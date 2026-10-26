@@ -3,8 +3,10 @@
 import argparse
 import contextlib
 import difflib
+import hashlib
 import io
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -89,12 +91,42 @@ RESTORED_BILLING_FIELDS = (b"cch", b"cc_prev_req", b"cc_prompt_id")
 # upstream carries it where the native capture, made with a dummy token, carried nothing.
 ACCOUNT_UUID = re.compile(rb'(\\"account_uuid\\":\\")[^\\]*(\\")')
 
+# The values a written fixture carries in place of the run's own ids. Each keeps its field's shape, 64 hex digits or
+# a version 4 uuid, so every parser that reads the fields still parses a written fixture. The session header and
+# the body's session_id share one placeholder, as the client sends one uuid in both, so the relay's reading of
+# header and body stays consistent.
+DEVICE_ID_PLACEHOLDER = "0123456789abcdef" * 4
+PROMPT_ID_PLACEHOLDER = "33333333-3333-4333-8333-333333333333"
+REQUEST_ID_PLACEHOLDER = "22222222-2222-4222-8222-222222222222"
+SESSION_ID_PLACEHOLDER = "11111111-1111-4111-8111-111111111111"
+
 
 def redact(line: str) -> str:
     line = re.sub(r"Bearer sk-ant-oat01-\S+", "Bearer sk-ant-oat01-PLACEHOLDER", line)
     line = re.sub(r"x-api-key: sk-ant-api03-\S+", "x-api-key: sk-ant-api03-PLACEHOLDER", line)
     line = re.sub(r"^Host: 127\.0\.0\.1:\d+$", "Host: api.anthropic.com", line)
+    # The client spells these two names in different cases, so they match in any case and keep their spelling.
+    line = re.sub(r"(?i)^(x-claude-code-session-id:\s*)\S+$", rf"\g<1>{SESSION_ID_PLACEHOLDER}", line)
+    line = re.sub(r"(?i)^(x-client-request-id:\s*)\S+$", rf"\g<1>{REQUEST_ID_PLACEHOLDER}", line)
     return line
+
+
+def redact_body(raw: bytes) -> bytes:
+    """Replace metadata.user_id's device_id and session_id with their placeholders, empty its account_uuid, and
+    replace every billing block's cc_prompt_id.
+
+    The members are matched in their escaped form, the form they take inside the user_id string, across the whole
+    body as normalize_body masks them, so a written file holds no id the comparison would hide. account_uuid is
+    emptied in every mode: the native capture's dummy token leaves it empty, a capture at the router's upstream
+    carries the serving account there, and the committed shape is the empty value.
+    """
+    device = DEVICE_ID_PLACEHOLDER.encode()
+    session = SESSION_ID_PLACEHOLDER.encode()
+    prompt = b"cc_prompt_id=" + PROMPT_ID_PLACEHOLDER.encode() + b";"
+    raw = re.sub(rb'(\\"device_id\\":\\")[^\\]*(\\")', lambda m: m.group(1) + device + m.group(2), raw)
+    raw = re.sub(rb'(\\"session_id\\":\\")[^\\]*(\\")', lambda m: m.group(1) + session + m.group(2), raw)
+    raw = ACCOUNT_UUID.sub(lambda m: m.group(1) + m.group(2), raw)
+    return BILLING_BLOCK.sub(lambda m: BILLING_PROMPT_ID.sub(lambda _: prompt, m.group(0)), raw)
 
 
 def declared_length(entry):
@@ -136,11 +168,15 @@ def count_entries(cm: list) -> list:
     return [(i, e) for i, e in enumerate(cm) if e["request_line"].startswith("POST /v1/messages/count_tokens")]
 
 
-def build(src: pathlib.Path, out: pathlib.Path) -> None:
+def build(src: pathlib.Path, out: pathlib.Path, resign: bool = True) -> None:
     """Write the fixture tree at `out`, sourced from the capture directory `src`.
 
     `src/mitm/` is optional: a capture without it holds the inference plane only, and the control fixtures and
     canned responses are left unwritten for `check()` to report as not captured.
+
+    The bodies are written redacted, and with `resign` their cch digits are re-signed over the redacted bytes.
+    `check()` builds with `resign` off, since its comparison masks the digits and `check_hashes` grades the raw
+    bodies' own.
     """
     (out / "responses").mkdir(parents=True, exist_ok=True)
     cm = json.load(open(src / "clean_modes.json"))
@@ -149,21 +185,22 @@ def build(src: pathlib.Path, out: pathlib.Path) -> None:
     posts = inference_entries(cm)
     if len(posts) != len(INFERENCE_BODIES):
         raise SystemExit(f"{src}/clean_modes.json holds {len(posts)} POST /v1/messages entries, want 4")
-    for (idx, _), name in zip(posts, INFERENCE_BODIES):
-        # Byte-for-byte: the captured CCH digits in the heads are the hash of exactly these bytes.
-        (out / name).write_bytes((src / f"clean_body_{idx}.json").read_bytes())
+    captured = [(src / f"clean_body_{idx}.json").read_bytes() for idx, _ in posts]
     if THROUGH_ROUTER:
-        # head() below regenerates Content-Length from the body, and the router grading masks the field, so a
-        # body the declared length does not describe would normalize to the same bytes as one it does. Checked
-        # here, before either happens, because this is the last point where both numbers are still on hand.
-        for (idx, entry), name in zip(posts, INFERENCE_BODIES):
+        # head() below regenerates Content-Length from the redacted body, and the router grading masks the field,
+        # so a body the declared length does not describe would normalize to the same bytes as one it does.
+        # Checked against the captured bytes, before the redaction changes their length.
+        for (idx, entry), body in zip(posts, captured):
             declared = declared_length(entry)
-            captured = len((out / name).read_bytes())
-            if declared != captured:
+            if declared != len(body):
                 raise SystemExit(
                     f"{src}/clean_modes.json entry {idx} ({entry['request_line']}) declares Content-Length "
-                    f"{declared}, but the body captured beside it is {captured} bytes"
+                    f"{declared}, but the body captured beside it is {len(body)} bytes"
                 )
+    for body, name in zip(captured, INFERENCE_BODIES):
+        (out / name).write_bytes(redact_body(body))
+        if resign:
+            resign_written(out / name)
     for (_, entry), name, body_name in zip(posts, INFERENCE_HEADS, INFERENCE_BODIES):
         (out / name).write_bytes(head(entry, len((out / body_name).read_bytes())))
     # The relay answers HEAD /api/hello itself, so a router capture never carries one; both it and the hex
@@ -282,6 +319,10 @@ def _self_test() -> None:
     _self_test_declared_length()
     _self_test_count_selector()
     _self_test_capture_partition()
+    _self_test_redact_body()
+    _self_test_redact_head()
+    _self_test_build_redacts()
+    _self_test_resign_written()
 
 
 def _self_test_declared_length() -> None:
@@ -406,6 +447,185 @@ def _self_test_capture_partition() -> None:
             print("self-test passed:", e)
         else:
             raise AssertionError("build_count wrote a count body its declared Content-Length does not describe")
+
+
+# Invented ids, each of repeated digits, so no run's own value can pass for one of them.
+_TEST_ACCOUNT_UUID = b"77777777-7777-4777-8777-777777777777"
+_TEST_DEVICE_ID = b"5" * 64
+_TEST_PROMPT_ID = b"88888888-8888-4888-8888-888888888888"
+_TEST_REQUEST_ID = b"99999999-9999-4999-8999-999999999999"
+_TEST_SESSION_ID = b"66666666-6666-4666-8666-666666666666"
+_TEST_BODY_IDS = (_TEST_ACCOUNT_UUID, _TEST_DEVICE_ID, _TEST_PROMPT_ID, _TEST_SESSION_ID)
+
+
+def _identified_body(model: bytes) -> bytes:
+    """A body in the client's shape whose metadata.user_id and billing block carry the invented ids, with a
+    nonempty account_uuid as a capture at the router's upstream carries."""
+    user_id = (
+        rb'{\"device_id\":\"' + _TEST_DEVICE_ID + rb'\",\"account_uuid\":\"' + _TEST_ACCOUNT_UUID
+        + rb'\",\"session_id\":\"' + _TEST_SESSION_ID + rb'\"}'
+    )
+    return (
+        rb'{"model":"' + model + rb'","system":[{"type":"text","text":"x-anthropic-billing-header: '
+        + b"cc_version=2.1.269.517; cc_entrypoint=sdk-cli; cch=00000; cc_prompt_id=" + _TEST_PROMPT_ID
+        + rb';"}],"metadata":{"user_id":"' + user_id + rb'"}}'
+    )
+
+
+def _inference_capture(root: pathlib.Path) -> pathlib.Path:
+    """A capture directory shaped like the one the baseline script writes: the hello probe, then the four
+    inference posts, each head and body carrying the invented ids."""
+    root.mkdir(parents=True)
+    entries = [{"request_line": "HEAD /api/hello HTTP/1.1", "headers": ["Host: 127.0.0.1:48442"], "body": ""}]
+    for i, name in enumerate(INFERENCE_BODIES, start=1):
+        body = _identified_body(name.encode())
+        entries.append(
+            {
+                "request_line": "POST /v1/messages?beta=true HTTP/1.1",
+                "headers": [
+                    "Authorization: Bearer sk-ant-oat01-DUMMYOAUTH",
+                    "X-Claude-Code-Session-Id: " + _TEST_SESSION_ID.decode(),
+                    "x-client-request-id: " + _TEST_REQUEST_ID.decode(),
+                    "Host: 127.0.0.1:48442",
+                    f"Content-Length: {len(body)}",
+                ],
+                "body": body.decode(),
+            }
+        )
+        (root / f"clean_body_{i}.json").write_bytes(body)
+    (root / "clean_modes.json").write_text(json.dumps(entries))
+    (root / "connect.json").write_text(json.dumps([{"hello_len": INFERENCE_HELLO_LEN, "raw_hex": "16"}]))
+    return root
+
+
+def _self_test_redact_body() -> None:
+    """A written body carries the placeholders and an empty account_uuid, and a body without the members comes
+    back byte for byte, whatever metadata.user_id holds or whether it is there at all."""
+    redacted = redact_body(_identified_body(b"claude-sonnet-4-5"))
+    for wanted in (
+        rb'\"account_uuid\":\"\"',
+        rb'\"device_id\":\"' + DEVICE_ID_PLACEHOLDER.encode() + rb'\"',
+        rb'\"session_id\":\"' + SESSION_ID_PLACEHOLDER.encode() + rb'\"',
+        b"cc_prompt_id=" + PROMPT_ID_PLACEHOLDER.encode() + b";",
+    ):
+        if wanted not in redacted:
+            raise AssertionError(f"redact_body wrote no {wanted!r}")
+    for original in _TEST_BODY_IDS:
+        if original in redacted:
+            raise AssertionError(f"redact_body kept {original!r}")
+    # The placeholders keep the fields' shape only if the escaping around them survives as well.
+    members = json.loads(json.loads(redacted)["metadata"]["user_id"])
+    if members != {"device_id": DEVICE_ID_PLACEHOLDER, "account_uuid": "", "session_id": SESSION_ID_PLACEHOLDER}:
+        raise AssertionError(f"redact_body left metadata.user_id parsing as {members!r}")
+    print("self-test passed: redact_body writes the placeholders and an empty account_uuid")
+
+    for unrelated in (
+        b'{"model":"claude-sonnet-4-5","system":[{"type":"text","text":'
+        b'"x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli; cch=00000;"}]}',
+        b'{"model":"claude-sonnet-4-5","metadata":{"user_id":null}}',
+    ):
+        if redact_body(unrelated) != unrelated:
+            raise AssertionError(f"redact_body changed a body without the members: {unrelated!r}")
+    print("self-test passed: redact_body leaves a body without metadata.user_id's members unchanged")
+
+
+def _self_test_redact_head() -> None:
+    """A written head carries the session and request placeholders, and the credentials and the Host line
+    redact as before."""
+    cases = {
+        "Authorization: Bearer sk-ant-oat01-REAL": "Authorization: Bearer sk-ant-oat01-PLACEHOLDER",
+        "Host: 127.0.0.1:48442": "Host: api.anthropic.com",
+        "x-api-key: sk-ant-api03-capture-dummy": "x-api-key: sk-ant-api03-PLACEHOLDER",
+        "X-Claude-Code-Session-Id: " + _TEST_SESSION_ID.decode(): f"X-Claude-Code-Session-Id: {SESSION_ID_PLACEHOLDER}",
+        "x-client-request-id: " + _TEST_REQUEST_ID.decode(): f"x-client-request-id: {REQUEST_ID_PLACEHOLDER}",
+        "X-Stainless-Lang: js": "X-Stainless-Lang: js",
+    }
+    for line, wanted in cases.items():
+        if redact(line) != wanted:
+            raise AssertionError(f"redact({line!r}) gave {redact(line)!r}, want {wanted!r}")
+    print("self-test passed: redact writes the session and request placeholders into a head")
+
+
+def _self_test_build_redacts() -> None:
+    """In both grading modes every written body is free of the capture's ids, and every inference head carries
+    the two placeholders and declares the length of the redacted body it travels with."""
+    global THROUGH_ROUTER
+    with tempfile.TemporaryDirectory() as tmp:
+        src = _inference_capture(pathlib.Path(tmp) / "capture")
+        for through_router, mode in ((False, "native"), (True, "--through-router")):
+            out = pathlib.Path(tmp) / mode.lstrip("-")
+            THROUGH_ROUTER = through_router
+            try:
+                build(src, out, resign=False)
+            finally:
+                THROUGH_ROUTER = False
+            bodies = sorted(out.glob("body_*.json"))
+            if len(bodies) != len(INFERENCE_BODIES):
+                raise AssertionError(f"the {mode} build wrote {len(bodies)} bodies, want {len(INFERENCE_BODIES)}")
+            for path in bodies:
+                body = path.read_bytes()
+                leaked = [original for original in _TEST_BODY_IDS if original in body]
+                if leaked:
+                    raise AssertionError(f"the {mode} build kept {leaked!r} in {path.name}")
+                if rb'\"account_uuid\":\"\"' not in body:
+                    raise AssertionError(f"the {mode} build wrote {path.name} without an empty account_uuid")
+            heads = sorted(out.glob("inference_*.http"))
+            if len(heads) != len(INFERENCE_HEADS):
+                raise AssertionError(f"the {mode} build wrote {len(heads)} heads, want {len(INFERENCE_HEADS)}")
+            body_of = dict(zip(INFERENCE_HEADS, INFERENCE_BODIES))
+            for path in heads:
+                text = path.read_bytes().decode()
+                length = len((out / body_of[path.name]).read_bytes())
+                for line in (
+                    f"Content-Length: {length}",
+                    f"X-Claude-Code-Session-Id: {SESSION_ID_PLACEHOLDER}",
+                    f"x-client-request-id: {REQUEST_ID_PLACEHOLDER}",
+                ):
+                    if f"\r\n{line}\r\n" not in text:
+                        raise AssertionError(f"the {mode} build wrote {path.name} without {line!r}")
+                for original in (_TEST_REQUEST_ID, _TEST_SESSION_ID):
+                    if original.decode() in text:
+                        raise AssertionError(f"the {mode} build kept {original!r} in {path.name}")
+            print(f"self-test passed: the {mode} build writes redacted bodies and heads")
+
+
+def _self_test_resign_written() -> None:
+    """A body without a stamp is left alone before cargo is looked for, and a stamped body needs cargo."""
+    with tempfile.TemporaryDirectory() as tmp:
+        stampless = pathlib.Path(tmp) / "body_apikey.json"
+        stampless.write_bytes(
+            b'{"system":[{"type":"text","text":'
+            b'"x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli;"}]}'
+        )
+        stamped = pathlib.Path(tmp) / "body_oauth.json"
+        stamped.write_bytes(_identified_body(b"claude-sonnet-4-5"))
+        no_cargo = pathlib.Path(tmp) / "bin"
+        no_cargo.mkdir()
+        saved_path = os.environ.get("PATH")
+        os.environ["PATH"] = str(no_cargo)
+        try:
+            before = stampless.read_bytes()
+            report = io.StringIO()
+            with contextlib.redirect_stdout(report):
+                resign_written(stampless)
+            if stampless.read_bytes() != before:
+                raise AssertionError("resign_written changed a body without a stamp")
+            if "body_apikey.json" not in report.getvalue() or "no cch= stamp" not in report.getvalue():
+                raise AssertionError(f"resign_written skipped a body without a stamp silently: {report.getvalue()!r}")
+            print("self-test passed: resign_written leaves a body without a stamp alone and says so")
+            try:
+                resign_written(stamped)
+            except SystemExit as e:
+                if str(e) != "cargo is needed to re-sign the redacted bodies":
+                    raise AssertionError(f"resign_written refused for the wrong reason: {e}") from e
+                print("self-test passed:", e)
+            else:
+                raise AssertionError("resign_written went on with a stamped body and no cargo")
+        finally:
+            if saved_path is None:
+                del os.environ["PATH"]
+            else:
+                os.environ["PATH"] = saved_path
 
 
 def _self_test_mask_hello() -> None:
@@ -600,26 +820,66 @@ def has_stamp(body: bytes) -> bool:
     return bool(block and BILLING_STAMP.search(block.group(0)))
 
 
-def check_hashes(fresh_dir: pathlib.Path) -> int:
-    """Re-sign every freshly captured body that carries a cch= stamp, the gate normalize_body's masking removes."""
-    stamped = [p for p in sorted(fresh_dir.glob("body_*.json")) if has_stamp(p.read_bytes())]
+def resign_written(path: pathlib.Path) -> None:
+    """Store in a written body the cch digits the signer computes over its redacted bytes.
+
+    The stamp is looked for before cargo: a body whose billing block carries none has no digits to follow its
+    bytes, and the example's write mode exits 1 on such a file.
+    """
+    if not has_stamp(path.read_bytes()):
+        print(f"resign skipped: {path.name} carries no cch= stamp")
+        return
+    if shutil.which("cargo") is None:
+        raise SystemExit("cargo is needed to re-sign the redacted bodies")
+    run = subprocess.run(
+        ["cargo", "run", "-q", "-p", "phoebis-cch", "--example", "resign", "--", "--write", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    output = (run.stdout + run.stderr).strip()
+    if run.returncode != 0:
+        raise SystemExit(f"re-signing {path} failed:\n{output}")
+    print(output)
+
+
+def check_hashes(capture_dir: pathlib.Path) -> int:
+    """Re-sign every raw inference body that carries a cch= stamp, the gate normalize_body's masking removes.
+
+    The raw bodies are read because the written ones are redacted, and the client signed the bytes it sent. Each
+    stamped body leaves a trace line, its SHA-256 beside its native digits, printed and written to
+    raw-hash-trace.txt beside the capture: the evidence that the signer matches the client's formula, carrying no
+    id of the run.
+    """
+    cm = json.load(open(capture_dir / "clean_modes.json"))
+    stamped = []
+    for (idx, _), name in zip(inference_entries(cm), INFERENCE_BODIES):
+        path = capture_dir / f"clean_body_{idx}.json"
+        if has_stamp(path.read_bytes()):
+            stamped.append((name, path))
     if not stamped:
         return 0
     if shutil.which("cargo") is None:
         print("hash check skipped: cargo not found")
         return 2
     status = 0
-    for path in stamped:
+    trace = []
+    for name, path in stamped:
+        raw = path.read_bytes()
+        stamp = BILLING_STAMP.search(BILLING_BLOCK.search(raw).group(0)).group(0)
+        line = f"raw {name} sha256={hashlib.sha256(raw).hexdigest()} cch={stamp[len(b'cch='):-1].decode()}"
+        print(line)
+        trace.append(line + "\n")
         run = subprocess.run(
             ["cargo", "run", "-q", "-p", "phoebis-cch", "--example", "resign", "--", str(path)],
             capture_output=True,
             text=True,
         )
         if run.returncode != 0:
-            print(f"hash drift: {path.name}")
-            for line in (run.stdout + run.stderr).splitlines():
-                print(f"  {line}")
+            print(f"hash drift: {name}")
+            for output in (run.stdout + run.stderr).splitlines():
+                print(f"  {output}")
             status = 1
+    (capture_dir / "raw-hash-trace.txt").write_text("".join(trace))
     return status
 
 
@@ -695,16 +955,16 @@ def partition_names(committed: dict, fresh: dict, uncaptured_set: set) -> tuple[
 def check(capture_dir: pathlib.Path, baseline: pathlib.Path | None = None, skip_hashes: bool = False) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         fresh_dir = pathlib.Path(tmp) / "fixtures"
-        build(capture_dir, fresh_dir)
+        build(capture_dir, fresh_dir, resign=False)
         if THROUGH_ROUTER:
             for line in restored_report(fresh_dir):
                 print(line)
-        hashes = 0 if skip_hashes else check_hashes(fresh_dir)
+        hashes = 0 if skip_hashes else check_hashes(capture_dir)
         if baseline is not None:
             # The same two masks that apply to the router capture apply here too, so a live date or a live
             # account_uuid in the baseline's own bodies never shows up as drift against itself.
             baseline_dir = pathlib.Path(tmp) / "baseline"
-            build(baseline, baseline_dir)
+            build(baseline, baseline_dir, resign=False)
             committed = normalize_tree(baseline_dir)
         else:
             committed = normalize_tree(FIXTURES)
