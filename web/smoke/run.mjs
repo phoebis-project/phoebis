@@ -17960,6 +17960,39 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   failed.unmount();
   delete api.getAnalyticsUnusedAllowance;
   results.push({ name: '/analytics a failed unused allowance read draws the error state in the card', ok: down?.error === 'Could not load the unused allowance' && down.ids.length === 0, missing: [JSON.stringify(down)] });
+
+  // A weekly row changes once a week, so the card reads once per Accounts filter and again once the registry's poll
+  // answers a weekly window past its reset, never at the list's 5 s cadence, under a custom range whose end is still
+  // ahead as under a preset.
+  const cadence = countCalls('getAnalyticsUnusedAllowance');
+  const watched = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
+  const mounted = cadence.calls.length;
+  tick(5_000);
+  await watched.settle();
+  const polled = cadence.calls.length;
+  const { listAccounts } = api;
+  // The router observed primary's 7-day reset, so its window reads the reset a week on.
+  api.listAccounts = async (...args) => (await listAccounts.apply(api, args)).map((a) => (a.id === 'primary' ? { ...a, windows: a.windows.map((w) => (w.id === '7d' ? { ...w, resetsAt: new Date(Date.parse(w.resetsAt) + 7 * DAY_MS).toISOString() } : w)) } : a));
+  tick(5_000);
+  await watched.settle();
+  const moved = cadence.calls.length;
+  api.listAccounts = listAccounts;
+  watched.unmount();
+  const ahead = await mount(`/analytics?from=${isoAt(CLOCK_ORIGIN - 2 * 3_600_000)}&to=${isoAt(CLOCK_ORIGIN + 3_600_000)}#accounts`, { now: CLOCK_ORIGIN });
+  await chooseInterval(ahead, '5 s');
+  const opened = cadence.calls.length;
+  for (let i = 0; i < 2; i += 1) {
+    tick(5_000);
+    await ahead.settle();
+  }
+  const ticked = cadence.calls.length - opened;
+  ahead.unmount();
+  cadence.restore();
+  results.push({
+    name: "/analytics the unused allowance card reads again after a weekly reset passes and not at the list's cadence, under a custom range whose end is ahead too",
+    ok: mounted === 1 && polled === 1 && moved === 2 && opened > moved && ticked === 0,
+    missing: [`${mounted} at mount, ${polled} after a tick, ${moved} after the reset, ${opened - moved} on the custom range's mount, ${ticked} over its two ticks`],
+  });
 }
 {
   // The breakdown tables are picked by card title: the Cache tab draws the placements table under the same card class,

@@ -34,7 +34,7 @@ import { REFUSED_TITLE } from '@/lib/requests';
 import { linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { words } from '@/lib/routingLog';
 import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition } from '@/lib/unit';
-import { WINDOW_LABEL } from '@/lib/windows';
+import { WINDOW_HOURS, WINDOW_LABEL } from '@/lib/windows';
 
 /** The dimensions the breakdown route groups on; `all` is the ungrouped total every section reads. */
 type GroupBy = Exclude<AnalyticsGroupBy, 'all'>;
@@ -379,9 +379,6 @@ export function AnalyticsPage() {
     reload,
   );
   const accountRollups = useAsync(() => (tab === 'accounts' ? api.listAccountRollups(fromIso, toIso) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
-  // The weekly resets of the last four weeks whatever the range, so a range change reads nothing, and the Accounts
-  // filter alone narrows them.
-  const unusedAllowance = useAsync(() => (tab === 'accounts' ? api.getAnalyticsUnusedAllowance(allowanceSpan(now), { accountIds: filters.accountId }) : Promise.resolve(null)), [tab, filters.accountId, generation], reload);
   // The fold rates the hour still running over the part of it this read saw, so the answer keeps its end and instant.
   // The instant is the read's own: the range clock stands still while another tab is open, and a read made later in
   // the same hour has seen more of it.
@@ -394,6 +391,23 @@ export function AnalyticsPage() {
   // differs from the Dashboard's, and one account keeps one color across the views.
   const registry = useAsync(() => api.listAccounts(), [], { paused, refreshMs: polledMs });
   const slotOf = useMemo(() => accountSlots((registry.data ?? []).map((a) => a.id)), [registry.data]);
+  // A weekly row changes once a week, so the unused allowance card reads once per Accounts filter, again on Refresh and
+  // once the registry's poll answers a weekly window of an account under the filter past its reset, never at the list's
+  // cadence, under a custom range too. The registry's first answer moves no reset, so the page's load reads once.
+  const weeklyResetsAt =
+    registry.data === null
+      ? null
+      : registry.data
+          .filter((a) => filters.accountId.length === 0 || filters.accountId.includes(a.id))
+          .flatMap((a) => [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])])
+          .filter((w) => w.periodHours === WINDOW_HOURS['7d'])
+          .map((w) => w.resetsAt ?? '')
+          .join(',');
+  const [resets, setResets] = useState({ at: weeklyResetsAt, moved: 0 });
+  if (weeklyResetsAt !== resets.at) setResets({ at: weeklyResetsAt, moved: resets.at === null ? resets.moved : resets.moved + 1 });
+  // The weekly resets of the last four weeks whatever the range, so a range change reads nothing, and the Accounts
+  // filter alone narrows them.
+  const unusedAllowance = useAsync(() => (tab === 'accounts' ? api.getAnalyticsUnusedAllowance(allowanceSpan(now), { accountIds: filters.accountId }) : Promise.resolve(null)), [tab, filters.accountId, generation, resets.moved]);
   // The cost model's capacity rows, which the plan chart's line category reads each account's stored tier against and
   // the unused allowance card prices its figures through.
   const costSettings = useAsync(() => (tab === 'burn' || tab === 'accounts' ? api.getSettings() : Promise.resolve(null)), [tab]);
