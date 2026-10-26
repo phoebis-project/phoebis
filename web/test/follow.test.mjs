@@ -333,6 +333,44 @@ test("a custom range's poll over a stale list with no next cursor leaves a late 
   assert.deepEqual([f.last().rows.map(byId), [...f.last().fresh]], [rows.slice(0, 26).map(byId), []], 'row 26 stays for Next');
 });
 
+/**
+ * A watermarked reader for a custom range whose list read failed: the first poll's page stands in with rows 0 to 24 of
+ * `route(26)`, the stamp 7 and `cursor` as its next cursor, the read at 7 answers row 25 alone, a second older than row
+ * 24 and written after the stamp, and the read at 9 answers nothing.
+ */
+function standInLateBelow(cursor) {
+  const { rows } = route(26);
+  const sent = [];
+  const read = async (_cursor, _to, landedAfter) => {
+    sent.push(landedAfter);
+    if (landedAfter === undefined) return { landedThrough: 7, nextCursor: cursor, rows: rows.slice(0, 25) };
+    return landedAfter === 7 ? { landedThrough: 9, nextCursor: null, rows: [rows[25]] } : { landedThrough: 9, nextCursor: null, rows: [] };
+  };
+  return { read, rows, sent };
+}
+
+test("a custom range's stand-in with no next cursor lands a late row below its last row", async () => {
+  // The stand-in is the list while it stands, so its page's missing cursor says the range holds no more rows.
+  const clock = frozen();
+  const { read, rows, sent } = standInLateBelow(null);
+  const f = follow({ error: 'ledger locked', fixedEnd: true, list: null, read });
+  await twoPolls(clock);
+  const drawn = () => [f.last().rows.map(byId), [...f.last().fresh], f.last().error, f.last().nextCursor];
+  assert.deepEqual(drawn(), [rows.map(byId), ['row_025'], null, null], 'the second poll lands row 25 below row 24, tinted');
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(sent, [undefined, 7, 9]);
+  assert.equal(f.last().rows.length, 26, 'the row stays drawn past the watermark');
+});
+
+test("a custom range's stand-in with a next cursor leaves a late row below its last row to Next", async () => {
+  const clock = frozen();
+  const { read, rows } = standInLateBelow('p2');
+  const f = follow({ error: 'ledger locked', fixedEnd: true, list: null, read });
+  await twoPolls(clock);
+  assert.deepEqual([f.last().rows.map(byId), [...f.last().fresh], f.last().error, f.last().nextCursor], [rows.slice(0, 25).map(byId), [], null, 'p2'], 'row 25 stays for Next');
+});
+
 test('no read while the tab is hidden, and one at once on its return after a full interval', async () => {
   const clock = frozen();
   const f = follow();

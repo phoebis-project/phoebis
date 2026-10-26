@@ -89,7 +89,7 @@ export function useFollow<R>(input: {
     let newest = 0;
     const poll = (returned = false) => {
       const nth = (issued += 1);
-      const { address: polled, compare: order, fixedEnd, identity: identify, list, mark: landedAfter, read: reader, shown: start } = latest.current;
+      const { address: polled, compare: order, fixedEnd, identity: identify, list, mark: landedAfter, read: reader, shown: start, standIn: standing } = latest.current;
       // Every page of one poll reads from the same stamp and is handed the same instant, so a reader that bounds its
       // range by it walks one fixed range. A reader under a watermark may read to the router's clock instead, and the
       // instant still dates the poll's overrun and stand-in.
@@ -97,10 +97,13 @@ export function useFollow<R>(input: {
       const page = (cursor: string | undefined) => (failures.failing ? quietly(() => reader(cursor, to, landedAfter)) : reader(cursor, to, landedAfter));
       const last = start?.[start.length - 1];
       const below = (r: R) => last !== undefined && order(r, last) > 0;
+      // A stand-in is the list while it stands, so its page's cursor says whether the range holds rows past those shown.
+      // A stale list hands none, since its cursor is another query's.
+      const tail = standing === null ? list?.nextCursor : standing.cursor;
       // Before the list answers there is no row to stop at, so the poll reads the newest page alone and keeps the
       // cursor past it for the answer that stands in for a list read that failed.
       const pages: Promise<{ cursor?: string | null; landedThrough?: number; overrun: string | null; rows: R[] }> =
-        start === null ? page(undefined).then((p) => ({ cursor: p.nextCursor, landedThrough: p.landedThrough, overrun: null, rows: p.rows })) : followPages(page, new Set(start.map(identify)), identify, below, landedAfter === undefined, () => armed.alive, fixedEnd && list?.nextCursor === null);
+        start === null ? page(undefined).then((p) => ({ cursor: p.nextCursor, landedThrough: p.landedThrough, overrun: null, rows: p.rows })) : followPages(page, new Set(start.map(identify)), identify, below, landedAfter === undefined, () => armed.alive, fixedEnd && tail === null);
       pages.then(
         (polledPages) => {
           if (!armed.alive) return;
