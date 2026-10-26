@@ -1246,7 +1246,8 @@ pub(crate) struct Kept {
     /// `idle_limit` today. A turn that reads the probe leaves the label in place, so one that ends without deciding the
     /// probe hands it back to the lapse sweep. `None` for a probe a real request superseded, which waits for that
     /// request's completion. A failed completion hands such a probe back under `expired`, the label its recipe's own
-    /// lapse settles it under.
+    /// lapse settles it under. A lapse of the recipe hands a probe whose chain is still alive back the same way, under
+    /// `expired`, for the sweep to settle at the chain's end.
     pub pending: Option<Wasted>,
 }
 
@@ -1583,9 +1584,10 @@ impl Inner {
     /// for that request, so it keeps them until the first of these decides them: its successful completion (each
     /// probe by its chain's last entry: a warm return on its lineage inside that entry clears it, one past it settles
     /// it under `expired`, and any other return, on another lineage or with no read, under `cold_return`), a labeled
-    /// discard (under its label), or the agent's lapse or eviction. A request the engine takes no observation of
-    /// leaves them kept for whichever comes next, and one that fails hands them back for the next turn to read or
-    /// the lapse sweep to settle.
+    /// discard (under its label), or the agent's lapse or eviction. An eviction settles them at once, and a lapse
+    /// settles at once only those whose chain has ended and hands the rest back under `expired`. A request the engine
+    /// takes no observation of leaves them kept for whichever comes next, and one that fails hands them back for the
+    /// next turn to read or the lapse sweep to settle.
     pub(crate) fn discard_keeping_unanswered(
         &mut self,
         key: &SessionKey,
