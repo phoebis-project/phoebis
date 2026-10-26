@@ -1,6 +1,6 @@
-# Answers and records the control calls a capture's client makes: its OAuth token grant and its profile, roles and
-# usage reads. The client sends them to hosts it dials by name, which ANTHROPIC_BASE_URL cannot redirect, so the
-# capture points HTTPS_PROXY here and NODE_EXTRA_CA_CERTS at the run's CA. Each connection gets a 200 for its CONNECT, a TLS
+# Answers and records the control calls a capture's client makes: its OAuth token grant and its profile, roles and usage
+# reads. The client sends them to hosts it dials by name, which ANTHROPIC_BASE_URL cannot redirect, so the capture
+# points HTTPS_PROXY here and NODE_EXTRA_CA_CERTS at the run's CA. Each connection gets a 200 for its CONNECT, a TLS
 # handshake with the run's leaf, and a canned answer to the one request inside.
 #
 # Usage: control_receiver.py <port> <output-json> <seconds> <certs-dir> <responses-dir>
