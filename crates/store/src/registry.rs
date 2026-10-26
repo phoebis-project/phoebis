@@ -695,8 +695,8 @@ pub struct SubscriptionTerm {
     /// never stored, false for an `api_key` account and for a seat that keeps plan windows.
     pub usage_based: bool,
     /// The plan the stored profile resolves to, one word: `free`, `pro`, `max_5x`, `max_20x`, `max`, `team`,
-    /// `enterprise` or `usage_based`, `None` while no profile document stands. Derived at every load by `plan_of`
-    /// beside `usage_based`, never stored.
+    /// `enterprise` or `usage_based`, `None` while no stored document and no tier the table names stand. Derived at
+    /// every load by `plan_of` beside `usage_based`, never stored.
     pub plan: Option<String>,
     /// When a profile read found the account's organization holding no plan, epoch milliseconds, `None` while a plan
     /// stands. The engine reads it as an end that has passed.

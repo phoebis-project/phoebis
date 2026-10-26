@@ -76,7 +76,7 @@ pub struct PollStatus {
     pub last_outcome: PollOutcome,
     /// When the account may be asked again; `None` when the next slot may ask it.
     pub next_attempt_at: Option<i64>,
-    /// 429s answered in a row, the ladder's step; 0 after a clean answer.
+    /// 429s answered in a row, the ladder's step, reset to 0 by a clean answer or the plan-ended pause.
     pub rate_limited_in_a_row: u32,
 }
 

@@ -11,15 +11,15 @@ Every request that finished lands in the ledger, a second SQLite file beside the
 for the client request, stamped with the instant the ledger wrote it, and one row for each upstream attempt it took.
 `GET /admin/requests` filters on the stamp as `landed_after` and answers the newest one among the rows its filters admit
 as `landed_through`, at most the read's `to` where it names one, unless the read marks a fixed-end range with
-`fixed_end`, which lets the watermark pass `to` so a row received before the end and landed after it is read once. The
-Requests view's auto reload polls a preset range by that stamp with no `to`, so the route reads to its own clock. The
-relay waits for the ledger's queue when it must, so a row is never lost to a busy moment. A request whose client leaves
-before the head lands as a canceled request with the code `client_gone`, keeping the attempts it reached. A request the
-router's own shutdown ends past its drain window, after the head or before one, lands the same way under the code
-`router_shutdown`. Captured bodies are the one best-effort part, since a stream may outrun its recorder, and a capture
-whose chunks were lost is stored as truncated with a `ledger_gap` event naming the request. Once a request finishes, it
-is folded into the hour's rollup in the same transaction as its rows, which is what the analytics routes report, so a
-long range costs one row per hour rather than one per request.
+`fixed_end`, which lets `landed_through` pass `to` so a row received before the end and landed after it is read once.
+The Requests view's auto reload polls a preset range by that stamp with no `to`, so the route reads to its own clock.
+The relay waits for the ledger's queue when it must, so a row is never lost to a busy moment. A request whose client
+leaves before the head lands as a canceled request with the code `client_gone`, keeping the attempts it reached. A
+request the router's own shutdown ends past its drain window, after the head or before one, lands the same way under the
+code `router_shutdown`. Captured bodies are the one best-effort part, since a stream may outrun its recorder, and a
+capture whose chunks were lost is stored as truncated with a `ledger_gap` event naming the request. Once a request
+finishes, it is folded into the hour's rollup in the same transaction as its rows, which is what the analytics routes
+report, so a long range costs one row per hour rather than one per request.
 
 Every routing decision lands as its own row in a decisions table beside the attempt rows: one zstd-compressed record per
 decision holding the request's facts, the settings in force, every pool member's standing at decision time, the rule
@@ -432,11 +432,13 @@ exhausted member.
 The analytics, the dashboard, the pool cards and the burn chart read the hourly rollups in pages of a day, each page
 its own read, so a 400-day range holds one day of rows in memory and the reader connection is free between pages.
 
-A prompt-length threshold that moves re-folds the hours whose attempts the ledger still holds at the next start, bounded
-at the first hour the rollup purge keeps where the request retention is 0, and the older hours keep their split. The
-re-fold moves the request rows alone. A wasted probe's counts and a probe the keepalive still holds keep the band they
-settled or were recorded in, so the waste of a probe whose prompt falls between the old and the new threshold inside the
-retained window stays priced at that band.
+A prompt-length threshold that moves re-folds the hours whose attempts the ledger still holds at the next start, and the
+older hours keep their split. Where the request retention is 0 the re-fold reads every request, and a request received
+before the first hour the rollup purge keeps moves only where its hour's rows still stand, so an hour the purge removed
+stays empty and one it kept for a budgeted member moves with the threshold. The re-fold moves the request rows alone. A
+wasted probe's counts and a probe the keepalive still holds keep the band they settled or were recorded in, so the waste
+of a probe whose prompt falls between the old and the new threshold inside the retained window stays priced at that
+band.
 
 ## Metrics
 

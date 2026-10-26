@@ -12066,8 +12066,7 @@ async fn a_wall_read_by_a_head_that_names_no_reset_is_stored_under_the_stored_re
     use phoebis_routing::RouterEvent;
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    // Held, so no clock walk announces the passed reset between the move past it and the sample that reads it
-    // passed.
+    // Held, so no clock walk announces the passed reset between the move past it and the sample that reads it passed.
     let handle = spawn(
         store,
         clock(&now),

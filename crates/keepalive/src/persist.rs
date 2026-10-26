@@ -1007,8 +1007,8 @@ impl Inner {
     /// The rows the store answered, restored within the limits the file sets now rather than the ones the save ran
     /// under: sessions newest first, each with its main agent and then its other agents newest first, and the recipes
     /// of what was restored newest first while the retained bytes allow. What does not fit is disposed, its rows
-    /// filed for deletion and each recipe among them counted as evicted. Ended sessions, rows of an older version,
-    /// rows this build cannot read and agents without a session row go too.
+    /// filed for deletion and each recipe among them counted as evicted. Agents without a session row, ended sessions,
+    /// released records whose leave has passed, rows of an older version and rows this build cannot read go too.
     fn restore_persisted(
         &mut self,
         (sessions, agents, counters): Loaded,

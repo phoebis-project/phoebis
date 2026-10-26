@@ -1326,9 +1326,9 @@ fn open_turn(r: &Rig, id: &str, agent: &str) {
 /// The recipe an arrival puts aside stays in memory, so it counts against `max_retained_bytes` beside the agent's new
 /// body, and where the new body does not fit the agent's own aside recipe leaves first. Under a bound of three and a
 /// half recipes, two agents armed and then each sent a request left open: the first agent's aside body fits beside its
-/// new one, the second's new body takes the room its own aside recipe leaves, and the first agent's failure restores its
-/// recipe, the failed body alone leaving, while the second's failure arms nothing. The agent ids have one length, so
-/// every recipe is one size.
+/// new one, the second's new body takes the room its own aside recipe leaves, and the first agent's failure restores
+/// its recipe, the failed body alone leaving, while the second's failure arms nothing. The agent ids have one length,
+/// so every recipe is one size.
 #[tokio::test]
 async fn an_aside_recipe_counts_against_the_memory_bound_and_yields_first_to_its_own_agents_new_body(
 ) {

@@ -1597,8 +1597,8 @@ impl Inner {
     }
 
     /// `discard_keeping_unanswered` for an arrival, an armed recipe (unpaused, its entry ahead of `now`) set aside
-    /// instead of ended: its observation leaves `current` and `pending` with its size kept in `retained`, and waits with
-    /// its schedule and context for the completion to restore or drop it. A paused recipe and one that never armed
+    /// instead of ended: its observation leaves `current` and `pending` with its size kept in `retained`, and waits
+    /// with its schedule and context for the completion to restore or drop it. A paused recipe and one that never armed
     /// end through the discard. An older recipe set aside over a completion the engine missed leaves through the
     /// discard.
     pub(crate) fn set_aside(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
@@ -1698,8 +1698,9 @@ impl Inner {
     /// first whose read did not cover the entry: a probe that read the whole entry back extended it, while one that
     /// read nothing or only part of the prefix found the entry gone, whole or in part, and wrote a new one, which
     /// starts a chain of its own. The read is tested beside `covered`, since the landing marks a cold complete rewrite
-    /// covered too. The chain also runs through the lineage's unanswered probes, which the sweep hands in beside the
-    /// kept ones, since the recipe a failed turn re-arms keeps probing the entry its kept probes paid for.
+    /// covered too. The chain also runs through the lineage's unanswered probes where the caller hands them in beside
+    /// the kept ones, as a compaction's completion, a lapse and the sweep do, since the recipe a failed turn re-arms
+    /// keeps probing the entry its kept probes paid for.
     fn chain_expires(kept: &[Kept], probe: &Kept) -> i64 {
         let mut later: Vec<&Kept> = kept
             .iter()

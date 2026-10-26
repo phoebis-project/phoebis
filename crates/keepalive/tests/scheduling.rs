@@ -1556,7 +1556,8 @@ async fn the_retention_rules_reach_a_paused_recipe() {
     assert_eq!(
         (r.status("main").reason, r.status("main").next_probe_at),
         (Reason::ProbeRetryLimit, None),
-        "the 429's first rung would land at the entry's expiry, so the ladder paused the recipe and cleared its schedule"
+        "the 429's first rung would land at the entry's expiry, so the ladder paused the recipe and cleared its \
+         schedule"
     );
     assert!(!r.engine.recipes_for("desktop", "session").is_empty());
     let mut key = r.h.store.api_key("desktop").unwrap().unwrap();

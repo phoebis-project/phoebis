@@ -668,8 +668,9 @@ static SHUTDOWN_FIGURES: std::sync::LazyLock<tokio::sync::RwLock<()>> =
     std::sync::LazyLock::new(|| tokio::sync::RwLock::new(()));
 
 /// The figure is removed when the last holder drops, a panic's unwinding included, so a case that fails before its
-/// admin answers leaves no short budget to a binary another case starts later. The holder keeps the read side of
-/// `SHUTDOWN_FIGURES` until the figure is gone, since the binary reads it at its start outside the `ENV` lock.
+/// admin answers leaves no short budget to a binary another case starts later. The holders keep the read side of
+/// `SHUTDOWN_FIGURES` until the last of them removed the figure, since the binary reads it at its start outside the
+/// `ENV` lock.
 struct ShortShutdownBudget {
     _figures: tokio::sync::RwLockReadGuard<'static, ()>,
 }

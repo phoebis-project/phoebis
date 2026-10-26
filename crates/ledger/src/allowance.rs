@@ -53,9 +53,9 @@ fn share_left(utilization: f64) -> f64 {
 /// since the ledger holds no account kind: the caller lists the `oauth` accounts it answers for. A term end's row reads
 /// the last reading before the end of a week still open at it (its reset at or after the end), the head's
 /// overage-included week folded into `seven_day_fable` with the newer reading standing, and a reading with no
-/// utilization skipped. A reading with no reset instant shows no open week. A reset of such an account at or after its
-/// end is left out, so the week the end cut short counts once. Ordered by account, window, then `reset_at` newest
-/// first. No rollup and no stored figure: the history is the events the purge still holds.
+/// utilization skipped. A reading with no reset instant shows no open week. A reset of an account in `term_ends` at or
+/// after its end is left out, so the week the end cut short counts once. Ordered by account, window, then `reset_at`
+/// newest first. No rollup and no stored figure: the history is the events the purge still holds.
 pub fn unused_allowance(
     conn: &Connection,
     accounts: &[String],

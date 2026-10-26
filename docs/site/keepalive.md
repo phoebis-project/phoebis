@@ -270,7 +270,7 @@ The console's words for the causes are in the labels table under [In the console
 | `retained` | The prompt is kept and its probe is scheduled, in flight, or waiting for the first stream event. |
 | `held` | The prompt is kept and no probe is sent while a condition holds that clears by itself or by an operator. |
 | `paused` | The engine paused the recipe after a probe's answer or a rejected request, until the next real request. |
-| `not_retained` | The last request was not kept, for its shape or size, the engine's limits, or no cache evidence, or a failure with no recipe armed before it. |
+| `not_retained` | The last request was not kept, for its shape or size, the engine's limits, no cache evidence, or a failure with no recipe armed before it. |
 | `ended` | The recipe was discarded: a ceiling, a completed compaction, an end, an eviction, a lapse or a release. |
 
 Each state reads these causes:

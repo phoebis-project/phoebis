@@ -18871,9 +18871,10 @@ fn under_priority_a_runway_shown_unbounded_past_its_reset_still_breaks_the_tie_b
     });
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
     st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
-    // b, first in the tie, reaches the ceiling past each window's reset: 35 000 s on the 5-hour window against its reset
-    // three hours out, about 140 hours on the week against its reset 72 hours out. c's 60 000 s on the 5-hour window
-    // pass its reset too, while its week's 85 000 s stay inside the 72 hours. b's computed runway is the shorter.
+    // b, first in the tie, reaches the ceiling past each window's reset: 35 000 s on the 5-hour window against its
+    // reset three hours out, about 140 hours on the week against its reset 72 hours out. c's 60 000 s on the 5-hour
+    // window pass its reset too, while its week's 85 000 s stay inside the 72 hours. b's computed runway is the
+    // shorter.
     st.record_sample("b", refreshing(0.55, T + 3 * HOUR, T + 72 * HOUR, T - 500));
     st.record_sample(
         "c",
@@ -20117,8 +20118,8 @@ fn under_round_robin_the_cursor_picks_and_the_runway_never_speaks() {
     let fit = line(&second.record, "fit");
     // b's 5-hour runway passes its reset, so its week, inside its reset 72 hours out, binds. Each of c's windows
     // resets before the ceiling is reached, its 15 000 s past the 10 800 s to the 5-hour reset among them. b's
-    // computed runway, about 37 500 s on its 5-hour window, is the longer against c's 15 000 s and is what the
-    // tie-break ranks by, while b displays its week since its 5-hour runway passes the reset.
+    // computed runway, about 37 500 s on its 5-hour window, is the longer against c's 15 000 s and is the figure a Pace
+    // or Priority tie-break would rank by, while b displays its week since its 5-hour runway passes the reset.
     assert_eq!(
         (fact_of(fit, "binding", "b"), fact_of(fit, "runway_ms", "b")),
         (

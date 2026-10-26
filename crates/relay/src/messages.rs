@@ -3874,7 +3874,7 @@ impl Relay {
             return None;
         }
         // The contract refuses a request without a session id at admission, before this path, so one that reached it
-        // would record no affinity rather than panic.
+        // would send no conversation or usage report rather than panic.
         let root = ctx.identity.session_id.clone()?;
         // An auxiliary request leaves no content entry: the client's quota probe has one message every probe of
         // the key shares, so an entry under it would read the next session's probe as a fork of this one. Its

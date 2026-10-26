@@ -2313,7 +2313,7 @@ pub(crate) struct AccountProfile {
 pub(crate) struct AccountSubscription {
     /// The plan the stored profile resolves to: `free`, `pro`, `max_5x`, `max_20x`, `max` (a Max organization whose
     /// tier names neither size), `team`, `enterprise` or `usage_based`, read from the organization type first and the
-    /// rate-limit tier second, null while no profile document stands.
+    /// rate-limit tier second, null while no stored document and no tier the table names stand.
     pub plan: Option<String>,
     /// Null when the profile lacks it.
     pub tier: Option<String>,
