@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, recordedCalls, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 /** The dash's title where a window priced nothing, the words a tile and its hover carry. */
 const UNPRICED_TITLE = 'No subscription request priced on this window: its model has no tier the cost model weighs';
@@ -13219,11 +13219,12 @@ m.unmount();
     });
   }
   {
-    // A custom range's poll sends its own end, and the stamp the route answers stops at that end, so each poll reads at
-    // the stamp the answer before it carried, up to the range's end. The story's late request arrived inside the range
-    // and lands after its end: the poll after its landing brings it under the fresh tint, and the poll after that
-    // brings it again, merged by its id into the one row with no second tint. The range starts two hours back, since
-    // the late request is the oldest row of the last hour, and a poll leaves a row below the list's last row to Next.
+    // A custom range's poll sends its own end with the fixed-end flag, which leaves the stamp the route answers
+    // uncapped at that end, so each poll reads at the stamp the answer before it carried. The story's late request
+    // arrived inside the range and lands after its end: the poll after its landing brings it under the fresh tint with
+    // a stamp past the end, and the poll after that reads from that stamp and brings nothing, so the row is read once.
+    // The range starts two hours back, so the late request, the oldest row of the last hour, sits above the list's last
+    // row: the span holds more rows than the page shows, and under a next cursor a poll leaves a row below it to Next.
     const LATE = 'req_7a3f0c26-d81';
     const from = isoAt(CLOCK_ORIGIN - 2 * HOUR);
     const end = isoAt(CLOCK_ORIGIN);
@@ -13232,27 +13233,33 @@ m.unmount();
     const lateAt = Date.parse(requests.find((r) => r.id === LATE)?.at ?? '');
     await chooseInterval(page, '5 s');
     const polls = [];
-    for (let n = 0; n < 3; n += 1) {
-      const spy = countCalls('listRequests');
-      tick(5_000);
-      await page.settle();
-      spy.restore();
-      const sent = spy.calls.map(([q]) => q);
-      // The poll's query at the same instant, so it answers what the poll's read answered.
-      const answer = sent.length === 1 ? await api.listRequests(sent[0]) : null;
-      const drawn = requestRows(page).map(idOf);
-      const tinted = [...page.container.querySelectorAll('.requests__table tbody tr.is-new')].map(idOf);
-      polls.push({ after: sent[0]?.landedAfter, brought: answer?.requests.some((r) => r.id === LATE) ?? false, calls: sent.length, drawn: drawn.filter((id) => id === LATE).length, through: answer?.landedThrough, tinted: tinted.includes(LATE), to: sent[0]?.to ?? null });
+    const recorded = recordedCalls('listRequests');
+    try {
+      for (let n = 0; n < 3; n += 1) {
+        const before = recorded.calls.length;
+        tick(5_000);
+        await page.settle();
+        const calls = recorded.calls.slice(before);
+        const [sent] = calls[0]?.args ?? [];
+        const answer = calls[0]?.answer;
+        const drawn = requestRows(page).map(idOf);
+        const tinted = [...page.container.querySelectorAll('.requests__table tbody tr.is-new')].map(idOf);
+        polls.push({ after: sent?.landedAfter, answered: answer?.requests.map((r) => r.id) ?? null, calls: calls.length, drawn: drawn.filter((id) => id === LATE).length, fixed: sent?.fixedEnd ?? null, through: answer?.landedThrough, tinted: tinted.includes(LATE), to: sent?.to ?? null });
+      }
+    } finally {
+      recorded.restore();
     }
     page.unmount();
     const [first, second, third] = polls;
+    const answered = polls.flatMap((p) => p.answered ?? []);
     results.push({
-      name: "/requests a custom range's polls each read at the stamp the answer before carried, capped at the range's end, and draw a late row inside it once",
+      name: "/requests a custom range's polls each read at the stamp the answer before carried, which passes the range's end, so a late row inside it is read and drawn once",
       ok:
-        !list.requests.some((r) => r.id === LATE) && lateAt > Date.parse(list.requests.at(-1)?.at ?? '') && polls.every((p) => p.calls === 1 && p.to === end) &&
-        first.after === list.landedThrough && second.after === first.through && third.after === second.through && third.after === Date.parse(end) &&
-        !first.brought && first.drawn === 0 && second.brought && second.drawn === 1 && second.tinted && third.brought && third.drawn === 1 && !third.tinted,
-      missing: [`list ${list.landedThrough}, late listed ${list.requests.some((r) => r.id === LATE)}, late at ${requests.find((r) => r.id === LATE)?.at}, last row at ${list.requests.at(-1)?.at}`, ...polls.map((p) => JSON.stringify(p))],
+        !list.requests.some((r) => r.id === LATE) && lateAt > Date.parse(list.requests.at(-1)?.at ?? '') && polls.every((p) => p.calls === 1 && p.to === end && p.fixed === true && p.answered !== null) &&
+        first.after === list.landedThrough && second.after === first.through && third.after === second.through &&
+        !first.answered.includes(LATE) && first.drawn === 0 && second.answered.includes(LATE) && second.through > Date.parse(end) && second.drawn === 1 && second.tinted &&
+        third.answered.length === 0 && third.drawn === 1 && !third.tinted && new Set(answered).size === answered.length,
+      missing: [`list ${list.landedThrough}, end ${Date.parse(end)}, late listed ${list.requests.some((r) => r.id === LATE)}, late at ${requests.find((r) => r.id === LATE)?.at}, last row at ${list.requests.at(-1)?.at}`, ...polls.map((p) => JSON.stringify(p))],
     });
   }
   {

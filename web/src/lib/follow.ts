@@ -33,11 +33,13 @@ export const readEnd = (custom: boolean, end: number, at: number): number => (cu
  * The query one page of a poll reads: the list's own query with the page's cursor and the poll's stamp. A preset under
  * a watermark sends no end, so the route reads to its own clock and every row its filters admit is inside the page,
  * where an end at the browser's instant would leave out a row received after it and written before the read. A custom
- * span keeps its own end, and a preset with no stamp reads up to the poll's instant.
+ * span keeps its own end and marks it fixed, so the route leaves its stamp uncapped at that end and a row received
+ * inside the span and written after it is read once. A preset with no stamp reads up to the poll's instant.
  */
-export const pollQuery = <Q extends object>(query: Q, custom: boolean, end: number, at: number, cursor: string | undefined, landedAfter: number | undefined): Q & { cursor?: string; landedAfter?: number; to?: string } => ({
+export const pollQuery = <Q extends object>(query: Q, custom: boolean, end: number, at: number, cursor: string | undefined, landedAfter: number | undefined): Q & { cursor?: string; fixedEnd?: boolean; landedAfter?: number; to?: string } => ({
   ...query,
   cursor,
+  fixedEnd: custom ? true : undefined,
   landedAfter,
   to: !custom && landedAfter !== undefined ? undefined : iso(readEnd(custom, end, at)),
 });

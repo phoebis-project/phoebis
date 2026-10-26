@@ -204,6 +204,30 @@ export const countCalls = (name: string) => {
   };
 };
 
+/**
+ * A pass-through spy on one mock method: every call's arguments and, once the call lands, its answer, in order, until
+ * `restore()` puts the method back. A check reads the answer the page itself was handed, which a second call with the
+ * same arguments need not repeat.
+ */
+export const recordedCalls = (name: string) => {
+  const mock = api as unknown as Record<string, (...args: unknown[]) => unknown>;
+  const original = mock[name];
+  const calls: { answer?: unknown; args: unknown[] }[] = [];
+  mock[name] = (...args: unknown[]) => {
+    const entry: { answer?: unknown; args: unknown[] } = { args };
+    calls.push(entry);
+    const answer = original.apply(api, args);
+    void Promise.resolve(answer).then((value) => (entry.answer = value), () => undefined);
+    return answer;
+  };
+  return {
+    calls,
+    restore: () => {
+      mock[name] = original;
+    },
+  };
+};
+
 // Set once at load so every mount starts signed in; the login checks clear it and put it back themselves.
 localStorage.setItem('phoebis.mockSession', 'admin');
 

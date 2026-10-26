@@ -56,6 +56,25 @@ test("the mock keeps a request under its serving attempt's stop reason and refus
   assert.deepEqual(await listed({ refusalCategories: ['-'], stopReasons: ['refusal'] }), ids(bare));
 });
 
+test('the mock leaves the stamp uncapped under a fixed end, so a row received inside the range and written after it is read once, as the route does', async () => {
+  // The seed is the story's failed turn that waited out its 60 s pool's whole bound at the cap after its attempts, so
+  // it finishes more than a minute after it arrived, and the ledger writes a row at its finish: an end between the two
+  // holds the row received and not yet written at the end.
+  const late = all.find((r) => r.errorCode === 'accounts_at_cap' && r.durationMs > 60_000);
+  assert.ok(late, 'the story holds a failed turn that waited out its bound at the cap');
+  const arrived = Date.parse(late.at);
+  const finished = arrived + late.durationMs;
+  const from = new Date(arrived - 60_000).toISOString();
+  const to = new Date(arrived + 30_000).toISOString();
+  const fixed = await api.listRequests({ fixedEnd: true, from, limit: 100_000, to });
+  assert.ok(fixed.requests.some((r) => r.id === late.id), 'the row arrived inside the range and the mock clock is past its write');
+  assert.ok(fixed.landedThrough >= finished, `the stamp ${fixed.landedThrough} reaches the row's finish ${finished}, past the end`);
+  const capped = await api.listRequests({ from, limit: 100_000, to });
+  assert.ok(capped.landedThrough <= Date.parse(to), `the stamp ${capped.landedThrough} stops at the end ${Date.parse(to)} without the flag`);
+  const next = await api.listRequests({ fixedEnd: true, from, landedAfter: fixed.landedThrough, limit: 100_000, to });
+  assert.ok(!next.requests.some((r) => r.id === late.id), 'a read from the stamp brings the row no more');
+});
+
 test('the mock keeps a request under its effort folded as the rollups file it', async () => {
   const expected = unprobed.filter((r) => r.shape.effort === null);
   narrowed(expected, 'without an effort');

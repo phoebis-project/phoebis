@@ -933,6 +933,8 @@ export interface RequestQuery {
   cursor?: string;
   /** The effort as the rollups fold it: a level, `none` or `other`. */
   efforts?: string[];
+  /** The range holds its own end, so `landedThrough` is left uncapped at `to` and a late row is read once. */
+  fixedEnd?: boolean;
   from?: string;
   /** Guardrail ids, `-` for a request no guardrail matched. */
   guardrails?: string[];
@@ -971,7 +973,8 @@ export interface RequestPage {
   /**
    * The newest write instant among the rows the query's filters admit at the read, `to` included, the `landedAfter` it
    * passed where none above it has landed, and 0 where neither is set, never past a `to` the query names, since a row
-   * received after `to` lands after it.
+   * received after `to` lands after it, unless the query passes `fixedEnd`, which lets the stamp pass `to` so a row
+   * received before the end and landed after it is read once.
    */
   landedThrough: number;
   nextCursor: string | null;

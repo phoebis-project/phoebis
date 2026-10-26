@@ -232,6 +232,14 @@ test('listRequests asks for the held requests alone when the query says so', asy
   assert.ok(!String(calls[1].url).includes('held'), 'no held filter, no parameter');
 });
 
+test('listRequests marks a fixed-end range when the query says so', async () => {
+  const calls = stub(() => answer(200, { landed_through: 0, next_cursor: null, requests: [] }));
+  await new HttpApi().listRequests({ fixedEnd: true });
+  assert.equal(new URL(calls[0].url, 'http://x').searchParams.get('fixed_end'), 'true');
+  await new HttpApi().listRequests({});
+  assert.ok(!String(calls[1].url).includes('fixed_end'), 'no fixed end, no parameter');
+});
+
 test('listRequests passes the stamp a poll read last as landed_after', async () => {
   const calls = stub(() => answer(200, { landed_through: 0, next_cursor: null, requests: [] }));
   await new HttpApi().listRequests({ landedAfter: 1_700_000_000_123 });

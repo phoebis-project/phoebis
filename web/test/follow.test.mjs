@@ -560,7 +560,7 @@ test('a poll and an older page on a custom span read to the span\'s own end, and
   assert.equal(d.readEnd(false, end, polled), polled);
 });
 
-test("a preset poll under a watermark sends no end, so the route reads to its own clock, and a custom range's poll keeps its end", async () => {
+test("a preset poll under a watermark sends no end, so the route reads to its own clock, and a custom range's poll keeps its end and marks it fixed", async () => {
   const end = Date.UTC(2026, 8, 16, 13, 0);
   const polled = Date.UTC(2026, 8, 16, 14, 30, 5);
   const wire = globalThis.fetch;
@@ -578,13 +578,13 @@ test("a preset poll under a watermark sends no end, so the route reads to its ow
     globalThis.fetch = wire;
   }
   assert.deepEqual(
-    urls.map((params) => [params.get('landed_after'), params.get('to'), params.get('cursor')]),
+    urls.map((params) => [params.get('landed_after'), params.get('to'), params.get('cursor'), params.get('fixed_end')]),
     [
-      ['101', null, null],
-      ['101', String(end), null],
-      [null, String(polled), 'c1'],
+      ['101', null, null, null],
+      ['101', String(end), null, 'true'],
+      [null, String(polled), 'c1', null],
     ],
-    'the preset reads to the router, the custom range to its end, and a preset with no stamp to the poll',
+    'the preset reads to the router, the custom range to its end with the end marked fixed, and a preset with no stamp to the poll',
   );
 });
 

@@ -729,7 +729,8 @@ search and the range. What each figure means is on [Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range
-ending at the router's clock and a custom range keeping its own end, takes every row that arrived since the read before,
+ending at the router's clock and a custom range keeping its own end, where a request received inside it and written
+after a read draws on the next read, takes every row that arrived since the read before,
 up to eight pages, and lands a new row at the top in the accent tint until the next read. A long request can finish
 below rows already shown: it lands between rows already shown, in the same tint, on the next auto reload. On a custom
 range whose rows fit on the page shown, a request that lands below them after a read draws on the next read in the
