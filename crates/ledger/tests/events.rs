@@ -2967,6 +2967,61 @@ fn a_term_end_leaves_out_an_ended_accounts_resets_by_the_resets_own_instant() {
     );
 }
 
+/// A term end before the range drops the resets at or after it as one inside the range does, and lists no row of its
+/// own there: the end's row belongs to a range that holds the end.
+#[test]
+fn a_term_end_before_the_range_drops_the_resets_after_it_and_lists_no_row_of_its_own() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let end = 10 * DAY;
+    let week_reset = end + 2 * DAY;
+    db.insert_samples(
+        &[weekly_sample(
+            "g",
+            "seven_day",
+            Some(0.8),
+            end - DAY,
+            week_reset,
+        )],
+        None,
+    )
+    .unwrap();
+    db.insert_event(
+        &event_of(&RouterEvent::WindowReset {
+            account_id: "g".into(),
+            window: "seven_day".into(),
+            utilization_before: 0.8,
+            reset_at: week_reset,
+            next_reset: None,
+            observed: "clock",
+            restored: false,
+            at: week_reset,
+        })
+        .expect("a reset row"),
+    )
+    .unwrap();
+    let read = |from: i64, to: i64| {
+        db.read_blocking(|c| unused_allowance(c, &["g".into()], from, to, &[("g".into(), end)]))
+            .unwrap()
+    };
+    assert_eq!(
+        read(11 * DAY, 13 * DAY),
+        Vec::<AllowanceReset>::new(),
+        "the day-12 reset of an account whose term ended on day 10 is left out, and the end lists no row"
+    );
+    assert_eq!(
+        read(0, 13 * DAY),
+        vec![reset_row(
+            "g",
+            "seven_day",
+            end,
+            1.0 - 0.8,
+            end - DAY,
+            "term_ended"
+        )],
+        "a range that holds the end lists its row in place of the reset"
+    );
+}
+
 #[tokio::test]
 async fn a_wind_down_the_previous_run_announced_is_not_written_again() {
     let up = FakeUpstream::start(vec![]).await;

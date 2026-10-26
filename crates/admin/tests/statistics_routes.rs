@@ -2774,6 +2774,101 @@ async fn a_trial_end_that_passed_in_range_ends_a_week_only_where_the_plan_ended_
     );
 }
 
+/// A term that ended before the range still drops the resets announced after it. The clock walk announces the reset of
+/// the week the stored reading names two days after the end, and a range that starts a day past the end lists no
+/// entry for the account, while the 30-day range that holds the end lists the `term_ended` row in its place.
+#[tokio::test]
+async fn a_term_end_before_the_range_still_drops_the_resets_after_it() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    const DAY: i64 = 24 * HOUR;
+    let end = now - 3 * DAY;
+    parts
+        .store
+        .set_canceled("business", true, Some(end))
+        .unwrap();
+    parts.router.reload().await.unwrap();
+    let week_reset = end + 2 * DAY;
+    parts
+        .db
+        .insert_samples(
+            &[phoebis_ledger::QuotaSampleRecord {
+                account_id: "business".into(),
+                bucket: phoebis_ledger::bucket_of(end - DAY),
+                window: "seven_day".into(),
+                utilization: Some(0.8),
+                reset_at: Some(week_reset),
+                source: "poll".into(),
+                observed_at: Some(end - DAY),
+            }],
+            None,
+        )
+        .unwrap();
+    parts
+        .db
+        .insert_event(&EventRecord {
+            at: week_reset,
+            kind: "window_reset".into(),
+            account_id: Some("business".into()),
+            detail: Some(
+                serde_json::json!({
+                    "window": "seven_day",
+                    "utilization_before": 0.8,
+                    "reset_at": week_reset,
+                    "next_reset": null,
+                    "observed": "clock",
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        })
+        .unwrap();
+    let read = |query: String| {
+        let app = parts.app.clone();
+        let cookie = cookie.clone();
+        async move {
+            json(
+                get(
+                    &app,
+                    &format!("/admin/analytics/unused_allowance{query}"),
+                    Some(&cookie),
+                )
+                .await,
+            )
+            .await
+        }
+    };
+    let after_end = read(format!("?range={},{now}", end + DAY)).await;
+    assert_eq!(
+        after_end["accounts"],
+        serde_json::json!([]),
+        "a range that starts a day past the end lists no reset of the ended account: {after_end}"
+    );
+    let thirty = read(String::new()).await;
+    assert_eq!(
+        (
+            &thirty["accounts"][0]["account_id"],
+            &thirty["accounts"][0]["windows"],
+        ),
+        (
+            &serde_json::json!("business"),
+            &serde_json::json!([{
+                "window": "seven_day",
+                "resets": [{
+                    "reset_at": end,
+                    "share_left": 1.0 - 0.8,
+                    "observed_at": end - DAY,
+                    "source": "term_ended",
+                }],
+                "total_share_left": 1.0 - 0.8,
+                "resets_counted": 1,
+            }]),
+        ),
+        "the 30-day range holds the end and lists its row in place of the clock reset: {thirty}"
+    );
+}
+
 #[tokio::test]
 async fn a_canceled_end_still_ahead_of_now_ends_no_week_in_a_range_that_reaches_past_it() {
     let parts = common::admin_parts_full().await;

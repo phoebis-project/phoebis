@@ -1281,12 +1281,13 @@ pub(crate) async fn unused_allowance(
     }
     // The term is read at the range's end, capped at `now`. A trial whose end passed by then while the plan carried on
     // ended no plan, so a passed trial end ends a week only through a plan-ended flag that followed it, at the flag's
-    // instant. An end still ahead of `now` ends no week yet, and a custom range may reach a day past it.
+    // instant. An end still ahead of `now` ends no week yet, and a custom range may reach a day past it. An end before
+    // `from` is listed too, since the week it cut short can reset inside the range, and the read drops that reset.
     let term_ends: Vec<(String, i64)> = oauth
         .iter()
         .filter_map(|id| {
             let end = term::end_of(snapshot.term(id)?, to.min(now))?;
-            (from <= end && end <= to.min(now)).then(|| (id.clone(), end))
+            (end <= to.min(now)).then(|| (id.clone(), end))
         })
         .collect();
     let rows = match state

@@ -48,14 +48,14 @@ fn share_left(utilization: f64) -> f64 {
 }
 
 /// The weekly resets of the listed accounts whose event `at` lies in `[from, to]`, read off the stored `window_reset`
-/// events, plus one `term_ended` row per weekly window with a reading before each `(account_id, end_at)` of
-/// `term_ends`. The read keeps the listed accounts, every account's rows where the list is empty, since the ledger
-/// holds no account kind: the caller lists the `oauth` accounts it answers for. A term end's row reads the last
-/// reading before the end of a week still open at it (its reset at or after the end), the head's overage-included
-/// week folded into `seven_day_fable` with the newer reading standing, and a reading with no utilization skipped. A
-/// reading with no reset instant shows no open week. A reset of such an account at or after its end is left out, so
-/// the week the end cut short counts once. Ordered by account, window, then `reset_at` newest first. No rollup and no
-/// stored figure: the history is the events the purge still holds.
+/// events, plus one `term_ended` row per weekly window with a reading before each `(account_id, end_at)` of `term_ends`
+/// whose end lies at or after `from`. The read keeps the listed accounts, every account's rows where the list is empty,
+/// since the ledger holds no account kind: the caller lists the `oauth` accounts it answers for. A term end's row reads
+/// the last reading before the end of a week still open at it (its reset at or after the end), the head's
+/// overage-included week folded into `seven_day_fable` with the newer reading standing, and a reading with no
+/// utilization skipped. A reading with no reset instant shows no open week. A reset of such an account at or after its
+/// end is left out, so the week the end cut short counts once. Ordered by account, window, then `reset_at` newest
+/// first. No rollup and no stored figure: the history is the events the purge still holds.
 pub fn unused_allowance(
     conn: &Connection,
     accounts: &[String],
@@ -131,7 +131,8 @@ pub fn unused_allowance(
                           AND COALESCE(observed_at, bucket * 1000) < ?2)
           ORDER BY window",
     )?;
-    for (account_id, end_at) in term_ends {
+    // An end before the range drops the resets after it above, and its own row belongs to a range that holds it.
+    for (account_id, end_at) in term_ends.iter().filter(|(_, end_at)| *end_at >= from) {
         let mut last: BTreeMap<String, (f64, i64)> = BTreeMap::new();
         let found = readings.query_map(params![account_id, end_at], |r| {
             Ok((
