@@ -91,6 +91,30 @@ test('a figure reads a dash where the plan is Free, the cost model sizes no capa
   assert.deepEqual(texts.filter((t) => t.includes('~')), [], 'no model is priced here, so no figure is estimated');
 });
 
+test('a Team or Enterprise plan reads the dash on a tier the cost model sizes', () => {
+  // Each tier is one the file's costs size, so only the plan word keeps these accounts unpriced, as the router's does.
+  const plans = [
+    { plan: 'team', tier: 'default_claude_ai' },
+    { plan: 'team', tier: 'default_claude_max_20x' },
+    { plan: 'enterprise', tier: 'default_claude_max_5x' },
+  ];
+  for (const plan of plans) {
+    for (const window of ['seven_day', 'seven_day_fable']) {
+      for (const unit of EQUIVALENT_UNITS) assert.deepEqual(d.allowanceFigure(0.5, window, plan, COSTS, unit), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${plan.plan} on ${plan.tier}, ${window}, ${unit}`);
+      assert.deepEqual(d.allowanceFigure(0.5, window, plan, COSTS, 'share'), { kind: 'share', share: 0.5, text: '50%' }, `${plan.plan} on ${plan.tier}, ${window}: Window shares reads the share`);
+    }
+  }
+  // The Team account leaves more than the Max 20x one, so only its plan ranks it last.
+  const answer = {
+    accounts: [accountOf('max', MAX_20X, [windowOf('seven_day', [0.25, 0.25, 0.25, 0.25])]), accountOf('team', { plan: 'team', tier: 'default_claude_max_20x' }, [windowOf('seven_day', [0.75, 0.75, 0.75, 0.75])])],
+    from: iso(NOW - 29 * DAY),
+    to: iso(NOW),
+  };
+  const rows = d.allowanceRows(answer, COSTS, 'native');
+  assert.deepEqual(rows.map((r) => [r.accountId, r.unpriced]), [['max', false], ['team', true]]);
+  assert.equal(d.fleetFigures(rows, 'native').note, '1 account priced, team left out unpriced');
+});
+
 test('the subtitle names the unit the figures read in', () => {
   assert.equal(d.allowanceSubtitle('share'), 'The share of each weekly window left unused when it reset, the last four weeks');
   for (const unit of EQUIVALENT_UNITS) assert.equal(d.allowanceSubtitle(unit), 'Each weekly window left unused when it reset, in 20x window equivalents, the last four weeks', unit);

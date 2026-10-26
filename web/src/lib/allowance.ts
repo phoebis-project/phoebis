@@ -1,6 +1,7 @@
 import type { AllowanceAccount, AllowanceReset, AllowanceWindow, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
 import { anchorTier, pricedWindow, tierCapacity } from '@/lib/costs';
 import { equivalentShort, fmtAbsolute, fmtShare, fmtShortTime } from '@/lib/format';
+import { routerPricesPlan } from '@/lib/quota';
 import type { UnitPosition } from '@/lib/unit';
 import { WINDOW_LABEL, WINDOW_ORDER, windowKeyId } from '@/lib/windows';
 
@@ -25,7 +26,8 @@ export function newestResets(window: AllowanceWindow, weeks = ALLOWANCE_WEEKS): 
 
 /** A figure in the console's unit: the share of the account's own window under Window shares, else the share's 20x
  *  window equivalent through the tier's capacity over the anchor's on the window (a model week through its priced
- *  shared window), a dash where the plan is `free` or the cost model sizes no capacity for the tier on that window. */
+ *  shared window), a dash where the router prices no capacity for the plan or the cost model sizes none for the tier
+ *  on that window. */
 export type AllowanceFigure = { kind: 'share'; share: number; text: string } | { kind: 'equivalent'; share: number; text: string } | { kind: 'unpriced'; text: '-'; title: string } | { kind: 'none'; text: '-'; title: string };
 
 /** The dash's hover where the plan prices no capacity. Named apart from `lib/analytics.ts`'s `UNPRICED_TITLE`, whose
@@ -37,11 +39,11 @@ export const FREE_NOTE = 'Free has no priced capacity in the cost model, so the 
 /**
  * What one share of the account's own window weighs in the anchor's: the tier's capacity over the anchor's on the
  * shared window the week prices on. A model week's capacity divides by one factor for every tier, so its weight is its
- * shared window's. Null for a Free plan, whose stored tier is Pro's though it prices no capacity, and where the cost
- * model sizes neither side.
+ * shared window's. Null for a plan the router prices no capacity for, whose stored tier the cost model may still size
+ * (a Free plan stores Pro's), and where the cost model sizes neither side.
  */
 function capacityWeight(account: Pick<AllowanceAccount, 'plan' | 'tier'>, window: string, costs: SubscriptionCosts): number | null {
-  if (account.plan === 'free' || account.tier === null) return null;
+  if (!routerPricesPlan(account.plan) || account.tier === null) return null;
   const priced = pricedWindow(costs, window);
   if (priced === null) return null;
   const own = tierCapacity(costs, account.tier, priced.priced);

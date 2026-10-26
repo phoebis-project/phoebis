@@ -35,6 +35,15 @@ export const PLAN_WORD_LABEL: Readonly<Record<string, string>> = {
 /** A resolved plan word's label, a word the table lacks shown as sent. */
 export const planWordLabel = (word: PlanWord): string => (own(PLAN_WORD_LABEL, word) ? PLAN_WORD_LABEL[word] : word);
 
+/**
+ * The router keys capacity by the stored tier for these plans alone (its snapshot's `priced_tier`), so a Free, Team,
+ * Enterprise or usage-based account, or one with no plan, is unpriced even on a tier the cost model sizes.
+ */
+const ROUTER_PRICED_PLANS: ReadonlySet<string> = new Set(['max', 'max_20x', 'max_5x', 'pro']);
+
+/** Whether the router prices capacity for an account of this plan word. */
+export const routerPricesPlan = (plan: PlanWord | null): boolean => plan !== null && ROUTER_PRICED_PLANS.has(plan);
+
 /** Remaining share drives the color: green at 50% and above, amber at 20% and above, red below. */
 export function meterTone(remaining: number): MeterTone {
   if (remaining >= 0.5) return 'good';
