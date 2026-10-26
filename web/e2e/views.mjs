@@ -5106,8 +5106,7 @@ async function analyticsTables(theme) {
  * rule with Account the fill at 1280 by 800, and at 375 by 800 its Account column at least 132 px under the floor the
  * card's `accounts-range` class reaches, its computed `min-width` 132 px, as wide and as floored as Accounts in range's
  * account column there. Both columns and the two cards' edges go to the measurements, and the viewport and the Traffic
- * tab are the pass's again after. The mock pass's alone, since the reference pass's seeded router answers no allowance
- * route.
+ * tab are the pass's again after. The mock pass's alone, since the router pass's seed answers no allowance route.
  */
 async function analyticsAllowanceTable(theme) {
   const say = (what) => failures.push(`${theme} /analytics Unused allowance by account: ${what}`);
@@ -7087,7 +7086,7 @@ async function accountsCardToggles(theme) {
  * pane's content box, nothing in it scrolls sideways, every card's right edge sits inside it and inside the window, and
  * the page is as wide as the window, since a grid minimum wider than the phone's pane would widen the pane with it. The
  * cards, the grid, the pane and the page go to the measurements, and the viewport is the pass's again after. The mock
- * pass's alone, since the reference pass's seeded router answers no allowance route and reconciles no window.
+ * pass's alone, since the router pass's seed answers no allowance route and reconciles no window.
  */
 async function accountsMeterCards(theme) {
   const say = (what) => failures.push(`${theme} /accounts allowance grid: ${what}`);

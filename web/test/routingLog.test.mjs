@@ -342,7 +342,7 @@ test('the walk words name every key the slow-down, the return rule, the pick, th
 
 /** Every key the routing crate writes on a walk line under a name of its own, with the fixtures' walk keys. */
 const ROUTER_WALK_KEYS = [
-  'account_id', 'age_five_hour', 'at_cap', 'attempt', 'binding', 'bound_ms', 'burn', 'by_runway', 'cause', 'ceiling', 'cold', 'cooldown', 'deadline', 'demand_five_hour', 'depth', 'destinations',
+  'account_id', 'age_five_hour', 'at_cap', 'attempt', 'binding', 'bound_ms', 'burn', 'by_runway', 'cause', 'ceiling', 'cold', 'cooldown', 'credit', 'deadline', 'demand_five_hour', 'depth', 'destinations',
   'drawn', 'dwell_age_ms', 'dwell_ms', 'end', 'ending', 'epoch', 'excess', 'expires_at', 'factor', 'fast', 'fired_by', 'found', 'grace_ms', 'hash', 'hashes_stamped', 'hold_five_hour',
   'holds_allowance', 'idle_ms', 'in_flight', 'in_overage', 'kind', 'ladder', 'lane', 'marked', 'marks', 'migrate_when_spent', 'mode', 'no_destination', 'no_fit', 'obstacle', 'obstacles',
   'over_ms', 'over_since', 'overage_policy', 'place', 'prefix_tokens', 'ramp', 'reason', 'refresh_age_ms', 'refresh_stamped', 'reset', 'reset_in_grace', 'round', 'runway_ms', 'score',

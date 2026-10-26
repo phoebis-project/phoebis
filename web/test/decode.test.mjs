@@ -22,9 +22,8 @@ test('an account decodes with its windows, plan, pool, and models', () => {
   const a = d.decodeAccount(body);
   assert.equal(a.id, 'business');
   assert.equal(a.kind, 'oauth');
-  // The captured fixture answers the profile's `max` flag, which the table reads as "Max". A capture that answers the
-  // word the router resolves for this Max 20x organization, `max_20x`, reads "Max 20x" here.
-  assert.equal(a.plan, 'Max', 'the resolved word names the plan, so the badge, the search and the chips read one name');
+  // The captured fixture answers the word the router resolves for this Max 20x organization, `max_20x`.
+  assert.equal(a.plan, 'Max 20x', 'the resolved word names the plan, so the badge, the search and the chips read one name');
   assert.equal(d.decodeAccount({ ...body, subscription: { ...body.subscription, plan: null } }).plan, null, 'the tier names no plan on its own');
   const planOf = (plan) => d.decodeAccount({ ...body, subscription: { ...body.subscription, plan } });
   assert.deepEqual([planOf('max_20x').subscription.plan, planOf('max_20x').plan], ['max_20x', 'Max 20x'], 'the word reads as sent and labels through the table');
@@ -37,7 +36,7 @@ test('an account decodes with its windows, plan, pool, and models', () => {
     ['billingType', 'endsAt', 'organizationType', 'plan', 'rateLimitTier', 'since', 'trialEndsAt'],
     'the route answers the profile and subscription fields and nothing more, so the card draws nothing beside them',
   );
-  assert.equal(a.subscription.plan, 'max');
+  assert.equal(a.subscription.plan, 'max_20x');
   assert.ok(isIso(a.subscription.since));
   assert.equal(a.subscription.trialEndsAt, null);
   assert.deepEqual(fixture('account').windows.map((w) => w.id), ['five_hour', 'seven_day', 'seven_day_fable', 'seven_day_opus'], 'the route passes the ledger\'s one spelling through, in the ledger order');
@@ -238,7 +237,7 @@ test('extra usage the provider switched off keeps the reason it gave', () => {
 
 test('the account list folds state, enabled, and cooldowns onto one status', () => {
   const list = fixture('accounts').accounts.map(d.decodeAccount);
-  assert.deepEqual(list.map((a) => a.id), ['business', 'direct', 'usage-seat'], 'sorted by label');
+  assert.deepEqual(list.map((a) => a.id), ['business', 'direct', 'free-org', 'usage-seat'], 'sorted by label');
   const direct = list.find((a) => a.id === 'direct');
   assert.equal(direct.kind, 'api_key');
   assert.equal(direct.subscription, null);
@@ -1745,19 +1744,19 @@ test("a refusal's record decodes its pin reason as not looked up", () => {
 test('request rows fold into analytics groups with the same sums the routes answer', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   const [all] = d.foldGroups(page.requests, 'all');
-  assert.equal(all.requests, 8, 'the two requests the route flagged refused leave the count');
+  assert.equal(all.requests, 11, 'the two requests the route flagged refused leave the count');
   assert.equal(all.refused, 2, 'the fold counts them under refused');
   assert.deepEqual({ ...all.refusals }, { client_contract: 1, guardrail_blocked: 1 }, 'and under their codes');
   assert.equal(all.rejected, 0, 'and under no outcome');
   assert.ok(!('client_contract' in all.errors) && !('guardrail_blocked' in all.errors), JSON.stringify({ ...all.errors }));
-  assert.equal(all.succeeded, 6);
+  assert.equal(all.succeeded, 9);
   assert.equal(all.failed, 1, 'a stream that ended short is not a failure');
   assert.equal(all.incomplete, 1);
-  assert.equal(all.attempts, 9);
+  assert.equal(all.attempts, 12);
   assert.equal(all.failovers, 1);
-  assert.equal(all.tokens.cacheRead, 4000);
-  assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 8);
-  assert.equal(all.cacheMissReasons.none, 7);
+  assert.equal(all.tokens.cacheRead, 5500);
+  assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 11);
+  assert.equal(all.cacheMissReasons.none, 10);
   assert.equal(all.cacheMissReasons.pending, 1, 'a comparison still running counts under its own word');
   assert.equal(all.probes.ok, 0);
   assert.equal(all.probes.held, 0, 'a group folded from request rows counts no held probe');
@@ -2228,7 +2227,7 @@ test('a session fold keeps two holders of one key id apart and labels the earlie
   const groups = inZone('UTC', () => d.foldGroups(rows, 'key'));
   assert.deepEqual(
     groups.map((g) => [g.key, g.label, g.requests]),
-    [[`desktop@${live.keyGeneration}`, 'desktop', 7], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Oct 11, 2026, 12:15)', 1]],
+    [[`desktop@${live.keyGeneration}`, 'desktop', 10], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Oct 11, 2026, 12:15)', 1]],
     'the key a group carries is the lifetime the requests route selects by',
   );
   assert.deepEqual(d.foldGroups([{ ...live, keyGeneration: 0, keyId: null }], 'key').map((g) => [g.key, g.label]), [['-@0', 'unattributed']]);
@@ -2267,12 +2266,12 @@ test('a session view folds every page the cursor names', () => {
   const load = async (cursor) => { calls += 1; return cursor === undefined ? pages[0] : pages[1]; };
   return d.loadSessionRequests(load, 20).then(({ partial, requests }) => {
     assert.equal(calls, 2);
-    assert.equal(requests.length, 10, 'both pages folded');
+    assert.equal(requests.length, 13, 'both pages folded');
     assert.equal(partial, false);
     return d.loadSessionRequests(async () => ({ nextCursor: 'more', requests: page.requests }), 2);
   }).then(({ partial, requests }) => {
     assert.equal(partial, true, 'the page bound marks the result partial');
-    assert.equal(requests.length, 20);
+    assert.equal(requests.length, 26);
   });
 });
 

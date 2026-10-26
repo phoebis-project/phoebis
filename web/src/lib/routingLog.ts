@@ -875,6 +875,7 @@ export const WALK_KEY: Record<string, string> = {
   ceiling: 'ceiling',
   cold: 'cold',
   cooldown: 'cooldown',
+  credit: 'credit issuer',
   cycle_ms: 'cycle',
   deadline: 'deadline',
   deadline_five_hour: "5h to its subscription's end at",
