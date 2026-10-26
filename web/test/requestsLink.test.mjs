@@ -33,6 +33,14 @@ test("a refusal count links its category's refused answers over the counted wind
   assert.equal(target(d.refusalLink(input, '-', 1).href).refusal_categories, '-', 'a refusal with no category links the dash');
 });
 
+test('a refusal count links with no client or user agent pattern, since the route reads neither', () => {
+  const input = { filters: { ...BASE.filters, clientPattern: 'no-such-client', userAgentPattern: 'claude-cli*' }, window: BASE.window };
+  const answer = d.refusalLink(input, 'cyber', 3);
+  assert.notEqual(answer.href, null, 'the bar links');
+  assert.equal(target(answer.href).client, undefined, 'no client pattern travels');
+  assert.equal(answer.title, 'List these requests on the Requests page');
+});
+
 test('a count links to the Requests page under its reason, from the hour holding the panel start to the end capped at now', () => {
   const answer = link();
   assert.deepEqual(target(answer.href), { cache_miss_reasons: 'messages_changed', from: '2026-09-16T11:00:00.000Z', path: '/requests', to: '2026-09-16T14:30:00.000Z' });

@@ -128,10 +128,10 @@ export function requestsLink({ count, filters, group, reason, refusalCategory, w
 }
 
 /** A count of the refusals card: its category's refused answers over the exact window the route counted, since the
- *  route reads the attempts at the request rather than the rollups' whole hours, and with no session, since the
- *  route's query carries no session selector. */
+ *  route reads the attempts at the request rather than the rollups' whole hours, and with no session, client pattern
+ *  or user agent pattern, since the route's query reads none of the three. */
 export function refusalLink(input: Omit<RequestsLinkInput, 'count' | 'group' | 'reason' | 'refusalCategory'>, category: string, count: number): RequestsLinkTarget {
-  return requestsLink({ ...input, count, filters: { ...input.filters, sessionId: null }, refusalCategory: category, window: { ...input.window, exact: true } });
+  return requestsLink({ ...input, count, filters: { ...input.filters, clientPattern: '', sessionId: null, userAgentPattern: '' }, refusalCategory: category, window: { ...input.window, exact: true } });
 }
 
 /** One link of the drawer's "Widen to" line. */

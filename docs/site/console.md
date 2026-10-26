@@ -862,23 +862,24 @@ Exhausted), Errors by code ("Failed and incomplete responses in range, the refus
 range." where none was), Refusals by category ("Answers the upstream refused in range, by category, each a request that
 succeeded", one bar per category linking the Requests view on the stop reason `refusal` and the category over the range
 to the millisecond, `none` for a refusal with no category, or "No answer was refused in this range." where none was, and
-under a session filter every session's, which its subtitle then says), Failovers, Migration rewrites with its moves (one
-bar per move reason, stacked by the destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each segment
-titled `{fit} {n}` and the bar labeled with the reason's total, and under them "Held by the slow-down", a bar per bucket
-of the time the slow-down held requests in the warning tone, its hover `12 requests held 14 min in all`, `no request
-held` on a bucket that held none, and its legend line the range's sum, or `none in range` with no chart), Requests by
-speed, Effort levels, then at full width the card "Guardrails" ("Matches by guardrail in range, every key") with one row
-per guardrail that matched in the range as Guardrail, Observed, Blocked and "Blocked bytes", reading the range alone and
-no other filter, a guardrail the registry no longer holds as `{id} (deleted)` and "No guardrail matched in this range."
-where none did ([Guardrails](guardrails.md)), and the table Traffic by the chosen group with Requests, OK, Rate limited,
-Failed, Incomplete, Exhausted, Rejected, Refused, Error rate, Failovers, Search and Fetch, the Requests and Error rate
-headers reading "The refused requests are left out, see the Refused column" on hover and the Refused header the
-Dashboard's Refused tile hover. Under the model grouping a request refused before it resolved a model groups under "no
-model", which the Cache by model table leaves out, and a group with no request, as that one, reads a muted dash in its
-Error rate cell, as the head's `{pct}` reads a dash where the range rated no request. A request the router refused
-before any account was asked is counted in its group's Refused column and in the "Refusals by code" card, a guardrail's
-block on the Guardrails card's Blocked and "Blocked bytes" as well, and never in the request count, the outcome columns,
-the error rate, the cache figures or the latency.
+under a session, client or user agent filter every session's, client's and user agent's, which its subtitle then names,
+its links carrying none of the three), Failovers, Migration rewrites with its moves (one bar per move reason, stacked by
+the destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each segment titled `{fit} {n}` and the bar
+labeled with the reason's total, and under them "Held by the slow-down", a bar per bucket of the time the slow-down held
+requests in the warning tone, its hover `12 requests held 14 min in all`, `no request held` on a bucket that held none,
+and its legend line the range's sum, or `none in range` with no chart), Requests by speed, Effort levels, then at full
+width the card "Guardrails" ("Matches by guardrail in range, every key") with one row per guardrail that matched in the
+range as Guardrail, Observed, Blocked and "Blocked bytes", reading the range alone and no other filter, a guardrail the
+registry no longer holds as `{id} (deleted)` and "No guardrail matched in this range." where none did
+([Guardrails](guardrails.md)), and the table Traffic by the chosen group with Requests, OK, Rate limited, Failed,
+Incomplete, Exhausted, Rejected, Refused, Error rate, Failovers, Search and Fetch, the Requests and Error rate headers
+reading "The refused requests are left out, see the Refused column" on hover and the Refused header the Dashboard's
+Refused tile hover. Under the model grouping a request refused before it resolved a model groups under "no model", which
+the Cache by model table leaves out, and a group with no request, as that one, reads a muted dash in its Error rate
+cell, as the head's `{pct}` reads a dash where the range rated no request. A request the router refused before any
+account was asked is counted in its group's Refused column and in the "Refusals by code" card, a guardrail's block on
+the Guardrails card's Blocked and "Blocked bytes" as well, and never in the request count, the outcome columns, the
+error rate, the cache figures or the latency.
 
 Burn follows the page's grouping, and "Session (Burn only)" groups it by session while every other section keeps the key
 grouping, since no rollup carries a session. Of the filters, the Accounts filter and the user agent groups alone apply

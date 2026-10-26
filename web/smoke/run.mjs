@@ -17699,6 +17699,22 @@ m.unmount();
     });
     scoped.unmount();
   }
+
+  // Nor does the route read a client pattern, so under one that matches no row the card counts every client's
+  // refusals, says so, and its links list the rows it counted.
+  const clientCheck = '/analytics under a client pattern the Refusals by category card reads every client, its subtitle saying the client filter does not apply, with no client on its links';
+  const patterned = await mount('/analytics?class=no-such-client', { now: CLOCK_ORIGIN });
+  const patternedLinks = barsOf(patterned).map((b) => (b.href === null ? null : paramsOf(b.href)));
+  results.push({
+    name: clientCheck,
+    ok:
+      subtitleOf(patterned) === `${SUBTITLE}. The client filter does not apply here` &&
+      JSON.stringify(countsOf(patterned)) === JSON.stringify([['cyber', '3'], ['harmful', '2'], ['none', '1']]) &&
+      patternedLinks.length === 3 &&
+      patternedLinks.every((l) => l !== null && !('client' in l)),
+    missing: [subtitleOf(patterned) ?? 'no subtitle', JSON.stringify(countsOf(patterned)), JSON.stringify(patternedLinks)],
+  });
+  patterned.unmount();
 }
 
 m = await mount('/analytics');

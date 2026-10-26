@@ -56,6 +56,21 @@ test("the mock keeps a request under its serving attempt's stop reason and refus
   assert.deepEqual(await listed({ refusalCategories: ['-'], stopReasons: ['refusal'] }), ids(bare));
 });
 
+test("a refusal bar's link lists the rows its count counted under a client pattern the route does not read", async () => {
+  const now = Date.parse(AT);
+  const from = now - 24 * 3_600_000;
+  const count = await api.getAnalyticsRefusalCategories({ accountIds: [], clients: ['no-such-client'], from: new Date(from).toISOString(), groupBy: 'all', includeProbes: false, keyIds: [], models: [], poolIds: [], to: AT });
+  const cyber = count.rows.find((r) => r.category === 'cyber');
+  assert.equal(cyber?.requests, 3, JSON.stringify(count.rows));
+  const counted = unprobed.filter((r) => Date.parse(r.at) >= from && Date.parse(r.at) <= now && r.attempts.at(-1)?.response?.stopReason === 'refusal' && r.attempts.at(-1).response.refusalCategory === 'cyber');
+  const input = { filters: { accountIds: [], clientPattern: 'no-such-client', includeProbes: false, keyIds: [], models: [], poolIds: [], sessionId: null, userAgentPattern: '' }, window: { exact: false, fromMs: from, nowMs: now, toMs: now } };
+  // The address read back as the Requests page reads it into its list query.
+  const read = d.REQUESTS_CODEC.fromParams(new URL(d.refusalLink(input, 'cyber', cyber.requests).href, 'http://console.test').searchParams, now);
+  const linked = await listed({ accountIds: read.accounts, client: read.client, from: read.range.from, includeProbes: read.kind === 'probe', keyIds: read.keys, models: read.models, poolIds: read.pools, refusalCategories: read.refusalCategories, session: read.session || undefined, stopReasons: read.stopReasons, to: read.range.to });
+  assert.deepEqual(linked, ids(counted));
+  assert.equal(linked.length, 3);
+});
+
 test('the mock leaves the stamp uncapped under a fixed end, so a row received inside the range and written after it is read once, as the route does', async () => {
   // The seed is the story's failed turn that waited out its 60 s pool's whole bound at the cap after its attempts, so
   // it finishes more than a minute after it arrived, and the ledger writes a row at its finish: an end between the two
