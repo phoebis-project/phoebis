@@ -37,12 +37,9 @@
 # status, so one command captures and compares.
 #
 # The control plane (the OAuth token, profile, usage, and roles calls) is not captured here: those calls hit
-# hardcoded hosts that ANTHROPIC_BASE_URL cannot redirect, so recording them needs a live `/login` and `/status`
-# session run by hand behind a CONNECT tunnel that trusts a throwaway CA. Point HTTPS_PROXY at
-# scripts/capture/mitm/mitm5.py and NODE_EXTRA_CA_CERTS at that CA's certificate; mitm5.py answers the token,
-# profile, usage, and roles endpoints with canned responses and records what it received. Generate the throwaway
-# CA and leaf certificate yourself; none is checked in. Without that half, --check reports the control-plane
-# fixtures as not captured and compares the rest.
+# hardcoded hosts that ANTHROPIC_BASE_URL cannot redirect, so scripts/capture-control.sh records them through a
+# CONNECT tunnel of its own. Without that capture, --check reports the control-plane fixtures as not captured and
+# compares the rest.
 #
 # Nothing here talks to Anthropic. Every receiver answers with a canned 400 or a canned 200, and the script
 # refuses to start if the caller's environment holds a real credential.

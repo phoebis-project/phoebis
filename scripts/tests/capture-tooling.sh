@@ -1,14 +1,24 @@
 #!/usr/bin/env bash
 # Each case pins a rule a real capture leans on, checked here without the client: the leaf a receiver presents
-# chains to the run's own CA and names the control hosts, and mkcerts.sh refuses to start on a host without
-# openssl. Every case runs against a throwaway tree, never /tmp/cc-capture or ~/.claude, and reaches no host off
-# loopback.
+# chains to the run's own CA and names the control hosts, mkcerts.sh refuses to start on a host without openssl,
+# and control_receiver.py answers the control calls with the committed canned bodies, records each call, and keeps
+# serving after a client that drops its tunnel before the handshake. Every case runs against a throwaway tree,
+# never /tmp/cc-capture or ~/.claude, and reaches no host off loopback.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
 capture="$here/scripts/capture"
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+receiver_pid=
+# A case that fails exits with its receiver still listening, so the trap stops it before removing the tree the
+# receiver writes into.
+stop_receiver() {
+  [[ -n "$receiver_pid" ]] || return 0
+  kill "$receiver_pid" 2>/dev/null || true
+  wait "$receiver_pid" 2>/dev/null || true
+  receiver_pid=
+}
+trap 'stop_receiver; rm -rf "$tmp"' EXIT
 fail() { echo "FAIL $1" >&2; exit 1; }
 
 # --- mkcerts.sh ---
@@ -47,5 +57,101 @@ out=$(PATH="$tmp/empty-bin" "$BASH" "$capture/mkcerts.sh" "$tmp/no-openssl" 2>&1
 [[ "$status" -eq 1 ]] || fail "mkcerts.sh without openssl exited $status, want 1: $out"
 [[ "$out" == "mkcerts.sh: openssl is needed" ]] || fail "mkcerts.sh without openssl printed: $out"
 [[ ! -e "$tmp/no-openssl" ]] || fail "mkcerts.sh without openssl still wrote $tmp/no-openssl"
+
+# --- control_receiver.py ---
+
+# The control capture's client reaches the control hosts only through this receiver, so the receiver has to answer
+# with exactly the committed bodies and record every call. Each call below names the real host inside the
+# receiver's tunnel. -q skips a ~/.curlrc and --noproxy '' overrides a NO_PROXY in the environment, so no call can
+# bypass the receiver and reach that host.
+responses="$here/crates/profile/fixtures/responses"
+recording="$tmp/control.json"
+port=$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])') \
+  || fail "found no free loopback port for control_receiver.py"
+python3 -I "$capture/control_receiver.py" "$port" "$recording" 60 "$tmp/run/certs" "$responses" &
+receiver_pid=$!
+control_curl() {
+  curl -q -s --max-time 10 --noproxy '' --proxy "http://127.0.0.1:$port" --cacert "$tmp/run/certs/ca.pem" "$@"
+}
+# One line per entry in seq order, so a whole recording compares as one string. An entry whose keys differ from
+# the request shape or the error shape, or a request whose Host header does not name its tunnel's host, prints a
+# line no expected string holds.
+summarize() {
+  python3 -I - "$1" <<'PY'
+import json, sys
+
+for entry in sorted(json.load(open(sys.argv[1])), key=lambda e: e["seq"]):
+    keys = sorted(entry)
+    if keys == ["error", "seq", "target"] and entry["error"]:
+        print(entry["seq"], entry["target"], "error")
+    elif keys == ["answered", "body", "headers", "request_line", "seq", "target"]:
+        if "Host: " + entry["target"].rsplit(":", 1)[0] not in entry["headers"]:
+            print(entry["seq"], "no Host header for", entry["target"], entry["headers"])
+        line = f'{entry["seq"]} {entry["target"]} {entry["request_line"]} -> {entry["answered"]} {entry["body"]}'
+        print(line.rstrip())
+    else:
+        print(entry["seq"], "unexpected entry", entry)
+PY
+}
+
+# The first call also waits out the receiver's start: curl retries a refused connect, and the receiver accepts
+# nothing before it listens, so the wait leaves no trace in the recording.
+code=$(control_curl --retry 5 --retry-delay 1 --retry-connrefused -o "$tmp/profile.out" \
+  -w '%{http_code} %{content_type} %header{connection}' https://api.anthropic.com/api/oauth/profile) \
+  || fail "the profile call through control_receiver.py failed: $code"
+[[ "$code" == "200 application/json close" ]] || fail "the profile call was answered $code"
+cmp -s "$tmp/profile.out" "$responses/profile.json" || fail "the profile call's body is not responses/profile.json"
+code=$(control_curl -o "$tmp/token.out" -w '%{http_code}' -H 'Content-Type: application/json' \
+  --data-raw '{"grant_type":"refresh_token"}' https://platform.claude.com/v1/oauth/token) \
+  || fail "the token call through control_receiver.py failed: $code"
+[[ "$code" == "200" ]] || fail "the token call was answered $code"
+cmp -s "$tmp/token.out" "$responses/token.json" || fail "the token call's body is not responses/token.json"
+code=$(control_curl -o "$tmp/other.out" -w '%{http_code}' https://api.anthropic.com/api/oauth/other) \
+  || fail "the call to a path with no canned body failed: $code"
+[[ "$code" == "404" ]] || fail "a path with no canned body was answered $code, want 404"
+[[ "$(<"$tmp/other.out")" == "{}" ]] || fail "a path with no canned body was answered $(<"$tmp/other.out"), want {}"
+
+# Each entry reaches the disk before its answer goes out, so a capture killed outright keeps every call the client
+# saw answered.
+three='0 api.anthropic.com:443 GET /api/oauth/profile HTTP/1.1 -> 200
+1 platform.claude.com:443 POST /v1/oauth/token HTTP/1.1 -> 200 {"grant_type":"refresh_token"}
+2 api.anthropic.com:443 GET /api/oauth/other HTTP/1.1 -> 404'
+got=$(summarize "$recording") || fail "the recording does not parse: $got"
+[[ "$got" == "$three" ]] || fail "the recording after three calls reads: $got"
+
+# A client that drops its tunnel between the CONNECT answer and the TLS handshake leaves one error entry, and the
+# receiver goes on to answer the next call.
+python3 -I - "$port" <<'PY' || fail "control_receiver.py did not answer CONNECT x:443 with a 200"
+import socket, sys
+
+with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=10) as s:
+    s.sendall(b"CONNECT x:443\r\n\r\n")
+    answer = b""
+    while b"\r\n\r\n" not in answer:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        answer += chunk
+sys.exit(answer != b"HTTP/1.1 200 Connection established\r\n\r\n")
+PY
+code=$(control_curl -o "$tmp/profile-again.out" -w '%{http_code}' https://api.anthropic.com/api/oauth/profile) \
+  || fail "the profile call after a dropped tunnel failed: $code"
+[[ "$code" == "200" ]] || fail "the profile call after a dropped tunnel was answered $code"
+cmp -s "$tmp/profile-again.out" "$responses/profile.json" \
+  || fail "the profile call after a dropped tunnel is not responses/profile.json"
+
+# The recording is removed first, so only the SIGTERM handler's own dump can bring it back.
+rm "$recording"
+kill -TERM "$receiver_pid"
+status=0
+wait "$receiver_pid" || status=$?
+receiver_pid=
+[[ "$status" -eq 0 ]] || fail "control_receiver.py exited $status on SIGTERM, want 0"
+[[ -s "$recording" ]] || fail "control_receiver.py wrote no recording on SIGTERM"
+five="$three
+3 x:443 error
+4 api.anthropic.com:443 GET /api/oauth/profile HTTP/1.1 -> 200"
+got=$(summarize "$recording") || fail "the recording written on SIGTERM does not parse: $got"
+[[ "$got" == "$five" ]] || fail "the recording written on SIGTERM reads: $got"
 
 echo "capture-tooling: ok"
