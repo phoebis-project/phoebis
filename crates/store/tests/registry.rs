@@ -2449,6 +2449,115 @@ fn the_term_classes_a_usage_based_seat_from_its_stored_tier_or_seat_tier_and_nev
     );
 }
 
+#[test]
+fn the_term_resolves_the_plan_from_the_organization_type_first_and_the_tier_second() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let profiles: [(&str, Option<&str>, &str, Option<&str>); 13] = [
+        (
+            "enterprise",
+            Some("claude_enterprise"),
+            "default_claude_max_5x",
+            None,
+        ),
+        ("free", Some("claude_free"), "default_claude_ai", None),
+        (
+            "max",
+            Some("claude_max"),
+            "default_claude_max_unnamed",
+            None,
+        ),
+        (
+            "max-20x",
+            Some("claude_max"),
+            "default_claude_max_20x",
+            None,
+        ),
+        ("max-5x", Some("claude_max"), "default_claude_max_5x", None),
+        ("pro", Some("claude_pro"), "default_claude_ai", None),
+        (
+            "seat-by-tier",
+            Some("claude_free"),
+            "default_claude_zero",
+            None,
+        ),
+        (
+            "seat-by-seat-tier",
+            Some("claude_enterprise"),
+            "default_claude_max_5x",
+            Some("enterprise_usage_based"),
+        ),
+        ("team", Some("claude_team"), "default_claude_ai", None),
+        ("untyped-20x", None, "default_claude_max_20x", None),
+        ("untyped-pro", None, "default_claude_ai", None),
+        ("untyped-unnamed", None, "default_claude_unnamed", None),
+        ("untyped-zero", None, "default_claude_zero", None),
+    ];
+    store
+        .insert_account(&account("bare", AccountKind::Oauth))
+        .unwrap();
+    for (id, organization_type, tier, seat_tier) in profiles {
+        store
+            .insert_account(&account(id, AccountKind::Oauth))
+            .unwrap();
+        let document = serde_json::json!({
+            "organization": {
+                "organization_type": organization_type,
+                "rate_limit_tier": tier,
+                "seat_tier": seat_tier,
+            },
+        });
+        store
+            .set_profile(
+                id,
+                &document.to_string(),
+                &SubscriptionRow {
+                    tier: Some(tier.into()),
+                    ..SubscriptionRow::default()
+                },
+            )
+            .unwrap();
+    }
+    let expected: Vec<(String, Option<String>)> = [
+        ("bare", None),
+        ("enterprise", Some("enterprise")),
+        ("free", Some("free")),
+        ("max", Some("max")),
+        ("max-20x", Some("max_20x")),
+        ("max-5x", Some("max_5x")),
+        ("pro", Some("pro")),
+        ("seat-by-seat-tier", Some("usage_based")),
+        ("seat-by-tier", Some("usage_based")),
+        ("team", Some("team")),
+        ("untyped-20x", Some("max_20x")),
+        ("untyped-pro", Some("pro")),
+        ("untyped-unnamed", None),
+        ("untyped-zero", Some("usage_based")),
+    ]
+    .into_iter()
+    .map(|(id, plan)| (id.to_string(), plan.map(String::from)))
+    .collect();
+    let loaded: Vec<(String, Option<String>)> = store
+        .load_registry()
+        .unwrap()
+        .terms
+        .into_iter()
+        .map(|term| (term.account_id, term.plan))
+        .collect();
+    let read: Vec<(String, Option<String>)> = expected
+        .iter()
+        .map(|(id, _)| {
+            let term = store.subscription_term(id).unwrap().unwrap();
+            (term.account_id, term.plan)
+        })
+        .collect();
+    assert_eq!(
+        (loaded, read),
+        (expected.clone(), expected),
+        "the type names the plan before the tier, the class reads above both, and no document reads none, at the \
+         load and through the term read alike"
+    );
+}
+
 fn has_windows_table(path: &std::path::Path) -> bool {
     let conn = rusqlite::Connection::open(path).unwrap();
     conn.query_row(
@@ -3540,6 +3649,266 @@ fn a_write_that_keeps_an_account_in_its_own_pool_lands() {
         .update_pool_with_members(&read, read.updated_at, Some(&[member("a", 5)]), "test")
         .unwrap();
     assert_eq!(store.pool_members("p1").unwrap()[0].priority, 5);
+}
+
+/// The list `budgeted_pool` stores: `a` first with a daily budget and `b` second with a monthly one, so a compare
+/// reads every column of a member.
+fn budgeted_members() -> Vec<MemberWrite> {
+    vec![
+        MemberWrite {
+            budget_daily_usd: Some(5.0),
+            ..member("a", 0)
+        },
+        MemberWrite {
+            budget_monthly_usd: Some(50.0),
+            ..member("b", 1)
+        },
+    ]
+}
+
+/// Accounts `a` and `b` in pool `main` as `budgeted_members` lists them.
+fn budgeted_pool(store: &Store) {
+    for id in ["a", "b"] {
+        store
+            .insert_account(&account(id, AccountKind::ApiKey))
+            .unwrap();
+    }
+    store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .set_pool_members("main", &budgeted_members(), "test")
+        .unwrap();
+}
+
+fn change_count(store: &Store) -> usize {
+    store.registry_changes_after(0, 1_000).unwrap().len()
+}
+
+#[test]
+fn a_member_list_equal_to_the_stored_one_writes_no_change_row_and_moves_no_stamp() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    budgeted_pool(&store);
+    let before = store.pool("main").unwrap().unwrap();
+    let changes = change_count(&store);
+    let stamp = store
+        .set_pool_members("main", &budgeted_members(), "test")
+        .unwrap();
+    let after = store.pool("main").unwrap().unwrap();
+    assert_eq!(
+        (stamp, after.updated_at, after.incarnation),
+        (before.updated_at, before.updated_at, before.incarnation),
+        "the write answers the stamp it read and leaves the row's own"
+    );
+    assert_eq!(
+        change_count(&store),
+        changes,
+        "the equal list records no change row"
+    );
+}
+
+#[test]
+fn a_member_list_that_differs_in_order_priority_or_budget_writes_the_list_again() {
+    let stored = budgeted_members();
+    let reordered = vec![stored[1].clone(), stored[0].clone()];
+    let mut reprioritized = stored.clone();
+    reprioritized[1].priority = 2;
+    let mut rebudgeted = stored.clone();
+    rebudgeted[0].budget_daily_usd = Some(6.0);
+    for (what, list) in [
+        ("a reordered list", reordered),
+        ("a changed priority", reprioritized),
+        ("a changed budget", rebudgeted),
+    ] {
+        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        budgeted_pool(&store);
+        let before = store.pool("main").unwrap().unwrap();
+        let changes = change_count(&store);
+        let stamp = store.set_pool_members("main", &list, "test").unwrap();
+        assert!(stamp > before.updated_at, "{what} moves the stamp");
+        assert_eq!(
+            store.pool("main").unwrap().unwrap().updated_at,
+            stamp,
+            "{what}"
+        );
+        assert_eq!(
+            change_count(&store),
+            changes + 1,
+            "{what} records one change row"
+        );
+        assert_eq!(last_change(&store, "main").0, "pool_members_set", "{what}");
+    }
+}
+
+#[test]
+fn a_pool_save_that_changes_the_member_list_alone_records_the_list_and_no_pool_edit_and_moves_the_stamp(
+) {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    budgeted_pool(&store);
+    let read = store.pool("main").unwrap().unwrap();
+    let stored = budgeted_members();
+    let reordered = vec![stored[1].clone(), stored[0].clone()];
+    let start = store.newest_registry_change_id().unwrap().unwrap_or(0);
+    let stamp = store
+        .update_pool_with_members(&read, read.updated_at, Some(&reordered), "test")
+        .unwrap();
+    assert!(stamp > read.updated_at, "the list's write moves the stamp");
+    assert_eq!(store.pool("main").unwrap().unwrap().updated_at, stamp);
+    let kinds: Vec<(String, String)> = store
+        .registry_changes_after(start, 100)
+        .unwrap()
+        .into_iter()
+        .map(|change| (change.kind, change.target))
+        .collect();
+    assert_eq!(
+        kinds,
+        [("pool_members_set".to_string(), "main".to_string())],
+        "the unchanged row's pairs are empty, so the save records the list's row alone"
+    );
+}
+
+#[test]
+fn a_pool_save_that_changes_no_field_no_policy_no_member_and_no_guardrail_writes_nothing_and_answers_the_stamp_it_was_given(
+) {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    budgeted_pool(&store);
+    let read = store.pool("main").unwrap().unwrap();
+    let changes = change_count(&store);
+    let stamp = store
+        .update_pool_with_members_and_guardrails(
+            &read,
+            read.updated_at,
+            Some(&budgeted_members()),
+            Some(&[]),
+            "test",
+        )
+        .unwrap();
+    assert_eq!(stamp, read.updated_at, "the stamp the save was given");
+    assert_eq!(
+        format!("{:?}", store.pool("main").unwrap().unwrap()),
+        format!("{read:?}"),
+        "the row as it was read, its stamp and incarnation among it"
+    );
+    assert_eq!(
+        change_count(&store),
+        changes,
+        "neither the pool's edit nor its member list records a change row"
+    );
+}
+
+#[test]
+fn a_pool_save_that_changes_nothing_under_a_stale_stamp_or_another_incarnation_is_refused_as_stale()
+{
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    budgeted_pool(&store);
+    let first = store.pool("main").unwrap().unwrap();
+    store
+        .update_pool(
+            &PoolRow {
+                label: "Renamed".into(),
+                ..first.clone()
+            },
+            first.updated_at,
+            "test",
+        )
+        .unwrap();
+    let read = store.pool("main").unwrap().unwrap();
+    let changes = change_count(&store);
+    assert!(
+        matches!(
+            store.update_pool_with_members(
+                &read,
+                first.updated_at,
+                Some(&budgeted_members()),
+                "test"
+            ),
+            Err(StoreError::Stale)
+        ),
+        "a stamp a later edit moved past"
+    );
+    assert!(
+        matches!(
+            store.update_pool_with_members(
+                &PoolRow {
+                    incarnation: read.incarnation + 1,
+                    ..read.clone()
+                },
+                read.updated_at,
+                Some(&budgeted_members()),
+                "test"
+            ),
+            Err(StoreError::Stale)
+        ),
+        "a row read from another incarnation of the pool"
+    );
+    assert_eq!(
+        format!("{:?}", store.pool("main").unwrap().unwrap()),
+        format!("{read:?}")
+    );
+    assert_eq!(change_count(&store), changes);
+}
+
+#[test]
+fn a_pool_save_that_changes_the_keepalive_policy_alone_writes_one_pool_edit_with_empty_pairs_and_moves_the_stamp(
+) {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    let read = store.pool("main").unwrap().unwrap();
+    let changes = change_count(&store);
+    let policy = r#"{"enabled":true,"lead_seconds_5m":90}"#;
+    let stamp = store
+        .update_pool(
+            &PoolRow {
+                keepalive_json: policy.into(),
+                ..read.clone()
+            },
+            read.updated_at,
+            "test",
+        )
+        .unwrap();
+    assert!(
+        stamp > read.updated_at,
+        "the policy's write moves the stamp"
+    );
+    let after = store.pool("main").unwrap().unwrap();
+    assert_eq!(
+        (after.keepalive_json.as_str(), after.updated_at),
+        (policy, stamp)
+    );
+    assert_eq!(change_count(&store), changes + 1);
+    assert_eq!(
+        last_change(&store, "main"),
+        ("pool_updated".to_string(), serde_json::json!({})),
+        "the policy sits outside the logged fields, so the edit's row names none"
+    );
+}
+
+#[test]
+fn a_pool_created_with_an_empty_member_list_records_no_member_row_and_one_created_with_a_member_records_both(
+) {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::ApiKey))
+        .unwrap();
+    let start = store.newest_registry_change_id().unwrap().unwrap_or(0);
+    store
+        .insert_pool_with_members(&pool("empty"), Some(&[]), "test")
+        .unwrap();
+    store
+        .insert_pool_with_members(&pool("held"), Some(&[member("a", 0)]), "test")
+        .unwrap();
+    let kinds: Vec<(String, String)> = store
+        .registry_changes_after(start, 100)
+        .unwrap()
+        .into_iter()
+        .map(|change| (change.kind, change.target))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("pool_created".to_string(), "empty".to_string()),
+            ("pool_created".to_string(), "held".to_string()),
+            ("pool_members_set".to_string(), "held".to_string()),
+        ]
+    );
 }
 
 #[test]
@@ -4649,8 +5018,14 @@ fn a_pool_edit_records_each_field_it_changed_with_its_value_before_and_after_and
     store.update_pool(&edited, stamp, "test").unwrap();
     assert_eq!(
         last_change(&store, "main"),
-        ("pool_updated".to_string(), serde_json::json!({})),
-        "an edit that changed no field"
+        (
+            "pool_updated".to_string(),
+            serde_json::json!({
+                "label": { "from": "main", "to": "Main pool" },
+                "in_flight_cap": { "from": 8, "to": 4 },
+            })
+        ),
+        "an edit that changed no field records no row, so the two-field edit stays the newest"
     );
 }
 
@@ -5922,7 +6297,6 @@ fn the_change_log_records_the_three_guardrail_kinds_and_the_guardrails_member_on
             ("guardrail_created", "g2"),
             ("guardrail_updated", "g1"),
             ("pool_updated", "main"),
-            ("pool_updated", "main"),
             ("key_updated", "k1"),
             ("key_updated", "k1"),
             ("guardrail_deleted", "g2"),
@@ -5946,19 +6320,15 @@ fn the_change_log_records_the_three_guardrail_kinds_and_the_guardrails_member_on
         changes[3].2["guardrails"],
         serde_json::json!({ "from": ["g1"], "to": ["g2", "g1"] })
     );
-    assert!(
-        changes[4].2.get("guardrails").is_none(),
-        "a list written back unchanged adds no member"
-    );
     assert_eq!(
-        changes[5].2["guardrails"],
+        changes[4].2["guardrails"],
         serde_json::json!({ "from": ["g1"], "to": ["g2"] })
     );
     assert!(
-        changes[6].2.get("guardrails").is_none(),
+        changes[5].2.get("guardrails").is_none(),
         "a key edit without a list adds no member"
     );
-    assert_eq!(changes[7].2, serde_json::json!({}));
+    assert_eq!(changes[6].2, serde_json::json!({}));
 }
 
 /// The diffs a guardrail's writes logged after `start`, oldest first.

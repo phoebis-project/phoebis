@@ -242,6 +242,7 @@ pub async fn run_until(
         &ledger_db,
         &pricing.revisions(),
         config.stats.retention_days,
+        config.stats.rollup_retention_days,
         clock(),
     )
     .context("re-folding the rollup rows whose prompt-length band moved")?;
@@ -366,6 +367,7 @@ pub async fn run_until(
         .spawn_memory_flush(phoebis_relay::MEMORY_FLUSH_INTERVAL);
     // Read at the start beside the keepalive's timing, so a test's variable has to outlive the start alone.
     let budget_total = shutdown_budget();
+    let drain_timeout = listener_drain();
     let keepalive = Engine::new(EngineParts {
         bus: bus.clone(),
         clock: clock.clone(),
@@ -579,7 +581,7 @@ pub async fn run_until(
         )),
         proxy_stop,
         ListenLimits {
-            drain_timeout: LISTENER_DRAIN,
+            drain_timeout,
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: PROXY_MAX_CONNECTIONS,
             shutdown_mark: Some(mark.clone()),
@@ -591,7 +593,7 @@ pub async fn run_until(
         admin_app,
         stop_rx.clone(),
         ListenLimits {
-            drain_timeout: LISTENER_DRAIN,
+            drain_timeout,
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: ADMIN_MAX_CONNECTIONS,
             shutdown_mark: None,
@@ -613,7 +615,7 @@ pub async fn run_until(
         ),
         stop_rx,
         ListenLimits {
-            drain_timeout: LISTENER_DRAIN,
+            drain_timeout,
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: METRICS_MAX_CONNECTIONS,
             shutdown_mark: None,
@@ -672,6 +674,8 @@ pub async fn run_until(
         )
         .await;
     };
+    // The outer bound keeps the constant, longer than any test drain, so a listener's own cut is never the abort
+    // path's.
     let served = match budget
         .bound_within("listeners", LISTENER_DRAIN, listeners)
         .await
@@ -994,6 +998,20 @@ fn shutdown_budget() -> Duration {
         return Duration::from_secs(seconds);
     }
     SHUTDOWN_BUDGET
+}
+
+/// The listeners' own drain. Under the `debug-hooks` feature, which only the router's own test build turns on,
+/// `PHOEBIS_DEBUG_LISTENER_DRAIN_SECONDS` replaces it, so an end-to-end case sees the proxy listener's own cut in
+/// seconds. The budget's outer bound keeps `LISTENER_DRAIN`, longer than any test drain.
+fn listener_drain() -> Duration {
+    #[cfg(feature = "debug-hooks")]
+    if let Some(seconds) = std::env::var("PHOEBIS_DEBUG_LISTENER_DRAIN_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        return Duration::from_secs(seconds);
+    }
+    LISTENER_DRAIN
 }
 
 fn resolver_for(upstream: &UpstreamConfig) -> Resolver {

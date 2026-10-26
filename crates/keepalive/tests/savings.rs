@@ -7,7 +7,7 @@ use std::time::Duration;
 use common::*;
 use fake_upstream::Respond;
 use phoebis_bus::OTHER_CLIENT;
-use phoebis_keepalive::{Event, KeepalivePolicy, Reason};
+use phoebis_keepalive::{Event, KeepalivePolicy, Reason, RecipeState};
 use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect, UNATTRIBUTED};
 use phoebis_routing::PinUsage;
 
@@ -892,6 +892,513 @@ async fn a_failed_request_decides_none_of_the_probes_it_kept_and_leaves_them_to_
     }
 }
 
+/// A canceled request between two probes restores the recipe, and the restored recipe's next probe reads the entry
+/// back, so the first probe's chain runs on through it. The tick at the first probe's own entry's end at 570 s
+/// settles nothing, and a warm turn at 600 s inside the second probe's entry is credited with neither probe wasted.
+#[tokio::test]
+async fn a_canceled_request_between_two_probes_leaves_the_first_to_the_chain_the_restored_recipe_extends(
+) {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1, "a covering probe");
+    r.advance_attended(10_000);
+    open_request_as(&r, "canceled", OTHER_CLIENT, 0, 2_000);
+    r.engine
+        .observe(r.complete("canceled", phoebis_bus::Outcome::Canceled, None));
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.next_probe_at, status.reason),
+        (Some(NOW + 540_000), Reason::RequestCanceled),
+        "the cancel restored the recipe on the first probe's entry"
+    );
+    r.advance_attended(260_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.unanswered, status.next_probe_at, status.reason),
+        (2, Some(NOW + 810_000), Reason::Scheduled),
+        "the kept probe and the restored recipe's probe, which read the entry back 540 s in and kept it to 840 s"
+    );
+    r.advance_attended(30_000);
+    r.step().await;
+    r.engine.flush_persisted().await;
+    r.advance_attended(30_000);
+    open_request_as(&r, "warm", OTHER_CLIENT, 2_000, 0);
+    r.engine.observe(completed(&r, "warm", 2_000));
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the tick at 570 s settled nothing and the warm turn answered both probes"
+    );
+}
+
+/// A probe sent while a request streams reads the entry back past the end of the recipe the arrival set aside, and
+/// the request fails before that end. The restored recipe lapses at 570 s while the probe's entry lives to 850 s, so
+/// the lapse leaves both probes to their chain, and a warm turn at 600 s is credited with neither probe wasted. With
+/// `catch_up_fails` the restored recipe's catch-up probe at 561 s answers a 5xx, whose first rung would land past the
+/// entry's end, so the recipe pauses and its lapse drops the paused prompt.
+async fn a_failed_request_between_two_probes_then_the_restored_recipes_lapse(catch_up_fails: bool) {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(
+        r.status("main").unanswered,
+        1,
+        "a covering probe, its entry to 570 s"
+    );
+    r.advance_attended(10_000);
+    // At 280 s the first recipe goes aside on its entry to 570 s, and this request's first stream event arms its own
+    // recipe on an entry to 580 s, due at 550 s.
+    open_request_as(&r, "second", OTHER_CLIENT, 0, 2_000);
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").unanswered),
+        (2, 2),
+        "the kept probe and the probe that landed at 550 s while the second request streamed, its entry to 850 s"
+    );
+    r.advance_attended(10_000);
+    r.engine.observe(failed(&r, "second", Some(40)));
+    assert_eq!(
+        r.status("main").next_probe_at,
+        Some(NOW + 540_000),
+        "the failure at 560 s restored the first recipe on its entry to 570 s"
+    );
+    if catch_up_fails {
+        r.up.push_credential_rule(
+            A,
+            "/v1/messages",
+            Respond::Json {
+                status: 503,
+                headers: vec![],
+                body: br#"{"type":"error","error":{"type":"api_error","message":"x"}}"#.to_vec(),
+            },
+        );
+        r.advance_attended(1_000);
+        r.step().await;
+        assert!(
+            r.status("main").paused,
+            "the catch-up probe's 5xx paused the restored recipe"
+        );
+        r.advance_attended(9_000);
+    } else {
+        r.advance_attended(10_000);
+    }
+    r.step().await;
+    r.engine.flush_persisted().await;
+    r.advance_attended(30_000);
+    open_request_as(&r, "warm", OTHER_CLIENT, 2_000, 0);
+    r.engine.observe(completed(&r, "warm", 2_000));
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "catch-up fails: {catch_up_fails}: the lapse at 570 s settled neither probe and the warm turn at 600 s \
+         answered both"
+    );
+}
+
+#[tokio::test]
+async fn a_probe_sent_during_a_failed_request_outlives_the_restored_recipes_lapse() {
+    a_failed_request_between_two_probes_then_the_restored_recipes_lapse(false).await;
+}
+
+#[tokio::test]
+async fn a_probe_sent_during_a_failed_request_outlives_the_restored_paused_recipes_lapse() {
+    a_failed_request_between_two_probes_then_the_restored_recipes_lapse(true).await;
+}
+
+/// The rig's body with `content` as its one message, so the upstream stub tells one turn's probe from another's.
+fn body_saying(content: &str) -> String {
+    BODY.replace(r#""content":"hello""#, &format!(r#""content":"{content}""#))
+}
+
+/// The one message a recorded request's body carries.
+fn sent_content(request: &fake_upstream::RecordedRequest) -> String {
+    let body: serde_json::Value = serde_json::from_slice(&request.body).expect("a JSON body");
+    body["messages"][0]["content"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The Sessions row of the rig's agent `agent`.
+fn recipe_row(r: &Rig, agent: &str) -> phoebis_keepalive::RecipeView {
+    r.engine
+        .recipes()
+        .into_iter()
+        .find(|v| v.session_id == "session" && v.agent_id == agent)
+        .unwrap_or_else(|| panic!("no row for {agent}"))
+}
+
+/// A real request that fails or is canceled leaves the recipe of the last answered request armed on its schedule:
+/// the row reads `retained` under the request's own word, and the next probe replays the answered turn's body, never
+/// the failed one's, though the failed turn streamed far enough to arm a recipe of its own.
+#[tokio::test]
+async fn a_failed_or_canceled_request_leaves_the_last_answered_recipe_armed_and_its_next_probe_replays_that_body(
+) {
+    for outcome in [phoebis_bus::Outcome::Failed, phoebis_bus::Outcome::Canceled] {
+        let word = match outcome {
+            phoebis_bus::Outcome::Canceled => Reason::RequestCanceled,
+            _ => Reason::RequestFailed,
+        };
+        let mut r = rig(RigSpec {
+            accounts: vec![api_key("a", A, 0)],
+            ..RigSpec::default()
+        })
+        .await;
+        r.observe_with("main", &body_saying("answered")).await;
+        let schedule = r.status("main").next_probe_at;
+        assert!(
+            schedule.is_some(),
+            "{outcome:?}: the answered turn armed the recipe"
+        );
+        r.advance(60_000);
+        open_request_with(&r, "failing", &body_saying("failing"), 2_000, 0);
+        r.engine.observe(r.complete("failing", outcome, None));
+        let status = r.status("main");
+        assert_eq!(
+            (status.next_probe_at, status.paused, status.reason),
+            (schedule, false, word),
+            "{outcome:?}: the answered turn's schedule stands"
+        );
+        let row = recipe_row(&r, "main");
+        assert_eq!(
+            (row.state, row.cause),
+            (RecipeState::Retained, word),
+            "{outcome:?}"
+        );
+        r.advance(schedule.unwrap() - r.now());
+        r.step().await;
+        let sent = r.up.requests();
+        assert_eq!(
+            (sent.len(), r.status("main").probes),
+            (2, 1),
+            "{outcome:?}: the answered request and the probe on its schedule"
+        );
+        assert_eq!(
+            sent_content(&sent[1]),
+            "answered",
+            "{outcome:?}: the probe replays the answered turn's body"
+        );
+    }
+}
+
+/// A rejected request stays a pause: the recipe it found leaves with it, the row reads `paused` and no probe goes.
+#[tokio::test]
+async fn a_rejected_request_pauses_and_leaves_no_recipe_armed() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    let schedule = r.status("main").next_probe_at.unwrap();
+    r.advance(60_000);
+    r.engine.observe(r.observed("rejected", "main", BODY));
+    r.engine
+        .observe(r.complete("rejected", phoebis_bus::Outcome::Rejected, None));
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.next_probe_at,
+            status.reason,
+            r.engine.stats().retained_bytes
+        ),
+        (None, Reason::RequestRejected, 0)
+    );
+    let row = recipe_row(&r, "main");
+    assert_eq!(
+        (row.state, row.cause),
+        (RecipeState::Paused, Reason::RequestRejected)
+    );
+    r.advance(schedule - r.now());
+    r.step().await;
+    assert_eq!(r.up.requests().len(), 1, "no probe after the rejection");
+}
+
+/// A request open past the expiry of the last answered recipe's entry finds nothing left to arm when it fails: the
+/// row reads `not_retained` under `request_failed`, and nothing stays in memory.
+#[tokio::test]
+async fn a_failure_whose_last_recipe_expired_while_it_was_open_leaves_nothing_armed() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    r.advance(60_000);
+    r.engine.observe(r.observed("failing", "main", BODY));
+    r.engine.observe(r.selected("failing", "a"));
+    // Past the answered turn's five-minute entry, with the request still open.
+    r.advance(300_000);
+    r.engine.observe(failed(&r, "failing", None));
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.next_probe_at,
+            status.reason,
+            r.engine.stats().retained_bytes
+        ),
+        (None, Reason::RequestFailed, 0)
+    );
+    let row = recipe_row(&r, "main");
+    assert_eq!(
+        (row.state, row.cause),
+        (RecipeState::NotRetained, Reason::RequestFailed)
+    );
+}
+
+/// The arrival moves the agent to its request's model and the selection to its account, and the recipe a failure
+/// leaves armed comes back under the model and the account it was armed under: an old body probed under the new pair
+/// would read the wrong pin, cooldown and price. The probe reaches the first turn's account with its body and model.
+#[tokio::test]
+async fn a_failed_turn_on_another_model_and_account_leaves_the_first_turns_recipe_armed_under_its_own_pair(
+) {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    let first = r.status("main");
+    assert_eq!(first.account_id.as_deref(), Some("a"));
+    r.advance(10_000);
+    r.engine.observe(r.observed("other", "main", &opus_body()));
+    r.engine.observe(r.selected("other", "b"));
+    let moved = r.status("main");
+    assert_eq!(
+        (moved.canonical_model.as_str(), moved.account_id.as_deref()),
+        (OPUS, Some("b")),
+        "the turn moved the agent to its own pair"
+    );
+    r.engine.observe(failed(&r, "other", None));
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.canonical_model.as_str(),
+            status.account_id.as_deref(),
+            status.cache_ttl_ms,
+            status.next_probe_at
+        ),
+        (
+            first.canonical_model.as_str(),
+            Some("a"),
+            first.cache_ttl_ms,
+            first.next_probe_at
+        ),
+        "the failure restored the first turn's model, account, TTL and schedule"
+    );
+    r.advance(first.next_probe_at.unwrap() - r.now());
+    r.step().await;
+    let sent = r.up.requests();
+    assert_eq!(sent.len(), 2, "the first turn and its probe");
+    let probe: serde_json::Value = serde_json::from_slice(&sent[1].body).unwrap();
+    assert_eq!(
+        (sent[1].credential(), probe["model"].as_str()),
+        (Some(A), Some(first.canonical_model.as_str())),
+        "the probe went to the first turn's account with its body and model"
+    );
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.probes,
+            status.migrations,
+            status.account_id.as_deref(),
+            status.canonical_model.as_str(),
+            status.reason
+        ),
+        (
+            1,
+            0,
+            Some("a"),
+            first.canonical_model.as_str(),
+            Reason::Scheduled
+        )
+    );
+}
+
+/// The recipe a failed request leaves armed is swept as any armed recipe is: its request ended before the failed one
+/// arrived, so no open request holds it. Past its entry's expiry with no probe answered it lapses under `expired`,
+/// and at the memory bound a new body evicts it from an idle agent under `evicted`.
+#[tokio::test]
+async fn a_recipe_a_failed_request_left_armed_lapses_and_is_evicted_as_any_armed_one() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    let schedule = r.status("main").next_probe_at;
+    r.advance(60_000);
+    r.engine.observe(r.observed("failing", "main", BODY));
+    r.engine.observe(r.selected("failing", "a"));
+    r.engine.observe(failed(&r, "failing", None));
+    assert_eq!(r.status("main").next_probe_at, schedule, "armed again");
+    let sent = r.up.requests().len();
+    // Past the entry's expiry at 300 s, with no tick between.
+    r.advance(260_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.reason,
+            status.next_probe_at,
+            r.engine.stats().retained_bytes
+        ),
+        (Reason::Expired, None, 0)
+    );
+    assert_eq!(r.up.requests().len(), sent, "no probe past the expiry");
+    // Room for two recipes and a half: a third agent's body evicts the idle agent's restored recipe.
+    let one = {
+        let mut sized = rig(RigSpec::default()).await;
+        sized.observe("main").await;
+        sized.engine.stats().retained_bytes
+    };
+    let mut r = rig(RigSpec {
+        limits: phoebis_keepalive::KeepaliveLimits {
+            max_retained_bytes: one * 5 / 2,
+            ..phoebis_keepalive::KeepaliveLimits::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    for agent in ["worker", "third"] {
+        r.event(Event {
+            event: "agent_start".into(),
+            agent_id: Some(agent.into()),
+            ..Default::default()
+        })
+        .unwrap();
+    }
+    r.observe("main").await;
+    r.advance_attended(10_000);
+    r.engine.observe(r.observed("failing", "main", BODY));
+    r.engine.observe(r.selected("failing", "a"));
+    r.engine.observe(failed(&r, "failing", None));
+    assert!(
+        r.status("main").next_probe_at.is_some(),
+        "the failure left main's recipe armed"
+    );
+    r.state("main", "idle");
+    r.observe("worker").await;
+    r.observe("third").await;
+    assert_eq!(
+        (r.status("main").reason, r.status("third").reason),
+        (Reason::Evicted, Reason::Scheduled)
+    );
+    let mut kept = r.engine.recipes_for("desktop", "session");
+    kept.sort();
+    assert_eq!(kept, ["third", "worker"]);
+}
+
+/// The two halves of a turn of `agent`'s on `a`, observed and placed and its first stream event written, open for a
+/// completion the case sends or withholds.
+fn open_turn(r: &Rig, id: &str, agent: &str) {
+    r.engine.observe(r.observed(id, agent, BODY));
+    r.engine.observe(r.selected(id, "a"));
+    r.engine.observe(message_start(
+        id,
+        phoebis_bus::Usage {
+            cache_write_5m_tokens: Some(2_000),
+            ..Default::default()
+        },
+    ));
+}
+
+/// The recipe an arrival puts aside stays in memory, so it counts against `max_retained_bytes` beside the agent's new
+/// body, and where the new body does not fit the agent's own aside recipe leaves first. Under a bound of three and a
+/// half recipes, two agents armed and then each sent a request left open: the first agent's aside body fits beside its
+/// new one, the second's new body takes the room its own aside recipe leaves, and the first agent's failure restores
+/// its recipe, the failed body alone leaving, while the second's failure arms nothing. The agent ids have one length,
+/// so every recipe is one size.
+#[tokio::test]
+async fn an_aside_recipe_counts_against_the_memory_bound_and_yields_first_to_its_own_agents_new_body(
+) {
+    let one = {
+        let sized = rig(RigSpec::default()).await;
+        open_turn(&sized, "sized", "main");
+        sized.engine.observe(completed(&sized, "sized", 0));
+        sized.engine.stats().retained_bytes
+    };
+    let limit = one * 7 / 2;
+    let mut r = rig(RigSpec {
+        limits: phoebis_keepalive::KeepaliveLimits {
+            max_retained_bytes: limit,
+            ..phoebis_keepalive::KeepaliveLimits::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("side".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    let retained = |r: &Rig| {
+        let bytes = r.engine.stats().retained_bytes;
+        assert!(
+            bytes <= limit,
+            "{bytes} retained against a bound of {limit}"
+        );
+        bytes
+    };
+    for agent in ["main", "side"] {
+        let id = format!("{agent}-answered");
+        open_turn(&r, &id, agent);
+        r.engine.observe(completed(&r, &id, 0));
+    }
+    let schedule = r.status("main").next_probe_at;
+    assert_eq!(retained(&r), 2 * one, "two armed recipes");
+    open_turn(&r, "main-open", "main");
+    assert_eq!(
+        retained(&r),
+        3 * one,
+        "main's aside body fits beside its new one"
+    );
+    open_turn(&r, "side-open", "side");
+    assert_eq!(
+        (retained(&r), r.status("side").reason),
+        (3 * one, Reason::Scheduled),
+        "side's new body took the room its own aside recipe left"
+    );
+    r.engine.observe(failed(&r, "main-open", None));
+    assert_eq!(
+        retained(&r),
+        2 * one,
+        "main's failure restored its recipe, the failed body alone leaving"
+    );
+    assert_eq!(
+        (r.status("main").next_probe_at, r.status("main").reason),
+        (schedule, Reason::RequestFailed)
+    );
+    r.engine.observe(failed(&r, "side-open", None));
+    assert_eq!(retained(&r), one, "side's failure arms nothing");
+    let row = recipe_row(&r, "side");
+    assert_eq!(
+        (row.state, row.cause),
+        (RecipeState::NotRetained, Reason::RequestFailed)
+    );
+}
+
 /// A probe sent while a request streams pays for the request after it, so that request failing past its head leaves
 /// the probe on the books for the next request or the recipe's stop, as a bus gap does, rather than dropping it.
 #[tokio::test]
@@ -952,12 +1459,9 @@ fn open_request_with(r: &Rig, id: &str, body: &str, read: u64, write: u64) {
     ));
 }
 
-/// A probe sent while a request streams can pause the agent on its answer, and a later attempt of that request then
-/// reports its usage under the pause. The observation records the TTL that usage settled on all the same, so the
-/// request's credit books an hour recipe's count under the hour, where a TTL of zero would file it under five minutes.
-#[tokio::test]
-async fn a_request_whose_usage_arrives_while_its_agent_is_paused_books_its_credit_at_the_ttl_it_settled_on(
-) {
+/// The rig after the two requests, the covering probe, the pausing probe and the retry whose first stream event
+/// carries `start`, for the two cases that read the credit it books.
+async fn paused_retry(start: phoebis_bus::Usage) -> Rig {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
         ..RigSpec::default()
@@ -991,13 +1495,7 @@ async fn a_request_whose_usage_arrives_while_its_agent_is_paused_books_its_credi
         selected.attempt = 2;
     }
     r.engine.observe(retry);
-    let mut start = message_start(
-        "second",
-        phoebis_bus::Usage {
-            cache_read_tokens: Some(2_000),
-            ..Default::default()
-        },
-    );
+    let mut start = message_start("second", start);
     if let phoebis_bus::Event::ResponseChunk(chunk) = &mut start {
         chunk.attempt = 2;
     }
@@ -1008,6 +1506,20 @@ async fn a_request_whose_usage_arrives_while_its_agent_is_paused_books_its_credi
         complete.attempt = 2;
     }
     r.engine.observe(done);
+    r
+}
+
+/// A probe sent while a request streams can pause the agent on its answer, and a later attempt of that request then
+/// reports its usage under the pause. The observation records the TTL that usage settled on all the same, so the
+/// request's credit books an hour recipe's count under the hour, where a TTL of zero would file it under five minutes.
+#[tokio::test]
+async fn a_request_whose_usage_arrives_while_its_agent_is_paused_books_its_credit_at_the_ttl_it_settled_on(
+) {
+    let r = paused_retry(phoebis_bus::Usage {
+        cache_read_tokens: Some(2_000),
+        ..Default::default()
+    })
+    .await;
     let rows = final_rollups(&r).await;
     let credit = inference_rows(&rows);
     assert_eq!(
@@ -1026,56 +1538,13 @@ async fn a_request_whose_usage_arrives_while_its_agent_is_paused_books_its_credi
 /// read alone would settle on the recipe's hour.
 #[tokio::test]
 async fn a_paused_requests_credit_books_at_the_shorter_ttl_an_earlier_phase_settled_on() {
-    let mut r = rig(RigSpec {
-        accounts: vec![api_key("a", A, 0)],
-        ..RigSpec::default()
+    let r = paused_retry(phoebis_bus::Usage {
+        cache_read_tokens: Some(2_000),
+        cache_write_5m_tokens: Some(100),
+        cache_write_1h_tokens: Some(0),
+        ..Default::default()
     })
     .await;
-    let hour = priced_body().replace(
-        r#""cache_control":{"type":"ephemeral"}"#,
-        r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#,
-    );
-    open_request_with(&r, "first", &hour, 0, 2_000);
-    r.engine.observe(completed(&r, "first", 0));
-    assert_eq!(r.status("main").cache_ttl_ms, 3_600_000);
-    r.advance_attended(3_600_000 - 360_000);
-    r.step().await;
-    assert_eq!(r.status("main").unanswered, 1, "a covering probe");
-    r.advance_attended(420_000);
-    open_request_with(&r, "second", &hour, 2_000, 0);
-    // The probe due while the second request streams reads half the prefix back, which pauses the agent.
-    r.up.push_credential_rule(A, "/v1/messages", probe_answer(1_000, 1_000));
-    r.advance_attended(3_600_000 - 360_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").probes, r.status("main").paused),
-        (2, true),
-        "the probe sent while the second request streamed paused the agent"
-    );
-    let mut retry = r.selected("second", "a");
-    if let phoebis_bus::Event::AccountSelected(selected) = &mut retry {
-        selected.attempt = 2;
-    }
-    r.engine.observe(retry);
-    let mut start = message_start(
-        "second",
-        phoebis_bus::Usage {
-            cache_read_tokens: Some(2_000),
-            cache_write_5m_tokens: Some(100),
-            cache_write_1h_tokens: Some(0),
-            ..Default::default()
-        },
-    );
-    if let phoebis_bus::Event::ResponseChunk(chunk) = &mut start {
-        chunk.attempt = 2;
-    }
-    r.engine.observe(start);
-    assert!(r.status("main").paused, "the usage arrived under the pause");
-    let mut done = completed(&r, "second", 2_000);
-    if let phoebis_bus::Event::RequestComplete(complete) = &mut done {
-        complete.attempt = 2;
-    }
-    r.engine.observe(done);
     let rows = final_rollups(&r).await;
     let credit = inference_rows(&rows);
     assert_eq!(
@@ -1215,9 +1684,9 @@ async fn a_warm_return_without_the_credit_answers_the_probes_it_kept() {
 }
 
 /// Probes kept on one model answer only to a return on that model. A request on another model that failed before
-/// any head moves the agent to that model and leaves the probes kept; the next request on it reads that model's own
-/// entry inside its TTL, which reads nothing the probes paid for, so they settle as a cold return and nothing is
-/// credited.
+/// any head leaves the first model's recipe armed and the probes kept. The next request on the other model reads that
+/// model's own entry inside its TTL, which reads nothing the probes paid for, so they settle as a cold return and
+/// nothing is credited.
 #[tokio::test]
 async fn a_cache_read_on_another_model_settles_the_probes_kept_on_the_first_as_a_cold_return() {
     let mut r = rig(RigSpec {
@@ -1238,8 +1707,8 @@ async fn a_cache_read_on_another_model_settles_the_probes_kept_on_the_first_as_a
     let status = r.status("main");
     assert_eq!(
         (status.canonical_model.as_str(), status.unanswered),
-        (OPUS, 1),
-        "the failed request moved the model and decided nothing"
+        ("claude-sonnet-4-5", 1),
+        "the failed request restored the first turn's recipe and decided nothing"
     );
     r.advance_attended(10_000);
     open_request_with(&r, "third", &other, 2_000, 0);
@@ -3930,6 +4399,63 @@ async fn a_request_kept_warm_on_a_plan_funded_account_is_credited() {
         (2_000, 0)
     );
     assert!(row(&r, &kept).await.kept_warm);
+}
+
+/// The unit and the tier of the first probe a plan-funded account on the Pro tier leaves unanswered, its stored profile
+/// naming `organization_type`, on the suite's own cost tables.
+async fn probe_on_the_pro_tier_of(organization_type: &str) -> (Option<String>, Option<String>) {
+    let mut r = rig(RigSpec {
+        tables: phoebis_ledger::test_tables::subscription_costs(),
+        tier: Some("default_claude_ai"),
+        ..plan_funded_spec()
+    })
+    .await;
+    let document = serde_json::json!({
+        "organization": {"organization_type": organization_type, "rate_limit_tier": "default_claude_ai"},
+    });
+    r.h.store
+        .set_profile(
+            "o",
+            &document.to_string(),
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_ai".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    let body = opus_body();
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1, "{organization_type}");
+    let (_, agents) = r.engine.persist_rows();
+    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    let probe = &payload["unanswered"][0];
+    (
+        probe["unit"].as_str().map(String::from),
+        probe["tier"].as_str().map(String::from),
+    )
+}
+
+/// A free organization reports the Pro tier and its plan prices no capacity, so its probe settles in dollars as an
+/// untiered account's does while a Pro organization's settles in the window share, and both records keep the raw tier
+/// their rows file under.
+#[tokio::test]
+async fn a_free_organizations_probe_settles_in_dollars_and_keeps_the_raw_tier_beside_a_pro_ones_window_share(
+) {
+    assert_eq!(
+        (
+            probe_on_the_pro_tier_of("claude_free").await,
+            probe_on_the_pro_tier_of("claude_pro").await,
+        ),
+        (
+            (Some("usd".into()), Some("default_claude_ai".into())),
+            (Some("window_share".into()), Some("default_claude_ai".into())),
+        ),
+        "the free organization's probe settles in dollars, the Pro one's in the window share, both on the stored tier"
+    );
 }
 
 /// A credit files beside its request's own row: a Haiku 5.5 request in January whose prompt passes that month's

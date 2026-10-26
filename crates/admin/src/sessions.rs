@@ -62,10 +62,11 @@ pub(crate) struct Session {
     pub burn_at: Option<i64>,
     /// The time until the pin's account's projection reaches the pool's ceiling on the window that binds among those
     /// the pin's model draws, with the pin's burn counted once and no rewrite. Null for an unbounded runway and where
-    /// the account projects none of those windows.
+    /// the account projects none of those windows. Null too where the runway reaches past the binding window's next
+    /// reset, since the window resets before the ceiling is reached.
     pub runway_ms: Option<i64>,
-    /// Null where the account projects none of the windows the pin's model draws, false for an unbounded runway,
-    /// true where `runway_ms` is set.
+    /// Null where the account projects none of the windows the pin's model draws, false for an unbounded runway or one
+    /// past the window's reset, true where `runway_ms` is set.
     pub runway_bounded: Option<bool>,
     /// The pin's account's factor from the slow-down entry in force, null on a row with no pin and where no entry is
     /// in force.
@@ -324,11 +325,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             Some(BurnUnit::Usd) => rates.price_pin(BurnUnit::Usd, p).map(|b| b * 3_600.0),
             Some(BurnUnit::WindowShare) => {
                 if !tiers.contains_key(&p.account_id) {
-                    let tier = state
-                        .store
-                        .subscription(&p.account_id)
-                        .map_err(crate::routes::store_failure)?
-                        .and_then(|s| s.tier);
+                    // The selector's own read of the plan, so a plan the cost model does not price (a free
+                    // organization) reads unpriced here as it does there.
+                    let tier = snapshot.priced_tier(&p.account_id).map(String::from);
                     tiers.insert(p.account_id.clone(), tier);
                 }
                 let tier = tiers.get(&p.account_id).and_then(Option::as_deref);

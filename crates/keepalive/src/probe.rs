@@ -194,6 +194,17 @@ pub(crate) enum Applied {
     Orphaned,
 }
 
+/// How an upstream `Retry-After` bears on a rung's wait.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RetryWait {
+    /// No header: the ladder's step.
+    Step,
+    /// The `accounts_at_cap` header: a slot frees up in seconds, so the header replaces the step whatever its length.
+    Replace(i64),
+    /// The quota `429`'s header: it replaces the step only where it is longer.
+    AtLeast(i64),
+}
+
 /// The unit a probe settles in: the one `settlement_unit` decides under the regime of the probe's `entrypoint`, or
 /// dollars where the share it names cannot be priced. Only the unit is kept, since the credit reads its presence and
 /// the ledger prices the probe's counts.
@@ -363,7 +374,10 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         } else {
             funding.map(Funding::unit).unwrap_or(SavingsUnit::Usd)
         };
-        // The tier the store names now: a share is of the window the account has at this settlement.
+        // The tier the store names now: a share is of the window the account has at this settlement, and the record
+        // keeps that raw tier as the key its rows file under, as the request row keeps its own. The unit reads the
+        // store's tier where the snapshot's plan is one the cost model prices, so a plan the cost model does not price
+        // (a free organization) settles in dollars as an untiered account does.
         let tier = (default_unit == SavingsUnit::WindowShare)
             .then(|| match engine.parts.store.subscription(&record.account) {
                 Ok(row) => {
@@ -384,11 +398,13 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             .flatten()
             .and_then(|s| s.tier);
         record.tier = tier.clone();
+        let snapshot = engine.parts.router.snapshot();
+        let priced_tier = snapshot.priced_tier(&record.account).and(tier.as_deref());
         let unit = settled_unit(
             default_unit,
             &tables,
             job.entrypoint.as_deref(),
-            tier.as_deref(),
+            priced_tier,
             &record.account,
             &record.canonical_model,
             record.usage,
@@ -751,7 +767,13 @@ impl Inner {
             return Applied::Landed { covered: false };
         }
         if usage.evidence() == 0 {
-            self.retry(key, agent_id, Reason::NoProbeCacheEvidence, now, None);
+            self.retry(
+                key,
+                agent_id,
+                Reason::NoProbeCacheEvidence,
+                now,
+                RetryWait::Step,
+            );
             return Applied::Landed { covered: false };
         }
         // A probe that read part of the prefix and rebuilt the rest never warmed the whole entry; one that
@@ -793,7 +815,7 @@ impl Inner {
             .due_at()
             .is_some_and(|due| due <= now)
         {
-            self.retry(key, agent_id, Reason::SlowProbe, now, None);
+            self.retry(key, agent_id, Reason::SlowProbe, now, RetryWait::Step);
         }
         Applied::Landed { covered }
     }
@@ -809,9 +831,10 @@ impl Inner {
     }
 
     /// The Go `probeErrorLocked`, read from the answer the relay gave. A 429 after failover, or the exhaustion 429
-    /// the relay answers when every account is cooled, is the quota pause. A pool at its in-flight cap
-    /// (`accounts_at_cap`) retries after the header's wait instead, since a slot there may free up before the next
-    /// real request would. A probe the selector refused on the pinned member's spend budget holds under `budget`
+    /// the relay answers when every account is cooled, retries on the ladder under `probe_quota_exhausted`, its
+    /// `Retry-After` replacing the step where it is longer. A pool at its in-flight cap (`accounts_at_cap`) retries
+    /// after the header's wait whatever its length, since a slot there may free up before the next real request
+    /// would. A probe the selector refused on the pinned member's spend budget holds under `budget`
     /// without a pause, since only a raised budget or the period's end clears it, never a wait. A probe the router
     /// refused with `ledger_behind` holds under it for the answer's wait, counting no failure and no idle tick. A
     /// probe the selector answered on its pinned member's standing holds under that standing: `Paused` for the
@@ -819,8 +842,8 @@ impl Inner {
     /// retry for a member this probe already tried, or for one whose budget the degraded ledger leaves unknown,
     /// which the ledger's recovery clears without a real request. A pinned member a leg of the probe marked for
     /// re-authentication pauses under the authentication reason. The untimed exhaustion 503, when every account of
-    /// the pool was unusable at selection, pauses under its own reason. A 5xx forwarded from upstream retries, any
-    /// other 4xx is a shape the upstream refuses, and a canceled, timed-out, or lost exchange (status 0) is a
+    /// the pool was unusable at selection, retries under its own reason. A 5xx forwarded from upstream retries, any
+    /// other 4xx is a shape the upstream refuses, and a canceled, timed-out, or lost exchange (status 0) retries as a
     /// transport error.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn probe_error(
@@ -853,7 +876,13 @@ impl Inner {
             }
             // A moved key's next probe admits under its new pool.
             (true, Some("attempted" | "budget_unknown" | "pool_moved")) => {
-                return self.retry(key, agent_id, Reason::RetryableProbeError, now, None)
+                return self.retry(
+                    key,
+                    agent_id,
+                    Reason::RetryableProbeError,
+                    now,
+                    RetryWait::Step,
+                )
             }
             (true, Some("reauth_required")) => {
                 self.set_reason(key, agent_id, Reason::ProbeAuthenticationError);
@@ -863,14 +892,14 @@ impl Inner {
             _ => {}
         }
         if status == 429 && error_code == Some("accounts_at_cap") {
-            // Retrying, not pausing: the pool is momentarily full, not out of quota, and a slot frees up in
-            // seconds, so `RetryableProbeError` ("retrying") is the honest label rather than the quota one.
+            // The pool is momentarily full and a slot frees up in seconds, so `RetryableProbeError` ("retrying") is
+            // the honest label.
             self.retry(
                 key,
                 agent_id,
                 Reason::RetryableProbeError,
                 now,
-                retry_after_ms,
+                retry_after_ms.map_or(RetryWait::Step, RetryWait::Replace),
             );
             return;
         }
@@ -903,29 +932,39 @@ impl Inner {
             self.set_reason(key, agent_id, Reason::LedgerBehind);
             return;
         }
-        let reason = match status {
-            429 => Reason::ProbeQuotaExhausted,
-            _ if exhausted => Reason::ProbePoolExhausted,
-            500..=599 => return self.retry(key, agent_id, Reason::RetryableProbeError, now, None),
-            401 | 403 => Reason::ProbeAuthenticationError,
-            400..=499 => Reason::UnsupportedProbe,
-            _ => Reason::ProbeTransportError,
+        let (reason, wait) = match status {
+            429 => (
+                Reason::ProbeQuotaExhausted,
+                retry_after_ms.map_or(RetryWait::Step, RetryWait::AtLeast),
+            ),
+            _ if exhausted => (Reason::ProbePoolExhausted, RetryWait::Step),
+            500..=599 => (Reason::RetryableProbeError, RetryWait::Step),
+            401 | 403 => {
+                self.set_reason(key, agent_id, Reason::ProbeAuthenticationError);
+                self.pause(key, agent_id);
+                return;
+            }
+            400..=499 => {
+                self.set_reason(key, agent_id, Reason::UnsupportedProbe);
+                self.pause(key, agent_id);
+                return;
+            }
+            _ => (Reason::ProbeTransportError, RetryWait::Step),
         };
-        self.set_reason(key, agent_id, reason);
-        self.pause(key, agent_id);
+        self.retry(key, agent_id, reason, now, wait);
     }
 
-    /// Exponential backoff from the timing's `retry_ms`, capped at its `retry_max_ms`, unless `override_delay_ms`
-    /// names this attempt's own wait (the `accounts_at_cap` header). The failure limit bounds consecutive retries
-    /// either way. A retry that falls past the entry's expiry needs no check here: the due time is the later of the
-    /// two, so the first tick at or after the expiry holds the recipe as lapsed before the retry could send.
+    /// The ladder: `retry_ms` doubled per consecutive error up to `retry_max_ms`, `wait` resolving the header against
+    /// the step, the wait capped at `retry_max_ms`. The entry's TTL bounds the ladder: a rung due at or past the
+    /// entry's expiry is not scheduled, and the failure that would plan it pauses under `ProbeRetryLimit`, since
+    /// `Engine::step` lapses the entry at that instant before it reads a due probe.
     pub(crate) fn retry(
         &mut self,
         key: &SessionKey,
         agent_id: &str,
         reason: Reason,
         now: i64,
-        override_delay_ms: Option<i64>,
+        wait: RetryWait,
     ) {
         let agent = self
             .sessions
@@ -935,18 +974,19 @@ impl Inner {
             .get_mut(agent_id)
             .unwrap();
         agent.failures += 1;
-        if agent.failures >= agent.timing.failure_limit {
+        let exponent = (agent.failures - 1).min(4);
+        let step = (agent.timing.retry_ms << exponent).min(agent.timing.retry_max_ms);
+        let delay = match wait {
+            RetryWait::Step => step,
+            RetryWait::Replace(ms) => ms,
+            RetryWait::AtLeast(ms) => ms.max(step),
+        }
+        .min(agent.timing.retry_max_ms);
+        if agent.expires.is_some_and(|expires| now + delay >= expires) {
             self.set_reason(key, agent_id, Reason::ProbeRetryLimit);
             self.pause(key, agent_id);
             return;
         }
-        let delay = match override_delay_ms {
-            Some(delay) => delay.min(agent.timing.retry_max_ms),
-            None => {
-                let exponent = (agent.failures - 1).min(4);
-                (agent.timing.retry_ms << exponent).min(agent.timing.retry_max_ms)
-            }
-        };
         agent.retry_at = Some(now + delay);
         self.set_reason(key, agent_id, reason);
     }
@@ -1228,12 +1268,23 @@ mod tests {
     }
 
     #[test]
-    fn every_other_429_still_pauses_as_probe_quota_exhausted() {
+    fn a_quota_429_retries_on_the_first_rung_under_probe_quota_exhausted() {
         let (mut inner, key) = one_agent_inner();
         inner.probe_error(&key, "main", 429, None, None, None, false, false, 1_000);
         let agent = &inner.sessions[&key].agents["main"];
-        assert!(agent.paused);
-        assert_eq!(agent.reason, Reason::ProbeQuotaExhausted);
+        assert_eq!(
+            (agent.paused, agent.reason, agent.retry_at),
+            (
+                false,
+                Reason::ProbeQuotaExhausted,
+                Some(1_000 + agent.timing.retry_ms)
+            ),
+            "the quota 429 retries rather than pausing"
+        );
+        assert_eq!(
+            crate::view::recipe_state(agent.reason, agent.paused),
+            crate::view::RecipeState::Held
+        );
     }
 
     #[test]
@@ -1320,9 +1371,18 @@ mod tests {
     }
 
     #[test]
-    fn failure_limit_ledger_behind_answers_in_a_row_never_reach_the_retry_limit() {
+    fn ledger_behind_answers_in_a_row_never_reach_the_retry_limit() {
         let (mut inner, key) = one_agent_inner();
-        let answers = inner.sessions[&key].agents["main"].timing.failure_limit + 1;
+        // An hour of entry ahead, so the ladder's deadline would pause a hold that counted a failure.
+        inner
+            .sessions
+            .get_mut(&key)
+            .unwrap()
+            .agents
+            .get_mut("main")
+            .unwrap()
+            .expires = Some(1_000 + crate::ONE_HOUR_MS);
+        let answers = 6;
         for answer in 0..answers {
             let now = 1_000 + i64::from(answer) * 6_000;
             inner.probe_error(

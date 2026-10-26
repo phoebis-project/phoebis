@@ -21,10 +21,11 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::catalog::CatalogService;
+use crate::credit::CreditStore;
 use crate::hold::INSPECT_BUFFER;
 use crate::identity::PendingReports;
 use crate::messages::{cut_code, Guards, RelayOutcome, Trace, CANCELED, REFUSED, TRANSPORT_ERROR};
-use crate::observe::{answer_from_json, is_tool_use_delta, message_id_from_json};
+use crate::observe::{answer_from_json, is_tool_use_delta, message_id_from_json, Answer};
 use crate::sse::{SseEvent, SseParser};
 
 /// Chunks held between the upstream reader and the caller's socket. Deep enough that a caller pausing for a
@@ -116,9 +117,15 @@ pub(crate) struct Publish {
     pub trace: Trace,
     pub clock: Clock,
     pub outcome: RelayOutcome,
+    /// The serving account's incarnation, which a refusal's fallback credit token is recorded under, so a holder
+    /// created again under the id takes no credit.
+    pub incarnation: u64,
     /// Notified once the answer's model is known, so a snapshot the router did not resolve to triggers a
     /// bounded refresh of the account that served it.
     pub catalog: Arc<CatalogService>,
+    /// Where a refusal's fallback credit token is recorded for the serving account, which the selection of the body
+    /// carrying the token reads.
+    pub credits: Arc<CreditStore>,
     /// Parses the decoded copy for phases on an event stream, and is `None` for any other body. It skips an event
     /// past its bound and keeps parsing, so an oversized event costs a bounded buffer and its own phase while the
     /// events after it still reach the completion. A held stream's is the hold's own, already past the held events.
@@ -249,8 +256,8 @@ pub(crate) struct AffinityFacts {
     /// The request is the client's own classifier call, so its usage report charges no plan window.
     pub classifier: bool,
     pub lane: String,
-    /// The identity's session id, `None` for a request with no identity.
-    pub root: Option<String>,
+    /// The identity's session id, which the contract guarantees.
+    pub root: String,
     pub static_boundaries: Arc<[String]>,
     pub static_sizes: Vec<u64>,
     pub message_boundaries: Arc<[String]>,
@@ -488,6 +495,7 @@ impl Publish {
                 let answer = answer_from_json(&event.data, &[], self.outcome.diagnostics_named);
                 self.usage.merge(&answer.usage);
                 self.response.merge(&answer.response);
+                self.record_credit(&answer);
                 Some(Phase::MessageDelta {
                     usage: answer.usage,
                 })
@@ -508,6 +516,23 @@ impl Publish {
                 None
             }
             _ => None,
+        }
+    }
+
+    /// Records a refusal's fallback credit token under the serving account. A stream's delta is recorded here, before
+    /// the piece that carries it reaches the client, so a fallback the client sends while the upstream body is still
+    /// open finds the issuer.
+    fn record_credit(&self, answer: &Answer) {
+        if answer.response.stop_reason.as_deref() != Some("refusal") {
+            return;
+        }
+        if let Some(digest) = answer.credit_digest {
+            self.credits.record(
+                digest,
+                &self.outcome.account_id,
+                self.incarnation,
+                (self.clock)(),
+            );
         }
     }
 
@@ -535,6 +560,8 @@ impl Publish {
             let answer = answer_from_json(&json, &[], self.outcome.diagnostics_named);
             self.usage.merge(&answer.usage);
             self.response.merge(&answer.response);
+            // A JSON answer is whole only at the body's end.
+            self.record_credit(&answer);
             if let Some(id) = message_id_from_json(&json, &[]) {
                 self.saw_message_id(id);
             }

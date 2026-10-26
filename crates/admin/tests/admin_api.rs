@@ -1137,7 +1137,7 @@ async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
     assert_eq!(
         acct["subscription"],
         serde_json::json!({
-            "plan": "max",
+            "plan": "max_5x",
             "tier": "default_claude_max_5x",
             "since": 1_773_482_400_000_i64,
             "trial_ends_at": 1_790_899_200_000_i64,
@@ -1345,6 +1345,69 @@ async fn the_account_view_reads_the_extra_usage_flag_from_the_organization_alone
             Some(&serde_json::Value::Null)
         ),
         "the organization's flag answers over the account's, and a flag under the account alone answers null"
+    );
+}
+
+#[tokio::test]
+async fn the_account_view_answers_the_plan_the_profile_resolves_to() {
+    use common::{get, json, login};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    for (id, label) in [("seat", "Seat"), ("unpaired", "Unpaired")] {
+        store
+            .insert_account(&phoebis_store::AccountRow {
+                id: id.into(),
+                kind: phoebis_store::AccountKind::Oauth,
+                label: label.into(),
+                enabled: true,
+                identity: None,
+                lifecycle_generation: 1,
+                incarnation: 1,
+                revision: 1,
+                state: phoebis_store::AccountState::Ready,
+                state_cause: phoebis_store::StateCause::Paired,
+            })
+            .unwrap();
+    }
+    // A free organization reports the Pro tier and neither plan flag, so the type alone names it.
+    store
+        .set_profile(
+            "business",
+            r#"{"account":{"has_claude_max":false,"has_claude_pro":false},"organization":{"organization_type":"claude_free","rate_limit_tier":"default_claude_ai"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_ai".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    store
+        .set_profile(
+            "seat",
+            r#"{"organization":{"organization_type":"claude_enterprise","rate_limit_tier":"default_claude_zero"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    // Canceled before it ever paired, so the view answers a subscription with no profile behind it.
+    store
+        .set_canceled("unpaired", true, Some(common::NOW + 86_400_000))
+        .unwrap();
+    let mut plans = Vec::new();
+    for id in ["business", "seat", "unpaired"] {
+        let view = json(get(&app, &format!("/admin/accounts/{id}"), Some(&cookie)).await).await;
+        assert!(view["subscription"].is_object(), "{id}: {view}");
+        plans.push(view["subscription"]["plan"].clone());
+    }
+    assert_eq!(
+        plans,
+        [
+            serde_json::json!("free"),
+            serde_json::json!("usage_based"),
+            serde_json::Value::Null,
+        ],
+        "the free organization reads free, the usage-based seat its class, and an account with no profile null"
     );
 }
 
@@ -1647,7 +1710,8 @@ async fn a_usage_based_account_answers_its_spend_window_with_the_polled_figures_
     );
 
     // Built again over the same store, with the same rows in its ledger: the router's memory of the head's reset is
-    // gone, so the reset reads the estimate while every member the ledger answers stands.
+    // gone, so the reset reads the estimate while the share stands, read from the credits row the rebuilt router
+    // loaded, or from the ledger's head row where the writer had not landed it.
     let again = common::admin_parts_full_on(parts.store.clone()).await;
     for row in &rows {
         again.db.insert_samples(&[], Some(row)).unwrap();
@@ -1660,7 +1724,7 @@ async fn a_usage_based_account_answers_its_spend_window_with_the_polled_figures_
             "amounts": amounts, "utilization": 0.42, "resets_at": month_end(), "reset_source": "estimated",
             "observed_at": headed_bucket
         }),
-        "after a restart the amounts and the newest row's share stand, the reset the estimate: {restarted}"
+        "after a restart the amounts and the share stand, the reset the estimate: {restarted}"
     );
     assert_eq!(
         again
@@ -1692,6 +1756,136 @@ async fn a_usage_based_account_answers_its_spend_window_with_the_polled_figures_
             "observed_at": headed_bucket
         }),
         "past the head's reset with no newer row the share lapses and the amounts stay: {lapsed}"
+    );
+}
+
+/// Writes the ledger rows of the seat `id` and reports its router readings, answering the reset the head names: a head
+/// twenty minutes before `NOW` naming the reset an hour after it, then a poll ten minutes before `NOW` carrying the
+/// share 0.41. The poll's row lands in a later bucket than the head's, so the ledger's share read takes the poll's row,
+/// which names no reset and so lapses at the estimate over its bucket start.
+async fn poll_after_a_held_head(parts: &common::Full, id: &str) -> i64 {
+    let (headed_at, polled_at, reset) = (
+        common::NOW - 1_200_000,
+        common::NOW - 600_000,
+        common::NOW + 3_600_000,
+    );
+    for row in [
+        head_row(id, headed_at, None, 0.42, reset),
+        polled_row(id, polled_at, (250_000, 102_500), 0.41, None),
+    ] {
+        parts.db.insert_samples(&[], Some(&row)).unwrap();
+    }
+    parts
+        .router
+        .report(phoebis_routing::Report::SpendHead {
+            account_id: id.into(),
+            utilization: Some(0.42),
+            reset: Some(reset),
+            observed_at: headed_at,
+            incarnation: 1,
+        })
+        .await;
+    // Each read folds the readings pending before it, so the head lands before the poll whatever their keys' order.
+    parts.router.spend_windows().await.unwrap();
+    parts
+        .router
+        .report(phoebis_routing::Report::Credits {
+            account_id: id.into(),
+            state: phoebis_routing::CreditsState {
+                enabled: true,
+                disabled_reason: None,
+                utilization: Some(0.41),
+                observed_at: polled_at,
+                incarnation: 1,
+            },
+            incarnation: 1,
+        })
+        .await;
+    parts.router.spend_windows().await.unwrap();
+    reset
+}
+
+/// The share and the reset of `account`'s spend window.
+fn spend_share_and_reset(account: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!([
+        account["spend"]["utilization"],
+        account["spend"]["resets_at"],
+        account["spend"]["reset_source"]
+    ])
+}
+
+#[tokio::test]
+async fn a_usage_based_accounts_spend_share_lapses_at_the_held_head_reset_the_router_read_a_later_poll_under(
+) {
+    use common::{login, month_end, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    insert_oauth(&parts, "seat", true);
+    parts.router.reload().await.unwrap();
+    let reset = poll_after_a_held_head(&parts, "seat").await;
+    let held = account_of(&parts.app, &cookie, "seat").await;
+    assert_eq!(
+        spend_share_and_reset(&held),
+        serde_json::json!([0.41, reset, "head"]),
+        "the poll's share under the head's reset while that is ahead: {held}"
+    );
+    common::step(
+        &parts,
+        std::time::Duration::from_millis((reset - NOW + 1) as u64),
+    );
+    // The step passes the session's idle deadline, so the case logs in again.
+    let cookie = login(&parts.app, "admin-secret").await;
+    let lapsed = account_of(&parts.app, &cookie, "seat").await;
+    assert_eq!(
+        spend_share_and_reset(&lapsed),
+        serde_json::json!([null, month_end(), "estimated"]),
+        "the router read the poll under the head's reset, so the share lapses there, where the ledger's poll row \
+         would hold it to the estimate: {lapsed}"
+    );
+}
+
+#[tokio::test]
+async fn a_usage_based_accounts_spend_reads_the_ledger_rows_share_where_the_router_answers_no_window_or_holds_no_reading_of_the_seat(
+) {
+    use common::{login, month_end, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for seat in ["held", "unread"] {
+        insert_oauth(&parts, seat, true);
+    }
+    parts.router.reload().await.unwrap();
+    let reset = poll_after_a_held_head(&parts, "held").await;
+    parts
+        .db
+        .insert_samples(
+            &[],
+            Some(&polled_row(
+                "unread",
+                NOW - 600_000,
+                (300_000, 75_000),
+                0.25,
+                None,
+            )),
+        )
+        .unwrap();
+    let unread = account_of(&parts.app, &cookie, "unread").await;
+    assert_eq!(
+        spend_share_and_reset(&unread),
+        serde_json::json!([0.25, month_end(), "estimated"]),
+        "the running router holds no reading of the seat, so the share is the ledger row's: {unread}"
+    );
+    common::step(
+        &parts,
+        std::time::Duration::from_millis((reset - NOW + 1) as u64),
+    );
+    parts.router.shutdown().await.unwrap();
+    let cookie = login(&parts.app, "admin-secret").await;
+    let stopped = account_of(&parts.app, &cookie, "held").await;
+    assert_eq!(
+        spend_share_and_reset(&stopped),
+        serde_json::json!([0.41, month_end(), "estimated"]),
+        "a stopped router answers no window, so the share is the ledger's poll row's, lapsing at the estimate over \
+         its bucket start: {stopped}"
     );
 }
 
@@ -1916,7 +2110,7 @@ async fn a_usage_based_accounts_spend_reads_the_estimate_where_the_router_answer
     assert_eq!(
         stopped["spend"]["utilization"],
         serde_json::json!(0.4),
-        "the share is the ledger row's whatever the router answers"
+        "a stopped router answers no window, so the share is the ledger row's"
     );
 }
 
@@ -2107,6 +2301,185 @@ async fn an_attempt_on_a_usage_based_seat_answers_its_class_and_one_on_a_plan_ac
         shown["request"]["attempts"][0]["usage_based"],
         serde_json::json!(true),
         "the request's own answer carries the member as the list does: {shown}"
+    );
+}
+
+/// The request log narrows on the serving attempt's stop reason and refusal category, and a kept row answers both
+/// words off its attempt's response, the row itself carrying neither.
+#[tokio::test]
+async fn the_request_list_filters_on_the_serving_attempts_stop_reason_and_refusal_category() {
+    use common::{get, json, login, wait_json};
+    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let served = |id: &str, at: i64, answer: Option<(&str, Option<&str>)>| Record::Request {
+        request: RequestRecord {
+            id: id.into(),
+            received_at: at,
+            finished_at: Some(at + 500),
+            pool_id: Some("main".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(if answer.is_some() { 200 } else { 503 }),
+            outcome: if answer.is_some() {
+                "succeeded"
+            } else {
+                "exhausted"
+            }
+            .into(),
+            attempts: answer.is_some() as u32,
+            ..Default::default()
+        },
+        attempts: answer
+            .map(|(stop_reason, category)| AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: "business".into(),
+                account_kind: "oauth".into(),
+                started_at: at,
+                outcome: "succeeded".into(),
+                stop_reason: Some(stop_reason.into()),
+                refusal_category: category.map(String::from),
+                ..Default::default()
+            })
+            .into_iter()
+            .collect(),
+        bodies: None,
+    };
+    parts.ledger.record(served(
+        "r-harmful",
+        now - 4_000,
+        Some(("refusal", Some("harmful_request"))),
+    ));
+    parts
+        .ledger
+        .record(served("r-bare", now - 3_000, Some(("refusal", None))));
+    parts
+        .ledger
+        .record(served("r-ended", now - 2_000, Some(("end_turn", None))));
+    parts.ledger.record(served("r-unserved", now - 1_000, None));
+    wait_json(&parts.app, "/admin/requests", &cookie, |v| {
+        v["requests"].as_array().is_some_and(|rows| rows.len() == 4)
+    })
+    .await;
+    let listed = |query: &'static str| {
+        let app = parts.app.clone();
+        let cookie = cookie.clone();
+        async move {
+            let page =
+                json(get(&app, &format!("/admin/requests?{query}"), Some(&cookie)).await).await;
+            page["requests"]
+                .as_array()
+                .unwrap_or_else(|| panic!("a page of rows: {page}"))
+                .clone()
+        }
+    };
+    let ids = |rows: &[serde_json::Value]| -> Vec<String> {
+        rows.iter()
+            .map(|r| r["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let refused = listed("stop_reasons=refusal").await;
+    assert_eq!(
+        ids(&refused),
+        ["r-bare", "r-harmful"],
+        "the refusal stop keeps the two refusals"
+    );
+    for row in &refused {
+        let response = &row["attempts"][0]["response"];
+        assert_eq!(response["stop_reason"], "refusal", "{row}");
+        assert!(
+            row.get("stop_reason").is_none() && row.get("refusal_category").is_none(),
+            "the row carries the words on its attempt alone: {row}"
+        );
+    }
+    assert_eq!(
+        (
+            refused[0]["attempts"][0]["response"]["refusal_category"].clone(),
+            refused[1]["attempts"][0]["response"]["refusal_category"].clone(),
+        ),
+        (
+            serde_json::Value::Null,
+            serde_json::json!("harmful_request")
+        ),
+        "each kept row's serving attempt answers the category it stored"
+    );
+    assert_eq!(
+        ids(&listed("refusal_categories=-").await),
+        ["r-unserved", "r-ended", "r-bare"],
+        "`-` keeps every request whose serving attempt names no category, and the one no attempt served"
+    );
+    assert_eq!(
+        ids(&listed("stop_reasons=refusal&refusal_categories=-").await),
+        ["r-bare"],
+        "the two filters conjoin, so `-` beside the refusal stop keeps the refusal that named no category"
+    );
+}
+
+/// The writer stamps a row from the rig's clock, so the clock set past `to` before the write lands a row received
+/// inside the range after the range's end.
+#[tokio::test]
+async fn the_request_list_answers_a_fixed_end_watermark_past_to_and_a_live_one_at_to() {
+    use common::{get, json, login, wait_json};
+    use phoebis_ledger::{Record, RequestRecord};
+    use std::sync::atomic::Ordering;
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let (from, to) = (common::NOW - 5_000, common::NOW);
+    let written_at = common::NOW + 5_000;
+    parts.clock_cell.store(written_at, Ordering::SeqCst);
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "r-late".into(),
+            received_at: to - 1_000,
+            finished_at: Some(to - 500),
+            pool_id: Some("main".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            ..Default::default()
+        },
+        attempts: vec![],
+        bodies: None,
+    });
+    let range = format!("/admin/requests?from={from}&to={to}");
+    let fixed = wait_json(&parts.app, &format!("{range}&fixed_end=1"), &cookie, |v| {
+        v["requests"].as_array().is_some_and(|rows| rows.len() == 1)
+    })
+    .await;
+    assert_eq!(
+        fixed["landed_through"].as_i64(),
+        Some(written_at),
+        "the fixed-end read answers the late row's stamp, past to {to}: {fixed}"
+    );
+    let spelled = json(
+        get(
+            &parts.app,
+            &format!("{range}&fixed_end=true"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        spelled["landed_through"].as_i64(),
+        Some(written_at),
+        "the console's fixed_end=true spelling reads the same stamp: {spelled}"
+    );
+    let live = json(get(&parts.app, &range, Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            live["requests"].as_array().map(Vec::len),
+            live["landed_through"].as_i64()
+        ),
+        (Some(1), Some(to)),
+        "the same range read live keeps its watermark at to: {live}"
     );
 }
 
@@ -3481,6 +3854,27 @@ async fn a_reauth_required_oauth_account_answers_no_window_whatever_the_router_a
     }
 }
 
+/// A flagged account stays `ready`, so its poll standing reads whole, `held_until` included, and the flag alone
+/// withholds the windows.
+#[tokio::test]
+async fn a_plan_ended_oauth_account_answers_no_window_while_the_flag_stands_and_its_windows_again_once_it_clears(
+) {
+    let (h, cookie, before) = business_with_both_windows_paths().await;
+    let flagged_at = common::NOW - 60_000;
+    assert!(h.store.set_plan_ended("business", flagged_at).unwrap());
+    for after in business_as_read_and_listed(&h, &cookie).await {
+        assert_eq!(after["windows"], serde_json::json!([]), "{after}");
+        assert_eq!(after["state"], "ready", "{after}");
+        assert_eq!(after["plan_ended_at"], flagged_at, "{after}");
+        assert_eq!(after["fast_lane"], before["fast_lane"], "{after}");
+        assert_eq!(after["usage"], before["usage"], "{after}");
+    }
+    assert!(h.store.clear_plan_ended("business").unwrap());
+    for after in business_as_read_and_listed(&h, &cookie).await {
+        assert_eq!(after["windows"], before["windows"], "{after}");
+    }
+}
+
 #[tokio::test]
 async fn a_ready_oauth_account_answers_the_windows_the_router_and_the_ledger_hold() {
     let (h, cookie, before) = business_with_both_windows_paths().await;
@@ -4295,7 +4689,7 @@ async fn a_start_with_new_confirms_into_a_ready_row_with_its_identity_plan_and_s
     assert_eq!(
         acct["subscription"],
         serde_json::json!({
-            "plan": "max",
+            "plan": "max_5x",
             "tier": "default_claude_max_5x",
             "since": 1_773_482_400_000_i64,
             "trial_ends_at": 1_790_899_200_000_i64,
@@ -5055,6 +5449,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
         "the burn as the 20x 5-hour equivalent per hour: {on_20x:?} against {equivalent}"
     );
     name_the_tier(&parts.store, "business", "default_claude_ai");
+    parts.router.reload().await.unwrap();
     let on_pro = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         !close(session_row(v, "s1")["burn"].as_f64(), on_max_20x)
     })
@@ -5082,6 +5477,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
         equivalent_of(&on_pro)
     );
     name_the_tier(&parts.store, "business", "default_claude_team");
+    parts.router.reload().await.unwrap();
     let on_team = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         session_row(v, "s1")["burn"].is_null()
     })
@@ -5139,6 +5535,16 @@ async fn sessions_harness_rated(pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>
 
 /// Reports `readings` of `account` as an answer's head would land them, read a minute before the rig's clock.
 async fn read_windows(parts: &common::Full, account: &str, readings: &[(&str, f64, Option<i64>)]) {
+    read_windows_at(parts, account, readings, common::NOW - 60_000).await;
+}
+
+/// `read_windows` observed at `observed_at`, since a reading lands only over an older one.
+async fn read_windows_at(
+    parts: &common::Full,
+    account: &str,
+    readings: &[(&str, f64, Option<i64>)],
+    observed_at: i64,
+) {
     let sample = readings.iter().fold(
         phoebis_routing::UtilizationSample::default(),
         |sample, (window, utilization, reset)| {
@@ -5147,7 +5553,7 @@ async fn read_windows(parts: &common::Full, account: &str, readings: &[(&str, f6
                 phoebis_routing::WindowReading {
                     utilization: *utilization,
                     reset: *reset,
-                    observed_at: common::NOW - 60_000,
+                    observed_at,
                     source: phoebis_routing::WindowSource::Head,
                 },
             )
@@ -5169,7 +5575,8 @@ fn within(a: Option<f64>, b: f64) -> bool {
 }
 
 #[tokio::test]
-async fn a_pinned_sessions_runway_reads_its_accounts_own_projection_with_its_burn_counted_once() {
+async fn a_pinned_sessions_runway_reads_its_accounts_own_projection_with_its_burn_counted_once_and_unbounded_past_the_reset(
+) {
     use common::{login, wait_json, NOW};
     const HOUR: i64 = 3_600_000;
     // One pin on `business` burning five points of its 5-hour window an hour, the window at 0.80 and resetting in four
@@ -5184,6 +5591,29 @@ async fn a_pinned_sessions_runway_reads_its_accounts_own_projection_with_its_bur
     })
     .await;
     let cookie = login(&parts.app, "admin-secret").await;
+    // Read first with the 5-hour window resetting in two hours, before its three hours to the ceiling, and the week's
+    // (0.95 - 0.30) / 0.002 = 325 hours past its reset 50 hours out: each window resets before the ceiling is reached.
+    read_windows_at(
+        &parts,
+        "business",
+        &[
+            (phoebis_routing::FIVE_HOUR, 0.80, Some(NOW + 2 * HOUR)),
+            (phoebis_routing::SEVEN_DAY, 0.30, Some(NOW + 50 * HOUR)),
+        ],
+        NOW - 120_000,
+    )
+    .await;
+    let past = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        !session_row(v, "s1")["runway_bounded"].is_null()
+    })
+    .await;
+    let row = session_row(&past, "s1");
+    assert_eq!(
+        (&row["runway_ms"], &row["runway_bounded"]),
+        (&serde_json::Value::Null, &serde_json::json!(false)),
+        "a runway past its window's reset reads unbounded: {row}"
+    );
+    // The newer reading moves the 5-hour reset out to four hours, past the three hours to the ceiling.
     read_windows(
         &parts,
         "business",
@@ -5509,6 +5939,7 @@ async fn main_turn(
             folded_model: "claude-sonnet-5".into(),
             candidates,
             portable: true,
+            credit_account: None,
             attempted: Vec::new(),
             now: at,
             received_at: at,
@@ -6265,7 +6696,7 @@ async fn report_prefix(
                 key_generation: common::generation(&parts.store, "desktop"),
                 canonical_model: model.into(),
                 lane: phoebis_routing::lane_key(model, "standard", "none", "-"),
-                root: Some(session.into()),
+                root: session.into(),
                 static_boundaries: std::sync::Arc::from([]),
                 message_boundaries: std::sync::Arc::from([format!(
                     "{session}-{agent}-{model}-{account}"

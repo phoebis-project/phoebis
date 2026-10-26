@@ -445,10 +445,11 @@ async fn the_admin_routes_store_operator_and_the_pairing_confirm_paired() {
 async fn the_account_create_answers_its_own_sentence_to_an_object_that_lacks_id_kind_or_label() {
     let (app, _up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
-    for (id, body) in [
-        ("noid", r#"{"kind":"oauth","label":"No id"}"#),
-        ("nokind", r#"{"id":"nokind","label":"No kind"}"#),
-        ("nolabel", r#"{"id":"nolabel","kind":"oauth"}"#),
+    let accounts = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
+    for body in [
+        r#"{"kind":"oauth","label":"No id"}"#,
+        r#"{"id":"nokind","label":"No kind"}"#,
+        r#"{"id":"nolabel","kind":"oauth"}"#,
     ] {
         let refused = post(&app, "/admin/accounts", body, Some(&cookie)).await;
         let status = refused.status().as_u16();
@@ -460,14 +461,12 @@ async fn the_account_create_answers_its_own_sentence_to_an_object_that_lacks_id_
             ),
             "{body}"
         );
-        assert_eq!(
-            get(&app, &format!("/admin/accounts/{id}"), Some(&cookie))
-                .await
-                .status(),
-            404,
-            "the refused create left no row: {body}"
-        );
     }
+    assert_eq!(
+        json(get(&app, "/admin/accounts", Some(&cookie)).await).await,
+        accounts,
+        "the refused creates left no row"
+    );
 }
 
 #[tokio::test]
@@ -1215,7 +1214,7 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
     assert_eq!(
         listed["subscription"],
         serde_json::json!({
-            "plan": "max",
+            "plan": "max_5x",
             "tier": "default_claude_max_5x",
             "since": 1_773_482_400_000_i64,
             "trial_ends_at": 1_790_899_200_000_i64,

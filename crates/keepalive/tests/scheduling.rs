@@ -216,50 +216,6 @@ async fn a_hold_lifted_after_the_expiry_sends_no_probe() {
     );
 }
 
-/// A failed probe's retry that falls past the entry's expiry is not sent: the due time is the later of the two, so
-/// the first tick at or after the expiry holds the recipe under `expired`.
-#[tokio::test]
-async fn a_retry_re_armed_past_the_expiry_is_held_under_expired_and_sends_no_probe() {
-    let mut r = armed(RigSpec {
-        accounts: vec![api_key("a", A, 0)],
-        timing: KeepaliveTiming {
-            retry_ms: 60_000,
-            retry_max_ms: 60_000,
-            ..RigSpec::default().timing
-        },
-        ..RigSpec::default()
-    })
-    .await;
-    r.up.push_credential_rule(
-        A,
-        "/v1/messages",
-        fake_upstream::Respond::Json {
-            status: 503,
-            headers: vec![],
-            body: br#"{"type":"error","error":{"type":"api_error","message":"x"}}"#.to_vec(),
-        },
-    );
-    r.advance(270_000);
-    r.step().await;
-    let status = r.status("main");
-    assert_eq!(
-        (status.probes, status.reason, status.next_probe_at),
-        (1, Reason::RetryableProbeError, Some(r.now() + 60_000)),
-        "the retry falls at 330 s, past the entry's expiry at 300 s"
-    );
-    r.advance(60_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
-        (1, Reason::Expired)
-    );
-    assert_eq!(
-        r.up.requests().len(),
-        2,
-        "the arming request and the failed probe, no retry"
-    );
-}
-
 /// A probe the router refused while its ledger was behind holds under `ledger_behind` and goes again after the
 /// answer's wait, with no failure counted. The entry's own expiry still bounds the re-sends: when the ledger catches
 /// up only after it, no probe goes out and the recipe ends under `expired`, as under any other hold.
@@ -507,6 +463,7 @@ async fn select_main(r: &Rig) -> SelectResult {
             folded_model: model,
             candidates,
             portable: true,
+            credit_account: None,
             attempted: Vec::new(),
             now: r.now(),
             received_at: r.now(),
@@ -777,6 +734,7 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
             folded_model: "claude-sonnet-4-5".into(),
             candidates,
             portable: true,
+            credit_account: None,
             attempted: Vec::new(),
             now: r.now(),
             received_at: r.now(),
@@ -850,7 +808,7 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
 }
 
 /// While the ledger is degraded the selector cannot trust a budgeted member's spend and refuses a probe pinned there
-/// as `budget_unknown`. That clears once the ledger recovers, so the agent retries rather than pausing as exhausted.
+/// as `budget_unknown`. That clears once the ledger recovers, so the agent retries.
 #[tokio::test]
 async fn a_probe_refused_for_an_unknown_budget_retries_once_the_ledger_recovers() {
     let mut r = armed(RigSpec {
@@ -1288,6 +1246,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
                 folded_model: pin.model.clone(),
                 candidates: resolve(&snapshot, key, &pin.model, &pin.model).unwrap(),
                 portable: true,
+                credit_account: None,
                 attempted: vec![],
                 now: r.now(),
                 received_at: r.now(),
@@ -1596,8 +1555,9 @@ async fn the_retention_rules_reach_a_paused_recipe() {
     r.step().await;
     assert_eq!(
         (r.status("main").reason, r.status("main").next_probe_at),
-        (Reason::ProbeQuotaExhausted, None),
-        "the 429 paused the recipe and cleared its schedule"
+        (Reason::ProbeRetryLimit, None),
+        "the 429's first rung would land at the entry's expiry, so the ladder paused the recipe and cleared its \
+         schedule"
     );
     assert!(!r.engine.recipes_for("desktop", "session").is_empty());
     let mut key = r.h.store.api_key("desktop").unwrap().unwrap();

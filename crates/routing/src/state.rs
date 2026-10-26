@@ -1753,6 +1753,14 @@ impl RoutingState {
         self.spend_heads.get(account_id).copied()
     }
 
+    /// The head reset a reading at `observed_at` was taken under: the newest head's reset where that head was observed
+    /// at or before the reading, else `None`, so a poll that lands between two heads lapses at the first head's reset.
+    fn head_reset_for(&self, account_id: &str, observed_at: i64) -> Option<i64> {
+        self.spend_head(account_id)
+            .filter(|(_, held_at)| *held_at <= observed_at)
+            .map(|(reset, _)| reset)
+    }
+
     /// Folds a usage-based account's head: the share into the credits state (persisted as the poll's is) and the
     /// reset beside it. False when the reading is older than the one held, or names no share: the answer is whether
     /// the credits state moved, the write the caller persists.
@@ -1796,25 +1804,32 @@ impl RoutingState {
             },
         };
         self.credits.insert(account_id.to_string(), state);
+        // A head that names the share alone was read under the reset an earlier head named, as a poll is.
+        let reset = spend_reading_reset(
+            observed_at,
+            reset.or_else(|| self.head_reset_for(account_id, observed_at)),
+        );
         self.spend_shares.insert(
             account_id.to_string(),
             SpendShare {
                 source: "head",
-                reset: spend_reading_reset(observed_at, reset),
+                reset,
                 observed_at,
             },
         );
         true
     }
 
-    /// Marks the share a poll just set on a usage-based account: a poll names no reset, so the share lapses at the
-    /// estimate over the poll's instant.
+    /// Marks the share a poll just set on a usage-based account. A poll names no reset, so the share lapses at the
+    /// held head reset observed at or before the poll where that is still ahead of it, else at the estimate over the
+    /// poll's instant.
     pub(crate) fn record_poll_share(&mut self, account_id: &str, observed_at: i64) {
+        let reset = spend_reading_reset(observed_at, self.head_reset_for(account_id, observed_at));
         self.spend_shares.insert(
             account_id.to_string(),
             SpendShare {
                 source: "poll",
-                reset: spend_reading_reset(observed_at, None),
+                reset,
                 observed_at,
             },
         );
@@ -3733,6 +3748,44 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_readings_head_reset_is_the_held_heads_where_that_head_was_observed_at_or_before_it() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        assert_eq!(
+            state.head_reset_for("a", 2_000),
+            None,
+            "no head has named a reset"
+        );
+        state.record_spend_head("a", None, Some(9_000), 2_000, 1);
+        assert_eq!(
+            [1_999, 2_000, 9_500].map(|observed_at| state.head_reset_for("a", observed_at)),
+            [None, Some(9_000), Some(9_000)],
+            "a head observed after the reading names nothing of it, and one at or before it names its reset"
+        );
+        assert_eq!(
+            spend_reading_reset(9_500, state.head_reset_for("a", 9_500)),
+            spend_reset_estimate(9_500),
+            "a reading past the held reset lapses at the estimate over its instant"
+        );
+        assert_eq!(
+            state.head_reset_for("b", 9_500),
+            None,
+            "another account's head"
+        );
+    }
+
+    #[test]
+    fn a_newer_head_replaces_the_held_reset_so_a_reading_before_it_reads_none() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.record_spend_head("a", None, Some(9_000), 2_000, 1);
+        state.record_spend_head("a", None, Some(20_000), 5_000, 1);
+        assert_eq!(
+            [3_000, 5_000].map(|observed_at| state.head_reset_for("a", observed_at)),
+            [None, Some(20_000)],
+            "the newest head alone is held, so a slower reading taken before it reads the estimate"
+        );
+    }
+
     fn burning(session: &str, burn: f64) -> (PinRow, Option<f64>) {
         let pin = PinRow {
             key_id: "k".into(),
@@ -3783,7 +3836,7 @@ mod tests {
             key_generation: 1,
             canonical_model: model.into(),
             lane: crate::lane_key(model, "standard", "none", "-"),
-            root: None,
+            root: "s".into(),
             static_boundaries: std::sync::Arc::from([]),
             message_boundaries: std::sync::Arc::from(["b1".to_string()]),
             static_sizes: Vec::new(),

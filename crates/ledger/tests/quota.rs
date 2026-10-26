@@ -1208,6 +1208,67 @@ async fn a_profile_refresh_whose_seat_tier_alone_moves_the_class_reloads_the_rou
     up.shutdown().await;
 }
 
+/// A profile answer whose organization type names a Team plan under the Pro tier the case stores first.
+fn team_on_the_pro_tier_profile_rule() -> Rule {
+    Rule {
+        path_prefix: "/api/oauth/profile".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"account":{"uuid":"00000000-0000-4000-8000-000000000100","email":"a@example.invalid"},"organization":{"uuid":"o","organization_type":"claude_team","rate_limit_tier":"default_claude_ai"}}"#
+                .to_vec(),
+        },
+    }
+}
+
+#[tokio::test]
+async fn a_profile_refresh_whose_organization_type_alone_moves_the_plan_reloads_the_router() {
+    let up = FakeUpstream::start(vec![usage_rule(), team_on_the_pro_tier_profile_rule()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    // The refresh repeats the stored tier, so only the organization type moves.
+    h.store
+        .set_profile(
+            "a",
+            r#"{"organization":{"organization_type":"claude_pro","rate_limit_tier":"default_claude_ai"}}"#,
+            &SubscriptionRow {
+                tier: Some("default_claude_ai".into()),
+                ..SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    assert_eq!(
+        h.router.snapshot().plan("a"),
+        Some("pro"),
+        "a Pro plan before the refresh"
+    );
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::refresh_profile(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        &h.router,
+        &row,
+    )
+    .await;
+    assert_eq!(
+        h.store
+            .subscription_term("a")
+            .unwrap()
+            .unwrap()
+            .plan
+            .as_deref(),
+        Some("team"),
+        "the stored document names the Team plan"
+    );
+    assert_eq!(
+        h.router.snapshot().plan("a"),
+        Some("team"),
+        "the routing snapshot reads the plan the refresh stored, with no other reload"
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn the_startup_step_records_and_reports_one_sample_per_polled_account() {
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
@@ -2031,6 +2092,62 @@ async fn a_profile_reporting_no_plan_flags_the_account_and_its_slots_read_the_pr
 }
 
 #[tokio::test]
+async fn a_profile_reporting_no_plan_ends_the_open_backoff_run_with_its_row() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", plan_refused());
+    up.push_credential_rule(A, "/api/oauth/usage", rate_limited_bare());
+    up.add_credential_rule(A, "/api/oauth/profile", no_plan_profile());
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let paused = start_polling(&h, &up).await;
+
+    // The first slot at 300 s meets the 429 after the scheduler set its hook, so the run's start row lands. The slot
+    // at the hold's end meets the 403, whose same-poll profile read reports no plan and flags the account: the
+    // profile endpoint shares the usage endpoint's hold, so a read inside the hold would flag nothing.
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!((usage_asked(&up, A), profile_asked(&up, A)), (1, 0));
+    step_to(&h, &up, &paused, secs(425)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (2, 1),
+        "the 403 made the profile due in the same poll"
+    );
+    let flagged_at = plan_ended_at(&h, "a").expect("the profile read flags the account");
+    // The pause hands the run's end to the hook before the flag's row is recorded, so both have landed once it has.
+    resumed(wait_for_async(Duration::from_secs(5), || async {
+        rows_of(&h, "plan_ended").await.pop()
+    }))
+    .await;
+    let rows = resumed(backoff_rows(&h)).await;
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.0.as_str(), row.1.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("poll_backoff_started", Some("a")),
+            ("poll_backoff_ended", Some("a"))
+        ],
+        "the pause closes the run the 429 opened"
+    );
+    let (started, ended) = (&rows[0], &rows[1]);
+    assert_eq!(
+        (
+            ended.2,
+            ended.3["attempts"].as_u64(),
+            ended.3["duration_ms"].as_i64(),
+            ended.3["resumed_at"].as_i64()
+        ),
+        (
+            flagged_at,
+            Some(1),
+            Some(flagged_at - started.2),
+            Some(flagged_at)
+        ),
+        "the run lasted from its first 429 to the flag's instant"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_usage_403_naming_the_refusal_reads_the_profile_in_the_same_poll_and_flags_a_no_plan_account(
 ) {
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
@@ -2184,15 +2301,15 @@ async fn a_run_of_usage_429s_flags_nothing_and_writes_no_poll_failed_row() {
 }
 
 #[tokio::test]
-async fn a_backoff_run_open_when_the_plan_ended_closes_at_the_first_clean_poll_after_the_restore() {
+async fn a_backoff_run_open_at_the_restore_closes_at_the_first_clean_poll() {
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
     up.add_credential_rule(A, "/api/oauth/usage", usage_rule().respond);
     up.push_credential_rule(A, "/api/oauth/usage", rate_limited_bare());
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let paused = start_polling(&h, &up).await;
 
-    // The first slot at 300 s opens the run, and the case sets the flag in place of a profile read that finds the plan
-    // ended.
+    // The first slot at 300 s opens the run, and the case sets the flag on the store, so the run stands open into the
+    // restore, as a run a profile 429 opens under the flag does when the next profile read finds the plan.
     step_to(&h, &up, &paused, secs(302)).await;
     assert_eq!(usage_asked(&up, A), 1);
     assert!(h.store.set_plan_ended("a", NOW + 302_000).unwrap());

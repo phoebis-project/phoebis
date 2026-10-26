@@ -3,7 +3,7 @@
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, OptionalExtension, Row};
 
-use crate::registry::{usage_based_of, SubscriptionTerm};
+use crate::registry::{organization_type_of, plan_of, usage_based_of, SubscriptionTerm};
 use crate::{Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -669,6 +669,12 @@ pub(crate) fn subscription_term_in(
             let profile_json: Option<String> = row.get(7)?;
             let usage_based = row.get::<_, AccountKind>(6)? == AccountKind::Oauth
                 && usage_based_of(tier.as_deref(), profile_json.as_deref());
+            let plan = plan_of(
+                organization_type_of(profile_json.as_deref()).as_deref(),
+                tier.as_deref(),
+                usage_based,
+            )
+            .map(String::from);
             Ok(SubscriptionTerm {
                 account_id: row.get(0)?,
                 since: row.get(1)?,
@@ -677,6 +683,7 @@ pub(crate) fn subscription_term_in(
                 ends_at: row.get(4)?,
                 tier,
                 usage_based,
+                plan,
                 plan_ended_at: row.get(8)?,
             })
         },

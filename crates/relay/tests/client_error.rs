@@ -82,6 +82,7 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             folded_model: MODEL.into(),
             candidates,
             portable: true,
+            credit_account: None,
             attempted: Vec::new(),
             now: h.clock.load(std::sync::atomic::Ordering::SeqCst),
             received_at: h.clock.load(std::sync::atomic::Ordering::SeqCst),

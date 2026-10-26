@@ -14,7 +14,13 @@ fn boundaries(hashes: &[&str]) -> Vec<String> {
     hashes.iter().map(|h| h.to_string()).collect()
 }
 
-fn report(key_id: &str, account_id: &str, message_boundaries: &[&str], now: i64) -> AffinityReport {
+fn report(
+    key_id: &str,
+    account_id: &str,
+    root: &str,
+    message_boundaries: &[&str],
+    now: i64,
+) -> AffinityReport {
     AffinityReport {
         account_id: account_id.into(),
         incarnation: 1,
@@ -22,7 +28,7 @@ fn report(key_id: &str, account_id: &str, message_boundaries: &[&str], now: i64)
         key_generation: 0,
         canonical_model: "claude-sonnet-5".into(),
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
-        root: None,
+        root: root.into(),
         static_boundaries: Arc::from([]),
         message_boundaries: Arc::from(boundaries(message_boundaries)),
         static_sizes: Vec::new(),
@@ -44,13 +50,14 @@ fn report(key_id: &str, account_id: &str, message_boundaries: &[&str], now: i64)
 fn report_with(
     key_id: &str,
     account_id: &str,
+    root: &str,
     message_boundaries: &[&str],
     now: i64,
     message_id: &str,
 ) -> AffinityReport {
     AffinityReport {
         message_id: Some(message_id.into()),
-        ..report(key_id, account_id, message_boundaries, now)
+        ..report(key_id, account_id, root, message_boundaries, now)
     }
 }
 
@@ -99,7 +106,7 @@ fn match_at(m: Option<ConversationMatch>, root: &str, depth: u32) {
 #[test]
 fn the_lookup_answers_a_continuation_by_one_message_at_the_previous_tails_depth() {
     let mut map = AffinityMap::default();
-    map.record(&report("k", "a", &["b1", "b2", "b3"], 1_000));
+    map.record(&report("k", "a", "b1", &["b1", "b2", "b3"], 1_000));
     let q = boundaries(&["b1", "b2", "b3", "b4"]);
     match_at(map.conversation(&query("k", &q)), "b1", 3);
 }
@@ -107,7 +114,7 @@ fn the_lookup_answers_a_continuation_by_one_message_at_the_previous_tails_depth(
 #[test]
 fn a_fork_matches_at_the_last_shared_boundary() {
     let mut map = AffinityMap::default();
-    map.record(&report("k", "a", &["b1", "b2", "b3", "bA4"], 1_000));
+    map.record(&report("k", "a", "b1", &["b1", "b2", "b3", "bA4"], 1_000));
     let q = boundaries(&["b1", "b2", "b3", "bB4"]);
     match_at(map.conversation(&query("k", &q)), "b1", 3);
 }
@@ -115,7 +122,7 @@ fn a_fork_matches_at_the_last_shared_boundary() {
 #[test]
 fn the_lookup_answers_a_replaced_last_message_one_boundary_shallower() {
     let mut map = AffinityMap::default();
-    map.record(&report("k", "a", &["b1", "b2", "b3", "b4"], 1_000));
+    map.record(&report("k", "a", "b1", &["b1", "b2", "b3", "b4"], 1_000));
     let q = boundaries(&["b1", "b2", "b3", "b4-edited"]);
     match_at(map.conversation(&query("k", &q)), "b1", 3);
 }
@@ -128,7 +135,7 @@ fn fresh_messages_under_a_known_static_prefix_name_no_conversation_and_match_the
         static_sizes: vec![10, 20],
         cache_touched: true,
         static_ttl_ms: Some(3_600_000),
-        ..report("k1", "a", &["old-m1"], 1_000)
+        ..report("k1", "a", "s1", &["old-m1"], 1_000)
     });
     let q = boundaries(&["fresh-m1"]);
     assert_eq!(map.conversation(&query("k2", &q)), None);
@@ -147,7 +154,7 @@ fn the_lookup_follows_the_message_chain_across_a_tools_change() {
         static_sizes: vec![10],
         cache_touched: true,
         static_ttl_ms: Some(3_600_000),
-        ..report("k", "a", &["b1", "b2", "b3"], 1_000)
+        ..report("k", "a", "b1", &["b1", "b2", "b3"], 1_000)
     });
     let q = boundaries(&["b1", "b2", "b3", "b4"]);
     match_at(map.conversation(&query("k", &q)), "b1", 3);
@@ -158,10 +165,10 @@ fn the_lookup_follows_the_message_chain_across_a_tools_change() {
 #[test]
 fn a_compacted_body_names_no_conversation_and_its_continuation_matches_the_compacted_chain() {
     let mut map = AffinityMap::default();
-    map.record(&report("k", "a", &["b1", "b2", "b3", "b4"], 1_000));
+    map.record(&report("k", "a", "b1", &["b1", "b2", "b3", "b4"], 1_000));
     let compacted = boundaries(&["c1"]);
     assert_eq!(map.conversation(&query("k", &compacted)), None);
-    map.record(&report("k", "a", &["c1"], 2_000));
+    map.record(&report("k", "a", "c1", &["c1"], 2_000));
     let continuation = boundaries(&["c1", "c2"]);
     match_at(map.conversation(&query("k", &continuation)), "c1", 1);
 }
@@ -174,7 +181,7 @@ fn a_subagents_first_request_matches_its_cohorts_static_prefix_and_no_message_bo
         static_sizes: vec![10, 20],
         cache_touched: true,
         static_ttl_ms: Some(3_600_000),
-        ..report("k", "a", &["x1"], 1_000)
+        ..report("k", "a", "s1", &["x1"], 1_000)
     });
     let q = boundaries(&["y1"]);
     assert_eq!(map.conversation(&query("k", &q)), None);
@@ -190,14 +197,14 @@ fn a_report_stamps_its_lane_and_a_refresh_from_another_lane_rewrites_it() {
     let standard = lane_key("claude-sonnet-5", "standard", "none", "-");
     let fast = lane_key("claude-sonnet-5", "fast", "none", "-");
     let mut map = AffinityMap::default();
-    map.record(&report("k", "a", &["b1", "b2"], 1_000));
+    map.record(&report("k", "a", "s1", &["b1", "b2"], 1_000));
     assert_eq!(
         map.entry("claude-sonnet-5", "b2").map(|e| e.lane.as_str()),
         Some(standard.as_str())
     );
     let refreshed = map.record(&AffinityReport {
         lane: fast.clone(),
-        ..report("k", "a", &["b1", "b2"], 2_000)
+        ..report("k", "a", "s1", &["b1", "b2"], 2_000)
     });
     assert!(refreshed.is_empty(), "the same holder refreshes in place");
     assert_eq!(
@@ -218,14 +225,14 @@ fn a_link_only_refresh_from_another_lane_carries_no_warmth_over() {
     map.record(&AffinityReport {
         cache_touched: true,
         message_ttl_ms: Some(3_600_000),
-        ..report("k", "a", &["b1", "b2"], 1_000)
+        ..report("k", "a", "s1", &["b1", "b2"], 1_000)
     });
     let deadline = |map: &AffinityMap| {
         map.entry("claude-sonnet-5", "b2")
             .map(|e| e.written_at + e.ttl_ms)
     };
     assert_eq!(deadline(&map), Some(1_000 + 3_600_000));
-    map.record(&report("k", "a", &["b1", "b2"], 2_000));
+    map.record(&report("k", "a", "s1", &["b1", "b2"], 2_000));
     assert_eq!(
         deadline(&map),
         Some(1_000 + 3_600_000),
@@ -233,7 +240,7 @@ fn a_link_only_refresh_from_another_lane_carries_no_warmth_over() {
     );
     map.record(&AffinityReport {
         lane: fast.clone(),
-        ..report("k", "a", &["b1", "b2"], 3_000)
+        ..report("k", "a", "s1", &["b1", "b2"], 3_000)
     });
     let entry = map.entry("claude-sonnet-5", "b2").unwrap();
     assert_eq!(entry.lane, fast);
@@ -265,7 +272,7 @@ fn a_link_only_refresh_of_an_entry_written_before_the_lane_existed_adopts_its_la
     }]);
     map.record(&AffinityReport {
         lane: fast.clone(),
-        ..report("k", "a", &["b1"], 2_000)
+        ..report("k", "a", "b1", &["b1"], 2_000)
     });
     let entry = map.entry("claude-sonnet-5", "b1").unwrap();
     assert_eq!(
@@ -280,7 +287,7 @@ fn the_conversation_lookup_finds_a_root_across_lanes() {
     let mut map = AffinityMap::default();
     map.record(&AffinityReport {
         lane: lane_key("claude-sonnet-5", "fast", "none", "-"),
-        ..report("k", "a", &["b1", "b2", "b3"], 1_000)
+        ..report("k", "a", "b1", &["b1", "b2", "b3"], 1_000)
     });
     // A speed switch hashes the same message bytes, so the identity must find the conversation whatever lane
     // its entries were written under; the lane only filters where the cache is warm.
@@ -291,9 +298,9 @@ fn the_conversation_lookup_finds_a_root_across_lanes() {
 #[test]
 fn purge_answers_each_removed_entry_with_its_cause() {
     let mut map = AffinityMap::default();
-    map.record(&report("aged", "a", &["old"], 1_000));
-    map.record(&report("live", "replaced", &["moved"], 1_000));
-    map.record(&report("live", "a", &["kept"], 1_000));
+    map.record(&report("aged", "a", "s1", &["old"], 1_000));
+    map.record(&report("live", "replaced", "s1", &["moved"], 1_000));
+    map.record(&report("live", "a", "s1", &["kept"], 1_000));
     let ttl_of = |key_id: &str| match key_id {
         "aged" => Some(1_000),
         _ => Some(1_000_000),
@@ -331,7 +338,7 @@ fn an_entry_records_the_ordinal_of_its_boundary_and_a_refresh_keeps_it() {
         static_sizes: vec![100, 200],
         static_ttl_ms: Some(300_000),
         cache_touched: true,
-        ..report("k", "a", &["b1", "b2", "b3"], 1_000)
+        ..report("k", "a", "s1", &["b1", "b2", "b3"], 1_000)
     });
     let depth = |hash: &str| map.entry("claude-sonnet-5", hash).map(|e| e.depth);
     assert_eq!(
@@ -339,7 +346,7 @@ fn an_entry_records_the_ordinal_of_its_boundary_and_a_refresh_keeps_it() {
         [Some(1), Some(2), Some(3), Some(1), Some(2)],
         "each chain counts its own boundaries from 1"
     );
-    map.record(&report("k", "a", &["b3"], 2_000));
+    map.record(&report("k", "a", "s1", &["b3"], 2_000));
     assert_eq!(
         map.entry("claude-sonnet-5", "b3")
             .map(|e| (e.depth, e.written_at)),
@@ -358,7 +365,7 @@ fn a_reports_id_lands_on_its_tail_boundary_alone_and_a_static_entry_never_holds_
         message_ttl_ms: Some(300_000),
         cache_touched: true,
         prefix_tokens: 500,
-        ..report_with("k", "a", &["b1", "b2"], 1_000, "msg_02")
+        ..report_with("k", "a", "s1", &["b1", "b2"], 1_000, "msg_02")
     });
     assert_eq!(
         ["b1", "b2", "s1"].map(|hash| id_at(&map, hash)),
@@ -370,20 +377,20 @@ fn a_reports_id_lands_on_its_tail_boundary_alone_and_a_static_entry_never_holds_
 #[test]
 fn a_refresh_in_place_keeps_the_prefix_ids_overwrites_the_tails_and_keeps_it_without_an_id() {
     let mut map = AffinityMap::default();
-    map.record(&report_with("k", "a", &["b1"], 1_000, "msg_01"));
-    map.record(&report_with("k", "a", &["b1", "b2"], 2_000, "msg_02"));
+    map.record(&report_with("k", "a", "s1", &["b1"], 1_000, "msg_01"));
+    map.record(&report_with("k", "a", "s1", &["b1", "b2"], 2_000, "msg_02"));
     assert_eq!(
         (id_at(&map, "b1"), id_at(&map, "b2")),
         (Some("msg_01".to_string()), Some("msg_02".to_string())),
         "the prefix keeps the answer of the turn that ended there and the new tail takes the new answer"
     );
-    map.record(&report("k", "a", &["b1", "b2"], 3_000));
+    map.record(&report("k", "a", "s1", &["b1", "b2"], 3_000));
     assert_eq!(
         id_at(&map, "b2"),
         Some("msg_02".to_string()),
         "a report that names no id leaves the tail's answer in place"
     );
-    map.record(&report_with("k", "a", &["b1", "b2"], 4_000, "msg_03"));
+    map.record(&report_with("k", "a", "s1", &["b1", "b2"], 4_000, "msg_03"));
     assert_eq!(
         (id_at(&map, "b1"), id_at(&map, "b2")),
         (Some("msg_01".to_string()), Some("msg_03".to_string())),
@@ -394,9 +401,9 @@ fn a_refresh_in_place_keeps_the_prefix_ids_overwrites_the_tails_and_keeps_it_wit
 #[test]
 fn a_replacement_by_another_account_starts_with_the_tails_id_alone() {
     let mut map = AffinityMap::default();
-    map.record(&report_with("k", "a", &["b1"], 1_000, "msg_01"));
-    map.record(&report_with("k", "a", &["b1", "b2"], 2_000, "msg_02"));
-    map.record(&report_with("k", "b", &["b1", "b2"], 3_000, "msg_b2"));
+    map.record(&report_with("k", "a", "s1", &["b1"], 1_000, "msg_01"));
+    map.record(&report_with("k", "a", "s1", &["b1", "b2"], 2_000, "msg_02"));
+    map.record(&report_with("k", "b", "s1", &["b1", "b2"], 3_000, "msg_b2"));
     let held = |hash: &str| {
         map.entry("claude-sonnet-5", hash)
             .map(|e| (e.account_id.clone(), e.message_id.clone()))
@@ -416,24 +423,15 @@ fn a_replacement_by_another_account_starts_with_the_tails_id_alone() {
 #[test]
 fn another_conversations_identical_list_leaves_the_first_conversations_id_in_place() {
     let mut map = AffinityMap::default();
-    map.record(&AffinityReport {
-        root: Some("s1".into()),
-        ..report_with("k", "a", &["b1"], 1_000, "msg_01")
-    });
-    map.record(&AffinityReport {
-        root: Some("s2".into()),
-        ..report_with("k", "a", &["b1"], 2_000, "msg_s2")
-    });
+    map.record(&report_with("k", "a", "s1", &["b1"], 1_000, "msg_01"));
+    map.record(&report_with("k", "a", "s2", &["b1"], 2_000, "msg_s2"));
     let entry = map.entry("claude-sonnet-5", "b1").unwrap();
     assert_eq!(
         (entry.root.as_str(), entry.message_id.as_deref()),
         ("s1", Some("msg_01")),
         "a second session opening with the same message files no answer under the first session's root"
     );
-    map.record(&AffinityReport {
-        root: Some("s2".into()),
-        ..report_with("k", "b", &["b1"], 3_000, "msg_b1")
-    });
+    map.record(&report_with("k", "b", "s2", &["b1"], 3_000, "msg_b1"));
     let entry = map.entry("claude-sonnet-5", "b1").unwrap();
     assert_eq!(
         (
@@ -450,10 +448,10 @@ fn another_conversations_identical_list_leaves_the_first_conversations_id_in_pla
 #[test]
 fn a_refresh_under_a_new_incarnation_drops_the_entrys_id() {
     let mut map = AffinityMap::default();
-    map.record(&report_with("k", "a", &["b1"], 1_000, "msg_01"));
+    map.record(&report_with("k", "a", "s1", &["b1"], 1_000, "msg_01"));
     map.record(&AffinityReport {
         incarnation: 2,
-        ..report("k", "a", &["b1"], 2_000)
+        ..report("k", "a", "s1", &["b1"], 2_000)
     });
     assert_eq!(
         id_at(&map, "b1"),
@@ -462,7 +460,7 @@ fn a_refresh_under_a_new_incarnation_drops_the_entrys_id() {
     );
     map.record(&AffinityReport {
         incarnation: 2,
-        ..report_with("k", "a", &["b1"], 3_000, "msg_02")
+        ..report_with("k", "a", "s1", &["b1"], 3_000, "msg_02")
     });
     assert_eq!(id_at(&map, "b1"), Some("msg_02".to_string()));
 }
@@ -471,14 +469,8 @@ fn a_refresh_under_a_new_incarnation_drops_the_entrys_id() {
 fn the_predecessor_is_the_deepest_boundary_the_selected_account_holds_for_the_request_or_its_fork_parent(
 ) {
     let mut map = AffinityMap::default();
-    map.record(&AffinityReport {
-        root: Some("s1".into()),
-        ..report_with("k", "a", &["b1"], 1_000, "msg_01")
-    });
-    map.record(&AffinityReport {
-        root: Some("s1".into()),
-        ..report_with("k", "a", &["b1", "b2"], 2_000, "msg_02")
-    });
+    map.record(&report_with("k", "a", "s1", &["b1"], 1_000, "msg_01"));
+    map.record(&report_with("k", "a", "s1", &["b1", "b2"], 2_000, "msg_02"));
     let continuation = boundaries(&["b1", "b2", "b3"]);
     assert_eq!(
         map.predecessor(&predecessor_query(&continuation)),
@@ -512,9 +504,8 @@ fn the_predecessor_steps_over_an_entry_without_an_id_another_account_another_key
         (&["b1", "b2", "b3"][..], None),
     ] {
         map.record(&AffinityReport {
-            root: Some("s1".into()),
             message_id: message_id.map(String::from),
-            ..report("k", "a", list, 1_000)
+            ..report("k", "a", "s1", list, 1_000)
         });
     }
     let all = boundaries(&["b1", "b2", "b3"]);

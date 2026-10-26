@@ -67,6 +67,14 @@ is read. The drift checks judge the billing stamp and the version suffix once, b
 (`client_drift`, [Client drift](#client-drift)), and the selection takes over: the session's pin or the pool's strategy,
 whose own refusals are on [When nothing can serve](routing.md#when-nothing-can-serve).
 
+A refusal's answer can carry a fallback credit token in its `stop_details`, which the client sends at the top of its
+next body. The router keeps the issuing account for that token in memory for an hour, as a digest and nothing of the
+token itself, and places the next body carrying it on that account where the account is eligible and under its cap, or
+already holds the session's live pin, ahead of a live pin's renewal, the moves and the pool's strategy. The router
+assumes the credit applies on the issuing account, which is what the upstream's `400` on another organization says.
+Nothing of the token reaches a log line, a decision record or a request row, a body capture keeping it as it keeps every
+other byte of the body, and the body goes upstream as the client sent it.
+
 ## The body edits
 
 The edits run in this order on every leg, on the plain bytes, and each fails closed: a body whose member an edit cannot
@@ -435,9 +443,10 @@ which the client has not spawned or given a turn since, is not adopted again wha
 ends the run the router holds, and the mod sends the release once more when none is still queued, so a router restored
 from a save older than the release learns of it. A state the router holds wrongly is sent again. An agent only the mod
 holds is announced with `agent_start` and its state. An entry the router holds as `released` is skipped both ways, so a
-subagent the mod holds as parked stays released on the router until its next report starts it again with `agent_start`.
-An agent the answer names while the mod's release of it still waits in the queue stays unannounced, so the agent's next
-run starts it again with `agent_start`.
+subagent the mod holds as parked stays released on the router until its next report starts it again with `agent_start`,
+which registers it anew where the record left one pool cache TTL after the release ([The five
+states](keepalive.md#the-five-states)). An agent the answer names while the mod's release of it still waits in the queue
+stays unannounced, so the agent's next run starts it again with `agent_start`.
 
 A refusal takes one of two shapes. A missing, malformed, ambiguous or refused key is answered the relay's way, the same
 `401` in Anthropic's error shape that `/v1/messages` answers, with `x-phoebis-error-code` naming an `auth_*` code

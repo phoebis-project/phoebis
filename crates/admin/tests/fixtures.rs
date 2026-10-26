@@ -500,6 +500,63 @@ async fn every_route_is_captured_and_holds_its_shape() {
             trial_ends_at: None,
         },
     ).unwrap();
+    // A free organization on the Pro tier, so the accounts fixtures carry the plan its type resolves to. It sits in
+    // no pool, which leaves the pool fixtures as they stand, and shares the seed's two bound tokens as the seat does.
+    parts
+        .store
+        .insert_account(&AccountRow {
+            id: "free-org".into(),
+            kind: AccountKind::Oauth,
+            label: "Free".into(),
+            enabled: true,
+            identity: Some(Identity {
+                account_uuid: "00000000-0000-4000-8000-000000000005".into(),
+                email: "free@example.invalid".into(),
+                organization_uuid: Some("00000000-0000-4000-8000-000000000006".into()),
+            }),
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+            state_cause: StateCause::Paired,
+        })
+        .unwrap();
+    parts
+        .store
+        .commit_credentials(
+            "free-org",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new(access_token),
+                refresh_token: Some(Secret::new(refresh_token)),
+                issued_at: now,
+                expires_at: now + 3_600_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    parts.store.set_profile(
+        "free-org",
+        r#"{"account":{"uuid":"f","email":"free@example.invalid","display_name":"Free"},"organization":{"uuid":"g","name":"Free Org","organization_type":"claude_free","billing_type":"free","rate_limit_tier":"default_claude_ai","has_extra_usage_enabled":false}}"#,
+        &SubscriptionRow {
+            plan: None,
+            tier: Some("default_claude_ai".into()),
+            since: None,
+            trial_ends_at: None,
+        },
+    ).unwrap();
+    // The free organization's term ended eight days ago, inside a week its reading below names, so the unused
+    // allowance capture carries a term end. Set ahead of the pool's creation, whose reload brings it to the snapshot.
+    const DAY: i64 = 86_400_000;
+    let free_end = now - 8 * DAY;
+    parts
+        .store
+        .set_canceled("free-org", true, Some(free_end))
+        .unwrap();
     // A cap under a quarter, so the pool answers one warning and the console draws a non-empty list.
     post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"shed_cap":0.2,"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0},{"account_id":"usage-seat","priority":2}],"keepalive":{"enabled":true},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
     let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","model_rules":[{"pattern":"claude-opus-*","not":true}],"model_rules_mode":"extend"}"#, Some(&cookie)).await).await;
@@ -551,6 +608,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             folded_model: "claude-sonnet-5".into(),
             candidates,
             portable: true,
+            credit_account: None,
             attempted: Vec::new(),
             now,
             received_at: now,
@@ -600,7 +658,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 key_generation,
                 canonical_model: "claude-sonnet-5-5".into(),
                 lane: lane_key("claude-sonnet-5-5", "standard", "none", "-"),
-                root: Some("s0".into()),
+                root: "s0".into(),
                 static_boundaries: Arc::from([]),
                 message_boundaries: Arc::from(boundaries.clone()),
                 static_sizes: Vec::new(),
@@ -639,6 +697,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             )
             .expect("the pool's model rules allow claude-sonnet-5-5"),
             portable: true,
+            credit_account: None,
             attempted: Vec::new(),
             now,
             received_at: now,
@@ -972,6 +1031,39 @@ async fn every_route_is_captured_and_holds_its_shape() {
         agent_id: None,
         request_id: Some("r-failover".into()),
     }));
+    // Two weeks of `business`'s 7-day window, one reset the clock walk found, and one Fable week, so the unused
+    // allowance capture carries both `observed` words. Days back, so the routing log's hour and the failover's window
+    // hold none of them.
+    for (window, utilization_before, at, observed) in [
+        ("seven_day", 0.62, now - 7 * DAY, "sample"),
+        ("seven_day", 0.85, now - 14 * DAY, "clock"),
+        ("seven_day_fable", 0.4, now - 10 * DAY, "sample"),
+    ] {
+        parts.ledger.record(Record::Event(EventRecord {
+            at,
+            kind: "window_reset".into(),
+            account_id: Some("business".into()),
+            detail: Some(j!({ "window": window, "utilization_before": utilization_before, "reset_at": at, "next_reset": at + 7 * DAY, "observed": observed }).to_string()),
+            ..Default::default()
+        }));
+    }
+    // The free organization's last reading of the week its term end cut short.
+    let free_read_at = free_end - 3 * DAY;
+    parts
+        .db
+        .insert_samples(
+            &[QuotaSampleRecord {
+                account_id: "free-org".into(),
+                bucket: phoebis_ledger::bucket_of(free_read_at),
+                window: "seven_day".into(),
+                utilization: Some(0.3),
+                reset_at: Some(free_end + 4 * DAY),
+                source: "poll".into(),
+                observed_at: Some(free_read_at),
+            }],
+            None,
+        )
+        .unwrap();
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             bodies_captured: true,
@@ -1197,8 +1289,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
         bodies: None,
     });
     // A request the usage-based seat served, billed in dollars under the seat's own funding word, so the request rows
-    // carry the attempt's class with one true. The oldest row and in no session, so the list's first rows keep their
-    // places and the session rows their counts. The seat has no plan window, so its attempt carries no 5-hour reading.
+    // carry the attempt's class with one true. Older than the list's first rows and in no session, so the list's first
+    // rows keep their places and the session rows their counts. The seat has no plan window, so its attempt carries no
+    // 5-hour reading.
     let seat_at = refused_at - 600;
     parts.ledger.record(Record::Request {
         request: RequestRecord {
@@ -1221,6 +1314,27 @@ async fn every_route_is_captured_and_holds_its_shape() {
         }],
         bodies: None,
     });
+    // Three answers the upstream refused, each served with the stop reason `refusal`, one category twice and another
+    // once, so the request rows carry the refused attempts' responses and the refusal count its rows. Older than every
+    // other row and in no session, so the list's first rows keep their places and the session rows their counts.
+    for (id, at, category) in [
+        ("r-refused-1", seat_at - 1_800, "harmful_request"),
+        ("r-refused-2", seat_at - 1_200, "harmful_request"),
+        ("r-refused-3", seat_at - 600, "restricted_topic"),
+    ] {
+        parts.ledger.record(Record::Request {
+            request: RequestRecord {
+                session_id: None,
+                ..request(key_generation, id, at, "desktop", "s1", 200, "succeeded")
+            },
+            attempts: vec![AttemptRecord {
+                stop_reason: Some("refusal".into()),
+                refusal_category: Some(category.into()),
+                ..attempt(id, 1, "business", 200, "succeeded", at)
+            }],
+            bodies: None,
+        });
+    }
     parts
         .keepalive
         .apply_event(
@@ -1266,6 +1380,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 folded_model: model.into(),
                 candidates,
                 portable: true,
+                credit_account: None,
                 attempted: Vec::new(),
                 now: placed_at,
                 received_at: placed_at,
@@ -1324,7 +1439,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                     key_generation,
                     canonical_model: model.into(),
                     lane: lane_key(model, "standard", "none", "-"),
-                    root: Some("s1".into()),
+                    root: "s1".into(),
                     static_boundaries: Arc::from([]),
                     message_boundaries: Arc::from([format!("b-s1-{agent}")]),
                     static_sizes: Vec::new(),
@@ -1457,7 +1572,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
-        v["requests"].as_array().unwrap().len() == 10
+        v["requests"].as_array().unwrap().len() == 13
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
@@ -1735,6 +1850,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
             "analytics_reconciliations",
             "/admin/analytics/reconciliations",
         ),
+        (
+            "analytics_refusal_categories",
+            "/admin/analytics/refusal_categories?range=24h",
+        ),
         ("analytics_rewrites", "/admin/analytics/rewrites?range=24h"),
         (
             "analytics_series",
@@ -1743,6 +1862,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         (
             "analytics_series_accounts",
             "/admin/analytics/series?range=24h&group_by=account",
+        ),
+        (
+            "analytics_unused_allowance",
+            "/admin/analytics/unused_allowance",
         ),
         ("attention", "/admin/attention"),
         ("dashboard", "/admin/dashboard"),
@@ -2071,6 +2194,7 @@ fn asked(
         )
         .expect("the pool's model rules allow claude-sonnet-5"),
         portable: true,
+        credit_account: None,
         attempted: Vec::new(),
         now: common::NOW,
         received_at: common::NOW,
@@ -2120,7 +2244,7 @@ fn warmed(
         key_generation,
         canonical_model: "claude-sonnet-5".into(),
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
-        root: Some(root.into()),
+        root: root.into(),
         static_boundaries: Arc::from([static_hash.to_string()]),
         message_boundaries: Arc::from([format!("m-{request_id}")]),
         static_sizes: vec![31_200],

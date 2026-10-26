@@ -41,7 +41,7 @@ const WAKE_TOLERANCE: Duration = Duration::from_secs(1);
 pub const PROFILE_EVERY_POLLS: u32 = 12;
 
 /// The usage endpoint's key for the week the head reports as `7d_oi`.
-const SEVEN_DAY_OVERAGE_INCLUDED: &str = "seven_day_overage_included";
+pub(crate) const SEVEN_DAY_OVERAGE_INCLUDED: &str = "seven_day_overage_included";
 
 const OPEN_RUNS_POISONED: &str = "the poll backoff's open-run set poisoned by a prior panic";
 
@@ -627,13 +627,14 @@ impl QuotaPoll {
                 ProfileRead::NoPlan
             }
             Ok(profile) => {
-                // The term carries the class beside the tier, so a document whose seat tier alone moved reloads too.
+                // The term carries the class and the plan beside the tier, so a document whose seat tier or
+                // organization type alone moved reloads too.
                 let term = || {
                     store
                         .subscription_term(&account.id)
                         .ok()
                         .flatten()
-                        .map(|t| (t.tier, t.usage_based))
+                        .map(|t| (t.tier, t.usage_based, t.plan))
                 };
                 let before = term();
                 if let Err(error) =
@@ -642,7 +643,7 @@ impl QuotaPoll {
                     tracing::warn!(account = %account.id, %error, "the profile could not be stored");
                 } else if before != term() {
                     if let Err(error) = router.reload().await {
-                        tracing::debug!(account = %account.id, %error, "the router did not reload for a new tier or class");
+                        tracing::debug!(account = %account.id, %error, "the router did not reload for a new tier, class or plan");
                     }
                 }
                 Self::restore_plan(store, usage, ledger, router, account, &profile.raw).await;

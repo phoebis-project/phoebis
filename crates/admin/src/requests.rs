@@ -60,8 +60,9 @@ pub(crate) struct RequestList {
     /// Set only while a row lies beyond the page. A page of exactly `limit` rows with none beyond answers null.
     pub next_cursor: Option<String>,
     /// The newest write instant among the rows the filters admit at this read, `to` included, the `landed_after` passed
-    /// where none above it has landed, and 0 where neither is set, never past a `to` the query names, since a row
-    /// received after `to` lands after it. Pass it as `landed_after` to read what landed since.
+    /// where none above it has landed, and 0 where neither is set, never past a `to` the query names unless
+    /// `fixed_end` is set, since a row received after `to` lands after it and a fixed range's poll reads a late row
+    /// once. Pass it as `landed_after` to read what landed since.
     pub landed_through: i64,
 }
 
@@ -382,8 +383,8 @@ pub(crate) struct Event {
     /// - `plan_restored`: the account's plan-ended flag cleared, with its `source` (`profile` for a profile read that
     ///   found a plan, `pairing` for a pairing confirm) and the profile's `organization_type`, `rate_limit_tier` and
     ///   `subscription_status`.
-    /// - `poll_backoff_ended`: the usage poll's backoff on an account ended with a clean answer, with
-    ///   `duration_ms`.
+    /// - `poll_backoff_ended`: the usage poll's backoff on an account ended with a clean answer or at the account's
+    ///   plan-ended pause, with `duration_ms`.
     /// - `poll_backoff_started`: the usage or the profile endpoint (`endpoint`) rate-limited an account, starting
     ///   the usage poll's backoff, with `next_attempt_at` and `last_clean_poll_at`, when the last clean answer
     ///   before it was read.
@@ -864,6 +865,12 @@ pub(crate) struct RequestsQuery {
     pub turn_origins: Option<String>,
     /// A comma list of reasons, read off the serving attempt, any name the beta sent.
     pub cache_miss_reasons: Option<String>,
+    /// A comma list of stop reasons, read off the serving attempt, the last one, `-` for a request whose serving
+    /// attempt carries none or that no attempt served.
+    pub stop_reasons: Option<String>,
+    /// A comma list of refusal categories, read off the serving attempt as `stop_reasons` is, `-` for a request with
+    /// none.
+    pub refusal_categories: Option<String>,
     /// A comma list of efforts as the rollups fold them: a level, `none`, `other`.
     pub efforts: Option<String>,
     /// A comma list of classes as the rollups fold them: the class, `-`, `other`.
@@ -879,6 +886,9 @@ pub(crate) struct RequestsQuery {
     pub held: Option<bool>,
     /// `true`/`1`.
     pub include_probes: Option<bool>,
+    /// `true`/`1`: the range's end is fixed, so `landed_through` may pass `to` and a poll over the range reads a row
+    /// that landed after the end once. Leave it off for a live range.
+    pub fixed_end: Option<bool>,
     /// Default 50, clamped to 1 through 500.
     pub limit: Option<u32>,
     /// `<received_at>:<id>`.
@@ -952,6 +962,9 @@ pub(crate) async fn list(
         request_classes: list_param(&q, "request_classes"),
         classifiers: list_param(&q, "classifiers"),
         guardrails: list_param(&q, "guardrails"),
+        stop_reasons: list_param(&q, "stop_reasons"),
+        refusal_categories: list_param(&q, "refusal_categories"),
+        fixed_end: q.get("fixed_end").is_some_and(|v| v == "true" || v == "1"),
     };
     if !phoebis_ledger::patterns_within_bounds(filter.user_agent.as_slice())
         || !phoebis_ledger::patterns_within_bounds(filter.client.as_slice())

@@ -1638,6 +1638,17 @@ impl Captured {
     /// body task it spawns on the case's own thread, so every line the case drives lands here. A case that reads a
     /// debug line captures at `Level::DEBUG`.
     pub fn install_at(&self, level: tracing::Level) -> tracing::subscriber::DefaultGuard {
+        // While tracing-core knows one dispatcher, it caches a new callsite's interest from the registering thread's
+        // subscriber alone, so a parallel case without a capture that reaches a shared callsite first turns it off here
+        // too. A second dispatcher kept for the process rules that out, and its OFF filter leaves the max level alone.
+        static SECOND: std::sync::OnceLock<tracing::Dispatch> = std::sync::OnceLock::new();
+        SECOND.get_or_init(|| {
+            tracing::Dispatch::new(
+                tracing_subscriber::fmt()
+                    .with_max_level(tracing_subscriber::filter::LevelFilter::OFF)
+                    .finish(),
+            )
+        });
         tracing::subscriber::set_default(
             tracing_subscriber::fmt()
                 .with_ansi(false)

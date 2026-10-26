@@ -158,6 +158,7 @@ fn request(
         )
         .unwrap(),
         portable: true,
+        credit_account: None,
         attempted: vec![],
         now,
         received_at: now,
@@ -217,7 +218,7 @@ fn affinity_report(
         key_generation: s.key("k").unwrap().created_at,
         canonical_model: "claude-sonnet-5".into(),
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
-        root: None,
+        root: "s".into(),
         static_boundaries: Arc::from([]),
         message_boundaries: Arc::from(["b1".to_string()]),
         static_sizes: Vec::new(),
@@ -1136,6 +1137,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             )
             .unwrap(),
             portable: true,
+            credit_account: None,
             attempted: vec![],
             now,
             received_at: now,
@@ -1276,6 +1278,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             )
             .unwrap(),
             portable: true,
+            credit_account: None,
             attempted: vec![],
             now: 1_000,
             received_at: 1_000,
@@ -6176,6 +6179,125 @@ async fn a_spend_windows_reset_is_the_heads_while_ahead_then_rolls_to_the_next_m
     );
 }
 
+#[tokio::test]
+async fn a_polls_share_after_a_head_whose_reset_the_router_holds_lapses_at_that_reset() {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(OCT_10 + HOUR));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(spend_head(0.6, OCT_15, OCT_10)).await;
+    // Each read folds the readings pending before it, so the head lands before the poll whatever their keys' order.
+    spend_window_of(&handle).await;
+    handle
+        .report(credits_at(true, None, Some(30.0), OCT_10 + HOUR))
+        .await;
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: Some(0.3),
+            share_source: Some("poll"),
+            reset: OCT_15,
+            reset_source: SpendResetSource::Head,
+            observed_at: Some(OCT_10 + HOUR),
+        },
+        "the poll's share stands under the head's reset while that is ahead"
+    );
+    now.store(OCT_15 + HOUR, Ordering::SeqCst);
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: None,
+            share_source: Some("poll"),
+            reset: NOV_1,
+            reset_source: SpendResetSource::Estimated,
+            observed_at: Some(OCT_10 + HOUR),
+        },
+        "the poll was read under the head's reset, so its share lapses there and not at the estimate over its instant"
+    );
+}
+
+#[tokio::test]
+async fn a_share_only_heads_share_lapses_at_the_reset_an_earlier_head_named() {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(OCT_10 + HOUR));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(spend_head(0.6, OCT_15, OCT_10)).await;
+    spend_window_of(&handle).await;
+    handle
+        .report(Report::SpendHead {
+            account_id: "a".into(),
+            utilization: Some(0.8),
+            reset: None,
+            observed_at: OCT_10 + HOUR,
+            incarnation: 1,
+        })
+        .await;
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: Some(0.8),
+            share_source: Some("head"),
+            reset: OCT_15,
+            reset_source: SpendResetSource::Head,
+            observed_at: Some(OCT_10 + HOUR),
+        },
+        "the share-only head's share stands under the earlier head's reset"
+    );
+    now.store(OCT_15 + HOUR, Ordering::SeqCst);
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: None,
+            share_source: Some("head"),
+            reset: NOV_1,
+            reset_source: SpendResetSource::Estimated,
+            observed_at: Some(OCT_10 + HOUR),
+        },
+        "the share-only head names no reset of its own and reads the held one, so its share lapses there"
+    );
+}
+
+#[tokio::test]
+async fn a_head_observed_after_a_poll_leaves_the_polls_share_to_the_estimate_over_its_instant() {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(OCT_10 + HOUR));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    // A head carrying a share would hold a credits state newer than the slower poll's, which would then fold nothing.
+    handle
+        .report(Report::SpendHead {
+            account_id: "a".into(),
+            utilization: None,
+            reset: Some(OCT_15),
+            observed_at: OCT_10 + HOUR,
+            incarnation: 1,
+        })
+        .await;
+    spend_window_of(&handle).await;
+    handle
+        .report(credits_at(true, None, Some(30.0), OCT_10))
+        .await;
+    now.store(OCT_15 + HOUR, Ordering::SeqCst);
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: Some(0.3),
+            share_source: Some("poll"),
+            reset: NOV_1,
+            reset_source: SpendResetSource::Estimated,
+            observed_at: Some(OCT_10),
+        },
+        "the head came after the poll's reading, so its reset does not govern the poll's share"
+    );
+    now.store(NOV_1 + HOUR, Ordering::SeqCst);
+    assert_eq!(
+        spend_window_of(&handle).await.utilization,
+        None,
+        "the poll's share holds to the estimate over its own instant"
+    );
+}
+
 /// What `handle` answers a plain request and a fast one at `at`.
 async fn standard_and_fast(handle: &RouterHandle, at: i64) -> (SelectResult, SelectResult) {
     let fast = SelectRequest {
@@ -7871,6 +7993,7 @@ async fn the_handles_predecessor_reads_the_snapshots_incarnation() {
     .unwrap();
     let seq = handle
         .report(Report::Affinity(AffinityReport {
+            root: "b1".into(),
             message_id: Some("msg_01".into()),
             ..affinity_report(&handle, "a", 1_000)
         }))
@@ -7885,8 +8008,6 @@ async fn the_handles_predecessor_reads_the_snapshots_incarnation() {
     // The caller's reading answers an incarnation the snapshot never held, so only the handle's own reading of
     // the snapshot decides which entries the walk accepts.
     let stale = |_: &str| Some(2_u64);
-    // A report without a session roots its entries at its first boundary, so a one-boundary lookup names that
-    // boundary as its root.
     let query = |hash: &str| {
         let message_boundaries = [hash.to_string()];
         handle.predecessor(&PredecessorQuery {
@@ -7907,6 +8028,7 @@ async fn the_handles_predecessor_reads_the_snapshots_incarnation() {
 
     handle.affinity().write().unwrap().record(&AffinityReport {
         incarnation: 2,
+        root: "c1".into(),
         message_boundaries: Arc::from(["c1".to_string()]),
         message_id: Some("msg_c1".into()),
         ..affinity_report(&handle, "a", 2_000)
@@ -10342,7 +10464,7 @@ async fn the_purge_groups_expired_entries_per_root() {
     for (root, chain) in [("s1", &["x1", "x2", "x3"][..]), ("s2", &["y1"][..])] {
         handle
             .report(Report::Affinity(AffinityReport {
-                root: Some(root.into()),
+                root: root.into(),
                 message_boundaries: Arc::from(
                     chain.iter().map(|h| h.to_string()).collect::<Vec<_>>(),
                 ),
@@ -10410,6 +10532,7 @@ async fn an_expiry_reports_the_depth_the_entry_was_written_at_when_its_chain_is_
     };
     handle
         .report(Report::Affinity(AffinityReport {
+            root: "b1".into(),
             message_boundaries: chain(&["b1", "b2", "b3"]),
             ..affinity_report(&handle, "a", 1_000)
         }))
@@ -10422,6 +10545,7 @@ async fn an_expiry_reports_the_depth_the_entry_was_written_at_when_its_chain_is_
     now.store(1_600, Ordering::SeqCst);
     handle
         .report(Report::Affinity(AffinityReport {
+            root: "b1".into(),
             message_boundaries: chain(&["b2"]),
             ..affinity_report(&handle, "a", 1_600)
         }))
@@ -11089,6 +11213,75 @@ async fn a_pin_migrated_event_carries_the_destinations_fit_runway_and_binding() 
         ),
         (of("verdict"), of("runway_ms"), of("binding")),
         "the event names the destination's row of the move's fit table"
+    );
+}
+
+#[tokio::test]
+async fn a_standing_runway_that_reaches_past_its_windows_reset_reads_unbounded() {
+    let store = shedding_store(&["a"]);
+    with_tier(&store, "a");
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    // The pin's 0.1 of the window an hour fills the 0.2 left under the ceiling in two hours, and the window resets in
+    // one, so the ceiling is never reached before the reset. a holds no weekly reading, so no other window bounds it.
+    handle
+        .report(observed(
+            "a",
+            sample_with(AT, FIVE_HOUR, 0.75, Some(AT + HOUR)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let standing = handle.pins_standing().await.unwrap();
+    let s1 = standing
+        .iter()
+        .find(|p| p.pin.session_id == "s1")
+        .unwrap_or_else(|| panic!("no pin of s1: {standing:?}"));
+    assert_eq!(
+        (s1.runway_ms, s1.runway_bounded, s1.binding.as_deref()),
+        (None, Some(false), None),
+        "a runway past its window's reset reads unbounded"
+    );
+}
+
+#[tokio::test]
+async fn the_window_inside_its_reset_binds_the_standing_runway_where_a_shorter_one_passes_its_reset(
+) {
+    let store = shedding_store(&["a"]);
+    with_tier(&store, "a");
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    // The 5-hour window's two hours to the ceiling pass its reset an hour out, while the week's 0.05 left under the
+    // ceiling, at a sixth of the burn, lasts three hours under no reset: the week binds though its runway is longer.
+    handle
+        .report(observed(
+            "a",
+            sample_with(AT, FIVE_HOUR, 0.75, Some(AT + HOUR)).with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.9,
+                    reset: None,
+                    observed_at: AT,
+                    source: WindowSource::Poll,
+                },
+            ),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let standing = handle.pins_standing().await.unwrap();
+    let s1 = standing
+        .iter()
+        .find(|p| p.pin.session_id == "s1")
+        .unwrap_or_else(|| panic!("no pin of s1: {standing:?}"));
+    assert_eq!(
+        (s1.runway_ms, s1.runway_bounded, s1.binding.as_deref()),
+        (Some(3 * HOUR), Some(true), Some(SEVEN_DAY)),
+        "the week binds at its three hours, the 5-hour window's two passing its reset"
     );
 }
 
@@ -11873,7 +12066,16 @@ async fn a_wall_read_by_a_head_that_names_no_reset_is_stored_under_the_stored_re
     use phoebis_routing::RouterEvent;
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    // Held, so no clock walk announces the passed reset between the move past it and the sample that reads it passed.
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
     let mut events = handle.subscribe_events();
     let reset = 10 * HOUR;
     handle

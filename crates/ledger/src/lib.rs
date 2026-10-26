@@ -1,6 +1,7 @@
 //! The statistics ledger: `ledger.sqlite`, written by one task from what the bus and the router publish, and
 //! read by the admin routes and the metrics listener.
 
+mod allowance;
 mod assemble;
 mod bodies;
 mod db;
@@ -24,6 +25,7 @@ mod schema;
 mod task;
 mod usage;
 
+pub use allowance::{unused_allowance, AllowanceReset};
 pub use assemble::{Assembler, Expired, Record, IN_FLIGHT_TTL_MS};
 pub use bodies::{
     run_retention, run_retention_blocking, Purged, MAX_CAPTURED_BODY, PURGE_SLICE,
@@ -78,7 +80,7 @@ pub use query::{
     GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL, MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
 };
 pub use query::{guardrail_sample_page, request_body, SampleRow, SampleSubject};
-pub use query::{list_request_page, RequestPage};
+pub use query::{list_request_page, refusal_categories, RequestPage};
 pub use quota::{
     lead_over_pace, polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled,
     POLL_INTERVAL, PROFILE_EVERY_POLLS,

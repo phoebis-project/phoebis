@@ -6,9 +6,12 @@ use std::time::Duration;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
-use phoebis_ledger::{event_of, recent_events_of_kind, EventRecord, LedgerConfig, LedgerDb};
+use phoebis_ledger::{
+    event_of, recent_events_of_kind, unused_allowance, AllowanceReset, EventRecord, LedgerConfig,
+    LedgerDb, QuotaSampleRecord,
+};
 use phoebis_routing::RouterEvent;
-use phoebis_store::{AccountState, StateCause, StorageKey, Store};
+use phoebis_store::{AccountState, MemberWrite, PoolRow, StateCause, StorageKey, Store};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -470,7 +473,16 @@ async fn a_registry_change_lands_with_its_diff_decoded_once() {
     )
     .await;
     let pool = h.store.pool("main").unwrap().unwrap();
-    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    h.store
+        .update_pool(
+            &PoolRow {
+                label: "Main pool".into(),
+                ..pool.clone()
+            },
+            pool.updated_at,
+            "test",
+        )
+        .unwrap();
     let row = wait_for_async(Duration::from_secs(5), || async {
         h.db.events(0, i64::MAX, 100)
             .await
@@ -494,6 +506,64 @@ async fn a_registry_change_lands_with_its_diff_decoded_once() {
         detail["diff"].is_object(),
         "the diff is a value, not a string: {detail}"
     );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_pool_save_that_keeps_its_member_list_mirrors_one_event_and_a_save_that_changes_nothing_mirrors_none(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), polled_every_50_ms()).await;
+    let members = [MemberWrite {
+        account_id: "a".into(),
+        priority: 0,
+        budget_daily_usd: None,
+        budget_monthly_usd: None,
+    }];
+    let changes = || async {
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == "registry_changed")
+            .map(|e| {
+                let detail: serde_json::Value =
+                    serde_json::from_str(e.detail.as_deref().unwrap()).unwrap();
+                detail["kind"].as_str().unwrap().to_string()
+            })
+            .collect::<Vec<_>>()
+    };
+    let read = h.store.pool("main").unwrap().unwrap();
+    let stamp = h
+        .store
+        .update_pool_with_members(
+            &PoolRow {
+                label: "Main pool".into(),
+                ..read.clone()
+            },
+            read.updated_at,
+            Some(&members),
+            "test",
+        )
+        .unwrap();
+    let mirrored = wait_for_async(Duration::from_secs(5), || async {
+        let kinds = changes().await;
+        (!kinds.is_empty()).then_some(kinds)
+    })
+    .await;
+    assert_eq!(
+        mirrored,
+        ["pool_updated"],
+        "the changed setting's event and none for the list written back unchanged"
+    );
+    let edited = h.store.pool("main").unwrap().unwrap();
+    h.store
+        .update_pool_with_members(&edited, stamp, Some(&members), "test")
+        .unwrap();
+    stays_for_async(Duration::from_millis(200), || async {
+        changes().await == ["pool_updated"]
+    })
+    .await;
     up.shutdown().await;
 }
 
@@ -2553,6 +2623,403 @@ async fn a_clock_reset_the_previous_run_announced_is_not_written_again() {
         "a sample is a reading of this run, whatever the reset it names"
     );
     up.shutdown().await;
+}
+
+const DAY: i64 = 86_400_000;
+
+/// A `window_reset` row as the engine writes it: the event at `at`, the passed reset a minute before it.
+fn window_reset(
+    account_id: &str,
+    window: &str,
+    utilization_before: f64,
+    at: i64,
+    observed: &'static str,
+) -> EventRecord {
+    event_of(&RouterEvent::WindowReset {
+        account_id: account_id.into(),
+        window: window.into(),
+        utilization_before,
+        reset_at: at - 60_000,
+        next_reset: (observed == "sample").then_some(at - 60_000 + 7 * DAY),
+        observed,
+        restored: false,
+        at,
+    })
+    .expect("a reset row")
+}
+
+fn weekly_sample(
+    account_id: &str,
+    window: &str,
+    utilization: Option<f64>,
+    observed_at: i64,
+    reset_at: i64,
+) -> QuotaSampleRecord {
+    QuotaSampleRecord {
+        account_id: account_id.into(),
+        bucket: phoebis_ledger::bucket_of(observed_at),
+        window: window.into(),
+        utilization,
+        reset_at: Some(reset_at),
+        source: "poll".into(),
+        observed_at: Some(observed_at),
+    }
+}
+
+fn reset_row(
+    account_id: &str,
+    window: &str,
+    reset_at: i64,
+    share_left: f64,
+    observed_at: i64,
+    source: &str,
+) -> AllowanceReset {
+    AllowanceReset {
+        account_id: account_id.into(),
+        window: window.into(),
+        reset_at,
+        share_left,
+        observed_at,
+        source: source.into(),
+    }
+}
+
+#[test]
+fn the_unused_allowance_lists_each_weekly_reset_in_range_newest_first_and_a_term_end_from_the_last_reading_before_it(
+) {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = 100 * DAY;
+    let (from, to) = (now - 30 * DAY, now);
+    for row in [
+        window_reset("a", "seven_day", 0.62, now - DAY, "sample"),
+        window_reset("a", "seven_day", 1.0, now - 8 * DAY, "clock"),
+        // Past the window's whole allowance, so nothing was left of it.
+        window_reset("a", "seven_day_fable", 1.2, now - 3 * DAY, "sample"),
+        // Left out: the 5-hour window joins nothing, and a reset before the range.
+        window_reset("a", "five_hour", 0.5, now - 2 * DAY, "sample"),
+        window_reset("a", "seven_day", 0.3, now - 40 * DAY, "sample"),
+        window_reset("b", "seven_day", 0.25, now - 2 * DAY, "clock"),
+    ] {
+        db.insert_event(&row).unwrap();
+    }
+    // `c`'s term ended inside a week: two readings of the week before the end and one after it.
+    let end = now - 5 * DAY;
+    let week_reset = end + 2 * DAY;
+    db.insert_samples(
+        &[
+            weekly_sample("c", "seven_day", Some(0.2), end - 3 * DAY, week_reset),
+            weekly_sample("c", "seven_day", Some(0.45), end - DAY, week_reset),
+            weekly_sample("c", "seven_day", Some(0.9), end + DAY, week_reset),
+        ],
+        None,
+    )
+    .unwrap();
+    let a_rows = || {
+        vec![
+            reset_row(
+                "a",
+                "seven_day",
+                now - DAY - 60_000,
+                1.0 - 0.62,
+                now - DAY,
+                "sample",
+            ),
+            reset_row(
+                "a",
+                "seven_day",
+                now - 8 * DAY - 60_000,
+                0.0,
+                now - 8 * DAY,
+                "clock",
+            ),
+            reset_row(
+                "a",
+                "seven_day_fable",
+                now - 3 * DAY - 60_000,
+                0.0,
+                now - 3 * DAY,
+                "sample",
+            ),
+        ]
+    };
+    let listed = db
+        .read_blocking(|c| {
+            unused_allowance(c, &["a".into(), "c".into()], from, to, &[("c".into(), end)])
+        })
+        .unwrap();
+    let mut expected = a_rows();
+    expected.push(reset_row(
+        "c",
+        "seven_day",
+        end,
+        1.0 - 0.45,
+        end - DAY,
+        "term_ended",
+    ));
+    assert_eq!(
+        listed, expected,
+        "the listed accounts' weekly resets newest first, the share clamped to the unit interval, and the term end \
+         read from the last reading before it"
+    );
+    let every = db
+        .read_blocking(|c| unused_allowance(c, &[], from, to, &[]))
+        .unwrap();
+    let mut expected = a_rows();
+    expected.push(reset_row(
+        "b",
+        "seven_day",
+        now - 2 * DAY - 60_000,
+        1.0 - 0.25,
+        now - 2 * DAY,
+        "clock",
+    ));
+    assert_eq!(
+        every, expected,
+        "the empty list keeps every account's resets"
+    );
+}
+
+#[test]
+fn a_term_end_reads_each_open_weeks_last_reading_once_and_leaves_out_the_resets_after_it() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = 100 * DAY;
+    let end = now - 10 * DAY;
+    let week_reset = end + 3 * DAY;
+    db.insert_samples(
+        &[
+            // A reading with no utilization hides none before it.
+            weekly_sample("d", "seven_day", Some(0.7), end - 5 * 3_600_000, week_reset),
+            weekly_sample("d", "seven_day", None, end - 2 * 3_600_000, week_reset),
+            // The head's overage-included week and the poll's Fable week are one window, the newer reading standing.
+            weekly_sample(
+                "d",
+                "seven_day_fable",
+                Some(0.5),
+                end - 6 * 3_600_000,
+                end + DAY,
+            ),
+            weekly_sample(
+                "d",
+                "seven_day_overage_included",
+                Some(0.6),
+                end - 3_600_000,
+                end + DAY,
+            ),
+            // The same pair the other way round, the poll's Fable reading the newer one.
+            weekly_sample(
+                "e",
+                "seven_day_fable",
+                Some(0.35),
+                end - 3_600_000,
+                end + DAY,
+            ),
+            weekly_sample(
+                "e",
+                "seven_day_overage_included",
+                Some(0.65),
+                end - 6 * 3_600_000,
+                end + DAY,
+            ),
+            // A week that reset before the end left nothing the end cut short.
+            weekly_sample(
+                "d",
+                "seven_day_opus",
+                Some(0.4),
+                end - DAY,
+                end - 2 * 3_600_000,
+            ),
+        ],
+        None,
+    )
+    .unwrap();
+    for row in [
+        window_reset("d", "seven_day", 0.8, end - 3 * DAY, "sample"),
+        // The clock walk announces the cut-short week's reset after the end, which the term end already counts.
+        window_reset("d", "seven_day", 0.7, week_reset + 60_000, "clock"),
+    ] {
+        db.insert_event(&row).unwrap();
+    }
+    let rows = db
+        .read_blocking(|c| {
+            unused_allowance(c, &["d".into()], now - 30 * DAY, now, &[("d".into(), end)])
+        })
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            reset_row(
+                "d",
+                "seven_day",
+                end,
+                1.0 - 0.7,
+                end - 5 * 3_600_000,
+                "term_ended"
+            ),
+            reset_row(
+                "d",
+                "seven_day",
+                end - 3 * DAY - 60_000,
+                1.0 - 0.8,
+                end - 3 * DAY,
+                "sample"
+            ),
+            reset_row(
+                "d",
+                "seven_day_fable",
+                end,
+                1.0 - 0.6,
+                end - 3_600_000,
+                "term_ended"
+            ),
+        ],
+        "one row per open week, the head's week under the Fable id, and no reset after the end"
+    );
+    let reversed = db
+        .read_blocking(|c| {
+            unused_allowance(c, &["e".into()], now - 30 * DAY, now, &[("e".into(), end)])
+        })
+        .unwrap();
+    assert_eq!(
+        reversed,
+        vec![reset_row(
+            "e",
+            "seven_day_fable",
+            end,
+            1.0 - 0.35,
+            end - 3_600_000,
+            "term_ended"
+        )],
+        "the newer reading of the pair stands whichever key it carries"
+    );
+}
+
+#[test]
+fn a_term_end_leaves_out_an_ended_accounts_resets_by_the_resets_own_instant() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = 100 * DAY;
+    let end = now - 10 * DAY;
+    let announced =
+        |window: &str, utilization_before: f64, reset_at: i64, at: i64, observed: &'static str| {
+            event_of(&RouterEvent::WindowReset {
+                account_id: "f".into(),
+                window: window.into(),
+                utilization_before,
+                reset_at,
+                next_reset: (observed == "sample").then_some(reset_at + 7 * DAY),
+                observed,
+                restored: false,
+                at,
+            })
+            .expect("a reset row")
+        };
+    for row in [
+        // A week that reset before the end, announced only after it.
+        announced(
+            "seven_day",
+            0.55,
+            end - 2 * 3_600_000,
+            end + 3 * 3_600_000,
+            "clock",
+        ),
+        // The week the end cut short, which the term end counts.
+        announced("seven_day_fable", 0.9, end, end, "sample"),
+    ] {
+        db.insert_event(&row).unwrap();
+    }
+    db.insert_samples(
+        &[weekly_sample(
+            "f",
+            "seven_day_fable",
+            Some(0.75),
+            end - 3 * 3_600_000,
+            end,
+        )],
+        None,
+    )
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| {
+            unused_allowance(c, &["f".into()], now - 30 * DAY, now, &[("f".into(), end)])
+        })
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            reset_row(
+                "f",
+                "seven_day",
+                end - 2 * 3_600_000,
+                1.0 - 0.55,
+                end + 3 * 3_600_000,
+                "clock"
+            ),
+            reset_row(
+                "f",
+                "seven_day_fable",
+                end,
+                1.0 - 0.75,
+                end - 3 * 3_600_000,
+                "term_ended"
+            ),
+        ],
+        "a week that reset before the end keeps its row whenever it was announced, and a reset at the end is the term \
+         end's row alone"
+    );
+}
+
+/// A term end before the range drops the resets at or after it as one inside the range does, and lists no row of its
+/// own there: the end's row belongs to a range that holds the end.
+#[test]
+fn a_term_end_before_the_range_drops_the_resets_after_it_and_lists_no_row_of_its_own() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let end = 10 * DAY;
+    let week_reset = end + 2 * DAY;
+    db.insert_samples(
+        &[weekly_sample(
+            "g",
+            "seven_day",
+            Some(0.8),
+            end - DAY,
+            week_reset,
+        )],
+        None,
+    )
+    .unwrap();
+    db.insert_event(
+        &event_of(&RouterEvent::WindowReset {
+            account_id: "g".into(),
+            window: "seven_day".into(),
+            utilization_before: 0.8,
+            reset_at: week_reset,
+            next_reset: None,
+            observed: "clock",
+            restored: false,
+            at: week_reset,
+        })
+        .expect("a reset row"),
+    )
+    .unwrap();
+    let read = |from: i64, to: i64| {
+        db.read_blocking(|c| unused_allowance(c, &["g".into()], from, to, &[("g".into(), end)]))
+            .unwrap()
+    };
+    assert_eq!(
+        read(11 * DAY, 13 * DAY),
+        Vec::<AllowanceReset>::new(),
+        "the day-12 reset of an account whose term ended on day 10 is left out, and the end lists no row"
+    );
+    assert_eq!(
+        read(0, 13 * DAY),
+        vec![reset_row(
+            "g",
+            "seven_day",
+            end,
+            1.0 - 0.8,
+            end - DAY,
+            "term_ended"
+        )],
+        "a range that holds the end lists its row in place of the reset"
+    );
 }
 
 #[tokio::test]

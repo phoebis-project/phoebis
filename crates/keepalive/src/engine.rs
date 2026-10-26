@@ -13,7 +13,7 @@ use phoebis_bus::{
 };
 use phoebis_ledger::{Band, Ledger, Metrics, PlanTables, Pricing, Speed};
 use phoebis_oauth::Clock;
-use phoebis_relay::{CacheTtlPolicy, Relay};
+use phoebis_relay::{CacheTtl, CacheTtlPolicy, Relay};
 use phoebis_routing::{budget_deadline, listing, MemberSpend, RegistrySnapshot, RouterHandle};
 use phoebis_store::{AccountKind, AccountRow, AccountState, OveragePolicy, PoolRow, Store};
 use tokio::sync::Notify;
@@ -24,7 +24,7 @@ use crate::breakeven::{
     resolve, resolve_pool, shipped_tightest, Ceilings, FactorRows, ResolvedCeilings,
 };
 use crate::config::{
-    KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS,
+    KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS, ONE_HOUR_MS,
 };
 use crate::persist::Dirty;
 use crate::probe::{ceiling, run_job, wasted_label, ProbeJob};
@@ -556,6 +556,8 @@ pub(crate) struct Agent {
     pub last_prefix: Option<(String, String)>,
     pub generation: u64,
     pub current: Option<Observation>,
+    /// Never saved: a restart keeps the current observation alone.
+    pub aside: Option<AsideRecipe>,
     /// The compaction open on the agent, held apart from `current` so none of its events moves the recipe. Never saved:
     /// a restart drops it with the events that would have completed it.
     pub compaction: Option<OpenCompaction>,
@@ -567,6 +569,9 @@ pub(crate) struct Agent {
     pub body_saved: bool,
     /// When the entry the recipe keeps warm expires. The due time is this less the timing's lead and jitter.
     pub expires: Option<i64>,
+    /// When a released record leaves the engine: the release plus the longest TTL of the pool's cache TTL policy,
+    /// `None` on a record that is not released.
+    pub leaves_at: Option<i64>,
     /// The share of the timing's jitter this schedule takes, rolled once per schedule so the due time holds
     /// still between ticks.
     pub jitter_frac: f64,
@@ -659,10 +664,12 @@ impl Agent {
             last_prefix: None,
             generation: 0,
             current: None,
+            aside: None,
             compaction: None,
             body_dirty: false,
             body_saved: true,
             expires: None,
+            leaves_at: None,
             jitter_frac: 0.0,
             retry_at: None,
             policy: KeepalivePolicy::default(),
@@ -1095,6 +1102,24 @@ pub(crate) struct Observation {
     pub in_overage: bool,
 }
 
+/// The recipe a real request's arrival put aside, with the schedule and the error count it stood on and the model and
+/// account it was armed under, restored where the request fails or is canceled and dropped where it succeeds, is
+/// rejected, or the entry expired meanwhile. Its body stays counted in `Inner::retained` while it lives.
+pub(crate) struct AsideRecipe {
+    pub observation: Observation,
+    pub expires: Option<i64>,
+    pub retry_at: Option<i64>,
+    pub jitter_frac: f64,
+    pub ttl_ms: i64,
+    pub cache_started: i64,
+    pub failures: u32,
+    pub canonical_model: String,
+    pub entrypoint: Option<String>,
+    pub account: Option<String>,
+    pub pool_id: String,
+    pub key_generation: i64,
+}
+
 /// One unanswered probe with the label that settles it as wasted. Queued under the lock and written to the ledger by
 /// the engine once the lock is released.
 pub(crate) struct Settlement {
@@ -1221,7 +1246,8 @@ pub(crate) struct Kept {
     /// `idle_limit` today. A turn that reads the probe leaves the label in place, so one that ends without deciding the
     /// probe hands it back to the lapse sweep. `None` for a probe a real request superseded, which waits for that
     /// request's completion. A failed completion hands such a probe back under `expired`, the label its recipe's own
-    /// lapse settles it under.
+    /// lapse settles it under. A lapse of the recipe hands a probe whose chain is still alive back the same way, under
+    /// `expired`, for the sweep to settle at the chain's end.
     pub pending: Option<Wasted>,
 }
 
@@ -1274,8 +1300,8 @@ pub(crate) enum Unanswered {
     /// the kept ones for whatever decides them.
     Settle,
     /// A real request supersedes the recipe and keeps them until its completion decides them, a failed one handing
-    /// them back pending for the next turn, or the idle limit keeps them pending under its label until their entry
-    /// lapses or a turn reads them.
+    /// them back pending for the next turn, or the idle limit or a lapse keeps them pending under its label until
+    /// their entry lapses or a turn reads them.
     Keep,
     /// A bus gap or a failed request ends the observation without deciding the probes sent while it was open: they
     /// wait where they are, with the recipe's speed, for the next request.
@@ -1290,6 +1316,8 @@ pub(crate) struct Inner {
     /// observation's paths never see a compaction.
     pub compactions: HashMap<String, (SessionKey, String)>,
     pub reasons: BTreeMap<Reason, u64>,
+    /// Every body in memory, a recipe an arrival set aside beside the current ones, since `max_retained_bytes` bounds
+    /// memory.
     pub retained: usize,
     pub agents: usize,
     pub running: usize,
@@ -1556,9 +1584,10 @@ impl Inner {
     /// for that request, so it keeps them until the first of these decides them: its successful completion (each
     /// probe by its chain's last entry: a warm return on its lineage inside that entry clears it, one past it settles
     /// it under `expired`, and any other return, on another lineage or with no read, under `cold_return`), a labeled
-    /// discard (under its label), or the agent's lapse or eviction. A request the engine takes no observation of
-    /// leaves them kept for whichever comes next, and one that fails hands them back for the next turn to read or
-    /// the lapse sweep to settle.
+    /// discard (under its label), or the agent's lapse or eviction. An eviction settles them at once, and a lapse
+    /// settles at once only those whose chain has ended and hands the rest back under `expired`. A request the engine
+    /// takes no observation of leaves them kept for whichever comes next, and one that fails hands them back for the
+    /// next turn to read or the lapse sweep to settle.
     pub(crate) fn discard_keeping_unanswered(
         &mut self,
         key: &SessionKey,
@@ -1569,12 +1598,111 @@ impl Inner {
         self.set_reason(key, agent_id, reason);
     }
 
+    /// `discard_keeping_unanswered` for an arrival, an armed recipe (unpaused, its entry ahead of `now`) set aside
+    /// instead of ended: its observation leaves `current` and `pending` with its size kept in `retained`, and waits
+    /// with its schedule and context for the completion to restore or drop it. A paused recipe and one that never armed
+    /// end through the discard. An older recipe set aside over a completion the engine missed leaves through the
+    /// discard.
+    pub(crate) fn set_aside(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
+        let aside = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+            .filter(|agent| !agent.paused && agent.expires.is_some_and(|expires| expires > now))
+            .and_then(|agent| {
+                let observation = agent.current.take()?;
+                Some(AsideRecipe {
+                    observation,
+                    expires: agent.expires,
+                    retry_at: agent.retry_at,
+                    jitter_frac: agent.jitter_frac,
+                    ttl_ms: agent.ttl_ms,
+                    cache_started: agent.cache_started,
+                    failures: agent.failures,
+                    canonical_model: agent.canonical_model.clone(),
+                    entrypoint: agent.entrypoint.clone(),
+                    account: agent.account.clone(),
+                    pool_id: agent.pool_id.clone(),
+                    key_generation: agent.key_generation,
+                })
+            });
+        if let Some(aside) = &aside {
+            self.pending.remove(&aside.observation.id);
+        }
+        self.discard_keeping_unanswered(key, agent_id, Reason::AwaitingSelection);
+        if let Some(agent) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+        {
+            agent.aside = aside;
+        }
+    }
+
+    /// The recipe the arrival set aside, taken out for the completion to restore, its body still counted in
+    /// `retained`.
+    pub(crate) fn take_aside(&mut self, key: &SessionKey, agent_id: &str) -> Option<AsideRecipe> {
+        self.sessions
+            .get_mut(key)?
+            .agents
+            .get_mut(agent_id)?
+            .aside
+            .take()
+    }
+
+    /// Puts the recipe `take_aside` took back into `current` with the schedule, the error count and the model and
+    /// account it stood on, where its entry is still ahead of `now`, and otherwise drops it, its size leaving
+    /// `retained`. Its id never goes back into `pending`: its own request ended before the one that set it aside
+    /// arrived, so the lapse, the eviction and the sweeps take it as any armed recipe. Answers whether it re-armed.
+    pub(crate) fn rearm_aside(
+        &mut self,
+        key: &SessionKey,
+        agent_id: &str,
+        aside: AsideRecipe,
+        now: i64,
+    ) -> bool {
+        let agent = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+            .filter(|_| aside.expires.is_some_and(|expires| expires > now));
+        let Some(agent) = agent else {
+            self.retained -= aside.observation.recipe.size;
+            return false;
+        };
+        agent.current = Some(aside.observation);
+        agent.expires = aside.expires;
+        agent.retry_at = aside.retry_at;
+        agent.jitter_frac = aside.jitter_frac;
+        agent.ttl_ms = aside.ttl_ms;
+        agent.cache_started = aside.cache_started;
+        agent.failures = aside.failures;
+        agent.canonical_model = aside.canonical_model;
+        agent.entrypoint = aside.entrypoint;
+        agent.account = aside.account;
+        agent.pool_id = aside.pool_id;
+        agent.key_generation = aside.key_generation;
+        // The next save seals the restored body in place of the failed request's.
+        agent.body_dirty = true;
+        self.touch_agent(key, agent_id);
+        true
+    }
+
+    /// Drops the recipe the arrival set aside, its size leaving `retained`.
+    pub(crate) fn drop_aside(&mut self, key: &SessionKey, agent_id: &str) {
+        if let Some(aside) = self.take_aside(key, agent_id) {
+            self.retained -= aside.observation.recipe.size;
+        }
+    }
+
     /// The entry a kept probe is judged against: the greatest `entry_expires` among the probes of its chain. The chain
-    /// is the probe and each later kept probe of its lineage (model, speed, account), in exchange order, up to the
+    /// is the probe and each later probe of its lineage (model, speed, account) in `kept`, in exchange order, up to the
     /// first whose read did not cover the entry: a probe that read the whole entry back extended it, while one that
     /// read nothing or only part of the prefix found the entry gone, whole or in part, and wrote a new one, which
     /// starts a chain of its own. The read is tested beside `covered`, since the landing marks a cold complete rewrite
-    /// covered too.
+    /// covered too. The chain also runs through the lineage's unanswered probes where the caller hands them in beside
+    /// the kept ones, as a compaction's completion, a lapse and the sweep do, since the recipe a failed turn re-arms
+    /// keeps probing the entry its kept probes paid for.
     fn chain_expires(kept: &[Kept], probe: &Kept) -> i64 {
         let mut later: Vec<&Kept> = kept
             .iter()
@@ -1670,6 +1798,9 @@ impl Inner {
         if wasted.is_some() {
             self.end_compaction(key, agent_id);
         }
+        // Whatever ends the observation leaves nothing for a recipe set aside to wait for, so its body leaves memory
+        // with it.
+        self.drop_aside(key, agent_id);
         let Some(agent) = self
             .sessions
             .get_mut(key)
@@ -1733,7 +1864,9 @@ impl Inner {
     /// Settles every kept probe whose `pending` label is set and whose chain's last entry (`chain_expires`) ended at or
     /// before `now` under that label, on each agent with no request open, and touches each agent it settled for the
     /// next save, which releases the settlements. A probe whose own entry ended inside a live chain waits with the
-    /// chain, so a turn inside the chain's last entry still answers every probe of it.
+    /// chain, so a turn inside the chain's last entry still answers every probe of it. The chain runs through the
+    /// agent's unanswered probes of the lineage too, since the recipe a failed turn re-arms keeps probing, which is the
+    /// chain `decide_against` judges once the next arrival moves those probes into `kept`. Only kept probes settle.
     pub(crate) fn settle_lapsed_pending(&mut self, now: i64) {
         let open = &self.pending;
         let mut settled: Vec<(SessionKey, String)> = Vec::new();
@@ -1747,10 +1880,16 @@ impl Inner {
                 {
                     continue;
                 }
+                let chain: Vec<Kept> = agent
+                    .kept
+                    .iter()
+                    .cloned()
+                    .chain(agent.unanswered.iter().map(|probe| Kept::of(agent, probe)))
+                    .collect();
                 let chain_ends: Vec<i64> = agent
                     .kept
                     .iter()
-                    .map(|probe| Self::chain_expires(&agent.kept, probe))
+                    .map(|probe| Self::chain_expires(&chain, probe))
                     .collect();
                 if !agent
                     .kept
@@ -1832,13 +1971,13 @@ impl Inner {
     }
 
     /// The entry is dead at its expiry and the lead already places the due time ahead of it, so a probe past it warms
-    /// nothing: the recipe ends under `expired` rather than being probed, held or not, its unanswered probes wasted,
-    /// and the next real request re-arms it. A probe already in flight was sent in time and settles on its own answer,
-    /// a hold that already ledgered the probe it withheld is not counted again, and the skip takes the recipe's speed
-    /// before the discard drops the recipe. While a request is open on the agent, the one the observation follows or a
-    /// compaction, the recipe is held unprobed instead: its completion earns its credit and decides the probes, and the
-    /// next tick lapses it. A paused recipe loses its prompt alone (`drop_paused_prompt`). True when the tick is done
-    /// with the recipe.
+    /// nothing: the recipe ends under `expired` rather than being probed, held or not, its probes written off
+    /// (`lapse_probes`), and the next real request re-arms it. A probe already in flight was sent in time and settles
+    /// on its own answer, a hold that already ledgered the probe it withheld is not counted again, and the skip takes
+    /// the recipe's speed before the lapse drops the recipe. While a request is open on the agent, the one the
+    /// observation follows or a compaction, the recipe is held unprobed instead: its completion earns its credit and
+    /// decides the probes, and the next tick lapses it. A paused recipe loses its prompt alone (`drop_paused_prompt`).
+    /// True when the tick is done with the recipe.
     fn lapse(
         &mut self,
         key: &SessionKey,
@@ -1864,7 +2003,7 @@ impl Inner {
                 late_ms = now - expires,
                 "a paused keepalive recipe's entry expired, so its prompt was dropped"
             );
-            self.drop_paused_prompt(key, agent_id);
+            self.drop_paused_prompt(key, agent_id, now);
             return true;
         }
         tracing::info!(
@@ -1875,21 +2014,24 @@ impl Inner {
             "a keepalive recipe lapsed before its probe, so the probe was skipped"
         );
         if !agent.hold_counted {
-            // The lapse is what withholds the probe, so it counts under the state the discard below leaves.
+            // The lapse is what withholds the probe, so it counts under the state the recipe's end below leaves.
             lapsed.push(Skipped::of(
                 key,
                 agent,
                 recipe_state(Reason::Expired, agent.paused),
             ));
         }
-        self.discard(key, agent_id, Reason::Expired, Some(Wasted::Expired));
+        self.lapse_probes(key, agent_id, now);
+        self.end_observation(key, agent_id, Some(Wasted::Expired), Unanswered::Keep);
+        self.set_reason(key, agent_id, Reason::Expired);
         true
     }
 
     /// The lapse of a paused recipe. The pause withheld every probe and holds until the next real request, so the agent
     /// keeps its pause bit and its reason for the view's `paused`, and only the prompt the cold entry made worthless
-    /// leaves, with the probes it paid for settled under `expired`. No probe was due, so no skip is ledgered.
-    fn drop_paused_prompt(&mut self, key: &SessionKey, agent_id: &str) {
+    /// leaves, with the probes it paid for written off under `expired` (`lapse_probes`). No probe was due, so no skip
+    /// is ledgered.
+    fn drop_paused_prompt(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
         self.touch_agent(key, agent_id);
         let Some(agent) = self
             .sessions
@@ -1904,12 +2046,40 @@ impl Inner {
         }
         agent.expires = None;
         agent.last_stop = Some(Wasted::Expired);
-        for probe in std::mem::take(&mut agent.unanswered) {
-            self.settlements
-                .push(Kept::of(agent, &probe).settle(key, Wasted::Expired));
-        }
-        for kept in std::mem::take(&mut agent.kept) {
-            self.settlements.push(kept.settle(key, Wasted::Expired));
+        self.lapse_probes(key, agent_id, now);
+    }
+
+    /// A lapse's write-off of the agent's probes under `expired`, judged as the lapse sweep judges them: a probe whose
+    /// chain's last entry (`chain_expires` over the kept and the unanswered probes) ended at or before `now` settles
+    /// here, and the rest move into `kept` under the label, for the sweep to settle at their chain's end or a turn
+    /// inside it to read. The recipe a failed turn restored can lapse while a probe the failed turn's own recipe sent
+    /// keeps the chain alive past it.
+    fn lapse_probes(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
+        let Some(agent) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+        else {
+            return;
+        };
+        let unanswered = std::mem::take(&mut agent.unanswered);
+        let probes: Vec<Kept> = std::mem::take(&mut agent.kept)
+            .into_iter()
+            .chain(unanswered.iter().map(|probe| Kept::of(agent, probe)))
+            .collect();
+        let chain_ends: Vec<i64> = probes
+            .iter()
+            .map(|probe| Self::chain_expires(&probes, probe))
+            .collect();
+        for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
+            if chain_end <= now {
+                self.settlements.push(kept.settle(key, Wasted::Expired));
+            } else {
+                agent.kept.push(Kept {
+                    pending: Some(Wasted::Expired),
+                    ..kept
+                });
+            }
         }
     }
 
@@ -2151,7 +2321,58 @@ impl Inner {
         true
     }
 
+    /// Sets the record's leave one pool cache TTL out from `now`, from the snapshot's pool row, on a record its caller
+    /// set released.
+    pub(crate) fn release_record(
+        &mut self,
+        key: &SessionKey,
+        agent_id: &str,
+        now: i64,
+        snapshot: &RegistrySnapshot,
+    ) {
+        let Some(agent) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+        else {
+            return;
+        };
+        // A pool the snapshot no longer holds, or none for a record that never sent a request, reads the default
+        // policy, whose plan set keeps the hour.
+        let policy = snapshot
+            .pool(&agent.pool_id)
+            .map(|pool| CacheTtlPolicy::from_json(&pool.cache_ttl_json))
+            .unwrap_or_default();
+        agent.leaves_at = Some(now + longest_cache_ttl_ms(&policy));
+        self.touch_agent(key, agent_id);
+    }
+
     pub(crate) fn expire(&mut self, now: i64, expiry_ms: i64) {
+        // A record whose probe is still in flight waits for the result, which settles under the release's label, and
+        // the next sweep takes it.
+        let leaving: Vec<(SessionKey, String)> = self
+            .sessions
+            .iter()
+            .flat_map(|(key, session)| {
+                session
+                    .agents
+                    .iter()
+                    .filter(|(_, agent)| {
+                        agent.state == AgentState::Released
+                            && !agent.in_flight
+                            && agent.leaves_at.is_some_and(|at| now >= at)
+                    })
+                    .map(move |(agent_id, _)| (key.clone(), agent_id.clone()))
+            })
+            .collect();
+        for (key, agent_id) in leaving {
+            self.forget_agent(&key, &agent_id);
+            if let Some(session) = self.sessions.get_mut(&key) {
+                session.agents.remove(&agent_id);
+            }
+            self.agents -= 1;
+            self.touch_session(&key);
+        }
         let lapsed: Vec<SessionKey> = self
             .sessions
             .iter()
@@ -2224,6 +2445,24 @@ impl Inner {
             self.sessions.remove(&key);
         }
     }
+}
+
+/// The longest TTL the policy names in milliseconds, over both rule sets' `main`, `subagent` and model overrides.
+pub(crate) fn longest_cache_ttl_ms(policy: &CacheTtlPolicy) -> i64 {
+    // Whatever `enabled` says: the rules are what a body's markers are completed against, so a resumed agent's next
+    // request can land under the longest of them.
+    [&policy.plan, &policy.metered]
+        .into_iter()
+        .flat_map(|rules| {
+            [rules.main, rules.subagent]
+                .into_iter()
+                .chain(rules.models.iter().flat_map(|m| [m.main, m.subagent]))
+        })
+        .map(|ttl| match ttl {
+            CacheTtl::FiveMinutes => FIVE_MINUTES_MS,
+            CacheTtl::OneHour => ONE_HOUR_MS,
+        })
+        .fold(FIVE_MINUTES_MS, i64::max)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2593,9 +2832,9 @@ impl Engine {
                 .zip(observed.boundaries.last().cloned());
         }
         // A turn still pending here had no completion observed, since a success takes it off `pending` and a failure
-        // ends the observation, and the discard below ends it without one. It counts as the turn that answered, or the
-        // gap this arrival's coverage reads would run from a turn before it. A compaction ends no turn, so it returned
-        // above and leaves the open one to its own completion.
+        // ends the observation, and `set_aside` below ends it, or sets it aside, without one. It counts as the turn
+        // that answered, or the gap this arrival's coverage reads would run from a turn before it. A compaction ends no
+        // turn, so it returned above and leaves the open one to its own completion.
         let missed = inner.sessions[&key].agents[&agent_id]
             .current
             .as_ref()
@@ -2614,7 +2853,9 @@ impl Engine {
         // Taken before anything below overwrites it and consumed with the observation.
         let prior = prior_coverage(&inner.sessions[&key].agents[&agent_id], now);
         let poisoned = inner.gap_backlog > 0;
-        inner.discard_keeping_unanswered(&key, &agent_id, Reason::AwaitingSelection);
+        // The recipe set aside waits for this request's completion, so each return below that takes no observation
+        // drops it: nothing would complete to restore it.
+        inner.set_aside(&key, &agent_id, now);
         inner.sessions.get_mut(&key).unwrap().last_real_at = Some(now);
         inner.touch_session(&key);
         let agent = inner
@@ -2625,6 +2866,7 @@ impl Engine {
             .get_mut(&agent_id)
             .unwrap();
         if agent.state == AgentState::Unknown {
+            inner.drop_aside(&key, &agent_id);
             inner.set_reason(&key, &agent_id, Reason::AgentUnknown);
             return;
         }
@@ -2643,6 +2885,7 @@ impl Engine {
         agent.canonical_model = observed.canonical_model.clone();
         agent.key_generation = observed.key_generation;
         if inner.pending.len() >= limits.max_agents {
+            inner.drop_aside(&key, &agent_id);
             inner.set_reason(&key, &agent_id, Reason::RequestLimit);
             return;
         }
@@ -2654,6 +2897,7 @@ impl Engine {
         ) {
             Ok(recipe) => recipe,
             Err(reason) => {
+                inner.drop_aside(&key, &agent_id);
                 inner.set_reason(&key, &agent_id, recipe_reason(reason));
                 return;
             }
@@ -2662,6 +2906,11 @@ impl Engine {
         // prior arm happened to leave behind.
         recipe.static_hash = observed.static_hash.clone();
         recipe.tail_hash = observed.boundaries.last().cloned();
+        // The agent's own aside recipe yields first, so the bound reads as it would with that recipe ended, and the
+        // eviction never reaches it: an agent with a request open is no candidate.
+        if inner.retained + recipe.size > limits.max_retained_bytes {
+            inner.drop_aside(&key, &agent_id);
+        }
         if inner.retained + recipe.size > limits.max_retained_bytes
             && !inner.evict_for(limits.max_retained_bytes, recipe.size)
         {
@@ -2944,10 +3193,19 @@ impl Engine {
             Outcome::Rejected => Some(Reason::RequestRejected),
         };
         if let Some(reason) = reason {
+            // A failed or canceled turn leaves the last answered recipe armed as its arrival set it aside, and a
+            // rejected one is a pause, which `end_observation` below makes by dropping what the arrival set aside.
+            let aside = match reason {
+                Reason::RequestCanceled | Reason::RequestFailed => {
+                    inner.take_aside(&key, &agent_id)
+                }
+                _ => None,
+            };
             // A failed turn is no evidence about the cache, past a head or not, so it decides none of the probes it
             // kept and hands them back for the next turn to read. A label the turn found stays, and a probe that
             // carries none takes `expired`, which the lapse sweep settles it under when its chain's last entry ends if
-            // no turn reads it first, as its recipe's own lapse would have.
+            // no turn reads it first, as its recipe's own lapse would have. The sweep reads that chain through the
+            // restored recipe's probes, so a kept probe whose entry they read back waits for the turn that reads them.
             if let Some(agent) = inner
                 .sessions
                 .get_mut(&key)
@@ -2959,10 +3217,15 @@ impl Engine {
             }
             // A probe sent while this request was open pays for the request after it, whatever this one did.
             inner.end_observation(&key, &agent_id, None, Unanswered::Leave);
+            if let Some(aside) = aside {
+                inner.rearm_aside(&key, &agent_id, aside, now);
+            }
             inner.set_reason(&key, &agent_id, reason);
             return;
         }
         inner.pending.remove(&complete.request_id);
+        // The answered turn's own recipe replaces the one its arrival set aside.
+        inner.drop_aside(&key, &agent_id);
         // Read from the observation's own snapshot of what the previous recipe had proved: a probe that ran
         // while this request was open, or a TTL this request's evidence shortens below, cannot reach into it.
         let credited = {
@@ -3978,6 +4241,45 @@ mod tests {
             label = next(label);
         }
         assert_eq!(walked, Wasted::ALL.to_vec());
+    }
+
+    #[test]
+    fn the_longest_cache_ttl_reads_both_sets_and_their_model_overrides_while_the_policy_is_off() {
+        let longest =
+            |raw: serde_json::Value| longest_cache_ttl_ms(&CacheTtlPolicy::parse(&raw).unwrap());
+        let five = serde_json::json!({"main": "5m", "subagent": "5m"});
+        let with_model = |main: &str, subagent: &str| {
+            serde_json::json!({
+                "main": "5m",
+                "models": [{"main": main, "model": "claude-opus-4-1", "subagent": subagent}],
+                "subagent": "5m",
+            })
+        };
+        assert_eq!(longest(serde_json::json!({})), ONE_HOUR_MS);
+        assert_eq!(
+            longest(serde_json::json!({"metered": five, "plan": five})),
+            FIVE_MINUTES_MS
+        );
+        for (name, policy) in [
+            (
+                "a metered subagent",
+                serde_json::json!({"metered": {"main": "5m", "subagent": "1h"}, "plan": five}),
+            ),
+            (
+                "a plan main",
+                serde_json::json!({"metered": five, "plan": {"main": "1h", "subagent": "5m"}}),
+            ),
+            (
+                "a metered model's main",
+                serde_json::json!({"metered": with_model("1h", "5m"), "plan": five}),
+            ),
+            (
+                "a plan model's subagent",
+                serde_json::json!({"metered": five, "plan": with_model("5m", "1h")}),
+            ),
+        ] {
+            assert_eq!(longest(policy), ONE_HOUR_MS, "{name}");
+        }
     }
 
     #[test]

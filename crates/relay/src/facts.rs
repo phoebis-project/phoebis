@@ -6,6 +6,7 @@ use phoebis_bus::RequestShape;
 use serde_json::Value;
 
 use crate::chains::Chains;
+use crate::credit::{digest_of, CreditDigest};
 
 #[derive(Debug, PartialEq)]
 pub struct BodyFacts {
@@ -38,6 +39,8 @@ pub struct BodyFacts {
     pub system_is_array: bool,
     /// The body references no account-scoped state (`container`, `file_id`, a server-tool result).
     pub portable: bool,
+    /// The digest of a top-level `fallback_credit_token` string, `None` without one.
+    pub credit_digest: Option<CreditDigest>,
 }
 
 /// The gateway hint headers, each optional, read the way `identify` reads an identifier: bounded and
@@ -86,6 +89,7 @@ impl BodyFacts {
                 // Fails open as `is_portable` does: a body no reader parses carries no reference the router could
                 // prove, and the upstream refuses it anyway.
                 portable: true,
+                credit_digest: None,
             };
             return (facts, None);
         };
@@ -173,6 +177,10 @@ impl BodyFacts {
             markers_ttl_ms,
             system_is_array: matches!(root.get("system"), Some(Value::Array(_))),
             portable: crate::portability::portable_of(&root),
+            credit_digest: root
+                .get("fallback_credit_token")
+                .and_then(Value::as_str)
+                .map(digest_of),
         };
         (facts, Some(root))
     }

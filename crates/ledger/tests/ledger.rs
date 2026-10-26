@@ -2256,6 +2256,137 @@ fn the_cache_miss_reason_filter_reads_the_serving_attempt_alone_and_passes_any_n
     );
 }
 
+/// Writes request `id`, served by one attempt on `served`'s `(account, stop_reason, refusal_category)` after a 429 on
+/// `a` where `retried` is set, or by no attempt where `served` is `None`.
+fn plant_stops(
+    db: &LedgerDb,
+    id: &str,
+    received_at: i64,
+    retried: bool,
+    served: Option<(&str, &str, Option<&str>)>,
+) {
+    let mut attempts = Vec::new();
+    if let Some((account, stop_reason, category)) = served {
+        if retried {
+            attempts.push(AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                upstream_status: Some(429),
+                outcome: "rate_limited".into(),
+                ..Default::default()
+            });
+        }
+        attempts.push(AttemptRecord {
+            request_id: id.into(),
+            attempt: attempts.len() as u32 + 1,
+            account_id: account.into(),
+            account_kind: "oauth".into(),
+            upstream_status: Some(200),
+            outcome: "succeeded".into(),
+            stop_reason: Some(stop_reason.into()),
+            refusal_category: category.map(String::from),
+            ..Default::default()
+        });
+    }
+    let request = RequestRecord {
+        id: id.into(),
+        received_at,
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: if attempts.is_empty() {
+            "exhausted"
+        } else {
+            "succeeded"
+        }
+        .into(),
+        attempts: attempts.len() as u32,
+        ..Default::default()
+    };
+    db.insert_request(&request, &attempts, None).unwrap();
+}
+
+#[test]
+fn the_stop_reason_and_refusal_category_filters_read_the_serving_attempt_and_dash_a_request_without_one(
+) {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_stops(
+        &db,
+        "harm-a",
+        5,
+        false,
+        Some(("a", "refusal", Some("harmful_request"))),
+    );
+    // The 429 on `a` ahead of the serving attempt on `b` carries no stop reason, so a read of any attempt but the last
+    // would list this request under `-` and under the account `a`.
+    plant_stops(
+        &db,
+        "harm-b",
+        4,
+        true,
+        Some(("b", "refusal", Some("harmful_request"))),
+    );
+    plant_stops(&db, "bare", 3, false, Some(("a", "refusal", None)));
+    plant_stops(&db, "ended", 2, false, Some(("a", "end_turn", None)));
+    plant_stops(&db, "unserved", 1, false, None);
+    let listed = |stop_reasons: &[&str], refusal_categories: &[&str], accounts: &[&str]| {
+        let words = |list: &[&str]| list.iter().map(|w| w.to_string()).collect();
+        listed_ids(
+            &db,
+            &RequestFilter {
+                stop_reasons: words(stop_reasons),
+                refusal_categories: words(refusal_categories),
+                accounts: words(accounts),
+                ..Default::default()
+            },
+        )
+    };
+    assert_eq!(
+        listed(&[], &["harmful_request"], &[]),
+        ["harm-a", "harm-b"],
+        "the category keeps the refusals that named it"
+    );
+    assert_eq!(
+        listed(&[], &["-"], &[]),
+        ["bare", "ended", "unserved"],
+        "`-` keeps every request whose serving attempt names no category, and the one no attempt served"
+    );
+    assert_eq!(
+        listed(&["refusal"], &["-"], &[]),
+        ["bare"],
+        "with the refusal stop, `-` keeps the refusal that named no category"
+    );
+    assert_eq!(listed(&["end_turn"], &[], &[]), ["ended"]);
+    assert_eq!(
+        listed(&["refusal"], &[], &[]),
+        ["harm-a", "harm-b", "bare"],
+        "the refusal stop keeps every refusal, a category or none"
+    );
+    assert_eq!(
+        listed(&["-"], &[], &[]),
+        ["unserved"],
+        "`-` keeps the request no attempt served, and the earlier 429 is no serving attempt"
+    );
+    assert_eq!(
+        listed(&[], &["harmful_request"], &["a"]),
+        ["harm-a"],
+        "the account filter narrows the category to the account that served the refusal"
+    );
+    assert_eq!(
+        listed(&["refusal"], &[], &["a"]),
+        ["harm-a", "bare"],
+        "the account filter narrows the refusal stop the same way"
+    );
+    assert_eq!(
+        listed(&[], &[], &[]),
+        ["harm-a", "harm-b", "bare", "ended", "unserved"],
+        "empty lists narrow nothing"
+    );
+}
+
 /// A row's own `landed_at`, as the ledger wrote it.
 fn landed_at(db: &LedgerDb, id: &str) -> Option<i64> {
     db.read_blocking(|c| {
@@ -2452,6 +2583,79 @@ async fn a_read_bounded_by_to_caps_its_watermark_there_so_a_later_poll_reads_a_r
         ids(&next),
         ["past_the_bound", "inside"],
         "the next poll reads the row received after to, and the admitted row again"
+    );
+    up.shutdown().await;
+}
+
+/// A fixed range's `to` never moves, so no later bound reaches past it and the watermark may pass it. The writer
+/// stamps the row from its clock, after `to`, where a capped watermark would hand the row back to every poll.
+#[tokio::test]
+async fn a_fixed_end_read_lets_its_watermark_pass_to_so_a_row_that_landed_after_the_end_is_read_once(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let to = NOW + 1_000;
+    h.clock.store(NOW + 3_000, Ordering::SeqCst);
+    h.ledger
+        .record_request(Record::Request {
+            request: RequestRecord {
+                id: "late".into(),
+                received_at: NOW + 500,
+                ..Default::default()
+            },
+            attempts: Vec::new(),
+            bodies: None,
+        })
+        .await;
+    ledgered(&h, "late").await;
+    let stamp = landed_at(&h.db, "late").unwrap();
+    assert!(
+        stamp > to,
+        "the row lands at {stamp}, past the range's to {to}"
+    );
+    let page = |filter: RequestFilter| {
+        h.db.read(move |c| {
+            phoebis_ledger::list_request_page(c, &filter, &LiveKeys::default(), None, 10)
+        })
+    };
+    let ids = |page: &phoebis_ledger::RequestPage| -> Vec<String> {
+        page.rows.iter().map(|(r, _)| r.id.clone()).collect()
+    };
+    let capped = page(RequestFilter {
+        to: Some(to),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        (ids(&capped), capped.landed_through),
+        (vec!["late".to_string()], to),
+        "a live range's watermark stops at its to"
+    );
+    let fixed = page(RequestFilter {
+        to: Some(to),
+        fixed_end: true,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        (ids(&fixed), fixed.landed_through),
+        (vec!["late".to_string()], stamp),
+        "a fixed range's watermark is the late row's own stamp"
+    );
+    let next = page(RequestFilter {
+        landed_after: Some(fixed.landed_through),
+        to: Some(to),
+        fixed_end: true,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        (ids(&next), next.landed_through),
+        (Vec::<String>::new(), stamp),
+        "the next poll reads no row and keeps the stamp, so the late row was read once"
     );
     up.shutdown().await;
 }

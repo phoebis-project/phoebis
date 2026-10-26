@@ -236,10 +236,25 @@ impl RegistrySnapshot {
     pub fn term(&self, account_id: &str) -> Option<&SubscriptionTerm> {
         self.terms.get(account_id)
     }
-    /// The rate-limit tier the account's stored profile names, which prices the router's own use of its windows;
-    /// `None` before the first profile read and for an api_key account.
+    /// The rate-limit tier the account's stored profile names, `None` before the first profile read and for an api_key
+    /// account. The router prices its own use of the windows by `priced_tier`, which withholds the tier of a plan the
+    /// cost table does not price.
     pub fn tier(&self, account_id: &str) -> Option<&str> {
         self.terms.get(account_id).and_then(|t| t.tier.as_deref())
+    }
+    /// The resolved plan word of the account's term, `None` for an account with no stored document and no tier the
+    /// table names.
+    pub fn plan(&self, account_id: &str) -> Option<&str> {
+        self.terms.get(account_id).and_then(|t| t.plan.as_deref())
+    }
+    /// The stored tier where the resolved plan is one the cost table prices (`pro`, `max_5x`, `max_20x`, or `max`,
+    /// whose tier the table may hold), `None` for `free`, `team`, `enterprise`, `usage_based` and an account with no
+    /// plan: what every pricing read keys its capacity by, so a free organization reads as an untiered account.
+    pub fn priced_tier(&self, account_id: &str) -> Option<&str> {
+        match self.plan(account_id)? {
+            "pro" | "max_5x" | "max_20x" | "max" => self.tier(account_id),
+            _ => None,
+        }
     }
     /// The term row's class flag, false for an account with no term row.
     pub fn usage_based(&self, account_id: &str) -> bool {

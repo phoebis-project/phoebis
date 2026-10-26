@@ -221,13 +221,9 @@ pub struct KeepaliveTiming {
     pub jitter_1h_ms: i64,
     /// Two cold probes in a row and the entry is gone for good.
     pub cold_probe_limit: u32,
-    /// A failure that repeats this often is no passing fault, so the recipe pauses rather than keep paying for probes
-    /// that fail.
-    pub failure_limit: u32,
     /// The first retry's wait, which each further failure doubles up to `retry_max_ms`.
     pub retry_ms: i64,
-    /// Caps the doubling and an `accounts_at_cap` answer's `Retry-After` so one wait stays inside a one-hour entry's
-    /// six-minute lead.
+    /// Caps the doubling and an upstream `Retry-After` so one wait stays inside a one-hour entry's six-minute lead.
     pub retry_max_ms: i64,
 }
 
@@ -239,7 +235,6 @@ impl Default for KeepaliveTiming {
             jitter_5m_ms: 5_000,
             jitter_1h_ms: 30_000,
             cold_probe_limit: 2,
-            failure_limit: 3,
             retry_ms: 30_000,
             retry_max_ms: 300_000,
         }

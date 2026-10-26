@@ -72,8 +72,10 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("analytics_guardrails", &[400, 500]),
     ("analytics_placements", &[400, 500]),
     ("analytics_reconciliations", &[500]),
+    ("analytics_refusal_categories", &[400, 500]),
     ("analytics_rewrites", &[400, 500]),
     ("analytics_series", &[400, 500]),
+    ("analytics_unused_allowance", &[400, 500]),
     ("attention_show", &[500]),
     ("dashboard_show", &[500]),
     ("guardrails_list", &[500]),
@@ -135,9 +137,11 @@ const EXAMPLE_FILES: &[&str] = &[
     "analytics_guardrails",
     "analytics_placements",
     "analytics_reconciliations",
+    "analytics_refusal_categories",
     "analytics_rewrites",
     "analytics_series",
     "analytics_series_accounts",
+    "analytics_unused_allowance",
     "attention",
     "dashboard",
     "guardrails",
@@ -195,9 +199,17 @@ const CORPUS: &[(&str, Option<(&str, u16)>)] = &[
         "analytics_reconciliations",
         Some(("analytics_reconciliations", 200)),
     ),
+    (
+        "analytics_refusal_categories",
+        Some(("analytics_refusal_categories", 200)),
+    ),
     ("analytics_rewrites", Some(("analytics_rewrites", 200))),
     ("analytics_series", Some(("analytics_series", 200))),
     ("analytics_series_accounts", Some(("analytics_series", 200))),
+    (
+        "analytics_unused_allowance",
+        Some(("analytics_unused_allowance", 200)),
+    ),
     ("attention", Some(("attention_show", 200))),
     ("dashboard", Some(("dashboard_show", 200))),
     ("decision", Some(("request_decision", 200))),
@@ -580,8 +592,8 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
     );
     assert_eq!(
         document["paths"].as_object().unwrap().len(),
-        56,
-        "the admin listener's 56 paths"
+        58,
+        "the admin listener's 58 paths"
     );
     assert_eq!(
         phoebis_admin::path_count(),
@@ -590,8 +602,8 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
     );
     assert_eq!(
         operations(&document).len(),
-        69,
-        "the admin listener's 69 operations"
+        71,
+        "the admin listener's 71 operations"
     );
 }
 
@@ -755,8 +767,8 @@ async fn every_example_is_its_fixtures_body_member_and_the_count_holds() {
     );
     assert_eq!(
         EXAMPLE_FILES.len(),
-        46,
-        "45 success answers and the replay's held answer"
+        48,
+        "47 success answers and the replay's held answer"
     );
     // The places the fixture manifest targets, each with the stems it attaches: a place carries as many examples
     // as stems, so a fixture attached twice or to the wrong place fails here, while a hand-written example (a
@@ -1167,6 +1179,27 @@ async fn the_account_declares_its_usage_based_class_and_the_overage_it_answers_n
 }
 
 #[tokio::test]
+async fn the_account_subscription_declares_the_resolved_plan_and_its_example_reads_max_20x() {
+    let (_app, _up, document) = document().await;
+    let plan = &document["components"]["schemas"]["AccountSubscription"]["properties"]["plan"];
+    let description = plan["description"]
+        .as_str()
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+    assert!(
+        description.as_deref().is_some_and(|text| text.starts_with(
+            "The plan the stored profile resolves to: `free`, `pro`, `max_5x`, `max_20x`, `max`"
+        )),
+        "the member names the resolved plan's words: {plan}"
+    );
+    let (operation, status) = target(&document, "account");
+    assert_eq!(
+        example_of(operation, &status, "account")["subscription"]["plan"],
+        "max_20x",
+        "the account example reads the seed's Max 20x organization"
+    );
+}
+
+#[tokio::test]
 async fn the_account_and_its_edit_declare_the_canceled_flag_and_the_edit_its_three_refusals() {
     let (_app, _up, document) = document().await;
     let schemas = &document["components"]["schemas"];
@@ -1228,6 +1261,17 @@ async fn the_account_create_lists_the_object_refusal_and_the_members_route_the_m
             "{id}'s 400 lists {refusal}: {listed}"
         );
     }
+    let members = refusals("pool_members_put");
+    assert!(
+        members.contains(
+            "also the answer to an entry with an unknown field or a value past its field's type"
+        ),
+        "the members route's object refusal names the entries it also covers: {members}"
+    );
+    assert!(
+        !members.contains("a body without a `members` list"),
+        "the members route lists no list-less clause beside its list refusal: {members}"
+    );
 }
 
 #[tokio::test]
@@ -1318,8 +1362,8 @@ async fn the_attempt_declares_the_serving_accounts_usage_based_class() {
 }
 
 #[tokio::test]
-async fn the_account_windows_doc_says_a_disconnected_or_reauth_required_oauth_account_answers_none()
-{
+async fn the_account_windows_doc_says_a_disconnected_reauth_required_or_plan_ended_oauth_account_answers_none(
+) {
     let (_app, _up, document) = document().await;
     let windows = &document["components"]["schemas"]["Account"]["properties"]["windows"];
     // utoipa joins the doc comment's lines with line breaks, which the reference renders as spaces.
@@ -1331,14 +1375,14 @@ async fn the_account_windows_doc_says_a_disconnected_or_reauth_required_oauth_ac
         Some(
             "The account's quota windows: the router's reported sample first and the ledger's samples of the last day \
              for the rest, the ledger's alone for an `api_key` account. Empty for an account with no reading, and \
-             for an `oauth` account in the `disconnected` or `reauth_required` state, whose last reading the view no \
-             longer answers."
+             for an `oauth` account in the `disconnected` or `reauth_required` state or flagged `plan_ended_at`, \
+             whose last reading the view no longer answers."
         ),
         "{windows}"
     );
     assert_eq!(
         windows["type"], "array",
-        "the member stays an array, empty for the two states: {windows}"
+        "the member stays an array, empty for the two states and the flag: {windows}"
     );
 }
 
@@ -1756,6 +1800,89 @@ async fn the_burn_operation_declares_the_account_filter_and_the_agent_groups_it_
         names,
         BTreeSet::from(["accounts", "group_by", "range", "user_agent_groups"]),
         "the burn operation's query"
+    );
+}
+
+/// The query check compares names per module, and the breakdown's query declares the same seven names, so it would pass
+/// a refusal count operation that left its own query out of the document.
+#[tokio::test]
+async fn the_refusal_count_operation_declares_the_range_and_the_filters_it_reads() {
+    let (_app, _up, document) = document().await;
+    let parameters = document["paths"]["/admin/analytics/refusal_categories"]["get"]["parameters"]
+        .as_array()
+        .expect("the refusal count operation's parameters");
+    let names: BTreeSet<&str> = parameters
+        .iter()
+        .filter_map(|parameter| parameter["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        BTreeSet::from([
+            "accounts",
+            "include_probes",
+            "keys",
+            "kinds",
+            "models",
+            "pools",
+            "range"
+        ]),
+        "the refusal count operation's query"
+    );
+}
+
+/// The query check compares names per module, and the other analytics queries declare `range` and `accounts`, so it
+/// would pass an unused allowance operation that left its own query out. Its default differs from theirs, and the
+/// description is where the document says so.
+#[tokio::test]
+async fn the_unused_allowance_operation_declares_the_account_filter_and_the_range_with_its_thirty_day_default(
+) {
+    let (_app, _up, document) = document().await;
+    let parameters = document["paths"]["/admin/analytics/unused_allowance"]["get"]["parameters"]
+        .as_array()
+        .expect("the unused allowance operation's parameters");
+    let names: BTreeSet<&str> = parameters
+        .iter()
+        .filter_map(|parameter| parameter["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        BTreeSet::from(["accounts", "range"]),
+        "the unused allowance operation's query"
+    );
+    let range = parameters
+        .iter()
+        .find(|parameter| parameter["name"] == "range")
+        .expect("the range parameter");
+    assert!(
+        range["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("Default `30d`")),
+        "{range}"
+    );
+}
+
+/// The query check proves the name is declared, and the console reads the flag's meaning from the document alone.
+#[tokio::test]
+async fn the_request_list_declares_the_fixed_end_flag_that_lets_its_watermark_pass_to() {
+    let (_app, _up, document) = document().await;
+    let parameters = document["paths"]["/admin/requests"]["get"]["parameters"]
+        .as_array()
+        .expect("the request list's parameters");
+    let fixed_end = parameters
+        .iter()
+        .find(|parameter| parameter["name"] == "fixed_end")
+        .unwrap_or_else(|| panic!("the request list declares fixed_end: {parameters:?}"));
+    assert_eq!(fixed_end["in"], "query", "{fixed_end}");
+    let description = fixed_end["description"]
+        .as_str()
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+    assert_eq!(
+        description.as_deref(),
+        Some(
+            "`true`/`1`: the range's end is fixed, so `landed_through` may pass `to` and a poll over the range reads \
+             a row that landed after the end once. Leave it off for a live range."
+        ),
+        "{fixed_end}"
     );
 }
 

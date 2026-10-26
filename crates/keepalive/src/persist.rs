@@ -82,6 +82,9 @@ pub(crate) struct PersistedAgent {
     pub generation: u64,
     pub current: Option<PersistedObservation>,
     pub expires: Option<i64>,
+    /// When the released record leaves the engine, as `Agent.leaves_at` carries it, `None` on a record that is not
+    /// released.
+    pub leaves_at: Option<i64>,
     #[serde(with = "exact")]
     pub jitter_frac: f64,
     pub retry_at: Option<i64>,
@@ -420,6 +423,7 @@ impl PersistedAgent {
                 in_overage: o.in_overage,
             }),
             expires: agent.expires,
+            leaves_at: agent.leaves_at,
             jitter_frac: agent.jitter_frac,
             retry_at: agent.retry_at,
             policy: agent.policy.clone(),
@@ -524,6 +528,7 @@ impl PersistedAgent {
         agent.last_prefix = self.last_prefix;
         agent.generation = self.generation;
         agent.expires = self.expires;
+        agent.leaves_at = self.leaves_at;
         agent.jitter_frac = self.jitter_frac;
         agent.retry_at = self.retry_at;
         agent.policy = self.policy;
@@ -1002,8 +1007,8 @@ impl Inner {
     /// The rows the store answered, restored within the limits the file sets now rather than the ones the save ran
     /// under: sessions newest first, each with its main agent and then its other agents newest first, and the recipes
     /// of what was restored newest first while the retained bytes allow. What does not fit is disposed, its rows
-    /// filed for deletion and each recipe among them counted as evicted. Ended sessions, rows of an older version,
-    /// rows this build cannot read and agents without a session row go too.
+    /// filed for deletion and each recipe among them counted as evicted. Agents without a session row, ended sessions,
+    /// released records whose leave has passed, rows of an older version and rows this build cannot read go too.
     fn restore_persisted(
         &mut self,
         (sessions, agents, counters): Loaded,
@@ -1126,6 +1131,14 @@ impl Inner {
                     self.file_removed_agent(stored.clone(), agent_row.agent_id);
                     continue;
                 };
+                // The sweep has not run yet at the load, and a leave that passed while the router was down is already
+                // due, so the record goes here, before the cap read below can give it a live agent's slot.
+                if agent.state == AgentState::Released
+                    && agent.leaves_at.is_some_and(|at| at <= now)
+                {
+                    self.file_removed_agent(stored.clone(), agent_row.agent_id);
+                    continue;
+                }
                 // Read off the row rather than the opened body, so a blob that no longer opens is cleared by the
                 // agent's next save.
                 agent.body_saved = agent_row.body_size > 0;

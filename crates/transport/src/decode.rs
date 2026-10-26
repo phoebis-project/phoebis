@@ -17,6 +17,8 @@ pub enum Encoding {
 /// An unrecognized `Content-Encoding` is rejected rather than treated as `Identity`: passing the still-compressed
 /// bytes through as plain text would corrupt the relayed response instead of failing loudly. Several
 /// `Content-Encoding` fields read as one list (RFC 9110 sections 5.3 and 8.4), refused as a list in one field is.
+/// Empty list elements are skipped (RFC 9110 section 5.6.1.2), so a trailing comma or an empty field beside a coding
+/// reads as that coding.
 pub fn encoding(head: &ResponseHead) -> Result<Encoding, TransportError> {
     let fields: Vec<&str> = head
         .headers
@@ -28,16 +30,24 @@ pub fn encoding(head: &ResponseHead) -> Result<Encoding, TransportError> {
         return Ok(Encoding::Identity);
     }
     let raw = fields.join(", ");
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "identity" => Ok(Encoding::Identity),
-        "gzip" => Ok(Encoding::Gzip),
-        "deflate" => Ok(Encoding::Deflate),
-        "br" => Ok(Encoding::Brotli),
-        "zstd" => Ok(Encoding::Zstd),
-        _ => Err(TransportError::Decode(format!(
-            "unsupported content-encoding: {raw}"
-        ))),
-    }
+    let elements: Vec<&str> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .collect();
+    let known = match elements.as_slice() {
+        [] => Some(Encoding::Identity),
+        [coding] => match coding.to_ascii_lowercase().as_str() {
+            "identity" => Some(Encoding::Identity),
+            "gzip" => Some(Encoding::Gzip),
+            "deflate" => Some(Encoding::Deflate),
+            "br" => Some(Encoding::Brotli),
+            "zstd" => Some(Encoding::Zstd),
+            _ => None,
+        },
+        _ => None,
+    };
+    known.ok_or_else(|| TransportError::Decode(format!("unsupported content-encoding: {raw}")))
 }
 
 /// The request side of `encoding`: the caller's `content-encoding` token, with the same refusal of an unknown
@@ -326,6 +336,42 @@ mod tests {
             ])),
             Err(TransportError::Decode(_))
         ));
+    }
+
+    #[test]
+    fn a_gzip_field_beside_an_empty_field_reads_gzip() {
+        let read = encoding(&head(vec![
+            ("Content-Encoding", "gzip"),
+            ("Content-Encoding", ""),
+        ]));
+        assert!(matches!(read, Ok(Encoding::Gzip)), "{read:?}");
+    }
+
+    #[test]
+    fn a_trailing_comma_after_gzip_reads_gzip() {
+        let read = encoding(&head(vec![("Content-Encoding", "gzip, ")]));
+        assert!(matches!(read, Ok(Encoding::Gzip)), "{read:?}");
+    }
+
+    #[test]
+    fn an_empty_field_alone_reads_identity() {
+        let read = encoding(&head(vec![("Content-Encoding", "")]));
+        assert!(matches!(read, Ok(Encoding::Identity)), "{read:?}");
+    }
+
+    #[test]
+    fn a_list_of_empty_elements_alone_reads_identity() {
+        let read = encoding(&head(vec![("Content-Encoding", ", ")]));
+        assert!(matches!(read, Ok(Encoding::Identity)), "{read:?}");
+    }
+
+    #[test]
+    fn two_codings_stay_unsupported_with_the_raw_list_in_the_error() {
+        let read = encoding(&head(vec![("Content-Encoding", "gzip, br")]));
+        let Err(TransportError::Decode(message)) = read else {
+            panic!("{read:?}");
+        };
+        assert!(message.contains("gzip, br"), "{message}");
     }
 
     #[test]

@@ -15,7 +15,7 @@ use phoebis_bus::{
     Bus, Classifier, Delivery, Event, Outcome, RequestComplete, RequestObserved, Subscriber,
 };
 use phoebis_profile::fixtures::{inference_head, FixtureKind};
-use phoebis_relay::CLASSIFIER_BETA;
+use phoebis_relay::{Probe, CLASSIFIER_BETA};
 use phoebis_routing::{RefusalFacts, RouterEvent};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
@@ -134,6 +134,13 @@ impl Answer {
 
 async fn send(h: &Harness, sub: &mut Subscriber, req: Request<Body>) -> Answer {
     Answer::of(h.app.clone().oneshot(req).await.unwrap(), sub).await
+}
+
+fn probe_of(h: &Harness) -> Probe {
+    Probe {
+        key_id: "desktop".into(),
+        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+    }
 }
 
 /// The contract's answer for `item`: a `400` the client is told not to retry, its message naming `name` with no
@@ -310,6 +317,33 @@ async fn a_request_without_the_session_header_is_refused_for_the_contract() {
     remove_header(&mut req, "x-claude-code-session-id");
     let answer = send(&h, &mut sub, req).await;
     assert_refused_for(&answer, &up, "session_header", "x-claude-code-session-id");
+    up.shutdown().await;
+}
+
+/// A keepalive probe is judged on the session header as a request is, and its refusal's record carries the probe's
+/// flag and not the count's.
+#[tokio::test]
+async fn a_probe_without_the_session_header_is_refused_for_the_contract_and_recorded_as_a_probe() {
+    let up = upstream().await;
+    let (h, mut sub) = observing(&up, &[oauth("a", A, 0)]).await;
+    let mut decisions = h.router.subscribe_events();
+    let mut req = marked(FixtureKind::OauthFirstParty, Some("main"), false);
+    remove_header(&mut req, "x-claude-code-session-id");
+    let answer = Answer::of(h.relay.probe(probe_of(&h), req).await, &mut sub).await;
+    assert_refused_for(&answer, &up, "session_header", "x-claude-code-session-id");
+    let request_id = answer.complete().request_id.clone();
+    let events = router_events_until(&mut decisions, |event| {
+        matches!(event, RouterEvent::Decision { record, .. } if record.request.request_id == request_id)
+    })
+    .await;
+    let (_, record) = decisions_of(&events, &request_id)
+        .pop()
+        .expect("the refusal's decision");
+    assert_eq!(
+        (record.request.flags.probe, record.request.flags.count),
+        (true, false),
+        "the record names a probe"
+    );
     up.shutdown().await;
 }
 

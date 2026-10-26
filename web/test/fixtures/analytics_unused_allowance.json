@@ -1,0 +1,68 @@
+{
+  "route": "GET /admin/analytics/unused_allowance",
+  "body": {
+    "from": 1789129000000,
+    "to": 1791721000000,
+    "accounts": [
+      {
+        "account_id": "business",
+        "plan": "max_20x",
+        "tier": "default_claude_max_20x",
+        "windows": [
+          {
+            "window": "seven_day",
+            "resets": [
+              {
+                "reset_at": 1791116200000,
+                "share_left": 0.38,
+                "observed_at": 1791116200000,
+                "source": "sample"
+              },
+              {
+                "reset_at": 1790511400000,
+                "share_left": 0.15000000000000002,
+                "observed_at": 1790511400000,
+                "source": "clock"
+              }
+            ],
+            "total_share_left": 0.53,
+            "resets_counted": 2
+          },
+          {
+            "window": "seven_day_fable",
+            "resets": [
+              {
+                "reset_at": 1790857000000,
+                "share_left": 0.6,
+                "observed_at": 1790857000000,
+                "source": "sample"
+              }
+            ],
+            "total_share_left": 0.6,
+            "resets_counted": 1
+          }
+        ]
+      },
+      {
+        "account_id": "free-org",
+        "plan": "free",
+        "tier": "default_claude_ai",
+        "windows": [
+          {
+            "window": "seven_day",
+            "resets": [
+              {
+                "reset_at": 1791029800000,
+                "share_left": 0.7,
+                "observed_at": 1790770600000,
+                "source": "term_ended"
+              }
+            ],
+            "total_share_left": 0.7,
+            "resets_counted": 1
+          }
+        ]
+      }
+    ]
+  }
+}

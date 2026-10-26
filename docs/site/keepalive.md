@@ -181,9 +181,10 @@ the pool dialog shows.
 The schedule's numbers are fixed. A probe is due 60 seconds before a five-minute entry expires and 360 seconds before a
 one-hour entry, less a random jitter of up to 5 and 30 seconds that spreads a pool's probes so one tick never bursts. At
 most four probes run at once, and one exchange is bounded at 300 seconds, so a worker never waits on an upstream for
-longer than the schedule it serves. Two cold probes in a row pause the recipe until a real request. The third transient
-failure pauses it, after retries that wait 30 seconds and double up to 300, a cap that keeps one wait inside a one-hour
-entry's lead.
+longer than the schedule it serves. Two cold probes in a row pause the recipe until a real request. A transient failure
+of a probe, a `429`, a `5xx`, an exhausted pool or a transport error, retries after 30 seconds and doubles the wait up
+to 300 seconds while the retry still lands before the entry's expiry, and a failure whose next retry would land at or
+past the expiry pauses the recipe until a real request.
 
 ## The ceilings
 
@@ -255,10 +256,12 @@ by bucket.
 The Sessions view reads each agent's recipe as one of five states, with the engine's own reason beside it as the cause.
 The cause's sentence shows on hover over the state word and again in the row's expanded detail. Every agent that has
 sent a real request keeps its record in the engine until its session leaves it, and its line in the view with it, so a
-recipe that ended, or a request that was not kept, still shows with its cause. The one line that leaves earlier is a
-subagent's the mod released while its session lives: the view drops it at its next re-read, while the engine keeps the
-record, which refuses a late request and a late probe result under that id and holds its slot of the agent cap until the
-session leaves.
+recipe that ended, or a request that was not kept, still shows with its cause. The one record that leaves earlier is a
+released one, a subagent the mod released while its session lives or any agent its session's end released: the view
+drops a released line under a live session at its next re-read, while the engine keeps the record for one pool cache TTL
+after the release, the longest TTL the pool's cache TTL policy names, refusing a late request and a late probe result
+under that id and holding its slot of the agent cap, and then drops it, its line leaving the view with it. A later start
+under the id registers anew.
 
 The console's words for the causes are in the labels table under [In the console](#in-the-console).
 
@@ -266,19 +269,19 @@ The console's words for the causes are in the labels table under [In the console
 | --- | --- |
 | `retained` | The prompt is kept and its probe is scheduled, in flight, or waiting for the first stream event. |
 | `held` | The prompt is kept and no probe is sent while a condition holds that clears by itself or by an operator. |
-| `paused` | The engine paused the recipe after a probe's answer or a failed request, until the next real request. |
-| `not_retained` | The last request was not kept, for its shape or size, the engine's limits, or no cache evidence. |
+| `paused` | The engine paused the recipe after a probe's answer or a rejected request, until the next real request. |
+| `not_retained` | The last request was not kept, for its shape or size, the engine's limits, no cache evidence, or a failure with no recipe armed before it. |
 | `ended` | The recipe was discarded: a ceiling, a completed compaction, an end, an eviction, a lapse or a release. |
 
 Each state reads these causes:
 
-- `retained`: `awaiting_cache_evidence`, `awaiting_selection`, `lease_expired`, `probing`, `scheduled`.
+- `retained`: `awaiting_cache_evidence`, `awaiting_selection`, `lease_expired`, `probing`, `request_canceled`,
+  `request_failed`, `scheduled`.
 - `held`: `affinity_too_short`, `budget`, `cooled`, `horizon`, `ineligible_credential`, `keepalive_off`,
-  `ledger_behind`, `no_probe_cache_evidence`, `overage`, `paused`, `pool_disabled`, `reauth`, `retryable_probe_error`,
-  `slow_probe`.
+  `ledger_behind`, `no_probe_cache_evidence`, `overage`, `paused`, `pool_disabled`, `probe_pool_exhausted`,
+  `probe_quota_exhausted`, `probe_transport_error`, `reauth`, `retryable_probe_error`, `slow_probe`.
 - `paused`: `invalid_probe_usage`, `missing_account`, `partial_cache_coverage`, `probe_authentication_error`,
-  `probe_pool_exhausted`, `probe_quota_exhausted`, `probe_retry_limit`, `probe_transport_error`, `repeated_cold_probe`,
-  `request_canceled`, `request_failed`, `request_rejected`, `unexpected_output`, `unsupported_probe`.
+  `probe_retry_limit`, `repeated_cold_probe`, `request_rejected`, `unexpected_output`, `unsupported_probe`.
 - `not_retained`: `awaiting_request`, `fixed_thinking`, `forced_tool`, `headers_too_large`, `invalid_cache_control`,
   `invalid_model`, `invalid_request`, `no_cache_evidence`, `owner_mismatch`, `request_limit`, `request_too_large`,
   `storage_limit`, `structured_output`, `unsupported_shape`.
@@ -286,14 +289,19 @@ Each state reads these causes:
   `idle_limit`, `instance_replaced`, `key_opted_out`, `opted_out`, `parked_limit`, `released`, `reset`, `session_ended`,
   `session_expired`.
 
-A `held` or `retained` cause reads `paused` while the engine's own pause holds. A probe's error answer pauses the recipe
-and clears its schedule, and a gate's hold that lands on it at a later tick (`budget`, `cooled`, `ineligible_credential`
-or `paused`) re-arms nothing, so the row stays `paused` with the hold's cause until the next real request. The paused
-prompt itself leaves when its entry goes cold: at the entry's expiry the engine drops it, settles its unanswered probes
-under `expired` and sends nothing, and the row still reads `paused`. The same hold on an armed recipe reads `held`,
-since the gate reads it again at every tick and probing resumes when it clears. A recipe held on a disabled pool reads
-`retained` again at the first tick after the pool is enabled. A `held` or `retained` cause reads `not_retained` when the
-agent holds no prompt, as a request refused at its account selection does.
+A `held` or `retained` cause reads `paused` while the engine's own pause holds. A probe's structural error
+(`invalid_probe_usage`, `missing_account`, `partial_cache_coverage`, `probe_authentication_error`,
+`repeated_cold_probe`, `unexpected_output`, `unsupported_probe`) pauses the recipe and clears its schedule, as a
+rejected request does. `probe_retry_limit` names a ladder that ran to the entry's expiry still failing. A real request
+that fails or is canceled leaves the last answered recipe armed on its schedule where one was armed at its arrival, the
+row reading `retained` under the request's own word and `not_retained` where none was, while a rejected request pauses
+it. A gate's hold that lands on a paused recipe at a later tick (`budget`, `cooled`, `ineligible_credential` or
+`paused`) re-arms nothing, so the row stays `paused` with the hold's cause until the next real request. The paused
+prompt itself leaves when its entry goes cold: at the entry's expiry the engine drops it, writes off its probes under
+`expired`, each as its chain's last entry ends, and sends nothing, and the row still reads `paused`. The same hold on an
+armed recipe reads `held`, since the gate reads it again at every tick and probing resumes when it clears. A recipe held
+on a disabled pool reads `retained` again at the first tick after the pool is enabled. A `held` or `retained` cause
+reads `not_retained` when the agent holds no prompt, as a request refused at its account selection does.
 
 A session's recipes end together when the session does. A `session_end` report, a registration that replaces the
 instance, the session's own expiry and an operator's release each discard every recipe of the session at once, and the
@@ -321,36 +329,39 @@ the lead: the session could move away from the account the probe would warm, so 
 A five-minute recipe needs about four minutes of pin and a one-hour recipe about fifty-four, and the 300-second floor
 that `keepalive.enabled` asks of the pool when it is saved stays the one refusal.
 
-An entry the engine knows has expired is never probed: its recipe ends under `expired`, its unanswered probes are
-settled wasted, and the engine logs one line naming the key, the agent, the expiry and how late the tick was. A recipe
-held under any other reason, a gate's hold among them (`affinity_too_short`, `budget`, `cooled`, `overage`, `paused` or
-`reauth`), leaves as `expired` once its entry has expired, and the next real request starts a new one. A recipe held
-under `horizon` or on a disabled pool leaves the same way, and one reopened or enabled again while its entry is warm
-probes on. While the request a recipe follows is still open, the lapse waits for its completion. At the retained-bytes
-cap the engine evicts before it refuses: unattended sessions' agents first, oldest activity first, then attended
-sessions' idle agents, never one with a probe or a request in flight. A lapsed or evicted recipe reads `ended`, as one
-stopped under `idle_limit` does, and shows on the wasted counter at once, while the probes of one stopped under
-`idle_limit` reach it as their entries lapse with no real request. A lapse also shows in that log line.
+An entry the engine knows has expired is never probed: its recipe ends under `expired`, its probes are written off, each
+at once or, where a probe sent while a request was open keeps its chain alive, at the chain's end, and the engine logs
+one line naming the key, the agent, the expiry and how late the tick was. A recipe held under any other reason, a gate's
+hold among them (`affinity_too_short`, `budget`, `cooled`, `overage`, `paused` or `reauth`), leaves as `expired` once
+its entry has expired, and the next real request starts a new one. A recipe held under `horizon` or on a disabled pool
+leaves the same way, and one reopened or enabled again while its entry is warm probes on. While the request a recipe
+follows is still open, the lapse waits for its completion. At the retained-bytes cap the engine evicts before it
+refuses: unattended sessions' agents first, oldest activity first, then attended sessions' idle agents, never one with a
+probe or a request in flight. A lapsed or evicted recipe reads `ended`, as one stopped under `idle_limit` does. An
+evicted one shows on the wasted counter at once, while the probes of a lapsed one reach it at once where their chains
+have ended and otherwise as their chains' last entries lapse with no real request, as the probes of one stopped under
+`idle_limit` do. A lapse also shows in that log line.
 
 A probe answered `429 accounts_at_cap`, every account of its pool at the in-flight cap, is held under
-`retryable_probe_error` rather than paused under `probe_quota_exhausted`: its next attempt waits out that answer's
-`Retry-After` in place of the backoff, since a slot frees within seconds. A probe answered `503 accounts_unavailable`
-because its key moved to another pool while it was in flight is held under `retryable_probe_error` rather than paused
-under `probe_pool_exhausted`: its next attempt admits under the new pool.
+`retryable_probe_error`: its next attempt waits out that answer's `Retry-After` in place of the ladder's step, whatever
+its length, since a slot frees within seconds, while a quota `429`'s header counts only where it is longer than the
+step. A probe answered `503 accounts_unavailable` because its key moved to another pool while it was in flight is held
+under `retryable_probe_error`: its next attempt admits under the new pool.
 
 A probe the router refused with `503 ledger_behind`, its ledger catching up (see [Refusal
 codes](client.md#refusal-codes)), holds under `ledger_behind` rather than `retryable_probe_error`: its next attempt
-waits out that answer's `Retry-After`, or the 30-second retry wait without one, and counts no failure toward the failure
-limit, so a ledger that stays behind never pauses the recipe. The entry's expiry and the ceilings still bound the
-re-sends: once the entry expires, the recipe ends under `expired`, as under any other hold, and a ceiling that runs out
-first ends it under its own reason.
+waits out that answer's `Retry-After`, or the 30-second retry wait without one, and counts no failure on the ladder, so
+a ledger that stays behind never pauses the recipe. The entry's expiry and the ceilings still bound the re-sends: once
+the entry expires, the recipe ends under `expired`, as under any other hold, and a ceiling that runs out first ends it
+under its own reason.
 
 ### The wasted probes
 
 A wasted probe settles on its own with one of nine reasons: when the recipe stops with a probe unanswered (at the idle
 limit, once the last entry of the probe's [chain](#which-requests-re-arm-a-recipe) lapses before a real request reads
-it) or is held under `horizon`, when the recipe lapses or is evicted, or when the next request after the probe reads
-nothing from the entry its chain kept:
+it) or is held under `horizon`, when the recipe is evicted, or lapses with the probe's chain ended (a lapsed recipe's
+probe whose chain is still alive settles like a probe at the idle limit, once the chain's last entry lapses with no real
+request), or when the next request after the probe reads nothing from the entry its chain kept:
 
 | Reason | What settles it |
 | --- | --- |

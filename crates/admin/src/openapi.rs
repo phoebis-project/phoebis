@@ -63,9 +63,9 @@ Each operation names its request (path segments, query parameters, or body field
             files under the funding of the probe's own request, while a recipe's settlement, which carries the \
             probes' waste, files under the kind and the class its record carries: `billed` for an API key account, \
             `usage_based` for a usage-based seat, else `fast` for a fast recipe, else `plan`. Absent keeps every \
-            row. The two subsets partition the rows). `/accounts` takes `range` alone. `GET /admin/analytics/budgets`, \
-            `/burn`, `/placements`, `/reconciliations`, and `/rewrites`, elsewhere under this tag, take their own \
-            request shapes."),
+            row. The two subsets partition the rows). `/accounts`, `/guardrails` and `/rewrites` take `range` alone. \
+            `GET /admin/analytics/budgets`, `/burn`, `/placements`, `/reconciliations`, `/refusal_categories`, and \
+            `/unused_allowance`, elsewhere under this tag, take their own request shapes."),
         (name = "Attention"),
         (name = "Dashboard"),
         (name = "Guardrails", description = "A guardrail is a named list of conditions a request is checked against \
@@ -879,9 +879,11 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("analytics_guardrails", "200"),
     fixture!("analytics_placements", "200"),
     fixture!("analytics_reconciliations", "200"),
+    fixture!("analytics_refusal_categories", "200"),
     fixture!("analytics_rewrites", "200"),
     fixture!("analytics_series", "200"),
     fixture!("analytics_series_accounts", "200"),
+    fixture!("analytics_unused_allowance", "200"),
     fixture!("attention", "200"),
     fixture!("dashboard", "200"),
     fixture!("guardrails", "200"),

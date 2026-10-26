@@ -25,8 +25,8 @@ use crate::record::{
     RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    decide, pace_of, projection_of, projections_of, release_reasons, BurnRead, Decided, FailedOver,
-    MigrateReason, Refusal, SelectRequest, SelectResult, FIVE_HOUR_MS,
+    decide, pace_of, passes_reset, projection_of, projections_of, release_reasons, BurnRead,
+    Decided, FailedOver, MigrateReason, Refusal, SelectRequest, SelectResult, FIVE_HOUR_MS,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
@@ -417,6 +417,9 @@ impl RegimeRates {
 #[derive(Clone, Debug, PartialEq)]
 pub struct BurnRates {
     pub dollars: RateTable,
+    /// The 5-hour share per token of the pin's row under its regime, the table `BurnUnit::table` reads for
+    /// `WindowShare` when `price_pin` prices a pin. The router's own burn reads price in dollars alone, so the admin's
+    /// Sessions pricing is the reader in production, while the fit and the pace read the per-window map.
     pub five_hour: RegimeRates,
     /// Dollars per token at the fast cells, the table a pin's fast usage prices through. A row without fast cells
     /// carries its own standard and long-context rates here, as the ledger builds it, so a fast answer on such a
@@ -1149,7 +1152,8 @@ pub struct PinStanding {
     pub pin: PinRow,
     pub runway_ms: Option<i64>,
     /// `None` where the pin's account has no projection on any window the model draws (`runway_ms` null too),
-    /// `Some(false)` for an unbounded runway (`runway_ms` null), `Some(true)` for a bounded one (`runway_ms` set).
+    /// `Some(false)` for an unbounded runway, one no burn bounds or one past its window's reset on every window
+    /// (`runway_ms` null), `Some(true)` for a bounded one (`runway_ms` set).
     pub runway_bounded: Option<bool>,
     /// The window the runway reads, `None` unless it is bounded.
     pub binding: Option<String>,
@@ -2591,7 +2595,7 @@ fn projections(
                 priority,
                 upstream_model: String::new(),
             };
-            let tier = snapshot.tier(account_id).unwrap_or_default();
+            let tier = snapshot.priced_tier(account_id).unwrap_or_default();
             let achieved = projections_of(
                 state,
                 snapshot,
@@ -2728,9 +2732,9 @@ fn decayed(pin: PinRow, now: i64, average_ms: i64) -> PinRow {
 /// fill `ceiling - predicted` over the band's segments, as the projection beside it weighs them. Its burn already
 /// holds the pin, so neither the pin's burn nor a rewrite is added again (that is `fit_of`'s arithmetic for a
 /// destination). `Some(0)` where `predicted` already reaches the ceiling, an unbounded runway (`None` with no binding
-/// window) where the account's burn on every drawn window it projects is zero, and the binding window the shortest.
-/// The outer `None` where the account projects none of the drawn windows: an api_key account, or one with no reading
-/// of them.
+/// window) where on every drawn window it projects the account's burn is zero or the runway passes the window's reset,
+/// since the window resets before the ceiling is reached, and the binding window the shortest of the rest. The outer
+/// `None` where the account projects none of the drawn windows: an api_key account, or one with no reading of them.
 fn standing_runway(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2739,7 +2743,7 @@ fn standing_runway(
     model: &str,
     now: i64,
 ) -> Option<(Option<i64>, Option<String>)> {
-    let tier = snapshot.tier(account_id).unwrap_or_default();
+    let tier = snapshot.priced_tier(account_id).unwrap_or_default();
     let mut projected = false;
     let mut bounded: Vec<(&str, i64)> = Vec::new();
     for window in plan_windows(model) {
@@ -2765,7 +2769,9 @@ fn standing_runway(
             };
             runway_ms
         };
-        bounded.push((window, runway_ms));
+        if !passes_reset(runway_ms, projection.reset, now) {
+            bounded.push((window, runway_ms));
+        }
     }
     projected.then(|| {
         bounded
@@ -4202,14 +4208,14 @@ impl Task {
                     .clone();
                 // An api_key account bills its tokens and a usage-based seat its spend window, so neither has a plan
                 // window to charge, whatever tier the seat's profile names, and an account whose tier the profile has
-                // not named yet has no factor to price through.
+                // not named yet or whose plan the cost model does not price has no factor to price through.
                 if snapshot.account(&account_id).map(|a| a.kind)
                     != Some(phoebis_store::AccountKind::Oauth)
                     || snapshot.usage_based(&account_id)
                 {
                     return;
                 }
-                let Some(tier) = snapshot.tier(&account_id) else {
+                let Some(tier) = snapshot.priced_tier(&account_id) else {
                     return;
                 };
                 // The report's own entrypoint, never a booking's: an ordinary renewal holds none.
@@ -5897,6 +5903,7 @@ mod tests {
                 terms: vec![SubscriptionTerm {
                     account_id: "a".into(),
                     tier: Some(tier.into()),
+                    plan: Some("max_20x".into()),
                     ..SubscriptionTerm::default()
                 }],
                 ..RegistryLoad::default()

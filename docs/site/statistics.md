@@ -10,15 +10,16 @@ the admin routes that serve their figures are in the [API reference](api-referen
 Every request that finished lands in the ledger, a second SQLite file beside the registry (`stats.ledger_path`): one row
 for the client request, stamped with the instant the ledger wrote it, and one row for each upstream attempt it took.
 `GET /admin/requests` filters on the stamp as `landed_after` and answers the newest one among the rows its filters admit
-as `landed_through`, at most the read's `to` where it names one, and the Requests view's auto reload polls a preset
-range by it with no `to`, so the route reads to its own clock. The relay waits for the ledger's queue when it must, so a
-row is never lost to a busy moment. A request whose client leaves before the head lands as a canceled request with the
-code `client_gone`, keeping the attempts it reached. A request the router's own shutdown ends past its drain window,
-after the head or before one, lands the same way under the code `router_shutdown`. Captured bodies are the one
-best-effort part, since a stream may outrun its recorder, and a capture whose chunks were lost is stored as truncated
-with a `ledger_gap` event naming the request. Once a request finishes, it is folded into the hour's rollup in the same
-transaction as its rows, which is what the analytics routes report, so a long range costs one row per hour rather than
-one per request.
+as `landed_through`, at most the read's `to` where it names one, unless the read marks a fixed-end range with
+`fixed_end`, which lets `landed_through` pass `to` so a row received before the end and landed after it is read once.
+The Requests view's auto reload polls a preset range by that stamp with no `to`, so the route reads to its own clock.
+The relay waits for the ledger's queue when it must, so a row is never lost to a busy moment. A request whose client
+leaves before the head lands as a canceled request with the code `client_gone`, keeping the attempts it reached. A
+request the router's own shutdown ends past its drain window, after the head or before one, lands the same way under the
+code `router_shutdown`. Captured bodies are the one best-effort part, since a stream may outrun its recorder, and a
+capture whose chunks were lost is stored as truncated with a `ledger_gap` event naming the request. Once a request
+finishes, it is folded into the hour's rollup in the same transaction as its rows, which is what the analytics routes
+report, so a long range costs one row per hour rather than one per request.
 
 Every routing decision lands as its own row in a decisions table beside the attempt rows: one zstd-compressed record per
 decision holding the request's facts, the settings in force, every pool member's standing at decision time, the rule
@@ -115,6 +116,13 @@ map, in pages, resumed after a stopped start, and an hour whose rows the retenti
 counts. With `stats.retention_days` at 0, which keeps the requests for good, the move starts at the first hour
 `stats.rollup_retention_days` keeps, so a refusal in an hour the rollup purge removed writes no row into it.
 
+An upstream's refusal is a served request: the serving attempt records the answer's `stop_reason` `refusal` with the
+`refusal_category` and the recommended model its `stop_details` named, the request's outcome stays `succeeded`, and the
+figures count it as any served request. `GET /admin/requests` filters on `stop_reasons` and `refusal_categories`, each
+read off the serving attempt with `-` for a request whose serving attempt carries none or that no attempt served, and
+`GET /admin/analytics/refusal_categories` counts the refused requests in range per category, `-` for a refusal with
+none, read off the attempts at the request.
+
 ## Quota samples
 
 Quota samples arrive from two sources. Every response head from an OAuth account carries the unified rate-limit
@@ -134,7 +142,7 @@ carries the body's `spend` figures where the body has the object: the cap and th
 currency and its exponent. A usage-based seat's head row carries no in-use flag, since the seat's overage family is its
 spend window. The account view and the Dashboard answer the head's `seven_day_overage_included` and the poll's
 `seven_day_fable` under the one id `seven_day_fable`, the newest reading winning, while the ledger keeps the head's key
-as stored. The head's overage-included week is read as the Fable week until a second model week arrives by head, since
+as stored. The head's overage-included week is read as the 7-day Fable until a second model week arrives by head, since
 the upstream's name for it is generic.
 
 The usage endpoint is also read once at startup for every OAuth account with a credential, before the proxy listener
@@ -153,6 +161,13 @@ An account the endpoint answers 429 backs off alone. Its hold grows through two,
 five-minute slot when the hold is shorter. Each 429 is logged as a warning naming the account and the endpoint that
 answered it, `the {endpoint} endpoint rate-limited the account`, and the next clean answer returns the account to the
 five minutes. A transport failure or another error keeps the cadence. The other accounts keep theirs throughout.
+
+The router announces a plan window's reset as a `window_reset` event with the utilization the window held before it and
+whether a sample showed the reset or the clock walk found it, and `GET /admin/analytics/unused_allowance` reads those
+events for the weekly windows, `seven_day` and each model week, as the share of the allowance each subscription account
+left unused at its resets in range (the default range 30 days), with an account's term end inside a week read as a reset
+of that week from its last reading before the end. The history reaches as far as the events the hourly purge still
+holds, which `stats.retention_days` bounds, so a longer retention shows more weeks.
 
 ## Pricing
 
@@ -251,8 +266,9 @@ account reads 29.3% of its own 5-hour window. Under the interactive regime the s
 equivalent under the top bar's Unit switch, whose default Native position shows a subscription request in it and a
 billed request in dollars ([The shell](console.md#the-shell)).
 
-The base capacities the shipped file carries, in units per window, keyed by the tier the profile reports (a Pro
-subscription reports `default_claude_ai`):
+The base capacities the shipped file carries, in units per window, keyed by the tier the profile reports for the plans
+the cost model prices (a Pro subscription reports `default_claude_ai`, and a free organization reports the same tier
+with no priced capacity):
 
 | Tier | 5-hour | 7-day |
 | --- | --- | --- |
@@ -417,9 +433,12 @@ The analytics, the dashboard, the pool cards and the burn chart read the hourly 
 its own read, so a 400-day range holds one day of rows in memory and the reader connection is free between pages.
 
 A prompt-length threshold that moves re-folds the hours whose attempts the ledger still holds at the next start, and the
-older hours keep their split. The re-fold moves the request rows alone. A wasted probe's counts and a probe the
-keepalive still holds keep the band they settled or were recorded in, so the waste of a probe whose prompt falls
-between the old and the new threshold inside the retained window stays priced at that band.
+older hours keep their split. Where the request retention is 0 the re-fold reads every request, and a request received
+before the first hour the rollup purge keeps moves only where its hour's rows still stand, so an hour the purge removed
+stays empty and one it kept for a budgeted member moves with the threshold. The re-fold moves the request rows alone. A
+wasted probe's counts and a probe the keepalive still holds keep the band they settled or were recorded in, so the waste
+of a probe whose prompt falls between the old and the new threshold inside the retained window stays priced at that
+band.
 
 ## Metrics
 
@@ -575,7 +594,7 @@ windows rather than the events, so a restart holds it again at the first fold to
 | `refresh_failed` | serious | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
 | `certificate_expiring` | warning | the listener key | a pair with more than 30 days left is loaded |
 | `ledger_record_parked` | serious | the pool, or `-` for a record without one | the next start or the Replay button lands them |
-| `poll_backoff` | warning | the polled account | a poll answers clean |
+| `poll_backoff` | warning | the polled account | a poll answers clean, or the account is flagged plan ended |
 | `model_unweighted` | warning | the model | a later subscription request on the model is priced at a cost model entry that weighs it, or the router restarts |
 | `meter_drift` | warning | the OAuth account | the newest reconciled window of each kind that ended in the last eight days with a rise of at least 5% reads a ratio inside 0.8 to 1.25 or a priced share under 5%, or no such window remains |
 | `wall_reached` | warning | the account | no window of the account read spent in the last 24 hours |
@@ -641,8 +660,9 @@ subject is the pool the record was served under, or `-` for a record without one
 id with nothing to open. The item dates from the oldest row, and the detail counts the rows and names the accounts.
 
 **`poll_backoff`** holds once the usage poll has been backing off from the endpoint's 429 answers on the account for
-thirty minutes, counted from the run's first 429. The detail gives when the run started, when the next attempt comes,
-and how many 429s the endpoint answered in a row.
+thirty minutes, counted from the run's first 429. The condition clears with the account's plan-ended pause as well,
+since the paused poll sends no clean answer. The detail gives when the run started, when the next attempt comes, and how
+many 429s the endpoint answered in a row.
 
 **`model_unweighted`** holds while a model the cost model does not weigh has served plan-funded requests since the
 start, each priced at the weight of the latest weighed model of its model tier and marked estimated wherever its figure
@@ -671,20 +691,20 @@ and it opens the Meter view on the account.
 
 **`wall_reached`** holds while a window of the account read spent in the last 24 hours: a `window_spent` event of any
 source, the prediction's among them, so a wall the router predicted counts before a head or the poll reads it. A wall is
-announced once per reset cycle, since a newer head of the same cycle within two points of 1.0 after it neither clears
-nor repeats it, and two points cover a head, which reads the share up to a point under the poll's whole percent, with
-one point of room. A head that names no reset, taken before the announced reset, is of the announced cycle, so within
-the two points it neither clears nor repeats the wall, and the cycle that holds a head within the two points runs from
-the instant the wall was announced, or from the reset's passing for a wall that goes on past its reset. The ledger folds
-the four routing conditions from its events once an hour and at start into one table, which the gauge and
-`GET /admin/attention` read, so a condition clears at the first fold whose trailing day holds none of its events. The
-subject is the account, and the item dates from the oldest wall of the day. The detail counts the walls, names their
-windows and the settings `shed_cap` and `window_ceiling`, and names one figure by the trigger of the newest shedding
-round on the wall's window within that window's length before the wall: after a projection round the projection error,
-one less the round's projection, after a slow-down round the time the wall arrived before the reset (0 at or after it),
-and neither with no round. The ledger also keeps each account's longest early wall of the hour under a slow-down round,
-so the figure outlives the trailing day. The item opens the [routing log](console.md#routing-log) on the account's spent
-windows since the condition began.
+announced once per reset cycle, since a newer head or poll of the same cycle within two points of 1.0 after it neither
+clears nor repeats it, and two points cover a head, which reads the share up to a point under the poll's whole percent,
+with one point of room. A head or a poll that names no reset, taken before the announced reset, is of the announced
+cycle, so within the two points it neither clears nor repeats the wall, and the cycle that holds a head or a poll within
+the two points runs from the instant the wall was announced, from the stored instant of a wall a restart restored, or
+from the reset's passing for a wall that goes on past its reset. The ledger folds the four routing conditions from its
+events once an hour and at start into one table, which the gauge and `GET /admin/attention` read, so a condition clears
+at the first fold whose trailing day holds none of its events. The subject is the account, and the item dates from the
+oldest wall of the day. The detail counts the walls, names their windows and the settings `shed_cap` and
+`window_ceiling`, and names one figure by the trigger of the newest shedding round on the wall's window within that
+window's length before the wall: after a projection round the projection error, one less the round's projection, after a
+slow-down round the time the wall arrived before the reset (0 at or after it), and neither with no round. The ledger
+also keeps each account's longest early wall of the hour under a slow-down round, so the figure outlives the trailing
+day. The item opens the [routing log](console.md#routing-log) on the account's spent windows since the condition began.
 
 **`destination_spent`** holds while a move landed on the account in the last 24 hours and a `window_spent` event of any
 source followed on it within the hour, until a `window_cleared` event on the same account and window follows that spent

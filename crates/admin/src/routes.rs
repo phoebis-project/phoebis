@@ -76,8 +76,10 @@ pub(crate) fn parts() -> (Router<Arc<AdminState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(analytics::guardrails))
         .routes(routes!(analytics::placements))
         .routes(routes!(analytics::reconciliations))
+        .routes(routes!(analytics::refusal_categories))
         .routes(routes!(analytics::rewrites))
         .routes(routes!(analytics::series))
+        .routes(routes!(analytics::unused_allowance))
         .routes(routes!(attention::show))
         .routes(routes!(dashboard::show))
         .routes(routes!(guardrails::list, guardrails::create))
@@ -2223,7 +2225,8 @@ pub(crate) struct Account {
     pub subscription: Option<AccountSubscription>,
     /// The account's quota windows: the router's reported sample first and the ledger's samples of the last day for
     /// the rest, the ledger's alone for an `api_key` account. Empty for an account with no reading, and for an `oauth`
-    /// account in the `disconnected` or `reauth_required` state, whose last reading the view no longer answers.
+    /// account in the `disconnected` or `reauth_required` state or flagged `plan_ended_at`, whose last reading the view
+    /// no longer answers.
     pub windows: Vec<AccountWindow>,
     /// The account's slow-down entry in force as the router reads it, null on an api_key account, an untiered account
     /// or one with no 5-hour reading, an account in no pool, a pool with the slow-down off, and an account no pinned
@@ -2308,7 +2311,9 @@ pub(crate) struct AccountProfile {
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AccountSubscription {
-    /// `max`, `pro`, or null when the profile lacks it.
+    /// The plan the stored profile resolves to: `free`, `pro`, `max_5x`, `max_20x`, `max` (a Max organization whose
+    /// tier names neither size), `team`, `enterprise` or `usage_based`, read from the organization type first and the
+    /// rate-limit tier second, null while no stored document and no tier the table names stand.
     pub plan: Option<String>,
     /// Null when the profile lacks it.
     pub tier: Option<String>,
@@ -2399,9 +2404,9 @@ pub(crate) struct ExtraUsage {
 pub(crate) struct Spend {
     /// Null while no polled row of the last day carries the amounts.
     pub amounts: Option<SpendAmounts>,
-    /// The share as a fraction, the stored `utilization` of the newest row of any source that carries one, null where
-    /// no row of the day carries one and once the reset that row's reading was taken under has passed, the amounts
-    /// drawn with no meter then.
+    /// The share as a fraction: the router's wherever it holds a reading of the seat, else the stored `utilization` of
+    /// the newest row of the last day, of any source, that carries one. Null where the share it reads is none and once
+    /// the reset the share was read under has passed, the amounts drawn with no meter then.
     pub utilization: Option<f64>,
     /// Epoch milliseconds: the window's reset as the router reads it, the estimate where the router answers none.
     pub resets_at: i64,
@@ -2594,20 +2599,21 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             }
         })
         .map(|s| AccountSubscription {
-            plan: s.plan,
+            plan: term.plan.clone(),
             tier: s.tier,
             since: s.since,
             trial_ends_at: s.trial_ends_at,
             ends_at: term.ends_at,
         });
-    // The token manager hands out no token for an `oauth` account in either state, its credential gone or refused, so
-    // neither the poll nor a request reads it until it pairs again: what the router and the ledger still hold is its
-    // last reading, which both paths below would draw as live.
+    // The token manager hands out no token for an `oauth` account in either state, and a flagged account's poll is
+    // paused and its routing reads it as past its end, so neither the poll nor a request reads the account until it
+    // pairs again or a profile read finds a plan: what the router and the ledger still hold is its last reading, which
+    // both paths below would draw as live.
     let windows_withheld = row.kind == AccountKind::Oauth
-        && matches!(
+        && (matches!(
             row.state,
             AccountState::Disconnected | AccountState::ReauthRequired
-        );
+        ) || term.plan_ended_at.is_some());
     // The router holds a reading the moment the poll or a head reports it, while the ledger's row waits on the writer,
     // so a refresh's reading shows as soon as the refresh answers. The ledger's rows fill each plan window the router
     // holds no reading of, and every window of an api_key account.
@@ -2812,10 +2818,10 @@ pub(crate) fn account_window_id(key: &str) -> &str {
     }
 }
 
-/// A usage-based seat's spend window: the amounts from the newest polled row, the share from the newest row that
-/// carries one, the instant from the newest row of any source, and the reset from the router's window. The share lapses
-/// where `now` reaches the reset its row's reading was taken under, the instant the router's hold lifts at, so the
-/// meter and the hold agree whether or not the router holds a reading of the seat.
+/// A usage-based seat's spend window: the amounts from the newest polled row, the instant from the newest row of any
+/// source, and the reset from the router's window. The share and its lapse are the router's wherever it holds a reading
+/// of the seat, so the meter lifts where the hold does, and otherwise the share of the newest row that carries one,
+/// lapsing where `now` reaches the reset that row's reading was taken under.
 fn spend_view(ctx: &AccountContext, account_id: &str, now: i64) -> Spend {
     let polled = ctx.extra_polled.iter().find(|e| e.account_id == account_id);
     let newest = ctx.extra.iter().find(|e| e.account_id == account_id);
@@ -2841,10 +2847,20 @@ fn spend_view(ctx: &AccountContext, account_id: &str, now: i64) -> Spend {
             }),
         }
     });
-    let utilization = shared.and_then(|e| {
-        let reset = phoebis_routing::spend_reading_reset(e.bucket * 1_000, e.overage_reset);
-        e.utilization.filter(|_| now < reset)
-    });
+    // The router lapses its share at the reset it read the share under, a held head's included, which the ledger's row
+    // does not keep. The row serves a router that answers no window, stopped or on a snapshot that predates the class,
+    // and one that holds no reading of the seat.
+    let utilization = match ctx
+        .spend_windows
+        .get(account_id)
+        .filter(|window| window.observed_at.is_some())
+    {
+        Some(window) => window.utilization,
+        None => shared.and_then(|e| {
+            let reset = phoebis_routing::spend_reading_reset(e.bucket * 1_000, e.overage_reset);
+            e.utilization.filter(|_| now < reset)
+        }),
+    };
     // A router that answers no window for the seat, a stopped one or one whose snapshot predates the class, leaves the
     // estimate.
     let (resets_at, reset_source) = ctx.spend_windows.get(account_id).map_or_else(

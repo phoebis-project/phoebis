@@ -1,21 +1,21 @@
 {
   "route": "GET /admin/dashboard",
   "body": {
-    "requests_24h": 9,
-    "tokens_24h": 18000,
-    "tokens_cached_24h": 5000,
-    "cost_24h": 0.032,
+    "requests_24h": 12,
+    "tokens_24h": 23400,
+    "tokens_cached_24h": 6500,
+    "cost_24h": 0.04265,
     "billed_24h": 0.014249999999999999,
     "equivalent_24h": {
-      "five_hour": 0.000048175000000000005,
-      "seven_day": 0.000012846666666666667,
+      "five_hour": 0.0000746125,
+      "seven_day": 0.000019896666666666665,
       "unpriced": {
         "five_hour": false,
         "seven_day": false
       }
     },
     "estimated_24h": true,
-    "error_rate_24h": 0.2222222222222222,
+    "error_rate_24h": 0.16666666666666666,
     "top_error_code": "upstream_error",
     "refused_24h": 2,
     "top_refusal_code": "guardrail_blocked",
@@ -397,10 +397,10 @@
       {
         "at": 1791716400000,
         "billed": 0.01065,
-        "cost": 0.021300000000000003,
+        "cost": 0.03195,
         "equivalent": {
-          "five_hour": 0.000017625,
-          "seven_day": 4.7e-6,
+          "five_hour": 0.00004406250000000001,
+          "seven_day": 0.00001175,
           "unpriced": {
             "five_hour": false,
             "seven_day": false
@@ -408,8 +408,8 @@
         },
         "errors": 1,
         "refused": 2,
-        "requests": 5,
-        "tokens": 10800
+        "requests": 8,
+        "tokens": 16200
       },
       {
         "at": 1791720000000,

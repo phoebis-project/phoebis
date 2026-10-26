@@ -2,15 +2,15 @@ use phoebis_routing::{
     cohort_hold, decide, effective_warm, lane_key, release_reasons, resolve, select, shed_dwell_ms,
     warm, warmth_of, windows::MODEL_WINDOWS, AccountTicket, AffinityChain, AffinityMap,
     AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit, CandidateFacts, ChainFacts,
-    ClientClass, CohortHold, CreditsState, Decided, DecisionRecord, EvidenceSource, Exhaustion,
-    FactEntity, FactValue, FailedOver, HeadMark, HoldFacts, HoldOutcome, HoldWait, LaneFacts,
-    LongContextRates, MemberSpend, MigrateReason, MoveCause, OverageEvidence, PinKeyFacts, PinRef,
-    PinShed, Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates,
-    RegistrySnapshot, RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult,
-    SharePricer, SlowDownEdge, SlowDownRead, SlowDownState, StateWrite, UtilizationSample,
-    WalkStep, Warmth, WarmthCause, WindowFacts, WindowReading, WindowSource, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY,
-    SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
+    ClientClass, CohortHold, CreditAccount, CreditsState, Decided, DecisionRecord, EvidenceSource,
+    Exhaustion, FactEntity, FactValue, FailedOver, HeadMark, HoldFacts, HoldOutcome, HoldWait,
+    LaneFacts, LongContextRates, MemberSpend, MigrateReason, MoveCause, OverageEvidence,
+    PinKeyFacts, PinRef, PinShed, Placement, RateTable, Rates, RefusalFacts, RefusedRequest,
+    RegimeRates, RegistrySnapshot, RequestFlags, Reservation, RoutingState, SelectRequest,
+    SelectResult, SharePricer, SlowDownEdge, SlowDownRead, SlowDownState, StateWrite,
+    UtilizationSample, WalkStep, Warmth, WarmthCause, WindowFacts, WindowReading, WindowSource,
+    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
+    MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -417,6 +417,7 @@ fn select_request(
         folded_model: model.into(),
         candidates: resolve(s, key, model, model).unwrap(),
         portable,
+        credit_account: None,
         attempted: attempted.iter().map(|a| a.to_string()).collect(),
         now,
         received_at: now,
@@ -1092,6 +1093,342 @@ fn a_pin_on_a_depleted_account_is_renewed_rather_than_moved() {
         ..request(&s, Some("s2"), "claude-sonnet-5", true, &[], 2_000)
     };
     assert_eq!(picked(&select(&mut st, &s, &fresh, &mut rng()).0), "b");
+}
+
+const CREDIT_MODEL: &str = "claude-sonnet-5";
+
+/// Two accounts under Pace, `a` read at a tenth of its windows and `b` at half, so the strategy favors `a`.
+fn credit_pool() -> (RegistrySnapshot, RoutingState) {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", sample(0.1, 0.1, 1));
+    st.record_sample("b", sample(0.5, 0.5, 1));
+    (s, st)
+}
+
+/// `req` carrying a fallback credit token the relay's store names `account_id` under `incarnation` for.
+fn credited(req: SelectRequest, account_id: &str, incarnation: u64) -> SelectRequest {
+    SelectRequest {
+        credit_account: Some(CreditAccount {
+            account_id: account_id.into(),
+            incarnation,
+        }),
+        ..req
+    }
+}
+
+/// `req`'s decision and the one without its token, each on a fresh `credit_pool` state `prepare` readies, so a case
+/// reads whether the token left the walk as it was.
+fn with_and_without_credit(
+    req: &SelectRequest,
+    prepare: impl Fn(&mut RoutingState),
+) -> (Decided, Decided) {
+    let decide_on = |req: &SelectRequest| {
+        let (s, mut st) = credit_pool();
+        prepare(&mut st);
+        decide(&mut st, &s, req, &mut rng())
+    };
+    let without = SelectRequest {
+        credit_account: None,
+        ..req.clone()
+    };
+    (decide_on(req), decide_on(&without))
+}
+
+/// A line's facts as their keys and values, so a mismatch prints the whole line.
+fn keyed(step: &WalkStep) -> Vec<(&str, &FactValue)> {
+    step.facts.iter().map(|f| (f.key, &f.value)).collect()
+}
+
+fn credit_reason() -> FactValue {
+    FactValue::Text("credit".into())
+}
+
+#[test]
+fn a_body_carrying_a_known_credit_token_lands_on_the_issuing_account_ahead_of_pace() {
+    let (_, mut st) = credit_pool();
+    // b ten minutes from its end, inside the default thirty-minute wind-down, so the `no_fit` partition passes it over
+    // and the account the credit lands on carries a partition's label.
+    let s = snapshot_with_terms(
+        Pool {
+            strategy: Strategy::Pace,
+            members: vec![("a", 0), ("b", 0)],
+            ..Pool::default()
+        },
+        vec![SubscriptionTerm {
+            account_id: "b".into(),
+            since: Some(0),
+            trial_ends_at: None,
+            canceled: true,
+            ends_at: Some(1_000 + 10 * MINUTE),
+            tier: None,
+            usage_based: false,
+            plan: None,
+            plan_ended_at: None,
+        }],
+    );
+    let fresh = request(&s, None, CREDIT_MODEL, true, &[], 1_000);
+    assert_eq!(
+        picked(&select(&mut st, &s, &fresh, &mut rng()).0),
+        "a",
+        "the strategy favors a"
+    );
+    let req = credited(
+        request(&s, Some("s-credit"), CREDIT_MODEL, true, &[], 1_000),
+        "b",
+        1,
+    );
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let SelectResult::Selected(sel) = &d.result else {
+        panic!("expected a selection, got {:?}", d.result)
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated, sel.trace.tier),
+        ("b", None, None),
+        "the credit applies on the account that issued it"
+    );
+    let pin = line(&d.record, "pin");
+    assert_eq!(pin.verdict, "match", "{:?}", pin.facts);
+    assert_eq!(fact_of(pin, "credit", "b"), &FactValue::Text("b".into()));
+    for rung in ["rung:content", "rung:with_main", "rung:static"] {
+        let step = line(&d.record, rung);
+        assert_eq!(
+            (step.verdict, keyed(step)),
+            ("none", vec![("reason", &credit_reason())]),
+            "{rung}"
+        );
+    }
+    let pick = line(&d.record, "pick");
+    assert_eq!(
+        (
+            pick.verdict,
+            fact_of(pick, "account_id", "b"),
+            fact(pick, "reason")
+        ),
+        ("chosen", &FactValue::Text("b".into()), &credit_reason())
+    );
+    assert!(
+        d.writes.iter().any(|w| matches!(
+            w,
+            StateWrite::UpsertPin(p) if p.account_id == "b" && p.session_id == "s-credit"
+        )),
+        "the agent's pin is written on b: {:?}",
+        d.writes
+    );
+    assert_eq!(
+        d.summary
+            .fact
+            .iter()
+            .find(|f| f.key == "pick")
+            .map(|f| &f.value),
+        Some(&credit_reason()),
+        "the summary names the credit as what placed the request"
+    );
+    assert_eq!(candidate(&d.record, "b").partition, Some("no_fit"));
+    assert_eq!(
+        sel.trace.skipped,
+        Vec::new(),
+        "the credit placed the request on b, so the trace does not also pass b over"
+    );
+}
+
+#[test]
+fn a_credit_token_naming_a_cooled_account_leaves_the_walk_as_it_was() {
+    let (s, _) = credit_pool();
+    let req = credited(
+        request(&s, Some("s-cooled"), CREDIT_MODEL, true, &[], 1_000),
+        "b",
+        1,
+    );
+    let (with, without) = with_and_without_credit(&req, |st| {
+        st.record_cooldown(cooled(
+            "b",
+            "account",
+            1_000 + HOUR,
+            "five_hour",
+            "rate_limit",
+        ));
+    });
+    assert_eq!(picked(&with.result), "a");
+    assert_eq!(
+        (&with.result, &with.record.walk),
+        (&without.result, &without.record.walk),
+        "a cooled issuer takes no credit"
+    );
+}
+
+#[test]
+fn a_credit_token_naming_an_account_that_does_not_take_the_model_leaves_the_walk_as_it_was() {
+    let (s, _) = credit_pool();
+    let mut req = credited(
+        request(&s, Some("s-model"), CREDIT_MODEL, true, &[], 1_000),
+        "b",
+        1,
+    );
+    req.candidates.retain(|c| c.account_id != "b");
+    let (with, without) = with_and_without_credit(&req, |_| {});
+    assert_eq!(picked(&with.result), "a");
+    assert_eq!(
+        (&with.result, &with.record.walk),
+        (&without.result, &without.record.walk),
+        "an issuer that is no candidate for the model takes no credit"
+    );
+}
+
+#[test]
+fn a_credit_token_hands_a_live_pin_on_another_account_to_the_issuing_account() {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 0), ("c", 0)],
+        ..Pool::default()
+    });
+    let old = seeded_pin("s-handed", "a", T);
+    // a's 5-hour window spent, so the spent rule moves the pin off a, and Pace ranks c, the emptier sibling, ahead of
+    // the issuer among the rule's destinations.
+    let state = || {
+        let mut st = loaded(vec![old.clone()]);
+        st.record_sample("a", sample(1.0, 0.1, T - 500));
+        st.record_sample("b", sample(0.5, 0.5, T - 500));
+        st.record_sample("c", sample(0.2, 0.2, T - 500));
+        st
+    };
+    let req = request(&s, Some("s-handed"), CREDIT_MODEL, true, &[], T + 1_000);
+    assert_eq!(
+        landed(select(&mut state(), &s, &req, &mut rng()).0),
+        ("c".into(), Some(MigrateReason::Spent)),
+        "without the token the spent rule fires"
+    );
+    let mut st = state();
+    let d = decide(&mut st, &s, &credited(req, "b", 1), &mut rng());
+    let SelectResult::Selected(sel) = &d.result else {
+        panic!("expected a selection, got {:?}", d.result)
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", None),
+        "no move reason names a credit"
+    );
+    for rule in [
+        "move:spent",
+        "move:overage",
+        "move:return_to_plan",
+        "move:drain",
+        "move:shed",
+    ] {
+        let step = line(&d.record, rule);
+        assert_eq!(
+            (step.verdict, keyed(step)),
+            ("not_run", vec![("reason", &credit_reason())]),
+            "{rule}"
+        );
+    }
+    assert!(
+        d.writes
+            .iter()
+            .any(|w| matches!(w, StateWrite::DeletePin(k) if *k == pin_key("s-handed"))),
+        "the row on a leaves as a move's source does: {:?}",
+        d.writes
+    );
+    let handed = pinned(&st, "s-handed");
+    assert_eq!(handed.account_id, "b");
+    assert_eq!(
+        handed.last_input_tokens, old.last_input_tokens,
+        "the new row carries the last prompt over, as a fired move's does"
+    );
+    assert_eq!(
+        d.record.outcome.pin_written.as_ref().map(|p| p.action),
+        Some("created")
+    );
+}
+
+#[test]
+fn a_credit_token_naming_an_issuer_created_again_under_its_id_leaves_the_walk_as_it_was() {
+    let (s, _) = credit_pool();
+    // The snapshot's `b` is incarnation 1, so the entry recorded under 2 names another holder of the id.
+    let req = credited(
+        request(&s, Some("s-fenced"), CREDIT_MODEL, true, &[], 1_000),
+        "b",
+        2,
+    );
+    let (with, without) = with_and_without_credit(&req, |_| {});
+    assert_eq!(picked(&with.result), "a");
+    assert_eq!(
+        (&with.result, &with.record.walk),
+        (&without.result, &without.record.walk),
+        "the credit reaches the incarnation that answered the refusal alone"
+    );
+}
+
+#[test]
+fn a_credit_token_naming_the_live_pins_account_renews_the_pin_with_the_moves_not_run() {
+    let (s, mut st) = credit_pool();
+    // `b` leads at the opening, so the session's pin lands there, and `a` leads from then on.
+    st.record_sample("a", sample(0.5, 0.5, 2));
+    st.record_sample("b", sample(0.1, 0.1, 2));
+    let opening = request(&s, Some("s-renewed"), CREDIT_MODEL, true, &[], 1_000);
+    let SelectResult::Selected(placed) = select(&mut st, &s, &opening, &mut rng()).0 else {
+        panic!("expected a selection")
+    };
+    assert_eq!(placed.account.id, "b");
+    st.record_sample("a", sample(0.1, 0.1, 3));
+    st.record_sample("b", sample(0.5, 0.5, 3));
+    let fresh = request(&s, None, CREDIT_MODEL, true, &[], 2_000);
+    assert_eq!(
+        picked(&select(&mut st, &s, &fresh, &mut rng()).0),
+        "a",
+        "the strategy favors a"
+    );
+    // b at its cap, which the credited renewal reads no more than any renewal does.
+    let cap = s.pool("p").unwrap().failover.in_flight_cap;
+    let _held: Vec<_> = (0..cap)
+        .map(|_| st.in_flight().dispatched("b", 1_500))
+        .collect();
+    let req = credited(
+        request(&s, Some("s-renewed"), CREDIT_MODEL, true, &[], 2_000),
+        "b",
+        1,
+    );
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let SelectResult::Selected(sel) = &d.result else {
+        panic!("expected a selection, got {:?}", d.result)
+    };
+    assert_eq!(
+        (
+            sel.account.id.as_str(),
+            sel.trace.renewed,
+            sel.pin.as_ref().map(|p| p.epoch)
+        ),
+        ("b", true, placed.pin.as_ref().map(|p| p.epoch)),
+        "the pin renews in place"
+    );
+    for rule in [
+        "move:spent",
+        "move:overage",
+        "move:return_to_plan",
+        "move:drain",
+        "move:shed",
+    ] {
+        let step = line(&d.record, rule);
+        assert_eq!(
+            (step.verdict, keyed(step)),
+            ("not_run", vec![("reason", &credit_reason())]),
+            "{rule}"
+        );
+    }
+    assert!(
+        !d.writes
+            .iter()
+            .any(|w| matches!(w, StateWrite::DeletePin(_))),
+        "{:?}",
+        d.writes
+    );
+    let pin = line(&d.record, "pin");
+    assert_eq!(pin.verdict, "match");
+    assert_eq!(fact_of(pin, "credit", "b"), &FactValue::Text("b".into()));
 }
 
 #[test]
@@ -4485,6 +4822,7 @@ fn a_probe_on_a_pin_whose_subscription_ended_answers_the_obstacle_and_moves_noth
             ends_at: Some(1_500),
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );
@@ -5610,6 +5948,7 @@ fn the_blocker_refuses_a_winding_down_account_for_the_static_tier() {
             ends_at: Some(1_000 + 10 * 60_000), // 10 minutes out, inside the 30-minute window
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );
@@ -6222,6 +6561,7 @@ fn a_tail_match_bypasses_no_fit_and_the_wind_down() {
         ends_at: Some(at),
         tier: None,
         usage_based: false,
+        plan: None,
         plan_ended_at: None,
     };
     // No runway: b outranks a, so only the bypass can land the request there.
@@ -8129,6 +8469,7 @@ fn an_account_inside_its_wind_down_takes_no_placement_while_another_serves() {
         ends_at: Some(at),
         tier: None,
         usage_based: false,
+        plan: None,
         plan_ended_at: None,
     };
     let pool = || Pool {
@@ -8518,6 +8859,7 @@ fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );
@@ -8565,6 +8907,7 @@ fn a_winding_down_account_takes_a_fresh_session_only_as_the_last_resort_under_ev
             ends_at: Some(1_000 + 10 * 60_000), // 10 minutes out, inside the 30-minute window
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }];
         let failover = Failover {
@@ -8632,6 +8975,7 @@ fn a_canceled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_sub
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );
@@ -8694,6 +9038,7 @@ fn an_account_flagged_plan_ended_is_the_obstacle_subscription_ended_as_one_past_
         ends_at: None,
         tier: None,
         usage_based: false,
+        plan: None,
         plan_ended_at,
     };
     let running = snapshot_with_terms(pool(), vec![term(None)]);
@@ -8752,6 +9097,7 @@ fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone
             ends_at: None,
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );
@@ -8772,6 +9118,7 @@ fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone
             ends_at: None,
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );
@@ -11770,6 +12117,7 @@ fn a_cold_pin_on_a_winding_down_account_drains_and_a_warm_one_stays() {
             ends_at: Some(T + 10 * MINUTE),
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );
@@ -12134,6 +12482,7 @@ fn usage_based_seat(id: &str) -> SubscriptionTerm {
         account_id: id.into(),
         tier: Some("default_claude_zero".into()),
         usage_based: true,
+        plan: Some("usage_based".into()),
         ..SubscriptionTerm::default()
     }
 }
@@ -12673,6 +13022,41 @@ fn a_usage_based_seats_candidate_facts_carry_the_spend_entry_estimated_under_no_
             reserved: 0.0,
         }),
         "a head's share and reset name the head"
+    );
+}
+
+#[test]
+fn a_usage_based_seats_candidate_facts_list_its_spend_entry_and_no_plan_window_while_a_plan_member_lists_its_windows(
+) {
+    // The plan readings a seat read before it converted, which the routing state keeps across the class.
+    let plan_readings = || with_fable(sample(0.2, 0.3, T - 500), 0.4, None);
+    let s = spend_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", plan_readings());
+    st.record_sample("b", plan_readings());
+    st.record_credits("b", credits(true, None, Some(0.4), T - 500));
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    let windows = |account: &str| -> Vec<String> {
+        candidate(&d.record, account)
+            .windows
+            .keys()
+            .cloned()
+            .collect()
+    };
+    assert_eq!(
+        windows("b"),
+        ["spend"],
+        "the seat lists no plan window, its spend window drawn"
+    );
+    assert_eq!(
+        windows("a"),
+        [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE],
+        "the plan member lists its three plan windows"
     );
 }
 
@@ -14119,6 +14503,13 @@ fn fact_of<'a>(step: &'a WalkStep, key: &str, account: &str) -> &'a FactValue {
             )
         })
         .value
+}
+
+/// Whether the line carries no fact under `key` about `account`.
+fn no_fact_of(step: &WalkStep, key: &str, account: &str) -> bool {
+    step.facts
+        .iter()
+        .all(|f| f.key != key || f.account_id.as_deref() != Some(account))
 }
 
 fn number(value: &FactValue) -> f64 {
@@ -17150,6 +17541,7 @@ fn tiered(pool: Pool) -> RegistrySnapshot {
             ends_at: None,
             tier: Some(TIER.into()),
             usage_based: false,
+            plan: Some("max_20x".into()),
             plan_ended_at: None,
         })
         .collect();
@@ -18157,6 +18549,7 @@ fn tier_terms(ids: &[&str]) -> Vec<SubscriptionTerm> {
             ends_at: None,
             tier: Some(TIER.into()),
             usage_based: false,
+            plan: Some("max_20x".into()),
             plan_ended_at: None,
         })
         .collect()
@@ -18249,16 +18642,17 @@ fn a_move_takes_a_destination_the_pin_fits_to_the_horizon_before_any_other() {
         &FactValue::List(vec!["b".into()])
     );
     // b: 0.3 and the rewrite of 0.05 leave 0.6 of the window, which the pin's burn reaches in 60 000 s, past the
-    // three hours to the reset. No pin burns on b, so its projection is its prediction.
+    // three hours to the reset, and its week's runway passes its reset 72 hours out, so b's runway reads unbounded.
+    // No pin burns on b, so its projection is its prediction.
     assert!(close(
         number(fact_of(fit, "projection_five_hour", "b")),
         0.3
     ));
     assert!(close(number(fact_of(fit, "rewrite_five_hour", "b")), 0.05));
-    assert_eq!(fact_of(fit, "runway_ms", "b"), &FactValue::Int(60_000_000));
-    assert_eq!(
-        fact_of(fit, "binding", "b"),
-        &FactValue::Text("five_hour".into())
+    assert!(
+        no_fact_of(fit, "runway_ms", "b") && no_fact_of(fit, "binding", "b"),
+        "{:?}",
+        fit.facts
     );
     assert_eq!(
         fact_of(fit, "verdict", "b"),
@@ -18273,7 +18667,7 @@ fn a_move_takes_a_destination_the_pin_fits_to_the_horizon_before_any_other() {
     let b = candidate(&d.record, "b");
     assert_eq!(
         (b.runway_ms, b.fit, b.binding.as_deref()),
-        (Some(60_000_000), Some("fits"), Some("five_hour"))
+        (None, Some("fits"), None)
     );
     assert_eq!(
         (
@@ -18284,7 +18678,10 @@ fn a_move_takes_a_destination_the_pin_fits_to_the_horizon_before_any_other() {
         "the candidate table carries the projection at the horizon and the horizon"
     );
     let facts = summary_facts(&d);
-    assert_eq!(facts[0], ("runway", FactValue::Int(60_000_000), Some("ms")));
+    assert_eq!(
+        facts[0],
+        ("runway", FactValue::Text("unbounded".into()), Some("text"))
+    );
     assert_eq!(
         facts[1].0, "pick",
         "the placement fact follows the runway: {facts:?}"
@@ -18338,6 +18735,51 @@ fn with_no_fitting_destination_the_rewrite_only_candidate_with_the_longest_runwa
 }
 
 #[test]
+fn a_rewrite_only_candidate_with_a_window_past_its_reset_keeps_the_longest_runways_move() {
+    let s = tiered(gate_pool());
+    let mut st = priced(vec![gated_pin("s1", "a", 1_000.0)]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    // b's 5-hour window binds at 4 000 s, short of the 10 800 s to its reset, beside a week whose 50 500 s pass its
+    // reset two hours out. c's 5-hour window binds at 3 000 s beside a week inside its reset.
+    st.record_sample(
+        "b",
+        windows_with_resets((0.5, T + 3 * HOUR), (0.1, T + 2 * HOUR), T - 500),
+    );
+    st.record_sample("c", refreshing(0.6, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    let fit = line(&d.record, "fit");
+    assert_eq!(fit.verdict, "rewrite_only");
+    assert_eq!(
+        fact(line(&d.record, "move:spent"), "destinations"),
+        &FactValue::List(vec!["b".into()]),
+        "the longer runway alone, the week past its reset leaving the order as it is"
+    );
+    assert_eq!(
+        (fact_of(fit, "binding", "b"), fact_of(fit, "runway_ms", "b")),
+        (
+            &FactValue::Text("five_hour".into()),
+            &FactValue::Int(4_000_000)
+        )
+    );
+    assert_eq!(
+        (fact_of(fit, "binding", "c"), fact_of(fit, "runway_ms", "c")),
+        (
+            &FactValue::Text("five_hour".into()),
+            &FactValue::Int(3_000_000)
+        )
+    );
+}
+
+#[test]
 fn with_nothing_fitting_the_move_lands_least_bad_where_the_strategy_picks() {
     let s = tiered(gate_pool());
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
@@ -18383,7 +18825,8 @@ fn under_priority_two_fitting_candidates_in_one_tier_take_the_longer_runway_with
     });
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
     // b: 0.6 of the window left over the pin's burn is 60 000 s, c: 0.4 left is 40 000 s, both past the 10 800 s to
-    // the reset.
+    // the reset, and each week's runway passes its reset 72 hours out: both runways read unbounded, while the
+    // computed figures still break the tie.
     gated_siblings(&mut st, 0.3, 0.5);
     let d = decide(
         &mut st,
@@ -18396,8 +18839,11 @@ fn under_priority_two_fitting_candidates_in_one_tier_take_the_longer_runway_with
         ("b".into(), Some(MigrateReason::Spent))
     );
     let fit = line(&d.record, "fit");
-    assert_eq!(fact_of(fit, "runway_ms", "b"), &FactValue::Int(60_000_000));
-    assert_eq!(fact_of(fit, "runway_ms", "c"), &FactValue::Int(40_000_000));
+    assert!(
+        no_fact_of(fit, "runway_ms", "b") && no_fact_of(fit, "runway_ms", "c"),
+        "{:?}",
+        fit.facts
+    );
     let pick = line(&d.record, "pick");
     assert_eq!(
         fact(pick, "ties"),
@@ -18413,6 +18859,53 @@ fn under_priority_two_fitting_candidates_in_one_tier_take_the_longer_runway_with
         fact(pick, "drawn"),
         &FactValue::Bool(false),
         "one candidate is left after the runway, so nothing is drawn"
+    );
+}
+
+#[test]
+fn under_priority_a_runway_shown_unbounded_past_its_reset_still_breaks_the_tie_by_its_computed_figure(
+) {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1), ("c", 1)],
+        ..gate_pool()
+    });
+    let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    // b, first in the tie, reaches the ceiling past each window's reset: 35 000 s on the 5-hour window against its
+    // reset three hours out, about 140 hours on the week against its reset 72 hours out. c's 60 000 s on the 5-hour
+    // window pass its reset too, while its week's 85 000 s stay inside the 72 hours. b's computed runway is the
+    // shorter.
+    st.record_sample("b", refreshing(0.55, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample(
+        "c",
+        windows_with_resets((0.3, T + 3 * HOUR), (0.8, T + 72 * HOUR), T - 500),
+    );
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), Some(MigrateReason::Spent))
+    );
+    let pick = line(&d.record, "pick");
+    assert_eq!(
+        fact(pick, "ties"),
+        &FactValue::List(vec!["b".into(), "c".into()])
+    );
+    assert_eq!(
+        fact(pick, "by_runway"),
+        &FactValue::List(vec!["c".into()]),
+        "the computed runway breaks the tie, so b's unbounded display never makes it the longest"
+    );
+    assert_eq!(fact(pick, "drawn"), &FactValue::Bool(false));
+    let fit = line(&d.record, "fit");
+    assert!(
+        no_fact_of(fit, "runway_ms", "b") && no_fact_of(fit, "binding", "b"),
+        "b's runway past every reset is shown unbounded: {:?}",
+        fit.facts
     );
 }
 
@@ -18722,7 +19215,7 @@ fn a_failover_lands_on_the_invalidated_rows_burn_and_books_it() {
         gated_pin("w1", "b", 200.0),
         gated_pin("w2", "b", 400.0),
     ]);
-    st.record_sample("b", refreshing(0.3, T + HOUR, T + 3 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.3, T + HOUR, T + 72 * HOUR, T - 500));
     let row = burning("s1", "a", 100.0, true, T);
     let cause = MoveCause::Cooldown {
         scope: "account".into(),
@@ -18733,13 +19226,15 @@ fn a_failover_lands_on_the_invalidated_rows_burn_and_books_it() {
     let d = decide(&mut st, &s, &req, &mut rng());
     assert_eq!(landed(d.result.clone()), ("b".into(), None));
     // b: 0.3 and the 200 000-token rewrite of 0.02 leave 0.63 of the window to the ceiling. The two pins on b burn
-    // 0.00006 of it a second, and the row's own 0.00001 takes the total to 0.00007: 9 000 s. The median's 0.00003
-    // would read 7 000 s.
+    // 0.00006 of it a second, and the row's own 0.00001 takes the total to 0.00007: 9 000 s, past the reset an hour
+    // out, so the 5-hour window drops from the displayed runway, and the week, inside its reset 72 hours out, binds.
+    // At 0.1 of the week with the rewrite and each burn a sixth as large, the row's 0.00001 a second gives about
+    // 72 571 s where the median's 0.00003 would give about 56 444 s, so the figure proves the fit read the row's burn.
     let b = candidate(&d.record, "b");
     assert_eq!(
         (b.runway_ms, b.fit, b.binding.as_deref()),
-        (Some(9_000_000), Some("fits"), Some("five_hour")),
-        "the fit reads the row's burn"
+        (Some(72_571_429), Some("fits"), Some("seven_day")),
+        "the week's runway reads the failed-over row's burn"
     );
     let reserve = line(&d.record, "reserve");
     assert!(
@@ -19554,8 +20049,12 @@ fn the_shed_rule_takes_the_fitting_destination_the_strategy_ranks_first_or_none(
     for id in ["b", "c"] {
         assert_eq!(fact_of(fit, "verdict", id), &FactValue::Text("fits".into()));
     }
-    assert_eq!(fact_of(fit, "runway_ms", "b"), &FactValue::Int(60_000_000));
-    assert_eq!(fact_of(fit, "runway_ms", "c"), &FactValue::Int(40_000_000));
+    // b's 60 000 s and c's 40 000 s pass the reset three hours out, and each week's runway its reset 72 hours out.
+    assert!(
+        no_fact_of(fit, "runway_ms", "b") && no_fact_of(fit, "runway_ms", "c"),
+        "a runway past each window's reset reads unbounded: {:?}",
+        fit.facts
+    );
     let (st, d) = round(0.92, 0.93);
     assert_eq!(
         landed(d.result.clone()),
@@ -19614,14 +20113,27 @@ fn under_round_robin_the_cursor_picks_and_the_runway_never_speaks() {
     assert_eq!(
         landed(second.result.clone()),
         ("c".into(), Some(MigrateReason::Shed)),
-        "the cursor's next turn, though b still reads the longer runway"
+        "the cursor's next turn, though b's computed runway is the longer"
     );
     let fit = line(&second.record, "fit");
-    let runway = |id: &str| match fact_of(fit, "runway_ms", id) {
-        FactValue::Int(ms) => *ms,
-        other => panic!("a bounded runway on {id}: {other:?}"),
-    };
-    assert!(runway("b") > runway("c"), "{:?}", fit.facts);
+    // b's 5-hour runway passes its reset, so its week, inside its reset 72 hours out, binds. Each of c's windows
+    // resets before the ceiling is reached, its 15 000 s past the 10 800 s to the 5-hour reset among them. b's
+    // computed runway, about 37 500 s on its 5-hour window, is the longer against c's 15 000 s and is the figure a Pace
+    // or Priority tie-break would rank by, while b displays its week since its 5-hour runway passes the reset.
+    assert_eq!(
+        (fact_of(fit, "binding", "b"), fact_of(fit, "runway_ms", "b")),
+        (
+            &FactValue::Text("seven_day".into()),
+            &FactValue::Int(250_069_444)
+        ),
+        "{:?}",
+        fit.facts
+    );
+    assert!(
+        no_fact_of(fit, "runway_ms", "c") && no_fact_of(fit, "binding", "c"),
+        "{:?}",
+        fit.facts
+    );
     for d in [&first, &second] {
         assert_eq!(
             fact(line(&d.record, "move:shed"), "destinations"),
@@ -19835,6 +20347,128 @@ fn the_binding_window_is_the_one_the_pin_reaches_first_among_those_it_overruns()
             &FactValue::Text("five_hour".into()),
             &FactValue::Int(3_000_000)
         )
+    );
+}
+
+#[test]
+fn a_window_whose_runway_passes_its_reset_leaves_the_binding_to_the_window_inside_its_own() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    // b's 5-hour window leaves the pin 35 000 s against its reset three hours out, so the window resets before the
+    // ceiling. Its week leaves 85 000 s, past the five-hour horizon and inside its reset 72 hours out, and binds.
+    st.record_sample(
+        "b",
+        windows_with_resets((0.55, T + 3 * HOUR), (0.8, T + 72 * HOUR), T - 500),
+    );
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    let fit = line(&d.record, "fit");
+    assert_eq!(fit.verdict, "fits");
+    assert_eq!(
+        fact_of(fit, "verdict", "b"),
+        &FactValue::Text("fits".into())
+    );
+    assert!(close(
+        number(fact_of(fit, "projection_five_hour", "b")),
+        0.55
+    ));
+    assert!(close(
+        number(fact_of(fit, "projection_seven_day", "b")),
+        0.8
+    ));
+    assert_eq!(
+        (fact_of(fit, "binding", "b"), fact_of(fit, "runway_ms", "b")),
+        (
+            &FactValue::Text("seven_day".into()),
+            &FactValue::Int(85_000_000)
+        ),
+        "the week inside its reset binds, the 5-hour window past its reset shown unbounded"
+    );
+    let b = candidate(&d.record, "b");
+    assert_eq!(
+        (b.runway_ms, b.fit, b.binding.as_deref()),
+        (Some(85_000_000), Some("fits"), Some("seven_day"))
+    );
+    assert_eq!(
+        (
+            b.windows["five_hour"].horizon,
+            b.windows["seven_day"].horizon
+        ),
+        (Some(T + 3 * HOUR), Some(T + 5 * HOUR)),
+        "the horizons stand at the 5-hour reset and five hours out"
+    );
+}
+
+#[test]
+fn a_candidate_whose_every_runway_passes_its_reset_carries_no_runway_and_no_binding() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    // b leaves the pin 45 000 s on the 5-hour window against its reset two hours out and 265 000 s on the week against
+    // its reset ten hours out: each window resets before the ceiling is reached.
+    st.record_sample(
+        "b",
+        windows_with_resets((0.45, T + 2 * HOUR), (0.5, T + 10 * HOUR), T - 500),
+    );
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    let fit = line(&d.record, "fit");
+    assert_eq!(fit.verdict, "fits");
+    assert_eq!(
+        fact_of(fit, "verdict", "b"),
+        &FactValue::Text("fits".into())
+    );
+    assert!(close(
+        number(fact_of(fit, "projection_five_hour", "b")),
+        0.45
+    ));
+    assert!(close(
+        number(fact_of(fit, "projection_seven_day", "b")),
+        0.5
+    ));
+    assert!(
+        no_fact_of(fit, "runway_ms", "b") && no_fact_of(fit, "binding", "b"),
+        "a runway past every window's reset is shown unbounded: {:?}",
+        fit.facts
+    );
+    let b = candidate(&d.record, "b");
+    assert_eq!(
+        (b.runway_ms, b.fit, b.binding.as_deref()),
+        (None, Some("fits"), None)
+    );
+    assert_eq!(
+        (
+            b.windows["five_hour"].horizon,
+            b.windows["seven_day"].horizon
+        ),
+        (Some(T + 2 * HOUR), Some(T + 5 * HOUR))
+    );
+    assert_eq!(
+        summary_facts(&d)[0],
+        ("runway", FactValue::Text("unbounded".into()), Some("text"))
     );
 }
 
@@ -20897,6 +21531,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
             ends_at,
             tier: Some(TIER.into()),
             usage_based: false,
+            plan: Some("max_20x".into()),
             plan_ended_at: None,
         })
         .to_vec();
@@ -21757,6 +22392,161 @@ fn a_pool_with_the_slow_down_off_an_api_key_account_and_an_unread_window_read_no
         .iter()
         .all(|f| f.key != "slow_down"));
     none_read("probe", &d, &st);
+}
+
+/// `ratio_pricer` with the Pro tier `default_claude_ai` priced as `TIER` is, so an account on the Pro tier prices its
+/// rewrite and its burn wherever its plan prices a capacity at all.
+fn pro_tier_pricer() -> SharePricer {
+    fn priced(tier: &str) -> &str {
+        if tier == "default_claude_ai" {
+            TIER
+        } else {
+            tier
+        }
+    }
+    let ratio = ratio_pricer();
+    let (price, rate) = (ratio.clone(), ratio.clone());
+    SharePricer::new(move |window, entrypoint, tier, model, usage, at| {
+        price.price(window, entrypoint, priced(tier), model, usage, at)
+    })
+    .with_rate(move |window, entrypoint, tier, model, burn, at| {
+        rate.rate(window, entrypoint, priced(tier), model, burn, at)
+    })
+    .with_equivalent(move |window, entrypoint, model, usage, at| {
+        ratio.equivalent(window, entrypoint, model, usage, at)
+    })
+}
+
+#[test]
+fn a_free_organization_on_the_pro_tier_prices_no_capacity_and_reads_as_an_untiered_account() {
+    // The account under test is a free organization on the Pro tier, a term with no tier or a Max 20x term, beside a
+    // Max 20x sibling, under a pricer that prices the Pro tier.
+    let term = |id: &str, tier: Option<&str>, plan: Option<&str>| SubscriptionTerm {
+        account_id: id.into(),
+        tier: tier.map(String::from),
+        plan: plan.map(String::from),
+        ..SubscriptionTerm::default()
+    };
+    let free = || term("b", Some("default_claude_ai"), Some("free"));
+    let untiered = || term("b", None, None);
+    let max = || term("b", Some(TIER), Some("max_20x"));
+    let without_word = |c: &CandidateFacts| CandidateFacts {
+        plan_tier: None,
+        ..c.clone()
+    };
+
+    // A spent move from `a` onto `b`: the gate's fit on `b`.
+    let moved = |b: SubscriptionTerm| {
+        let s = snapshot_with_terms(
+            Pool {
+                members: vec![("a", 0), ("b", 1)],
+                ..Pool::default()
+            },
+            vec![term("a", Some(TIER), Some("max_20x")), b],
+        );
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.set_share(pro_tier_pricer());
+        select(
+            &mut st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+            &mut rng(),
+        );
+        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+        st.record_sample("b", sample(0.1, 0.1, T + 500));
+        let d = decide(
+            &mut st,
+            &s,
+            &SelectRequest {
+                body_tokens: 1_000_000,
+                ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000)
+            },
+            &mut rng(),
+        );
+        assert_eq!(
+            landed(d.result.clone()),
+            ("b".into(), Some(MigrateReason::Spent))
+        );
+        d
+    };
+    let (on_free, on_untiered, on_max) = (moved(free()), moved(untiered()), moved(max()));
+    assert_eq!(
+        (
+            line(&on_free.record, "fit").verdict,
+            line(&on_untiered.record, "fit").verdict,
+            line(&on_max.record, "fit").verdict,
+        ),
+        ("least_bad", "least_bad", "fits"),
+        "the free organization prices no rewrite, so the move reads it least bad as it reads an untiered sibling, \
+         while the Max 20x sibling prices the rewrite and fits"
+    );
+    assert_eq!(
+        line(&on_free.record, "fit"),
+        line(&on_untiered.record, "fit"),
+        "the fit's facts are an untiered account's"
+    );
+    assert_eq!(
+        without_word(candidate(&on_free.record, "b")),
+        without_word(candidate(&on_untiered.record, "b")),
+        "the destination's facts are an untiered account's but for the plan word"
+    );
+
+    // A pinned turn on `a` under the slow-down: the read and its entry on `a`.
+    let slowed = |a: SubscriptionTerm| {
+        let s = snapshot_with_terms(
+            slowing(Pool {
+                members: vec![("a", 0), ("b", 1)],
+                load_shedding: false,
+                ..Pool::default()
+            }),
+            vec![a, term("b", Some(TIER), Some("max_20x"))],
+        );
+        let mut st = loaded(vec![burning("s1", "a", 10.0, true, T)]);
+        st.set_share(pro_tier_pricer());
+        reading(&mut st, "a", 0.80, 2 * HOUR, T);
+        let d = decide(&mut st, &s, &main_turn(&s, "s1", T), &mut rng());
+        let entry = st.slow_down_state("p", "a").is_some();
+        (d, entry)
+    };
+    let as_a = |term: SubscriptionTerm| SubscriptionTerm {
+        account_id: "a".into(),
+        ..term
+    };
+    let (free_turn, free_entry) = slowed(as_a(free()));
+    let (untiered_turn, untiered_entry) = slowed(as_a(untiered()));
+    let (max_turn, max_entry) = slowed(as_a(max()));
+    assert_eq!(
+        (free_entry, untiered_entry, max_entry),
+        (false, false, true),
+        "the slow-down writes an entry on the Max 20x account alone"
+    );
+    assert_eq!(
+        line(&free_turn.record, "move:shed"),
+        line(&untiered_turn.record, "move:shed"),
+        "the shed line reads the free organization as it reads an untiered account"
+    );
+    assert_eq!(
+        without_word(candidate(&free_turn.record, "a")),
+        without_word(candidate(&untiered_turn.record, "a")),
+        "the free organization's facts are an untiered account's but for the plan word"
+    );
+    assert!(
+        candidate(&free_turn.record, "a").burn.is_empty()
+            && !candidate(&max_turn.record, "a").burn.is_empty(),
+        "the free organization prices no burn, the Max 20x account its own: {:?} against {:?}",
+        candidate(&free_turn.record, "a").burn,
+        candidate(&max_turn.record, "a").burn
+    );
+    assert_eq!(
+        (
+            candidate(&free_turn.record, "a").plan_tier.as_deref(),
+            candidate(&free_turn.record, "b").plan_tier.as_deref(),
+            candidate(&untiered_turn.record, "a").plan_tier.as_deref(),
+            candidate(&max_turn.record, "a").plan_tier.as_deref(),
+        ),
+        (Some("free"), Some("max_20x"), None, Some("max_20x")),
+        "the record's plan fact carries the resolved plan word"
+    );
 }
 
 #[test]
@@ -25237,6 +26027,7 @@ fn a_covering_pins_rewrite_reads_one_figure_whatever_the_destinations_tier() {
                     ends_at: None,
                     tier: Some(tier.into()),
                     usage_based: false,
+                    plan: Some(if tier == TIER { "max_20x" } else { "pro" }.into()),
                     plan_ended_at: None,
                 })
                 .collect(),
@@ -25549,6 +26340,7 @@ fn the_cedar_window_replay_ends_at_a_zero_factor_with_the_subagent_held_and_no_r
             ends_at,
             tier: Some(TIER.into()),
             usage_based: false,
+            plan: Some("max_20x".into()),
             plan_ended_at: None,
         })
         .to_vec();
@@ -27324,6 +28116,7 @@ fn a_pin_released_past_its_saved_end_names_the_account_it_left() {
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );

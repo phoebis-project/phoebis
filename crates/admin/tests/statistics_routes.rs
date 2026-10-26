@@ -1740,10 +1740,11 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
     assert_eq!(row("silent")["pinned"].as_bool(), Some(true));
 }
 
-/// A pin on plan quota is priced in its account's window, so a tier the store cannot read fails the route rather
-/// than reading as a tier the table does not size.
+/// The route reads each account's tier from the routing snapshot, the selector's own read, so the store's tier column
+/// is not on the route's path and a failed read of it cannot fail the route.
 #[tokio::test]
-async fn the_sessions_route_answers_500_when_an_accounts_tier_cannot_be_read() {
+async fn the_sessions_route_prices_from_the_snapshots_tier_so_a_failed_store_tier_read_leaves_it_at_200(
+) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let store = std::sync::Arc::new(
@@ -1797,32 +1798,10 @@ async fn the_sessions_route_answers_500_when_an_accounts_tier_cannot_be_read() {
         .unwrap();
     let parts = common::admin_parts_full_on(store).await;
     let cookie = login(&parts.app, "admin-secret").await;
-    // The tier read names the column, and no other read the route makes does.
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch(
-        "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
-    )
-    .unwrap();
-    drop(conn);
-    let listed = get(&parts.app, "/admin/sessions", Some(&cookie)).await;
-    assert_eq!(listed.status(), 500);
-    assert_eq!(
-        json(listed).await,
-        serde_json::json!({"error": "storage failure"})
-    );
-}
-
-/// Only a row priced in the window share reads a tier, so a subscription account with no pin in the window costs the
-/// route no read and cannot fail it.
-#[tokio::test]
-async fn a_failed_tier_read_on_an_account_no_row_prices_leaves_the_sessions_route_at_200() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("router.sqlite");
-    let store = std::sync::Arc::new(
-        phoebis_store::Store::open(&path, &phoebis_store::StorageKey::generate()).unwrap(),
-    );
-    let parts = common::admin_parts_full_on(store).await;
-    let cookie = login(&parts.app, "admin-secret").await;
+    // The snapshot takes Max 20x before the column goes, so the pin's zero burn reads a share of 0, where an account
+    // with no tier reads null.
+    set_max_20x(&parts).await;
+    // Every store read of the tier names the column, so it fails from here on.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
         "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
@@ -1831,7 +1810,19 @@ async fn a_failed_tier_read_on_an_account_no_row_prices_leaves_the_sessions_rout
     drop(conn);
     let listed = get(&parts.app, "/admin/sessions", Some(&cookie)).await;
     assert_eq!(listed.status(), 200);
-    assert_eq!(json(listed).await, serde_json::json!({"sessions": []}));
+    let sessions = json(listed).await;
+    let row = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["session_id"] == "planned")
+        .unwrap_or_else(|| panic!("no row for planned: {sessions}"))
+        .clone();
+    assert_eq!(
+        (&row["burn_unit"], &row["burn"]),
+        (&serde_json::json!("window_share"), &serde_json::json!(0.0)),
+        "the pin prices as a share of the snapshot's Max 20x window: {row}"
+    );
 }
 
 #[tokio::test]
@@ -2339,6 +2330,626 @@ async fn the_reconciliations_route_lists_the_trailing_thirty_days_under_the_acco
             ),
         ],
         "the filter keeps the named accounts' rows"
+    );
+}
+
+#[tokio::test]
+async fn the_refusal_count_route_answers_the_range_and_its_categories_under_the_account_filter() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    const DAY: i64 = 24 * HOUR;
+    let (harmful, topic) = (Some("harmful_request"), Some("restricted_topic"));
+    for (id, at, account, stop_reason, category) in [
+        ("h1", now - 5 * HOUR, "business", "refusal", harmful),
+        ("h2", now - 4 * HOUR, "business", "refusal", harmful),
+        ("t1", now - 3 * HOUR, "business", "refusal", topic),
+        ("n1", now - 2 * HOUR, "business", "refusal", None),
+        ("t2", now - HOUR, "other", "refusal", topic),
+        // Left out: an answer of another stop reason, and a refusal older than the default range.
+        ("e1", now - HOUR, "business", "end_turn", None),
+        ("old", now - DAY - HOUR, "business", "refusal", harmful),
+    ] {
+        let Record::Request {
+            request,
+            mut attempts,
+            bodies,
+        } = record(id, at, "claude-sonnet-5", "s1")
+        else {
+            unreachable!("record writes a request")
+        };
+        attempts[0].account_id = account.into();
+        attempts[0].stop_reason = Some(stop_reason.into());
+        attempts[0].refusal_category = category.map(String::from);
+        parts.ledger.record(Record::Request {
+            request,
+            attempts,
+            bodies,
+        });
+    }
+    wait_json(
+        &parts.app,
+        &format!("/admin/requests?from={}", now - 2 * DAY),
+        &cookie,
+        |v| v["requests"].as_array().is_some_and(|rows| rows.len() == 7),
+    )
+    .await;
+    let read = |query: String| {
+        let app = parts.app.clone();
+        let cookie = cookie.clone();
+        async move {
+            json(
+                get(
+                    &app,
+                    &format!("/admin/analytics/refusal_categories{query}"),
+                    Some(&cookie),
+                )
+                .await,
+            )
+            .await
+        }
+    };
+    let rows = |body: &serde_json::Value| -> Vec<(String, u64)> {
+        body["rows"]
+            .as_array()
+            .unwrap_or_else(|| panic!("a list of rows: {body}"))
+            .iter()
+            .map(|r| {
+                (
+                    r["category"].as_str().unwrap().to_string(),
+                    r["requests"].as_u64().unwrap(),
+                )
+            })
+            .collect()
+    };
+    let pairs = |rows: &[(&str, u64)]| -> Vec<(String, u64)> {
+        rows.iter().map(|(c, n)| (c.to_string(), *n)).collect()
+    };
+    let every = read(String::new()).await;
+    assert_eq!(keys_in_order(&every), ["from", "to", "rows"], "{every}");
+    assert_eq!(
+        (every["from"].as_i64(), every["to"].as_i64()),
+        (Some(now - DAY), Some(now)),
+        "the default range is the trailing 24 hours"
+    );
+    assert_eq!(
+        rows(&every),
+        pairs(&[("harmful_request", 2), ("restricted_topic", 2), ("-", 1)]),
+        "the largest count first and the category among equals, the other stop and the older refusal left out"
+    );
+    assert_eq!(
+        every["rows"][0],
+        serde_json::json!({"category": "harmful_request", "requests": 2}),
+        "a row is its category and its count"
+    );
+    let business = read("?range=24h&accounts=business".into()).await;
+    assert_eq!(
+        rows(&business),
+        pairs(&[("harmful_request", 2), ("-", 1), ("restricted_topic", 1)]),
+        "the account filter keeps the refusals its accounts served"
+    );
+    let wider = read(format!("?range={},{now}&accounts=business", now - 2 * DAY)).await;
+    assert_eq!(
+        (wider["from"].as_i64(), wider["to"].as_i64()),
+        (Some(now - 2 * DAY), Some(now)),
+        "a custom range answers its own bounds"
+    );
+    assert_eq!(
+        rows(&wider),
+        pairs(&[("harmful_request", 3), ("-", 1), ("restricted_topic", 1)]),
+        "the wider range takes the older refusal in"
+    );
+    let bad = get(
+        &parts.app,
+        "/admin/analytics/refusal_categories?range=2d",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(bad.status(), 400);
+    assert_eq!(
+        json(bad).await["error"],
+        "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"
+    );
+}
+
+#[tokio::test]
+async fn the_unused_allowance_route_groups_each_subscription_accounts_weekly_resets_over_thirty_days(
+) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    const DAY: i64 = 24 * HOUR;
+    parts
+        .store
+        .insert_account(&AccountRow {
+            id: "second".into(),
+            kind: AccountKind::Oauth,
+            label: "Second".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+            state_cause: StateCause::Paired,
+        })
+        .unwrap();
+    for (id, document, tier) in [
+        (
+            "business",
+            r#"{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}"#,
+            "default_claude_max_20x",
+        ),
+        (
+            "second",
+            r#"{"organization":{"organization_type":"claude_pro","rate_limit_tier":"default_claude_ai"}}"#,
+            "default_claude_ai",
+        ),
+    ] {
+        parts
+            .store
+            .set_profile(
+                id,
+                document,
+                &phoebis_store::SubscriptionRow {
+                    tier: Some(tier.into()),
+                    ..phoebis_store::SubscriptionRow::default()
+                },
+            )
+            .unwrap();
+    }
+    // `second`'s term ended five days ago, inside the week its last reading names.
+    let end = now - 5 * DAY;
+    parts.store.set_canceled("second", true, Some(end)).unwrap();
+    parts.router.reload().await.unwrap();
+    for (account, window, utilization_before, at, observed) in [
+        ("business", "seven_day", 0.62, now - 20 * DAY, "sample"),
+        ("business", "seven_day", 0.9, now - 13 * DAY, "clock"),
+        ("business", "seven_day_fable", 0.3, now - 6 * DAY, "sample"),
+        ("second", "seven_day", 0.4, now - 12 * DAY, "sample"),
+        // Left out: a reset older than the default range, and an API key account's.
+        ("business", "seven_day", 0.5, now - 40 * DAY, "sample"),
+        ("direct", "seven_day", 0.1, now - 2 * DAY, "sample"),
+    ] {
+        parts
+            .db
+            .insert_event(&EventRecord {
+                at,
+                kind: "window_reset".into(),
+                account_id: Some(account.into()),
+                detail: Some(
+                    serde_json::json!({
+                        "window": window,
+                        "utilization_before": utilization_before,
+                        "reset_at": at,
+                        "next_reset": at + 7 * DAY,
+                        "observed": observed,
+                    })
+                    .to_string(),
+                ),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    parts
+        .db
+        .insert_samples(
+            &[phoebis_ledger::QuotaSampleRecord {
+                account_id: "second".into(),
+                bucket: phoebis_ledger::bucket_of(end - DAY),
+                window: "seven_day".into(),
+                utilization: Some(0.8),
+                reset_at: Some(end + 2 * DAY),
+                source: "poll".into(),
+                observed_at: Some(end - DAY),
+            }],
+            None,
+        )
+        .unwrap();
+    let read = |query: String| {
+        let app = parts.app.clone();
+        let cookie = cookie.clone();
+        async move {
+            json(
+                get(
+                    &app,
+                    &format!("/admin/analytics/unused_allowance{query}"),
+                    Some(&cookie),
+                )
+                .await,
+            )
+            .await
+        }
+    };
+    let reset = |reset_at: i64, share_left: f64, observed_at: i64, source: &str| {
+        serde_json::json!({
+            "reset_at": reset_at,
+            "share_left": share_left,
+            "observed_at": observed_at,
+            "source": source,
+        })
+    };
+    let business = serde_json::json!({
+        "account_id": "business",
+        "plan": "max_20x",
+        "tier": "default_claude_max_20x",
+        "windows": [
+            {
+                "window": "seven_day",
+                "resets": [
+                    reset(now - 13 * DAY, 1.0 - 0.9, now - 13 * DAY, "clock"),
+                    reset(now - 20 * DAY, 1.0 - 0.62, now - 20 * DAY, "sample"),
+                ],
+                "total_share_left": (1.0 - 0.9) + (1.0 - 0.62),
+                "resets_counted": 2,
+            },
+            {
+                "window": "seven_day_fable",
+                "resets": [reset(now - 6 * DAY, 1.0 - 0.3, now - 6 * DAY, "sample")],
+                "total_share_left": 1.0 - 0.3,
+                "resets_counted": 1,
+            },
+        ],
+    });
+    let second = serde_json::json!({
+        "account_id": "second",
+        "plan": "pro",
+        "tier": "default_claude_ai",
+        "windows": [{
+            "window": "seven_day",
+            "resets": [
+                reset(end, 1.0 - 0.8, end - DAY, "term_ended"),
+                reset(now - 12 * DAY, 1.0 - 0.4, now - 12 * DAY, "sample"),
+            ],
+            "total_share_left": (1.0 - 0.8) + (1.0 - 0.4),
+            "resets_counted": 2,
+        }],
+    });
+    let every = read(String::new()).await;
+    assert_eq!(keys_in_order(&every), ["from", "to", "accounts"], "{every}");
+    assert_eq!(
+        every,
+        serde_json::json!({
+            "from": now - 30 * DAY,
+            "to": now,
+            "accounts": [business, second],
+        }),
+        "the trailing 30 days by default, one entry per subscription account with a weekly reset in range, its plan \
+         and tier from the registry, the term end read as a reset of the week it cut short"
+    );
+    assert_eq!(
+        keys_in_order(&every["accounts"][0]),
+        ["account_id", "plan", "tier", "windows"],
+        "{every}"
+    );
+    let narrowed = read("?accounts=second".into()).await;
+    assert_eq!(
+        narrowed["accounts"],
+        serde_json::json!([second]),
+        "the account filter keeps the named accounts"
+    );
+    let billed = read("?accounts=direct".into()).await;
+    assert_eq!(
+        billed["accounts"],
+        serde_json::json!([]),
+        "an API key account has no weekly allowance, so naming it answers no account"
+    );
+    let wider = read(format!("?range={},{now}&accounts=business", now - 45 * DAY)).await;
+    assert_eq!(
+        (wider["from"].as_i64(), wider["to"].as_i64()),
+        (Some(now - 45 * DAY), Some(now)),
+        "a custom range answers its own bounds"
+    );
+    assert_eq!(
+        wider["accounts"][0]["windows"][0]["resets_counted"], 3,
+        "the wider range takes the older reset in"
+    );
+    let bad = get(
+        &parts.app,
+        "/admin/analytics/unused_allowance?range=2d",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(bad.status(), 400);
+    assert_eq!(
+        json(bad).await["error"],
+        "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"
+    );
+}
+
+#[tokio::test]
+async fn a_trial_end_that_passed_in_range_ends_a_week_only_where_the_plan_ended_flag_followed_it() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    const DAY: i64 = 24 * HOUR;
+    let trial_end = now - 10 * DAY;
+    let document = serde_json::json!({
+        "organization": {
+            "organization_type": "claude_pro",
+            "rate_limit_tier": "default_claude_ai",
+            "claude_code_trial_ends_at": jiff::Timestamp::from_millisecond(trial_end).unwrap().to_string(),
+        },
+    })
+    .to_string();
+    parts
+        .store
+        .set_profile(
+            "business",
+            &document,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_ai".into()),
+                trial_ends_at: Some(trial_end),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    parts.router.reload().await.unwrap();
+    // The week open at the trial's end resets two days after it, and the plan carries on.
+    let week_reset = trial_end + 2 * DAY;
+    parts
+        .db
+        .insert_event(&EventRecord {
+            at: week_reset,
+            kind: "window_reset".into(),
+            account_id: Some("business".into()),
+            detail: Some(
+                serde_json::json!({
+                    "window": "seven_day",
+                    "utilization_before": 0.6,
+                    "reset_at": week_reset,
+                    "next_reset": week_reset + 7 * DAY,
+                    "observed": "sample",
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        })
+        .unwrap();
+    let flagged = now - 5 * DAY;
+    parts
+        .db
+        .insert_samples(
+            &[
+                (trial_end - DAY, 0.35, week_reset),
+                (flagged - DAY, 0.25, week_reset + 7 * DAY),
+            ]
+            .map(|(observed_at, utilization, reset_at)| {
+                phoebis_ledger::QuotaSampleRecord {
+                    account_id: "business".into(),
+                    bucket: phoebis_ledger::bucket_of(observed_at),
+                    window: "seven_day".into(),
+                    utilization: Some(utilization),
+                    reset_at: Some(reset_at),
+                    source: "poll".into(),
+                    observed_at: Some(observed_at),
+                }
+            }),
+            None,
+        )
+        .unwrap();
+    let (app, cookie) = (&parts.app, cookie.as_str());
+    let read = move || async move {
+        json(get(app, "/admin/analytics/unused_allowance", Some(cookie)).await).await
+    };
+    let reset = |reset_at: i64, share_left: f64, observed_at: i64, source: &str| {
+        serde_json::json!({
+            "reset_at": reset_at,
+            "share_left": share_left,
+            "observed_at": observed_at,
+            "source": source,
+        })
+    };
+    let carried_on = read().await;
+    assert_eq!(
+        carried_on["accounts"],
+        serde_json::json!([{
+            "account_id": "business",
+            "plan": "pro",
+            "tier": "default_claude_ai",
+            "windows": [{
+                "window": "seven_day",
+                "resets": [reset(week_reset, 1.0 - 0.6, week_reset, "sample")],
+                "total_share_left": 1.0 - 0.6,
+                "resets_counted": 1,
+            }],
+        }]),
+        "a trial end that passed while the plan carried on ends no week, and the later reset stays"
+    );
+    parts.store.set_plan_ended("business", flagged).unwrap();
+    parts.router.reload().await.unwrap();
+    let ended = read().await;
+    assert_eq!(
+        ended["accounts"][0]["windows"],
+        serde_json::json!([{
+            "window": "seven_day",
+            "resets": [
+                reset(flagged, 1.0 - 0.25, flagged - DAY, "term_ended"),
+                reset(week_reset, 1.0 - 0.6, week_reset, "sample"),
+            ],
+            "total_share_left": (1.0 - 0.25) + (1.0 - 0.6),
+            "resets_counted": 2,
+        }]),
+        "the plan-ended flag ends the week it falls in at the flag's instant"
+    );
+}
+
+/// A term that ended before the range still drops the resets announced after it. The clock walk announces the reset of
+/// the week the stored reading names two days after the end, and a range that starts a day past the end lists no
+/// entry for the account, while the 30-day range that holds the end lists the `term_ended` row in its place.
+#[tokio::test]
+async fn a_term_end_before_the_range_still_drops_the_resets_after_it() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    const DAY: i64 = 24 * HOUR;
+    let end = now - 3 * DAY;
+    parts
+        .store
+        .set_canceled("business", true, Some(end))
+        .unwrap();
+    parts.router.reload().await.unwrap();
+    let week_reset = end + 2 * DAY;
+    parts
+        .db
+        .insert_samples(
+            &[phoebis_ledger::QuotaSampleRecord {
+                account_id: "business".into(),
+                bucket: phoebis_ledger::bucket_of(end - DAY),
+                window: "seven_day".into(),
+                utilization: Some(0.8),
+                reset_at: Some(week_reset),
+                source: "poll".into(),
+                observed_at: Some(end - DAY),
+            }],
+            None,
+        )
+        .unwrap();
+    parts
+        .db
+        .insert_event(&EventRecord {
+            at: week_reset,
+            kind: "window_reset".into(),
+            account_id: Some("business".into()),
+            detail: Some(
+                serde_json::json!({
+                    "window": "seven_day",
+                    "utilization_before": 0.8,
+                    "reset_at": week_reset,
+                    "next_reset": null,
+                    "observed": "clock",
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        })
+        .unwrap();
+    let read = |query: String| {
+        let app = parts.app.clone();
+        let cookie = cookie.clone();
+        async move {
+            json(
+                get(
+                    &app,
+                    &format!("/admin/analytics/unused_allowance{query}"),
+                    Some(&cookie),
+                )
+                .await,
+            )
+            .await
+        }
+    };
+    let after_end = read(format!("?range={},{now}", end + DAY)).await;
+    assert_eq!(
+        after_end["accounts"],
+        serde_json::json!([]),
+        "a range that starts a day past the end lists no reset of the ended account: {after_end}"
+    );
+    let thirty = read(String::new()).await;
+    assert_eq!(
+        (
+            &thirty["accounts"][0]["account_id"],
+            &thirty["accounts"][0]["windows"],
+        ),
+        (
+            &serde_json::json!("business"),
+            &serde_json::json!([{
+                "window": "seven_day",
+                "resets": [{
+                    "reset_at": end,
+                    "share_left": 1.0 - 0.8,
+                    "observed_at": end - DAY,
+                    "source": "term_ended",
+                }],
+                "total_share_left": 1.0 - 0.8,
+                "resets_counted": 1,
+            }]),
+        ),
+        "the 30-day range holds the end and lists its row in place of the clock reset: {thirty}"
+    );
+}
+
+#[tokio::test]
+async fn a_canceled_end_still_ahead_of_now_ends_no_week_in_a_range_that_reaches_past_it() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    const DAY: i64 = 24 * HOUR;
+    let end = now + 3 * HOUR;
+    parts
+        .store
+        .set_canceled("business", true, Some(end))
+        .unwrap();
+    parts.router.reload().await.unwrap();
+    let reset_at = now - 3 * DAY;
+    parts
+        .db
+        .insert_event(&EventRecord {
+            at: reset_at,
+            kind: "window_reset".into(),
+            account_id: Some("business".into()),
+            detail: Some(
+                serde_json::json!({
+                    "window": "seven_day",
+                    "utilization_before": 0.5,
+                    "reset_at": reset_at,
+                    "next_reset": reset_at + 7 * DAY,
+                    "observed": "sample",
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        })
+        .unwrap();
+    // A reading of the week the end will cut short.
+    parts
+        .db
+        .insert_samples(
+            &[phoebis_ledger::QuotaSampleRecord {
+                account_id: "business".into(),
+                bucket: phoebis_ledger::bucket_of(now - DAY),
+                window: "seven_day".into(),
+                utilization: Some(0.7),
+                reset_at: Some(reset_at + 7 * DAY),
+                source: "poll".into(),
+                observed_at: Some(now - DAY),
+            }],
+            None,
+        )
+        .unwrap();
+    let answer = json(
+        get(
+            &parts.app,
+            &format!(
+                "/admin/analytics/unused_allowance?range={},{}",
+                now - 30 * DAY,
+                now + DAY / 2
+            ),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            &answer["accounts"][0]["account_id"],
+            &answer["accounts"][0]["windows"],
+        ),
+        (
+            &serde_json::json!("business"),
+            &serde_json::json!([{
+                "window": "seven_day",
+                "resets": [{
+                    "reset_at": reset_at,
+                    "share_left": 1.0 - 0.5,
+                    "observed_at": reset_at,
+                    "source": "sample",
+                }],
+                "total_share_left": 1.0 - 0.5,
+                "resets_counted": 1,
+            }]),
+        ),
+        "an end past `now` ends no week yet, though the range reaches past it: {answer}"
     );
 }
 
@@ -4511,6 +5122,7 @@ fn select_request(
         folded_model: "claude-sonnet-5".into(),
         candidates,
         portable: true,
+        credit_account: None,
         attempted: Vec::new(),
         now: at,
         received_at: at,
@@ -5294,6 +5906,7 @@ async fn select_s1(
             folded_model: "claude-sonnet-5".into(),
             candidates,
             portable: true,
+            credit_account: None,
             attempted: attempted.iter().map(|a| a.to_string()).collect(),
             now: at,
             received_at: at,
