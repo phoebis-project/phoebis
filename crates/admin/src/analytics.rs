@@ -1199,7 +1199,8 @@ pub(crate) struct UnusedAllowance {
 #[serde(deny_unknown_fields)]
 pub(crate) struct UnusedAllowanceAccount {
     pub account_id: String,
-    /// The account's resolved plan word as `subscription.plan` answers it, null while no profile document stands.
+    /// The account's resolved plan word as `subscription.plan` answers it, null while no stored document and no tier
+    /// the table names stand.
     pub plan: Option<String>,
     /// The stored rate-limit tier, null as on the account.
     pub tier: Option<String>,

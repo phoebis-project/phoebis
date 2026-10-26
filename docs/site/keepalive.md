@@ -297,11 +297,11 @@ that fails or is canceled leaves the last answered recipe armed on its schedule 
 row reading `retained` under the request's own word and `not_retained` where none was, while a rejected request pauses
 it. A gate's hold that lands on a paused recipe at a later tick (`budget`, `cooled`, `ineligible_credential` or
 `paused`) re-arms nothing, so the row stays `paused` with the hold's cause until the next real request. The paused
-prompt itself leaves when its entry goes cold: at the entry's expiry the engine drops it, settles its unanswered probes
-under `expired` and sends nothing, and the row still reads `paused`. The same hold on an armed recipe reads `held`,
-since the gate reads it again at every tick and probing resumes when it clears. A recipe held on a disabled pool reads
-`retained` again at the first tick after the pool is enabled. A `held` or `retained` cause reads `not_retained` when the
-agent holds no prompt, as a request refused at its account selection does.
+prompt itself leaves when its entry goes cold: at the entry's expiry the engine drops it, writes off its probes under
+`expired`, each as its chain's last entry ends, and sends nothing, and the row still reads `paused`. The same hold on an
+armed recipe reads `held`, since the gate reads it again at every tick and probing resumes when it clears. A recipe held
+on a disabled pool reads `retained` again at the first tick after the pool is enabled. A `held` or `retained` cause
+reads `not_retained` when the agent holds no prompt, as a request refused at its account selection does.
 
 A session's recipes end together when the session does. A `session_end` report, a registration that replaces the
 instance, the session's own expiry and an operator's release each discard every recipe of the session at once, and the
@@ -329,16 +329,18 @@ the lead: the session could move away from the account the probe would warm, so 
 A five-minute recipe needs about four minutes of pin and a one-hour recipe about fifty-four, and the 300-second floor
 that `keepalive.enabled` asks of the pool when it is saved stays the one refusal.
 
-An entry the engine knows has expired is never probed: its recipe ends under `expired`, its unanswered probes are
-settled wasted, and the engine logs one line naming the key, the agent, the expiry and how late the tick was. A recipe
-held under any other reason, a gate's hold among them (`affinity_too_short`, `budget`, `cooled`, `overage`, `paused` or
-`reauth`), leaves as `expired` once its entry has expired, and the next real request starts a new one. A recipe held
-under `horizon` or on a disabled pool leaves the same way, and one reopened or enabled again while its entry is warm
-probes on. While the request a recipe follows is still open, the lapse waits for its completion. At the retained-bytes
-cap the engine evicts before it refuses: unattended sessions' agents first, oldest activity first, then attended
-sessions' idle agents, never one with a probe or a request in flight. A lapsed or evicted recipe reads `ended`, as one
-stopped under `idle_limit` does, and shows on the wasted counter at once, while the probes of one stopped under
-`idle_limit` reach it as their entries lapse with no real request. A lapse also shows in that log line.
+An entry the engine knows has expired is never probed: its recipe ends under `expired`, its probes are written off, each
+at once or, where a probe sent while a request was open keeps its chain alive, at the chain's end, and the engine logs
+one line naming the key, the agent, the expiry and how late the tick was. A recipe held under any other reason, a gate's
+hold among them (`affinity_too_short`, `budget`, `cooled`, `overage`, `paused` or `reauth`), leaves as `expired` once
+its entry has expired, and the next real request starts a new one. A recipe held under `horizon` or on a disabled pool
+leaves the same way, and one reopened or enabled again while its entry is warm probes on. While the request a recipe
+follows is still open, the lapse waits for its completion. At the retained-bytes cap the engine evicts before it
+refuses: unattended sessions' agents first, oldest activity first, then attended sessions' idle agents, never one with a
+probe or a request in flight. A lapsed or evicted recipe reads `ended`, as one stopped under `idle_limit` does. An
+evicted one shows on the wasted counter at once, while the probes of a lapsed one reach it at once where their chains
+have ended and otherwise as their chains' last entries lapse with no real request, as the probes of one stopped under
+`idle_limit` do. A lapse also shows in that log line.
 
 A probe answered `429 accounts_at_cap`, every account of its pool at the in-flight cap, is held under
 `retryable_probe_error`: its next attempt waits out that answer's `Retry-After` in place of the ladder's step, whatever
