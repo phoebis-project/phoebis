@@ -736,7 +736,7 @@ export interface Usage {
   webSearch: number;
 }
 
-/** What the request asked for, read off its body; `null` where the body carried no such member. */
+/** What the request asked for, read off its body, and `null` where the body carried no such member. */
 export interface RequestShape {
   contextEdits: string[];
   effort: string | null;
@@ -773,7 +773,7 @@ export type CostShares = Record<string, number | null>;
 export interface RequestLog {
   accountId: string | null;
   agentId: string | null;
-  /** `x-claude-code-agent-type` as the client sent it; `null` when it sent none. */
+  /** `x-claude-code-agent-type` as the client sent it, and `null` when it sent none. */
   agentType: string | null;
   at: string;
   attempts: Attempt[];
@@ -783,12 +783,12 @@ export interface RequestLog {
   capturedBodies: boolean;
   /** `client` for the client's own auto-mode classifier call, which takes no share of a plan window, and `null` otherwise. */
   classifier: 'client' | null;
-  /** The class the router derived at admission: `claude-code/<entrypoint>` or `other`; `null` on a row from before the
-   * router recorded it. */
+  /** The class the router derived at admission: `claude-code/<entrypoint>` or `other`, and `null` on a row from before
+   * the router recorded it. */
   client: string | null;
   /** The item a `client_contract` refusal named, and `null` for every other request. */
   clientContract: string | null;
-  /** The kind a client-drift refusal answered with (`hash` or `version_suffix`); `null` for every other request. */
+  /** The kind a client-drift refusal answered with (`hash` or `version_suffix`), and `null` for every other request. */
   clientDrift: string | null;
   compaction: string | null;
   contextCompacted: string | null;
@@ -828,7 +828,7 @@ export interface RequestLog {
   prevToolMs: number | null;
   /** The router refused the request before any account was asked, so the figures leave it out and the logs list it. */
   refused: boolean;
-  /** `x-claude-code-request-class` as the client sent it; `null` when it sent none. */
+  /** `x-claude-code-request-class` as the client sent it, and `null` when it sent none. */
   requestClass: string | null;
   requestTruncated: boolean;
   responseTruncated: boolean;
@@ -849,7 +849,7 @@ export interface RequestLog {
   /** `cc_turn_origin` off the attribution line; first-party only. */
   turnOrigin: string | null;
   usage: Usage;
-  /** The client that sent the request, as it named itself; `null` when it named nothing. */
+  /** The client that sent the request, as it named itself, and `null` when it named nothing. */
   userAgent: string | null;
 }
 
