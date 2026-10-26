@@ -4816,6 +4816,45 @@ m.unmount();
     missing: [`${polled} after the poll, ${refreshed} after Refresh, ${moved} after the reset`, ...reads.calls.map((c) => JSON.stringify(c))],
   });
   watched.unmount();
+
+  // The route lists the term's end once the router reloads the account, so an end saved a day behind the clock inside
+  // primary's current week reads the block again with no Refresh, its 7-day week now left at the end. The smoke runs
+  // under TZ=UTC, so the end's minute is the field's own and reads its UTC text.
+  const edited = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  const identity = () => [...edited.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+  const identityButton = (label) => [...(identity()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === label);
+  const typed = new Date(CLOCK_ORIGIN - 24 * 3_600_000).toISOString().slice(0, 16);
+  const endAt = Date.parse(`${typed}:00.000Z`);
+  const weekStart = Date.parse(primary.windows.find((w) => w.id === '7d').resetsAt) - WEEK;
+  const endReads = countCalls('getAnalyticsUnusedAllowance');
+  identityButton('Edit end')?.click();
+  await edited.settle(100);
+  identity()?.querySelector('label.row input[type="checkbox"]')?.click();
+  await edited.settle(100);
+  const endField = identity()?.querySelector('input[type="datetime-local"]') ?? null;
+  if (endField !== null) {
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(endField, typed);
+    endField.dispatchEvent(new window.Event('input', { bubbles: true }));
+  }
+  await edited.settle(100);
+  identityButton('Save')?.click();
+  await edited.settle(600);
+  const afterEnd = { reads: endReads.calls.length, reset: blockOf(edited)?.columns[0]?.reset ?? null, resetBadge: blockOf(edited)?.columns[0]?.resetBadge ?? null };
+  endReads.restore();
+  // Cleared again, so every later check reads the story as it was.
+  identityButton('Edit end')?.click();
+  await edited.settle(100);
+  identity()?.querySelector('label.row input[type="checkbox"]')?.click();
+  await edited.settle(80);
+  identityButton('Save')?.click();
+  await edited.settle(600);
+  const restored = (await api.listAccounts()).find((a) => a.id === 'primary');
+  edited.unmount();
+  results.push({
+    name: '/accounts/primary the allowance block reads again after the term end moves, its 7-day week left at the end with the "term ended" badge, with no Refresh',
+    ok: endAt > weekStart && endAt < CLOCK_ORIGIN && afterEnd.reads === 1 && afterEnd.reset === `left at ${instantOf(endAt)} term ended` && afterEnd.resetBadge === 'term ended' && restored?.canceled === false && restored?.subscription?.endsAt === null,
+    missing: [`the end ${typed} after the week's start ${new Date(weekStart).toISOString()}`, JSON.stringify(afterEnd), `restored canceled ${restored?.canceled}, ends ${restored?.subscription?.endsAt}`],
+  });
 }
 {
   // "Meter drift" over the mock's reconciled windows (`RECONCILIATIONS` in mock/analytics.ts), second in the grid beside

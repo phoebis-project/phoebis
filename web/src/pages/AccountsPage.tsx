@@ -277,12 +277,14 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
   // An API-key account and a usage-based seat report no weekly window, so neither draws the block nor reads its route.
   const allowanceShown = account.kind === 'oauth' && !account.usageBased;
   // A weekly row changes once a week, so the block reads again on the bar's Refresh and once the list's poll answers a
-  // weekly window past its reset, never at the list's cadence.
+  // weekly window past its reset, never at the list's cadence. The route ends the week at the term's end, which moves
+  // with a saved or cleared end and with the plan-ended flag while the windows keep their resets, so those read again
+  // too. A trial end needs none, since the route lists it once the flag follows it.
   const weeklyResetsAt = [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])]
     .filter((w) => w.periodHours === WINDOW_HOURS['7d'])
     .map((w) => w.resetsAt ?? '')
     .join(',');
-  const allowance = useAsync(() => (allowanceShown ? api.getAnalyticsUnusedAllowance(allowanceSpan(clock.now()), { accountIds: [account.id] }) : Promise.resolve(null)), [account.id, generation, weeklyResetsAt]);
+  const allowance = useAsync(() => (allowanceShown ? api.getAnalyticsUnusedAllowance(allowanceSpan(clock.now()), { accountIds: [account.id] }) : Promise.resolve(null)), [account.id, generation, weeklyResetsAt, account.canceled, account.subscription?.endsAt ?? null, account.planEndedAt]);
   // The ledger reconciles hourly, so the drift card reads once per account and on the bar's Refresh, never at the list's
   // cadence, and it reconciles plan windows alone, which neither an API-key account nor a seat reports.
   const drift = useAsync(() => (allowanceShown ? api.getAnalyticsReconciliations({ accountIds: [account.id] }) : Promise.resolve(null)), [account.id, generation]);
