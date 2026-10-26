@@ -360,7 +360,7 @@ under its own reason.
 A wasted probe settles on its own with one of nine reasons: when the recipe stops with a probe unanswered (at the idle
 limit, once the last entry of the probe's [chain](#which-requests-re-arm-a-recipe) lapses before a real request reads
 it) or is held under `horizon`, when the recipe is evicted, or lapses with the probe's chain ended (a lapsed recipe's
-probe whose chain is still alive settles as the idle-limit clause says, once the chain's last entry lapses with no real
+probe whose chain is still alive settles like a probe at the idle limit, once the chain's last entry lapses with no real
 request), or when the next request after the probe reads nothing from the entry its chain kept:
 
 | Reason | What settles it |
