@@ -177,6 +177,7 @@ export const REQUESTS_DIMENSIONS: Dimension[] = [
   { field: 'guardrails', group: 'Outcome', kind: 'list', label: 'Guardrail', word: 'guardrail' },
   { field: 'held', group: 'Outcome', kind: 'flag', label: 'Held only', word: 'held only' },
   { field: 'outcomes', group: 'Outcome', kind: 'list', label: 'Outcome', word: 'outcome' },
+  { field: 'refusalCategories', group: 'Outcome', kind: 'list', label: 'Refusal category', mono: true, word: 'refusal category' },
   {
     field: 'statuses',
     group: 'Outcome',
@@ -188,6 +189,7 @@ export const REQUESTS_DIMENSIONS: Dimension[] = [
     },
     word: 'status',
   },
+  { field: 'stopReasons', group: 'Outcome', kind: 'list', label: 'Stop reason', mono: true, word: 'stop reason' },
   { field: 'agentTypes', group: 'Request', kind: 'list', label: 'Agent type', mono: true, word: 'agent type' },
   {
     field: 'classifiers',

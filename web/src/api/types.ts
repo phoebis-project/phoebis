@@ -645,6 +645,11 @@ export interface AttemptResponse {
   stopSequence: string | null;
 }
 
+/** The stop reasons the console names, as the API spells them. The router stores whatever word the answer carried. */
+export const STOP_REASONS = ['end_turn', 'max_tokens', 'model_context_window_exceeded', 'pause_turn', 'refusal', 'stop_sequence', 'tool_use'] as const;
+/** The refusal categories the console names. The router stores whatever word the answer carried. */
+export const REFUSAL_CATEGORIES = ['cyber'] as const;
+
 /** A candidate the selection passed over, with the obstacle in its way as the router named it. */
 export interface SkippedCandidate {
   accountId: string;
@@ -942,6 +947,8 @@ export interface RequestQuery {
   models?: string[];
   outcomes?: RequestOutcome[];
   poolIds?: string[];
+  /** The serving attempt's refusal category, `-` for none. */
+  refusalCategories?: string[];
   /** The one request whose id equals the value. */
   request?: string;
   /** The class as the rollups fold it: the class, `-` or `other`. */
@@ -952,6 +959,8 @@ export interface RequestQuery {
   /** `fast`, `standard`: the serving attempt's speed, else `fast` for a request that asked for it. */
   speeds?: string[];
   statuses?: number[];
+  /** The serving attempt's stop reason, `-` for a request none served or whose attempt carries none. */
+  stopReasons?: string[];
   to?: string;
   turnOrigins?: string[];
   /** A pattern: `*` any run, `?` one character, a backslash quotes either. An empty string is no filter at all. */
@@ -1670,6 +1679,18 @@ export interface HeldPoint {
   at: string;
   heldMs: number;
   requests: number;
+}
+
+/** One category's refused answers in range, as `GET /admin/analytics/refusal_categories` answers them, `-` for none. */
+export interface RefusalCategoryRow {
+  category: string;
+  requests: number;
+}
+
+export interface RefusalCategoriesAnswer {
+  from: string;
+  rows: RefusalCategoryRow[];
+  to: string;
 }
 
 /** The rewrites route's answer: the moves by reason, and by reason and destination fit, over the range. */

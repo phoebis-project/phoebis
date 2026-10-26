@@ -40,6 +40,22 @@ test('the mock keeps a request under the cache miss reason of its serving attemp
   assert.deepEqual(await listed({ cacheMissReasons: ['none'] }), ids(expected));
 });
 
+test("the mock keeps a request under its serving attempt's stop reason and refusal category, the dash for none, as the route does", async () => {
+  const served = (r) => r.attempts.at(-1)?.response ?? null;
+  const refused = unprobed.filter((r) => served(r)?.stopReason === 'refusal');
+  narrowed(refused, 'whose serving attempt the upstream refused');
+  assert.deepEqual(await listed({ stopReasons: ['refusal'] }), ids(refused));
+  const cyber = unprobed.filter((r) => served(r)?.refusalCategory === 'cyber');
+  narrowed(cyber, 'refused under cyber');
+  assert.deepEqual(await listed({ refusalCategories: ['cyber'] }), ids(cyber));
+  const uncategorized = unprobed.filter((r) => (served(r)?.refusalCategory ?? null) === null);
+  narrowed(uncategorized, 'with no refusal category or no serving attempt');
+  assert.deepEqual(await listed({ refusalCategories: ['-'] }), ids(uncategorized));
+  const bare = refused.filter((r) => served(r).refusalCategory === null);
+  assert.equal(bare.length, 1, 'the story holds one refusal the upstream gave no category');
+  assert.deepEqual(await listed({ refusalCategories: ['-'], stopReasons: ['refusal'] }), ids(bare));
+});
+
 test('the mock keeps a request under its effort folded as the rollups file it', async () => {
   const expected = unprobed.filter((r) => r.shape.effort === null);
   narrowed(expected, 'without an effort');

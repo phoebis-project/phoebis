@@ -34,6 +34,7 @@ import type {
   PoolStrategy,
   QuotaHistory,
   ReconciliationsAnswer,
+  RefusalCategoriesAnswer,
   ReplayOutcome,
   RequestDetail,
   RequestPage,
@@ -223,6 +224,8 @@ export interface Api {
   getAnalyticsGuardrails(range: GuardrailRange): Promise<GuardrailCounts>;
   /** The route reads the Accounts filter alone: its windows are the trailing 30 days, whatever the page's range. */
   getAnalyticsReconciliations(filters?: Pick<AnalyticsQuery, 'accountIds'>): Promise<ReconciliationsAnswer>;
+  /** The answers the upstream refused in range by category, read off the attempts at the request, the outcome staying succeeded. */
+  getAnalyticsRefusalCategories(query: AnalyticsQuery): Promise<RefusalCategoriesAnswer>;
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>): Promise<RewritesAnswer>;
   /** `funding` keeps the billed or the plan-funded rows. Under the account grouping each point's subscription groups carry their shares. */
   getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;

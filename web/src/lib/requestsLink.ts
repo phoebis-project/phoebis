@@ -7,10 +7,12 @@ import { aroundRequest, aroundSubject, clockMinute, type LogWindow } from './rou
 
 export interface RequestsLinkInput {
   /** The reason the count is under, any name the beta sent. */
-  reason: string;
+  reason?: string;
+  /** The category of the upstream's refusals the count is under, `-` for a refusal with none. */
+  refusalCategory?: string;
   count: number;
-  /** The panel's window in milliseconds and the page's now. A session view, whose log read the exact window, sets
-   * `exact`, and otherwise the rollups' whole hours apply. */
+  /** The panel's window in milliseconds and the page's now. `exact` keeps the window as given, for a session view whose
+   * log read it and a refusal count whose route counted it, and otherwise the rollups' whole hours apply. */
   window: { fromMs: number; toMs: number; nowMs: number; exact: boolean };
   /** The Analytics page's filters the Requests page reads the same way. */
   filters: {
@@ -83,16 +85,17 @@ export function linkedKeyIds(selected: string[], sessionKey: string | null): str
 }
 
 /**
- * The Requests address for a count of the cache miss reasons panel: `cache_miss_reasons` set to the reason, the window
- * as two ISO instants (the start of the hour holding the panel's start to one millisecond before the hour ceiling of
- * its end, capped at now, or the exact window for a session view), the page's selections as `accounts`, `keys`,
- * `models` and `pools`, the class pattern as `client`, a session id as `session`, and a breakdown row's group as its
- * own filter: `accounts`, `classifiers`, `client`, `efforts`, `keys`, `kind`, `models`, `pools`, `request_classes` or
- * `speeds`. A client group keyed `other`, or keyed with a class the rollups would fold, answers no address, and outside
- * the client grouping neither does a class pattern that matches `other`, unless it is stars alone, which matches the
- * raw and the folded alike.
+ * The Requests address for a count of the cache miss reasons panel or the refusals card: `cache_miss_reasons` set to
+ * the reason where one is given, `stop_reasons` set to `refusal` and `refusal_categories` to the category where one is
+ * given, the window as two ISO instants (the start of the hour holding the panel's start to one millisecond before the
+ * hour ceiling of its end, capped at now, or the exact window where `exact` is set), the page's selections as
+ * `accounts`, `keys`, `models` and `pools`, the class pattern as `client`, a session id as `session`, and a breakdown
+ * row's group as its own filter: `accounts`, `classifiers`, `client`, `efforts`, `keys`, `kind`, `models`, `pools`,
+ * `request_classes` or `speeds`. A client group keyed `other`, or keyed with a class the rollups would fold, answers
+ * no address, and outside the client grouping neither does a class pattern that matches `other`, unless it is stars
+ * alone, which matches the raw and the folded alike.
  */
-export function requestsLink({ count, filters, group, reason, window }: RequestsLinkInput): RequestsLinkTarget {
+export function requestsLink({ count, filters, group, reason, refusalCategory, window }: RequestsLinkInput): RequestsLinkTarget {
   if (count === 0) return { href: null, title: NOTHING_TO_LIST };
   if (filters.userAgentPattern !== '') return { href: null, title: AGENT_PATTERN_PLAIN };
   if (group?.by === 'user_agent') return { href: null, title: AGENT_GROUP_PLAIN };
@@ -103,13 +106,15 @@ export function requestsLink({ count, filters, group, reason, window }: Requests
   const address: RequestsAddress = {
     ...REQUESTS_CODEC.fromParams(new URLSearchParams()),
     accounts: filters.accountIds,
-    cacheMissReasons: [reason],
+    cacheMissReasons: reason === undefined ? [] : [reason],
     client: filters.clientPattern,
     keys: filters.keyIds,
     models: filters.models,
     pools: filters.poolIds,
     range: { from: iso(from), preset: 'custom', to: iso(to) },
+    refusalCategories: refusalCategory === undefined ? [] : [refusalCategory],
     session: filters.sessionId ?? '',
+    stopReasons: refusalCategory === undefined ? [] : ['refusal'],
   };
   // The row is one value inside the page's selection of its own dimension, so it takes that selection's place.
   if (group !== undefined && group.by !== 'all') {
@@ -120,6 +125,13 @@ export function requestsLink({ count, filters, group, reason, window }: Requests
   }
   const probes = group?.by === 'kind' && group.key === 'probe';
   return { href: `/requests?${REQUESTS_CODEC.toParams(address)}`, title: filters.includeProbes && !probes ? LISTED_WITHOUT_PROBES : LISTED };
+}
+
+/** A count of the refusals card: its category's refused answers over the exact window the route counted, since the
+ *  route reads the attempts at the request rather than the rollups' whole hours, and with no session, since the
+ *  route's query carries no session selector. */
+export function refusalLink(input: Omit<RequestsLinkInput, 'count' | 'group' | 'reason' | 'refusalCategory'>, category: string, count: number): RequestsLinkTarget {
+  return requestsLink({ ...input, count, filters: { ...input.filters, sessionId: null }, refusalCategory: category, window: { ...input.window, exact: true } });
 }
 
 /** One link of the drawer's "Widen to" line. */

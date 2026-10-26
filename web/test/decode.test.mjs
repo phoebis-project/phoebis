@@ -764,6 +764,18 @@ test('the rewrites answer decodes its held points, and an answer without them re
   assert.deepEqual(d.decodeRewrites(before).held, [], 'an answer from before the member reads none');
 });
 
+test("the refusal categories answer keeps the route's rows in order with the dash as sent, and a serving attempt carries its stop reason and category", () => {
+  const from = 1_791_633_600_000;
+  const to = from + 86_400_000;
+  const rows = [{ category: 'cyber', requests: 3 }, { category: '-', requests: 1 }];
+  assert.deepEqual(d.decodeRefusalCategories({ from, rows, to }), { from: new Date(from).toISOString(), rows, to: new Date(to).toISOString() });
+  const wire = fixture('request').request;
+  const last = wire.attempts.length - 1;
+  const refused = { ...wire, attempts: wire.attempts.map((a, i) => (i === last ? { ...a, response: { ...a.response, refusal_category: null, stop_reason: 'refusal' } } : a)) };
+  const { response } = d.decodeRequest(refused).attempts.at(-1);
+  assert.deepEqual([response.stopReason, response.refusalCategory], ['refusal', null], 'the chip reads both off the serving attempt');
+});
+
 test('a candidate decodes its fit figures and an outcome its reservation and its hold\'s reason', () => {
   const body = fixture('decision');
   const [wire] = body.candidates;

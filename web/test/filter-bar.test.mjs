@@ -63,6 +63,19 @@ test('the status chip prints the codes alone, with the labels in its title', () 
   assert.deepEqual(chip, { field: 'statuses', label: 'status', mono: false, text: 'status: 429, 500', title: '429 Rate limited, 500 Server error', values: '429, 500' });
 });
 
+test('the Stop reason and Refusal category chips print their option labels, none for the dash, in the Outcome group', () => {
+  assert.deepEqual(
+    d.REQUESTS_DIMENSIONS.filter((x) => x.group === 'Outcome').map((x) => x.label),
+    ['Cache miss reason', 'Guardrail', 'Held only', 'Outcome', 'Refusal category', 'Status', 'Stop reason'],
+    'the group in alphabetical order',
+  );
+  const options = { refusalCategories: [{ label: 'cyber', value: 'cyber' }, { label: 'none', value: '-' }], stopReasons: [{ label: 'refusal', value: 'refusal' }, { label: 'none', value: '-' }] };
+  assert.deepEqual(d.chipsOf(d.REQUESTS_DIMENSIONS, { refusalCategories: ['cyber'], stopReasons: ['refusal', '-'] }, options), [
+    { field: 'refusalCategories', label: 'refusal category', mono: true, text: 'refusal category: cyber', title: 'cyber', values: 'cyber' },
+    { field: 'stopReasons', label: 'stop reason', mono: true, text: 'stop reason: refusal, none', title: 'refusal, none', values: 'refusal, none' },
+  ]);
+});
+
 test("a dimension's own text supplies the values the chip carries, whatever its text reads", () => {
   const kinds = { field: 'kinds', group: 'Kinds', kind: 'list', label: 'Kinds', text: (value) => ({ text: value.join(', '), title: value.join(', '), values: value.join(', ') }), word: 'kinds' };
   assert.deepEqual(d.chipsOf([kinds], { kinds: ['moved', 'held'] }, {}), [{ field: 'kinds', label: 'kinds', mono: false, text: 'moved, held', title: 'moved, held', values: 'moved, held' }]);

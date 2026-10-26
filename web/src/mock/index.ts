@@ -17,7 +17,7 @@ import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { isFastScope } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, usageOf } from './accounts';
-import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, rewritesOf, seriesOf } from './analytics';
+import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf } from './analytics';
 import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
@@ -472,6 +472,11 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
     const reason = r.attempts[r.attempts.length - 1]?.cacheMissReason ?? null;
     if (reason === null || !q.cacheMissReasons.includes(reason)) return false;
   }
+  // The stop reason and the category are the serving attempt's too, and `-` keeps a request whose serving attempt
+  // carries none or that no attempt served.
+  const serving = r.attempts[r.attempts.length - 1]?.response;
+  if (q.stopReasons?.length && !q.stopReasons.includes(serving?.stopReason ?? '-')) return false;
+  if (q.refusalCategories?.length && !q.refusalCategories.includes(serving?.refusalCategory ?? '-')) return false;
   if (q.efforts?.length && !q.efforts.includes(foldEffort(r.shape.effort))) return false;
   if (q.requestClasses?.length && !q.requestClasses.includes(foldRequestClass(r.requestClass))) return false;
   if (q.classifiers?.length && !q.classifiers.includes(foldClassifier(r.classifier))) return false;
@@ -1035,6 +1040,10 @@ export class MockApi implements Api {
 
   getAnalyticsReconciliations(filters?: Pick<AnalyticsQuery, 'accountIds'>) {
     return latency(reconciliationsOf(emptyStore() ? [] : RECONCILIATIONS, filters));
+  }
+
+  getAnalyticsRefusalCategories(query: AnalyticsQuery) {
+    return latency(refusalCategoriesOf(emptyStore() ? [] : REQUESTS, query));
   }
 
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>) {

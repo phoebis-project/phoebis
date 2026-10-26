@@ -519,12 +519,21 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
 function buildRequests(): RequestLog[] {
   const rows: RequestLog[] = [];
   const span = 24 * HOUR;
-  // The drawer's refusal line needs one answer that carries a refusal, so the first eligible row takes it
-  // rather than leaving it to the draw below.
-  let refusalOwed = true;
-  // The drawer reads a row of each standing the relay publishes; the eligible rows after the refusal take them
-  // in turn without a draw of their own, so no later draw moves.
-  const autoModeOwed: AutoMode[] = ['server', 'stripped'];
+  // The eligible rows take in turn what the drawer and the refusal views read, without a draw of their own, so no later
+  // draw moves: the drawer's refusal line first, then a row of each auto-mode standing the relay publishes, then the
+  // refusals the Refusals by category card ranks and the Requests filters keep, `cyber` three times in all, `harmful`
+  // twice and one the upstream gave no category. The standings keep the second and the third eligible rows, so the row
+  // the stripped standing moves to notebook, which the passes after the loop draw less for, stays the one it is.
+  const owed: ({ autoMode: AutoMode } | { refusal: string | null })[] = [
+    { refusal: 'cyber' },
+    { autoMode: 'server' },
+    { autoMode: 'stripped' },
+    { refusal: 'harmful' },
+    { refusal: 'cyber' },
+    { refusal: null },
+    { refusal: 'harmful' },
+    { refusal: 'cyber' },
+  ];
   // A separate stream so the hint draws do not shift the rest of the row's draws.
   const hints = createRng(6_061);
   for (let i = 0; i < 232; i += 1) {
@@ -551,12 +560,12 @@ function buildRequests(): RequestLog[] {
     const diagnosis = diagnosed(tried, kind);
     // The story hour's rows leave below, so the rows the drawer reads land before it.
     const owable = lane.keyId === 'laptop' && kind === 'inference' && finalStatus === 200 && whole && atMs < STORY_HOUR_FROM;
-    const refused = refusalOwed && owable;
-    if (refused) refusalOwed = false;
-    const autoMode = !refused && owable ? (autoModeOwed.shift() ?? null) : null;
-    const attempts = refused
-      ? diagnosis.map((a, at) => (at === diagnosis.length - 1 ? { ...a, response: { ...a.response, refusalCategory: 'cyber', refusalRecommendedModel: 'claude-opus-5', stopReason: 'refusal' } } : a))
-      : diagnosis;
+    const turn = owable ? owed.shift() : undefined;
+    const autoMode = turn !== undefined && 'autoMode' in turn ? turn.autoMode : null;
+    const attempts =
+      turn !== undefined && 'refusal' in turn
+        ? diagnosis.map((a, at) => (at === diagnosis.length - 1 ? { ...a, response: { ...a.response, refusalCategory: turn.refusal, refusalRecommendedModel: 'claude-opus-5', stopReason: 'refusal' } } : a))
+        : diagnosis;
     const transport = kind === 'inference' ? (rng.chance(0.86) ? 'sse' : 'json') : 'json';
     // The request runs from its arrival to its last attempt's end, the gaps between attempts included, as the router
     // stamps it.

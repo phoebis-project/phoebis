@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
 import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, Usage } from '@/api/types';
+import { REFUSAL_CATEGORIES, STOP_REASONS } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useFollow } from '@/app/useFollow';
 import { BodyViewer } from '@/components/BodyViewer';
@@ -88,6 +89,13 @@ const missReasonOptions = (rows: RequestLog[], selected: string[]) => {
   const others = new Set([...served, ...selected].filter((name) => !CACHE_MISS_REASONS.includes(name)));
   return [...CACHE_MISS_REASONS, ...[...others].sort()].map((name) => ({ label: missLabel(name), value: name }));
 };
+/** The serving attempt's answer, where an attempt served the request. */
+const servingResponse = (r: RequestLog): AttemptResponse | null => r.attempts[r.attempts.length - 1]?.response ?? null;
+/** The known words, then the loaded rows' other values and the filter's own, each as itself, then `-` labeled `none`. */
+function wordOptions(known: readonly string[], loaded: (string | null)[], chosen: string[]): Option[] {
+  const others = new Set([...loaded, ...chosen].filter((v): v is string => v !== null && v !== '-' && !known.includes(v)));
+  return [...[...known, ...[...others].sort()].map((v) => ({ label: v, value: v })), { label: 'none', value: '-' }];
+}
 /**
  * The classes the loaded rows and the address carry as the rollups fold them, alphabetically, then a request that sent
  * no class under the label the Analytics page gives it, then the classes the fold reads as `other`.
@@ -121,6 +129,7 @@ const REQUEST_OUTCOME_LABEL: Record<RequestOutcome, string> = {
  */
 const HEAD_ID_CHARS = 24;
 const GEOGRAPHY_TITLE = 'The inference geography the upstream reported for the answer: global or us. Not available means the model does not take the inference geography parameter.';
+const UPSTREAM_REFUSAL_TITLE = 'The upstream refused this answer. Open the request for the stop reason and the recommended model.';
 
 /** The log on this request, a quarter hour either side of it. A row with no duration is read as a moment. */
 const routingLogHref = (r: RequestLog, now: number) => {
@@ -284,7 +293,7 @@ export function RequestsPage() {
   const polledMs = effectiveInterval(intervalMs, ended);
   const query = useMemo<RequestQuery>(
     // Probes are off the log unless they are what the filter asks for.
-    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, classifiers: filters.classifiers, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), guardrails: filters.guardrails, held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: cursor !== undefined && !custom ? undefined : iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
+    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, classifiers: filters.classifiers, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), guardrails: filters.guardrails, held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, refusalCategories: filters.refusalCategories, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), stopReasons: filters.stopReasons, to: cursor !== undefined && !custom ? undefined : iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
     [filters, cursor, custom, span, pagedTo],
   );
   const requests = useAsync(() => api.listRequests(query), [query]);
@@ -332,12 +341,14 @@ export function RequestsPage() {
     models: (catalog.data ?? []).map((m) => ({ label: m.id, value: m.id })),
     outcomes: REQUEST_OUTCOME_VALUES.map((o) => ({ label: REQUEST_OUTCOME_LABEL[o], value: o })),
     pools: (pools.data ?? []).map((p) => ({ label: p.name, value: p.id })),
+    refusalCategories: wordOptions(REFUSAL_CATEGORIES, rows.map((r) => servingResponse(r)?.refusalCategory ?? null), filters.refusalCategories),
     requestClasses: requestClassOptions(rows, filters.requestClasses),
     speeds: [
       { label: 'fast', value: 'fast' },
       { label: 'standard', value: 'standard' },
     ],
     statuses: statusOptions(rows, filters.statuses),
+    stopReasons: wordOptions(STOP_REASONS, rows.map((r) => servingResponse(r)?.stopReason ?? null), filters.stopReasons),
     turnOrigins: TURN_ORIGINS.map((v) => ({ label: v, value: v })),
   };
   const disabled = { ...notLoadedReason('keys', 'key', keys), ...notLoadedReason('pools', 'pool', pools), ...notLoadedReason('accounts', 'account', accounts), ...notLoadedReason('models', 'model', catalog), ...notLoadedReason('guardrails', 'guardrail', guardrails) };
@@ -456,6 +467,11 @@ export function RequestsPage() {
                           <td className="col-fit">
                             <span className="requests__status">
                               <StatusBadge status={r.status} />
+                              {servingResponse(r)?.stopReason === 'refusal' && (
+                                <Badge tone="warning" title={UPSTREAM_REFUSAL_TITLE}>
+                                  {servingResponse(r)?.refusalCategory ?? 'none'}
+                                </Badge>
+                              )}
                               {r.outcome !== 'succeeded' && <span className="muted requests__outcome">{REQUEST_OUTCOME_LABEL[r.outcome]}</span>}
                             </span>
                           </td>

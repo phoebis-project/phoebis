@@ -1,5 +1,5 @@
 import type {
-  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, Reconciliation, ReconciliationsAnswer, RequestKind, RequestLog,
+  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, Reconciliation, ReconciliationsAnswer, RefusalCategoriesAnswer, RequestKind, RequestLog,
   RewritePoint, RewritesAnswer, WastedProbeReason,
 } from '@/api/types';
 import { bucketShare } from '@/lib/analytics';
@@ -725,6 +725,36 @@ export function placementsOf(requests: RequestLog[], q: Pick<AnalyticsQuery, 'fr
     }
   }
   return [...byRung.values()].sort((a, b) => a.rung.localeCompare(b.rung)).map((row) => ({ ...row, hitShare: row.placements > 0 ? row.hits / row.placements : null }));
+}
+
+/**
+ * The refused answers by category off the request rows, as the route counts them: each request in range whose serving
+ * attempt the upstream answered with the stop reason `refusal`, `-` for a refusal with no category, the largest count
+ * first and then the category in byte order, where the dash sorts first. The route narrows by the range, the accounts,
+ * the keys, the pools, the models, the kinds and the probes switch, and by no client pattern.
+ */
+export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): RefusalCategoriesAnswer {
+  const fromMs = Date.parse(q.from);
+  const toMs = Date.parse(q.to);
+  const counts = new Map<string, number>();
+  for (const r of requests) {
+    const at = Date.parse(r.at);
+    if (at < fromMs || at > toMs) continue;
+    // The serving attempt's account, with a request no attempt served under the unattributed id, as the request log
+    // files it.
+    if (q.accountIds?.length && !q.accountIds.includes(r.accountId ?? '-')) continue;
+    if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, { keyGeneration: r.keyGeneration, keyId: r.keyId ?? '-' }))) continue;
+    if (q.poolIds?.length && (r.poolId === null || !q.poolIds.includes(r.poolId))) continue;
+    if (q.models?.length && !q.models.some((m) => m.toLowerCase() === r.canonicalModel)) continue;
+    if (q.kinds?.length && !q.kinds.includes(r.kind)) continue;
+    if (r.kind === 'probe' && !q.includeProbes && !q.kinds?.includes('probe')) continue;
+    const answer = r.attempts[r.attempts.length - 1]?.response;
+    if (answer?.stopReason !== 'refusal') continue;
+    const category = answer.refusalCategory ?? '-';
+    counts.set(category, (counts.get(category) ?? 0) + 1);
+  }
+  const rows = [...counts].map(([category, requests]) => ({ category, requests })).sort((a, b) => b.requests - a.requests || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
+  return { from: iso(fromMs), rows, to: iso(toMs) };
 }
 
 /**

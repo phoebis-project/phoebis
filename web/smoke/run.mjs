@@ -70,6 +70,8 @@ const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRES
 
 /** The dash's title where a window priced nothing, the words a tile and its hover carry. */
 const UNPRICED_TITLE = 'No subscription request priced on this window: its model has no tier the cost model weighs';
+/** The hover of the Requests view's chip on an answer the upstream refused, the page's sentence. */
+const UPSTREAM_REFUSAL_TITLE = 'The upstream refused this answer. Open the request for the stop reason and the recommended model.';
 /** The hover of the Dashboard's Refused tile and the Traffic table's Refused header, the pages' sentence. */
 const REFUSED_TITLE =
   "Requests refused for the client's or a policy's cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable, body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead.";
@@ -12615,6 +12617,131 @@ m.unmount();
   facet.unmount();
 }
 
+// The upstream's refusals on the Requests view: the Status cell's chip on a refused answer, read off the serving
+// attempt, and the Stop reason and Refusal category lists of Add filter's Outcome group. The story's refused answers,
+// read off the mock's `REQUESTS`, are drawn laptop rows before the story hour, `cyber` three times, `harmful` twice and
+// one the upstream gave no category, so the bare list's first page holds none and the checks mount an address that
+// lists them.
+{
+  const served = (r) => r.attempts.at(-1)?.response ?? null;
+  const refused = requests.filter((r) => served(r)?.stopReason === 'refusal');
+  const idsOf = (list) => list.map((r) => r.id).sort();
+  const cyber = refused.filter((r) => served(r).refusalCategory === 'cyber');
+  const bare = refused.filter((r) => served(r).refusalCategory === null);
+  const rowsOf = (page) => [...page.container.querySelectorAll('.requests__table tbody tr')];
+  // The time cell carries the whole id on its title, the one place a row names its request.
+  const idOf = (tr) => tr?.querySelector('.sub.mono')?.getAttribute('title') ?? null;
+  const listedIds = (page) => rowsOf(page).map(idOf).sort();
+  const statusOf = (tr) => {
+    const cell = tr?.querySelector('.requests__status');
+    const [code, chip] = [...(cell?.children ?? [])].filter((el) => el.classList.contains('badge'));
+    return { chip: chip ? { classes: chip.className, text: chip.textContent?.trim() ?? '', title: chip.getAttribute('title') } : null, code: code?.textContent?.trim() ?? null, outcome: cell?.querySelector('.requests__outcome')?.textContent ?? null };
+  };
+  const param = (page, name) => new URLSearchParams(page.location().search).get(name);
+
+  const chipCheck = "/requests a refused answer's Status cell draws its category as a warning badge after the code, with the upstream's hover and no outcome word, and none where the upstream named no category";
+  const page = await mount('/requests?stop_reasons=refusal', { now: CLOCK_ORIGIN });
+  const want = (text) => ({ chip: { classes: 'badge badge--warning', text, title: UPSTREAM_REFUSAL_TITLE }, code: '200', outcome: null });
+  const drawn = { cyber: statusOf(rowsOf(page).find((tr) => idOf(tr) === cyber[0]?.id)), none: statusOf(rowsOf(page).find((tr) => idOf(tr) === bare[0]?.id)) };
+  results.push({
+    name: chipCheck,
+    ok: cyber.length === 3 && bare.length === 1 && refused.length === 6 && JSON.stringify(listedIds(page)) === JSON.stringify(idsOf(refused)) && JSON.stringify(drawn) === JSON.stringify({ cyber: want('cyber'), none: want('none') }),
+    missing: [`${refused.length} refused, ${cyber.length} cyber, ${bare.length} with none`, `${rowsOf(page).length} rows`, JSON.stringify(drawn)],
+  });
+  page.unmount();
+  const plain = await mount('/requests', { now: CLOCK_ORIGIN });
+  const chipped = rowsOf(plain).filter((tr) => statusOf(tr).chip !== null).map(idOf);
+  results.push({ name: '/requests a row the upstream answered without a refusal draws no chip in its Status cell', ok: rowsOf(plain).length > 0 && chipped.length === 0, missing: [`${rowsOf(plain).length} rows`, ...chipped] });
+  plain.unmount();
+
+  // A list stays open across a choice, so its values are opened only while the box shows another step.
+  const openOptions = async (on, label) => {
+    if (filterBox()?.querySelector('.popover__title')?.textContent?.trim() !== label) await addFilter(on, label);
+    return boxOptions();
+  };
+  const choose = async (on, label, text) => {
+    (await openOptions(on, label)).find((o) => o.textContent?.trim() === text)?.click();
+    await on.settle();
+  };
+  /** The group heading the Add filter list draws above the row reading `label`. */
+  const groupOf = async (on, label) => {
+    await closeBoxes(on);
+    addFilterButton(on)?.click();
+    await on.settle(100);
+    let heading = null;
+    for (const el of filterBox()?.querySelectorAll('.mselect__group, .add-filter__row') ?? []) {
+      if (el.classList.contains('mselect__group')) heading = el.textContent?.trim() ?? null;
+      else if (el.firstElementChild?.textContent?.trim() === label) break;
+    }
+    await closeBoxes(on);
+    return heading;
+  };
+  const optionsOf = async (on, label) => (await openOptions(on, label)).map((o) => o.textContent?.trim() ?? '');
+  const filterCheck =
+    "/requests Add filter's Outcome group offers Stop reason and Refusal category, the console's words and the loaded rows' then none, and choosing refusal and cyber narrows the list to those answers with their chips and address, none to the refusal with no category";
+  const bar = await mount('/requests', { now: CLOCK_ORIGIN });
+  const groups = [await groupOf(bar, 'Stop reason'), await groupOf(bar, 'Refusal category')];
+  const reasons = await optionsOf(bar, 'Stop reason');
+  await choose(bar, 'Stop reason', 'refusal');
+  // The refused rows the list now holds carry `harmful`, a category the console does not name.
+  const categories = await optionsOf(bar, 'Refusal category');
+  await choose(bar, 'Refusal category', 'cyber');
+  await closeBoxes(bar);
+  const chosen = { chips: [chipRead(bar, 'stop reason'), chipRead(bar, 'refusal category')], params: [param(bar, 'stop_reasons'), param(bar, 'refusal_categories')], rows: listedIds(bar) };
+  await choose(bar, 'Refusal category', 'cyber');
+  await choose(bar, 'Refusal category', 'none');
+  await closeBoxes(bar);
+  const uncategorized = { chips: [chipRead(bar, 'stop reason'), chipRead(bar, 'refusal category')], params: [param(bar, 'stop_reasons'), param(bar, 'refusal_categories')], rows: listedIds(bar) };
+  results.push({
+    name: filterCheck,
+    ok:
+      JSON.stringify(groups) === JSON.stringify(['Outcome', 'Outcome']) &&
+      JSON.stringify(reasons) === JSON.stringify(['end_turn', 'max_tokens', 'model_context_window_exceeded', 'pause_turn', 'refusal', 'stop_sequence', 'tool_use', 'none']) &&
+      JSON.stringify(categories) === JSON.stringify(['cyber', 'harmful', 'none']) &&
+      JSON.stringify(chosen) === JSON.stringify({ chips: ['stop reason: refusal', 'refusal category: cyber'], params: ['refusal', 'cyber'], rows: idsOf(cyber) }) &&
+      JSON.stringify(uncategorized) === JSON.stringify({ chips: ['stop reason: refusal', 'refusal category: none'], params: ['refusal', '-'], rows: idsOf(bare) }),
+    missing: [JSON.stringify(groups), JSON.stringify(reasons), JSON.stringify(categories), JSON.stringify(chosen), JSON.stringify(uncategorized)],
+  });
+  bar.unmount();
+
+  // The page builds its query member by member, so the list read, a cursor page and a poll each carry the two lists.
+  // The `cyber` refusals fit one page, so the cursor page reads a filter that pages at the smallest size: every drawn
+  // attempt ends its turn, and none of them names a category.
+  const queryCheck = '/requests the list read, a Next page and an auto reload poll send the stop reasons and the refusal categories the address holds';
+  const spy = countCalls('listRequests');
+  const lists = (q) => [q?.stopReasons ?? null, q?.refusalCategories ?? null];
+  const sent = { paged: null, polled: [], read: null };
+  try {
+    const watched = await mount('/requests?stop_reasons=refusal&refusal_categories=cyber', { now: CLOCK_ORIGIN });
+    sent.read = spy.calls[0]?.[0] ?? null;
+    await chooseInterval(watched, '5 s');
+    const from = spy.calls.length;
+    tick(5_000);
+    await watched.settle();
+    sent.polled = spy.calls.slice(from).map(([q]) => q);
+    await chooseInterval(watched, 'Off');
+    watched.unmount();
+    const paging = await mount('/requests?stop_reasons=end_turn&refusal_categories=-&rows=10', { now: CLOCK_ORIGIN });
+    const before = spy.calls.length;
+    paging.container.querySelector('button[aria-label="Next page"]')?.click();
+    await paging.settle();
+    sent.paged = spy.calls.slice(before).map(([q]) => q).find((q) => q?.cursor !== undefined) ?? null;
+    paging.unmount();
+  } finally {
+    spy.restore();
+  }
+  results.push({
+    name: queryCheck,
+    ok:
+      JSON.stringify(lists(sent.read)) === JSON.stringify([['refusal'], ['cyber']]) &&
+      sent.polled.length > 0 &&
+      sent.polled.every((q) => JSON.stringify(lists(q)) === JSON.stringify([['refusal'], ['cyber']])) &&
+      sent.paged !== null &&
+      JSON.stringify(lists(sent.paged)) === JSON.stringify([['end_turn'], ['-']]),
+    missing: [`read ${JSON.stringify(lists(sent.read))}`, `polls ${JSON.stringify(sent.polled.map(lists))}`, `next page ${sent.paged === null ? 'none' : JSON.stringify(lists(sent.paged))}`],
+  });
+}
+
 // Auto reload starts off on this view and reads the list again at the interval the split button's menu sets, over the
 // page's filters with a preset range sending no end, so the route reads to its own clock, and lands what arrived at the
 // top in the accent tint. The open drawer, an older page and an open menu or popover under the bar pause it with the
@@ -13568,7 +13695,7 @@ m.unmount();
     results.push({
       name: '/requests the Add filter popover walks its two steps for a list, a pattern, an id, a choice and a flag and closes on Escape, a click outside and focus leaving',
       ok:
-        JSON.stringify(one) === JSON.stringify({ expanded: 'true', field: true, groups: ['Routing', 'Outcome', 'Request', 'Subject'], rows: 20 }) &&
+        JSON.stringify(one) === JSON.stringify({ expanded: 'true', field: true, groups: ['Routing', 'Outcome', 'Request', 'Subject'], rows: 22 }) &&
         JSON.stringify(head) === JSON.stringify({ back: true, remove: false, title: 'Outcome' }) &&
         JSON.stringify(list) === JSON.stringify({ open: true, outcomes: 'canceled', remove: true }) &&
         back &&
@@ -16799,6 +16926,158 @@ m.unmount();
   const bars = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   results.push({ name: cutCheck, ok: bars.some(([code, count]) => code === 'router_shutdown' && count === '2'), missing: [JSON.stringify(bars)] });
   page.unmount();
+}
+
+// The Traffic section's Refusals by category card over the story's refused answers, read off the mock's `REQUESTS`:
+// `cyber` three times, `harmful` twice and one the upstream gave no category, all inside the default day. Each bar
+// links the Requests view on its category's refused answers over the page's range to the millisecond, with no session.
+{
+  const DAY = 86_400_000;
+  const TITLE = 'Refusals by category';
+  const SUBTITLE = 'Answers the upstream refused in range, by category, each a request that succeeded';
+  const served = (r) => r.attempts.at(-1)?.response ?? null;
+  const refused = requests.filter((r) => served(r)?.stopReason === 'refusal');
+  const cardOf = (page, title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+  const subtitleOf = (page) => cardOf(page, TITLE)?.querySelector('.card__subtitle')?.textContent?.trim() ?? null;
+  const barsOf = (page) =>
+    [...(cardOf(page, TITLE)?.querySelectorAll('.hbars li') ?? [])].map((li) => ({
+      count: li.querySelector('.num')?.firstChild?.textContent?.trim() ?? null,
+      href: li.querySelector('.num a')?.getAttribute('href') ?? null,
+      label: li.querySelector('.mono')?.textContent?.trim() ?? null,
+    }));
+  const countsOf = (page) => barsOf(page).map((b) => [b.label, b.count]);
+  /** The route's rows over `list`, the largest count first and then the category in byte order, `-` read none. */
+  const ranked = (list) => {
+    const counts = new Map();
+    for (const r of list) counts.set(served(r).refusalCategory ?? '-', (counts.get(served(r).refusalCategory ?? '-') ?? 0) + 1);
+    return [...counts].sort(([a, x], [b, y]) => y - x || (a < b ? -1 : a > b ? 1 : 0)).map(([category, n]) => [category === '-' ? 'none' : category, String(n)]);
+  };
+  // Each parameter by name, in key order, since the codec writes the categories before the stop reasons.
+  const paramsOf = (href) => Object.fromEntries([...new URL(href, 'http://console.test').searchParams].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+  const rowIds = (page) => [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.querySelector('.sub.mono')?.getAttribute('title') ?? null).sort();
+
+  const cardCheck =
+    '/analytics the Refusals by category card follows Refusals by code with its subtitle, a bar per category with cyber first and none for the refusal with no category, each linking the refused answers over the range to the millisecond with no session';
+  const page = await mount('/analytics', { now: CLOCK_ORIGIN });
+  const titles = [...(cardOf(page, 'Refusals by code')?.parentElement?.children ?? [])].map((c) => c.querySelector('.card__title')?.textContent?.trim() ?? null);
+  const bars = barsOf(page);
+  const links = bars.map((b) => (b.href === null ? null : paramsOf(b.href)));
+  const span = { from: isoAt(CLOCK_ORIGIN - DAY), to: isoAt(CLOCK_ORIGIN) };
+  results.push({
+    name: cardCheck,
+    ok:
+      titles.indexOf(TITLE) > 0 &&
+      titles.indexOf(TITLE) === titles.indexOf('Refusals by code') + 1 &&
+      subtitleOf(page) === SUBTITLE &&
+      JSON.stringify(countsOf(page)) === JSON.stringify([['cyber', '3'], ['harmful', '2'], ['none', '1']]) &&
+      JSON.stringify(countsOf(page)) === JSON.stringify(ranked(refused)) &&
+      JSON.stringify(links) ===
+        JSON.stringify([
+          { from: span.from, refusal_categories: 'cyber', stop_reasons: 'refusal', to: span.to },
+          { from: span.from, refusal_categories: 'harmful', stop_reasons: 'refusal', to: span.to },
+          { from: span.from, refusal_categories: '-', stop_reasons: 'refusal', to: span.to },
+        ]),
+    missing: [JSON.stringify(titles), subtitleOf(page) ?? 'no subtitle', JSON.stringify(countsOf(page)), JSON.stringify(links)],
+  });
+
+  // The bar's address lands on the list of its category's refused answers inside the card's window, and nothing else.
+  const landingCheck = "/analytics the cyber bar's link opens the Requests view on the cyber refusals of the card's window alone";
+  const cyberHref = bars.find((b) => b.label === 'cyber')?.href ?? null;
+  page.unmount();
+  const wanted = refused.filter((r) => served(r).refusalCategory === 'cyber' && Date.parse(r.at) >= CLOCK_ORIGIN - DAY && Date.parse(r.at) <= CLOCK_ORIGIN).map((r) => r.id).sort();
+  if (cyberHref === null) controlMissing(landingCheck, 'the cyber bar');
+  else {
+    const landed = await mount(cyberHref, { now: CLOCK_ORIGIN });
+    results.push({ name: landingCheck, ok: wanted.length === 3 && JSON.stringify(rowIds(landed)) === JSON.stringify(wanted), missing: [cyberHref, JSON.stringify(rowIds(landed)), JSON.stringify(wanted)] });
+    landed.unmount();
+  }
+
+  // The story's last hour holds no refused answer, since the refusals are drawn before the story hour.
+  const emptyCheck = '/analytics the Refusals by category card reads its empty words under a range that holds no refused answer';
+  const hour = await mount('/analytics?range=1h', { now: CLOCK_ORIGIN });
+  const empty = cardOf(hour, TITLE)?.querySelector('p.muted')?.textContent?.trim() ?? null;
+  results.push({ name: emptyCheck, ok: empty === 'No answer was refused in this range.' && barsOf(hour).length === 0, missing: [empty ?? 'no empty words', JSON.stringify(countsOf(hour))] });
+  hour.unmount();
+
+  // The card reads a route of its own, so its failure is the card's alone: the other Traffic cards draw their figures
+  // and the page names no failure, and Try again reads the route again.
+  const failCheck = '/analytics a failed refusal count read draws the card\'s own error with Try again while the other Traffic cards draw, and Try again draws the bars';
+  failNextCall('getAnalyticsRefusalCategories', '/admin/analytics/refusal_categories', 'refusal counts unavailable');
+  const failed = await mount('/analytics', { now: CLOCK_ORIGIN });
+  const errorOf = (on) => {
+    const state = cardOf(on, TITLE)?.querySelector('.empty--error');
+    return state ? { action: state.querySelector('button')?.textContent?.trim() ?? null, body: state.querySelector('.empty__body')?.textContent?.trim() ?? null, title: state.querySelector('.empty__title')?.textContent?.trim() ?? null } : null;
+  };
+  const during = { banner: failed.text().includes('Could not load the analytics for these filters'), codes: cardOf(failed, 'Refusals by code')?.querySelectorAll('.hbars li').length ?? 0, error: errorOf(failed), errors: cardOf(failed, 'Errors by code')?.querySelectorAll('.hbars li').length ?? 0 };
+  cardOf(failed, TITLE)?.querySelector('.empty--error button')?.click();
+  await failed.settle();
+  const retried = { counts: countsOf(failed), error: errorOf(failed) };
+  results.push({
+    name: failCheck,
+    ok:
+      JSON.stringify(during.error) === JSON.stringify({ action: 'Try again', body: 'refusal counts unavailable', title: 'Could not load refusals by category' }) &&
+      !during.banner &&
+      during.codes > 0 &&
+      during.errors > 0 &&
+      retried.error === null &&
+      JSON.stringify(retried.counts) === JSON.stringify([['cyber', '3'], ['harmful', '2'], ['none', '1']]),
+    missing: [JSON.stringify(during), JSON.stringify(retried)],
+  });
+  failed.unmount();
+
+  // A read held across a filter change: the card draws its skeleton with no count and no link while the page's other
+  // reads land under the new filter, and the new counts once the held read lands.
+  const heldCheck = '/analytics the Refusals by category card draws no count while its read for a new Accounts filter is held, and the new counts once it lands';
+  const held = await mount('/analytics', { now: CLOCK_ORIGIN });
+  const lineOf = (on) => /[\d,]+ requests, [\d.]+% errors/.exec(on.text())?.[0] ?? null;
+  const unfiltered = lineOf(held);
+  const gate = deferNextCall('getAnalyticsRefusalCategories');
+  const seen = { landed: null, waiting: null };
+  try {
+    await held.navigate('/analytics?accounts=primary');
+    seen.waiting = { bars: barsOf(held).length, line: lineOf(held), links: cardOf(held, TITLE)?.querySelectorAll('a').length ?? 0, skeleton: cardOf(held, TITLE)?.querySelector('.skeleton') !== null };
+    gate.release();
+    await held.settle();
+    seen.landed = countsOf(held);
+  } finally {
+    gate.restore();
+  }
+  const primary = ranked(refused.filter((r) => r.accountId === 'primary'));
+  results.push({
+    name: heldCheck,
+    ok:
+      seen.waiting !== null &&
+      seen.waiting.bars === 0 &&
+      seen.waiting.links === 0 &&
+      seen.waiting.skeleton &&
+      seen.waiting.line !== null &&
+      seen.waiting.line !== unfiltered &&
+      gate.calls.length > 0 &&
+      primary.length > 0 &&
+      JSON.stringify(seen.landed) === JSON.stringify(primary),
+    missing: [`unfiltered ${unfiltered}`, JSON.stringify(seen.waiting), `${gate.calls.length} held calls`, JSON.stringify(seen.landed), JSON.stringify(primary)],
+  });
+  held.unmount();
+
+  // The route carries no session selector, so under a session filter the card reads every session's refusals and says
+  // so, and its links carry no session.
+  const sessionCheck = '/analytics under a session filter the Refusals by category card reads every session, its subtitle saying the session filter does not apply, with no session on its links';
+  const session = refused.find((r) => served(r).refusalCategory === null)?.sessionId ?? null;
+  if (session === null) controlMissing(sessionCheck, 'a session holding a refusal');
+  else {
+    const scoped = await mount(`/analytics?session=${session}`, { now: CLOCK_ORIGIN });
+    const scopedLinks = barsOf(scoped).map((b) => (b.href === null ? null : paramsOf(b.href)));
+    results.push({
+      name: sessionCheck,
+      ok:
+        subtitleOf(scoped) === `${SUBTITLE}. The session filter does not apply here` &&
+        JSON.stringify(countsOf(scoped)) === JSON.stringify([['cyber', '3'], ['harmful', '2'], ['none', '1']]) &&
+        scopedLinks.length === 3 &&
+        scopedLinks.every((l) => l !== null && !('session' in l)),
+      missing: [subtitleOf(scoped) ?? 'no subtitle', JSON.stringify(countsOf(scoped)), JSON.stringify(scopedLinks)],
+    });
+    scoped.unmount();
+  }
 }
 
 m = await mount('/analytics');

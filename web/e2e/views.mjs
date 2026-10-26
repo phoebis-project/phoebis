@@ -5446,6 +5446,39 @@ async function requestsFundingWord(theme) {
 }
 
 /**
+ * The Status cell's refusal chip on the request log, on the list of the refused answers, since the story draws them
+ * before the bare list's first page: the `cyber` chip against the row's code badge in its font size and height and from
+ * the code's left edge within the cell, and, since the Status column is as wide as its widest single item and drops a
+ * second item under the first, at the cell's gap under the code, its text and its hover recorded. Only the mock's story
+ * holds a refused answer. The bare list loads again after, for the pager's read and the view's shot.
+ */
+async function requestsRefusalChip(theme) {
+  if (!mock) return;
+  try {
+    await loadAtOrigin('/requests?stop_reasons=refusal', '.requests__table');
+    const read = await page.evaluate(() => {
+      const badgesOf = (cell) => [...cell.children].filter((el) => el.classList.contains('badge'));
+      const cell = [...document.querySelectorAll('.requests__table tbody .requests__status')].find((c) => badgesOf(c)[1]?.textContent?.trim() === 'cyber');
+      if (!cell) return { chip: null, code: null, gap: null };
+      const [code, chip] = badgesOf(cell);
+      const td = cell.closest('td').getBoundingClientRect();
+      const box = (el) => {
+        const b = el.getBoundingClientRect();
+        return { fontSize: getComputedStyle(el).fontSize, height: Math.round(b.height), left: Math.round(b.left - td.left), top: Math.round(b.top - td.top) };
+      };
+      return { chip: { ...box(chip), text: chip.textContent?.trim() ?? '', title: chip.getAttribute('title') }, code: box(code), gap: parseFloat(getComputedStyle(cell).rowGap) };
+    });
+    measurements.push(`${theme} /requests refusal chip ${JSON.stringify(read)}`);
+    failures.push(...compare(read.chip, read.code, ['fontSize', 'height', 'left'], `${theme} /requests: the Status cell's refusal chip against the code's badge`));
+    if (read.chip && read.code && read.chip.top - (read.code.top + read.code.height) !== read.gap) failures.push(`${theme} /requests: the refusal chip's top ${read.chip.top} is not the cell's ${read.gap}px gap under the code's bottom ${read.code.top + read.code.height}`);
+    const title = 'The upstream refused this answer. Open the request for the stop reason and the recommended model.';
+    if (read.chip && (read.chip.text !== 'cyber' || read.chip.title !== title)) failures.push(`${theme} /requests: the refusal chip reads ${JSON.stringify(read.chip.text)} with the hover ${JSON.stringify(read.chip.title)}`);
+  } finally {
+    await loadAtOrigin('/requests', '.requests__table');
+  }
+}
+
+/**
  * The request table with Time, its fill, hidden through the Columns control, so no drawn column fills: the table
  * carries `table--no-fill` and takes its content width up to its wrap's, read at the pass's 1280 by 800 and at 1920
  * by 1080, where the content leaves the card's rest empty. The viewport and the column return afterwards.
@@ -6212,11 +6245,11 @@ async function freshRowTint(theme, path) {
  * neighbor it copies: Requests by speed against Requests by outcome (title type, card width, chart height),
  * Effort levels against Errors by code (title type, and where both draw bars, the bar row, its label type and its
  * track), Fast mode spend against the first tile, Cost under a fresh browser's native position (the tile box and its
- * figure's type). Effort levels ends the grid alone, so it spans the grid's row. Refusals by code follows Errors by
- * code, so the grid pairs it with Failovers (title type, card width, the row's top and height), and Migration
- * rewrites, which grows taller than its row partner with the held chart under its moves, with Requests by speed (the
- * same, and the first chart's height). In the mock pass, whose story holds requests for the slow-down, the rewrites
- * card draws the held chart's bars in the warning tone. The cards are read on the Traffic tab and the tiles on Cost.
+ * figure's type). The grid's eight cards pair off row by row, each against its row partner on the card width, the
+ * row's top and height: Refusals by category beside Refusals by code (and the title type), Migration rewrites, which
+ * grows taller than its row partner with the held chart under its moves, beside Failovers, and Effort levels beside
+ * Requests by speed. In the mock pass, whose story holds requests for the slow-down, the rewrites card draws the held
+ * chart's bars in the warning tone. The cards are read on the Traffic tab and the tiles on Cost.
  */
 async function trafficCards(theme) {
   // The cards and tiles the shown tab draws; one on another tab is not mounted and reads as null.
@@ -6260,7 +6293,7 @@ async function trafficCards(theme) {
         const b = el.getBoundingClientRect();
         return { height: Math.round(b.height), value: type(el.querySelector('.stat__value')), width: Math.round(b.width) };
       };
-      return { cost: tile('Cost'), effort: box('Effort levels'), errors: box('Errors by code'), failovers: box('Failovers'), fastSpend: tile('Fast mode spend'), held, outcome: box('Requests by outcome'), refusals: box('Refusals by code'), rewrites: box('Migration rewrites'), speed: box('Requests by speed') };
+      return { cost: tile('Cost'), effort: box('Effort levels'), errors: box('Errors by code'), failovers: box('Failovers'), fastSpend: tile('Fast mode spend'), held, outcome: box('Requests by outcome'), refusalCategories: box('Refusals by category'), refusals: box('Refusals by code'), rewrites: box('Migration rewrites'), speed: box('Requests by speed') };
     });
   try {
     if (!(await tabTo(theme, 'Traffic'))) return;
@@ -6272,11 +6305,11 @@ async function trafficCards(theme) {
     failures.push(...compare(read.speed, read.outcome, ['chart', 'section', 'title', 'width'], `${theme} /analytics: "Requests by speed" against "Requests by outcome"`));
     const bars = read.effort?.bar !== null && read.errors?.bar !== null ? ['bar', 'label', 'track'] : [];
     failures.push(...compare(read.effort, read.errors, ['section', 'title', ...bars], `${theme} /analytics: "Effort levels" against "Errors by code"`));
-    if (read.effort && Math.abs(read.effort.width - read.effort.row) > 1) failures.push(`${theme} /analytics: the Effort levels card ends the grid alone at ${read.effort.width}px, not across its ${read.effort.row}px row`);
+    failures.push(...compare(read.effort, read.speed, ['height', 'section', 'top', 'width'], `${theme} /analytics: "Effort levels" against "Requests by speed"`));
     failures.push(...compare(read.fastSpend, read.cost, ['height', 'value', 'width'], `${theme} /analytics: the Fast mode spend tile against Cost`));
     if (read.effort?.bar === null) failures.push(`${theme} /analytics: the Effort levels card draws no bar, though every request asks for a level or none`);
-    failures.push(...compare(read.refusals, read.failovers, ['height', 'section', 'title', 'top', 'width'], `${theme} /analytics: "Refusals by code" against "Failovers"`));
-    failures.push(...compare(read.rewrites, read.speed, ['chart', 'height', 'section', 'title', 'top', 'width'], `${theme} /analytics: "Migration rewrites" against "Requests by speed"`));
+    failures.push(...compare(read.refusalCategories, read.refusals, ['height', 'section', 'title', 'top', 'width'], `${theme} /analytics: "Refusals by category" against "Refusals by code"`));
+    failures.push(...compare(read.rewrites, read.failovers, ['height', 'section', 'top', 'width'], `${theme} /analytics: "Migration rewrites" against "Failovers"`));
     if (mock && (read.rewrites?.charts !== 2 || !read.held || read.held.bars === 0)) failures.push(`${theme} /analytics: the story holds requests for the slow-down, yet the rewrites card draws no held bar under its moves (${JSON.stringify(read.held)})`);
     if (read.held && read.held.fills.some((fill) => fill !== read.held.warning)) failures.push(`${theme} /analytics: the held bars draw ${read.held.fills.join(', ')}, not the warning ink ${read.held.warning}`);
   } finally {
@@ -10739,6 +10772,7 @@ try {
         await tableColumns(theme, 'requests', '.requests__table', ['Time'], 0, { wrapping: ['Status', 'Attempts', ''] });
         if (mock) await requestsTableWide(theme);
         await requestsFundingWord(theme);
+        await requestsRefusalChip(theme);
         await pagerControls(theme, view.path);
       }
       if (view.path === '/routing-log') {

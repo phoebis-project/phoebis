@@ -274,6 +274,26 @@ test('the request list encodes the outcome list', async () => {
   assert.ok(!String(calls[1].url).includes('outcomes'), 'no outcome filter, no parameter');
 });
 
+test('listRequests passes the refusal categories and the stop reasons as comma lists', async () => {
+  const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
+  await new HttpApi().listRequests({ refusalCategories: ['cyber', '-'], stopReasons: ['refusal'] });
+  const params = new URL(calls[0].url, 'http://x').searchParams;
+  assert.deepEqual([params.get('refusal_categories'), params.get('stop_reasons')], ['cyber,-', 'refusal']);
+  await new HttpApi().listRequests({});
+  for (const name of ['refusal_categories', 'stop_reasons']) assert.ok(!String(calls[1].url).includes(name), `no ${name} filter, no parameter`);
+});
+
+test('the refusal categories read sends the analytics query and answers the rows in the route order', async () => {
+  const rows = [{ category: 'cyber', requests: 3 }, { category: '-', requests: 1 }];
+  const calls = stub(() => answer(200, { from: 0, rows, to: 86_400_000 }));
+  const q = { accountIds: ['primary'], from: '1970-01-01T00:00:00.000Z', groupBy: 'all', includeProbes: true, keyIds: ['desktop'], kinds: ['inference'], models: ['claude-sonnet-5'], poolIds: ['all'], to: '1970-01-02T00:00:00.000Z' };
+  const read = await new HttpApi().getAnalyticsRefusalCategories(q);
+  const url = new URL(calls[0].url, 'http://x');
+  assert.equal(url.pathname, '/admin/analytics/refusal_categories');
+  assert.deepEqual(Object.fromEntries(url.searchParams), { accounts: 'primary', group_by: 'all', include_probes: 'true', keys: 'desktop', kinds: 'inference', models: 'claude-sonnet-5', pools: 'all', range: '0,86400000' });
+  assert.deepEqual(read, { from: '1970-01-01T00:00:00.000Z', rows, to: '1970-01-02T00:00:00.000Z' });
+});
+
 test('listRequests passes the request and the session as they are', async () => {
   const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
   await new HttpApi().listRequests({ request: 'req_1', session: 's1' });

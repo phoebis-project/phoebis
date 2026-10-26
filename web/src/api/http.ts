@@ -200,6 +200,7 @@ export class HttpApi implements Api {
     d.decodeBurn(await call('GET', `/admin/analytics/burn${qs({ accounts: filters.accountIds, group_by: groupBy, range: range(r.from, r.to), user_agent_groups: filters.userAgentGroups?.join('\n') })}`));
   getAnalyticsGuardrails = async (r: GuardrailRange) => d.decodeGuardrailCounts(await call('GET', `/admin/analytics/guardrails${qs({ range: r === '24h' ? r : range(r.from, r.to) })}`));
   getAnalyticsReconciliations = async (filters: Pick<AnalyticsQuery, 'accountIds'> = {}) => d.decodeReconciliations(await call('GET', `/admin/analytics/reconciliations${qs({ accounts: filters.accountIds })}`));
+  getAnalyticsRefusalCategories = async (query: AnalyticsQuery) => d.decodeRefusalCategories(await call('GET', `/admin/analytics/refusal_categories${analytics(query)}`));
   getAnalyticsRewrites = async (r: Pick<AnalyticsQuery, 'from' | 'to'>) => d.decodeRewrites(await call('GET', `/admin/analytics/rewrites${qs({ range: range(r.from, r.to) })}`));
   getAnalyticsSeries = async (q: AnalyticsQuery): Promise<AnalyticsPoint[]> => (await call<{ points: unknown[] }>('GET', `/admin/analytics/series${analytics(q)}`)).points.map(d.decodeAnalyticsPoint);
   getAttention = async () => (await call<{ items: unknown[] }>('GET', '/admin/attention', undefined, false, { quiet: true })).items.map(d.decodeAttention);
@@ -264,7 +265,7 @@ export class HttpApi implements Api {
   listPools = async () => (await call<{ pools: unknown[] }>('GET', '/admin/pools')).pools.map(d.decodePool);
   listRequests = async (q: RequestQuery = {}) =>
     d.decodeRequestPage(
-      await call('GET', `/admin/requests${qs({ accounts: q.accountIds, agent_types: q.agentTypes, cache_miss_reasons: q.cacheMissReasons, classifiers: q.classifiers, client: q.client, cursor: q.cursor, efforts: q.efforts, from: q.from ? Date.parse(q.from) : undefined, guardrails: q.guardrails, held: q.held, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, landed_after: q.landedAfter, limit: q.limit, models: q.models, outcomes: q.outcomes, pools: q.poolIds, request: q.request, request_classes: q.requestClasses, session: q.session, speeds: q.speeds, statuses: q.statuses?.map(String), text: q.search, to: q.to ? Date.parse(q.to) : undefined, turn_origins: q.turnOrigins, user_agent: q.userAgent })}`),
+      await call('GET', `/admin/requests${qs({ accounts: q.accountIds, agent_types: q.agentTypes, cache_miss_reasons: q.cacheMissReasons, classifiers: q.classifiers, client: q.client, cursor: q.cursor, efforts: q.efforts, from: q.from ? Date.parse(q.from) : undefined, guardrails: q.guardrails, held: q.held, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, landed_after: q.landedAfter, limit: q.limit, models: q.models, outcomes: q.outcomes, pools: q.poolIds, refusal_categories: q.refusalCategories, request: q.request, request_classes: q.requestClasses, session: q.session, speeds: q.speeds, statuses: q.statuses?.map(String), stop_reasons: q.stopReasons, text: q.search, to: q.to ? Date.parse(q.to) : undefined, turn_origins: q.turnOrigins, user_agent: q.userAgent })}`),
     );
   // The route reads RFC 3339 instants, so the two times pass through as the page wrote them.
   listRoutingLog = async (q: RoutingLogQuery = {}) =>

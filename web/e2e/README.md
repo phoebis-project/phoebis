@@ -136,7 +136,10 @@ narrowest with Time at its floor, scrolling inside its wrap with the page as wid
 fill, the Status, Attempts and links cells wrapping), its text at 1920 by 1080 in the mock pass (no client class or
 agent type cut, each read on its own span, and every id whole), the usage-based Cost cell (mock pass: `usage-based`
 under its dollars in the tag, size, weight and ink of a billed row's funding word, its hover `Billed in dollars:
-usage-based`), the table with Time turned off (`table--no-fill` at its content width at 1280 by 800 and 1920 by 1080),
+usage-based`), the Status cell's refusal chip against the code's badge (mock pass, on the refused answers' list: the
+`cyber` chip in the badge's font size and height from its left edge and under it at the cell's gap, its text and the
+upstream's hover recorded), the table with Time turned off (`table--no-fill` at its content width at 1280 by 800 and
+1920 by 1080),
 the Cache warming grid (an odd last card spanning its row, its title in the type of the card before it), the Analytics
 tiles rows and the Cache warming grid at 1280 by 800 and 1440 by 900 (no figure on the Cost and Cache warming tiles
 rows, the Wasted probes card's among them, wider than its tile, a Cache warming card alone on its row spanning the grid
@@ -168,7 +171,9 @@ row above it, recorded as skipped in the router pass), the fresh tint on both lo
 shot, the row the story lands a few seconds after the load, the request log's late request on a page of 50 and the
 routing log's late event, drawn on the first auto reload at 5 s with every cell in `--accent-soft` over the surface,
 apart from the row's resting fill and in its box, the one row in the tint, recorded as skipped in the router pass), the
-traffic cards (each Analytics check opens the tab it reads and returns to Traffic), the tab strip docked under the
+traffic cards (the Refusals by category card against Refusals by code, Failovers beside Migration rewrites and Effort
+levels beside Requests by speed, and each Analytics check opens the tab it reads and returns to Traffic), the tab strip
+docked under the
 filter bar at the end of the Latency tab (the bar 49 px at rest and 83 px with a chip line, read on an address of its
 own), the unit legend's lines in the top bar's popover at 1280 by 800 (Native's and Billed dollars' sentences naming the
 four billed fundings, each in the face, size and ink of the line after it, its label at that label's weight), the Unit

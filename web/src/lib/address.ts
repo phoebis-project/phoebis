@@ -154,6 +154,8 @@ export interface RequestsAddress {
   outcomes: string[];
   pools: string[];
   range: RangeValue;
+  /** The serving attempt's refusal category, `-` for none. */
+  refusalCategories: string[];
   request: string;
   requestClasses: string[];
   /** The page size. */
@@ -162,6 +164,8 @@ export interface RequestsAddress {
   session: string;
   speeds: string[];
   statuses: string[];
+  /** The serving attempt's stop reason, `-` for none. */
+  stopReasons: string[];
   turnOrigins: string[];
 }
 
@@ -188,6 +192,8 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   outcomes: list('outcomes'),
   cacheMissReasons: list('cache_miss_reasons'),
   guardrails: list('guardrails'),
+  refusalCategories: list('refusal_categories'),
+  stopReasons: list('stop_reasons'),
   kind: { default: '', kind: 'choice', name: 'kind', values: REQUEST_KINDS },
   rows: { default: '25', kind: 'choice', name: 'rows', values: ['10', '25', '50', '100'] },
   range: { default: '24h', kind: 'range', presets: RANGE_PRESETS },

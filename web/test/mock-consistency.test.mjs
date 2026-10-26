@@ -3194,6 +3194,42 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(totals.requests, rows.length, 'each row counts once');
   });
 
+  // The route's own fixture, `analytics_refusal_categories`, comes with the admin capture, and from then on the sync
+  // test reads this answer against it.
+  test(`the story's refused answers fall under two categories and one with none across two sessions, each a request that succeeded, and the refusal route counts them by category, at ${at}`, async () => {
+    const s = await story;
+    const served = (r) => r.attempts.at(-1)?.response ?? null;
+    const word = (r) => served(r).refusalCategory ?? '-';
+    const refused = s.requests.filter((r) => served(r)?.stopReason === 'refusal');
+    assert.ok(refused.length >= 5, `the story holds ${refused.length} refused answers`);
+    assert.deepEqual([...new Set(refused.map(word))].sort(), ['-', 'cyber', 'harmful']);
+    assert.ok(new Set(refused.map((r) => r.sessionId)).size >= 2, 'the refused answers span two sessions at least');
+    for (const r of refused) {
+      assert.deepEqual([r.outcome, r.refused], ['succeeded', false], `${r.id} is a request that succeeded`);
+      assert.ok(served(r).refusalRecommendedModel !== null, `${r.id} names the model to try`);
+    }
+    assert.deepEqual(s.requests.filter((r) => 'refusalCategory' in r || 'stopReason' in r).map((r) => r.id), [], 'the serving attempt alone carries the refusal');
+    // Requests by outcome and the Traffic table's OK column count a refused answer as the request that succeeded.
+    const rows = s.asked(s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= startOfHour(s.now - DAY)));
+    const [totals] = s.lib.groupsOf(defaultRange(s), { groupBy: 'all', includeProbes: false });
+    assert.ok(refused.some((r) => rows.includes(r)), 'the default range holds a refused answer');
+    assert.equal(totals.succeeded, rows.filter((r) => r.outcome === 'succeeded').length, 'the OK count holds the refused answers');
+    // The route orders the rows by the count, then by the category in byte order, where the dash sorts first.
+    const byCategory = (list) => {
+      const counts = new Map();
+      for (const r of list) counts.set(word(r), (counts.get(word(r)) ?? 0) + 1);
+      return [...counts].map(([category, requests]) => ({ category, requests })).sort((a, b) => b.requests - a.requests || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
+    };
+    const range = { from: iso(Math.min(...s.requests.map((r) => Date.parse(r.at)))), groupBy: 'all', to: iso(s.now) };
+    const answer = await s.api.getAnalyticsRefusalCategories(range);
+    assert.deepEqual(answer.rows, byCategory(refused));
+    assert.equal(sum(answer.rows, (row) => row.requests), refused.length, 'the rows sum to the refused answers');
+    const account = refused[0].accountId;
+    const mine = refused.filter((r) => r.accountId === account);
+    assert.ok(mine.length < refused.length, `${account} serves some of the refused answers alone`);
+    assert.deepEqual((await s.api.getAnalyticsRefusalCategories({ ...range, accountIds: [account] })).rows, byCategory(mine), `narrowed to ${account}`);
+  });
+
   test(`the routing log lists the story's late event once the clock reaches it a few seconds after the load, on top, at ${at}`, async () => {
     const s = await story;
     // The route's clock is read as the call is made, so it is set for the call alone.

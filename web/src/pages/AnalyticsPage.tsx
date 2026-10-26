@@ -6,7 +6,7 @@ import { api } from '@/api';
 import { windowId } from '@/api/decode';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups, type SessionRequests } from '@/api/fold';
 import { useAppSettings } from '@/app/settings';
-import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, ReconciliationsAnswer, RequestLog, RewritesAnswer, SubscriptionCosts } from '@/api/types';
+import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, ReconciliationsAnswer, RefusalCategoriesAnswer, RequestLog, RewritesAnswer, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
 import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -30,7 +30,7 @@ import { ESTIMATED_TITLE, equivalentShort, fmtAbsolute, fmtBytes, fmtCompact, fm
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
 import { REFUSED_TITLE } from '@/lib/requests';
-import { linkedKeyIds, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
+import { linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { WINDOW_WORD, words } from '@/lib/routingLog';
 import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition } from '@/lib/unit';
 import { WINDOW_LABEL } from '@/lib/windows';
@@ -394,6 +394,8 @@ export function AnalyticsPage() {
   const burnSettings = useAsync(() => (tab === 'burn' ? api.getSettings() : Promise.resolve(null)), [tab]);
   const sized = useMemo(() => (burn.data && burnSettings.data ? sizedAccounts(burn.data.accounts, burnSettings.data.subscriptionCosts) : null), [burn.data, burnSettings.data]);
   const rewrites = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRewrites({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
+  // The route takes no session selector, so under a session filter the card counts every session's refusals.
+  const refusalCategories = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRefusalCategories(query) : Promise.resolve(null)), [query, tab, generation], reload);
   // The counts route reads the range alone, which the card's subtitle says, since it carries no filter.
   const guardrailCounts = useAsync(() => (tab === 'traffic' ? api.getAnalyticsGuardrails({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
   // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
@@ -600,6 +602,9 @@ export function AnalyticsPage() {
     filters: { accountIds: filters.accountId, clientPattern: classPattern.trim(), includeProbes, keyIds: linkedKeyIds(filters.keyId, sessionId === null ? null : sessionKey), models: filters.model, poolIds: filters.poolId, sessionId, userAgentPattern: userAgentPattern.trim() },
     window: { exact: sessionId !== null, fromMs: span.fromMs, nowMs: now, toMs: span.toMs },
   };
+  // The refusal route reads the page's own key selection, never a session view's key lifetime, and `refusalLink` sets
+  // the exact window and leaves the session out.
+  const refusalInput: ReasonLink = { ...linkInput, filters: { ...linkInput.filters, keyIds: filters.keyId } };
 
   return (
     <div className="stack">
@@ -666,10 +671,31 @@ export function AnalyticsPage() {
               {loading ? <Skeleton height={90} /> : <ErrorBars errors={totals.errors} color={ink.series[7]} />}
             </Card>
 
-            {/* The refusals follow the errors, so the two code lists read in turn, and the grid then pairs Failovers
-                with the refusals and the rewrites with the speed chart. */}
+            {/* The two refusal lists follow the errors in turn, so the grid pairs Requests by outcome with Errors by
+                code, the two refusal cards, Failovers with Migration rewrites and Requests by speed with Effort levels,
+                eight cards and no lone one. */}
             <Card title="Refusals by code" subtitle="Requests the router refused before any account was asked, not in the counts">
               {loading ? <Skeleton height={90} /> : <ErrorBars color={ink.series[7]} empty="No request was refused in this range." errors={totals.refusals} />}
+            </Card>
+
+            {/* Its own error with Try again, as a card reading a route of its own draws one, and no count while the
+                answer is stale, so no figure stands under links for filters it was not read for. */}
+            <Card title="Refusals by category" subtitle={`Answers the upstream refused in range, by category, each a request that succeeded${sessionId === null ? '' : REFUSALS_SESSION_NOTE}`}>
+              {refusalCategories.error !== null ? (
+                <ErrorState
+                  title="Could not load refusals by category"
+                  body={refusalCategories.error}
+                  action={
+                    <Button size="sm" onClick={refusalCategories.reload}>
+                      Try again
+                    </Button>
+                  }
+                />
+              ) : refusalCategories.data === null || refusalCategories.stale ? (
+                <Skeleton height={90} />
+              ) : (
+                <CountBars color={ink.series[7]} empty="No answer was refused in this range." rows={refusalRows(refusalCategories.data, refusalInput)} />
+              )}
             </Card>
 
             <ChartCard title="Failovers" subtitle="Attempts that moved to another member" loading={loading} legend={[{ color: ink.series[3], label: 'Failovers', shape: 'line', value: fmtInt(totals.failovers) }]}>
@@ -1474,8 +1500,11 @@ function BreakdownTable({
   );
 }
 
-/** Horizontal bars of counts in the order given, each with its share of the total; `empty` when every count is zero. */
-function CountBars({ color, empty, rows }: { color: string; empty: string; rows: { count: number; label: string }[] }) {
+/**
+ * Horizontal bars of counts in the order given, each with its share of the total and, where its row carries a target,
+ * its count linking the requests it counts, and `empty` when every count is zero.
+ */
+function CountBars({ color, empty, rows }: { color: string; empty: string; rows: { count: number; label: string; target?: RequestsLinkTarget }[] }) {
   const max = Math.max(1, ...rows.map((r) => r.count));
   const total = rows.reduce((s, r) => s + r.count, 0);
   if (total === 0) return <p className="muted">{empty}</p>;
@@ -1488,7 +1517,7 @@ function CountBars({ color, empty, rows }: { color: string; empty: string; rows:
             <span className="hbars__fill" style={{ width: `${(r.count / max) * 100}%`, background: color }} />
           </div>
           <span className="num">
-            {fmtInt(r.count)} <span className="muted">{fmtPct(r.count / total)}</span>
+            {r.target ? <CountLink target={r.target}>{fmtInt(r.count)}</CountLink> : fmtInt(r.count)} <span className="muted">{fmtPct(r.count / total)}</span>
           </span>
         </li>
       ))}
@@ -1502,6 +1531,9 @@ function ErrorBars({ errors, color, empty = 'No errors in range.' }: { color: st
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
   return <CountBars color={color} empty={empty} rows={rows} />;
 }
+
+/** One bar per category in the route's order, `-` read `none`, each count linking its category's refused answers. */
+const refusalRows = (answer: RefusalCategoriesAnswer, input: ReasonLink) => answer.rows.map((r) => ({ count: r.requests, label: r.category === '-' ? 'none' : r.category, target: refusalLink(input, r.category, r.requests) }));
 
 /** Requests per effort level, each named as the rollups file it; `none`, the requests that asked for no level, last. */
 function EffortBars({ groups, color }: { color: string; groups: AnalyticsGroup[] }) {
@@ -1527,11 +1559,15 @@ function reasonColor(ink: ReturnType<typeof useChartInk>, reason: CacheMissReaso
 }
 
 /**
- * What every count of the reasons panel links under: the window and the page's filters, without a count or a reason.
+ * What every count of the reasons panel and the refusals card links under: the window and the page's filters, without
+ * a count, a reason or a category.
  */
-type ReasonLink = Omit<RequestsLinkInput, 'count' | 'group' | 'reason'>;
+type ReasonLink = Omit<RequestsLinkInput, 'count' | 'group' | 'reason' | 'refusalCategory'>;
 
-/** A count of the reasons panel: a link to the requests it counts, else the figure with why it stays plain. */
+/**
+ * A count of the reasons panel or the refusals card: a link to the requests it counts, else the figure with why it
+ * stays plain.
+ */
 function CountLink({ children, target }: { children: ReactNode; target: RequestsLinkTarget }) {
   return target.href === null ? (
     <span title={target.title}>{children}</span>
@@ -2152,6 +2188,7 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, shared,
 }
 
 const UNFILTERED_NOTE = '. The filters above do not apply here';
+const REFUSALS_SESSION_NOTE = '. The session filter does not apply here';
 const BURN_UNFILTERED_NOTE = '. Of the filters above, the Accounts filter and the user agent groups alone apply here';
 type TimeAxis = { height?: number; label?: { fill: string; fontSize: number; position: 'insideBottomRight'; value: string }; tickFormatter: (v: number) => string };
 /**

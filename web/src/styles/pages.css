@@ -4629,8 +4629,9 @@
   min-width: 132px;
 }
 
-/* The Burn grid draws three plan cards beside the spend card, or two without a model week, and the Traffic grid seven,
-   so an odd last card spans the row rather than leaving a half empty. */
+/* The Burn grid draws three plan cards beside the spend card, or two without a model week, so an odd last card spans
+   the row rather than leaving a half empty. The Traffic grid's eight cards pair off, and the rule spans its last card
+   should the count turn odd. */
 .burn-grid > .card:last-child:nth-child(odd),
 .traffic-grid > .card:last-child:nth-child(odd) {
   grid-column: 1 / -1;
