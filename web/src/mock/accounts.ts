@@ -459,7 +459,7 @@ export const ACCOUNTS: Account[] = SEEDS.map((a) => {
   // Standing in for the router, which answers each window's lead toward the earlier of its reset and the account's end.
   const end = endOf({ ...a, subscription }, NOW);
   const led = (w: RateLimitWindow): RateLimitWindow => ({ ...w, lead: leadOf(w, w.periodHours * HOUR, NOW, end) });
-  return { ...a, fableWindow: a.fableWindow === null ? null : led(a.fableWindow), plan: planName(subscription), pool: null, subscription, usage: usageOf(a), windows: a.planEndedAt === null ? a.windows.map(led) : [] };
+  return { ...a, fableWindow: a.planEndedAt === null && a.fableWindow !== null ? led(a.fableWindow) : null, plan: planName(subscription), pool: null, subscription, usage: usageOf(a), windows: a.planEndedAt === null ? a.windows.map(led) : [] };
 });
 
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
