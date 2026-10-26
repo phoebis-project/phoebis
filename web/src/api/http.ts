@@ -203,6 +203,8 @@ export class HttpApi implements Api {
   getAnalyticsRefusalCategories = async (query: AnalyticsQuery) => d.decodeRefusalCategories(await call('GET', `/admin/analytics/refusal_categories${analytics(query)}`));
   getAnalyticsRewrites = async (r: Pick<AnalyticsQuery, 'from' | 'to'>) => d.decodeRewrites(await call('GET', `/admin/analytics/rewrites${qs({ range: range(r.from, r.to) })}`));
   getAnalyticsSeries = async (q: AnalyticsQuery): Promise<AnalyticsPoint[]> => (await call<{ points: unknown[] }>('GET', `/admin/analytics/series${analytics(q)}`)).points.map(d.decodeAnalyticsPoint);
+  getAnalyticsUnusedAllowance = async (span: Pick<AnalyticsQuery, 'from' | 'to'>, filters: Pick<AnalyticsQuery, 'accountIds'> = {}) =>
+    d.decodeUnusedAllowance(await call('GET', `/admin/analytics/unused_allowance${qs({ accounts: filters.accountIds, range: range(span.from, span.to) })}`));
   getAttention = async () => (await call<{ items: unknown[] }>('GET', '/admin/attention', undefined, false, { quiet: true })).items.map(d.decodeAttention);
   getCapturedBodies = async (requestId: string) => {
     try {

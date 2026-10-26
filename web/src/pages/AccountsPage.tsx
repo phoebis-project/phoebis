@@ -2,8 +2,9 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError } from '@/api';
-import type { Account, PairingConfirmed, PairingPreview, PairingSession, QuotaHistory } from '@/api/types';
+import type { Account, AllowanceAccount, AllowanceWindow, PairingConfirmed, PairingPreview, PairingSession, QuotaHistory, SubscriptionCosts } from '@/api/types';
 import { useSession } from '@/app/session';
+import { useAppSettings } from '@/app/settings';
 import { CatalogDialog } from '@/components/CatalogDialog';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
@@ -15,6 +16,7 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, E
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { ACCOUNTS_CODEC } from '@/lib/address';
+import { FREE_NOTE, allowanceFigure, allowanceSpan, allowanceSubtitle, allowanceWindows, newestResets, resetDate, resetHover, resetInstant, type AllowanceFigure } from '@/lib/allowance';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
@@ -24,6 +26,8 @@ import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } fr
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { speedHover } from '@/lib/selection';
 import { joinTrend } from '@/lib/trend';
+import type { UnitPosition } from '@/lib/unit';
+import { WINDOW_HOURS, WINDOW_LABEL, windowKeyId } from '@/lib/windows';
 
 /** The Status dimension's options, in the labels' order. */
 const STATUS_OPTIONS = { status: ACCOUNT_STATUSES.map((s) => ({ label: STATUS_LABEL[s], value: s })) };
@@ -44,11 +48,17 @@ export function AccountsPage() {
   const [detailBusy, setDetailBusy] = useState(false);
   const [intervalMs, setIntervalMs] = useState(5_000);
   const [barOpen, setBarOpen] = useState(false);
+  // Counts the bar's Refresh presses, so a detail read that skips the list's cadence still reads again on one.
+  const [generation, setGeneration] = useState(0);
   // A save in flight or an editor open in the detail holds the list as a dialog does.
   const dialogOpen = addOpen || pairing !== null || detailBusy;
   const accounts = useAsync(() => api.listAccounts(), [], { paused: dialogOpen || barOpen, refreshMs: intervalMs });
   const now = useNow();
   const { notify } = useSession();
+  const refresh = () => {
+    setGeneration((g) => g + 1);
+    accounts.reload();
+  };
 
   const list = useMemo(() => {
     const { search, sort, status } = filters;
@@ -124,7 +134,7 @@ export function AccountsPage() {
         onOpenChange={setBarOpen}
         options={STATUS_OPTIONS}
         placeholder="Search accounts"
-        refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: accounts.reload, paused: dialogOpen ? 'dialog' : barOpen ? 'menu' : null, refreshTitle: 'Reads the list again now' }}
+        refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: refresh, paused: dialogOpen ? 'dialog' : barOpen ? 'menu' : null, refreshTitle: 'Reads the list again now' }}
         update={update}
       >
         <label className="row">
@@ -183,7 +193,7 @@ export function AccountsPage() {
           <Descriptions>
             {/* Keyed by the account, so a save still running when the operator moves on answers into its own
                 unmounted detail and never moves the token of an editor another account opened. */}
-            <AccountDetail key={selected.id} account={selected} awaitingReading={awaiting === selected.id} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ start: { accountId: selected.id }, label: selected.label, repair })} onChanged={accounts.reload} />
+            <AccountDetail key={selected.id} account={selected} awaitingReading={awaiting === selected.id} generation={generation} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ start: { accountId: selected.id }, label: selected.label, repair })} onChanged={accounts.reload} />
           </Descriptions>
         ) : accounts.data === null ? (
           <Skeleton height={400} />
@@ -256,9 +266,21 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
   );
 }
 
-function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, onPair, onChanged }: { account: Account; awaitingReading: boolean; now: number; onBusyChange: (busy: boolean) => void; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void }) {
+function AccountDetail({ account, awaitingReading, generation, now, onBusyChange, onToast, onPair, onChanged }: { account: Account; awaitingReading: boolean; generation: number; now: number; onBusyChange: (busy: boolean) => void; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void }) {
   const navigate = useNavigate();
   const history = useAsync(() => api.getQuotaHistory(account.id), [account.id]);
+  // The cost model the allowance block's equivalents price through.
+  const settings = useAsync(() => api.getSettings(), []);
+  const { unit } = useAppSettings();
+  // An API-key account and a usage-based seat report no weekly window, so neither draws the block nor reads its route.
+  const allowanceShown = account.kind === 'oauth' && !account.usageBased;
+  // A weekly row changes once a week, so the block reads again on the bar's Refresh and once the list's poll answers a
+  // weekly window past its reset, never at the list's cadence.
+  const weeklyResetsAt = [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])]
+    .filter((w) => w.periodHours === WINDOW_HOURS['7d'])
+    .map((w) => w.resetsAt ?? '')
+    .join(',');
+  const allowance = useAsync(() => (allowanceShown ? api.getAnalyticsUnusedAllowance(allowanceSpan(clock.now()), { accountIds: [account.id] }) : Promise.resolve(null)), [account.id, generation, weeklyResetsAt]);
   const [busy, setBusy] = useState(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
@@ -703,6 +725,21 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
         </Card>
       )}
 
+      {allowanceShown && (
+        <div className="detail__grid detail__grid--meter">
+          <AllowanceCard
+            answer={allowance.data === null ? undefined : (allowance.data.accounts.find((a) => a.accountId === account.id) ?? null)}
+            costs={settings.data?.subscriptionCosts ?? null}
+            error={allowance.error ?? settings.error}
+            onRetry={() => {
+              allowance.reload();
+              settings.reload();
+            }}
+            unit={unit}
+          />
+        </div>
+      )}
+
       <div className="detail__grid">
         <CoolingDown
           title="Cooling down"
@@ -772,6 +809,90 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
 
       <CatalogDialog open={catalogOpen} accountId={account.id} label={account.label} now={now} onClose={() => setCatalogOpen(false)} />
       <ConfirmDialog open={confirm !== null} onClose={() => setConfirm(null)} title={confirm?.title ?? ''} body={confirm?.body ?? ''} confirmLabel={confirm?.label} danger={confirm?.danger} onConfirm={() => confirm?.onConfirm()} />
+    </div>
+  );
+}
+
+/** A figure's text, a dash carrying the reason it reads none. */
+function AllowanceText({ className, figure }: { className: string; figure: AllowanceFigure }) {
+  return (
+    <span className={className} title={figure.kind === 'unpriced' || figure.kind === 'none' ? figure.title : undefined}>
+      {figure.text}
+    </span>
+  );
+}
+
+/**
+ * "Allowance left at reset", one column per weekly window: the latest reset's figure in the Usage card's head shape
+ * and its reset line, the three weeks before it, then the total. `answer` is undefined while the read runs and null
+ * for an account the route lists no reset for.
+ */
+function AllowanceCard({ answer, costs, error, onRetry, unit }: { answer: AllowanceAccount | null | undefined; costs: SubscriptionCosts | null; error: string | null; onRetry: () => void; unit: UnitPosition }) {
+  return (
+    <Card title="Allowance left at reset" subtitle={allowanceSubtitle(unit)}>
+      {error !== null ? (
+        <ErrorState
+          title="Could not load the weekly resets"
+          body={error}
+          action={
+            <Button size="sm" onClick={onRetry}>
+              Try again
+            </Button>
+          }
+        />
+      ) : answer === undefined || costs === null ? (
+        <Skeleton height={120} />
+      ) : answer === null ? (
+        <p className="muted">{"No weekly reset recorded yet. The first shows once this account's week ends."}</p>
+      ) : (
+        <>
+          <div className="allowance">
+            {allowanceWindows(answer).map((w) => (
+              <AllowanceColumn key={w.window} account={answer} costs={costs} unit={unit} window={w} />
+            ))}
+          </div>
+          {answer.plan === 'free' && unit !== 'share' && <p className="muted detail__note">{FREE_NOTE}</p>}
+        </>
+      )}
+    </Card>
+  );
+}
+
+function AllowanceColumn({ account, costs, unit, window: w }: { account: AllowanceAccount; costs: SubscriptionCosts; unit: UnitPosition; window: AllowanceWindow }) {
+  const { counted, resets, total } = newestResets(w);
+  const [latest, ...before] = resets;
+  const figure = (share: number | null) => allowanceFigure(share, w.window, account, costs, unit);
+  const ended = <Badge tone="neutral">term ended</Badge>;
+  return (
+    <div className="allowance__col">
+      <div className="wbar__head">
+        <span className="wbar__label">{WINDOW_LABEL[windowKeyId(w.window) ?? ''] ?? w.window}</span>
+        <AllowanceText className="wbar__pct num" figure={figure(latest?.shareLeft ?? null)} />
+      </div>
+      {latest && (
+        <div className="wbar__reset allowance__reset" title={resetHover(latest)}>
+          {latest.source === 'term_ended' ? (
+            <>
+              {`left at ${resetInstant(latest.resetAt)}`} {ended}
+            </>
+          ) : (
+            `left at the reset of ${resetInstant(latest.resetAt)}`
+          )}
+        </div>
+      )}
+      {before.map((r) => (
+        <div key={r.resetAt} className="allowance__row" title={resetHover(r)}>
+          <span className="allowance__date">
+            {resetDate(r.resetAt)}
+            {r.source === 'term_ended' && <> {ended}</>}
+          </span>
+          <AllowanceText className="num" figure={figure(r.shareLeft)} />
+        </div>
+      ))}
+      <div className="allowance__row allowance__total">
+        <span>{counted === 1 ? 'Total, 1 week' : `Total, ${counted} weeks`}</span>
+        <AllowanceText className="num" figure={figure(total)} />
+      </div>
     </div>
   );
 }

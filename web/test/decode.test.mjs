@@ -776,6 +776,67 @@ test("the refusal categories answer keeps the route's rows in order with the das
   assert.deepEqual([response.stopReason, response.refusalCategory], ['refusal', null], 'the chip reads both off the serving attempt');
 });
 
+test('the unused allowance answer keeps every account, window and reset as the route lists them, newest first, its instants as ISO strings', () => {
+  const end = 1_791_633_600_000;
+  const at = (hours) => end - hours * 3_600_000;
+  const reset = (hours, share, source, observedHours = hours) => ({ observed_at: at(observedHours), reset_at: at(hours), share_left: share, source });
+  const body = {
+    accounts: [
+      {
+        account_id: 'pro-org',
+        plan: 'pro',
+        tier: 'default_claude_ai',
+        windows: [
+          // The term's end read off the last sample six hours before it, then a clock walk's reset whose share the
+          // subtraction left inexact, which the decoder keeps as sent.
+          { resets: [reset(24, 0.54, 'term_ended', 30), reset(192, 0.15000000000000002, 'clock'), reset(360, 0.38, 'sample'), reset(528, 0.6, 'sample')], resets_counted: 4, total_share_left: 1.67, window: 'seven_day' },
+          { resets: [reset(48, 0.2, 'sample'), reset(216, 0.7, 'clock')], resets_counted: 2, total_share_left: 0.9, window: 'seven_day_fable' },
+        ],
+      },
+      // No profile document yet, and a source word the router writes that the console does not know.
+      { account_id: 'unprofiled', plan: null, tier: null, windows: [{ resets: [reset(72, 1, 'replayed')], resets_counted: 1, total_share_left: 1, window: 'seven_day' }] },
+    ],
+    from: at(29 * 24),
+    to: end,
+  };
+  const iso = (ms) => new Date(ms).toISOString();
+  assert.deepEqual(d.decodeUnusedAllowance(body), {
+    accounts: [
+      {
+        accountId: 'pro-org',
+        plan: 'pro',
+        tier: 'default_claude_ai',
+        windows: [
+          {
+            resets: [
+              { observedAt: iso(at(30)), resetAt: iso(at(24)), shareLeft: 0.54, source: 'term_ended' },
+              { observedAt: iso(at(192)), resetAt: iso(at(192)), shareLeft: 0.15000000000000002, source: 'clock' },
+              { observedAt: iso(at(360)), resetAt: iso(at(360)), shareLeft: 0.38, source: 'sample' },
+              { observedAt: iso(at(528)), resetAt: iso(at(528)), shareLeft: 0.6, source: 'sample' },
+            ],
+            resetsCounted: 4,
+            totalShareLeft: 1.67,
+            window: 'seven_day',
+          },
+          {
+            resets: [
+              { observedAt: iso(at(48)), resetAt: iso(at(48)), shareLeft: 0.2, source: 'sample' },
+              { observedAt: iso(at(216)), resetAt: iso(at(216)), shareLeft: 0.7, source: 'clock' },
+            ],
+            resetsCounted: 2,
+            totalShareLeft: 0.9,
+            window: 'seven_day_fable',
+          },
+        ],
+      },
+      { accountId: 'unprofiled', plan: null, tier: null, windows: [{ resets: [{ observedAt: iso(at(72)), resetAt: iso(at(72)), shareLeft: 1, source: 'replayed' }], resetsCounted: 1, totalShareLeft: 1, window: 'seven_day' }] },
+    ],
+    from: iso(at(29 * 24)),
+    to: iso(end),
+  });
+  assert.deepEqual(d.decodeUnusedAllowance({ accounts: [], from: at(24), to: end }), { accounts: [], from: iso(at(24)), to: iso(end) }, 'a range with no weekly reset lists no account');
+});
+
 test('a candidate decodes its fit figures and an outcome its reservation and its hold\'s reason', () => {
   const body = fixture('decision');
   const [wire] = body.candidates;

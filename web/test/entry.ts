@@ -4,6 +4,7 @@ export * from '@/api/http';
 export { PLAN_WORDS } from '@/api/types';
 export { accountColor, accountSlots } from '@/components/charts/theme';
 export * from '@/lib/address';
+export * from '@/lib/allowance';
 export * from '@/lib/analytics';
 export * from '@/lib/attention';
 export * from '@/lib/autoMode';

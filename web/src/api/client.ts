@@ -46,6 +46,7 @@ import type {
   SessionInfo,
   Settings,
   TtlRules,
+  UnusedAllowanceAnswer,
 } from './types';
 import type { Condition, Guardrail, GuardrailCounts, GuardrailMode, GuardrailPreset, GuardrailTestResult } from './types';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS } from '@/lib/presets';
@@ -229,6 +230,8 @@ export interface Api {
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>): Promise<RewritesAnswer>;
   /** `funding` keeps the billed or the plan-funded rows. Under the account grouping each point's subscription groups carry their shares. */
   getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;
+  /** The weekly resets of the span per subscription account, the Accounts filter alone narrowing it. */
+  getAnalyticsUnusedAllowance(span: Pick<AnalyticsQuery, 'from' | 'to'>, filters?: Pick<AnalyticsQuery, 'accountIds'>): Promise<UnusedAllowanceAnswer>;
   /** The conditions that hold now, worst first and the oldest first within a kind: the route's order is the ranking. */
   getAttention(): Promise<AttentionItem[]>;
   getCapturedBodies(requestId: string): Promise<CapturedBodies | null>;

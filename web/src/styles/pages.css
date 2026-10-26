@@ -1443,6 +1443,63 @@
   align-items: start;
 }
 
+/* The two cards after the 7-day trend sit side by side at 1440 px and stack at 1280 and 375 px: the detail pane is
+   794 px wide at 1440 and 634 px at 1280, so two tracks and the gap fit from a minimum above 309 px up to 389 px. A
+   minimum wider than the grid would hold its one column past the pane and push the cards out of it at 375 px, where
+   the pane is narrower than 360 px, so the minimum stops at the grid's own width. */
+.detail__grid--meter {
+  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
+}
+
+/* The block's columns, one per weekly window, side by side from 464 px of content width and stacked under it. */
+.allowance {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 24px;
+}
+
+.allowance__col {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+/* A row reads in the Usage card's head size, its date and its figure each whole: where a long equivalent and the
+   total's words pass the column, the figure drops under them, still set right. */
+.allowance__row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.allowance__row > * {
+  white-space: nowrap;
+}
+
+.allowance__row > .num {
+  margin-left: auto;
+}
+
+/* A week's date reads as a fact row's label does, beside its figure. */
+.allowance__date {
+  color: var(--ink-2);
+}
+
+.allowance__total {
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+  font-weight: 600;
+}
+
+/* The badge's 22 px would set its line taller than the reset line beside it in the other column. */
+.allowance .badge {
+  margin-block: -3px;
+}
+
 .usage-bars {
   display: flex;
   flex-direction: column;
@@ -4621,12 +4678,23 @@
   padding-left: 8px;
 }
 
-/* The Accounts in range card's account column reads its names at 375 px, where the eight figure columns would otherwise
-   leave it 24 px, and the table scrolls inside its wrap past that. The floor works as the Sessions table's does, its
-   figure scaled to the account names. */
+/* The Accounts tab's two account tables, Accounts in range and Unused allowance by account, keep sixteen mono
+   characters in the account column at 375 px, where the figure columns would otherwise squeeze it, and each table
+   scrolls inside its wrap past that. */
 .accounts-range th.col-fill,
 .accounts-range td.col-fill {
   min-width: 132px;
+}
+
+/* The fleet figures sit under the card's head, inset as its title is, since the table below draws edge to edge. */
+.allowance-table > .req-totals {
+  padding: 0 18px 14px;
+}
+
+/* The term-ended mark is prose under a mono id, on the Routing log's 16 px sub line. */
+.allowance-table td.col-fill .sub {
+  font-family: var(--font-sans);
+  line-height: 16px;
 }
 
 /* The Burn grid draws three plan cards beside the spend card, or two without a model week, so an odd last card spans

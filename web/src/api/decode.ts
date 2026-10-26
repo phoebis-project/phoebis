@@ -1,8 +1,8 @@
 import type {
-  Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
+  Account, AccountCatalog, AccountRollup, AffinityMode, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, CostRevision, CostSplit, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
   MoveCause, Overview, PairingConfirmed, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, ReturnToPlan, RewritesAnswer,
-  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SharedEquivalent, Spend, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId, WindowSample,
+  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SharedEquivalent, Spend, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WarmSessions, WindowId, WindowSample,
 } from './types';
 import type { AgentContext } from './types';
 import type { StreamCut } from './types';
@@ -849,6 +849,25 @@ export function decodeReconciliation(v: unknown): Reconciliation {
   };
 }
 export const decodeReconciliations = (v: unknown): ReconciliationsAnswer => ({ reconciliations: list(rec(v).reconciliations).map(decodeReconciliation), requestRetentionDays: num(rec(v).request_retention_days) });
+
+const decodeAllowanceReset = (v: unknown): AllowanceReset => {
+  const r = rec(v);
+  return { observedAt: isoOr(r.observed_at, epoch), resetAt: isoOr(r.reset_at, epoch), shareLeft: num(r.share_left), source: str(r.source) };
+};
+export const decodeUnusedAllowance = (v: unknown): UnusedAllowanceAnswer => ({
+  accounts: list(rec(v).accounts)
+    .map(rec)
+    .map((a) => ({
+      accountId: str(a.account_id),
+      plan: strOrNull(a.plan),
+      tier: strOrNull(a.tier),
+      windows: list(a.windows)
+        .map(rec)
+        .map((w) => ({ resets: list(w.resets).map(decodeAllowanceReset), resetsCounted: num(w.resets_counted), totalShareLeft: num(w.total_share_left), window: str(w.window) })),
+    })),
+  from: isoOr(rec(v).from, epoch),
+  to: isoOr(rec(v).to, epoch),
+});
 
 export function decodeAccountRollups(v: unknown): AccountRollup[] {
   return list(rec(v).accounts).map(rec).flatMap((a) => list(a.hours).map(rec).map((h) => {

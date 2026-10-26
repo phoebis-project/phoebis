@@ -3,7 +3,7 @@ import type {
   RecordPin, RecordRequest, RecordSettings, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
 import { endOf } from '@/lib/quota';
-import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT } from './accounts';
+import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN } from './accounts';
 import { leadOf } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
@@ -2048,7 +2048,7 @@ export const SUMMARIES: DecisionSummary[] = built.summaries;
  */
 export const STORY_PINS: { attempt: number; inFlight: Record<string, number>; requestId: string; seq: number }[] = built.pins;
 
-type EventSeed = Omit<RoutingEvent, 'agentId' | 'actor' | 'id' | 'keyId' | 'model' | 'poolId' | 'requestId' | 'sessionId' | 'type'> & Partial<Pick<RoutingEvent, 'actor' | 'agentId' | 'keyId' | 'model' | 'poolId' | 'requestId' | 'sessionId'>>;
+export type EventSeed = Omit<RoutingEvent, 'agentId' | 'actor' | 'id' | 'keyId' | 'model' | 'poolId' | 'requestId' | 'sessionId' | 'type'> & Partial<Pick<RoutingEvent, 'actor' | 'agentId' | 'keyId' | 'model' | 'poolId' | 'requestId' | 'sessionId'>>;
 
 /**
  * The story hour's cache entry that lapsed unread: the Haiku subagent's write on nightly at 14:24:12, which its
@@ -2372,6 +2372,43 @@ function planEndedRow(account: Account): EventSeed[] {
   return [{ accountId: account.id, at: account.planEndedAt, detail: { organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', source: 'profile', subscription_status: 'canceled' }, kind: 'plan_ended' }];
 }
 
+const WEEK = 7 * DAY;
+
+/**
+ * A weekly window's resets over the four weeks before the story's, a week apart back from `resetsAtMs`, its current
+ * reset, each storing the reading before it so the share left is one less it, newest first. The clock walk announces a
+ * reset no poll read after it, which names no next reset, as the engine writes it.
+ */
+function weeklyResets(accountId: string, window: string, resetsAtMs: number, shares: number[], clockAt = -1): EventSeed[] {
+  return shares.map((share, i) => {
+    const reset = resetsAtMs - (i + 1) * WEEK;
+    const clockWalk = i === clockAt;
+    return { accountId, at: iso(reset), detail: { next_reset: clockWalk ? null : reset + WEEK, observed: clockWalk ? 'clock' : 'sample', reset_at: reset, utilization_before: Math.round((1 - share) * 1000) / 1000, window }, kind: 'window_reset' };
+  });
+}
+
+const resetOf = (accountId: string, window: '7d' | '7d_fable'): number => {
+  const a = accountOf.get(accountId);
+  return Date.parse((window === '7d_fable' ? a?.fableWindow : a?.windows.find((w) => w.id === window))?.resetsAt ?? '');
+};
+
+/**
+ * The story's weekly resets, the routing log's rows the unused allowance route answers from: each weekly window of the
+ * subscription accounts with traffic, and sunset's 7-day window, which its plan's end left unreported, so its three
+ * resets run back from the reset of the week the end cut short. Nightly's third 7-day reset fell between two polls and
+ * the clock walk announced it.
+ */
+export const WEEKLY_RESETS: EventSeed[] = [
+  ...weeklyResets('primary', 'seven_day', resetOf('primary', '7d'), [0.32, 0.41, 0.27, 0.38]),
+  ...weeklyResets('primary', 'seven_day_fable', resetOf('primary', '7d_fable'), [0.05, 0.12, 0.08, 0.03]),
+  ...weeklyResets('secondary', 'seven_day', resetOf('secondary', '7d'), [0.61, 0.55, 0.7, 0.58]),
+  ...weeklyResets('nightly', 'seven_day', resetOf('nightly', '7d'), [0.18, 0.22, 0.15, 0.29], 2),
+  ...weeklyResets('nightly', 'seven_day_fable', resetOf('nightly', '7d_fable'), [0.31, 0.36, 0.28, 0.4]),
+  ...weeklyResets('studio', 'seven_day', resetOf('studio', '7d'), [0.44, 0.39, 0.5, 0.47]),
+  ...weeklyResets('studio', 'seven_day_fable', resetOf('studio', '7d_fable'), [0.79, 0.84, 0.76, 0.82]),
+  ...weeklyResets('sunset', 'seven_day', NOW + SUNSET_WEEK_RESETS_IN, [0.52, 0.48, 0.57]),
+];
+
 /**
  * The events beside the decisions: every pin event and model answer the requests' windows hold, the pins the
  * placements created, the cooldowns the attempts' answers set, and the story's own rows, at least one of every kind.
@@ -2535,6 +2572,7 @@ function buildEvents(): RoutingEvent[] {
     ...reservePolls(),
     { accountId: 'research', at: iso(t(12, 41, 7)), detail: { budget_usd: 20, period: 'day', period_end: startOfDay(t(12, 41, 7)) + DAY, source_request_id: BUDGET_CROSSING_ID, spent_usd: 20.4 }, kind: 'budget_reached', poolId: 'jobs', requestId: BUDGET_CROSSING_ID },
     { accountId: 'primary', at: iso(fiveHourReset), detail: { next_reset: fiveHourReset + 5 * HOUR, observed: 'sample', reset_at: fiveHourReset, utilization_before: beforeReset, window: 'five_hour' }, kind: 'window_reset' },
+    ...WEEKLY_RESETS,
     { accountId: 'overflow', at: iso(t(11, 30, 12)), detail: { cause: 'funding_refused', detail: 'Your credit balance is too low to access the Anthropic API.', from: 'ready', to: 'funding_required' }, kind: 'account_state_changed' },
     {
       accountId: 'nightly',

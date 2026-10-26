@@ -302,6 +302,18 @@ test('the refusal categories read sends the analytics query and answers the rows
   assert.deepEqual(read, { from: '1970-01-01T00:00:00.000Z', rows, to: '1970-01-02T00:00:00.000Z' });
 });
 
+test('the unused allowance read sends the one range parameter and the Accounts filter alone, and no accounts without one', async () => {
+  const calls = stub(() => answer(200, { accounts: [], from: 0, to: 86_400_000 }));
+  const api = new HttpApi();
+  const span = { from: '1970-01-01T00:00:00.000Z', to: '1970-01-02T00:00:00.000Z' };
+  assert.deepEqual(await api.getAnalyticsUnusedAllowance(span, { accountIds: ['primary'] }), { accounts: [], from: span.from, to: span.to });
+  await api.getAnalyticsUnusedAllowance(span);
+  const [named, every] = calls.map((c) => new URL(c.url, 'http://x'));
+  assert.equal(named.pathname, '/admin/analytics/unused_allowance');
+  assert.deepEqual([...named.searchParams], [['accounts', 'primary'], ['range', '0,86400000']]);
+  assert.deepEqual([every.pathname, [...every.searchParams]], ['/admin/analytics/unused_allowance', [['range', '0,86400000']]]);
+});
+
 test('listRequests passes the request and the session as they are', async () => {
   const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
   await new HttpApi().listRequests({ request: 'req_1', session: 's1' });

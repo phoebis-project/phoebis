@@ -1,6 +1,6 @@
 import type {
-  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, Reconciliation, ReconciliationsAnswer, RefusalCategoriesAnswer, RequestKind, RequestLog,
-  RewritePoint, RewritesAnswer, WastedProbeReason,
+  Account, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, QuotaHistory, Reconciliation, ReconciliationsAnswer,
+  RefusalCategoriesAnswer, RequestKind, RequestLog, RewritePoint, RewritesAnswer, UnusedAllowanceAnswer, WastedProbeReason,
 } from '@/api/types';
 import { bucketShare } from '@/lib/analytics';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
@@ -9,9 +9,11 @@ import { countOf, emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, placementHit } from '@/lib/format';
 import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
+import { endOf } from '@/lib/quota';
 import { ACCOUNTS } from './accounts';
 import { keyById } from './pools';
 import { clock } from './requests';
+import type { EventSeed } from './routingLog';
 import { TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NOW, iso } from './time';
 
@@ -799,4 +801,66 @@ export const RECONCILIATIONS: Reconciliation[] = [
 export function reconciliationsOf(rows: Reconciliation[], filters: Pick<AnalyticsQuery, 'accountIds'> = {}): ReconciliationsAnswer {
   const accounts = filters.accountIds ?? [];
   return { reconciliations: rows.filter((r) => accounts.length === 0 || accounts.includes(r.accountId)).map((r) => ({ ...r })), requestRetentionDays: REQUEST_RETENTION_DAYS };
+}
+
+/** The route's keys of the weekly windows the quota history names by the console's ids. */
+const WEEKLY_KEY: Record<string, string> = { '7d': 'seven_day', '7d_fable': 'seven_day_fable' };
+const isWeekly = (window: string) => window === 'seven_day' || window.startsWith('seven_day_');
+const byteOrder = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * The term's end the route reads at `at`: the saved end while canceled, else a trial end still ahead, and the
+ * plan-ended flag where it comes first, so a trial end that passed while the plan carried on ends no week.
+ */
+function termEndOf(a: Account, at: number): number | null {
+  const end = endOf(a, at);
+  const flagged = a.planEndedAt === null ? null : Date.parse(a.planEndedAt);
+  return end === null ? flagged : flagged === null ? end : Math.min(end, flagged);
+}
+
+/**
+ * The weekly resets in range per subscription account as the route answers them, from the story's `window_reset` rows
+ * and, for an account whose term ended in range, one `term_ended` reset per weekly window at the end, its share the
+ * last reading of the window's quota history strictly before the end, as the ledger reads `observed_at < end`. A reset
+ * of that account at or after its end is left out, so the week the end cut short counts once. The term is read at the
+ * range's end capped at the story's now, and the windows run in key order, the 7-day window first.
+ */
+export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], history: QuotaHistory[], span: Range, filters: Pick<AnalyticsQuery, 'accountIds'> = {}): UnusedAllowanceAnswer {
+  const fromMs = Date.parse(span.from);
+  const toMs = Date.parse(span.to);
+  const listed = filters.accountIds ?? [];
+  const readAt = Math.min(toMs, NOW);
+  const answered = accounts
+    .filter((a) => a.kind === 'oauth' && (listed.length === 0 || listed.includes(a.id)))
+    .sort((a, b) => byteOrder(a.id, b.id))
+    .flatMap((a) => {
+      const end = termEndOf(a, readAt);
+      const ended = end !== null && fromMs <= end && end <= readAt ? end : null;
+      const byWindow = new Map<string, AllowanceReset[]>();
+      const add = (window: string, reset: AllowanceReset) => byWindow.set(window, [...(byWindow.get(window) ?? []), reset]);
+      for (const e of events) {
+        const at = Date.parse(e.at);
+        if (e.kind !== 'window_reset' || e.accountId !== a.id || at < fromMs || at > toMs) continue;
+        const d = e.detail as { observed: string; reset_at: number; utilization_before: number; window: string };
+        if (!isWeekly(d.window) || (ended !== null && d.reset_at >= ended)) continue;
+        add(d.window, { observedAt: e.at, resetAt: iso(d.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - d.utilization_before)), source: d.observed });
+      }
+      if (ended !== null) {
+        for (const h of history) {
+          const window = WEEKLY_KEY[h.windowId] ?? h.windowId;
+          if (h.accountId !== a.id || !isWeekly(window)) continue;
+          const before = h.samples.filter((x) => Date.parse(x.at) < ended);
+          const last = before[before.length - 1];
+          if (last) add(window, { observedAt: last.at, resetAt: iso(ended), shareLeft: Math.min(1, Math.max(0, 1 - last.utilization)), source: 'term_ended' });
+        }
+      }
+      const windows = [...byWindow]
+        .sort(([x], [y]) => byteOrder(x, y))
+        .map(([window, listedResets]) => {
+          const resets = [...listedResets].sort((x, y) => Date.parse(y.resetAt) - Date.parse(x.resetAt));
+          return { resets, resetsCounted: resets.length, totalShareLeft: resets.reduce((sum, r) => sum + r.shareLeft, 0), window };
+        });
+      return windows.length === 0 ? [] : [{ accountId: a.id, plan: a.subscription?.plan ?? null, tier: a.subscription?.rateLimitTier ?? null, windows }];
+    });
+  return { accounts: answered, from: iso(fromMs), to: iso(toMs) };
 }

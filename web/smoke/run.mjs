@@ -4644,6 +4644,179 @@ m.unmount();
   });
   page.unmount();
 }
+{
+  // "Allowance left at reset" over the story's weekly resets (`WEEKLY_RESETS` in mock/routingLog.ts), each a week
+  // before the window's current reset: primary's 7-day window left 0.32, 0.41, 0.27 and 0.38 of its week at its last
+  // four resets, newest first, and its Fable week 0.05, 0.12, 0.08 and 0.03. Under Native a figure prices through the
+  // cost model the page reads, the account's tier against the anchor's on the 7-day window. The smoke runs under
+  // TZ=UTC, so each date reads its UTC text, where a viewer's zone would move its day and hour.
+  const WEEK = 7 * 24 * 3_600_000;
+  const text = (el) => el?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
+  const day = (ms) => new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+  const instantOf = (ms) => `${day(ms)} ${new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' })}`;
+  const hoverOf = (ms, source) => `${fmtAbsolute(new Date(ms).toISOString())}, read from ${source}`;
+  const blockOf = (page) => {
+    const card = [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Allowance left at reset');
+    if (!card) return null;
+    const grid = card.parentElement;
+    return {
+      after: text(grid?.previousElementSibling?.querySelector('.card__title')),
+      before: grid?.nextElementSibling?.className ?? null,
+      columns: [...card.querySelectorAll('.allowance__col')].map((c) => ({
+        head: [text(c.querySelector('.wbar__label')), text(c.querySelector('.wbar__pct'))],
+        reset: text(c.querySelector('.allowance__reset')),
+        resetBadge: text(c.querySelector('.allowance__reset .badge--neutral')),
+        resetTitle: c.querySelector('.allowance__reset')?.getAttribute('title') ?? null,
+        rows: [...c.querySelectorAll('.allowance__row:not(.allowance__total)')].map((r) => [text(r.children[0]), text(r.children[1])]),
+        rowTitles: [...c.querySelectorAll('.allowance__row:not(.allowance__total)')].map((r) => r.getAttribute('title')),
+        total: [...(c.querySelector('.allowance__total')?.children ?? [])].map(text),
+      })),
+      empty: text(card.querySelector(':scope > p.muted')),
+      error: text(card.querySelector('.empty--error .empty__title')),
+      first: grid?.firstElementChild === card,
+      grid: grid?.className ?? null,
+      note: text(card.querySelector('.detail__note')),
+      subtitle: text(card.querySelector('.card__subtitle')),
+    };
+  };
+  const costs = (await api.getSettings()).subscriptionCosts;
+  const story = new Map((await api.listAccounts()).map((a) => [a.id, a]));
+  /** The figures under Native: the share times the tier's 7-day capacity over the anchor's, a model week's alike. */
+  const nativeOf = (tier) => (share, window) => equivalentShort(window, share * (tierCapacity(costs, tier, 'seven_day') / tierCapacity(costs, anchorTier(costs), 'seven_day')));
+  const shareFigure = (share) => fmtShare(share);
+  const sum = (shares) => shares.reduce((a, b) => a + b, 0);
+  const resetsBack = (resetsAt, n) => Array.from({ length: n }, (_, k) => Date.parse(resetsAt) - (k + 1) * WEEK);
+  const columnOf = (label, window, shares, resets, figure, latest = { line: `left at the reset of ${instantOf(resets[0])}`, badge: null, title: hoverOf(resets[0], 'a usage sample') }) => ({
+    head: [label, figure(shares[0], window)],
+    reset: latest.line,
+    resetBadge: latest.badge,
+    resetTitle: latest.title,
+    rows: shares.slice(1).map((s, i) => [day(resets[i + 1]), figure(s, window)]),
+    rowTitles: resets.slice(1).map((ms) => hoverOf(ms, 'a usage sample')),
+    total: [`Total, ${shares.length} weeks`, figure(sum(shares), window)],
+  });
+  const primary = story.get('primary');
+  const SEVEN = [0.32, 0.41, 0.27, 0.38];
+  const FABLE = [0.05, 0.12, 0.08, 0.03];
+  const primaryColumns = (figure) => [
+    columnOf('7-day', 'seven_day', SEVEN, resetsBack(primary.windows.find((w) => w.id === '7d').resetsAt, 4), figure),
+    columnOf('7-day Fable', 'seven_day_fable', FABLE, resetsBack(primary.fableWindow.resetsAt, 4), figure),
+  ];
+  const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  const native = blockOf(page);
+  results.push({
+    name: '/accounts/primary "Allowance left at reset" sits first in a grid of its own after the 7-day trend and before the Cooling down grid, one column per weekly window',
+    ok: native !== null && native.first && native.grid === 'detail__grid detail__grid--meter' && native.after === '7-day trend' && native.before === 'detail__grid' && JSON.stringify(native.columns.map((c) => c.head[0])) === '["7-day","7-day Fable"]',
+    missing: [JSON.stringify(native && { after: native.after, before: native.before, first: native.first, grid: native.grid, heads: native.columns.map((c) => c.head) })],
+  });
+  const nativeWant = primaryColumns(nativeOf(primary.subscription.rateLimitTier));
+  results.push({
+    name: "/accounts/primary under Native the block reads each week's 20x window equivalent, the latest reset in the head with its reset line, the three weeks before it and the four weeks' total",
+    ok: native?.subtitle === 'Each weekly window left unused when it reset, in 20x window equivalents, the last four weeks' && JSON.stringify(native?.columns) === JSON.stringify(nativeWant) && native?.note === null,
+    missing: [native?.subtitle ?? 'no block', JSON.stringify(native?.columns ?? null), JSON.stringify(nativeWant)],
+  });
+  await chooseUnit(page, 'share');
+  const shares = blockOf(page);
+  const sharesWant = primaryColumns(shareFigure);
+  results.push({
+    name: "/accounts/primary under Window shares the block reads the share of each week the account left, through the top bar's switch",
+    ok: shellUnit(page)?.value === 'share' && shares?.subtitle === 'The share of each weekly window left unused when it reset, the last four weeks' && JSON.stringify(shares?.columns) === JSON.stringify(sharesWant),
+    missing: [shellUnit(page)?.value ?? 'no switch', shares?.subtitle ?? 'no block', JSON.stringify(shares?.columns ?? null), JSON.stringify(sharesWant)],
+  });
+  await chooseUnit(page, 'native');
+  page.unmount();
+  localStorage.removeItem('phoebis.unit');
+
+  // Sunset's saved end passed three days back inside its week, so its latest reset is the term's end, read off the last
+  // sample of its 7-day series before the end, its seed's reading 0.46: 0.54 of a Pro week, priced at the account's
+  // stored tier against the anchor's. Its three weeks before left 0.52, 0.48 and 0.57.
+  const sunset = story.get('sunset');
+  const end = Date.parse(sunset.subscription.endsAt);
+  const sunsetResets = [end, ...resetsBack(new Date(end + 4 * 24 * 3_600_000).toISOString(), 3)];
+  const ended = await mount('/accounts/sunset', { now: CLOCK_ORIGIN });
+  const term = blockOf(ended);
+  const termWant = [columnOf('7-day', 'seven_day', [1 - 0.46, 0.52, 0.48, 0.57], sunsetResets, nativeOf(sunset.subscription.rateLimitTier), { line: `left at ${instantOf(end)} term ended`, badge: 'term ended', title: hoverOf(end, "the term's end") })];
+  results.push({
+    name: "/accounts/sunset the week its term ended inside reads as its latest reset, \"left at\" its end with the neutral \"term ended\" badge, priced at its Pro tier and counted in the total",
+    ok: JSON.stringify(term?.columns) === JSON.stringify(termWant),
+    missing: [JSON.stringify(term?.columns ?? null), JSON.stringify(termWant)],
+  });
+  ended.unmount();
+
+  // The clock walk announced nightly's third 7-day reset, which the second of its week rows reads.
+  const nightly = await mount('/accounts/nightly', { now: CLOCK_ORIGIN });
+  const walked = blockOf(nightly)?.columns[0]?.rowTitles ?? [];
+  const nightlyResets = resetsBack(story.get('nightly').windows.find((w) => w.id === '7d').resetsAt, 4);
+  results.push({
+    name: "/accounts/nightly a week row's hover names its reset's instant and the reading's source, the clock walk's in the block's own words",
+    ok: JSON.stringify(walked) === JSON.stringify([hoverOf(nightlyResets[1], 'a usage sample'), hoverOf(nightlyResets[2], 'the clock walk'), hoverOf(nightlyResets[3], 'a usage sample')]),
+    missing: walked,
+  });
+  nightly.unmount();
+
+  // Reserve is a subscription account in no pool whose story holds no weekly reset.
+  const quiet = await mount('/accounts/reserve', { now: CLOCK_ORIGIN });
+  const none = blockOf(quiet);
+  results.push({
+    name: '/accounts/reserve an account with no weekly reset yet reads the empty sentence in the windows\' place',
+    ok: none?.empty === "No weekly reset recorded yet. The first shows once this account's week ends." && none.columns.length === 0,
+    missing: [JSON.stringify(none)],
+  });
+  quiet.unmount();
+
+  // An API-key account and a usage-based seat report no weekly window, so neither draws the block nor reads its route.
+  const unread = countCalls('getAnalyticsUnusedAllowance');
+  const drawn = [];
+  for (const id of ['annex', 'contract']) {
+    const other = await mount(`/accounts/${id}`, { now: CLOCK_ORIGIN });
+    if (blockOf(other) !== null) drawn.push(id);
+    other.unmount();
+  }
+  unread.restore();
+  results.push({ name: '/accounts an API-key account and a usage-based seat draw no allowance block and read no allowance route', ok: drawn.length === 0 && unread.calls.length === 0, missing: [`drawn on ${JSON.stringify(drawn)}`, `${unread.calls.length} reads`] });
+
+  // A failed read draws the error state with Try again, which reads the route again and draws the block.
+  failNextCall('getAnalyticsUnusedAllowance', '/admin/analytics/unused_allowance', 'ledger locked');
+  const failed = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  const down = blockOf(failed);
+  const card = [...failed.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Allowance left at reset');
+  [...(card?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Try again')?.click();
+  await failed.settle();
+  const back = blockOf(failed);
+  // A page that never read the route leaves the failure armed, so the method goes back before the checks after this.
+  delete api.getAnalyticsUnusedAllowance;
+  results.push({
+    name: '/accounts/primary a failed allowance read draws the error state with Try again, which draws the block',
+    ok: down?.error === 'Could not load the weekly resets' && down.columns.length === 0 && JSON.stringify(back?.columns) === JSON.stringify(nativeWant) && back?.error === null,
+    missing: [JSON.stringify(down), JSON.stringify(back?.columns ?? null)],
+  });
+  failed.unmount();
+
+  // The block reads once per account, again on the bar's Refresh and once the list's poll answers a weekly window past
+  // its reset, and not at the list's 5 s cadence, since a weekly row changes once a week.
+  const watched = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  const reads = countCalls('getAnalyticsUnusedAllowance');
+  tick(5_000);
+  await watched.settle();
+  const polled = reads.calls.length;
+  watched.container.querySelector('.refresh-control__body[aria-label="Refresh"]')?.click();
+  await watched.settle();
+  const refreshed = reads.calls.length;
+  const { listAccounts } = api;
+  // The router observed primary's 7-day reset, so its window reads the reset a week on.
+  api.listAccounts = async (...args) => (await listAccounts.apply(api, args)).map((a) => (a.id === 'primary' ? { ...a, windows: a.windows.map((w) => (w.id === '7d' ? { ...w, resetsAt: new Date(Date.parse(w.resetsAt) + WEEK).toISOString() } : w)) } : a));
+  tick(5_000);
+  await watched.settle();
+  const moved = reads.calls.length;
+  api.listAccounts = listAccounts;
+  reads.restore();
+  results.push({
+    name: '/accounts/primary the allowance block reads again on Refresh and after a weekly reset passes, not at the list\'s cadence',
+    ok: polled === 0 && refreshed === 1 && moved === 2 && reads.calls.every(([span, filters]) => JSON.stringify(filters) === '{"accountIds":["primary"]}' && Date.parse(span.to) - Date.parse(span.from) === 29 * 24 * 3_600_000),
+    missing: [`${polled} after the poll, ${refreshed} after Refresh, ${moved} after the reset`, ...reads.calls.map((c) => JSON.stringify(c))],
+  });
+  watched.unmount();
+}
 await readsAgain('/accounts', 'listAccounts', 5_000);
 
 // Picks an Analytics tab on the given mount and lets its section's reads land; a check reads its counts afterwards.
@@ -17228,6 +17401,117 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   page.unmount();
 }
 {
+  // "Unused allowance by account" over the story's weekly resets (`WEEKLY_RESETS` in mock/routingLog.ts) and sunset's
+  // term end, the last four weeks whatever the range. Under Window shares the rows rank on the four weeks' 7-day share
+  // each account left: secondary 0.61, 0.55, 0.7 and 0.58 of its week (2.44), sunset 0.54, 0.52, 0.48 and 0.57 (2.11,
+  // its newest the share its term's end left off its seed's 0.46), studio 0.44, 0.39, 0.5 and 0.47 (1.80), primary
+  // 0.32, 0.41, 0.27 and 0.38 (1.38) and nightly 0.18, 0.22, 0.15 and 0.29 (0.84). The smoke runs under TZ=UTC, so the
+  // term's end reads its UTC text.
+  const DAY_MS = 24 * 3_600_000;
+  const text = (el) => el?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
+  const instantOf = (ms) => `${new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' })}`;
+  const read = (page) => {
+    const card = [...page.container.querySelectorAll('#accounts .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Unused allowance by account');
+    if (!card) return null;
+    const rows = [...card.querySelectorAll('tbody tr')];
+    const account = (tr) => text(tr.querySelector('td.col-fill a'));
+    return {
+      after: text(card.previousElementSibling?.querySelector('.card__title')),
+      classes: ['card--table', 'accounts-range'].filter((c) => card.classList.contains(c)),
+      empty: rows.length === 1 && rows[0].children.length === 1 ? { muted: rows[0].children[0].classList.contains('muted'), text: text(rows[0]) } : null,
+      error: text(card.querySelector('.empty--error .empty__title')),
+      heads: [...card.querySelectorAll('thead th')].map(text),
+      ids: rows.map(account).filter((id) => id !== null),
+      links: rows.map((tr) => tr.querySelector('td.col-fill a')?.getAttribute('href') ?? null).filter((href) => href !== null),
+      rows: rows.map((tr) => [...tr.children].map(text)),
+      subs: rows.flatMap((tr) => (tr.querySelector('td.col-fill .sub') ? [[account(tr), text(tr.querySelector('td.col-fill .sub'))]] : [])),
+      subtitle: text(card.querySelector('.card__subtitle')),
+      totals: [...card.querySelectorAll('.req-totals > div')].map((d) => [text(d.querySelector('.stat__label')), text(d.querySelector('.stat__value')), text(d.querySelector('.stat__note'))]),
+    };
+  };
+  const end = Date.parse((await api.listAccounts()).find((a) => a.id === 'sunset').subscription.endsAt);
+  const SUBTITLE = "Each subscription account's weekly windows left unused at their resets, the last four weeks, under the Accounts filter. The range does not apply here";
+  const HEADS = ['Account', 'Resets', '7-day, last', '7-day, 4 weeks', 'Fable, last', 'Fable, 4 weeks'];
+
+  const page = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
+  const native = read(page);
+  results.push({
+    name: '/analytics the Accounts section draws "Unused allowance by account" after Accounts in range, one row per subscription account with a weekly reset, the term-ended mark under its account',
+    ok:
+      native !== null &&
+      native.after === 'Accounts in range' &&
+      JSON.stringify(native.classes) === '["card--table","accounts-range"]' &&
+      native.subtitle === SUBTITLE &&
+      JSON.stringify(native.heads) === JSON.stringify(HEADS) &&
+      JSON.stringify([...native.ids].sort()) === '["nightly","primary","secondary","studio","sunset"]' &&
+      JSON.stringify(native.links) === JSON.stringify(native.ids.map((id) => `/accounts/${id}`)) &&
+      JSON.stringify(native.subs) === JSON.stringify([['sunset', `term ended ${instantOf(end)}`]]),
+    missing: [JSON.stringify(native && { after: native.after, classes: native.classes, heads: native.heads, ids: native.ids, subs: native.subs, subtitle: native.subtitle })],
+  });
+  // Under Native the order and the totals read the shipped cost model's capacities, so the figures' labels alone.
+  results.push({
+    name: '/analytics under Native the card heads its fleet figures with the priced totals',
+    ok: JSON.stringify(native?.totals.map(([label]) => label)) === JSON.stringify(['7-day, fleet total', 'Fable, fleet total', null]),
+    missing: [JSON.stringify(native?.totals ?? null)],
+  });
+  await chooseUnit(page, 'share');
+  const shares = read(page);
+  // The page adds the route's totals in the card's order, so the expectation adds them so too, since a sum of the seeds
+  // in another order can round the last digit the other way.
+  const answer = await api.getAnalyticsUnusedAllowance({ from: new Date(CLOCK_ORIGIN - 29 * DAY_MS).toISOString(), to: new Date(CLOCK_ORIGIN).toISOString() });
+  const windowOf = (a, key) => a.windows.find((w) => w.window === key);
+  const ranked = [...answer.accounts].sort((x, y) => windowOf(y, 'seven_day').totalShareLeft - windowOf(x, 'seven_day').totalShareLeft);
+  const meanOf = (key) => {
+    const windows = ranked.map((a) => windowOf(a, key)).filter((w) => w !== undefined);
+    return fmtShare(windows.reduce((s, w) => s + w.totalShareLeft, 0) / windows.reduce((n, w) => n + w.resetsCounted, 0));
+  };
+  results.push({
+    name: "/analytics under Window shares the rows rank on the four weeks' 7-day share left, and the fleet figures read the mean share per reset with the resets and accounts counted",
+    ok:
+      shellUnit(page)?.value === 'share' &&
+      JSON.stringify(shares?.ids) === '["secondary","sunset","studio","primary","nightly"]' &&
+      JSON.stringify(shares?.rows.map((r) => r[1])) === '["4","4","4","4","4"]' &&
+      JSON.stringify(shares?.rows[0].slice(2, 4)) === JSON.stringify([fmtShare(0.61), fmtShare(0.61 + 0.55 + 0.7 + 0.58)]) &&
+      JSON.stringify(shares?.totals) === JSON.stringify([['7-day, mean per reset', meanOf('seven_day'), null], ['Fable, mean per reset', meanOf('seven_day_fable'), null], [null, null, "20 resets on 5 accounts, each a share of its account's own week"]]),
+    missing: [shellUnit(page)?.value ?? 'no switch', JSON.stringify(shares?.ids ?? null), JSON.stringify(shares?.rows ?? null), JSON.stringify(shares?.totals ?? null), meanOf('seven_day'), meanOf('seven_day_fable')],
+  });
+  // The card reads the last four weeks whatever the range, so a 1-hour range draws the same rows and reads nothing new.
+  const ranged = countCalls('getAnalyticsUnusedAllowance');
+  await page.navigate('/analytics?range=1h#accounts');
+  const hour = read(page);
+  ranged.restore();
+  results.push({
+    name: '/analytics a 1-hour range draws the same unused allowance rows, the range not applying to the card',
+    ok: hour !== null && JSON.stringify(hour.rows) === JSON.stringify(shares?.rows) && ranged.calls.length === 0,
+    missing: [JSON.stringify(hour?.rows ?? null), `${ranged.calls.length} reads`],
+  });
+  await chooseUnit(page, 'native');
+  page.unmount();
+  localStorage.removeItem('phoebis.unit');
+
+  const filtered = countCalls('getAnalyticsUnusedAllowance');
+  const one = await mount('/analytics?accounts=studio#accounts', { now: CLOCK_ORIGIN });
+  const narrowed = read(one);
+  filtered.restore();
+  one.unmount();
+  results.push({
+    name: '/analytics the Accounts filter narrows the unused allowance card to its account, over the last four weeks',
+    ok: JSON.stringify(narrowed?.ids) === '["studio"]' && filtered.calls.length > 0 && filtered.calls.every(([span, filters]) => JSON.stringify(filters) === '{"accountIds":["studio"]}' && Date.parse(span.to) - Date.parse(span.from) === 29 * DAY_MS),
+    missing: [JSON.stringify(narrowed?.ids ?? null), ...filtered.calls.map((c) => JSON.stringify(c))],
+  });
+  // Reserve holds no weekly reset in the story, so under a filter on it the table reads its empty row.
+  const quiet = await mount('/analytics?accounts=reserve#accounts', { now: CLOCK_ORIGIN });
+  const empty = read(quiet);
+  quiet.unmount();
+  results.push({ name: '/analytics the unused allowance card reads its muted empty row where no account has a weekly reset', ok: JSON.stringify(empty?.empty) === JSON.stringify({ muted: true, text: 'No weekly reset in the last four weeks' }), missing: [JSON.stringify(empty)] });
+  failNextCall('getAnalyticsUnusedAllowance', '/admin/analytics/unused_allowance', 'ledger locked');
+  const failed = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
+  const down = read(failed);
+  failed.unmount();
+  delete api.getAnalyticsUnusedAllowance;
+  results.push({ name: '/analytics a failed unused allowance read draws the error state in the card', ok: down?.error === 'Could not load the unused allowance' && down.ids.length === 0, missing: [JSON.stringify(down)] });
+}
+{
   // The breakdown tables are picked by card title: the Cache tab draws the placements table under the same card class,
   // and that one has its own check.
   const BREAKDOWNS = [
@@ -20158,12 +20442,13 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     m.unmount();
     // The route paths label a failure report; the method names are what count. A side breakdown carries the page's
     // query, `keyIds` among it, where a filter's option read carries the range alone.
-    const reads = failCalls({ analyticsBudgets: '/admin/analytics/budgets', analyticsPlacements: '/admin/analytics/placements', getAnalyticsBreakdown: '/admin/analytics/breakdown', getAnalyticsBurn: '/admin/analytics/burn', getAnalyticsRewrites: '/admin/analytics/rewrites', getSettings: '/admin/settings', listAccountRollups: '/admin/analytics/accounts' }, 'counted');
+    const reads = failCalls({ analyticsBudgets: '/admin/analytics/budgets', analyticsPlacements: '/admin/analytics/placements', getAnalyticsBreakdown: '/admin/analytics/breakdown', getAnalyticsBurn: '/admin/analytics/burn', getAnalyticsRewrites: '/admin/analytics/rewrites', getAnalyticsUnusedAllowance: '/admin/analytics/unused_allowance', getSettings: '/admin/settings', listAccountRollups: '/admin/analytics/accounts' }, 'counted');
     reads.recover();
     const side = (groupBy) => reads.calls.getAnalyticsBreakdown.filter(([q]) => q.groupBy === groupBy && q.keyIds !== undefined).length;
-    const counted = () => ({ budgets: reads.calls.analyticsBudgets.length, burn: reads.calls.getAnalyticsBurn.length, effort: side('effort'), model: side('model'), placements: reads.calls.analyticsPlacements.length, pool: side('pool'), rewrites: reads.calls.getAnalyticsRewrites.length, rollups: reads.calls.listAccountRollups.length, settings: reads.calls.getSettings.length });
+    const counted = () => ({ allowance: reads.calls.getAnalyticsUnusedAllowance.length, budgets: reads.calls.analyticsBudgets.length, burn: reads.calls.getAnalyticsBurn.length, effort: side('effort'), model: side('model'), placements: reads.calls.analyticsPlacements.length, pool: side('pool'), rewrites: reads.calls.getAnalyticsRewrites.length, rollups: reads.calls.listAccountRollups.length, settings: reads.calls.getSettings.length });
     m = await mount('/analytics');
-    // The shell reads the settings once for every page, so the Burn tab's own read is the step it adds.
+    // The shell reads the settings once for every page, so the Burn and Accounts tabs' own reads of the cost model are
+    // the step each adds.
     const { settings: shell, ...opened } = counted();
     const steps = { traffic: JSON.stringify(opened) };
     for (const [label, id] of [['Accounts', 'accounts'], ['Burn', 'burn'], ['Cache', 'cache'], ['Cache warming', 'cache-warming']]) {
@@ -20174,12 +20459,12 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     }
     reads.restore();
     const wanted = {
-      accounts: '{"rollups":1}',
+      accounts: '{"allowance":1,"rollups":1,"settings":1}',
       burn: '{"budgets":1,"burn":1,"settings":1}',
       cache: '{"model":1,"placements":1}',
       // Native's by-pool table pairs the whole read with the billed one.
       'cache-warming': '{"pool":2}',
-      traffic: '{"budgets":0,"burn":0,"effort":1,"model":0,"placements":0,"pool":0,"rewrites":1,"rollups":0}',
+      traffic: '{"allowance":0,"budgets":0,"burn":0,"effort":1,"model":0,"placements":0,"pool":0,"rewrites":1,"rollups":0}',
     };
     results.push({ name: '/analytics a section whose tab is not chosen makes none of its own reads', ok: Object.entries(wanted).every(([id, delta]) => steps[id] === delta), missing: [`shell settings ${shell}`, ...Object.entries(steps).map(([id, delta]) => `${id} ${delta}`)] });
     m.unmount();

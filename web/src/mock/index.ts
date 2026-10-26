@@ -17,7 +17,7 @@ import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { isFastScope } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, usageOf } from './accounts';
-import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf } from './analytics';
+import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, unusedAllowanceOf } from './analytics';
 import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
@@ -26,7 +26,7 @@ import { KEYS, POOLS, composedFor, resolvedFor, servedFigures } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRICED_REQUEST, UNPRICED_ROLLUPS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
 import { createRng } from './rng';
-import { ROUTING_LOG_KINDS, getDecision, listRoutingLog } from './routingLog';
+import { ROUTING_LOG_KINDS, WEEKLY_RESETS, getDecision, listRoutingLog } from './routingLog';
 import { ROUTING_EVENTS } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
@@ -1052,6 +1052,12 @@ export class MockApi implements Api {
 
   getAnalyticsSeries(query: AnalyticsQuery) {
     return latency(seriesOf(ledgerRollups(), query));
+  }
+
+  /** The story's weekly resets, or none for a fresh installation, whose registry holds no account to end a term on. */
+  getAnalyticsUnusedAllowance(span: Pick<AnalyticsQuery, 'from' | 'to'>, filters?: Pick<AnalyticsQuery, 'accountIds'>) {
+    const empty = emptyStore();
+    return latency(unusedAllowanceOf(empty ? [] : WEEKLY_RESETS, empty ? [] : ACCOUNTS, QUOTA_HISTORY, span, filters));
   }
 
   /**

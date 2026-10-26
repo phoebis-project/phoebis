@@ -1737,6 +1737,41 @@ export interface ReconciliationsAnswer {
   requestRetentionDays: number;
 }
 
+/** Where a weekly reset's share comes from: a usage sample, the clock walk (its reading as the event carries it, up
+ *  to one poll interval old) or the account's term ending inside the week. The router stores whatever word it
+ *  writes. */
+export type AllowanceResetSource = 'clock' | 'sample' | 'term_ended' | string;
+
+export interface AllowanceReset {
+  observedAt: string;
+  resetAt: string;
+  /** One less the utilization before the reset, inside the unit interval. */
+  shareLeft: number;
+  source: AllowanceResetSource;
+}
+
+export interface AllowanceWindow {
+  resets: AllowanceReset[];
+  resetsCounted: number;
+  totalShareLeft: number;
+  /** `seven_day` or a model week's key, as the route spells it. */
+  window: string;
+}
+
+export interface AllowanceAccount {
+  accountId: string;
+  plan: PlanWord | null;
+  tier: string | null;
+  windows: AllowanceWindow[];
+}
+
+/** The weekly resets in range per subscription account, as `GET /admin/analytics/unused_allowance` answers them. */
+export interface UnusedAllowanceAnswer {
+  accounts: AllowanceAccount[];
+  from: string;
+  to: string;
+}
+
 /** The keepalive mod's lifecycle word for an agent. */
 export type KeepaliveState = 'busy' | 'idle' | 'parked' | 'released' | 'unknown';
 

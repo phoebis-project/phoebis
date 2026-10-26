@@ -4985,6 +4985,57 @@ async function analyticsTables(theme) {
 }
 
 /**
+ * The Accounts tab's "Unused allowance by account" card: below Accounts in range, its table's columns under the width
+ * rule with Account the fill at 1280 by 800, and at 375 by 800 its Account column at least 132 px under the floor the
+ * card's `accounts-range` class reaches, its computed `min-width` 132 px, as wide and as floored as Accounts in range's
+ * account column there. Both columns and the two cards' edges go to the measurements, and the viewport and the Traffic
+ * tab are the pass's again after. The mock pass's alone, since the router's seed answers no allowance route on this
+ * branch.
+ */
+async function analyticsAllowanceTable(theme) {
+  const say = (what) => failures.push(`${theme} /analytics Unused allowance by account: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const card = (t) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+      const column = (el) => {
+        const th = el?.querySelector('th.col-fill');
+        return th ? { minWidth: getComputedStyle(th).minWidth, width: Math.round(th.getBoundingClientRect().width * 10) / 10 } : null;
+      };
+      const range = card('Accounts in range');
+      const unused = card('Unused allowance by account');
+      return { column: column(unused), range: column(range), rangeBottom: range ? Math.round(range.getBoundingClientRect().bottom) : null, top: unused ? Math.round(unused.getBoundingClientRect().top) : null };
+    });
+  try {
+    if (!(await tabTo(theme, 'Accounts'))) return;
+    const wide = await read();
+    measurements.push(`${theme} /analytics Unused allowance by account at 1280 by 800 ${JSON.stringify(wide)}`);
+    if (wide.top === null) {
+      say('no card to measure on the Accounts tab');
+      return;
+    }
+    if (wide.rangeBottom === null || wide.top <= wide.rangeBottom) say(`the card's top ${wide.top}px is not below Accounts in range's bottom ${wide.rangeBottom}px`);
+    await tableColumns(theme, 'analytics', '.allowance-table table', ['Account']);
+    await page.setViewportSize({ height: 800, width: 375 });
+    await settle();
+    const phone = await read();
+    measurements.push(`${theme} /analytics Unused allowance by account at 375 by 800 ${JSON.stringify(phone)}`);
+    if (phone.column === null) {
+      say('no Account column at 375 by 800');
+      return;
+    }
+    if (phone.column.width < 132) say(`the Account column is ${phone.column.width}px at 375 by 800, under its 132 px floor`);
+    if (phone.column.minWidth !== '132px') say(`the Account column's min-width is ${phone.column.minWidth} at 375 by 800, not the floor's 132px`);
+    const rounded = (c) => c && { minWidth: c.minWidth, width: Math.round(c.width) };
+    for (const what of compare(rounded(phone.column), rounded(phone.range), ['minWidth', 'width'], "the Account column against Accounts in range's at 375 by 800")) say(what);
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await tabTo(theme, 'Traffic');
+    await atRest();
+  }
+}
+
+/**
  * The Analytics tables' columns under the width rule, each read on the tab that draws it: the Traffic breakdown on the
  * landing tab (its group column the fill, Key under the default grouping) and the Guardrails card above it (Guardrail),
  * the misses-by-reason breakdown (Key again, its ten figure headers wrapped so the group column keeps its room, each
@@ -6908,6 +6959,79 @@ async function accountsCardToggles(theme) {
     }
   } finally {
     await tabTo(theme, 'Traffic');
+  }
+}
+
+/**
+ * The Accounts detail's grid after the 7-day trend, which holds "Allowance left at reset", on the story's first
+ * account: at 1280 by 800 and 375 by 800 its card spans the detail pane's content width as the Usage and Requests cards
+ * do, in their title's type, and at 1440 by 900, where the pane sets the Usage card beside Identity, the one card spans
+ * its auto-fit grid. At each width the grid stays inside the pane's content box, nothing in it scrolls sideways,
+ * every card's right edge sits inside it and inside the window, and the page is as wide as the window, since a grid
+ * minimum wider than the phone's pane would widen the pane with it. The cards, the grid, the pane and the page go to
+ * the measurements, and the viewport is the pass's again after. The mock pass's alone, since the router's seed answers
+ * no allowance route on this branch.
+ */
+async function accountsMeterCards(theme) {
+  const say = (what) => failures.push(`${theme} /accounts allowance grid: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const pane = document.querySelector('.accounts__detail');
+      const grid = pane?.querySelector('.detail__grid--meter');
+      if (!pane || !grid) return null;
+      const tenths = (n) => Math.round(n * 10) / 10;
+      const card = (title) => [...pane.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+      const box = (el) => {
+        if (!el) return null;
+        const title = el.querySelector('.card__title');
+        const s = title ? getComputedStyle(title) : null;
+        return { title: s ? `${s.fontFamily}/${s.fontSize}/${s.fontWeight}` : null, width: tenths(el.getBoundingClientRect().width) };
+      };
+      const s = getComputedStyle(pane);
+      const g = grid.getBoundingClientRect();
+      return {
+        allowance: box(card('Allowance left at reset')),
+        cards: [...grid.children].map((c) => ({ right: tenths(c.getBoundingClientRect().right), title: c.querySelector('.card__title')?.textContent?.trim() ?? null })),
+        content: tenths(pane.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight)),
+        grid: { client: grid.clientWidth, right: tenths(g.right), scroll: grid.scrollWidth, width: tenths(g.width) },
+        page: { client: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth },
+        requests: box(card('Requests')),
+        usage: box(card('Usage')),
+      };
+    });
+  try {
+    for (const [width, height] of [
+      [1280, 800],
+      [1440, 900],
+      [375, 800],
+    ]) {
+      const where = `at ${width} by ${height}`;
+      await page.setViewportSize({ height, width });
+      await settle();
+      const at = await read();
+      measurements.push(`${theme} /accounts allowance grid ${where} ${JSON.stringify(at)}`);
+      if (at === null || at.allowance === null) {
+        say(`${where}: no "Allowance left at reset" card in a grid of its own`);
+        continue;
+      }
+      const rounded = (b) => b && { title: b.title, width: Math.round(b.width) };
+      if (Math.abs(at.allowance.width - at.content) > 1) say(`${where}: the card is ${at.allowance.width}px across a ${at.content}px pane`);
+      if (width === 1440) {
+        for (const what of compare(rounded(at.allowance), rounded(at.usage), ['title'], `${where}: the card against the Usage card`)) say(what);
+      } else {
+        for (const what of compare(rounded(at.allowance), rounded(at.usage), ['title', 'width'], `${where}: the card against the Usage card`)) say(what);
+        for (const what of compare(rounded(at.allowance), rounded(at.requests), ['title', 'width'], `${where}: the card against the Requests card`)) say(what);
+      }
+      if (at.grid.width > at.content + 1) say(`${where}: the grid is ${at.grid.width}px in a ${at.content}px pane`);
+      if (at.grid.scroll > at.grid.client) say(`${where}: the grid scrolls ${at.grid.scroll}px in its ${at.grid.client}px`);
+      for (const c of at.cards.filter((x) => x.right > at.grid.right + 1)) say(`${where}: "${c.title}" ends at ${c.right}px past the grid's ${at.grid.right}px`);
+      for (const c of at.cards.filter((x) => x.right > at.page.client)) say(`${where}: "${c.title}" ends at ${c.right}px past the ${at.page.client}px window`);
+      if (at.page.scroll > at.page.client) say(`${where}: the page scrolls ${at.page.scroll}px in its ${at.page.client}px window`);
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await atRest();
   }
 }
 
@@ -10719,6 +10843,7 @@ try {
         await burnCards(theme);
         await planLegend(theme);
         await analyticsTables(theme);
+        if (mock) await analyticsAllowanceTable(theme);
         await analyticsColumns(theme);
         await trafficCards(theme);
         await errorsSubtitle(theme);
@@ -10741,6 +10866,7 @@ try {
       }
       if (view.path === '/accounts') {
         if (mock) await accountBadges(theme);
+        if (mock) await accountsMeterCards(theme);
         await tableColumns(theme, 'accounts', '.cooling-down table', ['Reason']);
         await fastLane(theme, view.path);
         await deleteAccountButton(theme);

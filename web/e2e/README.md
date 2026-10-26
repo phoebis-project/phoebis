@@ -78,7 +78,11 @@ and its horizon, and a whole bar's reset and projection as two parts, each part 
 seat's spend bar there at 1280 and 400 by 800 (mock pass: its row as wide as a window triple's beside it, from its left
 edge where the two share a column, the amount spent of the limit in its head, and its reset on one line inside the bar
 with the estimate's word muted and its sentence on hover), the plan badges' words on the seat's row and the plan-ended
-account's row against the first other row's, the account lines, the Quota cards' poll lines (short of the
+account's row against the first other row's, the Accounts detail's allowance grid at 1280 by 800, 1440 by 900 and 375 by
+800 (mock pass: "Allowance left at reset" across the pane's content box at each width, as wide as the Usage and Requests
+cards and in their title's type at 1280 and 375 px and alone in its grid at 1440 px, the grid inside the pane with
+nothing in it scrolling sideways and every card's right edge inside it),
+the account lines, the Quota cards' poll lines (short of the
 Refresh pill and inside the card, the backoff line in the serious ink, none wrapping, a failed poll's reason cut inside
 its line and whole in its title where a listed card draws one), the Quota cards' chips and reset cells (each chip and
 each reset cell without a projection on one line inside its column, a live label with its projection split between its
@@ -120,7 +124,10 @@ request tile's first figure, and the Cost by card's note on a line of its own un
 edge, in its type and ink, its text recorded), the burn cards (an odd last card spanning its row, and in the mock pass
 four cards two by two at 1440 by 900 under the key grouping), the Errors by code card's subtitle (its text, in the type
 and ink of the Refusals by code card's subtitle), the plan legend's estimated entry (a hollow swatch) and model unlisted
-entry, the placement and budget tables, the Analytics tables' columns, each read on the tab that draws it (the Traffic
+entry, the placement and budget tables, the Unused allowance by account card (mock pass: below Accounts in range, its
+columns under the width rule with Account the fill at 1280 by 800, and its Account column at 375 by 800 at least 132 px
+with a 132 px min-width, as wide as Accounts in range's),
+the Analytics tables' columns, each read on the tab that draws it (the Traffic
 breakdown's group column the fill, Key on the misses-by-reason breakdown under its wrapped headers, Cache by model's
 width recorded under native with every column inside its wrap at 1280 by 800 and in the mock pass a cost cell's billed
 line drawn, Rung on the placements table, Pool and Account on the member budgets, whose Spent column is as wide as its

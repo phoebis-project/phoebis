@@ -6,7 +6,7 @@ import { api } from '@/api';
 import { windowId } from '@/api/decode';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups, type SessionRequests } from '@/api/fold';
 import { useAppSettings } from '@/app/settings';
-import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, ReconciliationsAnswer, RefusalCategoriesAnswer, RequestLog, RewritesAnswer, SubscriptionCosts } from '@/api/types';
+import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, ReconciliationsAnswer, RefusalCategoriesAnswer, RequestLog, RewritesAnswer, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
 import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -19,6 +19,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
+import { ALLOWANCE_WEEKS, allowanceColumnWord, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, type AllowanceFigure } from '@/lib/allowance';
 import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, probeMarked, probesRequired, ratioOff, readBurn, sampledWindows, savingRequired, shareLines, shareRow, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
@@ -378,6 +379,9 @@ export function AnalyticsPage() {
     reload,
   );
   const accountRollups = useAsync(() => (tab === 'accounts' ? api.listAccountRollups(fromIso, toIso) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
+  // The weekly resets of the last four weeks whatever the range, so a range change reads nothing, and the Accounts
+  // filter alone narrows them.
+  const unusedAllowance = useAsync(() => (tab === 'accounts' ? api.getAnalyticsUnusedAllowance(allowanceSpan(now), { accountIds: filters.accountId }) : Promise.resolve(null)), [tab, filters.accountId, generation], reload);
   // The fold rates the hour still running over the part of it this read saw, so the answer keeps its end and instant.
   // The instant is the read's own: the range clock stands still while another tab is open, and a read made later in
   // the same hour has seen more of it.
@@ -390,9 +394,10 @@ export function AnalyticsPage() {
   // differs from the Dashboard's, and one account keeps one color across the views.
   const registry = useAsync(() => api.listAccounts(), [], { paused, refreshMs: polledMs });
   const slotOf = useMemo(() => accountSlots((registry.data ?? []).map((a) => a.id)), [registry.data]);
-  // The plan chart's line category reads each account's stored tier against the cost model's capacity rows.
-  const burnSettings = useAsync(() => (tab === 'burn' ? api.getSettings() : Promise.resolve(null)), [tab]);
-  const sized = useMemo(() => (burn.data && burnSettings.data ? sizedAccounts(burn.data.accounts, burnSettings.data.subscriptionCosts) : null), [burn.data, burnSettings.data]);
+  // The cost model's capacity rows, which the plan chart's line category reads each account's stored tier against and
+  // the unused allowance card prices its figures through.
+  const costSettings = useAsync(() => (tab === 'burn' || tab === 'accounts' ? api.getSettings() : Promise.resolve(null)), [tab]);
+  const sized = useMemo(() => (burn.data && costSettings.data ? sizedAccounts(burn.data.accounts, costSettings.data.subscriptionCosts) : null), [burn.data, costSettings.data]);
   const rewrites = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRewrites({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
   // The route takes no session selector, so under a session filter the card counts every session's refusals.
   const refusalCategories = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRefusalCategories(query) : Promise.resolve(null)), [query, tab, generation], reload);
@@ -494,7 +499,7 @@ export function AnalyticsPage() {
     setNow(clock.now());
     setGeneration((g) => g + 1);
     budgets.reload();
-    burnSettings.reload();
+    costSettings.reload();
     reconciliations.reload();
   };
   const rows = useMemo(() => (log.stale ? [] : (log.data?.requests ?? [])), [log.stale, log.data]);
@@ -746,8 +751,8 @@ export function AnalyticsPage() {
           <BurnCharts
             account={burnAccount}
             answer={burn.stale ? null : (burn.data?.answer ?? null)}
-            costs={burnSettings.data?.subscriptionCosts ?? null}
-            error={burn.error ?? (burnSizes ? burnSettings.error : null)}
+            costs={costSettings.data?.subscriptionCosts ?? null}
+            error={burn.error ?? (burnSizes ? costSettings.error : null)}
             figure={burnFigure}
             groupBy={pageBy}
             loading={burn.data === null || burn.stale || (burnSizes && sized === null)}
@@ -1127,6 +1132,7 @@ export function AnalyticsPage() {
         <Section id="accounts" shown={shown} title="Accounts" meta="Peak utilization, window usage, pace, ineligible time, and pin churn per account">
           <AccountsSection
             accountIds={filters.accountId}
+            allowance={{ answer: unusedAllowance.stale ? null : unusedAllowance.data, costs: costSettings.data?.subscriptionCosts ?? null, error: unusedAllowance.error ?? costSettings.error }}
             bucketMs={bucketMs}
             error={accountRollups.error}
             loading={accountRollups.data === null || accountRollups.stale}
@@ -1135,6 +1141,7 @@ export function AnalyticsPage() {
             slotOf={slotOf}
             span={span}
             axis={axis}
+            unit={unit}
           />
         </Section>
       )}
@@ -2896,6 +2903,7 @@ function peakOf(values: (number | null)[]): number | null {
  */
 function AccountsSection({
   accountIds,
+  allowance,
   axis,
   bucketMs,
   error,
@@ -2904,8 +2912,11 @@ function AccountsSection({
   rollups: all,
   slotOf,
   span,
+  unit,
 }: {
   accountIds: string[];
+  /** The unused allowance card's read, its answer null while it runs, and the cost model its figures price through. */
+  allowance: { answer: UnusedAllowanceAnswer | null; costs: SubscriptionCosts | null; error: string | null };
   axis: TimeAxis;
   bucketMs: number;
   error: string | null;
@@ -2914,6 +2925,7 @@ function AccountsSection({
   rollups: AccountRollup[] | null;
   slotOf: (id: string) => number | null;
   span: { fromMs: number; toMs: number };
+  unit: UnitPosition;
 }) {
   const ink = useChartInk();
   const rollups = useMemo(() => (all === null ? null : accountIds.length === 0 ? all : all.filter((r) => accountIds.includes(r.accountId))), [all, accountIds]);
@@ -3040,6 +3052,93 @@ function AccountsSection({
           ],
         }))}
       />
+      <AllowanceTable {...allowance} unit={unit} />
     </>
+  );
+}
+
+/** A figure's cell, a dash in the muted ink that says why on hover. */
+const allowanceCell = (key: string, figure: AllowanceFigure | undefined) => (
+  <td key={key} className="right num col-fit">
+    {figure === undefined ? (
+      <span className="muted" title="No reset of this window in the last four weeks">
+        -
+      </span>
+    ) : figure.kind === 'unpriced' || figure.kind === 'none' ? (
+      <span className="muted" title={figure.title}>
+        -
+      </span>
+    ) : (
+      figure.text
+    )}
+  </td>
+);
+
+/**
+ * "Unused allowance by account": each subscription account's weekly windows over the last four weeks under the
+ * Accounts filter, ranked most left first, with the fleet's two figures over the table. A failed read, its own or the
+ * cost model's, draws in place of the rows and the figures, so no figure stands without the read it prices.
+ */
+function AllowanceTable({ answer, costs, error, unit }: { answer: UnusedAllowanceAnswer | null; costs: SubscriptionCosts | null; error: string | null; unit: UnitPosition }) {
+  const rows = useMemo(() => (answer === null || costs === null ? null : allowanceRows(answer, costs, unit)), [answer, costs, unit]);
+  const windows = useMemo(() => weeklyKeys(answer?.accounts ?? []), [answer]);
+  const fleet = rows === null ? null : fleetFigures(rows, unit);
+  const shares = unit === 'share';
+  return (
+    <Card title="Unused allowance by account" subtitle="Each subscription account's weekly windows left unused at their resets, the last four weeks, under the Accounts filter. The range does not apply here" padded={false} className="card--table accounts-range allowance-table">
+      {error === null && (
+        <div className="req-totals">
+          <div>
+            <span className="stat__label">{shares ? '7-day, mean per reset' : '7-day, fleet total'}</span>
+            <span className="stat__value">{fleet === null ? <Skeleton width={80} /> : fleet.sevenDay}</span>
+          </div>
+          <div>
+            <span className="stat__label">{shares ? 'Fable, mean per reset' : 'Fable, fleet total'}</span>
+            <span className="stat__value">{fleet === null ? <Skeleton width={80} /> : fleet.fable}</span>
+          </div>
+          <div>
+            <span className="stat__note">{fleet === null ? <Skeleton width={160} /> : fleet.note}</span>
+          </div>
+        </div>
+      )}
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th className="col-fill">Account</th>
+              <th className="right col-fit">Resets</th>
+              {windows.flatMap((w) => [
+                <th key={`${w}-last`} className="right col-fit">{`${allowanceColumnWord(w)}, last`}</th>,
+                <th key={`${w}-weeks`} className="right col-fit">{`${allowanceColumnWord(w)}, ${ALLOWANCE_WEEKS} weeks`}</th>,
+              ])}
+            </tr>
+          </thead>
+          <tbody>
+            {error === null &&
+              rows?.map((r) => (
+                <tr key={r.accountId}>
+                  <td className="mono col-fill" title={r.accountId}>
+                    <Link to={`/accounts/${r.accountId}`}>{r.accountId}</Link>
+                    {r.termEndedAt !== null && (
+                      <span className="sub" title={fmtAbsolute(r.termEndedAt)}>
+                        {`term ended ${resetInstant(r.termEndedAt)}`}
+                      </span>
+                    )}
+                  </td>
+                  <td className="right num col-fit">{fmtInt(r.resets)}</td>
+                  {windows.flatMap((w) => [allowanceCell(`${w}-last`, r.figures[w]?.last), allowanceCell(`${w}-weeks`, r.figures[w]?.weeks)])}
+                </tr>
+              ))}
+            {(error !== null || rows === null || rows.length === 0) && (
+              <tr>
+                <td colSpan={2 + windows.length * 2} className={error === null && rows !== null ? 'muted' : ''}>
+                  {error !== null ? <ErrorState title="Could not load the unused allowance" body={error} /> : rows === null ? <Skeleton height={22} /> : 'No weekly reset in the last four weeks'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 }

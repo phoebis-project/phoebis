@@ -1117,6 +1117,59 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(Date.parse(five.resetsAt) > Date.parse(cleared.at) && cleared.detail.reset === Date.parse(five.resetsAt));
   });
 
+  test(`the story's weekly resets run a week apart back from each window's reset, and the unused allowance route answers them with sunset's term end, at ${at}`, async () => {
+    const s = await story;
+    const WEEK = 7 * DAY;
+    const span = s.lib.allowanceSpan(s.now);
+    const page = await s.api.listRoutingLog({ from: span.from, kinds: ['window_reset'], limit: 200, to: span.to });
+    assert.equal(page.nextCursor, null, 'one page holds the four weeks');
+    const weekly = page.rows.filter((e) => e.type === 'event' && e.detail.window !== 'five_hour');
+    const accountOf = new Map(s.accounts.map((a) => [a.id, a]));
+    const sunset = accountOf.get('sunset');
+    const end = Date.parse(sunset.subscription.endsAt);
+    // Four resets of each weekly window an account reports, a week apart back from its current reset. Sunset reports
+    // none since its plan ended, so its three run back from the reset its seed's `win('7d', ...)` names, four days
+    // after the end, and the end itself is the fourth.
+    const expected = ['primary', 'secondary', 'nightly', 'studio'].flatMap((id) => {
+      const a = accountOf.get(id);
+      return [['seven_day', a.windows.find((w) => w.id === '7d')], ['seven_day_fable', a.fableWindow]].flatMap(([window, w]) => (w ? [1, 2, 3, 4].map((k) => `${id} ${window} ${iso(Date.parse(w.resetsAt) - k * WEEK)}`) : []));
+    });
+    expected.push(...[1, 2, 3].map((k) => `sunset seven_day ${iso(end + 4 * DAY - k * WEEK)}`));
+    assert.deepEqual(weekly.map((e) => `${e.accountId} ${e.detail.window} ${iso(e.detail.reset_at)}`).sort(), expected.sort());
+    // Each row in the engine's shape, announced at its reset, a sample's naming the next reset a week on and the clock
+    // walk's none, all before the day the dashboard and the routing log count.
+    const next = (e) => (e.detail.observed === 'clock' ? null : e.detail.reset_at + WEEK);
+    const off = weekly.filter((e) => JSON.stringify(Object.keys(e.detail).sort()) !== '["next_reset","observed","reset_at","utilization_before","window"]' || e.at !== iso(e.detail.reset_at) || e.detail.next_reset !== next(e) || !(e.detail.utilization_before > 0 && e.detail.utilization_before < 1) || Date.parse(e.at) >= s.now - DAY);
+    assert.deepEqual(off.map((e) => `${e.accountId} ${e.at} ${JSON.stringify(e.detail)}`), []);
+    assert.deepEqual(weekly.filter((e) => e.detail.observed !== 'sample').map((e) => `${e.accountId} ${e.detail.window} ${e.detail.observed}`), ['nightly seven_day clock'], 'one clock walk among the samples');
+
+    const answer = await s.api.getAnalyticsUnusedAllowance(span);
+    assert.deepEqual([answer.from, answer.to], [span.from, span.to]);
+    assert.deepEqual(answer.accounts.map((a) => a.accountId), ['nightly', 'primary', 'secondary', 'studio', 'sunset'], 'one entry per subscription account with a weekly reset, by id');
+    for (const a of answer.accounts) {
+      const account = accountOf.get(a.accountId);
+      assert.deepEqual([a.plan, a.tier], [account.subscription.plan, account.subscription.rateLimitTier], a.accountId);
+      assert.deepEqual(a.windows.map((w) => w.window), account.fableWindow ? ['seven_day', 'seven_day_fable'] : ['seven_day'], a.accountId);
+      for (const w of a.windows) {
+        const fromLog = weekly
+          .filter((e) => e.accountId === a.accountId && e.detail.window === w.window)
+          .sort((x, y) => y.detail.reset_at - x.detail.reset_at)
+          .map((e) => ({ observedAt: e.at, resetAt: iso(e.detail.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - e.detail.utilization_before)), source: e.detail.observed }));
+        assert.deepEqual(a.accountId === 'sunset' ? w.resets.slice(1) : w.resets, fromLog, `${a.accountId} ${w.window}: the log's resets, newest first`);
+        assert.ok(w.resetsCounted === w.resets.length && near(w.totalShareLeft, sum(w.resets, (r) => r.shareLeft)), `${a.accountId} ${w.window}: the total and the count over the listed resets`);
+      }
+    }
+    // The week the end cut short reads the last sample of sunset's 7-day series before the end, the reading its seed
+    // names, 0.46, so 0.54 of the week was left.
+    const series = (await s.api.getQuotaHistory('sunset')).find((h) => h.windowId === '7d');
+    const before = series.samples.filter((x) => Date.parse(x.at) < end).at(-1);
+    const ended = answer.accounts.find((a) => a.accountId === 'sunset').windows[0].resets[0];
+    assert.deepEqual(ended, { observedAt: before.at, resetAt: iso(end), shareLeft: 1 - before.utilization, source: 'term_ended' });
+    assert.ok(near(ended.shareLeft, 0.54), `sunset left ${ended.shareLeft} of its last week`);
+    const one = await s.api.getAnalyticsUnusedAllowance(span, { accountIds: ['studio'] });
+    assert.deepEqual(one.accounts, answer.accounts.filter((a) => a.accountId === 'studio'), 'the Accounts filter keeps its account alone');
+  });
+
   test(`spare's samples end at the reading its snapshot keeps from before the disconnect, with no poll, at ${at}`, async () => {
     const s = await story;
     const spare = s.accounts.find((a) => a.id === 'spare');
