@@ -37,6 +37,8 @@ jobs:
       - run: cargo test --workspace --locked
         env:
           PHOEBIS_UI_EXPECT: bundle
+      - run: scripts/tests/capture-tooling.sh
+      - run: python3 scripts/build-fixtures.py --self-test
   web:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
