@@ -72,9 +72,9 @@ test("a refusal bar's link lists the rows its count counted under a client patte
 });
 
 test('the mock leaves the stamp uncapped under a fixed end, so a row received inside the range and written after it is read once, as the route does', async () => {
-  // The seed is the story's failed turn that waited out its 60 s pool's whole bound at the cap after its attempts, so
-  // it finishes more than a minute after it arrived, and the ledger writes a row at its finish: an end between the two
-  // holds the row received and not yet written at the end.
+  // The seed is the failed turn `seedHolds` (mock/requests.ts) writes, which waited out its 60 s pool's whole bound at
+  // the cap after its attempts, so it finishes more than a minute after it arrived, and the ledger writes a row at its
+  // finish: an end between the two holds the row received and not yet written at the end.
   const late = all.find((r) => r.errorCode === 'accounts_at_cap' && r.durationMs > 60_000);
   assert.ok(late, 'the story holds a failed turn that waited out its bound at the cap');
   const arrived = Date.parse(late.at);

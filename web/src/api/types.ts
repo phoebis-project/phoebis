@@ -781,7 +781,8 @@ export interface RequestLog {
   /** The model the router resolved the request to, which a pin and its events are keyed by. */
   canonicalModel: string;
   capturedBodies: boolean;
-  /** `client` for the client's own auto-mode classifier call, which takes no share of a plan window, and `null` otherwise. */
+  /** `client` for the client's own auto-mode classifier call, which takes no share of a plan window, and `null`
+   * otherwise. */
   classifier: 'client' | null;
   /** The class the router derived at admission: `claude-code/<entrypoint>` or `other`, and `null` on a row from before
    * the router recorded it. */
@@ -972,9 +973,9 @@ export interface RequestQuery {
 export interface RequestPage {
   /**
    * The newest write instant among the rows the query's filters admit at the read, `to` included, the `landedAfter` it
-   * passed where none above it has landed, and 0 where neither is set, never past a `to` the query names, since a row
-   * received after `to` lands after it, unless the query passes `fixedEnd`, which lets the stamp pass `to` so a row
-   * received before the end and landed after it is read once.
+   * passed where none above it has landed, and 0 where neither is set, never past a `to` the query names unless the
+   * query passes `fixedEnd`, since a row received after `to` lands after it. Under `fixedEnd` the stamp may pass `to`,
+   * so a row received before the end and landed after it is read once.
    */
   landedThrough: number;
   nextCursor: string | null;

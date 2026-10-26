@@ -37,16 +37,15 @@ The sidebar reads the brand "Phoebis Router" over the views in this order: Dashb
 Guardrails, Requests, Analytics, Sessions, Settings. Under them a group headed "Diagnostics" holds Routing log and
 Meter, shown while the expert view is on or while the open view is a diagnostics view, so a link into either view opens
 it whatever the mode and leaves the mode as you set it. The sidebar's foot carries the "Expert view" switch and the
-router's version
-as `v{version}`. The top bar reads the open view's title (the document title is `{title} - Phoebis Router`), the "Unit"
-switch with its legend's button, "Log out", and the theme switch "Theme" with Light, Dark and System, stored under
-`phoebis.theme` (`system` until you pick one). When the router answers from a build other than the one the console's
-files were built from, a banner above the top bar reads `The router runs a newer build than this console. Reload to pick
-it up.` beside a "Reload" button, and it stays in view with the top bar until the page reloads. The time format lives
-under `phoebis.timeFormat` (`24h` by default). The theme, the time format and the unit are browser preferences, which
-the Settings view's Appearance card also sets, and nothing in the shell changes a router setting. On a narrow window a
-menu button opens the sidebar over the view. At a phone's width the top bar wraps a view title it cannot hold beside its
-controls onto a second line.
+router's version as `v{version}`. The top bar reads the open view's title (the document title is `{title} - Phoebis
+Router`), the "Unit" switch with its legend's button, "Log out", and the theme switch "Theme" with Light, Dark and
+System, stored under `phoebis.theme` (`system` until you pick one). When the router answers from a build other than the
+one the console's files were built from, a banner above the top bar reads `The router runs a newer build than this
+console. Reload to pick it up.` beside a "Reload" button, and it stays in view with the top bar until the page reloads.
+The time format lives under `phoebis.timeFormat` (`24h` by default). The theme, the time format and the unit are browser
+preferences, which the Settings view's Appearance card also sets, and nothing in the shell changes a router setting. On
+a narrow window a menu button opens the sidebar over the view. At a phone's width the top bar wraps a view title it
+cannot hold beside its controls onto a second line.
 
 The Accounts, Analytics and Pools views load their code on first open. A view that fails to draw tells a bundle that
 changed under the tab ("This page could not load") from an error while drawing ("This page hit an error"), each with its
@@ -149,11 +148,10 @@ left first, the ring's center reads the share "of capacity left", and the line u
 `{n} of {m} {tier} windows left`, such as 0.39 of 1.30 Max 20x windows. A window whose reset has passed with no reading
 since counts as a full allowance, and an account on a free plan, one whose tier the model does not size, or one that has
 no capacity for on the window, is named under the ring with the reason. Without a subscription account the card reads
-"No subscription
-accounts" and "A subscription account reports the window this card draws.", and with none sized "No listed account's
-tier is sized for the 5-hour window." (or 7-day). Each account keeps one color across the Dashboard, the Quota view and
-the Analytics, in the order of its id, the eight colors cycling past eight accounts, and an account the registry does
-not list draws muted.
+"No subscription accounts" and "A subscription account reports the window this card draws.", and with none sized "No
+listed account's tier is sized for the 5-hour window." (or 7-day). Each account keeps one color across the Dashboard,
+the Quota view and the Analytics, in the order of its id, the eight colors cycling past eight accounts, and an account
+the registry does not list draws muted.
 
 "Accounts" draws one small card per account, linking to its detail, with the status badge, the speed chip beside it on a
 slowed account (`0.5x`, as [Quota](#quota) describes it), the email, the window bars or the spend bar of a usage-based
@@ -274,12 +272,11 @@ wait, until the account's first reading lands or 30 s pass. The six labels, with
 down (`cooldown`), Needs funding (`funding_required`), Paused (`paused`), Needs re-auth (`reauth_required`), Ready
 (`ready`) and Not paired (`unpaired`). A row reads the label with a badge that names the plan the router resolved from
 the organization type and the tier ("Free", "Pro", "Max 5x", "Max 20x", "Max", "Team", "Enterprise" or "Usage-based",
-none on an API-key row), the status badge with the
-speed chip beside it on a slowed account, the email, `pool {id}` or "no pool", "Overage" while requests bill as extra
-usage and "extra usage on" while it is enabled and unused. The pane reads "The router holds no account yet" with "Add
-account" before the first account, "No accounts match" with "Clear the search or the status filter." under a filter, and
-"No account to show" until a row is selected. What the states mean and how an account moves between them is on [Pairing
-an account](pairing.md).
+none on an API-key row), the status badge with the speed chip beside it on a slowed account, the email, `pool {id}` or
+"no pool", "Overage" while requests bill as extra usage and "extra usage on" while it is enabled and unused. The pane
+reads "The router holds no account yet" with "Add account" before the first account, "No accounts match" with "Clear the
+search or the status filter." under a filter, and "No account to show" until a row is selected. What the states mean and
+how an account moves between them is on [Pairing an account](pairing.md).
 
 The detail opens on the account's label with "Edit label", its email and its badges: the status, `quarantined` while
 the last refresh's outcome is uncertain, `cooldown ends {ago}`, "Overage active" and "Routing paused", with `Overage
@@ -299,25 +296,25 @@ it." The actions, with the dialog each opens:
 
 "Identity" lists, for a subscription account, Type ("OAuth login"), Plan, the plan the router resolved, with its start
 (`Max 20x since {date}`), Rate-limit tier (`{tier}, usage-based` on a usage-based seat), Ends where known, Plan ended
-where set, Trial
-ends where known, Organization and Billing type, and "Edit end" opens the end editor: the checkbox "Canceled", the field
-`Ends ({zone})`, whose label names the browser's time zone, with the hint "The date the plan's billing settings show as
-its end. An annual plan is marked canceled in its final month only. The time is in this browser's zone.", Save and
-Cancel, and "Reload" where the row changed under the editor. Beside the saved end the row answers `plan_ended_at`, the
-instant a profile read found the account's organization holding no plan, which the router reads as an end that has
-passed until a profile read or a pairing finds a plan again, and the Quota view leaves the account out while the flag
-stands ([Account states](pairing.md#account-states)). The card closes on "Renewal date is not reported by the provider."
-For an API-key account it lists Type ("API key") and Windows ("None reported, billed per token"). "Usage" ("Remaining
-share of each window") draws the three windows as the Quota view does, or a usage-based seat's spend bar, "Spend limit"
-with `{used} of {limit}` over its meter and its reset line, the speed chip beside the 5-hour bar's label on a slowed
-account, "Extra usage this month" on every account but a usage-based seat, with an "in use" badge and its amounts and
-spend meter where the reading carries them, the reason the provider gave for disabling extra usage, and a "Fast mode"
-line with the share of the fast lane's input and output buckets used and a chip while the fast lane cools, or reads
-"This account does not report quota windows." ("No spend reading yet" on a usage-based seat, or "No quota window is read
-since the plan ended {ago}." on an account whose plan ended), or "The first quota reading is in flight." from a
-pairing's confirm until the account's first reading lands, where a usage-based seat reads "No spend reading yet". "7-day
-trend" ("Utilization of each window, sampled every 5 minutes") draws the 5-hour, 7-day and Fable 7-day windows of a
-subscription account, or "No samples yet" with "Quota samples appear after the first successful quota fetch."
+where set, Trial ends where known, Organization and Billing type, and "Edit end" opens the end editor: the checkbox
+"Canceled", the field `Ends ({zone})`, whose label names the browser's time zone, with the hint "The date the plan's
+billing settings show as its end. An annual plan is marked canceled in its final month only. The time is in this
+browser's zone.", Save and Cancel, and "Reload" where the row changed under the editor. Beside the saved end the row
+answers `plan_ended_at`, the instant a profile read found the account's organization holding no plan, which the router
+reads as an end that has passed until a profile read or a pairing finds a plan again, and the Quota view leaves the
+account out while the flag stands ([Account states](pairing.md#account-states)). The card closes on "Renewal date is not
+reported by the provider." For an API-key account it lists Type ("API key") and Windows ("None reported, billed per
+token"). "Usage" ("Remaining share of each window") draws the three windows as the Quota view does, or a usage-based
+seat's spend bar, "Spend limit" with `{used} of {limit}` over its meter and its reset line, the speed chip beside the
+5-hour bar's label on a slowed account, "Extra usage this month" on every account but a usage-based seat, with an "in
+use" badge and its amounts and spend meter where the reading carries them, the reason the provider gave for disabling
+extra usage, and a "Fast mode" line with the share of the fast lane's input and output buckets used and a chip while the
+fast lane cools, or reads "This account does not report quota windows." ("No spend reading yet" on a usage-based seat,
+or "No quota window is read since the plan ended {ago}." on an account whose plan ended), or "The first quota reading is
+in flight." from a pairing's confirm until the account's first reading lands, where a usage-based seat reads "No spend
+reading yet". "7-day trend" ("Utilization of each window, sampled every 5 minutes") draws the 5-hour, 7-day and Fable
+7-day windows of a subscription account, or "No samples yet" with "Quota samples appear after the first successful quota
+fetch."
 
 "Allowance left at reset" draws, for a subscription account that is not a usage-based seat, one column per weekly window
 (the 7-day window, then each model week): the share left unused at the latest reset with "left at the reset of {date}"
@@ -751,20 +748,20 @@ search and the range. What each figure means is on [Statistics](statistics.md).
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range
 ending at the router's clock and a custom range keeping its own end, where a request received inside it and written
-after a read draws on the next read, takes every row that arrived since the read before,
-up to eight pages, and lands a new row at the top in the accent tint until the next read. A long request can finish
-below rows already shown: it lands between rows already shown, in the same tint, on the next auto reload. On a custom
-range whose rows fit on the page shown, a request that lands below them after a read draws on the next read in the
-accent tint, and where the range runs on past the page a late row below it stays for Next. Past eight
-pages a line reads "More rows arrived than auto reload could fetch. Reload to read them.", and Next reads on from the
-last row the poll fetched, under a preset to the router's clock. A poll whose newest page stood in for a list read that
-failed gives way to the list once it answers. A filter change keeps the interval. The poll waits while the tab is
-hidden, while the drawer is open, on an older page until you go back to the first, and while a menu or popover under the
-bar is open, with the interval kept and the cause named in the dropdown's title. When the wait ends a full interval or
-more after its last answer, it reads at once. When the tab comes back to a read at once, the rows that read brought keep
-the tint through the read after it. A custom range whose end lay more than a minute in the past when the page took it
-has nothing new to read, so the dropdown reads Off and stays disabled, while a link whose range ends at the moment it
-was made reads on, each read refreshing the rows inside it.
+after a read draws on the next read, takes every row that arrived since the read before, up to eight pages, and lands a
+new row at the top in the accent tint until the next read. A long request can finish below rows already shown: it lands
+between rows already shown, in the same tint, on the next auto reload. On a custom range whose rows fit on the page
+shown, a request that lands below them after a read draws on the next read in the accent tint, and where the range runs
+on past the page a late row below it stays for Next. Past eight pages a line reads "More rows arrived than auto reload
+could fetch. Reload to read them.", and Next reads on from the last row the poll fetched, under a preset to the router's
+clock. A poll whose newest page stood in for a list read that failed gives way to the list once it answers. A filter
+change keeps the interval. The poll waits while the tab is hidden, while the drawer is open, on an older page until you
+go back to the first, and while a menu or popover under the bar is open, with the interval kept and the cause named in
+the dropdown's title. When the wait ends a full interval or more after its last answer, it reads at once. When the tab
+comes back to a read at once, the rows that read brought keep the tint through the read after it. A custom range whose
+end lay more than a minute in the past when the page took it has nothing new to read, so the dropdown reads Off and
+stays disabled, while a link whose range ends at the moment it was made reads on, each read refreshing the rows inside
+it.
 
 Selecting a row opens the "Request details" drawer, with the request's id and time, a "Routing log" link that opens the
 [routing log](#routing-log) on the request a quarter hour either side, and these sections:
@@ -1222,24 +1219,23 @@ holds `realized`, in the order the engine applies them.
 
 "Candidates, by rank" lists every pool member with the chosen or held-on member tinted: Account with its plan beneath
 (the plan the router resolved from the organization type and the tier, "Free" among its words, or the tier word of a
-record from before),
-Tier (`plan P0`, `overage P0`, `keys P1`), 5h, 7d and Fable as three lines each (the utilization, the reset, the
-reading's source and age), or on a usage-based seat whose record carries its spend reading one cell across the three,
-`spend 41%` over its reset with `estimated` under it where the router estimated the reset, Projection and Runway, In
-flight against the cap, the Pace score, Prefix, and Verdict. A usage-based seat with no reading, its share lapsed or not
-yet read, draws the three "not reported" cells as an account with no window does. The rows list the chosen, renewed or
-held-on member first, then a move's source and its other destinations, then the ranked members by rank, then the
-eligible ones the strategy did not rank, then the ones a partition or a check dropped with their obstacle. Projection
-reads one line per window the candidate reports, the projection at the window's horizon, `5h 99% at 18:20` where the
-horizon is the reset and `7d 41% in 5 h` where it falls earlier, and Runway a span (`2 h 10 min`), `none` or
-`unbounded`, each a dash for a candidate the gate did not read. The Projection cell's hover names the demand where it
-differs from the burn the window sees, `demand 12.86 %/h over burn 6.43 %/h at 0.5x`, with the candidate's slow-down
-factor. The Pace score stands under a header naming the window it read, `Spare rate, 7-day per hour` or `Spare rate,
-7-day Fable per hour` (`Pace` where no subscription candidate names one, and `Pace, 7-day left per hour` on a version 1
-record), each cell's hover reading `{pct} of the 7-day window left over {n} h to its reset at {time}, less {burn} of
-burn: {rate}.` (or `to its subscription's end at {time}`) followed by `Inside its tier, the highest spare rate wins.`
-The pick line names the accounts whose scores tied, the runway that narrowed them where it did, and whether the draw
-chose among more than one. Verdict carries the one chip that decided it (`429 on 5h until 14:55`, `budget $1.10 of
+record from before), Tier (`plan P0`, `overage P0`, `keys P1`), 5h, 7d and Fable as three lines each (the utilization,
+the reset, the reading's source and age), or on a usage-based seat whose record carries its spend reading one cell
+across the three, `spend 41%` over its reset with `estimated` under it where the router estimated the reset, Projection
+and Runway, In flight against the cap, the Pace score, Prefix, and Verdict. A usage-based seat with no reading, its
+share lapsed or not yet read, draws the three "not reported" cells as an account with no window does. The rows list the
+chosen, renewed or held-on member first, then a move's source and its other destinations, then the ranked members by
+rank, then the eligible ones the strategy did not rank, then the ones a partition or a check dropped with their
+obstacle. Projection reads one line per window the candidate reports, the projection at the window's horizon, `5h 99% at
+18:20` where the horizon is the reset and `7d 41% in 5 h` where it falls earlier, and Runway a span (`2 h 10 min`),
+`none` or `unbounded`, each a dash for a candidate the gate did not read. The Projection cell's hover names the demand
+where it differs from the burn the window sees, `demand 12.86 %/h over burn 6.43 %/h at 0.5x`, with the candidate's
+slow-down factor. The Pace score stands under a header naming the window it read, `Spare rate, 7-day per hour` or `Spare
+rate, 7-day Fable per hour` (`Pace` where no subscription candidate names one, and `Pace, 7-day left per hour` on a
+version 1 record), each cell's hover reading `{pct} of the 7-day window left over {n} h to its reset at {time}, less
+{burn} of burn: {rate}.` (or `to its subscription's end at {time}`) followed by `Inside its tier, the highest spare rate
+wins.` The pick line names the accounts whose scores tied, the runway that narrowed them where it did, and whether the
+draw chose among more than one. Verdict carries the one chip that decided it (`429 on 5h until 14:55`, `budget $1.10 of
 $5.00`), whose hover says why the member was passed over, and beside it a badge for a destination the gate read that did
 not fit, `rewrite only` or `least bad` in the warning tone and `ending` neutral. Three folds, "Request facts", "Pin and
 warmth" (a record that pins nothing reads why: not looked up or pinning off, and a pin that carries them reads Cycle and
@@ -1367,9 +1363,8 @@ reported draws no group. A collapsed group is one line: Account (a link to the a
 always written) and Windows (the count). A click on the line or Enter on it opens the group, its chevron turning down,
 and a second closes it. An open group lists its windows newest first, the newest 10 of a 5-hour group and the newest 25
 of a weekly one, under Ended, Rise, Predicted (with the charts' `~` and its estimate hover where an attempt in it was
-priced at a model tier's estimate), Ratio and Requests, then, while windows stay unlisted,
-`{n} of {m} windows, newest first` with "Show 25 more". A group's open state belongs to the page, so a reload or a
-link opens every group shut.
+priced at a model tier's estimate), Ratio and Requests, then, while windows stay unlisted, `{n} of {m} windows, newest
+first` with "Show 25 more". A group's open state belongs to the page, so a reload or a link opens every group shut.
 
 The spark charts the group's windows over the 30 days to the newest window the view lists, so every line reads one axis:
 the ratio's base-2 log clipped to 0.5 and 2, the band 0.8 to 1.25 shaded with the 1.0 line in it, the windows the band

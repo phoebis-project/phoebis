@@ -1116,15 +1116,15 @@ function phoneTopBar() {
  * at 1920 the room for each request id under the time, which no line there cuts. At 375 the table keeps its 990 px
  * minimum, Time 147 px, and scrolls inside its wrap, the page as wide as its table card and the document as wide as the
  * window, and the top bar draws its title on at most two lines inside the bar and its last control inside its padding.
- * Each column from Time to Link holds its longest cell (`routingLogCells`), with no slack, so a column narrower
- * than it fails, Account aside: it cuts a line past its width by design, and it fails under the longest account id with
- * its padding. A line cut on purpose (the request link under the time, the agent line under the session, an Account
- * line past the column) that does not end behind an ellipsis fails. From 1420 px the model stands in its own column
- * alone, so an Account cell that draws it beneath the account fails, and under 1420 px a row with a model that does not
- * draw it there fails. The bare log is read, then the log under the 7-day range on the state changes, where the mock
- * story dates its Time cells on the first page and a Time cell that breaks over two lines fails. The mock pass fails a
- * 7-day page with no dated cell, and the router's seed, which draws no row older than a day, records that the read
- * stands down. The bare log loads again at the pass's viewport after.
+ * Each column from Time to Link holds its longest cell (`routingLogCells`), with no slack, so a column narrower than it
+ * fails, Account aside: it cuts a line past its width by design, and it fails under the longest account id with its
+ * padding. A line cut on purpose (the request link under the time, the agent line under the session, an Account line
+ * past the column) that does not end behind an ellipsis fails. From 1420 px the model stands in its own column alone,
+ * so an Account cell that draws it beneath the account fails, and under 1420 px a row with a model that does not draw
+ * it there fails. The bare log is read, then the log under the 7-day range on the state changes, where the mock story
+ * dates its Time cells on the first page and a Time cell that breaks over two lines fails. The mock pass fails a 7-day
+ * page with no dated cell, and the router's seed, which draws no row older than a day, records that the read stands
+ * down. The bare log loads again at the pass's viewport after.
  */
 async function routingLogColumns(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -4912,8 +4912,8 @@ async function errorsSubtitle(theme) {
 /**
  * The Burn tab's four cards at 1440 by 900 under the key grouping, where `.grid-2` alone fits three columns: the three
  * plan cards and Spend per minute sit two by two, two cards on each of two top edges, each as wide as half the grid's
- * row less half its 18 px gap, and none spanning the row. Each card's top edge, left edge and width go to the
- * measurements, and the viewport and the Traffic tab are the pass's again after.
+ * row less half its gap, and none spanning the row. Each card's top edge, left edge and width go to the measurements,
+ * and the viewport and the Traffic tab are the pass's again after.
  */
 async function burnGridFour(theme) {
   const say = (what) => failures.push(`${theme} /analytics burn grid at 1440 by 900: ${what}`);
@@ -5024,7 +5024,7 @@ async function planLegend(theme) {
  */
 async function analyticsTables(theme) {
   const say = (what) => failures.push(`${theme} /analytics: ${what}`);
-  // The tables the shown tab draws; a card on another tab is not mounted and reads as null.
+  // The tables the shown tab draws. A card on another tab is not mounted and reads as null.
   const tables = () =>
     page.evaluate(() => {
       const card = (t) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
@@ -5107,7 +5107,7 @@ async function analyticsTables(theme) {
  * rule with Account the fill at 1280 by 800, and at 375 by 800 its Account column at least 132 px under the floor the
  * card's `accounts-range` class reaches, its computed `min-width` 132 px, as wide and as floored as Accounts in range's
  * account column there. Both columns and the two cards' edges go to the measurements, and the viewport and the Traffic
- * tab are the pass's again after. The mock pass's alone, since the router pass's seed answers no allowance route.
+ * tab are the pass's again after. The mock pass's alone, since the router pass seeds no weekly reset.
  */
 async function analyticsAllowanceTable(theme) {
   const say = (what) => failures.push(`${theme} /analytics Unused allowance by account: ${what}`);
@@ -7089,7 +7089,7 @@ async function accountsCardToggles(theme) {
  * pane's content box, nothing in it scrolls sideways, every card's right edge sits inside it and inside the window, and
  * the page is as wide as the window, since a grid minimum wider than the phone's pane would widen the pane with it. The
  * cards, the grid, the pane and the page go to the measurements, and the viewport is the pass's again after. The mock
- * pass's alone, since the router pass's seed answers no allowance route and reconciles no window.
+ * pass's alone, since the router pass seeds no weekly reset and reconciles no window.
  */
 async function accountsMeterCards(theme) {
   const say = (what) => failures.push(`${theme} /accounts allowance grid: ${what}`);

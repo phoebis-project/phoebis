@@ -97,8 +97,8 @@ export function useFollow<R>(input: {
       const page = (cursor: string | undefined) => (failures.failing ? quietly(() => reader(cursor, to, landedAfter)) : reader(cursor, to, landedAfter));
       const last = start?.[start.length - 1];
       const below = (r: R) => last !== undefined && order(r, last) > 0;
-      // A stand-in is the list while it stands, so its page's cursor says whether the range holds rows past those shown.
-      // A stale list hands none, since its cursor is another query's.
+      // A stand-in is the list while it stands, so its page's cursor says whether the range holds rows past those
+      // shown. A stale list hands none, since its cursor is another query's.
       const tail = standing === null ? list?.nextCursor : standing.cursor;
       // Before the list answers there is no row to stop at, so the poll reads the newest page alone and keeps the
       // cursor past it for the answer that stands in for a list read that failed.
