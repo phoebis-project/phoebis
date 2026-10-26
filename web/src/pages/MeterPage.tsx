@@ -1,46 +1,21 @@
 import { Fragment, useMemo, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
-import type { Reconciliation } from '@/api/types';
 import { FilterBar } from '@/components/FilterBar';
+import { MeterRatio } from '@/components/MeterRatio';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevron } from '@/components/ui/icons';
-import { Badge, Button, Card, ErrorState, Skeleton } from '@/components/ui/primitives';
+import { Button, Card, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { METER_CODEC, type MeterAddress } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { METER_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import { fmtAbsolute, fmtDated, fmtInt, fmtShare, instant, withEstimate } from '@/lib/format';
 import { useAsync, useQueryFilters } from '@/lib/hooks';
-import { GROUP_PAGE, GROUP_STEP, judged, METER_HINT, meterGroups, meterWindowWord, SPARK, sparkOf, sparkY, UNJUDGED_TITLE, type MeterGroup } from '@/lib/meter';
-import { ratioOff } from '@/lib/analytics';
+import { GROUP_PAGE, GROUP_STEP, METER_HINT, meterGroups, meterWindowWord, SPARK, sparkOf, sparkY, type MeterGroup } from '@/lib/meter';
 
 const COLUMNS = 8;
 const plural = (n: number, one: string) => `${fmtInt(n)} ${one}${n === 1 ? '' : 's'}`;
 const groupKey = (g: Pick<MeterGroup, 'accountId' | 'window'>) => `${g.accountId}:${g.window}`;
-
-/**
- * A completed window's ratio at two decimals with the four on hover: the warning badge where the band marks it, muted
- * with the reason where the band does not judge it, so an unbadged ratio is not read as one the band passed.
- */
-export function MeterRatio({ row }: { row: Pick<Reconciliation, 'observedRise' | 'predictedShare' | 'ratio'> }) {
-  const four = row.ratio.toFixed(4);
-  if (ratioOff(row)) {
-    return (
-      <Badge tone="warning" title={four}>
-        {row.ratio.toFixed(2)}
-      </Badge>
-    );
-  }
-  return judged(row) ? (
-    <span className="num" title={four}>
-      {row.ratio.toFixed(2)}
-    </span>
-  ) : (
-    <span className="num muted" title={`${four}, ${UNJUDGED_TITLE}`}>
-      {row.ratio.toFixed(2)}
-    </span>
-  );
-}
 
 /** The group's judged windows over the trailing 30 days to the answer's newest window, the band shaded behind them. */
 function Spark({ group, newest }: { group: MeterGroup; newest: number }) {
@@ -53,7 +28,8 @@ function Spark({ group, newest }: { group: MeterGroup; newest: number }) {
     <svg className="meter-spark" width={SPARK.width} height={SPARK.height} viewBox={`0 0 ${SPARK.width} ${SPARK.height}`} role="img" aria-label={title}>
       <title>{title}</title>
       <rect className="meter-spark__band" x={0} y={top} width={SPARK.width} height={sparkY(low) - top} />
-      <line className="meter-spark__mid" x1={0} x2={SPARK.width} y1={mid} y2={mid} />
+      {/* Chromium reads a stroked shape's box half a stroke wider, so edge to edge the column needs a pixel more. */}
+      <line className="meter-spark__mid" x1={0.5} x2={SPARK.width - 0.5} y1={mid} y2={mid} />
       {points.length > 1 && <polyline className="meter-spark__line" points={points.map(xy).join(' ')} />}
       {points
         .filter((p) => p.off || dots)
@@ -103,7 +79,7 @@ function GroupWindows({ group, now, onMore, shown }: { group: MeterGroup; now: n
         <div className="meter-detail__more">
           <span>{`${fmtInt(shown)} of ${fmtInt(group.rows.length)} windows, newest first`}</span>
           <button type="button" className="link-btn" onClick={onMore}>
-            Show 25 more
+            {`Show ${fmtInt(GROUP_STEP)} more`}
           </button>
         </div>
       )}

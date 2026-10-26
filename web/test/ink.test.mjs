@@ -15,6 +15,7 @@ const INK3_ALLOWED = new Set([
   '.icon-btn',
   '.input::placeholder',
   '.ldot',
+  '.meter-spark__line',
   '.pct-label',
   ".refresh-control[data-state='paused'] .refresh-control__part",
   '.refresh-control__part:disabled',

@@ -1448,16 +1448,20 @@ async function diagnosticsNav(theme, path) {
 
 /**
  * The Meter view's two group tables at 1280 by 800, 1440 by 900, 1920 by 1080 and 375 by 800, under the Routing log's
- * own reads: each fit column as wide as its widest cell within 1 px past the 30 px gutter, Account the one fill and at
- * least its 132 px floor, and on the three wide viewports each table inside its wrap with nothing to scroll sideways. At
- * 375 the document is as wide as the window, each table wider than its card scrolls inside its `.table-wrap`, and the
- * first line's Latest ratio cell ends inside the wrap, in view with no scroll. At 1280 a collapsed line is 37.8 px
- * within 0.5 px, the badged line (nightly's 5-hour one in the mock's story) as tall as a plain one, and the height of
- * one open group, nightly's 5-hour line with its first page of windows, goes to the measurements. The viewport is the
- * pass's again after, every group shut. The mock pass's alone, since the router's seed reconciles no window.
+ * own reads: each fit column as wide as its widest cell within 1 px past the gutter, the gutter 30 px within 1 px,
+ * Account the one fill and at least its 132 px floor, and on the three wide viewports each table inside its wrap with
+ * nothing to scroll sideways. At 375 the document is as wide as the window, each table wider than its card scrolls
+ * inside its `.table-wrap`, and the first line's Latest ratio cell ends inside the wrap, in view with no scroll. At 1280
+ * a collapsed line is 37.8 px within 0.5 px, the badged line (nightly's 5-hour one in the mock's story) as tall as a
+ * plain one, and the height of one open group, nightly's 5-hour line with its first page of windows, goes to the
+ * measurements. That group's nested rows alternate two tones, each row read by the ground its first cell shows (the
+ * cell's own fill, else the nearest one behind it), since nightly's line is its card's second and the stripe paints
+ * the detail row the nested table sits in. The tones go to the measurements. The viewport is the pass's again after,
+ * every group shut. The mock pass's alone, since the router's seed reconciles no window.
  */
 async function meterColumns(theme) {
   const say = (what) => failures.push(`${theme} /meter: ${what}`);
+  const GUTTER_PX = 30;
   const LINE_PX = 37.8;
   try {
     for (const [width, height] of [
@@ -1477,10 +1481,12 @@ async function meterColumns(theme) {
           tables: [...document.querySelectorAll('.meter-table')].map((table) => {
             const wrap = table.closest('.table-wrap');
             const fill = table.querySelector(':scope > thead th.col-fill');
+            const gutter = table.querySelector(':scope > thead th.meter-table__gutter');
             const ratio = table.querySelector(':scope > tbody > tr.meter-row')?.children[3] ?? null;
             return {
               client: wrap?.clientWidth ?? null,
               fill: fill ? { minWidth: getComputedStyle(fill).minWidth, width: tenths(fill.getBoundingClientRect().width) } : null,
+              gutter: gutter ? tenths(gutter.getBoundingClientRect().width) : null,
               ratioRight: ratio && wrap ? tenths(ratio.getBoundingClientRect().right - wrap.getBoundingClientRect().left) : null,
               scroll: table.scrollWidth,
               selector: table.classList.contains('meter-table--weekly') ? 'weekly' : 'five-hour',
@@ -1493,6 +1499,7 @@ async function meterColumns(theme) {
       for (const t of got.tables) {
         const name = `${where} the ${t.selector} table`;
         if (t.fill === null || t.fill.width < 132 || t.fill.minWidth !== '132px') say(`${name}'s Account column reads ${JSON.stringify(t.fill)}, under its 132 px floor`);
+        if (t.gutter === null || Math.abs(t.gutter - GUTTER_PX) > 1) say(`${name}'s gutter is ${t.gutter}px wide, not ${GUTTER_PX}px`);
         if (width < 900) {
           if (t.scroll <= t.client) say(`${name} takes ${t.scroll}px of its ${t.client}px wrap without scrolling inside it`);
           if (t.ratioRight === null || t.ratioRight > t.client) say(`${name}'s first Latest ratio cell ends at ${t.ratioRight}px, past its ${t.client}px wrap`);
@@ -1517,9 +1524,27 @@ async function meterColumns(theme) {
       const tenths = (n) => Math.round(n * 10) / 10;
       return detail ? { detail: tenths(detail.getBoundingClientRect().height), group: tenths(detail.getBoundingClientRect().bottom - tr.getBoundingClientRect().top), windows: detail.querySelectorAll('tbody tr').length } : null;
     });
+    const nested = await nightly.evaluate((tr, clear) => {
+      const detail = tr.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+      // A cell with no fill of its own shows the nearest one behind it, and that is the tone its row reads in.
+      const ground = (el) => {
+        for (let at = el; at !== null; at = at.parentElement) {
+          const fill = getComputedStyle(at).backgroundColor;
+          if (fill !== clear) return fill;
+        }
+        return null;
+      };
+      return {
+        line: [...tr.parentElement.rows].filter((r) => !r.classList.contains('table__detail')).indexOf(tr) + 1,
+        rows: [...(detail?.querySelectorAll('.meter-detail__table > tbody > tr') ?? [])].map((r) => ground(r.querySelector(':scope > td'))),
+      };
+    }, CLEAR);
     await nightly.locator('.srow__chevron').click();
     await settle();
     measurements.push(`${theme} /meter lines at 1280 by 800 ${JSON.stringify({ ...lines, open })}`);
+    measurements.push(`${theme} /meter nested rows at 1280 by 800 ${JSON.stringify(nested)}`);
+    const alternating = nested.rows.length >= 4 && nested.rows.every((fill, i) => (i < 1 || fill !== nested.rows[i - 1]) && (i < 2 || fill === nested.rows[i - 2]));
+    if (!alternating) say(`nightly's open 5-hour group, line ${nested.line} of its card, reads its nested rows on ${JSON.stringify(nested.rows)}, not two tones alternating over four rows or more`);
     for (const [name, line] of Object.entries(lines)) {
       if (line === null) say(`no ${name} 5-hour line to measure`);
       else if (Math.abs(line.height - LINE_PX) > 0.5) say(`the ${name} line of ${line.account} is ${line.height}px, not ${LINE_PX}px`);

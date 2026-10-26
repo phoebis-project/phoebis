@@ -1140,10 +1140,10 @@ preferences alone and changes no router setting.
 ![The Routing log view: a decision card open](assets/routing-log-light.png#only-light)
 ![The Routing log view: a decision card open](assets/routing-log-dark.png#only-dark)
 
-The Routing log sits under the sidebar's Diagnostics heading, shown while the expert view is on or while the log is
-open, and every link into the log opens it whatever the mode. It is one stream of routing decisions and the events
-that explain them, newest first, 25 rows a page with First, Previous and Next. The rules a decision follows are on
-[Pools, keys and routing](routing.md).
+The Routing log sits under the sidebar's Diagnostics heading, shown while the expert view is on or while either
+Diagnostics view is open, and every link into the log opens it whatever the mode. It is one stream of routing decisions
+and the events that explain them, newest first, 25 rows a page with First, Previous and Next. The rules a decision
+follows are on [Pools, keys and routing](routing.md).
 
 The filter bar holds one row: the range, Add filter, and at the right edge the split Refresh button and the count of
 rows shown ("25 shown, more available"). The range offers the pills 1h (the default), 6h, 24h, 7d, 30d and Custom, with
@@ -1344,9 +1344,9 @@ detail or a log row names on the model's rows over the last 24 hours.
 ![The Meter view: the groups per account and window kind](assets/meter-dark.png#only-dark)
 
 The Meter view sits under the sidebar's Diagnostics heading after the Routing log, shown while the expert view is on or
-while the view is open, and every link into it opens it whatever the mode. It lists each subscription account's
-completed windows of the last 30 days, the rise the upstream's readings showed against the share the router priced for
-its own requests in each, grouped by account and window kind.
+while either Diagnostics view is open, and every link into it opens it whatever the mode. It lists each subscription
+account's completed windows of the last 30 days, the rise the upstream's readings showed against the share the router
+priced for its own requests in each, grouped by account and window kind.
 
 The filter bar holds one row: Add filter over Account, and at the right edge the split Refresh button and the count of
 groups and windows the filter keeps (`{n} groups, {m} windows`). The view offers no range, since it reads the trailing
@@ -1365,8 +1365,9 @@ reported draws no group. A collapsed group is one line: Account (a link to the a
 always written) and Windows (the count). A click on the line or Enter on it opens the group, its chevron turning down,
 and a second closes it. An open group lists its windows newest first, the newest 10 of a 5-hour group and the newest 25
 of a weekly one, under Ended, Rise, Predicted (with the charts' `~` and its estimate hover where an attempt in it was
-priced at a model tier's estimate), Ratio and Requests, then `{n} of {m} windows, newest first` with "Show 25 more". A
-group's open state belongs to the page, so a reload or a link opens every group shut.
+priced at a model tier's estimate), Ratio and Requests, then, while windows stay unlisted,
+`{n} of {m} windows, newest first` with "Show 25 more". A group's open state belongs to the page, so a reload or a
+link opens every group shut.
 
 The spark charts the group's windows over the 30 days to the newest window the view lists, so every line reads one axis:
 the ratio's base-2 log clipped to 0.5 and 2, the band 0.8 to 1.25 shaded with the 1.0 line in it, the windows the band

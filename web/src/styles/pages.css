@@ -3048,9 +3048,11 @@
   min-width: 132px;
 }
 
-/* The table's own selector, so the cells' padding rule does not widen the gutter past its 30 px. */
+/* The table's own selector, so the cells' padding rule does not widen the gutter past its 30 px. The floor holds the
+   30 px under a table wider than its wrap, where the auto layout gives the gutter its content's 26 px at 375 px. */
 .meter-table .meter-table__gutter {
   width: 30px;
+  min-width: 30px;
   padding-right: 0;
 }
 
@@ -3072,17 +3074,22 @@
   padding-bottom: 6px;
 }
 
-/* The Sessions detail's accent rule on the left marks the windows as the open line's. */
+/* The Sessions detail's accent rule on the left marks the windows as the open line's. Under an even group line the
+   stripe paints the detail row's cell, and --stripe is opaque, so without a ground of its own the nested table's rows
+   would read one tone there. */
 .meter-detail {
   margin: 0;
+  background: var(--surface);
   border-left: 2px solid var(--accent);
 }
 
+/* Two pixels under the group head's 8 px, so the nested head reads lighter than the group table's. */
 .meter-detail__table th {
   padding-top: 6px;
   padding-bottom: 6px;
 }
 
+/* A head cell's 8 and 12 px start the words under Ended, and the subtitles' type sets them apart from the windows. */
 .meter-detail__more {
   display: flex;
   gap: 12px;
@@ -3115,6 +3122,7 @@
   stroke-width: 1;
 }
 
+/* One ink step over the line's --ink-3, so a judged dot stands out where it sits on the line. */
 .meter-spark__dot {
   fill: var(--ink-2);
 }
@@ -3150,6 +3158,7 @@
   padding-right: 8px;
 }
 
+/* The subtitles' type, so the ratio leads the line and the window's end and off count read as its note. */
 .meter-drift__meta {
   font-size: 12.5px;
   color: var(--ink-2);

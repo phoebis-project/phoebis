@@ -11,6 +11,7 @@ import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
 import { CoolingDown } from '@/components/CoolingDown';
 import { FastLane } from '@/components/FastLane';
 import { FilterBar } from '@/components/FilterBar';
+import { MeterRatio } from '@/components/MeterRatio';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
@@ -29,7 +30,6 @@ import { speedHover } from '@/lib/selection';
 import { joinTrend } from '@/lib/trend';
 import type { UnitPosition } from '@/lib/unit';
 import { WINDOW_HOURS, WINDOW_LABEL, windowKeyId } from '@/lib/windows';
-import { MeterRatio } from '@/pages/MeterPage';
 
 /** The Status dimension's options, in the labels' order. */
 const STATUS_OPTIONS = { status: ACCOUNT_STATUSES.map((s) => ({ label: STATUS_LABEL[s], value: s })) };

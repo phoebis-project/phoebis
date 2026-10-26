@@ -1,5 +1,5 @@
 import type { Reconciliation } from '@/api/types';
-import { MIN_RISE, ratioOff } from './analytics';
+import { MIN_RISE, RATIO_HIGH, RATIO_LOW, ratioOff } from './analytics';
 import { WINDOW_LABEL, WINDOW_ORDER, windowKeyId } from './windows';
 
 export const METER_HINT =
@@ -77,7 +77,7 @@ export const GROUP_PAGE = { fiveHour: 10, weekly: 25 } as const;
 /** How many more windows each "Show 25 more" lists. */
 export const GROUP_STEP = 25;
 
-export const SPARK = { height: 24, width: 120, floor: 0.5, ceiling: 2, band: [0.8, 1.25] } as const;
+export const SPARK = { height: 24, width: 120, floor: 0.5, ceiling: 2, band: [RATIO_LOW, RATIO_HIGH] } as const;
 /** A point keeps 3 px from either side, so an off window's 2.25 px dot at an edge stays inside the 120 px the column
  *  is sized to, and 2 px from the top and the bottom. */
 const INSET_X = 3;
