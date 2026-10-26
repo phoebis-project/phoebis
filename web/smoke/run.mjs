@@ -2547,7 +2547,7 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
     // the sunset seed, whose plan ended.
     const ahead = (a) => [...a.windows.map((w) => w.resetsAt), ...(a.spend ? [a.spend.resetsAt] : [])].flatMap((at) => (at === null ? [] : [Date.parse(at)])).filter((t) => t > CLOCK_ORIGIN);
     const soonest = (a) => (ahead(a).length ? Math.min(...ahead(a)) : Number.POSITIVE_INFINITY);
-    const listed = (await api.listAccounts()).filter((a) => a.kind === 'oauth' && a.status !== 'reauth_required' && a.status !== 'unpaired' && a.planEndedAt === null);
+    const listed = (await api.listAccounts()).filter(quotaListed);
     const want = [...listed].sort((a, b) => soonest(a) - soonest(b)).map((a) => a.label);
     await changeSelect(page, page.container.querySelector('.quota-sort select'), 'soonest');
     const order = [...page.container.querySelectorAll('.qcard__name')].map((n) => n.textContent?.trim());
@@ -3813,7 +3813,8 @@ expect('/accounts/secondary', m.text(), [
   {
     // The sunset seed's profile read found no plan four hours before the mock's load, after its saved end three days
     // back, so the route answers no window for it: its Usage card names the ended plan, its row's badge reads the last
-    // plan its stored document keeps, and the list counts it with every other account.
+    // plan its stored document keeps, and the list counts it with every other account. The smoke runs under TZ=UTC, so
+    // the Plan ended hover reads 10:30, where a viewer's zone would move its hour.
     const sunset = story.find((a) => a.id === 'sunset');
     const page = await mount('/accounts/sunset', { now: CLOCK_ORIGIN });
     const ago = sunset ? fmtRelative(sunset.planEndedAt, CLOCK_ORIGIN) : 'no sunset';
@@ -3830,7 +3831,7 @@ expect('/accounts/secondary', m.text(), [
         sentence.startsWith('No quota window is read since the plan ended') &&
         sentence === `No quota window is read since the plan ended ${ago}.` &&
         row?.value === ago &&
-        row?.title === fmtAbsolute(sunset.planEndedAt) &&
+        row?.title === 'Sep 16, 2026, 10:30:00' &&
         badge === 'Pro' &&
         count === `${story.length} accounts`,
       missing: [sentence, JSON.stringify(row ?? null), badge, `${count} of ${story.length} accounts`],
@@ -6638,7 +6639,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
       await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', memberRows().map((tr) => [byLabel.get(tr.querySelector('td:first-child span')?.textContent ?? '') ?? '', tr.querySelector('td:first-child span.mono')?.textContent ?? null]));
     }
-    // The pool's members by priority, then every other account by label, the sunset seed in no pool last.
+    // The pool's members by priority, then every other account by label, the sunset seed last by its label.
     const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset'];
     results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     const prio = dlg?.querySelector('input[aria-label="Priority for primary"]');
@@ -8002,7 +8003,7 @@ m.unmount();
   const unchecked = !(dlg?.textContent ?? '').includes('is not an account') && members?.querySelector('.members-table') === null;
   retry?.click();
   await m.settle(600);
-  // The pool's members by priority, then every other account by label, the sunset seed in no pool last.
+  // The pool's members by priority, then every other account by label, the sunset seed last by its label.
   const labels = [...(members?.querySelectorAll('.members-table tbody tr') ?? [])].map((tr) => tr.querySelector('td:first-child span')?.textContent);
   results.push({
     name: "/pools a failed accounts read holds the dialog's save without naming a member",
@@ -8035,7 +8036,7 @@ m.unmount();
   read.release();
   await m.settle(600);
   read.restore();
-  // The pool's members by priority, then every other account by label, the sunset seed in no pool last.
+  // The pool's members by priority, then every other account by label, the sunset seed last by its label.
   const labels = rows().map((tr) => tr.querySelector('td:first-child span')?.textContent);
   results.push({
     name: '/pools while the accounts read is out the stored members draw unmarked and hold nothing',

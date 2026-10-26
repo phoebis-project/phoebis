@@ -106,8 +106,8 @@ test('a new pool reads each member the way the pool route does', async () => {
   const ended = await verdicts('ended', 'never');
   assert.equal(ended.sunset, 'unavailable', 'the flagged half alone: a plan-ended account with its cancel cleared is unavailable');
   assert.equal(ended.reserve, 'unavailable', 'the canceled half alone: an unflagged account canceled past its saved end is unavailable');
-  // Funded again, the flagged account serves; the account the router reads in overage is an obstacle only under a
-  // policy that admits none.
+  // Funded again, overflow serves. The account the router reads in overage is an obstacle only under a policy that
+  // admits none.
   await api.clearFunding('overflow');
   await api.pauseAccount('primary');
   const second = await verdicts('second', 'never');

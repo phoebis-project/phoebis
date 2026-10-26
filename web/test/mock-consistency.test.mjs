@@ -538,7 +538,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       // plan window.
       assert.equal(seat.allowanceKnown, true, `${r.requestId}/${r.seq}'s seat`);
       // The spent rule's holds_allowance counts a plan window the seat lacks as untouched, so the seat holds allowance.
-      assert.ok(['five_hour', 'seven_day', 'seven_day_fable'].every((w) => (seat.windows[w]?.utilization ?? 0) < 1), `${r.requestId}/${r.seq}'s windows ${Object.keys(seat.windows).join(', ')}`);
+      assert.ok(['five_hour', 'seven_day', 'seven_day_fable'].every((w) => seat.windows[w] === undefined), `${r.requestId}/${r.seq}'s windows ${Object.keys(seat.windows).join(', ')}`);
     }
     const keys = all.flatMap((r) => r.candidates.filter((c) => c.kind === 'api_key'));
     assert.ok(keys.length > 0 && keys.every((c) => c.allowanceKnown), 'every API key candidate knows its allowance');
@@ -901,6 +901,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(words, ['main', 'busy', 'parked', 'idle']);
     const lastRequestOf = (word) => Date.parse(rows.find((r) => r.agentId !== 'main' && r.agentState === word).lastRequestAt);
     assert.ok(lastRequestOf('idle') > lastRequestOf('busy'), 'the idle row is the newer request');
+    // The one line on the engine's retry ladder holds its agent with the next rung ahead of the clock.
+    const exhausted = recipes.filter((r) => r.cause === 'probe_pool_exhausted');
+    assert.deepEqual(exhausted.map((r) => [r.sessionId, r.agentId, r.state]), [[rows[1].sessionId, rows[1].agentId, 'held']], "the written session's second line is the pool exhausted one");
+    assert.ok(Date.parse(exhausted[0].nextProbeAt) > s.now, `its next probe ${exhausted[0].nextProbeAt} lies ahead of the story's now`);
     const overview = await s.api.getKeepaliveOverview();
     const count = (word) => recipes.filter((r) => r.agentState === word).length;
     assert.deepEqual([overview.agents.busy, overview.agents.idle, overview.agents.parked], [count('busy'), count('idle'), count('parked')], 'the tiles count the recipe rows by lifecycle word, released ones left out');

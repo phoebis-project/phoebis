@@ -1674,6 +1674,10 @@ test("a Pace cell and its title read the score in the unit the record's pick ste
   assert.deepEqual([behind.pace, behind.paceTitle.includes(': 0.60 %/h.')], ['0.60 %/h', true], "a plan member below a seat's tier reads the plan unit its pace names");
   const rate = picked(plan, [wfact('score', 0.006, 'percent_per_hour', 'primary')]);
   assert.deepEqual([rate.pace, rate.paceTitle.includes(': 0.60 %/h.')], ['0.60 %/h', true], 'a plan candidate reads its spare rate');
+  // The pick step's fact wins over the pace's shape, so a plan-shaped pace under a percent fact reads a percent.
+  const shaped = { ...plan, pace: { ...plan.pace, score: 0.42 } };
+  const ruled = picked(shaped, [wfact('score', 0.42, 'percent', 'primary')]);
+  assert.deepEqual([ruled.pace, ruled.paceTitle.includes(': 42%.')], ['42%', true], `the fact's unit wins over the pace's hours and window: ${ruled.paceTitle}`);
   const planBare = d.candidateCells(plan, record({ candidates: [plan] }), NOW);
   assert.deepEqual([planBare.pace, planBare.paceTitle.includes(': 0.60 %/h.')], ['0.60 %/h', true], 'a plan member on a record with no pick step reads the plan unit off its hours and window');
   const bare = d.candidateCells(lapsed, record({ candidates: [lapsed] }), NOW);

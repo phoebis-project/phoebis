@@ -1544,7 +1544,8 @@ async function meterColumns(theme) {
     measurements.push(`${theme} /meter lines at 1280 by 800 ${JSON.stringify({ ...lines, open })}`);
     measurements.push(`${theme} /meter nested rows at 1280 by 800 ${JSON.stringify(nested)}`);
     const alternating = nested.rows.length >= 4 && nested.rows.every((fill, i) => (i < 1 || fill !== nested.rows[i - 1]) && (i < 2 || fill === nested.rows[i - 2]));
-    if (!alternating) say(`nightly's open 5-hour group, line ${nested.line} of its card, reads its nested rows on ${JSON.stringify(nested.rows)}, not two tones alternating over four rows or more`);
+    // The stripe paints an even line's detail row, the ground the read is for, so the group must sit on an even line.
+    if (!alternating || nested.line % 2 !== 0) say(`nightly's open 5-hour group, line ${nested.line} of its card, reads its nested rows on ${JSON.stringify(nested.rows)}, not two tones alternating over four rows or more on an even line`);
     for (const [name, line] of Object.entries(lines)) {
       if (line === null) say(`no ${name} 5-hour line to measure`);
       else if (Math.abs(line.height - LINE_PX) > 0.5) say(`the ${name} line of ${line.account} is ${line.height}px, not ${LINE_PX}px`);
@@ -6412,10 +6413,11 @@ async function freshRowTint(theme, path) {
  * Effort levels against Errors by code (title type, and where both draw bars, the bar row, its label type and its
  * track), Fast mode spend against the first tile, Cost under a fresh browser's native position (the tile box and its
  * figure's type). The grid's eight cards pair off row by row, each against its row partner on the card width, the
- * row's top and height: Refusals by category beside Refusals by code (and the title type), Migration rewrites, which
- * grows taller than its row partner with the held chart under its moves, beside Failovers, and Effort levels beside
- * Requests by speed. In the mock pass, whose story holds requests for the slow-down, the rewrites card draws the held
- * chart's bars in the warning tone. The cards are read on the Traffic tab and the tiles on Cost.
+ * row's top and height: Errors by code beside Requests by outcome, Refusals by category beside Refusals by code (and
+ * the title type), Migration rewrites, which grows taller than its row partner with the held chart under its moves,
+ * beside Failovers (and the chart height and the title type), and Effort levels beside Requests by speed. In the mock
+ * pass, whose story holds requests for the slow-down, the rewrites card draws the held chart's bars in the warning
+ * tone. The cards are read on the Traffic tab and the tiles on Cost.
  */
 async function trafficCards(theme) {
   // The cards and tiles the shown tab draws; one on another tab is not mounted and reads as null.
@@ -6475,7 +6477,8 @@ async function trafficCards(theme) {
     failures.push(...compare(read.fastSpend, read.cost, ['height', 'value', 'width'], `${theme} /analytics: the Fast mode spend tile against Cost`));
     if (read.effort?.bar === null) failures.push(`${theme} /analytics: the Effort levels card draws no bar, though every request asks for a level or none`);
     failures.push(...compare(read.refusalCategories, read.refusals, ['height', 'section', 'title', 'top', 'width'], `${theme} /analytics: "Refusals by category" against "Refusals by code"`));
-    failures.push(...compare(read.rewrites, read.failovers, ['height', 'section', 'top', 'width'], `${theme} /analytics: "Migration rewrites" against "Failovers"`));
+    failures.push(...compare(read.errors, read.outcome, ['height', 'section', 'top', 'width'], `${theme} /analytics: "Errors by code" against "Requests by outcome"`));
+    failures.push(...compare(read.rewrites, read.failovers, ['chart', 'height', 'section', 'title', 'top', 'width'], `${theme} /analytics: "Migration rewrites" against "Failovers"`));
     if (mock && (read.rewrites?.charts !== 2 || !read.held || read.held.bars === 0)) failures.push(`${theme} /analytics: the story holds requests for the slow-down, yet the rewrites card draws no held bar under its moves (${JSON.stringify(read.held)})`);
     if (read.held && read.held.fills.some((fill) => fill !== read.held.warning)) failures.push(`${theme} /analytics: the held bars draw ${read.held.fills.join(', ')}, not the warning ink ${read.held.warning}`);
   } finally {
