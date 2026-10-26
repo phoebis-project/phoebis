@@ -17897,15 +17897,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   });
   await chooseUnit(page, 'share');
   const shares = read(page);
-  // The page adds the route's totals in the card's order, so the expectation adds them so too, since a sum of the seeds
-  // in another order can round the last digit the other way.
-  const answer = await api.getAnalyticsUnusedAllowance({ from: new Date(CLOCK_ORIGIN - 29 * DAY_MS).toISOString(), to: new Date(CLOCK_ORIGIN).toISOString() });
-  const windowOf = (a, key) => a.windows.find((w) => w.window === key);
-  const ranked = [...answer.accounts].sort((x, y) => windowOf(y, 'seven_day').totalShareLeft - windowOf(x, 'seven_day').totalShareLeft);
-  const meanOf = (key) => {
-    const windows = ranked.map((a) => windowOf(a, key)).filter((w) => w !== undefined);
-    return fmtShare(windows.reduce((s, w) => s + w.totalShareLeft, 0) / windows.reduce((n, w) => n + w.resetsCounted, 0));
-  };
+  // The 7-day mean sums the seeded shares of secondary, sunset (its three weeks and its 0.54 term-end reset), studio,
+  // primary and nightly over their 20 resets, and the Fable mean those of primary, nightly and studio over 12.
   results.push({
     name: "/analytics under Window shares the rows rank on the four weeks' 7-day share left, and the fleet figures read the mean share per reset with the resets and accounts counted",
     ok:
@@ -17913,8 +17906,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       JSON.stringify(shares?.ids) === '["secondary","sunset","studio","primary","nightly"]' &&
       JSON.stringify(shares?.rows.map((r) => r[1])) === '["4","4","4","4","4"]' &&
       JSON.stringify(shares?.rows[0].slice(2, 4)) === JSON.stringify([fmtShare(0.61), fmtShare(0.61 + 0.55 + 0.7 + 0.58)]) &&
-      JSON.stringify(shares?.totals) === JSON.stringify([['7-day, mean per reset', meanOf('seven_day'), null], ['Fable, mean per reset', meanOf('seven_day_fable'), null], [null, null, "20 resets on 5 accounts, each a share of its account's own week"]]),
-    missing: [shellUnit(page)?.value ?? 'no switch', JSON.stringify(shares?.ids ?? null), JSON.stringify(shares?.rows ?? null), JSON.stringify(shares?.totals ?? null), meanOf('seven_day'), meanOf('seven_day_fable')],
+      JSON.stringify(shares?.totals) === JSON.stringify([['7-day, mean per reset', fmtShare((2.44 + 2.11 + 1.8 + 1.38 + 0.84) / 20), null], ['Fable, mean per reset', fmtShare((0.28 + 1.35 + 3.21) / 12), null], [null, null, "20 resets on 5 accounts, each a share of its account's own week"]]),
+    missing: [shellUnit(page)?.value ?? 'no switch', JSON.stringify(shares?.ids ?? null), JSON.stringify(shares?.rows ?? null), JSON.stringify(shares?.totals ?? null)],
   });
   // The card reads the last four weeks whatever the range, so a 1-hour range draws the same rows and reads nothing new.
   const ranged = countCalls('getAnalyticsUnusedAllowance');

@@ -1057,7 +1057,7 @@ export class MockApi implements Api {
   /** The story's weekly resets, or none for a fresh installation, whose registry holds no account to end a term on. */
   getAnalyticsUnusedAllowance(span: Pick<AnalyticsQuery, 'from' | 'to'>, filters?: Pick<AnalyticsQuery, 'accountIds'>) {
     const empty = emptyStore();
-    return latency(unusedAllowanceOf(empty ? [] : WEEKLY_RESETS, empty ? [] : ACCOUNTS, QUOTA_HISTORY, span, filters));
+    return latency(unusedAllowanceOf(empty ? [] : WEEKLY_RESETS, empty ? [] : this.accounts, QUOTA_HISTORY, span, filters));
   }
 
   /**

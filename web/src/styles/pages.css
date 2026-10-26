@@ -1444,9 +1444,9 @@
 }
 
 /* The two cards after the 7-day trend sit side by side at 1440 px and stack at 1280 and 375 px: the detail pane is
-   794 px wide at 1440 and 634 px at 1280, so two tracks and the gap fit from a minimum above 309 px up to 389 px. A
-   minimum wider than the grid would hold its one column past the pane and push the cards out of it at 375 px, where
-   the pane is narrower than 360 px, so the minimum stops at the grid's own width. */
+   794 px wide at 1440 and 634 px at 1280, so a minimum above 309 px stacks the two at 1280 px and one of at most 389 px
+   pairs them at 1440 px. A minimum wider than the grid would hold its one column past the pane and push the cards out
+   of it at 375 px, where the pane is narrower than 360 px, so the minimum stops at the grid's own width. */
 .detail__grid--meter {
   grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
 }
@@ -1492,6 +1492,9 @@
 .allowance__total {
   padding-top: 8px;
   border-top: 1px solid var(--hairline);
+}
+
+.allowance__total > .num {
   font-weight: 600;
 }
 
