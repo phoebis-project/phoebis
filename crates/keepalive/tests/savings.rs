@@ -944,6 +944,91 @@ async fn a_canceled_request_between_two_probes_leaves_the_first_to_the_chain_the
     );
 }
 
+/// A probe sent while a request streams reads the entry back past the end of the recipe the arrival set aside, and
+/// the request fails before that end. The restored recipe lapses at 570 s while the probe's entry lives to 850 s, so
+/// the lapse leaves both probes to their chain, and a warm turn at 600 s is credited with neither probe wasted. With
+/// `catch_up_fails` the restored recipe's catch-up probe at 561 s answers a 5xx, whose first rung would land past the
+/// entry's end, so the recipe pauses and its lapse drops the paused prompt.
+async fn a_failed_request_between_two_probes_then_the_restored_recipes_lapse(catch_up_fails: bool) {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(
+        r.status("main").unanswered,
+        1,
+        "a covering probe, its entry to 570 s"
+    );
+    r.advance_attended(10_000);
+    // At 280 s the first recipe goes aside on its entry to 570 s, and this request's first stream event arms its own
+    // recipe on an entry to 580 s, due at 550 s.
+    open_request_as(&r, "second", OTHER_CLIENT, 0, 2_000);
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").unanswered),
+        (2, 2),
+        "the kept probe and the probe that landed at 550 s while the second request streamed, its entry to 850 s"
+    );
+    r.advance_attended(10_000);
+    r.engine.observe(failed(&r, "second", Some(40)));
+    assert_eq!(
+        r.status("main").next_probe_at,
+        Some(NOW + 540_000),
+        "the failure at 560 s restored the first recipe on its entry to 570 s"
+    );
+    if catch_up_fails {
+        r.up.push_credential_rule(
+            A,
+            "/v1/messages",
+            Respond::Json {
+                status: 503,
+                headers: vec![],
+                body: br#"{"type":"error","error":{"type":"api_error","message":"x"}}"#.to_vec(),
+            },
+        );
+        r.advance_attended(1_000);
+        r.step().await;
+        assert!(
+            r.status("main").paused,
+            "the catch-up probe's 5xx paused the restored recipe"
+        );
+        r.advance_attended(9_000);
+    } else {
+        r.advance_attended(10_000);
+    }
+    r.step().await;
+    r.engine.flush_persisted().await;
+    r.advance_attended(30_000);
+    open_request_as(&r, "warm", OTHER_CLIENT, 2_000, 0);
+    r.engine.observe(completed(&r, "warm", 2_000));
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "catch-up fails: {catch_up_fails}: the lapse at 570 s settled neither probe and the warm turn at 600 s \
+         answered both"
+    );
+}
+
+#[tokio::test]
+async fn a_probe_sent_during_a_failed_request_outlives_the_restored_recipes_lapse() {
+    a_failed_request_between_two_probes_then_the_restored_recipes_lapse(false).await;
+}
+
+#[tokio::test]
+async fn a_probe_sent_during_a_failed_request_outlives_the_restored_paused_recipes_lapse() {
+    a_failed_request_between_two_probes_then_the_restored_recipes_lapse(true).await;
+}
+
 /// The rig's body with `content` as its one message, so the upstream stub tells one turn's probe from another's.
 fn body_saying(content: &str) -> String {
     BODY.replace(r#""content":"hello""#, &format!(r#""content":"{content}""#))

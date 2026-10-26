@@ -1299,8 +1299,8 @@ pub(crate) enum Unanswered {
     /// the kept ones for whatever decides them.
     Settle,
     /// A real request supersedes the recipe and keeps them until its completion decides them, a failed one handing
-    /// them back pending for the next turn, or the idle limit keeps them pending under its label until their entry
-    /// lapses or a turn reads them.
+    /// them back pending for the next turn, or the idle limit or a lapse keeps them pending under its label until
+    /// their entry lapses or a turn reads them.
     Keep,
     /// A bus gap or a failed request ends the observation without deciding the probes sent while it was open: they
     /// wait where they are, with the recipe's speed, for the next request.
@@ -1968,13 +1968,13 @@ impl Inner {
     }
 
     /// The entry is dead at its expiry and the lead already places the due time ahead of it, so a probe past it warms
-    /// nothing: the recipe ends under `expired` rather than being probed, held or not, its unanswered probes wasted,
-    /// and the next real request re-arms it. A probe already in flight was sent in time and settles on its own answer,
-    /// a hold that already ledgered the probe it withheld is not counted again, and the skip takes the recipe's speed
-    /// before the discard drops the recipe. While a request is open on the agent, the one the observation follows or a
-    /// compaction, the recipe is held unprobed instead: its completion earns its credit and decides the probes, and the
-    /// next tick lapses it. A paused recipe loses its prompt alone (`drop_paused_prompt`). True when the tick is done
-    /// with the recipe.
+    /// nothing: the recipe ends under `expired` rather than being probed, held or not, its probes written off
+    /// (`lapse_probes`), and the next real request re-arms it. A probe already in flight was sent in time and settles
+    /// on its own answer, a hold that already ledgered the probe it withheld is not counted again, and the skip takes
+    /// the recipe's speed before the lapse drops the recipe. While a request is open on the agent, the one the
+    /// observation follows or a compaction, the recipe is held unprobed instead: its completion earns its credit and
+    /// decides the probes, and the next tick lapses it. A paused recipe loses its prompt alone (`drop_paused_prompt`).
+    /// True when the tick is done with the recipe.
     fn lapse(
         &mut self,
         key: &SessionKey,
@@ -2000,7 +2000,7 @@ impl Inner {
                 late_ms = now - expires,
                 "a paused keepalive recipe's entry expired, so its prompt was dropped"
             );
-            self.drop_paused_prompt(key, agent_id);
+            self.drop_paused_prompt(key, agent_id, now);
             return true;
         }
         tracing::info!(
@@ -2011,21 +2011,24 @@ impl Inner {
             "a keepalive recipe lapsed before its probe, so the probe was skipped"
         );
         if !agent.hold_counted {
-            // The lapse is what withholds the probe, so it counts under the state the discard below leaves.
+            // The lapse is what withholds the probe, so it counts under the state the recipe's end below leaves.
             lapsed.push(Skipped::of(
                 key,
                 agent,
                 recipe_state(Reason::Expired, agent.paused),
             ));
         }
-        self.discard(key, agent_id, Reason::Expired, Some(Wasted::Expired));
+        self.lapse_probes(key, agent_id, now);
+        self.end_observation(key, agent_id, Some(Wasted::Expired), Unanswered::Keep);
+        self.set_reason(key, agent_id, Reason::Expired);
         true
     }
 
     /// The lapse of a paused recipe. The pause withheld every probe and holds until the next real request, so the agent
     /// keeps its pause bit and its reason for the view's `paused`, and only the prompt the cold entry made worthless
-    /// leaves, with the probes it paid for settled under `expired`. No probe was due, so no skip is ledgered.
-    fn drop_paused_prompt(&mut self, key: &SessionKey, agent_id: &str) {
+    /// leaves, with the probes it paid for written off under `expired` (`lapse_probes`). No probe was due, so no skip
+    /// is ledgered.
+    fn drop_paused_prompt(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
         self.touch_agent(key, agent_id);
         let Some(agent) = self
             .sessions
@@ -2040,12 +2043,40 @@ impl Inner {
         }
         agent.expires = None;
         agent.last_stop = Some(Wasted::Expired);
-        for probe in std::mem::take(&mut agent.unanswered) {
-            self.settlements
-                .push(Kept::of(agent, &probe).settle(key, Wasted::Expired));
-        }
-        for kept in std::mem::take(&mut agent.kept) {
-            self.settlements.push(kept.settle(key, Wasted::Expired));
+        self.lapse_probes(key, agent_id, now);
+    }
+
+    /// A lapse's write-off of the agent's probes under `expired`, judged as the lapse sweep judges them: a probe whose
+    /// chain's last entry (`chain_expires` over the kept and the unanswered probes) ended at or before `now` settles
+    /// here, and the rest move into `kept` under the label, for the sweep to settle at their chain's end or a turn
+    /// inside it to read. The recipe a failed turn restored can lapse while a probe the failed turn's own recipe sent
+    /// keeps the chain alive past it.
+    fn lapse_probes(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
+        let Some(agent) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+        else {
+            return;
+        };
+        let unanswered = std::mem::take(&mut agent.unanswered);
+        let probes: Vec<Kept> = std::mem::take(&mut agent.kept)
+            .into_iter()
+            .chain(unanswered.iter().map(|probe| Kept::of(agent, probe)))
+            .collect();
+        let chain_ends: Vec<i64> = probes
+            .iter()
+            .map(|probe| Self::chain_expires(&probes, probe))
+            .collect();
+        for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
+            if chain_end <= now {
+                self.settlements.push(kept.settle(key, Wasted::Expired));
+            } else {
+                agent.kept.push(Kept {
+                    pending: Some(Wasted::Expired),
+                    ..kept
+                });
+            }
         }
     }
 
