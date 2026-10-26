@@ -325,8 +325,8 @@ top bar's unit: the share of the account's own window under Window shares, and u
 (a Free plan among them, the card then noting it). A week the account's term ended inside counts as a reset with the
 badge "term ended", a clock-walk reset reads the last reading before it as the event carries it, and the card reads "No
 weekly reset recorded yet. The first shows once this account's week ends." before the first. The card reads its weeks
-once per account, again on the bar's Refresh and once a weekly window resets, and a failed read draws its error with Try
-again.
+once per account, again on the bar's Refresh, once a weekly window resets and once the account's term end moves (its
+cancellation flag, saved end or plan-ended flag), and a failed read draws its error with Try again.
 
 "Meter drift" draws, beside it, one line per window kind the account's completed windows hold: the newest completed
 window's ratio of the upstream's rise over the router's priced share (a warning badge where the rise and the priced

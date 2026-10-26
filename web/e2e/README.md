@@ -181,27 +181,27 @@ of an untinted row of its own stripe and in the box of the untinted row above it
 pass), the fresh tint on both logs (in the mock pass, after the view's shot, the row the story lands a few seconds after
 the load, the request log's late request on a page of 50 and the routing log's late event, drawn on the first auto
 reload at 5 s with every cell in `--accent-soft` over the surface, apart from the row's resting fill and in its box, the
-one row in the tint, recorded as skipped in the router pass), the traffic cards (the Refusals by category card against
-Refusals by code, Failovers beside Migration rewrites and Effort levels beside Requests by speed, and each Analytics
-check opens the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the end of the
-Latency tab (the bar 49 px at rest and 83 px with a chip line, read on an address of its own), the unit legend's lines
-in the top bar's popover at 1280 by 800 (Native's and Billed dollars' sentences naming the four billed fundings, each in
-the face, size and ink of the line after it, its label at that label's weight), the Unit select and the legend's button
-in the top bar (inside the bar, clear of Log out and the theme switch, inside the viewport at 1280 and 400 px with
-nothing scrolling the bar sideways, every short label whole and no legend button at 400 px, the long labels whole at
-1280 px, and the legend's popover over the filter bar uncovered at 1280 px), the top bar on every view at 1280 and 400
-px (nothing scrolling it sideways, its last control inside its padding, the title whole on one line, and Log out a text
-button at 1280 px and its icon alone at 400 px), the reload banner under the mock's build switch
-`phoebis.mockBuildMismatch` (mock pass, on loads of its own at 1280 by 800 and 400 by 800, scrolled 600 px down the
-Analytics view: the banner's top edge at the window's top, where the bar's sits with the switch off, the bar's top edge
-on the banner's bottom, the banner's paint opaque under its tint, the block's paint transparent with the switch off and
-opaque with it on, the sticky filter bar on the block's bottom and the section bar on the filter bar's bottom, and at
-1280 by 800 the Accounts list 20 px under the block, each edge within 1 px), the anchored pool card and key row under
-the reload banner (mock pass, on loads of its own under the mock's build switch, the Pools view at 1280 by 800 and the
-Keys view at 1280 by 400: the first card's or row's top edge 16 px under the sticky block's bottom once the view moves
-to its hash, within 1 px), the fast lane, the request drawer, which opens once the request list's shot is taken (its
-compact table with Time the fill as wide as its card at 1280 by 800 and 1440 by 900 with every id whole in the mock
-pass, and at 375 by 800 under the list scrolling inside its card, its chips in the status badge's type, and the
+one row in the tint, recorded as skipped in the router pass), the traffic cards (Errors by code against Requests by
+outcome, the Refusals by category card against Refusals by code, Failovers beside Migration rewrites and Effort levels
+beside Requests by speed, and each Analytics check opens the tab it reads and returns to Traffic), the tab strip docked
+under the filter bar at the end of the Latency tab (the bar 49 px at rest and 83 px with a chip line, read on an address
+of its own), the unit legend's lines in the top bar's popover at 1280 by 800 (Native's and Billed dollars' sentences
+naming the four billed fundings, each in the face, size and ink of the line after it, its label at that label's weight),
+the Unit select and the legend's button in the top bar (inside the bar, clear of Log out and the theme switch, inside
+the viewport at 1280 and 400 px with nothing scrolling the bar sideways, every short label whole and no legend button at
+400 px, the long labels whole at 1280 px, and the legend's popover over the filter bar uncovered at 1280 px), the top
+bar on every view at 1280 and 400 px (nothing scrolling it sideways, its last control inside its padding, the title
+whole on one line, and Log out a text button at 1280 px and its icon alone at 400 px), the reload banner under the
+mock's build switch `phoebis.mockBuildMismatch` (mock pass, on loads of its own at 1280 by 800 and 400 by 800, scrolled
+600 px down the Analytics view: the banner's top edge at the window's top, where the bar's sits with the switch off, the
+bar's top edge on the banner's bottom, the banner's paint opaque under its tint, the block's paint transparent with the
+switch off and opaque with it on, the sticky filter bar on the block's bottom and the section bar on the filter bar's
+bottom, and at 1280 by 800 the Accounts list 20 px under the block, each edge within 1 px), the anchored pool card and
+key row under the reload banner (mock pass, on loads of its own under the mock's build switch, the Pools view at 1280 by
+800 and the Keys view at 1280 by 400: the first card's or row's top edge 16 px under the sticky block's bottom once the
+view moves to its hash, within 1 px), the fast lane, the request drawer, which opens once the request list's shot is
+taken (its compact table with Time the fill as wide as its card at 1280 by 800 and 1440 by 900 with every id whole in
+the mock pass, and at 375 by 800 under the list scrolling inside its card, its chips in the status badge's type, and the
 Estimated cost row's 20x equivalent chips and muted equivalent on one line each inside the cell at 1280 by 800 and 1440
 by 900, the story's Fable request reading a 20x 5-hour, a 20x 7-day and a 20x 7-day Fable equivalent in that order), a
 reasons panel link landing on a list whose first row's drawer reads the reason (mock pass, on a load of its own once

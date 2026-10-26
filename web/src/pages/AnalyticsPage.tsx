@@ -413,7 +413,8 @@ export function AnalyticsPage() {
   const costSettings = useAsync(() => (tab === 'burn' || tab === 'accounts' ? api.getSettings() : Promise.resolve(null)), [tab]);
   const sized = useMemo(() => (burn.data && costSettings.data ? sizedAccounts(burn.data.accounts, costSettings.data.subscriptionCosts) : null), [burn.data, costSettings.data]);
   const rewrites = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRewrites({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
-  // The route takes no session selector, so under a session filter the card counts every session's refusals.
+  // The route takes no session selector and reads no client or user agent pattern, so under any of the three the card
+  // counts every session's and every client's refusals.
   const refusalCategories = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRefusalCategories(query) : Promise.resolve(null)), [query, tab, generation], reload);
   // The counts route reads the range alone, which the card's subtitle says, since it carries no filter.
   const guardrailCounts = useAsync(() => (tab === 'traffic' ? api.getAnalyticsGuardrails({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
