@@ -170,6 +170,21 @@ test('the idle limit cause reads its label and the sentence that names the break
   );
 });
 
+test('the causes the retry ladder and the kept recipe move read their sentences, and their labels stand', () => {
+  const want = {
+    probe_pool_exhausted: 'Every account of the pool was exhausted or cooled when the probe was selected. The next attempt is scheduled on the retry ladder before the entry expires.',
+    probe_quota_exhausted: "The account's usage window was spent when the last probe was sent. The next attempt is scheduled on the retry ladder before the entry expires.",
+    probe_retry_limit: "The last probes failed with retryable errors along the retry ladder until the entry's TTL, so the engine stopped retrying.",
+    probe_transport_error: 'The last probe failed on the transport before an answer came back. The next attempt is scheduled on the retry ladder before the entry expires.',
+    request_canceled: "The agent's request was canceled before it finished, so the last answered request's recipe stays armed where one was, and the canceled body is never probed.",
+    request_failed: "The agent's request failed, so the last answered request's recipe stays armed where one was, and the failed body is never probed.",
+    retryable_probe_error: 'The last probe failed with a retryable error. The next attempt is scheduled on the retry ladder before the entry expires.',
+  };
+  assert.deepEqual(Object.fromEntries(Object.keys(want).map((cause) => [cause, d.CAUSE_HINT[cause]])), want);
+  assert.equal(d.CAUSE_LABEL.probe_retry_limit, 'retry limit');
+  assert.equal(d.CAUSE_LABEL.retryable_probe_error, 'retrying');
+});
+
 /** A read as a tile names it: the word the notice uses, its error, and whether it has ever answered. */
 const tileRead = (name, error, loaded) => ({ error, loaded, name });
 

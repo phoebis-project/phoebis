@@ -428,12 +428,17 @@ const STATE_OF: Partial<Record<RecipeCause, RecipeState>> = {
   idle_limit: 'ended',
   overage: 'held',
   parked_limit: 'ended',
-  probe_pool_exhausted: 'paused',
+  probe_pool_exhausted: 'held',
   probing: 'retained',
   repeated_cold_probe: 'paused',
   scheduled: 'retained',
   unsupported_shape: 'not_retained',
 };
+
+// The cause the story holds on the engine's retry ladder: its line reads `held` with the next rung ahead of the clock,
+// inside the ladder's 300 s cap and the entry's TTL. The rung is written rather than drawn, so the rows after the line
+// keep their rolls.
+const LADDER_NEXT_PROBE: Partial<Record<RecipeCause, string>> = { probe_pool_exhausted: ahead(3 * MINUTE) };
 
 /**
  * The index in `sessionSpec` of the session whose rows past the drawn pair are written, not rolled.
@@ -539,7 +544,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
       lastRequestAt,
       model,
       // A probe in flight leaves the due time it went out at, which the engine keeps showing until it lands.
-      nextProbeAt: fixedAgents ? (fixedAgents[j].nextProbeSeconds === null ? null : ahead(fixedAgents[j].nextProbeSeconds * 1000)) : cause === 'scheduled' ? ahead(rng.int(20, 280) * 1000) : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : null,
+      nextProbeAt: fixedAgents ? (fixedAgents[j].nextProbeSeconds === null ? null : ahead(fixedAgents[j].nextProbeSeconds * 1000)) : cause === 'scheduled' ? ahead(rng.int(20, 280) * 1000) : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : (LADDER_NEXT_PROBE[cause] ?? null),
       parkKind,
       poolId: keyById.get(pin.keyId)?.poolId ?? 'all',
       probesToday,
