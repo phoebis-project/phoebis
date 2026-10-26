@@ -683,6 +683,13 @@ test('the walk collapses the rules after a fired one and marks the rung lines wi
   assert.ok(!lines.some((l) => l.chips.some((c) => c.value.length >= 64)), 'no chip draws a whole hash');
 });
 
+test("the pin step's credit fact names its account once, as an account chip labeled credit issuer", () => {
+  // The router writes the fact about the account it names, and an id with an underscore keeps its spelling.
+  const r = record({ walk: [wstep('pin', 'match', [wfact('found', 'live'), wfact('credit', 'team_seat', 'text', 'team_seat')])] });
+  const [pin] = d.walkLines(r);
+  assert.deepEqual(pin.chips.slice(1), [{ entity: { id: 'team_seat', kind: 'account' }, label: 'credit issuer', value: 'team_seat' }]);
+});
+
 test("a refusal's walk is two lines, the admission's reason and the rest of the walk not run", () => {
   const r = record({ outcome: { accountId: null, kind: 'refused', refusal: { kind: 'client', reason: 'hash' }, upstreamModel: null }, pin: null, pinReason: 'not_looked_up', walk: [wstep('admission', 'refused', [wfact('reason', 'hash')]), wstep('selection', 'not_run')] });
   // The version rides the summary's `client` fact, so the reason names the trigger alone.
