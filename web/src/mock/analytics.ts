@@ -907,8 +907,10 @@ function termEndOf(a: Account, at: number): number | null {
  * The weekly resets in range per subscription account as the route answers them, from the story's `window_reset` rows
  * and, for an account whose term ended in range, one `term_ended` reset per weekly window at the end, its share the
  * last reading of the window's quota history strictly before the end, as the ledger reads `observed_at < end`. A reset
- * of that account at or after its end is left out, so the week the end cut short counts once. The term is read at the
- * range's end capped at the story's now, and the windows run in key order, the 7-day window first.
+ * at or after an end the read has reached is left out, an end before the range's start included, as the ledger drops
+ * the resets at or after every end it lists, so the week the end cut short counts once. The `term_ended` rows build for
+ * an end inside the range alone. The term is read at the range's end capped at the story's now, and the windows run in
+ * key order, the 7-day window first.
  */
 export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], history: QuotaHistory[], span: Range, filters: Pick<AnalyticsQuery, 'accountIds'> = {}): UnusedAllowanceAnswer {
   const fromMs = Date.parse(span.from);
@@ -920,14 +922,15 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
     .sort((a, b) => byteOrder(a.id, b.id))
     .flatMap((a) => {
       const end = termEndOf(a, readAt);
-      const ended = end !== null && fromMs <= end && end <= readAt ? end : null;
+      const elapsed = end !== null && end <= readAt ? end : null;
+      const ended = elapsed !== null && fromMs <= elapsed ? elapsed : null;
       const byWindow = new Map<string, AllowanceReset[]>();
       const add = (window: string, reset: AllowanceReset) => byWindow.set(window, [...(byWindow.get(window) ?? []), reset]);
       for (const e of events) {
         const at = Date.parse(e.at);
         if (e.kind !== 'window_reset' || e.accountId !== a.id || at < fromMs || at > toMs) continue;
         const d = e.detail as { observed: string; reset_at: number; utilization_before: number; window: string };
-        if (!isWeekly(d.window) || (ended !== null && d.reset_at >= ended)) continue;
+        if (!isWeekly(d.window) || (elapsed !== null && d.reset_at >= elapsed)) continue;
         add(d.window, { observedAt: e.at, resetAt: iso(d.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - d.utilization_before)), source: d.observed });
       }
       if (ended !== null) {

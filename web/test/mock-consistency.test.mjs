@@ -1170,6 +1170,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(one.accounts, answer.accounts.filter((a) => a.accountId === 'studio'), 'the Accounts filter keeps its account alone');
   });
 
+  test(`an end before the span drops the resets after it and adds no term_ended row, at ${at}`, async () => {
+    const s = await story;
+    // A fresh mock, so the edit leaves the story the other cases read as it was.
+    const api = new s.lib.MockApi();
+    await api.login('admin');
+    await api.updateAccount('primary', { canceled: true, subscriptionEndsAt: iso(s.now - 31 * DAY) });
+    // Every weekly reset of primary falls after the end, and the end falls before the span's start, so none lists.
+    const answer = await api.getAnalyticsUnusedAllowance(s.lib.allowanceSpan(s.now), { accountIds: ['primary'] });
+    assert.deepEqual(answer.accounts, []);
+  });
+
   test(`spare's samples end at the reading its snapshot keeps from before the disconnect, with no poll, at ${at}`, async () => {
     const s = await story;
     const spare = s.accounts.find((a) => a.id === 'spare');
