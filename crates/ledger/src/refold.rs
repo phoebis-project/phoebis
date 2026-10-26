@@ -29,7 +29,7 @@ use crate::pricing::{
     effective_instant, LongContext, ModelPrice, ModelRow, PriceRevisions, PriceTable,
 };
 use crate::record::{AttemptRecord, RequestRecord};
-use crate::rollup::{deltas_of, empty_row, read_rollup, unfold, write_rollup};
+use crate::rollup::{deltas_of, empty_row, read_rollup, unfold, write_rollup, RollupRow};
 use crate::LedgerError;
 
 const DAY_MS: i64 = 86_400_000;
@@ -81,8 +81,9 @@ struct Cursor {
 /// `(received_at, id)`, one transaction per page carrying the page's rows and its cursor, the mark rewritten and the
 /// cursor cleared in the last page's transaction. Answers how many requests moved: 0 on a first start (which writes
 /// the mark with `since` and moves nothing) and on an unchanged file. Rows older than the retention cutoff and rows
-/// received before `since` keep their split, and under a request retention of 0 so do rows received before the
-/// first hour the rollup purge keeps.
+/// received before `since` keep their split. Under a request retention of 0 the walk reads every request, and one
+/// received before the first hour the rollup purge keeps moves only where its hour still holds the rows it folded
+/// into, so an hour the purge removed stays empty and an hour it kept for a budgeted member moves.
 pub fn refold_bands(
     db: &LedgerDb,
     prices: &PriceRevisions,
@@ -93,18 +94,19 @@ pub fn refold_bands(
     let loaded = thresholds_of(prices);
     // Each purge's own arithmetic, a zero keeping its rows for good. A nonzero request retention bounds the walk,
     // since the configuration holds a nonzero rollup retention at least as long as the request one. Under a request
-    // retention of 0 the first hour the rollup purge keeps bounds it, so a re-fold writes no row into an hour the
-    // purge removed.
-    let cutoff = match (retention_days, rollup_retention_days) {
-        (0, 0) => None,
+    // retention of 0 the first hour the rollup purge keeps guards each request before it rather than bounding the
+    // walk, since the purge keeps a budgeted member's hours from its period's start, before that hour, and
+    // `member_spends` prices them by band.
+    let (cutoff, guard) = match (retention_days, rollup_retention_days) {
+        (0, 0) => (None, None),
         (0, days) => {
             // The rollup purge cuts in seconds and drops every hour that starts before its cutoff.
             let cutoff = now / 1_000 - i64::from(days) * DAY_S;
             let hour = cutoff.div_euclid(HOUR_S) * HOUR_S;
             let first_kept = if hour < cutoff { hour + HOUR_S } else { hour };
-            Some(first_kept * 1_000)
+            (None, Some(first_kept * 1_000))
         }
-        (days, _) => Some(now - i64::from(days) * DAY_MS),
+        (days, _) => (Some(now - i64::from(days) * DAY_MS), None),
     };
     let mut moved = 0;
     let (mark, cursor) = db.write(|c| {
@@ -134,6 +136,7 @@ pub fn refold_bands(
             db,
             mark.since,
             cutoff,
+            guard,
             cursor.source,
             cursor.target.clone(),
             Some(cursor.after),
@@ -141,17 +144,19 @@ pub fn refold_bands(
         mark.revisions = cursor.target;
     }
     if mark.revisions != loaded {
-        moved += pass(db, mark.since, cutoff, mark.revisions, loaded, None)?;
+        moved += pass(db, mark.since, cutoff, guard, mark.revisions, loaded, None)?;
     }
     Ok(moved)
 }
 
 /// One pass from `source` to `target` over the requests received at or after the later of `since`, the cutoff and the
-/// first instant the two lists' band functions differ, resuming after `after` when a start left one halfway.
+/// first instant the two lists' band functions differ, resuming after `after` when a start left one halfway. A request
+/// received before `guard` moves only where every row its old deltas name still stands.
 fn pass(
     db: &LedgerDb,
     since: i64,
     cutoff: Option<i64>,
+    guard: Option<i64>,
     source: Vec<Thresholds>,
     target: Vec<Thresholds>,
     mut after: Option<After>,
@@ -175,6 +180,12 @@ fn pass(
                     deltas_of(request, attempts, &new),
                 );
                 if was == now {
+                    continue;
+                }
+                // The purge removes a member's hour whole, so a request whose rows are gone stays out of the hour
+                // rather than writing the new band's rows into it.
+                if guard.is_some_and(|guard| request.received_at < guard) && !rows_stand(&tx, &was)?
+                {
                     continue;
                 }
                 for delta in &was {
@@ -226,6 +237,16 @@ fn pass(
             return Ok(moved);
         }
     }
+}
+
+/// Whether the row each delta names stands.
+fn rows_stand(conn: &Connection, deltas: &[RollupRow]) -> Result<bool, LedgerError> {
+    for delta in deltas {
+        if read_rollup(conn, delta)?.is_none() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Every revision's thresholds, in the list's order.
@@ -404,7 +425,8 @@ thread_local! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pricing::PriceTable;
+    use crate::pricing::{Band, PriceTable, Speed};
+    use crate::query::{member_spends, BudgetedMember};
     use crate::record::{AttemptRecord, RequestRecord};
     use crate::rollup::{read_rollups, RollupRow, RollupSelect, LONG_BAND, STANDARD_BAND};
 
@@ -673,12 +695,29 @@ mod tests {
         assert_eq!(rows(&db), before, "nothing moved: nothing is backfilled");
     }
 
+    /// The retention purge at `now` under the two retentions, the `budgeted` members' periods kept.
+    fn purge(
+        db: &LedgerDb,
+        retention_days: u32,
+        rollup_retention_days: u32,
+        now: i64,
+        budgeted: &[BudgetedMember],
+    ) {
+        let config = crate::LedgerConfig {
+            retention_days,
+            rollup_retention_days,
+            ..Default::default()
+        };
+        crate::bodies::run_retention_blocking(db, &config, now, budgeted).unwrap();
+    }
+
     /// A request retention of 0 keeps the requests for good while a rollup retention of seven days drops whole hours:
-    /// the re-fold starts at the first hour the rollup purge keeps, so a request received after the purge's cutoff
-    /// inside the hour the cutoff splits keeps its band, while one inside the first kept hour moves. With both
-    /// retentions 0 the walk starts at the mark and every request moves.
+    /// the purge removes the hour its cutoff splits, and the re-fold writes no row back into it for the request
+    /// received there after the cutoff, while the request inside the first kept hour moves. With both retentions 0
+    /// nothing is purged and every request moves.
     #[test]
-    fn under_a_zero_request_retention_the_refold_starts_at_the_first_hour_the_rollup_purge_keeps() {
+    fn under_a_zero_request_retention_an_hour_the_rollup_purge_removed_stays_empty_through_the_refold(
+    ) {
         const HOUR: i64 = 3_600_000;
         // The purge's cutoff, seven days back from `now`, falls half an hour into `split_hour`.
         let split_hour = NEW_YEAR + 13 * DAY;
@@ -700,6 +739,7 @@ mod tests {
             );
             land(&db, &haiku("dropped", dropped, 1_500), &list(Some(1_000)));
             land(&db, &haiku("kept", kept, 1_500), &list(Some(1_000)));
+            purge(&db, 0, rollup_retention_days, now, &[]);
             let moved =
                 refold_bands(&db, &list(Some(2_000)), 0, rollup_retention_days, now).unwrap();
             (moved, bands(&db))
@@ -714,8 +754,8 @@ mod tests {
         };
         assert_eq!(
             refolded(7),
-            (1, vec![band(dropped, LONG_BAND), band(kept, STANDARD_BAND)]),
-            "the request inside the hour the purge drops keeps its band"
+            (1, vec![band(kept, STANDARD_BAND)]),
+            "the hour the purge removed gets no row back"
         );
         assert_eq!(
             refolded(0),
@@ -724,6 +764,77 @@ mod tests {
                 vec![band(dropped, STANDARD_BAND), band(kept, STANDARD_BAND)]
             ),
             "with both retentions 0 every request moves"
+        );
+    }
+
+    /// Under a request retention of 0 and a rollup retention of seven days the purge keeps a monthly budgeted
+    /// member's hours from the month's first while it removes another member's hour beside them. A threshold that
+    /// moves re-folds the kept hour, which `member_spends` then prices at the new band, and writes no row back into
+    /// the other member's.
+    #[test]
+    fn under_a_zero_request_retention_a_budgeted_members_kept_hours_move_with_the_threshold() {
+        const HOUR: i64 = 3_600_000;
+        let db = LedgerDb::open_in_memory().unwrap();
+        let now = NEW_YEAR + 20 * DAY;
+        assert_eq!(
+            refold_bands(&db, &list(Some(1_000)), 0, 7, NEW_YEAR + DAY).unwrap(),
+            0,
+            "the first start writes the mark"
+        );
+        let day_four = NEW_YEAR + 4 * DAY + HOUR / 2;
+        land(&db, &haiku("budgeted", day_four, 1_500), &list(Some(1_000)));
+        let mut other = haiku("other", day_four + 1_000, 1_500);
+        other.0.pool_id = Some("q".into());
+        other.1[0].account_id = "b".into();
+        land(&db, &other, &list(Some(1_000)));
+        let budgeted = [BudgetedMember {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            period: phoebis_store::BudgetPeriod::Month,
+            metered_only: false,
+        }];
+        purge(&db, 0, 7, now, &budgeted);
+        let hour = crate::rollup::hour_of(day_four);
+        assert_eq!(
+            bands(&db),
+            [(hour, LONG_BAND.to_string(), 1, 1_500)],
+            "the purge kept the budgeted member's hour and removed the other member's"
+        );
+        assert_eq!(
+            refold_bands(&db, &list(Some(2_000)), 0, 7, now).unwrap(),
+            1,
+            "the budgeted member's request moved"
+        );
+        assert_eq!(
+            bands(&db),
+            [(hour, STANDARD_BAND.to_string(), 1, 1_500)],
+            "the kept hour moved to the new band and the removed hour got no row back"
+        );
+        let prices = list(Some(2_000));
+        let usage = phoebis_routing::PinUsage {
+            input: 1_500,
+            output: 10,
+            ..Default::default()
+        };
+        let at_band = |band: Band| {
+            prices
+                .in_force(now)
+                .estimate_banded(HAIKU, Speed::Standard, band, usage)
+                .expect("the list prices Haiku 5.5")
+                .0
+        };
+        assert_ne!(
+            at_band(Band::Standard),
+            at_band(Band::LongContext),
+            "the two bands price the prompt apart"
+        );
+        let spent = db
+            .read_blocking(|c| member_spends(c, &budgeted, now, &prices))
+            .unwrap();
+        assert_eq!(
+            spent.iter().map(|s| s.spent_usd).collect::<Vec<_>>(),
+            [at_band(Band::Standard)],
+            "the month's spend prices the kept hour at the new band"
         );
     }
 
