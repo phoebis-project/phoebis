@@ -87,5 +87,5 @@ echo "ran $RUN_COUNT runs, $RUN_FAILURES exited non-zero"
 echo "capture written under $OUT: clean_modes.json, clean_body_<i>.json, gzip_modes.json, connect.json"
 
 trap - EXIT
-cd "$ROOT"
+cd "$ROOT" || exit 1
 exec python3 scripts/build-fixtures.py --check "$OUT"

@@ -6,8 +6,10 @@
 # handshake. The resign example's --write mode leaves a body stamped with the digits the signer computes over its own
 # bytes. drive_login.py logs stub_client.py in with the authorize URL's state and reads /status, and gives up with its
 # screen saved when the client stops answering. The stub reaches the receiver alone, NO_PROXY or not, and refuses a
-# proxy off loopback. Every case runs against a throwaway tree, never /tmp/cc-capture or ~/.claude, and reaches no
-# host off loopback.
+# proxy off loopback. capture-control.sh records the stub's login and refresh phases in both of its variants, with the
+# refresh run starting from the credentials the login wrote, moves on past a login the driver gives up on, and refuses
+# a real token. Every case runs against a throwaway tree, never /tmp/cc-capture or ~/.claude, and reaches no host off
+# loopback.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -309,5 +311,113 @@ env -i PATH="$PATH" HTTPS_PROXY=http://203.0.113.9:3128 NODE_EXTRA_CA_CERTS="$tm
 cmp -s "$login_recording" "$tmp/login-before.json" \
   || fail "the stub behind a proxy off loopback left an entry: $(<"$login_recording")"
 stop_receiver
+
+# --- capture-control.sh ---
+
+# The control capture logs the stub in through the driver, then runs it in print mode on a copy of the login's config
+# directory, once with runcli's environment and once without CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC. The phase files
+# are what the builder's --check --control reads, so a phase file holding another phase's calls would grade the wrong
+# request. PHOEBIS_CAPTURE_NETNS=1 skips the namespace, which a CI runner may not allow, and PHOEBIS_CAPTURE_STATE
+# keeps the client's directories in the throwaway tree. The run takes lib.sh's own ports, and the host's credentials
+# and CAPTURE_BASELINE stay out of it.
+export PHOEBIS_CAPTURE_NETNS=1 PHOEBIS_CAPTURE_STATE="$tmp/state"
+capture_control() {
+  env -u ANTHROPIC_API_KEY -u CAPTURE_BASELINE -u CLAUDE_CODE_OAUTH_TOKEN "$here/scripts/capture-control.sh" "$@"
+}
+
+# Each phase file under $1 holds its phase's calls alone, in order, each carrying x-stub-nonessential: $2. The refresh
+# grant carries the refresh token the stub stored at its login, which only a config directory that outlived runcli's
+# reset still holds, and the inference receiver beside the control receiver recorded the refresh run's turn.
+check_variant() {
+  python3 -I - "$@" <<'PY'
+import json, pathlib, sys
+
+variant, nonessential = pathlib.Path(sys.argv[1]), sys.argv[2]
+token, profile = "POST /v1/oauth/token HTTP/1.1", "GET /api/oauth/profile HTTP/1.1"
+login = [token, profile, "GET /api/oauth/claude_cli/roles HTTP/1.1", "GET /api/oauth/usage HTTP/1.1"]
+phases = {"login-claude": login, "login-console": login, "refresh": [token, profile]}
+for phase, want in phases.items():
+    entries = sorted(json.load(open(variant / f"{phase}.json")), key=lambda e: e["seq"])
+    if [e.get("request_line") for e in entries] != want:
+        sys.exit(f"{phase}.json holds {entries}")
+    for entry in entries:
+        if f"x-stub-nonessential: {nonessential}" not in entry["headers"]:
+            sys.exit(f"{phase}.json's {entry['request_line']} lacks x-stub-nonessential: {nonessential}: {entry}")
+    if phase == "refresh":
+        grant = json.loads(entries[0]["body"])
+        if grant.get("grant_type") != "refresh_token" or grant.get("refresh_token") != "sk-ant-ort01-PLACEHOLDER":
+            sys.exit(f"the refresh grant reads {grant}")
+turns = [e["request_line"] for e in json.load(open(variant / "inference" / "clean_modes.json"))]
+if turns != ["POST /v1/messages HTTP/1.1"]:
+    sys.exit(f"the inference receiver recorded {turns}")
+PY
+}
+
+out_dir=$(realpath -m "$tmp/out")
+status=0
+out=$(capture_control "$stub" "$tmp/out" 2>&1) || status=$?
+[[ "$status" -eq 0 ]] || fail "capture-control.sh against the stub exited $status, want 0: $out"
+[[ -s "$out_dir/certs/ca.pem" ]] || fail "capture-control.sh wrote no certs/ca.pem: $out"
+for variant in control control-unflagged; do
+  for phase in login-claude login-console refresh; do
+    [[ -s "$out_dir/$variant/$phase.json" ]] || fail "capture-control.sh wrote no $variant/$phase.json: $out"
+  done
+  want="  python3 -I scripts/build-fixtures.py --check --control $out_dir/$variant <baseline-dir>"
+  grep -qxF -- "$want" <<<"$out" || fail "capture-control.sh did not print the check of $variant/: $out"
+done
+got=$(check_variant "$out_dir/control" 1 2>&1) || fail "in control/, $got"
+got=$(check_variant "$out_dir/control-unflagged" unset 2>&1) || fail "in control-unflagged/, $got"
+# The capture stops both receivers before it exits, so the next capture finds lib.sh's ports free.
+python3 -I - <<'PY' || fail "capture-control.sh left a receiver listening on port 48442 or 48444"
+import socket
+
+for port in (48442, 48444):
+    with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("127.0.0.1", port))
+PY
+
+# The receivers record every header verbatim, so a real token in the environment is refused before anything is
+# written.
+status=0
+out=$(env -u ANTHROPIC_API_KEY -u CAPTURE_BASELINE CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-REAL \
+  "$here/scripts/capture-control.sh" "$stub" "$tmp/refused" 2>&1) || status=$?
+[[ "$status" -eq 1 ]] || fail "capture-control.sh with a real CLAUDE_CODE_OAUTH_TOKEN exited $status, want 1: $out"
+[[ "$out" == "capture-control.sh: refusing to run with a real CLAUDE_CODE_OAUTH_TOKEN set" ]] \
+  || fail "capture-control.sh with a real CLAUDE_CODE_OAUTH_TOKEN printed: $out"
+[[ ! -e "$tmp/refused" ]] || fail "capture-control.sh with a real CLAUDE_CODE_OAUTH_TOKEN still wrote $tmp/refused"
+
+# A login whose driver gives up, here on a client that prints a screen the driver does not know and exits, is logged
+# with its screen file, and the capture goes on to the next phase. The refresh phase then finds no credentials to
+# expire and is skipped with a note. The client waits before it exits so the driver reads the screen before the
+# terminal closes, and it exits rather than hangs, since a hang would cost the driver's 90-second timeout per variant.
+wrapper="$tmp/unknown-screen-client"
+cat >"$wrapper" <<EOF
+#!/usr/bin/env bash
+if [[ "\$CLAUDE_CONFIG_DIR" == */cfg-login-claude ]]; then
+  echo "an unknown screen"
+  sleep 2
+  exit 0
+fi
+exec python3 -I "$stub" "\$@"
+EOF
+chmod +x "$wrapper"
+gave_up=$(realpath -m "$tmp/gave-up")
+status=0
+out=$(capture_control "$wrapper" "$tmp/gave-up" 2>&1) || status=$?
+[[ "$status" -eq 0 ]] || fail "capture-control.sh past a login the driver gave up on exited $status, want 0: $out"
+for variant in control control-unflagged; do
+  screen="$gave_up/$variant/login-claude-screen.txt"
+  grep -qxF "phase login-claude: drive_login.py exited 2, screen in $screen" <<<"$out" \
+    || fail "capture-control.sh did not log the screen of $variant/'s login-claude: $out"
+  grep -qF "an unknown screen" "$screen" || fail "$variant/login-claude-screen.txt holds: $(<"$screen")"
+  grep -qF '"request_line": "GET /api/oauth/usage HTTP/1.1"' "$gave_up/$variant/login-console.json" \
+    || fail "capture-control.sh ran no login-console in $variant/ after the driver gave up: $out"
+  [[ ! -e "$gave_up/$variant/refresh.json" ]] \
+    || fail "capture-control.sh ran a refresh in $variant/ without credentials: $out"
+done
+skipped=$(grep -cxF "phase refresh skipped: login-claude left no claudeAiOauth.expiresAt in .credentials.json" \
+  <<<"$out") || true
+[[ "$skipped" -eq 2 ]] || fail "capture-control.sh printed the refresh phase's skip note $skipped times, want 2: $out"
 
 echo "capture-tooling: ok"
