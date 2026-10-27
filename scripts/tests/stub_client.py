@@ -13,7 +13,7 @@
 # base URL off loopback. The tokens it sends are the dummy ones the tests seed and the canned ones the receiver
 # answers with.
 #
-# Every request carries x-stub-lang, x-stub-nonessential and x-stub-term with the values of LANG,
+# Every request carries x-stub-home, x-stub-lang, x-stub-nonessential and x-stub-term with the values of HOME, LANG,
 # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and TERM, or "unset" for a variable the run lacks, so a recording shows
 # which environment its run had. STUB_HANG=1 makes terminal mode print its prompt and then nothing, as a client stuck
 # on a screen the driver does not know.
@@ -28,6 +28,7 @@ USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 RECORDED = {
+    "x-stub-home": os.environ.get("HOME", "unset"),
     "x-stub-lang": os.environ.get("LANG", "unset"),
     "x-stub-nonessential": os.environ.get("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "unset"),
     "x-stub-term": os.environ.get("TERM", "unset"),

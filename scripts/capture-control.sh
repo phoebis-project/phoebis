@@ -6,11 +6,12 @@
 #
 # It sources scripts/capture/lib.sh, so it runs in the same loopback-only namespace as scripts/capture-baseline.sh,
 # refuses to start with a real credential in the environment, and keeps the client's working and config directories
-# under /tmp/cc-capture. The control calls go to hosts the client dials by name, which ANTHROPIC_BASE_URL cannot
-# redirect, so every client run here gets HTTPS_PROXY pointed at scripts/capture/control_receiver.py on port 48444
-# (CONTROL_RECEIVER_PORT) and NODE_EXTRA_CA_CERTS at the throwaway CA that scripts/capture/mkcerts.sh writes to
-# <output-dir>/certs/ before the first run. scripts/capture/http_raw.py on port 48442 (HTTP_PORT) answers the refresh
-# phase's inference post with its canned 400 and records it under <variant>/inference/.
+# under /tmp/cc-capture, beside the throwaway HOME every client run here gets. The control calls go to hosts the client
+# dials by name, which ANTHROPIC_BASE_URL cannot redirect, so every client run here gets HTTPS_PROXY pointed at
+# scripts/capture/control_receiver.py on port 48444 (CONTROL_RECEIVER_PORT) and NODE_EXTRA_CA_CERTS at the throwaway
+# CA that scripts/capture/mkcerts.sh writes to <output-dir>/certs/ before the first run. scripts/capture/http_raw.py on
+# port 48442 (HTTP_PORT) answers the refresh phase's inference post with its canned 400 and records it under
+# <variant>/inference/.
 #
 # The capture runs in two variants: into <output-dir>/control/ with the environment runcli gives every capture, the
 # one the committed fixtures were captured under, and into <output-dir>/control-unflagged/ with the same environment
@@ -46,6 +47,12 @@ RESPONSES="$ROOT/crates/profile/fixtures/responses"
 
 "$CAPTURE_DIR/mkcerts.sh" "$OUT"
 
+# The receivers record token grants verbatim, so a credential the interactive client found under the operator's own
+# HOME would land in a phase file. Each client run gets this HOME after CLIENT_ENV's, where env takes the later value,
+# and it starts empty so no earlier run's client state reaches this one.
+rm -rf "${STATE:?}/home"
+mkdir -p "$STATE/home"
+
 login_phase() { # $1=variant dir $2=1 to leave the non-essential-traffic flag out $3=claude or console
   local dir=$1 allow=$2 method=$3 status=0
   local phase="login-$method"
@@ -59,9 +66,9 @@ login_phase() { # $1=variant dir $2=1 to leave the non-essential-traffic flag ou
   start_control_receiver "$dir/$phase.json" "$CLEAN_DURATION" "$OUT/certs" "$RESPONSES"
   # A terminal UI may not draw its menus without TERM and a locale. The print-mode runs keep runcli's list, the
   # environment the committed fixtures were captured under.
-  env -i "${CLIENT_ENV[@]}" HTTPS_PROXY="$PROXY" LANG=C.UTF-8 NODE_EXTRA_CA_CERTS="$CA" TERM=xterm-256color \
-    python3 -I "$CAPTURE_DIR/drive_login.py" --binary "$BINARY" --cwd "$CLIENT_CWD" --out "$dir" --method "$method" \
-    || status=$?
+  env -i "${CLIENT_ENV[@]}" HOME="$STATE/home" HTTPS_PROXY="$PROXY" LANG=C.UTF-8 NODE_EXTRA_CA_CERTS="$CA" \
+    TERM=xterm-256color python3 -I "$CAPTURE_DIR/drive_login.py" --binary "$BINARY" --cwd "$CLIENT_CWD" \
+    --out "$dir" --method "$method" || status=$?
   stop_control_receiver
   case $status in
     0) ;;
@@ -103,7 +110,7 @@ PY
   [[ "$status" -eq 0 ]] || exit "$status"
   start_control_receiver "$dir/refresh.json" "$CLEAN_DURATION" "$OUT/certs" "$RESPONSES"
   ALLOW_NONESSENTIAL_TRAFFIC=$allow KEEP_CONFIG=1 runcli refresh refresh hi \
-    HTTPS_PROXY="$PROXY" NODE_EXTRA_CA_CERTS="$CA" ANTHROPIC_BASE_URL="http://127.0.0.1:$HTTP_PORT"
+    HOME="$STATE/home" HTTPS_PROXY="$PROXY" NODE_EXTRA_CA_CERTS="$CA" ANTHROPIC_BASE_URL="http://127.0.0.1:$HTTP_PORT"
   stop_control_receiver
 }
 

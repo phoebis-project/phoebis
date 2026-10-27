@@ -326,16 +326,18 @@ capture_control() {
   env -u ANTHROPIC_API_KEY -u CAPTURE_BASELINE -u CLAUDE_CODE_OAUTH_TOKEN "$here/scripts/capture-control.sh" "$@"
 }
 
-# Each phase file under $1 holds its phase's calls alone, in order, each carrying x-stub-nonessential: $2. A terminal
-# UI may not draw its menus without TERM and a locale, so the login phases' client sees both, and the refresh run keeps
-# runcli's print-mode environment, the one the committed fixtures were captured under. The refresh grant carries the
-# refresh token the stub stored at its login, which only a config directory that outlived runcli's reset still holds,
-# and the inference receiver beside the control receiver recorded the refresh run's turn.
+# Each phase file under $1 holds its phase's calls alone, in order, each carrying x-stub-nonessential: $2 and
+# x-stub-home: $3, since the receivers record token grants verbatim and every client run gets a throwaway HOME in
+# place of the operator's. A terminal UI may not draw its menus without TERM and a locale, so the login phases' client
+# sees both, and the refresh run keeps runcli's print-mode environment, the one the committed fixtures were captured
+# under. The refresh grant carries the refresh token the stub stored at its login, which only a config directory that
+# outlived runcli's reset still holds, and the inference receiver beside the control receiver recorded the refresh
+# run's turn.
 check_variant() {
   python3 -I - "$@" <<'PY'
 import json, pathlib, sys
 
-variant, nonessential = pathlib.Path(sys.argv[1]), sys.argv[2]
+variant, nonessential, home = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 token, profile = "POST /v1/oauth/token HTTP/1.1", "GET /api/oauth/profile HTTP/1.1"
 login = [token, profile, "GET /api/oauth/claude_cli/roles HTTP/1.1", "GET /api/oauth/usage HTTP/1.1"]
 phases = {"login-claude": login, "login-console": login, "refresh": [token, profile]}
@@ -345,7 +347,8 @@ for phase, want in phases.items():
     entries = sorted(json.load(open(variant / f"{phase}.json")), key=lambda e: e["seq"])
     if [e.get("request_line") for e in entries] != want:
         sys.exit(f"{phase}.json holds {entries}")
-    headers = [f"x-stub-nonessential: {nonessential}"] + (print_mode if phase == "refresh" else terminal)
+    headers = [f"x-stub-home: {home}", f"x-stub-nonessential: {nonessential}"]
+    headers += print_mode if phase == "refresh" else terminal
     for entry in entries:
         for header in headers:
             if header not in entry["headers"]:
@@ -372,8 +375,9 @@ for variant in control control-unflagged; do
   want="  python3 -I scripts/build-fixtures.py --check --control $out_dir/$variant <baseline-dir>"
   grep -qxF -- "$want" <<<"$out" || fail "capture-control.sh did not print the check of $variant/: $out"
 done
-got=$(check_variant "$out_dir/control" 1 2>&1) || fail "in control/, $got"
-got=$(check_variant "$out_dir/control-unflagged" unset 2>&1) || fail "in control-unflagged/, $got"
+got=$(check_variant "$out_dir/control" 1 "$PHOEBIS_CAPTURE_STATE/home" 2>&1) || fail "in control/, $got"
+got=$(check_variant "$out_dir/control-unflagged" unset "$PHOEBIS_CAPTURE_STATE/home" 2>&1) \
+  || fail "in control-unflagged/, $got"
 # The capture stops both receivers before it exits, so the next capture finds lib.sh's ports free.
 python3 -I - <<'PY' || fail "capture-control.sh left a receiver listening on port 48442 or 48444"
 import socket
