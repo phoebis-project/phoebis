@@ -310,7 +310,6 @@ def build(
     # inference plane.
     if control is not None and not control.is_dir():
         raise SystemExit(f"{control} is not a directory of control recordings")
-    (out / "responses").mkdir(parents=True, exist_ok=True)
     cm = json.load(open(src / "clean_modes.json"))
     # Selected by request line rather than by index: a capture that interleaves its HEAD /api/hello probes
     # differently still lands the same four bodies on the same four fixtures. Each session contributes its first
@@ -330,6 +329,20 @@ def build(
                     f"{src}/clean_modes.json entry {idx} ({entry['request_line']}) declares Content-Length "
                     f"{declared}, but the body captured beside it is {len(body)} bytes"
                 )
+    hello = next((e for e in cm if e["request_line"].startswith("HEAD /api/hello")), None)
+    # In a router capture, connect.json, which tls_raw.py always writes, holds the ClientHello the router itself sent
+    # toward its upstream. crates/transport/tests/client_hello.rs grades that shape, so the build never opens the file
+    # under THROUGH_ROUTER.
+    conn = [] if THROUGH_ROUTER else json.load(open(src / "connect.json"))
+    inf = next((h for h in conn if h.get("hello_len") == INFERENCE_HELLO_LEN), None)
+    # Both stops come before the first write: a fixture write that stopped after it would leave the committed tree
+    # half rewritten.
+    if strict and not THROUGH_ROUTER:
+        if hello is None:
+            raise SystemExit(f"{src}/clean_modes.json holds no HEAD /api/hello entry")
+        if inf is None:
+            raise SystemExit(f"{src}/connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello")
+    (out / "responses").mkdir(parents=True, exist_ok=True)
     for body, name in zip(captured, INFERENCE_BODIES):
         (out / name).write_bytes(redact_body(body))
         if resign:
@@ -338,24 +351,14 @@ def build(
         (out / name).write_bytes(head(entry, len((out / body_name).read_bytes())))
     # The relay answers HEAD /api/hello itself, so a router capture never carries one; both it and the hex
     # files below are optional in this mode.
-    hello = next((e for e in cm if e["request_line"].startswith("HEAD /api/hello")), None)
     if hello is None:
         if not THROUGH_ROUTER:
-            if strict:
-                raise SystemExit(f"{src}/clean_modes.json holds no HEAD /api/hello entry")
             print("hello.http: the capture holds no HEAD /api/hello")
     else:
         (out / "hello.http").write_bytes(head(hello))
-    # connect.json, which tls_raw.py always writes, holds the ClientHello the router itself sent toward its
-    # upstream; that shape is graded by crates/transport/tests/client_hello.rs, not here, so it is never opened
-    # in this mode even though it exists.
     if not THROUGH_ROUTER:
-        conn = json.load(open(src / "connect.json"))
-        inf = next((h for h in conn if h.get("hello_len") == INFERENCE_HELLO_LEN), None)
         if inf is not None:
             (out / "hello_inference.hex").write_text(inf["raw_hex"] + "\n")
-        elif strict:
-            raise SystemExit(f"{src}/connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello")
         else:
             lengths = ", ".join(str(n) for n in sorted({h["hello_len"] for h in conn if "hello_len" in h}))
             print(
@@ -456,6 +459,7 @@ def _self_test() -> None:
     _self_test_resend_selector()
     _self_test_check_reports_resends()
     _self_test_check_reports_probe_and_hello()
+    _self_test_build_stops_without_client_hello()
     _self_test_capture_partition()
     _self_test_redact_body()
     _self_test_redact_head()
@@ -700,6 +704,11 @@ def _client_hello() -> bytes:
     return b"\x16\x03\x01" + struct.pack("!H", len(handshake)) + handshake
 
 
+def _written_files(out: pathlib.Path) -> list[str]:
+    """The files a build left under `out`, by their path relative to it."""
+    return sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file())
+
+
 def _self_test_redact_body() -> None:
     """A written body carries the placeholders and an empty account_uuid, and a body without the members comes
     back byte for byte, whatever metadata.user_id holds or whether it is there at all."""
@@ -919,7 +928,7 @@ def _self_test_check_reports_resends() -> None:
 
 def _self_test_check_reports_probe_and_hello() -> None:
     """A capture without the hello probe and without the inference ClientHello grades to its end in check mode, the
-    two missing fixtures named, while the fixture write still stops on the missing probe."""
+    two missing fixtures named, while the fixture write stops on the missing probe before it writes a file."""
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
         first = _inference_capture(root / "first")
@@ -951,9 +960,32 @@ def _self_test_check_reports_probe_and_hello() -> None:
         except SystemExit as e:
             if "HEAD /api/hello" not in str(e):
                 raise AssertionError(f"the build refused for the wrong reason: {e}") from e
+            written = _written_files(root / "strict")
+            if written:
+                raise AssertionError(f"the build wrote {written} before it stopped on the missing probe")
             print("self-test passed:", e)
         else:
             raise AssertionError("the build wrote fixtures from a capture without the hello probe")
+
+
+def _self_test_build_stops_without_client_hello() -> None:
+    """A fixture write from a capture that keeps the hello probe but holds no inference ClientHello stops before it
+    writes a file."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        capture = _inference_capture(root / "capture")
+        (capture / "connect.json").write_text(json.dumps([{"hello_len": INFERENCE_HELLO_LEN + 4, "raw_hex": "16"}]))
+        try:
+            build(capture, root / "strict", resign=False)
+        except SystemExit as e:
+            if f"{INFERENCE_HELLO_LEN}-byte ClientHello" not in str(e):
+                raise AssertionError(f"the build refused for the wrong reason: {e}") from e
+            written = _written_files(root / "strict")
+            if written:
+                raise AssertionError(f"the build wrote {written} before it stopped on the missing ClientHello")
+            print("self-test passed: build stops on a capture without the inference ClientHello before it writes")
+        else:
+            raise AssertionError("the build wrote fixtures from a capture without the inference ClientHello")
 
 
 def _control_entry(seq: int, request_line: str, body: str = "") -> dict:
