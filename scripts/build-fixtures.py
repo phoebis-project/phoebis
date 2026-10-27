@@ -206,16 +206,13 @@ def control(entry, name, out):
     (out / name).write_bytes(control_bytes(entry, name))
 
 
-def control_fixtures(
-    control_dir: pathlib.Path, out: pathlib.Path, responses: pathlib.Path
-) -> tuple[list[str], list[tuple[str, str]]]:
-    """Write the control fixtures from the control receiver's recordings in `control_dir`, one file per phase, and
-    copy the canned responses the receiver answered with from `responses` into `out/responses/`.
+def derive_control_fixtures(control_dir: pathlib.Path) -> tuple[list[tuple[str, bytes]], list[tuple[str, str]]]:
+    """The control fixtures the control receiver's recordings in `control_dir` hold, one file per phase, each as its
+    name and the bytes control_bytes gives it, then each fixture the recording lacks with the reason. Nothing is
+    written, so a stop in control_bytes leaves every tree as it was.
 
     Each fixture is the first request of its kind across the phase files in name order, so a retried refresh grant
-    leaves the first one pinned. A grant or read the recording lacks writes nothing, and an earlier copy of that
-    fixture in `out` stays as it was. Returns the names of the fixtures written, then each fixture the recording
-    lacks with the reason.
+    leaves the first one pinned.
     """
     if not control_dir.is_dir():
         raise SystemExit(f"{control_dir} is not a directory of control recordings")
@@ -241,7 +238,6 @@ def control_fixtures(
                 return entry
         return None
 
-    # Every fixture's bytes come before the first write, so a stop in control_bytes leaves no control fixture written.
     derived = []
     missing = []
     for name, method, path, grant_type in (
@@ -257,15 +253,31 @@ def control_fixtures(
             missing.append((name, f"the recording holds no {request}"))
         else:
             derived.append((name, control_bytes(entry, name)))
+    return derived, missing
+
+
+def write_control_fixtures(derived: list[tuple[str, bytes]], out: pathlib.Path, responses: pathlib.Path) -> list[str]:
+    """Write the fixtures derive_control_fixtures returned into `out`, copy the canned responses the receiver
+    answered with from `responses` into `out/responses/`, and return the names written. A fixture the recording
+    lacks is not among them, and an earlier copy of it in `out` stays as it was."""
     (out / "responses").mkdir(parents=True, exist_ok=True)
     for name, data in derived:
         (out / name).write_bytes(data)
-    written = [name for name, _ in derived]
     # The builder's own write passes the committed responses as the source and the tree holding them as `out`.
     if (out / "responses").resolve() != responses.resolve():
         for name in ("profile.json", "roles.json", "token.json", "usage.json"):
             shutil.copyfile(responses / name, out / "responses" / name)
-    return written, missing
+    return [name for name, _ in derived]
+
+
+def control_fixtures(
+    control_dir: pathlib.Path, out: pathlib.Path, responses: pathlib.Path
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Derive the control fixtures from `control_dir` and write them into `out`. Every fixture's bytes come before the
+    first write, so a stop in control_bytes leaves no control fixture written. Returns the names written, then each
+    fixture the recording lacks with the reason."""
+    derived, missing = derive_control_fixtures(control_dir)
+    return write_control_fixtures(derived, out, responses), missing
 
 
 def session_id(entry) -> str | None:
@@ -392,6 +404,11 @@ def build(
     stamped = any(has_stamp(body) and not carries_only_the_placeholder(body) for body in bodies)
     if resign and stamped and shutil.which("cargo") is None:
         raise SystemExit("cargo is needed to re-sign the redacted bodies")
+    if control is None and (src / "control").is_dir():
+        control = src / "control"
+    # Derived before the first write as well, so the stop control_bytes makes on a kept grant value leaves the
+    # committed tree untouched. The fixtures are written after the inference plane, as before.
+    derived, control_missing = derive_control_fixtures(control) if control is not None else ([], [])
     (out / "responses").mkdir(parents=True, exist_ok=True)
     for body, name in zip(bodies, INFERENCE_BODIES):
         (out / name).write_bytes(body)
@@ -426,11 +443,9 @@ def build(
             (out / "hello_control.hex").write_text(ctl["raw_hex"] + "\n")
             written.append("hello_control.hex")
     if control is None:
-        control = src / "control"
-        if not control.is_dir():
-            return written, unwritten
+        return written, unwritten
     # The control receiver answers from the committed responses, so they are the canned bodies this capture saw.
-    control_written, control_missing = control_fixtures(control, out, FIXTURES / "responses")
+    control_written = write_control_fixtures(derived, out, FIXTURES / "responses")
     return written + control_written, unwritten + control_missing
 
 
@@ -530,6 +545,7 @@ def _self_test() -> None:
     _self_test_check_hashes_placeholder()
     _self_test_control_selection()
     _self_test_control_fails_closed()
+    _self_test_build_control_stop_writes_nothing()
     _self_test_build_reads_control()
     _self_test_build_reports_partial_control()
     _self_test_build_count_redacts()
@@ -1308,21 +1324,26 @@ def _self_test_control_selection() -> None:
         print("self-test passed: control writes the recorded bytes and declares their length")
 
 
+def _escaped_code_recording(root: pathlib.Path) -> pathlib.Path:
+    """A control directory under `root` holding the profile read, then a code grant whose key's first letter is
+    spelled as a JSON unicode escape, which json.loads reads as code and the substitutions of control_bytes do not."""
+    recording = root / "control"
+    recording.mkdir()
+    grant = '{"grant_type":"authorization_code","' + "\\u0063ode" + '":"DUMMYCODE","state":"S","code_verifier":"V"}'
+    entries = [
+        _control_entry(0, "GET /api/oauth/profile HTTP/1.1"),
+        _control_entry(1, "POST /v1/oauth/token HTTP/1.1", grant),
+    ]
+    (recording / "login-claude.json").write_text(json.dumps(entries))
+    return recording
+
+
 def _self_test_control_fails_closed() -> None:
     """A grant member the substitutions miss stops control_fixtures before it writes any control fixture, and the stop
     names the fixture and the member, never the value."""
-    # The key's first letter spelled as a JSON unicode escape, which json.loads reads as code and the substitutions
-    # do not.
-    grant = '{"grant_type":"authorization_code","' + "\\u0063ode" + '":"DUMMYCODE","state":"S","code_verifier":"V"}'
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
-        recording = root / "control"
-        recording.mkdir()
-        entries = [
-            _control_entry(0, "GET /api/oauth/profile HTTP/1.1"),
-            _control_entry(1, "POST /v1/oauth/token HTTP/1.1", grant),
-        ]
-        (recording / "login-claude.json").write_text(json.dumps(entries))
+        recording = _escaped_code_recording(root)
         out = root / "out"
         try:
             control_fixtures(recording, out, FIXTURES / "responses")
@@ -1335,6 +1356,27 @@ def _self_test_control_fails_closed() -> None:
             print("self-test passed:", e)
         else:
             raise AssertionError("control_fixtures wrote a code grant whose escaped key kept the captured code")
+
+
+def _self_test_build_control_stop_writes_nothing() -> None:
+    """A strict build whose control directory holds a grant member the substitutions miss stops before it writes any
+    fixture, the inference plane included."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        src = _inference_capture(root / "capture")
+        recording = _escaped_code_recording(root)
+        out = root / "out"
+        try:
+            build(src, out, resign=False, control=recording)
+        except SystemExit as e:
+            if str(e) != "control_token_code.http: code kept a captured value":
+                raise AssertionError(f"the build stopped for the wrong reason: {e}") from e
+            written = _written_files(out)
+            if written:
+                raise AssertionError(f"the build wrote {written} before it stopped on the code grant")
+            print("self-test passed: build stops on a code grant that kept its code before it writes a fixture")
+        else:
+            raise AssertionError("the build wrote a code grant whose escaped key kept the captured code")
 
 
 def _self_test_build_reads_control() -> None:
