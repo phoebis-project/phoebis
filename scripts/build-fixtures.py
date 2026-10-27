@@ -294,7 +294,7 @@ def build(
     resign: bool = True,
     control: pathlib.Path | None = None,
     strict: bool = True,
-) -> None:
+) -> list[tuple[str, str]]:
     """Write the fixture tree at `out`, sourced from the capture directory `src`.
 
     The control plane is read from the control receiver's recordings in `control`, or in `src/control/` when
@@ -306,8 +306,11 @@ def build(
     bodies' own.
 
     `check()` also builds with `strict` off, so a grade reaches the end of the capture: a missing hello probe or
-    inference ClientHello prints a line and leaves its fixture unwritten, which the comparison then lists. A write
-    to the committed tree keeps `strict` on and stops there instead.
+    inference ClientHello leaves its fixture unwritten. A write to the committed tree keeps `strict` on and stops
+    there instead.
+
+    Returns the required fixtures left unwritten, each with its reason, and prints nothing about them, so the caller
+    reports them.
     """
     # A fixture write targets the committed tree, so a mistyped directory stops the build before it rewrites the
     # inference plane.
@@ -352,11 +355,12 @@ def build(
             resign_written(out / name)
     for (_, entry), name, body_name in zip(posts, INFERENCE_HEADS, INFERENCE_BODIES):
         (out / name).write_bytes(head(entry, len((out / body_name).read_bytes())))
+    unwritten = []
     # The relay answers HEAD /api/hello itself, so a router capture never carries one; both it and the hex
     # files below are optional in this mode.
     if hello is None:
         if not THROUGH_ROUTER:
-            print("hello.http: the capture holds no HEAD /api/hello")
+            unwritten.append(("hello.http", "the capture holds no HEAD /api/hello"))
     else:
         (out / "hello.http").write_bytes(head(hello))
     if not THROUGH_ROUTER:
@@ -364,9 +368,11 @@ def build(
             (out / "hello_inference.hex").write_text(inf["raw_hex"] + "\n")
         else:
             lengths = ", ".join(str(n) for n in sorted({h["hello_len"] for h in conn if "hello_len" in h})) or "none"
-            print(
-                f"hello_inference.hex: connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello "
-                f"(recorded lengths: {lengths})"
+            unwritten.append(
+                (
+                    "hello_inference.hex",
+                    f"connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello (recorded lengths: {lengths})",
+                )
             )
         ctl = next((h for h in conn if h.get("hello_len") == CONTROL_HELLO_LEN), None)
         if ctl is not None:
@@ -374,9 +380,10 @@ def build(
     if control is None:
         control = src / "control"
         if not control.is_dir():
-            return
+            return unwritten
     # The control receiver answers from the committed responses, so they are the canned bodies this capture saw.
     control_fixtures(control, out, FIXTURES / "responses")
+    return unwritten
 
 
 def build_count(src: pathlib.Path, out: pathlib.Path, resign: bool = True) -> None:
@@ -980,9 +987,31 @@ def _self_test_check_reports_probe_and_hello() -> None:
         ):
             if line not in output.splitlines():
                 raise AssertionError(f"check printed no {line!r}: {output!r}")
-        if not output.endswith("fixtures differ:\n  hello.http\n  hello_inference.hex\n"):
+        listed = "fixtures differ:\n  hello.http\n  hello_inference.hex\n"
+        if not output.endswith(listed + "fixtures not captured: hello.http, hello_inference.hex\n"):
             raise AssertionError(f"check listed other fixtures than the probe and the ClientHello: {output!r}")
         print("self-test passed: check reports a capture without the hello probe and the inference ClientHello")
+        # A baseline that lacks them too leaves the same two fixtures unwritten on both sides, where the comparison
+        # finds no difference.
+        report = io.StringIO()
+        with contextlib.redirect_stdout(report):
+            status = check(second, baseline=second, skip_hashes=True)
+        output = report.getvalue()
+        if status != 1:
+            raise AssertionError(
+                f"check graded two captures without the probe and the ClientHello with status {status}"
+            )
+        for line in (
+            "baseline hello.http: the capture holds no HEAD /api/hello",
+            f"baseline hello_inference.hex: connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello "
+            f"(recorded lengths: {INFERENCE_HELLO_LEN + 4})",
+            "fixtures not captured: hello.http, hello_inference.hex",
+        ):
+            if line not in output.splitlines():
+                raise AssertionError(f"check printed no {line!r}: {output!r}")
+        if "fixtures match" in output:
+            raise AssertionError(f"check printed fixtures match for two incomplete captures: {output!r}")
+        print("self-test passed: check grades two captures without the probe and the ClientHello with status 1")
         try:
             build(second, root / "strict", resign=False)
         except SystemExit as e:
@@ -1018,21 +1047,23 @@ def _self_test_build_stops_without_client_hello() -> None:
 
 def _self_test_build_reports_no_recorded_length() -> None:
     """A non-strict build over a connect.json whose records carry no length, here a plain-http connection's error
-    entry in hello_lib.parse_hello's shape, prints none as the recorded lengths."""
+    entry in hello_lib.parse_hello's shape, returns none as the recorded lengths and prints nothing itself."""
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
         capture = _inference_capture(root / "capture")
         (capture / "connect.json").write_text(json.dumps([{"error": "not-tls", "head": b"POST /v1/message".hex()}]))
         report = io.StringIO()
         with contextlib.redirect_stdout(report):
-            build(capture, root / "fresh", resign=False, strict=False)
-        line = (
-            f"hello_inference.hex: connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello "
-            "(recorded lengths: none)"
+            unwritten = build(capture, root / "fresh", resign=False, strict=False)
+        wanted = (
+            "hello_inference.hex",
+            f"connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello (recorded lengths: none)",
         )
-        if line not in report.getvalue().splitlines():
-            raise AssertionError(f"build printed no {line!r}: {report.getvalue()!r}")
-        print("self-test passed: a connect.json without a recorded length prints none as the lengths")
+        if unwritten != [wanted]:
+            raise AssertionError(f"build returned {unwritten!r}, want [{wanted!r}]")
+        if report.getvalue():
+            raise AssertionError(f"build printed {report.getvalue()!r} about the fixture it left unwritten")
+        print("self-test passed: a connect.json without a recorded length reports none as the lengths")
 
 
 def _control_entry(seq: int, request_line: str, body: str = "") -> dict:
@@ -1645,7 +1676,9 @@ def check(
 ) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         fresh_dir = pathlib.Path(tmp) / "fixtures"
-        build(capture_dir, fresh_dir, resign=False, control=control, strict=False)
+        unwritten = build(capture_dir, fresh_dir, resign=False, control=control, strict=False)
+        for name, reason in unwritten:
+            print(f"{name}: {reason}")
         cm = json.load(open(capture_dir / "clean_modes.json"))
         resent = resent_posts(cm)
         if resent:
@@ -1661,7 +1694,8 @@ def check(
             # The same two masks that apply to the router capture apply here too, so a live date or a live
             # account_uuid in the baseline's own bodies never shows up as drift against itself.
             baseline_dir = pathlib.Path(tmp) / "baseline"
-            build(baseline, baseline_dir, resign=False, strict=False)
+            for name, reason in build(baseline, baseline_dir, resign=False, strict=False):
+                print(f"baseline {name}: {reason}")
             committed = normalize_tree(baseline_dir)
         else:
             committed = normalize_tree(FIXTURES)
@@ -1684,6 +1718,11 @@ def check(
                 if name.startswith("body_") and name.endswith(".json"):
                     for line in body_diff(name, committed.get(name), fresh.get(name)):
                         print(f"    {line}")
+        # A baseline that lacks the same fixture leaves it unwritten on both sides, where the comparison finds no
+        # difference, so the capture's own list decides as well.
+        if unwritten:
+            print("fixtures not captured: " + ", ".join(name for name, _ in unwritten))
+        if diffs or unwritten:
             return 2 if hashes == 2 else 1
         if hashes:
             return hashes
