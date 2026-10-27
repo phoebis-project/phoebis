@@ -30,7 +30,8 @@
 #      post included, so NO_PROXY=127.0.0.1 sends that post to the inference receiver directly. The phase is skipped
 #      with a note when login-claude left no expiresAt.
 # A login whose driver gives up (exit 2, on a screen it does not know, a code the client refuses, or a client that
-# exited) is logged with its screen file and the next phase runs. Any other failure of the driver stops the capture.
+# exited) is logged with its screen file and the next phase runs. Any other failure of the driver stops the capture,
+# and so does a control receiver that fails to start or exits with an error.
 #
 # With CAPTURE_BASELINE naming a capture directory of scripts/capture-baseline.sh (one holding clean_modes.json), the
 # script ends with `python3 -I scripts/build-fixtures.py --check --control <variant-dir> "$CAPTURE_BASELINE"` for each
@@ -63,8 +64,8 @@ trap 'stop_receiver; stop_control_receiver || true; rm -f "$OUT"/certs/*.key' EX
 rm -rf "${STATE:?}/home"
 mkdir -p "$STATE/home"
 
-# A phase whose control receiver failed has recorded nothing, and its client would run against no receiver, so the
-# capture stops there the way it stops on a driver failure.
+# A phase whose control receiver failed to start or exited with an error holds no complete recording, so the capture
+# stops there the way it stops on a driver failure.
 receiver_failed() { # $1=phase $2=status
   echo "$SCRIPT_NAME: control receiver failed in phase $1" >&2
   exit "$2"

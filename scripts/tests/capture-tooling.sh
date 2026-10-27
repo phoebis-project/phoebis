@@ -10,9 +10,10 @@
 # loopback. capture-control.sh seeds each login's config directory past the client's first-start screens, records the
 # stub's login and refresh phases in both of its variants, with the refresh run starting from the credentials the login
 # wrote and its inference post reaching the inference receiver past the proxy, moves on past a login the driver gives up
-# on, and refuses a real token. lib.sh's runcli takes KEEP_CONFIG and ALLOW_NONESSENTIAL_TRAFFIC from a call's prefix
-# and never from the caller's environment, and its start_receiver runs the receiver isolated. Every case runs against a
-# throwaway tree, never /tmp/cc-capture or ~/.claude, and reaches no host off loopback.
+# on, stops in a phase whose control receiver cannot bind its port, and refuses a real token. lib.sh's runcli takes
+# KEEP_CONFIG and ALLOW_NONESSENTIAL_TRAFFIC from a call's prefix and never from the caller's environment, and its
+# start_receiver runs the receiver isolated. Every case runs against a throwaway tree, never /tmp/cc-capture or
+# ~/.claude, and reaches no host off loopback.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)

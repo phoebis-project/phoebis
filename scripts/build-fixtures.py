@@ -19,8 +19,8 @@ import tempfile
 DEFAULT_CAPTURE = pathlib.Path.home() / "workspace/cc-capture-2026-09-13/cc-capture"
 FIXTURES = pathlib.Path("crates/profile/fixtures")
 
-# Bound on the unified diff --check prints per body. A whole Messages body runs to thousands of pretty-printed
-# lines; the operator needs enough to tell a date or a kernel string in the system prompt from a shape change.
+# Bound on the unified diff --check prints per body. A whole Messages body runs to thousands of pretty-printed lines.
+# The operator needs enough to tell a date or a kernel string in the system prompt from a shape change.
 DIFF_LINES = 40
 
 # Both ClientHellos carry the same server name, so their byte length is the only thing that tells the inference
@@ -50,8 +50,8 @@ CONTROL_PLANE = {
 # on top of everything the control plane never reaches.
 UNCAPTURED_THROUGH_ROUTER = CONTROL_PLANE | {"hello.http", "hello_inference.hex", "hello_control.hex"}
 
-# The header names a live capture must never let reach disk unredacted; scripts/capture/tls_raw.py blanks their
-# values at write time, and this mask keeps that redaction and a fixture's dummy credential comparing equal.
+# The header names a live capture must never let reach disk unredacted. scripts/capture/tls_raw.py blanks their values
+# at write time, and this mask keeps that redaction and a fixture's dummy credential comparing equal.
 CREDENTIAL_HEADERS = {"authorization", "cookie", "proxy-authorization", "x-api-key"}
 
 # Set from --through-router: a capture taken at the router's own upstream needs different grading than one
@@ -86,11 +86,11 @@ LINE_STAMP = re.compile(r"cch=[0-9a-f]{5};")
 # unsigned (phoebis_cch::carries_only_the_placeholder), so the builder neither re-signs it nor grades it as drift.
 UNPATCHED_STAMP = "cch=00000;"
 
-# The billing fields the relay restores on a reduced-shape request; under THROUGH_ROUTER these are dropped
-# outright rather than masked, since a baseline that never carried one has no value for a placeholder to replace.
+# The billing fields the relay restores on a reduced-shape request. Under THROUGH_ROUTER these are dropped outright
+# rather than masked, since a baseline that never carried one has no value for a placeholder to replace.
 RESTORED_BILLING_FIELDS = (b"cch", b"cc_prev_req", b"cc_prompt_id")
 
-# The relay puts the serving account's identity into the escaped metadata string; a capture taken at the router's
+# The relay puts the serving account's identity into the escaped metadata string. A capture taken at the router's
 # upstream carries it where the native capture, made with a dummy token, carried nothing.
 ACCOUNT_UUID = re.compile(rb'(\\"account_uuid\\":\\")[^\\]*(\\")')
 
@@ -2014,8 +2014,8 @@ def check_count(capture_dir: pathlib.Path, committed_dir: pathlib.Path = FIXTURE
         committed = {k: v for k, v in normalize_tree(committed_dir).items() if k in COUNT_FIXTURES}
         fresh = {k: v for k, v in normalize_tree(fresh_dir).items() if k in COUNT_FIXTURES}
         missing = sorted(name for name in COUNT_FIXTURES if name not in committed or name not in fresh)
-        # Nothing is exempt here, so a name one side lacks lands in the difference list as well; it is already
-        # reported above, and reporting it twice would read as two faults.
+        # Nothing is exempt here, so a name one side lacks lands in the difference list as well. It is already reported
+        # above, and reporting it twice would read as two faults.
         _, _, diffs = partition_names(committed, fresh, set())
         diffs = [name for name in diffs if name not in missing]
         if missing:
