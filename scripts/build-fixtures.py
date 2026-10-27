@@ -44,10 +44,10 @@ CONTROL_PLANE = {
     "responses/usage.json",
 }
 
-# The relay answers HEAD /api/hello itself, so a router capture never carries one; and although tls_raw.py
-# peeks and records the router's own ClientHello on every connection, that shape is graded by
-# crates/transport/tests/client_hello.rs, not by this comparison. --check reports all of these as not captured
-# rather than as drift when --through-router is given, on top of everything the control plane never reaches.
+# The relay answers HEAD /api/hello itself, so a router capture never carries one. Although tls_raw.py peeks and records
+# the router's own ClientHello on every connection, that shape is graded by crates/transport/tests/client_hello.rs, not
+# by this comparison. --check reports all of these as not captured rather than as drift when --through-router is given,
+# on top of everything the control plane never reaches.
 UNCAPTURED_THROUGH_ROUTER = CONTROL_PLANE | {"hello.http", "hello_inference.hex", "hello_control.hex"}
 
 # The header names a live capture must never let reach disk unredacted; scripts/capture/tls_raw.py blanks their
@@ -401,8 +401,8 @@ def build(
         (out / name).write_bytes(head(entry, len((out / body_name).read_bytes())))
     written = INFERENCE_BODIES + INFERENCE_HEADS
     unwritten = []
-    # The relay answers HEAD /api/hello itself, so a router capture never carries one; both it and the hex
-    # files below are optional in this mode.
+    # The relay answers HEAD /api/hello itself, so a router capture never carries one. Both it and the hex files below
+    # are optional in this mode.
     if hello is None:
         if not THROUGH_ROUTER:
             unwritten.append(("hello.http", "the capture holds no HEAD /api/hello"))
@@ -1584,7 +1584,8 @@ def _self_test_normalize_body() -> None:
 
 
 def normalize_head(raw: bytes) -> bytes:
-    """Replace the per-run session/request id header values so a diff reflects profile drift, not a random id.
+    """Replace the per-run prompt, session and request id header values so a diff reflects profile drift, not a random
+    id.
 
     Under THROUGH_ROUTER two more values are masked, each keeping its header's name and position: a credential,
     which a live capture must never hold unredacted, and Content-Length, which the relay regenerates from the
