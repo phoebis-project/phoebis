@@ -5,12 +5,13 @@
 # Usage: drive_login.py --binary <path> --cwd <dir> --out <dir> --method claude|console [--timeout <seconds>]
 #
 # The client inherits the driver's environment, which the capture sets to the loopback proxy, the run's CA and a
-# throwaway config directory, so the client's calls reach the loopback receiver alone. The driver opens no socket and
-# sends the client nothing but keystrokes. It writes the authorize URL to <out>/login-<method>-url.txt and every byte
-# the client printed to <out>/login-<method>-screen.txt, so a screen it failed to recognize is readable afterwards.
-# Both files are raw capture output and stay out of the repository. A wait longer than --timeout, or a client that
-# exits while the driver still waits on it, exits 2 once the screen is on disk, which a capture logs and moves past.
-# A run that gets through /exit exits 0.
+# throwaway config directory, so the client's calls reach the loopback receiver alone. The capture also passes a
+# throwaway HOME, TERM and LANG, and BROWSER=true, which has the login show its paste form at once. The driver opens
+# no socket and sends the client nothing but keystrokes. It writes the authorize URL to <out>/login-<method>-url.txt
+# and every byte the client printed to <out>/login-<method>-screen.txt, so a screen it failed to recognize is readable
+# afterwards. Both files are raw capture output and stay out of the repository. A wait longer than --timeout, a client
+# that exits while the driver still waits on it, or a login that ends on the client's error screen exits 2 once the
+# screen is on disk, which a capture logs and moves past. A run that gets through /exit exits 0.
 import argparse, fcntl, os, pty, re, select, signal, struct, sys, termios, time, urllib.parse
 
 # A step's text can arrive in several chunks and the client redraws its screen between steps, so a wait acts on what
@@ -23,18 +24,23 @@ SETTLE = 0.3
 # terminal keeps it on one line for the match.
 COLUMNS, ROWS = 500, 50
 
-DOWN, UP = b"\x1b[B", b"\x1b[A"
+DOWN, ESC = b"\x1b[B", b"\x1b"
 ESCAPES = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_]")
 # A row's lead: blanks, among them the no-break space a client may draw, and the border of a boxed row.
 LEAD = r"^[ \t\xa0│┃|]*"
-MENU_ENTRY = re.compile(LEAD + r"(?P<mark>[>❯])?[ \t\xa0]*(?P<number>\d+)\.[ \t\xa0]+(?P<label>\S.*)$", re.M)
-METHODS = {"claude": re.compile(r"Claude account|subscription", re.I), "console": re.compile(r"Console", re.I)}
+# The /login menu lists the subscription first and the Console second, and the Console entry opens a second menu whose
+# first entry, the Console sign-in, holds the cursor.
+METHOD_KEYS = {"claude": [], "console": [DOWN]}
 # The input marker at a line start, behind the border of a boxed input line, and never a menu's selected entry.
 PROMPT = re.compile(LEAD + r"[>❯](?:[ \xa0]|$)(?![ \xa0]*\d+\.)", re.M)
 URL = re.compile(r"https://\S+/oauth/authorize\S*")
 
 
 class Exited(Exception):
+    pass
+
+
+class Refused(Exception):
     pass
 
 
@@ -105,18 +111,28 @@ class Terminal:
                 return
         raise Timeout("the client to exit after /exit")
 
+    def settle(self, key):
+        end = time.monotonic() + SETTLE
+        while (left := end - time.monotonic()) > 0:
+            try:
+                self.pump(left)
+            except Exited:
+                raise Exited(f"the client to draw {key!r}") from None
+
     def press(self, *keys):
         """Sends each key, then a return, and starts the next wait's text at the return."""
         for key in keys:
             os.write(self.fd, key)
-            end = time.monotonic() + SETTLE
-            while (left := end - time.monotonic()) > 0:
-                try:
-                    self.pump(left)
-                except Exited:
-                    raise Exited(f"the client to draw {key!r}") from None
+            self.settle(key)
         self.mark = len(self.read)
         os.write(self.fd, b"\r")
+
+    def escape(self):
+        """Sends Esc alone and starts the next wait's text at it. The client gets SETTLE seconds to take it, since a key
+        right behind a lone Esc can read as that key with Alt, and the driver may stop the client next."""
+        self.mark = len(self.read)
+        os.write(self.fd, ESC)
+        self.settle(ESC)
 
 
 def prompt(text):
@@ -128,47 +144,55 @@ def authorize_url(text):
     return match.group(0) if match else None
 
 
-def menu_keys(text, method):
-    """The arrow keys that move a menu's selection to the entry for `method`, or None while the screen shows no
-    menu with that entry and a selected one."""
-    labels, selected = {}, None
-    for entry in MENU_ENTRY.finditer(text):
-        number = int(entry["number"])
-        labels[number] = entry["label"]
-        if entry["mark"]:
-            selected = number
-    targets = [number for number, label in sorted(labels.items()) if METHODS[method].search(label)]
-    if selected is None or not targets:
-        return None
-    order = sorted(labels)
-    steps = order.index(targets[0]) - order.index(selected)
-    return [DOWN] * steps if steps >= 0 else [UP] * -steps
+def login_menu(text):
+    """("url", the URL) once the authorize URL shows, as it does at once where a setting presets the login method,
+    ("menu", None) on the method menu, or None while neither shows."""
+    url = authorize_url(text)
+    if url:
+        return "url", url
+    return ("menu", None) if "Select login method:" in text else None
 
 
-def login_step(method):
-    def found(text):
-        url = authorize_url(text)
-        if url:
-            return "url", url
-        keys = menu_keys(text, method)
-        return ("menu", keys) if keys is not None else None
+def showing(*texts):
+    return lambda text: any(t in text for t in texts)
 
-    return found
+
+def login_outcome(text):
+    if "Press Enter to continue" in text:
+        return "success"
+    if "Press Enter to retry" in text or "Invalid code" in text:
+        return "refused"
+    return "prompt" if prompt(text) else None
 
 
 def drive(terminal, method, url_path):
     terminal.wait("the first prompt", prompt)
     terminal.press(b"/login")
-    kind, value = terminal.wait("the login menu or the authorize URL", login_step(method))
+    kind, url = terminal.wait("the login menu or the authorize URL", login_menu)
     if kind == "menu":
-        terminal.press(*value)
-        value = terminal.wait("the authorize URL", authorize_url)
+        terminal.press(*METHOD_KEYS[method])
+        if method == "console":
+            terminal.wait("the Console sign-in menu", showing("How do you want to sign in?"))
+            terminal.press()
+        url = terminal.wait("the authorize URL", authorize_url)
     with open(url_path, "w") as f:
-        f.write(value + "\n")
-    state = urllib.parse.parse_qs(urllib.parse.urlsplit(value).query).get("state", [""])[0]
+        f.write(url + "\n")
+    state = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("state", [""])[0]
     terminal.press(f"DUMMYCODE#{state}".encode() if state else b"DUMMYCODE")
-    terminal.wait("the prompt after the login", prompt)
+    outcome = terminal.wait("the login's outcome", login_outcome)
+    if outcome == "refused":
+        # A retry would paste the same dummy code and fail the same way, so the driver closes the dialog and gives up.
+        # Where the token exchange is what failed, the recording already holds the code grant.
+        terminal.escape()
+        raise Refused
+    if outcome == "success":
+        # The success screen holds the dialog open until a return.
+        terminal.press()
+        terminal.wait("the prompt after the login", prompt)
     terminal.press(b"/status")
+    # /status opens the settings dialog, which only a key closes.
+    terminal.wait("the status dialog", showing("Settings", "Esc to cancel"))
+    terminal.escape()
     terminal.wait("the prompt after /status", prompt)
     terminal.press(b"/exit")
     terminal.wait_exit()
@@ -231,6 +255,8 @@ def main():
             failure = f"no sign of {e} within {args.timeout:g} s"
         except Exited as e:
             failure = f"the client exited while the driver waited for {e}"
+        except Refused:
+            failure = "the client answered the pasted code with an error"
         finally:
             stop(pid, 0 if failure else 2)
             os.close(fd)

@@ -2,9 +2,11 @@
 # Stands in for the client binary in scripts/tests/capture-tooling.sh, so the tests drive the login driver and the
 # control capture without the real client. It makes the control calls a capture records. In print mode (-p among
 # its arguments) it sends the refresh grant when the credentials file holds an expired token, then the profile read
-# and the inference post, and exits 1 as the client does against the canned 400. In terminal mode it answers /login
-# with a menu, the authorize URL, the code grant, the profile and roles reads and a credentials file holding the
-# token the grant returned, /status with the usage read, and /exit by exiting 0.
+# and the inference post, and exits 1 as the client does against the canned 400. In terminal mode it draws the
+# client's screens as text. It answers /login with the method menu, the Console sign-in menu after a down arrow, the
+# paste form with the authorize URL, then the code grant, the profile and roles reads and the success screen, and
+# after a return a credentials file holding the token the grant returned. It answers /status with the settings
+# dialog and the usage read after Esc, and /exit by exiting 0.
 #
 # It reaches no host but loopback. Every https call goes through a CONNECT tunnel opened to HTTPS_PROXY, so the stub
 # never resolves or dials a control host itself, and it reads no NO_PROXY, which urllib's proxy handler would honor
@@ -13,13 +15,15 @@
 # base URL off loopback. The tokens it sends are the dummy ones the tests seed and the canned ones the receiver
 # answers with.
 #
-# Every request carries x-stub-home, x-stub-lang, x-stub-nonessential and x-stub-term with the values of HOME, LANG,
-# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and TERM, or "unset" for a variable the run lacks, so a recording shows
-# which environment its run had. STUB_HANG=1 makes terminal mode print its prompt and then nothing, as a client stuck
-# on a screen the driver does not know.
-import http.client, json, os, pathlib, secrets, signal, ssl, sys, time, urllib.parse
+# Every request carries x-stub-browser, x-stub-home, x-stub-lang, x-stub-nonessential and x-stub-term with the values
+# of BROWSER, HOME, LANG, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and TERM, or "unset" for a variable the run lacks,
+# so a recording shows which environment its run had. STUB_HANG=1 makes terminal mode print its prompt and then
+# nothing, as a client stuck on a screen the driver does not know. STUB_REJECT_CODE=1 answers every pasted code with
+# the invalid-code screen the client shows for a code without its state.
+import http.client, json, os, pathlib, secrets, signal, ssl, sys, termios, time, tty, urllib.parse
 
 AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize"
+CONSOLE_AUTHORIZE_URL = "https://platform.claude.com/oauth/authorize"
 PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
 REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback"
 ROLES_URL = "https://api.anthropic.com/api/oauth/claude_cli/roles"
@@ -28,6 +32,7 @@ USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 RECORDED = {
+    "x-stub-browser": os.environ.get("BROWSER", "unset"),
     "x-stub-home": os.environ.get("HOME", "unset"),
     "x-stub-lang": os.environ.get("LANG", "unset"),
     "x-stub-nonessential": os.environ.get("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "unset"),
@@ -107,13 +112,44 @@ def print_mode():
     sys.exit(1)
 
 
+def wait_for_escape():
+    """Reads keys until Esc, the key that closes the client's dialogs. The terminal's line mode would hold a lone Esc
+    back until a return, so the read runs in cbreak mode."""
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    # TCSANOW keeps a key that arrived before the switch, which tty's default TCSAFLUSH would drop.
+    tty.setcbreak(fd, termios.TCSANOW)
+    try:
+        while os.read(fd, 1) not in (b"\x1b", b""):
+            pass
+    finally:
+        termios.tcsetattr(fd, termios.TCSANOW, saved)
+
+
 def login_command():
+    say("Select login method:")
     say("> 1. Claude account with subscription")
     say("  2. Anthropic Console account")
-    sys.stdin.readline()
+    authorize = AUTHORIZE_URL
+    # The line mode hands a down arrow over with the return that follows it.
+    if "\x1b[B" in sys.stdin.readline():
+        say("How do you want to sign in?")
+        say("> 1. Sign in with your Console account (recommended)")
+        say("  2. Create an API key (legacy)")
+        sys.stdin.readline()
+        authorize = CONSOLE_AUTHORIZE_URL
     state = secrets.token_urlsafe(32)
-    say(f"{AUTHORIZE_URL}?code=true&client_id=stub&state={state}")
+    url = f"{authorize}?code=true&client_id=stub&state={state}"
+    say("Browser didn't open? Use the url below to sign in")
+    # The client prints the URL as an OSC 8 hyperlink whose text is the URL, which the driver has to read through.
+    say(f"\x1b]8;;{url}\x07{url}\x1b]8;;\x07")
+    say("Paste code here if prompted > ", end="")
     code, _, pasted_state = sys.stdin.readline().strip().partition("#")
+    if not code or not pasted_state or os.environ.get("STUB_REJECT_CODE") == "1":
+        say("Invalid code. Please make sure the full code was copied")
+        say("Press Enter to retry.")
+        wait_for_escape()
+        return
     grant = {
         "grant_type": "authorization_code",
         "code": code,
@@ -129,6 +165,9 @@ def login_command():
         return
     request("GET", PROFILE_URL, token=answer["access_token"])
     request("GET", ROLES_URL, token=answer["access_token"])
+    say("Logged in as stub@example.invalid")
+    say("Login successful. Press Enter to continue")
+    sys.stdin.readline()
     oauth = {
         "accessToken": answer["access_token"],
         "refreshToken": answer.get("refresh_token"),
@@ -137,12 +176,14 @@ def login_command():
     }
     CONFIG.mkdir(parents=True, exist_ok=True)
     (CONFIG / ".credentials.json").write_text(json.dumps({"claudeAiOauth": oauth}, separators=(",", ":")))
-    say("Logged in")
 
 
 def status_command():
+    say("Settings  Status  Config  Usage  Stats")
+    say("Version stub")
+    say("Esc to cancel")
+    wait_for_escape()
     request("GET", USAGE_URL, token=stored_oauth().get("accessToken"))
-    say("Usage ok")
 
 
 def terminal_mode():
