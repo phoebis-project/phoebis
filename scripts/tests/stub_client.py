@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -I
 # Stands in for the client binary in scripts/tests/capture-tooling.sh, so the tests drive the login driver and the
 # control capture without the real client. It makes the control calls a capture records. In print mode (-p among
 # its arguments) it sends the refresh grant when the credentials file holds an expired token, then the profile read
