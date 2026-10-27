@@ -6,13 +6,13 @@
 # and records a chunked request as an error. The resign example's --write mode leaves a body stamped with the digits
 # the signer computes over its own bytes. drive_login.py logs stub_client.py in by either login method with the
 # authorize URL's state and reads /status, and gives up with its screen saved when the client stops answering or
-# refuses the code. The stub reaches the receiver alone, NO_PROXY or not, and refuses a proxy off loopback.
-# capture-control.sh seeds each login's config directory past the client's first-start screens, records the stub's
-# login and refresh phases in both of its variants, with the refresh run starting from the credentials the login
-# wrote and its inference post reaching the inference receiver past the proxy, moves on past a login the driver gives
-# up on, and refuses a real token. lib.sh's runcli takes KEEP_CONFIG and ALLOW_NONESSENTIAL_TRAFFIC from a call's
-# prefix and never from the caller's environment, and its start_receiver runs the receiver isolated. Every case runs
-# against a throwaway tree, never /tmp/cc-capture or ~/.claude, and reaches no host off loopback.
+# refuses the code. The stub's https calls reach the receiver alone, NO_PROXY or not, and the stub refuses a proxy off
+# loopback. capture-control.sh seeds each login's config directory past the client's first-start screens, records the
+# stub's login and refresh phases in both of its variants, with the refresh run starting from the credentials the login
+# wrote and its inference post reaching the inference receiver past the proxy, moves on past a login the driver gives up
+# on, and refuses a real token. lib.sh's runcli takes KEEP_CONFIG and ALLOW_NONESSENTIAL_TRAFFIC from a call's prefix
+# and never from the caller's environment, and its start_receiver runs the receiver isolated. Every case runs against a
+# throwaway tree, never /tmp/cc-capture or ~/.claude, and reaches no host off loopback.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
