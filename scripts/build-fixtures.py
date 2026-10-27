@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build crates/profile/fixtures from a capture directory, or --check a capture against them."""
 import argparse
+import collections
 import contextlib
 import difflib
 import hashlib
@@ -72,13 +73,6 @@ COUNT_MODES = ["count_oauth", "count_oauth_fp", "count_apikey"]
 # --check without --count reports these as not captured rather than as drift, and --count --check requires them.
 COUNT_FIXTURES = {f"{mode}{suffix}" for mode in COUNT_MODES for suffix in (".json", ".http")}
 
-# The two header values a session mints fresh on every run; masked so --check reports profile
-# drift, not the identifiers themselves.
-HEADER_PLACEHOLDERS = {
-    "x-claude-code-session-id": "SESSION-ID-PLACEHOLDER",
-    "x-client-request-id": "REQUEST-ID-PLACEHOLDER",
-}
-
 # The billing block, and the two values inside it a session mints fresh on every run. A new cc_prompt_id changes
 # the cch digits with it, so masking the id alone would still leave --check reporting drift with no protocol change.
 BILLING_BLOCK = re.compile(rb'"x-anthropic-billing-header:[^"]*"')
@@ -99,12 +93,20 @@ ACCOUNT_UUID = re.compile(rb'(\\"account_uuid\\":\\")[^\\]*(\\")')
 
 # The values a written fixture carries in place of the run's own ids. Each keeps its field's shape, 64 hex digits or
 # a version 4 uuid, so every parser that reads the fields still parses a written fixture. The session header and
-# the body's session_id share one placeholder, as the client sends one uuid in both, so the relay's reading of
-# header and body stays consistent.
+# the body's session_id share one placeholder, and so do the prompt id header and the billing block's cc_prompt_id,
+# as the client sends one uuid in both, so the relay's reading of header and body stays consistent.
 DEVICE_ID_PLACEHOLDER = "0123456789abcdef" * 4
 PROMPT_ID_PLACEHOLDER = "33333333-3333-4333-8333-333333333333"
 REQUEST_ID_PLACEHOLDER = "22222222-2222-4222-8222-222222222222"
 SESSION_ID_PLACEHOLDER = "11111111-1111-4111-8111-111111111111"
+
+# The header values the client mints fresh on every run, masked so --check reports profile drift, not the
+# identifiers themselves.
+HEADER_PLACEHOLDERS = {
+    "x-claude-code-prompt-id": PROMPT_ID_PLACEHOLDER,
+    "x-claude-code-session-id": "SESSION-ID-PLACEHOLDER",
+    "x-client-request-id": "REQUEST-ID-PLACEHOLDER",
+}
 
 # The authorization-code grant's two nonces, which the client mints with randomBytes(32) for every login. A code
 # fixture that kept them would report drift on every later capture of the same build. check() writes its fresh side
@@ -121,7 +123,9 @@ def redact(line: str) -> str:
     line = re.sub(r"Bearer sk-ant-oat01-\S+", "Bearer sk-ant-oat01-PLACEHOLDER", line)
     line = re.sub(r"x-api-key: sk-ant-api03-\S+", "x-api-key: sk-ant-api03-PLACEHOLDER", line)
     line = re.sub(r"^Host: 127\.0\.0\.1:\d+$", "Host: api.anthropic.com", line)
-    # The client spells these two names in different cases, so they match in any case and keep their spelling.
+    # The client spells the session and request names in different cases, so these match in any case and keep their
+    # spelling.
+    line = re.sub(r"(?i)^(x-claude-code-prompt-id:\s*)\S+$", rf"\g<1>{PROMPT_ID_PLACEHOLDER}", line)
     line = re.sub(r"(?i)^(x-claude-code-session-id:\s*)\S+$", rf"\g<1>{SESSION_ID_PLACEHOLDER}", line)
     line = re.sub(r"(?i)^(x-client-request-id:\s*)\S+$", rf"\g<1>{REQUEST_ID_PLACEHOLDER}", line)
     return line
@@ -226,9 +230,19 @@ def control_fixtures(control_dir: pathlib.Path, out: pathlib.Path, responses: pa
     return written
 
 
-def inference_entries(cm: list) -> list:
-    """The capture's inference posts, matched on the path alone: a count request's line starts with the
-    inference path as well, and zipping one onto an inference fixture name would mis-pin that fixture."""
+def session_id(entry) -> str | None:
+    """The value of the entry's x-claude-code-session-id header, or None when it carries none."""
+    for line in entry["headers"]:
+        name, colon, value = line.partition(":")
+        if colon and name.strip().lower() == "x-claude-code-session-id":
+            return value.strip()
+    return None
+
+
+def inference_posts(cm: list) -> list:
+    """Every inference post of the capture, re-sends included, matched on the path alone: a count request's line
+    starts with the inference path as well, and zipping one onto an inference fixture name would mis-pin that
+    fixture."""
     return [
         (i, e)
         for i, e in enumerate(cm)
@@ -236,12 +250,48 @@ def inference_entries(cm: list) -> list:
     ]
 
 
+def inference_entries(cm: list) -> list:
+    """The first inference post of each session in order of first appearance, and each post without the session
+    header on its own.
+
+    The client re-sends a request the capture receiver refused, with features stripped, in the same session. The
+    relay of a healthy conversation sees the first post alone, so that post is the one a fixture pins."""
+    seen = set()
+    kept = []
+    for i, e in inference_posts(cm):
+        session = session_id(e)
+        if session is not None:
+            if session in seen:
+                continue
+            seen.add(session)
+        kept.append((i, e))
+    return kept
+
+
+def resent_posts(cm: list) -> list[tuple[int, int]]:
+    """For each session holding more than one inference post, in the selector's order, the index of the post
+    `inference_entries` keeps and the session's number of inference posts."""
+    posts = collections.Counter(session_id(e) for _, e in inference_posts(cm))
+    resent = []
+    for i, e in inference_entries(cm):
+        session = session_id(e)
+        if session is not None and posts[session] > 1:
+            resent.append((i, posts[session]))
+    return resent
+
+
 def count_entries(cm: list) -> list:
     """The capture's token-count posts, the one request the count script's receiver provokes."""
     return [(i, e) for i, e in enumerate(cm) if e["request_line"].startswith("POST /v1/messages/count_tokens")]
 
 
-def build(src: pathlib.Path, out: pathlib.Path, resign: bool = True, control: pathlib.Path | None = None) -> None:
+def build(
+    src: pathlib.Path,
+    out: pathlib.Path,
+    resign: bool = True,
+    control: pathlib.Path | None = None,
+    strict: bool = True,
+) -> None:
     """Write the fixture tree at `out`, sourced from the capture directory `src`.
 
     The control plane is read from the control receiver's recordings in `control`, or in `src/control/` when
@@ -251,6 +301,10 @@ def build(src: pathlib.Path, out: pathlib.Path, resign: bool = True, control: pa
     The bodies are written redacted, and with `resign` their cch digits are re-signed over the redacted bytes.
     `check()` builds with `resign` off, since its comparison masks the digits and `check_hashes` grades the raw
     bodies' own.
+
+    `check()` also builds with `strict` off, so a grade reaches the end of the capture: a missing hello probe or
+    inference ClientHello prints a line and leaves its fixture unwritten, which the comparison then lists. A write
+    to the committed tree keeps `strict` on and stops there instead.
     """
     # A fixture write targets the committed tree, so a mistyped directory stops the build before it rewrites the
     # inference plane.
@@ -259,10 +313,11 @@ def build(src: pathlib.Path, out: pathlib.Path, resign: bool = True, control: pa
     (out / "responses").mkdir(parents=True, exist_ok=True)
     cm = json.load(open(src / "clean_modes.json"))
     # Selected by request line rather than by index: a capture that interleaves its HEAD /api/hello probes
-    # differently still lands the same four bodies on the same four fixtures.
+    # differently still lands the same four bodies on the same four fixtures. Each session contributes its first
+    # post alone, since the client re-sends a refused request in the same session.
     posts = inference_entries(cm)
     if len(posts) != len(INFERENCE_BODIES):
-        raise SystemExit(f"{src}/clean_modes.json holds {len(posts)} POST /v1/messages entries, want 4")
+        raise SystemExit(f"{src}/clean_modes.json holds {len(posts)} POST /v1/messages sessions, want 4")
     captured = [(src / f"clean_body_{idx}.json").read_bytes() for idx, _ in posts]
     if THROUGH_ROUTER:
         # head() below regenerates Content-Length from the redacted body, and the router grading masks the field,
@@ -286,7 +341,9 @@ def build(src: pathlib.Path, out: pathlib.Path, resign: bool = True, control: pa
     hello = next((e for e in cm if e["request_line"].startswith("HEAD /api/hello")), None)
     if hello is None:
         if not THROUGH_ROUTER:
-            raise SystemExit(f"{src}/clean_modes.json holds no HEAD /api/hello entry")
+            if strict:
+                raise SystemExit(f"{src}/clean_modes.json holds no HEAD /api/hello entry")
+            print("hello.http: the capture holds no HEAD /api/hello")
     else:
         (out / "hello.http").write_bytes(head(hello))
     # connect.json, which tls_raw.py always writes, holds the ClientHello the router itself sent toward its
@@ -295,9 +352,16 @@ def build(src: pathlib.Path, out: pathlib.Path, resign: bool = True, control: pa
     if not THROUGH_ROUTER:
         conn = json.load(open(src / "connect.json"))
         inf = next((h for h in conn if h.get("hello_len") == INFERENCE_HELLO_LEN), None)
-        if inf is None:
+        if inf is not None:
+            (out / "hello_inference.hex").write_text(inf["raw_hex"] + "\n")
+        elif strict:
             raise SystemExit(f"{src}/connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello")
-        (out / "hello_inference.hex").write_text(inf["raw_hex"] + "\n")
+        else:
+            lengths = ", ".join(str(n) for n in sorted({h["hello_len"] for h in conn if "hello_len" in h}))
+            print(
+                f"hello_inference.hex: connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello "
+                f"(recorded lengths: {lengths})"
+            )
         ctl = next((h for h in conn if h.get("hello_len") == CONTROL_HELLO_LEN), None)
         if ctl is not None:
             (out / "hello_control.hex").write_text(ctl["raw_hex"] + "\n")
@@ -389,6 +453,9 @@ def _self_test() -> None:
     _self_test_normalize_body()
     _self_test_declared_length()
     _self_test_count_selector()
+    _self_test_resend_selector()
+    _self_test_check_reports_resends()
+    _self_test_check_reports_probe_and_hello()
     _self_test_capture_partition()
     _self_test_redact_body()
     _self_test_redact_head()
@@ -447,6 +514,45 @@ def _self_test_count_selector() -> None:
     if counts != [1]:
         raise AssertionError(f"the count selector took entries {counts}, want the second alone")
     print("self-test passed: the inference selector and the count selector take one entry each")
+
+
+def _self_test_resend_selector() -> None:
+    """The client re-sends a refused request within its session, so the inference selector keeps the first post of
+    each session and every post without the session header, and matches the header's name in any case."""
+
+    def post(*headers: str, path: str = "/v1/messages?beta=true") -> dict:
+        return {"request_line": f"POST {path} HTTP/1.1", "headers": list(headers), "body": ""}
+
+    first = "x-claude-code-session-id: " + _TEST_SESSION_IDS[0].decode()
+    other = "x-claude-code-session-id: " + _TEST_SESSION_IDS[1].decode()
+    # The count post carries the first session's id as well, and must not add to that session's posts.
+    entries = [post(first), post(first), post(first, path="/v1/messages/count_tokens?beta=true"), post(other), post()]
+    posts = [i for i, _ in inference_entries(entries)]
+    if posts != [0, 3, 4]:
+        raise AssertionError(f"the inference selector took entries {posts}, want [0, 3, 4]")
+    counts = [i for i, _ in count_entries(entries)]
+    if counts != [2]:
+        raise AssertionError(f"the count selector took entries {counts}, want [2]")
+    if resent_posts(entries) != [(0, 2)]:
+        raise AssertionError(f"resent_posts returned {resent_posts(entries)}, want [(0, 2)]")
+    print("self-test passed: the inference selector keeps the first post of each session and a post without the header")
+
+    entries = [post(), post()]
+    posts = [i for i, _ in inference_entries(entries)]
+    if posts != [0, 1]:
+        raise AssertionError(f"the inference selector took entries {posts} of two posts without the header")
+    if resent_posts(entries) != []:
+        raise AssertionError(f"resent_posts returned {resent_posts(entries)} for posts without the header, want []")
+    print("self-test passed: the inference selector keeps every post without the session header")
+
+    value = _TEST_SESSION_IDS[0].decode()
+    entries = [post("X-Claude-Code-Session-Id: " + value), post("x-claude-code-session-id: " + value)]
+    posts = [i for i, _ in inference_entries(entries)]
+    if posts != [0]:
+        raise AssertionError(f"the inference selector took entries {posts} of one session spelled two ways")
+    if resent_posts(entries) != [(0, 2)]:
+        raise AssertionError(f"resent_posts returned {resent_posts(entries)} for one session spelled two ways")
+    print("self-test passed: the inference selector matches the session header's name in any case")
 
 
 def _count_capture(root: pathlib.Path, session: bytes, members: bytes = b"") -> pathlib.Path:
@@ -538,13 +644,17 @@ _TEST_REQUEST_ID = b"99999999-9999-4999-8999-999999999999"
 _TEST_SESSION_ID = b"66666666-6666-4666-8666-666666666666"
 _TEST_BODY_IDS = (_TEST_ACCOUNT_UUID, _TEST_DEVICE_ID, _TEST_PROMPT_ID, _TEST_SESSION_ID)
 
+# The capture's four runs are four sessions, and the inference selector keeps one post of each. Each id is the test
+# id with its last digit replaced by the run's number, so it keeps the uuid shape.
+_TEST_SESSION_IDS = tuple(_TEST_SESSION_ID[:-1] + str(run).encode() for run in range(1, len(INFERENCE_BODIES) + 1))
 
-def _identified_body(model: bytes) -> bytes:
-    """A body in the client's shape whose metadata.user_id and billing block carry the invented ids, with a
-    nonempty account_uuid as a capture at the router's upstream carries."""
+
+def _identified_body(model: bytes, session: bytes = _TEST_SESSION_ID) -> bytes:
+    """A body in the client's shape whose metadata.user_id and billing block carry the invented ids, `session` as
+    its session_id, with a nonempty account_uuid as a capture at the router's upstream carries."""
     user_id = (
         rb'{\"device_id\":\"' + _TEST_DEVICE_ID + rb'\",\"account_uuid\":\"' + _TEST_ACCOUNT_UUID
-        + rb'\",\"session_id\":\"' + _TEST_SESSION_ID + rb'\"}'
+        + rb'\",\"session_id\":\"' + session + rb'\"}'
     )
     return (
         rb'{"model":"' + model + rb'","system":[{"type":"text","text":"x-anthropic-billing-header: '
@@ -555,17 +665,19 @@ def _identified_body(model: bytes) -> bytes:
 
 def _inference_capture(root: pathlib.Path) -> pathlib.Path:
     """A capture directory shaped like the one the baseline script writes: the hello probe, then the four
-    inference posts, each head and body carrying the invented ids."""
+    inference posts, each head and body carrying the invented ids and its run's own session id."""
     root.mkdir(parents=True)
     entries = [{"request_line": "HEAD /api/hello HTTP/1.1", "headers": ["Host: 127.0.0.1:48442"], "body": ""}]
     for i, name in enumerate(INFERENCE_BODIES, start=1):
-        body = _identified_body(name.encode())
+        session = _TEST_SESSION_IDS[i - 1]
+        body = _identified_body(name.encode(), session)
         entries.append(
             {
                 "request_line": "POST /v1/messages?beta=true HTTP/1.1",
                 "headers": [
                     "Authorization: Bearer sk-ant-oat01-DUMMYOAUTH",
-                    "X-Claude-Code-Session-Id: " + _TEST_SESSION_ID.decode(),
+                    "X-Claude-Code-Session-Id: " + session.decode(),
+                    "x-claude-code-prompt-id: " + _TEST_PROMPT_ID.decode(),
                     "x-client-request-id: " + _TEST_REQUEST_ID.decode(),
                     "Host: 127.0.0.1:48442",
                     f"Content-Length: {len(body)}",
@@ -575,8 +687,17 @@ def _inference_capture(root: pathlib.Path) -> pathlib.Path:
         )
         (root / f"clean_body_{i}.json").write_bytes(body)
     (root / "clean_modes.json").write_text(json.dumps(entries))
-    (root / "connect.json").write_text(json.dumps([{"hello_len": INFERENCE_HELLO_LEN, "raw_hex": "16"}]))
+    hello = {"hello_len": INFERENCE_HELLO_LEN, "raw_hex": _client_hello().hex()}
+    (root / "connect.json").write_text(json.dumps([hello]))
     return root
+
+
+def _client_hello() -> bytes:
+    """A minimal ClientHello that mask_hello reads to its end: no session id, one cipher suite, no extensions.
+    check() masks every written hello, so a synthetic capture it grades has to carry one that parses."""
+    body = b"\x03\x03" + b"\x00" * 32 + b"\x00" + b"\x00\x02\x13\x01" + b"\x01\x00" + b"\x00\x00"
+    handshake = b"\x01" + struct.pack("!I", len(body))[1:] + body
+    return b"\x16\x03\x01" + struct.pack("!H", len(handshake)) + handshake
 
 
 def _self_test_redact_body() -> None:
@@ -611,25 +732,27 @@ def _self_test_redact_body() -> None:
 
 
 def _self_test_redact_head() -> None:
-    """A written head carries the session and request placeholders, and the credentials and the Host line
+    """A written head carries the prompt, session and request placeholders, and the credentials and the Host line
     redact as before."""
     cases = {
         "Authorization: Bearer sk-ant-oat01-DUMMYOAUTH": "Authorization: Bearer sk-ant-oat01-PLACEHOLDER",
         "Host: 127.0.0.1:48442": "Host: api.anthropic.com",
         "x-api-key: sk-ant-api03-capture-dummy": "x-api-key: sk-ant-api03-PLACEHOLDER",
-        "X-Claude-Code-Session-Id: " + _TEST_SESSION_ID.decode(): f"X-Claude-Code-Session-Id: {SESSION_ID_PLACEHOLDER}",
+        "x-claude-code-prompt-id: " + _TEST_PROMPT_ID.decode(): f"x-claude-code-prompt-id: {PROMPT_ID_PLACEHOLDER}",
         "x-client-request-id: " + _TEST_REQUEST_ID.decode(): f"x-client-request-id: {REQUEST_ID_PLACEHOLDER}",
         "X-Stainless-Lang: js": "X-Stainless-Lang: js",
     }
+    for session in _TEST_SESSION_IDS:
+        cases["X-Claude-Code-Session-Id: " + session.decode()] = f"X-Claude-Code-Session-Id: {SESSION_ID_PLACEHOLDER}"
     for line, wanted in cases.items():
         if redact(line) != wanted:
             raise AssertionError(f"redact({line!r}) gave {redact(line)!r}, want {wanted!r}")
-    print("self-test passed: redact writes the session and request placeholders into a head")
+    print("self-test passed: redact writes the prompt, session and request placeholders into a head")
 
 
 def _self_test_build_redacts() -> None:
     """In both grading modes every written body is free of the capture's ids, and every inference head carries
-    the two placeholders and declares the length of the redacted body it travels with."""
+    the three placeholders and declares the length of the redacted body it travels with."""
     global THROUGH_ROUTER
     with tempfile.TemporaryDirectory() as tmp:
         src = _inference_capture(pathlib.Path(tmp) / "capture")
@@ -645,7 +768,7 @@ def _self_test_build_redacts() -> None:
                 raise AssertionError(f"the {mode} build wrote {len(bodies)} bodies, want {len(INFERENCE_BODIES)}")
             for path in bodies:
                 body = path.read_bytes()
-                leaked = [original for original in _TEST_BODY_IDS if original in body]
+                leaked = [original for original in _TEST_BODY_IDS + _TEST_SESSION_IDS if original in body]
                 if leaked:
                     raise AssertionError(f"the {mode} build kept {leaked!r} in {path.name}")
                 if rb'\"account_uuid\":\"\"' not in body:
@@ -659,12 +782,13 @@ def _self_test_build_redacts() -> None:
                 length = len((out / body_of[path.name]).read_bytes())
                 for line in (
                     f"Content-Length: {length}",
+                    f"x-claude-code-prompt-id: {PROMPT_ID_PLACEHOLDER}",
                     f"X-Claude-Code-Session-Id: {SESSION_ID_PLACEHOLDER}",
                     f"x-client-request-id: {REQUEST_ID_PLACEHOLDER}",
                 ):
                     if f"\r\n{line}\r\n" not in text:
                         raise AssertionError(f"the {mode} build wrote {path.name} without {line!r}")
-                for original in (_TEST_REQUEST_ID, _TEST_SESSION_ID):
+                for original in (_TEST_PROMPT_ID, _TEST_REQUEST_ID, *_TEST_SESSION_IDS):
                     if original.decode() in text:
                         raise AssertionError(f"the {mode} build kept {original!r} in {path.name}")
             print(f"self-test passed: the {mode} build writes redacted bodies and heads")
@@ -771,6 +895,65 @@ def _self_test_check_hashes_placeholder() -> None:
         if not trace.exists() or trace.read_text() != line:
             raise AssertionError(f"check_hashes wrote no placeholder line to {trace.name}")
         print("self-test passed: check_hashes traces the unpatched placeholder without grading it")
+
+
+def _self_test_check_reports_resends() -> None:
+    """A capture whose first run the client re-sent grades on that run's first post, and the report names the run's
+    fixture and its post count."""
+    with tempfile.TemporaryDirectory() as tmp:
+        capture = _inference_capture(pathlib.Path(tmp) / "capture")
+        entries = json.loads((capture / "clean_modes.json").read_text())
+        entries.append(entries[1])
+        (capture / f"clean_body_{len(entries) - 1}.json").write_bytes((capture / "clean_body_1.json").read_bytes())
+        (capture / "clean_modes.json").write_text(json.dumps(entries))
+        report = io.StringIO()
+        with contextlib.redirect_stdout(report):
+            status = check(capture, baseline=capture, skip_hashes=True)
+        if status != 0:
+            raise AssertionError(f"check graded a capture holding a re-sent run with status {status}")
+        wanted = "re-sent after the receiver's answer:\n  body_oauth.json: 2 posts, the first kept\n"
+        if wanted not in report.getvalue():
+            raise AssertionError(f"check did not report the re-sent run: {report.getvalue()!r}")
+        print("self-test passed: check grades a re-sent run on its first post and reports the re-send")
+
+
+def _self_test_check_reports_probe_and_hello() -> None:
+    """A capture without the hello probe and without the inference ClientHello grades to its end in check mode, the
+    two missing fixtures named, while the fixture write still stops on the missing probe."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        first = _inference_capture(root / "first")
+        second = _inference_capture(root / "second")
+        entries = json.loads((second / "clean_modes.json").read_text())[1:]
+        (second / "clean_modes.json").write_text(json.dumps(entries))
+        # The probe was entry 0, so each post moves up one index and its body has to follow it.
+        for i in range(1, len(entries) + 1):
+            (second / f"clean_body_{i}.json").rename(second / f"clean_body_{i - 1}.json")
+        (second / "connect.json").write_text(json.dumps([{"hello_len": INFERENCE_HELLO_LEN + 4, "raw_hex": "16"}]))
+        report = io.StringIO()
+        with contextlib.redirect_stdout(report):
+            status = check(second, baseline=first, skip_hashes=True)
+        output = report.getvalue()
+        if status != 1:
+            raise AssertionError(f"check graded a capture without the probe and the ClientHello with status {status}")
+        for line in (
+            "hello.http: the capture holds no HEAD /api/hello",
+            f"hello_inference.hex: connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello "
+            f"(recorded lengths: {INFERENCE_HELLO_LEN + 4})",
+        ):
+            if line not in output.splitlines():
+                raise AssertionError(f"check printed no {line!r}: {output!r}")
+        if not output.endswith("fixtures differ:\n  hello.http\n  hello_inference.hex\n"):
+            raise AssertionError(f"check listed other fixtures than the probe and the ClientHello: {output!r}")
+        print("self-test passed: check reports a capture without the hello probe and the inference ClientHello")
+        try:
+            build(second, root / "strict", resign=False)
+        except SystemExit as e:
+            if "HEAD /api/hello" not in str(e):
+                raise AssertionError(f"the build refused for the wrong reason: {e}") from e
+            print("self-test passed:", e)
+        else:
+            raise AssertionError("the build wrote fixtures from a capture without the hello probe")
 
 
 def _control_entry(seq: int, request_line: str, body: str = "") -> dict:
@@ -1362,7 +1545,14 @@ def check(
 ) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         fresh_dir = pathlib.Path(tmp) / "fixtures"
-        build(capture_dir, fresh_dir, resign=False, control=control)
+        build(capture_dir, fresh_dir, resign=False, control=control, strict=False)
+        cm = json.load(open(capture_dir / "clean_modes.json"))
+        resent = resent_posts(cm)
+        if resent:
+            print("re-sent after the receiver's answer:")
+            kept = [idx for idx, _ in inference_entries(cm)]
+            for idx, count in resent:
+                print(f"  {INFERENCE_BODIES[kept.index(idx)]}: {count} posts, the first kept")
         if THROUGH_ROUTER:
             for line in restored_report(fresh_dir):
                 print(line)
@@ -1371,7 +1561,7 @@ def check(
             # The same two masks that apply to the router capture apply here too, so a live date or a live
             # account_uuid in the baseline's own bodies never shows up as drift against itself.
             baseline_dir = pathlib.Path(tmp) / "baseline"
-            build(baseline, baseline_dir, resign=False)
+            build(baseline, baseline_dir, resign=False, strict=False)
             committed = normalize_tree(baseline_dir)
         else:
             committed = normalize_tree(FIXTURES)
