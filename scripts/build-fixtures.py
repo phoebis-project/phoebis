@@ -84,6 +84,10 @@ BILLING_BLOCK = re.compile(rb'"x-anthropic-billing-header:[^"]*"')
 BILLING_PROMPT_ID = re.compile(rb"cc_prompt_id=[^;\"]*;")
 BILLING_STAMP = re.compile(rb"cch=[0-9a-f]{5};")
 
+# The field the client writes where its native patch does not run. It claims no hash, and the relay passes such a body
+# unsigned (phoebis_cch::carries_only_the_placeholder), so the builder neither re-signs it nor grades it as drift.
+UNPATCHED_STAMP = b"cch=00000;"
+
 # The billing fields the relay restores on a reduced-shape request; under THROUGH_ROUTER these are dropped
 # outright rather than masked, since a baseline that never carried one has no value for a placeholder to replace.
 RESTORED_BILLING_FIELDS = (b"cch", b"cc_prev_req", b"cc_prompt_id")
@@ -371,7 +375,9 @@ def _self_test() -> None:
     _self_test_redact_body()
     _self_test_redact_head()
     _self_test_build_redacts()
+    _self_test_placeholder()
     _self_test_resign_written()
+    _self_test_check_hashes_placeholder()
     _self_test_control_selection()
     _self_test_build_reads_control()
     _self_test_build_count_redacts()
@@ -521,7 +527,7 @@ def _identified_body(model: bytes) -> bytes:
     )
     return (
         rb'{"model":"' + model + rb'","system":[{"type":"text","text":"x-anthropic-billing-header: '
-        + b"cc_version=2.1.269.517; cc_entrypoint=sdk-cli; cch=00000; cc_prompt_id=" + _TEST_PROMPT_ID
+        + b"cc_version=2.1.269.517; cc_entrypoint=sdk-cli; cch=4f1c2; cc_prompt_id=" + _TEST_PROMPT_ID
         + rb';"}],"metadata":{"user_id":"' + user_id + rb'"}}'
     )
 
@@ -643,8 +649,26 @@ def _self_test_build_redacts() -> None:
             print(f"self-test passed: the {mode} build writes redacted bodies and heads")
 
 
+def _self_test_placeholder() -> None:
+    """The unpatched placeholder is told from a stamp, from a body without one, and from a line that claims a hash in a
+    second cch= field, an escaped one included, as phoebis_cch::carries_only_the_placeholder tells them."""
+    cases = (
+        (b"cc_version=2.1.269.517; cch=00000;", True),
+        (b"cc_version=2.1.269.517; cch=4f1c2;", False),
+        (b"cc_version=2.1.269.517;", False),
+        (b"cc_version=2.1.269.517; cch=00000; cch=4f1c2;", False),
+        (rb"cc_version=2.1.269.517; cch=00000; cch=4f1c2;", False),
+    )
+    for line, wanted in cases:
+        body = b'{"system":[{"type":"text","text":"x-anthropic-billing-header: ' + line + b'"}],"messages":[]}'
+        if carries_only_the_placeholder(body) != wanted:
+            raise AssertionError(f"carries_only_the_placeholder read {line!r} as {not wanted}")
+    print("self-test passed: the unpatched placeholder is told from a stamp and from a line claiming a hash")
+
+
 def _self_test_resign_written() -> None:
-    """A body without a stamp is left alone before cargo is looked for, and a stamped body needs cargo."""
+    """A body without a stamp and a body carrying only the unpatched placeholder are left alone before cargo is
+    looked for, and a stamped body needs cargo."""
     with tempfile.TemporaryDirectory() as tmp:
         stampless = pathlib.Path(tmp) / "body_apikey.json"
         stampless.write_bytes(
@@ -653,6 +677,8 @@ def _self_test_resign_written() -> None:
         )
         stamped = pathlib.Path(tmp) / "body_oauth.json"
         stamped.write_bytes(_identified_body(b"claude-sonnet-4-5"))
+        placeholder = pathlib.Path(tmp) / "body_fp_9b244.json"
+        placeholder.write_bytes(_identified_body(b"claude-sonnet-4-5").replace(b"cch=4f1c2;", b"cch=00000;"))
         no_cargo = pathlib.Path(tmp) / "bin"
         no_cargo.mkdir()
         saved_path = os.environ.get("PATH")
@@ -667,6 +693,15 @@ def _self_test_resign_written() -> None:
             if "body_apikey.json" not in report.getvalue() or "no cch= stamp" not in report.getvalue():
                 raise AssertionError(f"resign_written skipped a body without a stamp silently: {report.getvalue()!r}")
             print("self-test passed: resign_written leaves a body without a stamp alone and says so")
+            before = placeholder.read_bytes()
+            report = io.StringIO()
+            with contextlib.redirect_stdout(report):
+                resign_written(placeholder)
+            if placeholder.read_bytes() != before:
+                raise AssertionError("resign_written changed a body carrying the unpatched placeholder")
+            if report.getvalue() != "resign skipped: body_fp_9b244.json carries the unpatched placeholder cch=00000\n":
+                raise AssertionError(f"resign_written skipped the placeholder with the note {report.getvalue()!r}")
+            print("self-test passed: resign_written leaves a body carrying the unpatched placeholder alone and says so")
             try:
                 resign_written(stamped)
             except SystemExit as e:
@@ -680,6 +715,40 @@ def _self_test_resign_written() -> None:
                 del os.environ["PATH"]
             else:
                 os.environ["PATH"] = saved_path
+
+
+def _self_test_check_hashes_placeholder() -> None:
+    """A raw body carrying only the unpatched placeholder leaves a placeholder line with its SHA-256 in the output and
+    in the trace file, counts as neither drift nor a re-signed body, and needs no cargo."""
+    with tempfile.TemporaryDirectory() as tmp:
+        capture = _inference_capture(pathlib.Path(tmp) / "capture")
+        placeholder = _identified_body(b"claude-sonnet-4-5").replace(b"cch=4f1c2;", b"cch=00000;")
+        (capture / "clean_body_1.json").write_bytes(placeholder)
+        stampless = b'{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517;"}]}'
+        for i in range(2, len(INFERENCE_BODIES) + 1):
+            (capture / f"clean_body_{i}.json").write_bytes(stampless)
+        no_cargo = pathlib.Path(tmp) / "bin"
+        no_cargo.mkdir()
+        saved_path = os.environ.get("PATH")
+        os.environ["PATH"] = str(no_cargo)
+        try:
+            report = io.StringIO()
+            with contextlib.redirect_stdout(report):
+                status = check_hashes(capture)
+        finally:
+            if saved_path is None:
+                del os.environ["PATH"]
+            else:
+                os.environ["PATH"] = saved_path
+        line = f"placeholder body_oauth.json sha256={hashlib.sha256(placeholder).hexdigest()}\n"
+        if status != 0:
+            raise AssertionError(f"check_hashes graded the placeholder with status {status}: {report.getvalue()!r}")
+        if report.getvalue() != line:
+            raise AssertionError(f"check_hashes printed {report.getvalue()!r}, want {line!r}")
+        trace = capture / "raw-hash-trace.txt"
+        if not trace.exists() or trace.read_text() != line:
+            raise AssertionError(f"check_hashes wrote no placeholder line to {trace.name}")
+        print("self-test passed: check_hashes traces the unpatched placeholder without grading it")
 
 
 def _control_entry(seq: int, request_line: str, body: str = "") -> dict:
@@ -1070,13 +1139,33 @@ def has_stamp(body: bytes) -> bool:
     return bool(block and BILLING_STAMP.search(block.group(0)))
 
 
+def carries_only_the_placeholder(body: bytes) -> bool:
+    """Whether the first billing block's one and only cch= field is the unpatched placeholder, read the way
+    phoebis_cch::carries_only_the_placeholder reads it."""
+    block = BILLING_BLOCK.search(body)
+    stamp = block and BILLING_STAMP.search(block.group(0))
+    if not stamp or stamp.group(0) != UNPATCHED_STAMP:
+        return False
+    # Beside a second cch=, the line claims a hash after all. Counted over the decoded line, so an escaped spelling
+    # counts as the server reads it, and a line that does not decode is not taken for the placeholder.
+    try:
+        return json.loads(block.group(0)).count("cch=") == 1
+    except ValueError:
+        return False
+
+
 def resign_written(path: pathlib.Path) -> None:
     """Store in a written body the cch digits the signer computes over its redacted bytes.
 
-    The stamp is looked for before cargo: a body whose billing block carries none has no digits to follow its
-    bytes, and the example's write mode exits 1 on such a file.
+    The stamp is looked for before cargo. A body whose billing block carries none has no digits to follow its bytes,
+    and the example's write mode exits 1 on such a file. A body carrying only the unpatched placeholder claims no
+    hash, and signing it would store digits the client never sent.
     """
-    if not has_stamp(path.read_bytes()):
+    raw = path.read_bytes()
+    if carries_only_the_placeholder(raw):
+        print(f"resign skipped: {path.name} carries the unpatched placeholder cch=00000")
+        return
+    if not has_stamp(raw):
         print(f"resign skipped: {path.name} carries no cch= stamp")
         return
     if shutil.which("cargo") is None:
@@ -1098,21 +1187,26 @@ def check_hashes(capture_dir: pathlib.Path) -> int:
     The raw bodies are read because the written ones are redacted, and the client signed the bytes it sent. Each
     stamped body leaves a trace line, its SHA-256 beside its native digits, printed and written to
     raw-hash-trace.txt beside the capture: the evidence that the signer matches the client's formula, carrying no
-    id of the run.
+    id of the run. A body carrying only the unpatched placeholder claims no hash and is not graded. It leaves a
+    placeholder line with its SHA-256 instead, since normalize_body masks the digits and a move between a stamp and
+    the placeholder shows nowhere else.
     """
     cm = json.load(open(capture_dir / "clean_modes.json"))
     stamped = []
+    trace = []
     for (idx, _), name in zip(inference_entries(cm), INFERENCE_BODIES):
         path = capture_dir / f"clean_body_{idx}.json"
-        if has_stamp(path.read_bytes()):
+        raw = path.read_bytes()
+        if carries_only_the_placeholder(raw):
+            line = f"placeholder {name} sha256={hashlib.sha256(raw).hexdigest()}"
+            print(line)
+            trace.append(line + "\n")
+        elif has_stamp(raw):
             stamped.append((name, path))
-    if not stamped:
-        return 0
-    if shutil.which("cargo") is None:
-        print("hash check skipped: cargo not found")
-        return 2
     status = 0
-    trace = []
+    if stamped and shutil.which("cargo") is None:
+        print("hash check skipped: cargo not found")
+        stamped, status = [], 2
     for name, path in stamped:
         raw = path.read_bytes()
         stamp = BILLING_STAMP.search(BILLING_BLOCK.search(raw).group(0)).group(0)
@@ -1129,7 +1223,8 @@ def check_hashes(capture_dir: pathlib.Path) -> int:
             for output in (run.stdout + run.stderr).splitlines():
                 print(f"  {output}")
             status = 1
-    (capture_dir / "raw-hash-trace.txt").write_text("".join(trace))
+    if trace:
+        (capture_dir / "raw-hash-trace.txt").write_text("".join(trace))
     return status
 
 
