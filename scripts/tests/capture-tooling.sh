@@ -9,10 +9,10 @@
 # refuses the code. The stub reaches the receiver alone, NO_PROXY or not, and refuses a proxy off loopback.
 # capture-control.sh seeds each login's config directory past the client's first-start screens, records the stub's
 # login and refresh phases in both of its variants, with the refresh run starting from the credentials the login
-# wrote, moves on past a login the driver gives up on, and refuses a real token. lib.sh's runcli takes KEEP_CONFIG and
-# ALLOW_NONESSENTIAL_TRAFFIC from a call's prefix and never from the caller's environment, and its start_receiver runs
-# the receiver isolated. Every case runs against a throwaway tree, never /tmp/cc-capture or ~/.claude, and reaches no
-# host off loopback.
+# wrote and its inference post reaching the inference receiver past the proxy, moves on past a login the driver gives
+# up on, and refuses a real token. lib.sh's runcli takes KEEP_CONFIG and ALLOW_NONESSENTIAL_TRAFFIC from a call's
+# prefix and never from the caller's environment, and its start_receiver runs the receiver isolated. Every case runs
+# against a throwaway tree, never /tmp/cc-capture or ~/.claude, and reaches no host off loopback.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -376,8 +376,10 @@ capture_control() {
 # place of the operator's. A terminal UI may not draw its menus without TERM and a locale, so the login phases' client
 # sees both, and BROWSER=true, so its login shows the paste form at once on any host. The refresh run keeps runcli's
 # print-mode environment, the one the committed fixtures were captured under. The refresh grant carries the refresh
-# token the stub stored at its login, which only a config directory that outlived runcli's reset still holds, and the
-# inference receiver beside the control receiver recorded the refresh run's turn.
+# token the stub stored at its login, which only a config directory that outlived runcli's reset still holds. The
+# stub sends its inference post through the proxy, as the client does, unless NO_PROXY names the base URL's host, so
+# the refresh run's turn reaches the inference receiver beside the control receiver only through the NO_PROXY the
+# capture sets, and a post sent to the proxy instead leaves an error entry in refresh.json.
 check_variant() {
   python3 -I - "$@" <<'PY'
 import json, pathlib, sys
@@ -388,6 +390,17 @@ login = [token, profile, "GET /api/oauth/claude_cli/roles HTTP/1.1", "GET /api/o
 phases = {"login-claude": login, "login-console": login, "refresh": [token, profile]}
 terminal = ["x-stub-browser: true", "x-stub-lang: C.UTF-8", "x-stub-term: xterm-256color"]
 print_mode = ["x-stub-browser: unset", "x-stub-lang: unset", "x-stub-term: unset"]
+# Both checked ahead of the phases, where the refresh phase's request lines would fail first on an error entry and
+# name neither cause.
+failures = []
+errors = [e for e in json.load(open(variant / "refresh.json")) if "error" in e]
+if errors:
+    failures.append(f"refresh.json holds the error entries {errors}")
+turns = [e["request_line"] for e in json.load(open(variant / "inference" / "clean_modes.json"))]
+if turns != ["POST /v1/messages HTTP/1.1"]:
+    failures.append(f"the inference receiver recorded {turns}")
+if failures:
+    sys.exit(", and ".join(failures))
 for phase, want in phases.items():
     entries = sorted(json.load(open(variant / f"{phase}.json")), key=lambda e: e["seq"])
     if [e.get("request_line") for e in entries] != want:
@@ -402,9 +415,6 @@ for phase, want in phases.items():
         grant = json.loads(entries[0]["body"])
         if grant.get("grant_type") != "refresh_token" or grant.get("refresh_token") != "sk-ant-ort01-PLACEHOLDER":
             sys.exit(f"the refresh grant reads {grant}")
-turns = [e["request_line"] for e in json.load(open(variant / "inference" / "clean_modes.json"))]
-if turns != ["POST /v1/messages HTTP/1.1"]:
-    sys.exit(f"the inference receiver recorded {turns}")
 PY
 }
 

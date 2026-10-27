@@ -26,8 +26,9 @@
 #      receiver and exits, and then its folder trust dialog, where a return picks the focused No, exit.
 #   2. login-console: the same with an Anthropic Console account.
 #   3. refresh: the config directory login-claude left, copied with its token's expiresAt set to 0, so the client's
-#      print-mode run starts with the refresh grant. The phase is skipped with a note when login-claude left no
-#      expiresAt.
+#      print-mode run starts with the refresh grant. The client sends every request through the proxy, the inference
+#      post included, so NO_PROXY=127.0.0.1 sends that post to the inference receiver directly. The phase is skipped
+#      with a note when login-claude left no expiresAt.
 # A login whose driver gives up (exit 2, on a screen it does not know or a client that exited) is logged with its
 # screen file and the next phase runs. Any other failure of the driver stops the capture.
 #
@@ -133,7 +134,8 @@ PY
   [[ "$status" -eq 0 ]] || exit "$status"
   start_control_receiver "$dir/refresh.json" "$CLEAN_DURATION" "$OUT/certs" "$RESPONSES"
   ALLOW_NONESSENTIAL_TRAFFIC=$allow KEEP_CONFIG=1 runcli refresh refresh hi \
-    HOME="$STATE/home" HTTPS_PROXY="$PROXY" NODE_EXTRA_CA_CERTS="$CA" ANTHROPIC_BASE_URL="http://127.0.0.1:$HTTP_PORT"
+    ANTHROPIC_BASE_URL="http://127.0.0.1:$HTTP_PORT" HOME="$STATE/home" HTTPS_PROXY="$PROXY" NODE_EXTRA_CA_CERTS="$CA" \
+    NO_PROXY=127.0.0.1
   stop_control_receiver
 }
 

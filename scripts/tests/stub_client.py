@@ -9,12 +9,15 @@
 # credentials file holding the token the grant returned. It answers /status with the settings dialog and the usage
 # read after Esc, and /exit by exiting 0.
 #
-# It reaches no host but loopback. Every https call goes through a CONNECT tunnel opened to HTTPS_PROXY, so the stub
-# never resolves or dials a control host itself, and it reads no NO_PROXY, which urllib's proxy handler would honor
-# and then dial the real host. Before any socket opens it refuses a proxy off loopback, a run without
-# CLAUDE_CONFIG_DIR, where the client's default would be the user's own config directory, and in print mode an http
-# base URL off loopback. The tokens it sends are the dummy ones the tests seed and the canned ones the receiver
-# answers with.
+# It reaches no host but loopback. Every https call goes through a CONNECT tunnel opened to HTTPS_PROXY whatever
+# NO_PROXY says, so the stub never resolves or dials a control host itself, where urllib's proxy handler would honor
+# NO_PROXY and dial the real host. Print mode's inference post to an http base URL goes to HTTPS_PROXY as an
+# absolute-URI request, as the client sends every request, unless NO_PROXY names the base URL's host (an exact entry or
+# *), and then straight to that host. That post is the one place the stub reads NO_PROXY, and since the proxy and the
+# base URL's host are both checked to sit on loopback, it only picks between two loopback listeners. Before any socket
+# opens it refuses a proxy off loopback, a run without CLAUDE_CONFIG_DIR, where the client's default would be the
+# user's own config directory, and in print mode an http base URL off loopback. The tokens it sends are the dummy ones
+# the tests seed and the canned ones the receiver answers with.
 #
 # Every request carries x-stub-browser, x-stub-home, x-stub-lang, x-stub-nonessential and x-stub-term with the values
 # of BROWSER, HOME, LANG, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and TERM, or "unset" for a variable the run lacks,
@@ -56,15 +59,26 @@ def split(url):
         return None, None, None
 
 
+def bypasses_proxy(host):
+    """Whether NO_PROXY names `host` in one of its comma-separated entries, matched exactly, or holds *."""
+    entries = {entry.strip() for entry in os.environ.get("NO_PROXY", "").split(",")}
+    return "*" in entries or host in entries
+
+
 def request(method, url, body=None, token=None):
-    """Sends one request and returns its status and body. An https URL goes through the proxy's tunnel, and an http
-    one, the base URL checked to sit on loopback, straight to its host."""
+    """Sends one request and returns its status and body. An https URL goes through the proxy's tunnel. An http one,
+    the base URL checked to sit on loopback, goes to the proxy as an absolute-URI request, as the client sends it, or
+    straight to its host where NO_PROXY names that host."""
     parts = urllib.parse.urlsplit(url)
+    target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
     if parts.scheme == "https":
         conn = http.client.HTTPSConnection(PROXY_HOST, PROXY_PORT, timeout=TIMEOUT, context=CONTEXT)
         conn.set_tunnel(parts.hostname, parts.port or 443)
-    else:
+    elif bypasses_proxy(parts.hostname):
         conn = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=TIMEOUT)
+    else:
+        conn = http.client.HTTPConnection(PROXY_HOST, PROXY_PORT, timeout=TIMEOUT)
+        target = f"http://{parts.netloc}{target}"
     headers = {"Accept": "application/json", **RECORDED}
     payload = None
     if body is not None:
@@ -72,9 +86,8 @@ def request(method, url, body=None, token=None):
         payload = json.dumps(body, separators=(",", ":")).encode()
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
     try:
-        conn.request(method, path, body=payload, headers=headers)
+        conn.request(method, target, body=payload, headers=headers)
         response = conn.getresponse()
         return response.status, response.read()
     finally:
