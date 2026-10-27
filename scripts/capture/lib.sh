@@ -134,7 +134,8 @@ stop_control_receiver() {
   return "$status"
 }
 
-trap 'stop_receiver; stop_control_receiver' EXIT
+# Under set -e a non-zero return inside the trap would replace the script's exit status, so the receiver's is dropped.
+trap 'stop_receiver; stop_control_receiver || true' EXIT
 
 RUN_COUNT=0
 RUN_FAILURES=0

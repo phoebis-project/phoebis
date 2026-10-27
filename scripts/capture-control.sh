@@ -50,8 +50,10 @@ PROXY="http://127.0.0.1:$CONTROL_RECEIVER_PORT"
 RESPONSES="$ROOT/crates/profile/fixtures/responses"
 
 # The CA has no use once the run is over, and a private key in a capture directory that gets committed trips secret
-# scanners. The keys go after the receivers stop, since the control receiver presents the leaf until then.
-trap 'stop_receiver; stop_control_receiver; rm -f "$OUT"/certs/*.key' EXIT
+# scanners. The keys go after the receivers stop, since the control receiver presents the leaf until then. The
+# receiver's status is dropped here because under set -e a non-zero return inside the trap would skip the rest of it,
+# the key removal included, and replace the script's exit status.
+trap 'stop_receiver; stop_control_receiver || true; rm -f "$OUT"/certs/*.key' EXIT
 
 "$CAPTURE_DIR/mkcerts.sh" "$OUT"
 
