@@ -19,11 +19,12 @@
 # when the flag suppresses it, and in neither when the build no longer makes it.
 #
 # The phases of each variant, in order, each recorded by a control receiver of its own into <variant>/<phase>.json:
-#   1. login-claude: scripts/capture/drive_login.py logs the client in with a Claude account and reads /status, and
-#      writes the authorize URL and the screen it read beside the recording. The config directory starts fresh of any
-#      account, seeded with .claude.json's hasCompletedOnboarding and the working directory's hasTrustDialogAccepted:
-#      on an empty one the client first runs its onboarding wizard, whose connectivity preflight fails against the
-#      receiver and exits, and then its folder trust dialog, where a return picks the focused No, exit.
+#   1. login-claude: scripts/capture/drive_login.py logs the client in with a Claude account and reads /status and
+#      /usage, and writes the authorize URL and the screen it read beside the recording. The config directory starts
+#      fresh of any account, seeded with .claude.json's hasCompletedOnboarding and the working directory's
+#      hasTrustDialogAccepted: on an empty one the client first runs its onboarding wizard, whose connectivity preflight
+#      fails against the receiver and exits, and then its folder trust dialog, where a return picks the focused No,
+#      exit.
 #   2. login-console: the same with an Anthropic Console account.
 #   3. refresh: the config directory login-claude left, copied with its token's expiresAt set to 0, so the client's
 #      print-mode run starts with the refresh grant. The client sends every request through the proxy, the inference

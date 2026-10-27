@@ -6,8 +6,8 @@
 # client's screens as text. It answers /login with the method menu's three entries, the Console sign-in menu after a
 # down arrow (its header repainted over the method menu's the way the client repaints a line), the paste form with
 # the authorize URL, then the code grant, the profile and roles reads and the success screen, and after a return a
-# credentials file holding the token the grant returned. It answers /status with the settings dialog and the usage
-# read after Esc, and /exit by exiting 0.
+# credentials file holding the token the grant returned. It answers /status with the settings dialog, /usage with the
+# usage read and then the usage dialog, and /exit by exiting 0.
 #
 # It reaches no host but loopback. Every https call goes through a CONNECT tunnel opened to HTTPS_PROXY whatever
 # NO_PROXY says, so the stub never resolves or dials a control host itself, where urllib's proxy handler would honor
@@ -217,7 +217,13 @@ def status_command():
     say("Version stub")
     say("Esc to cancel")
     wait_for_escape()
+
+
+def usage_command():
     request("GET", USAGE_URL, token=stored_oauth().get("accessToken"))
+    say("Current session")
+    say("Esc to close")
+    wait_for_escape()
 
 
 def terminal_mode():
@@ -225,7 +231,7 @@ def terminal_mode():
     if os.environ.get("STUB_HANG") == "1":
         while True:
             signal.pause()
-    commands = {"/login": login_command, "/status": status_command}
+    commands = {"/login": login_command, "/status": status_command, "/usage": usage_command}
     while line := sys.stdin.readline():
         command = line.strip()
         if command == "/exit":

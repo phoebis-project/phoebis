@@ -1,6 +1,6 @@
-# Runs a client's /login and /status in a pseudo-terminal with no human at it, so the control capture records the
-# code grant and the reads that a login and /status make. The capture's receiver answers the token exchange with the
-# canned token whatever code it gets, so the driver pastes a dummy code and the login completes.
+# Runs a client's /login, /status and /usage in a pseudo-terminal with no human at it, so the control capture records
+# the code grant and the reads that a login, /status and /usage make. The capture's receiver answers the token exchange
+# with the canned token whatever code it gets, so the driver pastes a dummy code and the login completes.
 #
 # Usage: drive_login.py --binary <path> --cwd <dir> --out <dir> --method claude|console [--timeout <seconds>]
 #        drive_login.py --self-test
@@ -314,6 +314,14 @@ def drive(terminal, method, url_path):
     terminal.wait("the status dialog", showing("Settings", "Esc to cancel"))
     terminal.escape()
     terminal.wait("the prompt after /status", prompt)
+    terminal.press(b"/usage")
+    # The dialog is matched by its footer's prefix, which the filled dialog's "Esc to close" shares with the "Esc to
+    # cancel" of the client's other dialogs. Under CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 the client's admission
+    # check refuses the usage read, and the dialog's title is then not known. A dialog that never opens times out, with
+    # the login's calls already recorded.
+    terminal.wait("the usage dialog", showing("Esc to"))
+    terminal.escape()
+    terminal.wait("the prompt after /usage", prompt)
     terminal.press(b"/exit")
     terminal.wait_exit()
 
@@ -387,7 +395,7 @@ def main():
     # The self-test starts no client, so it needs none of the arguments a run does.
     if sys.argv[1:] == ["--self-test"]:
         sys.exit(self_test())
-    parser = Parser(description="Drive a client's /login and /status in a pseudo-terminal.")
+    parser = Parser(description="Drive a client's /login, /status and /usage in a pseudo-terminal.")
     parser.add_argument("--binary", required=True)
     parser.add_argument("--cwd", required=True)
     parser.add_argument("--method", required=True, choices=("claude", "console"))
