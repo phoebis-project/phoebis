@@ -678,7 +678,8 @@ def _self_test_placeholder() -> None:
         (b"cc_version=2.1.269.517; cch=4f1c2;", False),
         (b"cc_version=2.1.269.517;", False),
         (b"cc_version=2.1.269.517; cch=00000; cch=4f1c2;", False),
-        (rb"cc_version=2.1.269.517; cch=00000; cch=4f1c2;", False),
+        # The second field's first letter spelled as a JSON unicode escape, which the raw bytes do not show as cch=.
+        (b"cc_version=2.1.269.517; cch=00000; " + bytes([0x5C]) + b"u0063ch=4f1c2;", False),
     )
     for line, wanted in cases:
         body = b'{"system":[{"type":"text","text":"x-anthropic-billing-header: ' + line + b'"}],"messages":[]}'
