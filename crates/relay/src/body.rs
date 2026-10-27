@@ -1545,7 +1545,7 @@ mod tests {
                 client_stamp(&sent),
                 client_stamp(&cut)
             ),
-            ("4e6eb".into(), "4e6eb".into(), "6d872".into())
+            ("7c7db".into(), "7c7db".into(), "00eea".into())
         );
 
         let mut body = sent.clone();
@@ -1597,11 +1597,13 @@ mod tests {
         );
     }
 
-    /// The recorded first-party body with `stamps` in place of its one `cch=9b244;` field.
+    /// The recorded first-party body with `stamps` in place of its one `cch=` field.
     fn a_line_stamped(stamps: &str) -> Vec<u8> {
-        String::from_utf8(fixture_body(BodyFixture::FirstParty).to_vec())
+        let native = fixture_body(BodyFixture::FirstParty);
+        let field = format!("cch={};", carried_stamp(native));
+        String::from_utf8(native.to_vec())
             .unwrap()
-            .replacen("cch=9b244;", stamps, 1)
+            .replacen(&field, stamps, 1)
             .into_bytes()
     }
 

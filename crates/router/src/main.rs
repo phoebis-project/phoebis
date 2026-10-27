@@ -99,7 +99,7 @@ fn main() -> anyhow::Result<()> {
             );
             println!(
                 "profile {}",
-                phoebis_profile::claude_code_2_1_269_linux_x64().name
+                phoebis_profile::claude_code_2_1_310_linux_x64().name
             );
             println!(
                 "routing: cooldown_fallback {}s, model_rejection {}s, catalog refresh {}s, startup fetch {}s",

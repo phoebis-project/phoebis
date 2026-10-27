@@ -15,7 +15,7 @@ use http_body_util::BodyExt;
 use phoebis_bus::Bus;
 use phoebis_oauth::Clock;
 use phoebis_profile::{
-    claude_code_2_1_269_linux_x64,
+    claude_code_2_1_310_linux_x64,
     fixtures::{body, inference_head, BodyFixture, FixtureKind},
 };
 use phoebis_relay::{
@@ -755,7 +755,7 @@ async fn build(
     accounting: Option<AccountingSource>,
     shutdown_mark: Option<ShutdownMark>,
 ) -> Harness {
-    let p = claude_code_2_1_269_linux_x64();
+    let p = claude_code_2_1_310_linux_x64();
     if store.accounts().unwrap().is_empty() {
         for (n, account) in accounts.iter().enumerate() {
             // Every extra account gets its own uuid; the one-account wrapper is the only caller that names one.

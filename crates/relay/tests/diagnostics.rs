@@ -2211,15 +2211,15 @@ const RESUME_PLACEHOLDER: &str = "[Orphaned tool result removed due to conversat
 /// The drift warning's own words, which pick its line out of the capture.
 const DRIFT_WARNING: &str = "a caller stamped a billing line this build cannot reproduce";
 
-/// The first-party fixture stamped `cc_version=2.1.269.{suffix}`, its one user message replaced by the resume
+/// The first-party fixture stamped `cc_version=2.1.310.{suffix}`, its one user message replaced by the resume
 /// placeholder where `resumed`, and re-signed so the hash check passes and the suffix check decides. The fixture's
-/// own `517` is the empty prompt's suffix under 2.1.269.
+/// own `077` is the empty prompt's suffix under 2.1.310.
 fn stamped(suffix: &str, resumed: bool) -> Vec<u8> {
     let mut text = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
         .unwrap()
         .replacen(
-            "cc_version=2.1.269.517",
-            &format!("cc_version=2.1.269.{suffix}"),
+            "cc_version=2.1.310.077",
+            &format!("cc_version=2.1.310.{suffix}"),
             1,
         );
     if resumed {
@@ -2311,7 +2311,7 @@ async fn a_resumed_conversation_stamped_over_the_empty_prompt_relays() {
     let resp = h
         .app
         .clone()
-        .oneshot(first_party_request(&stamped("517", true), "s1"))
+        .oneshot(first_party_request(&stamped("077", true), "s1"))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -2351,7 +2351,7 @@ async fn a_fresh_conversations_suffix_that_does_not_reproduce_keeps_the_version_
 /// for the operator reading the journal.
 #[tokio::test]
 async fn a_resumed_conversations_drifted_hash_keeps_the_hash_words_and_warns_the_resume() {
-    let mut native = stamped("517", true);
+    let mut native = stamped("077", true);
     let at = phoebis_cch::find_cch(&native)
         .expect("the line carries a hash")
         .digits_start;

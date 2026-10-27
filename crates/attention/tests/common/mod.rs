@@ -16,7 +16,7 @@ use phoebis_ledger::{
     CostRevisions, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables, PriceRevisions, Pricing,
 };
 use phoebis_oauth::{Clock, CredentialManager, UsageService};
-use phoebis_profile::claude_code_2_1_269_linux_x64;
+use phoebis_profile::claude_code_2_1_310_linux_x64;
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, MemberWrite, NewBundle, PoolRow,
@@ -272,7 +272,7 @@ pub fn usage_over(rig: &Rig, up: &FakeUpstream) -> Arc<UsageService> {
             },
         )
         .unwrap();
-    let profile = claude_code_2_1_269_linux_x64();
+    let profile = claude_code_2_1_310_linux_x64();
     let addr = up.addr();
     let resolver: Resolver =
         Arc::new(move |_: &str| Box::pin(async move { Some(addr) }) as ResolveFuture);

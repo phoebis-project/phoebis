@@ -373,12 +373,9 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
             .unwrap()
     };
 
-    // The billing line stamped with a turn origin, the three hint headers set: every fact reaches the row.
-    let spliced = native.replacen(
-        "cc_prompt_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa;",
-        "cc_prompt_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa; cc_turn_origin=human;",
-        1,
-    );
+    // The billing line stamped with a turn origin other than the fixture's own, the three hint headers set: every
+    // fact reaches the row.
+    let spliced = native.replacen("cc_turn_origin=sdk;", "cc_turn_origin=human;", 1);
     let spliced = String::from_utf8(phoebis_cch::sign(spliced.as_bytes()).unwrap()).unwrap();
     let mut req = build(spliced, "s1", None);
     req.headers_mut()
@@ -495,7 +492,8 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
         "the turn origin finds it"
     );
 
-    // No hint header sent: the four hint members are absent, but the class still reads from the user agent.
+    // No hint header sent: the four hint members are absent, but the class still reads from the user agent and the
+    // turn origin from the fixture's own line.
     let resp2 = h
         .app
         .clone()
@@ -515,8 +513,15 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
             row2.prev_tool_ms,
             row2.turn_origin.as_deref()
         ),
-        (Some("claude-code/sdk-cli"), None, None, None, None, None),
-        "a caller that sends no hint carries the class alone"
+        (
+            Some("claude-code/sdk-cli"),
+            None,
+            None,
+            None,
+            None,
+            Some("sdk")
+        ),
+        "a caller that sends no hint carries the class and its line's turn origin alone"
     );
 
     // A caller of a different class, in the same hour: the rollup's client dimension keeps the two apart.
@@ -946,7 +951,7 @@ async fn a_version_suffix_drift_refusal_is_recorded_on_the_request_row() {
     let native =
         String::from_utf8(phoebis_profile::fixtures::body(BodyFixture::FirstParty).to_vec())
             .unwrap()
-            .replacen("cc_version=2.1.269.517", "cc_version=2.1.269.abc", 1);
+            .replacen("cc_version=2.1.310.077", "cc_version=2.1.310.abc", 1);
     let drifted = String::from_utf8(phoebis_cch::sign(native.as_bytes()).unwrap()).unwrap();
     let resp = h
         .app

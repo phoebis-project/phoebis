@@ -2,11 +2,11 @@ use phoebis_oauth::{
     authorization_url, generate_pkce, generate_state, CallbackInput, LoginKind, PairingError,
     PairingSessions, PairingStatus, PendingIdentity,
 };
-use phoebis_profile::claude_code_2_1_269_linux_x64;
+use phoebis_profile::claude_code_2_1_310_linux_x64;
 
 #[test]
 fn authorization_url_has_the_measured_parameter_order() {
-    let p = claude_code_2_1_269_linux_x64();
+    let p = claude_code_2_1_310_linux_x64();
     let url = authorization_url(
         p,
         LoginKind::ClaudeAi,

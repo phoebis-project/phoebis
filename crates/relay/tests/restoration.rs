@@ -166,7 +166,7 @@ async fn absent_fields_are_restored_in_native_order_and_present_ones_are_left_al
     );
     assert_eq!(
         field(&line, "cc_version"),
-        Some("2.1.269.517"),
+        Some("2.1.310.077"),
         "the client's own value is untouched"
     );
     assert_eq!(
@@ -207,7 +207,7 @@ async fn absent_fields_are_restored_in_native_order_and_present_ones_are_left_al
     );
     assert_eq!(
         header(fp, "x-client-request-id"),
-        Some("33333333-3333-4333-8333-333333333333")
+        Some("22222222-2222-4222-8222-222222222222")
     );
     up.shutdown().await;
 }
@@ -245,7 +245,7 @@ async fn the_restored_placeholder_is_signed_when_the_switch_is_on() {
 async fn a_client_sent_placeholder_on_a_full_shape_line_is_relayed_intact() {
     let placeholder = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
         .unwrap()
-        .replacen("cch=9b244", "cch=00000", 1)
+        .replacen("cch=91984", "cch=00000", 1)
         .into_bytes();
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let off = relay_with(AccountKind::Oauth, &up).await;
@@ -411,7 +411,7 @@ async fn a_request_without_the_prompt_id_header_gets_no_cc_prompt_id_on_a_tool_l
 #[tokio::test]
 async fn a_subagents_first_request_takes_no_prompt_id_from_its_parent() {
     const SESSION: &str = "11111111-1111-4111-8111-111111111111";
-    const SENT: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const SENT: &str = "33333333-3333-4333-8333-333333333333";
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;
     // The parent's turn names its id in the header beside the line, so the memory holds it for the session.
@@ -1486,13 +1486,13 @@ async fn a_failover_leg_reads_the_saved_record_back_before_it_builds() {
     up.shutdown().await;
 }
 
-/// The first-party 9b244 body with a system reminder cut mid-pair, stamped again as the client stamps what it
+/// The first-party body with a system reminder cut mid-pair, stamped again as the client stamps what it
 /// sends: a strict decoder refuses it and the drift check admits it.
 fn cut_first_party_body(container: bool) -> Vec<u8> {
     let fixture = String::from_utf8(body(BodyFixture::FirstParty).to_vec()).unwrap();
     let mut native = fixture.replacen(
-        "Today's date is 2026-09-13.",
-        "Today's date is 2026-09-13. \\ud83d",
+        "Today's date is 2026-10-27.",
+        "Today's date is 2026-10-27. \\ud83d",
         1,
     );
     assert!(native.contains("\\ud83d"), "the cut landed");

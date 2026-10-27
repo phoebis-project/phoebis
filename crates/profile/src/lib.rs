@@ -1,6 +1,5 @@
-//! Pinned wire constants of Claude Code 2.1.269 on Linux x64 and the fixture files measured from it. The
-//! inference and control fixtures are that build's; the `count_*` fixtures were measured from 2.1.278, the build
-//! installed when the client's own token count was recorded.
+//! Pinned wire constants of Claude Code 2.1.310 on Linux x64 and the fixture files measured from it. One capture
+//! of that build recorded every fixture: the inference plane, the count path and the control plane.
 
 pub mod catalog;
 pub mod fixtures;
@@ -38,11 +37,16 @@ pub struct Control {
     pub usage_url: &'static str,
     pub axios_user_agent: &'static str,
     pub default_login_scopes: &'static str,
+    /// The agent of the profile and roles reads. The token endpoint keeps the Axios agent and the usage read
+    /// carries the CLI agent, so each control call's agent is measured on its own.
+    pub read_user_agent: &'static str,
     pub refresh_fallback_scopes: &'static str,
 }
 pub struct TlsProfiles {
     pub curves: &'static str,
     pub control_cipher_list: &'static str,
+    /// The captured hello's `signature_algorithms` in its order, in BoringSSL's names.
+    pub signature_algorithms: &'static str,
 }
 
 pub struct Profile {
@@ -57,17 +61,17 @@ pub struct Profile {
     pub tls: TlsProfiles,
 }
 
-static PROFILE_2_1_269: Profile = Profile {
-    name: "claude-code-2.1.269-linux-x64",
-    cli_version: "2.1.269",
-    build_tag: "2.1.269.517",
-    user_agent_sdk_cli: "claude-cli/2.1.269 (external, sdk-cli)",
-    user_agent_cli: "claude-cli/2.1.269 (external, cli)",
-    stainless: Stainless { arch: "x64", lang: "js", os: "Linux", package_version: "0.112.1", runtime: "node", runtime_version: "v26.3.0", timeout: "600" },
+static PROFILE_2_1_310: Profile = Profile {
+    name: "claude-code-2.1.310-linux-x64",
+    cli_version: "2.1.310",
+    build_tag: "2.1.310.077",
+    user_agent_sdk_cli: "claude-cli/2.1.310 (external, sdk-cli)",
+    user_agent_cli: "claude-cli/2.1.310 (external, cli)",
+    stainless: Stainless { arch: "x64", lang: "js", os: "Linux", package_version: "0.128.0", runtime: "node", runtime_version: "v26.3.0", timeout: "600" },
     betas: Betas {
-        oauth_non_first_party: "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,extended-cache-ttl-2025-04-11",
-        oauth_first_party: "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,extended-cache-ttl-2025-04-11,cache-diagnosis-2026-04-07",
-        api_key_non_first_party: "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05",
+        oauth_non_first_party: "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,advanced-tool-use-2025-11-20,extended-cache-ttl-2025-04-11",
+        oauth_first_party: "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,thinking-binding-controls-2026-08-01,extended-cache-ttl-2025-04-11,cache-diagnosis-2026-04-07",
+        api_key_non_first_party: "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,advanced-tool-use-2025-11-20",
     },
     control: Control {
         authorize_claude_ai: "https://claude.com/cai/oauth/authorize",
@@ -79,22 +83,24 @@ static PROFILE_2_1_269: Profile = Profile {
         token_url: "https://platform.claude.com/v1/oauth/token",
         usage_url: "https://api.anthropic.com/api/oauth/usage",
         axios_user_agent: "axios/1.15.2",
-        default_login_scopes: "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
-        refresh_fallback_scopes: "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
+        default_login_scopes: "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins",
+        read_user_agent: "claude-code/2.1.310",
+        refresh_fallback_scopes: "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins",
     },
     tls: TlsProfiles {
         curves: "X25519MLKEM768:X25519:P-256:P-384",
         control_cipher_list: "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES256-SHA:ECDHE-RSA-AES256-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA:AES256-SHA",
+        signature_algorithms: "ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256:rsa_pkcs1_sha256:ecdsa_secp384r1_sha384:rsa_pss_rsae_sha384:rsa_pkcs1_sha384:rsa_pss_rsae_sha512:rsa_pkcs1_sha512:ed25519:ecdsa_secp521r1_sha512:rsa_pkcs1_sha1",
     },
 };
 
 /// The one profile this build carries: every reader takes it from here, and a re-pin changes it with the rebuild.
-pub fn claude_code_2_1_269_linux_x64() -> &'static Profile {
-    &PROFILE_2_1_269
+pub fn claude_code_2_1_310_linux_x64() -> &'static Profile {
+    &PROFILE_2_1_310
 }
 
 pub fn by_name(name: &str) -> Option<&'static Profile> {
-    [&PROFILE_2_1_269].into_iter().find(|p| p.name == name)
+    [&PROFILE_2_1_310].into_iter().find(|p| p.name == name)
 }
 
 #[cfg(test)]
@@ -106,9 +112,9 @@ mod tests {
 
     #[test]
     fn by_name_finds_the_pinned_profile_and_nothing_else() {
-        let p = claude_code_2_1_269_linux_x64();
+        let p = claude_code_2_1_310_linux_x64();
         assert_eq!(
-            by_name("claude-code-2.1.269-linux-x64").map(|x| x.name),
+            by_name("claude-code-2.1.310-linux-x64").map(|x| x.name),
             Some(p.name)
         );
         assert!(by_name("claude-code-9.9.9").is_none());
@@ -171,11 +177,11 @@ mod tests {
     fn fixtures_load_and_have_measured_sizes() {
         assert_eq!(
             fixtures::client_hello(fixtures::Plane::Inference).len(),
-            1499 + 5
+            1503 + 5
         );
         assert_eq!(
             fixtures::client_hello(fixtures::Plane::Control).len(),
-            1473 + 5
+            1477 + 5
         );
         assert!(
             fixtures::inference_head(fixtures::FixtureKind::OauthFirstParty)
@@ -183,7 +189,7 @@ mod tests {
         );
         assert_eq!(
             fixtures::body(fixtures::BodyFixture::FirstParty).len(),
-            80404
+            84179
         );
     }
 

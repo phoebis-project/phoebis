@@ -3398,10 +3398,10 @@ async fn the_renewal_report_carries_the_usage_the_origin_and_the_ttl_and_a_probe
 fn drifted_first_party_bodies() -> [(Vec<u8>, &'static str); 2] {
     use phoebis_profile::fixtures::{body, BodyFixture};
     let fixture = String::from_utf8(body(BodyFixture::FirstParty).to_vec()).unwrap();
-    let hash = fixture.replacen("cch=9b244", "cch=9b245", 1).into_bytes();
+    let hash = fixture.replacen("cch=91984", "cch=91985", 1).into_bytes();
     let suffix = phoebis_cch::sign(
         fixture
-            .replacen("cc_version=2.1.269.517", "cc_version=2.1.269.abc", 1)
+            .replacen("cc_version=2.1.310.077", "cc_version=2.1.310.abc", 1)
             .as_bytes(),
     )
     .unwrap();
@@ -3486,11 +3486,7 @@ async fn a_drifted_stamp_is_refused_at_admission_before_any_account_is_selected(
                 row.session_id.as_deref(),
                 row.agent_id.as_deref()
             ),
-            (
-                "claude-sonnet-4-5",
-                Some("11111111-1111-4111-8111-111111111111"),
-                Some("main")
-            )
+            ("claude-sonnet-4-5", Some(FIRST_PARTY_SESSION), Some("main"))
         );
         assert!(up.requests().is_empty(), "{trigger}: nothing was dialled");
         up.shutdown().await;
@@ -3563,7 +3559,7 @@ async fn a_drift_refusal_emits_one_decision_with_the_client_trigger_and_version(
                 .iter()
                 .map(|f| (f.key, &f.value))
                 .collect::<Vec<_>>(),
-            [("client", &FactValue::Text("2.1.269".into()))],
+            [("client", &FactValue::Text("2.1.310".into()))],
             "{trigger}: the version rides the summary's own fact"
         );
         assert_eq!(
@@ -3596,7 +3592,7 @@ async fn a_billing_line_with_no_stamp_is_not_refused_for_its_version_suffix() {
     // The reduced shape, its suffix one this build does not reproduce, and no `cch=` claiming a hash.
     let reduced = String::from_utf8(body(BodyFixture::Oauth).to_vec())
         .unwrap()
-        .replacen("cc_version=2.1.269.517", "cc_version=2.1.269.abc", 1);
+        .replacen("cc_version=2.1.310.077", "cc_version=2.1.310.abc", 1);
     assert_eq!(phoebis_cch::decoded_stamp_count(reduced.as_bytes()), 0);
     let resp = h
         .app
@@ -3633,7 +3629,7 @@ async fn a_drifted_stamp_under_a_key_that_refuses_the_model_gets_the_model_refus
     .await;
     let fixture = String::from_utf8(body(BodyFixture::FirstParty).to_vec()).unwrap();
     // A stamp this build does not compute, and one only the decoded walk reaches.
-    let drifted = fixture.replacen("cch=9b244", "cch=9b245", 1);
+    let drifted = fixture.replacen("cch=91984", "cch=91985", 1);
     let escaped = fixture.replacen(
         r#""text":"x-anthropic-billing-header"#,
         r#""te\u0078t":"x-anthropic-billing-header"#,

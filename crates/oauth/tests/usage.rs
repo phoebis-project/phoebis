@@ -172,7 +172,7 @@ mod service {
         UsageError, UsageService,
     };
     use phoebis_profile::{
-        claude_code_2_1_269_linux_x64,
+        claude_code_2_1_310_linux_x64,
         fixtures::{control_response, ControlFixture},
     };
     use phoebis_store::{
@@ -242,7 +242,7 @@ mod service {
     }
 
     fn service_for(up: &FakeUpstream, store: Arc<Store>, now: &Arc<AtomicI64>) -> UsageService {
-        let p = claude_code_2_1_269_linux_x64();
+        let p = claude_code_2_1_310_linux_x64();
         let mut b = connector_builder(p, Plane::Control).unwrap();
         phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
         let addr = up.addr();

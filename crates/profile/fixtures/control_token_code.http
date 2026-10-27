@@ -1,0 +1,10 @@
+POST /v1/oauth/token HTTP/1.1
+Accept: application/json, text/plain, */*
+Content-Type: application/json
+User-Agent: axios/1.15.2
+Content-Length: 249
+Accept-Encoding: gzip, compress, deflate, br
+Host: platform.claude.com
+Connection: close
+
+{"grant_type":"authorization_code","code":"CODE-PLACEHOLDER","redirect_uri":"https://platform.claude.com/oauth/code/callback","client_id":"9d1c250a-e61b-44d9-88ed-5944d1962f5e","code_verifier":"CODE-VERIFIER-PLACEHOLDER","state":"STATE-PLACEHOLDER"}

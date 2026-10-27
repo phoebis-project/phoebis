@@ -1370,7 +1370,7 @@ mod tests {
             },
         }])
         .await;
-        let profile = phoebis_profile::claude_code_2_1_269_linux_x64();
+        let profile = phoebis_profile::claude_code_2_1_310_linux_x64();
         let mut builder = connector_builder(profile, Plane::Control).unwrap();
         phoebis_transport::trust_extra_ca(&mut builder, up.ca_pem()).unwrap();
         let addr = up.addr();

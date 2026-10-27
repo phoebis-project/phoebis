@@ -36,21 +36,18 @@ async fn oauth_first_party_request_is_byte_identical_except_the_two_edits() {
             .as_bytes(),
     )
     .unwrap();
-    let mut expected_head = String::from_utf8(head.to_vec()).unwrap().replace(
+    // The recorded head carries the class header, so the harness adds none and the head travels as recorded.
+    let expected_head = String::from_utf8(head.to_vec()).unwrap().replace(
         &format!("Content-Length: {}", native.len()),
         &format!("Content-Length: {}", expected_body.len()),
     );
-    // The recorded head predates the class header, so the one line the harness adds as the client sends it rides
-    // at the head's end, where the caller's own head put it.
-    let end = expected_head.rfind("\r\n\r\n").unwrap();
-    expected_head.insert_str(end + 2, "x-claude-code-request-class: main\r\n");
     let mut expected = expected_head.into_bytes();
     expected.extend_from_slice(&expected_body);
     assert_eq!(got, expected);
     assert_ne!(
         phoebis_cch::find_cch(&expected_body)
             .map(|l| expected_body[l.digits_start..l.digits_start + 5].to_vec()),
-        Some(b"9b244".to_vec()),
+        Some(b"91984".to_vec()),
         "the uuid edit changes the hash"
     );
     up.shutdown().await;
@@ -357,7 +354,7 @@ async fn ready_answers_503_naming_what_the_readiness_source_reads_dead() {
 async fn a_client_sent_placeholder_is_relayed_as_the_placeholder() {
     let placeholder = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
         .unwrap()
-        .replacen("cch=9b244", "cch=00000", 1)
+        .replacen("cch=91984", "cch=00000", 1)
         .into_bytes();
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
@@ -383,12 +380,18 @@ async fn a_client_sent_placeholder_is_relayed_as_the_placeholder() {
     up.shutdown().await;
 }
 
+/// The second first-party body, since its stamp carries a hex letter: the uppercase spelling of the right digits.
 #[tokio::test]
 async fn an_uppercase_cch_counts_as_drift() {
-    let drifted = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
+    let drifted = String::from_utf8(body(BodyFixture::FirstPartyAgain).to_vec())
         .unwrap()
-        .replacen("cch=9b244", "cch=9B244", 1)
+        .replacen("cch=2c366", "cch=2C366", 1)
         .into_bytes();
+    assert_ne!(
+        drifted,
+        body(BodyFixture::FirstPartyAgain),
+        "the edit reached the fixture's stamp"
+    );
     a_drifted_stamp_is_refused(drifted, "hash").await;
 }
 
@@ -398,7 +401,7 @@ async fn an_uppercase_cch_counts_as_drift() {
 async fn a_lowercase_hash_this_build_does_not_compute_counts_as_drift() {
     let drifted = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
         .unwrap()
-        .replacen("cch=9b244", "cch=9b245", 1)
+        .replacen("cch=91984", "cch=91985", 1)
         .into_bytes();
     a_drifted_stamp_is_refused(drifted, "hash").await;
 }
@@ -411,13 +414,13 @@ fn resigned(from: &str, to: &str) -> Vec<u8> {
     phoebis_cch::sign(edited.as_bytes()).unwrap()
 }
 
-/// The fixture's line carries `cc_version=2.1.269.517`, the suffix of a prompt of three zeros under 2.1.269. A
+/// The fixture's line carries `cc_version=2.1.310.077`, the suffix of a prompt of three zeros under 2.1.310. A
 /// suffix the client computed by another rule is refused before any account is tried, as a drifted hash is;
 /// the body carries a valid hash, so the refusal is the suffix check's own.
 #[tokio::test]
 async fn a_version_suffix_this_build_cannot_reproduce_is_refused() {
     a_drifted_stamp_is_refused(
-        resigned("cc_version=2.1.269.517", "cc_version=2.1.269.abc"),
+        resigned("cc_version=2.1.310.077", "cc_version=2.1.310.abc"),
         "version_suffix",
     )
     .await;
@@ -432,7 +435,7 @@ async fn a_bare_version_with_no_suffix_is_not_drift() {
     }])
     .await;
     let app = relay_with(AccountKind::Oauth, &up).await;
-    let bare = resigned("cc_version=2.1.269.517", "cc_version=2.1.269");
+    let bare = resigned("cc_version=2.1.310.077", "cc_version=2.1.310");
     let resp = app
         .oneshot(request_from_fixture(
             inference_head(FixtureKind::OauthFirstParty),
@@ -457,7 +460,7 @@ async fn a_stamped_body_with_the_right_suffix_relays() {
     }])
     .await;
     let app = relay_with(AccountKind::Oauth, &up).await;
-    let same = resigned("cc_version=2.1.269.517", "cc_version=2.1.269.517");
+    let same = resigned("cc_version=2.1.310.077", "cc_version=2.1.310.077");
     assert_eq!(
         same,
         body(BodyFixture::FirstParty),
@@ -489,7 +492,7 @@ async fn a_suffix_over_a_supplementary_character_prompt_relays() {
     .await;
     let app = relay_with(AccountKind::Oauth, &up).await;
     // "a\u{1D11E}bcdefghijklmnopqrstuvwxyz": UTF-16 units 4, 7, and 20 are 'c', 'f', 's'; sha256 of
-    // "59cf53e54c78" + "cfs" + "2.1.269", first three hex characters, is "596".
+    // "59cf53e54c78" + "cfs" + "2.1.310", first three hex characters, is "7cf".
     let spliced = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
         .unwrap()
         .replacen(
@@ -497,7 +500,7 @@ async fn a_suffix_over_a_supplementary_character_prompt_relays() {
             "\"text\":\"a\u{1D11E}bcdefghijklmnopqrstuvwxyz\"",
             1,
         )
-        .replacen("cc_version=2.1.269.517", "cc_version=2.1.269.596", 1);
+        .replacen("cc_version=2.1.310.077", "cc_version=2.1.310.7cf", 1);
     let signed = phoebis_cch::sign(spliced.as_bytes()).unwrap();
     let resp = app
         .oneshot(request_from_fixture(

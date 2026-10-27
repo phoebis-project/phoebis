@@ -14,7 +14,7 @@ use phoebis_ledger::{
 };
 use phoebis_oauth::Clock;
 use phoebis_profile::{
-    claude_code_2_1_269_linux_x64,
+    claude_code_2_1_310_linux_x64,
     fixtures::{body, inference_head, BodyFixture, FixtureKind},
 };
 use phoebis_relay::{router, Accounting, CatalogService, Limits, Relay, UpstreamGzip};
@@ -109,7 +109,7 @@ pub async fn harness_on(
     config: LedgerConfig,
     with_usage: bool,
 ) -> Harness {
-    let p = claude_code_2_1_269_linux_x64();
+    let p = claude_code_2_1_310_linux_x64();
     if store.accounts().unwrap().is_empty() {
         for (n, account) in accounts.iter().enumerate() {
             let identity = matches!(account.kind, AccountKind::Oauth).then(|| Identity {

@@ -278,7 +278,7 @@ fn the_summary_names_the_routing_keys() {
             &[
                 "proxy: body budget 536870912 bytes, body read 60s, key body reads 128, max request 33554432 bytes, \
                  sign cch placeholder off, upstream gzip auto",
-                "profile claude-code-2.1.269-linux-x64",
+                "profile claude-code-2.1.310-linux-x64",
                 "routing: cooldown_fallback 60s, model_rejection 3600s, catalog refresh 21600s, startup fetch 30s",
                 "ledger at ./data/ledger.sqlite",
             ][..]

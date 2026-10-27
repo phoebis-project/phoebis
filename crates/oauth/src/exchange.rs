@@ -69,9 +69,7 @@ pub fn exchange_body(
     ])
 }
 
-/// The refresh body, in its measured key order. The captured client also sends an `expires_in` of one
-/// year, which the token endpoint ignores; asking for a lifetime we do not control would only invite a
-/// response we then have to reconcile, so it is left out.
+/// The refresh body, in its measured key order.
 pub fn refresh_body(profile: &Profile, refresh_token: &str, scopes: &str) -> Vec<u8> {
     json_body(&[
         ("grant_type", "refresh_token"),
@@ -82,8 +80,9 @@ pub fn refresh_body(profile: &Profile, refresh_token: &str, scopes: &str) -> Vec
 }
 
 /// Builds one control-plane request with the header order measured per endpoint. The sets differ in more
-/// than the obvious ways (usage sends the CLI user agent where the others send Axios', roles sends no
-/// `Content-Type`), so each one is spelled out rather than derived from a common base.
+/// than the obvious ways (the token call sends Axios' user agent, the profile and roles reads the client's own,
+/// usage the CLI one, and roles sends no `Content-Type`), so each one is spelled out rather than derived from a
+/// common base.
 pub fn control_request(
     profile: &Profile,
     kind: ControlKind,
@@ -92,7 +91,6 @@ pub fn control_request(
 ) -> RawRequest {
     let (host, target) = split_url(kind.url(profile));
     let body = Bytes::from(body.unwrap_or_default());
-    let axios = profile.control.axios_user_agent;
     let mut headers: Vec<(String, String)> = Vec::with_capacity(9);
     let mut push = |name: &str, value: &str| headers.push((name.to_string(), value.to_string()));
 
@@ -100,26 +98,26 @@ pub fn control_request(
     match kind {
         ControlKind::Token => {
             push("Content-Type", CONTENT_TYPE_JSON);
-            push("User-Agent", axios);
+            push("User-Agent", profile.control.axios_user_agent);
             push("Content-Length", &body.len().to_string());
         }
         ControlKind::Profile => {
             push("Content-Type", CONTENT_TYPE_JSON);
+            push("User-Agent", profile.control.read_user_agent);
             if let Some(bearer) = bearer {
                 push("Authorization", &format!("Bearer {bearer}"));
             }
             push("Cache-Control", "no-cache");
-            push("User-Agent", axios);
         }
         ControlKind::Roles => {
+            push("User-Agent", profile.control.read_user_agent);
             if let Some(bearer) = bearer {
                 push("Authorization", &format!("Bearer {bearer}"));
             }
-            push("User-Agent", axios);
         }
         ControlKind::Usage => {
             push("Content-Type", CONTENT_TYPE_JSON);
-            push("User-Agent", profile.user_agent_sdk_cli);
+            push("User-Agent", profile.user_agent_cli);
             if let Some(bearer) = bearer {
                 push("Authorization", &format!("Bearer {bearer}"));
             }

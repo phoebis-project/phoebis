@@ -6,7 +6,7 @@ use phoebis_oauth::{
     CredentialManager,
 };
 use phoebis_profile::{
-    claude_code_2_1_269_linux_x64,
+    claude_code_2_1_310_linux_x64,
     fixtures::{control_head, control_response, ControlFixture},
 };
 use phoebis_store::{
@@ -24,7 +24,7 @@ use std::sync::{
 };
 
 fn bodies_match_measured_key_order() {
-    let p = claude_code_2_1_269_linux_x64();
+    let p = claude_code_2_1_310_linux_x64();
     let b = refresh_body(p, "sk-ant-ort01-PLACEHOLDER", "user:profile user:inference");
     assert_eq!(
         String::from_utf8(b).unwrap(),
@@ -59,7 +59,7 @@ fn bodies_match_measured_key_order() {
 #[test]
 fn control_requests_serialize_to_the_fixture_heads() {
     bodies_match_measured_key_order();
-    let p = claude_code_2_1_269_linux_x64();
+    let p = claude_code_2_1_310_linux_x64();
     let fixture = control_head(ControlFixture::Roles);
     let req = control_request(
         p,
@@ -102,6 +102,28 @@ fn control_requests_serialize_to_the_fixture_heads() {
     );
 }
 
+#[test]
+fn the_code_grant_body_matches_the_captured_fixture() {
+    let p = claude_code_2_1_310_linux_x64();
+    let raw = control_head(ControlFixture::TokenCode);
+    let terminator = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+    let captured = &raw[terminator..];
+    let fields: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(captured).unwrap();
+    let field = |key: &str| fields[key].as_str().unwrap();
+    let body = exchange_body(
+        p,
+        field("code"),
+        field("redirect_uri"),
+        field("code_verifier"),
+        field("state"),
+    );
+    assert_eq!(
+        String::from_utf8(body).unwrap(),
+        std::str::from_utf8(captured).unwrap()
+    );
+}
+
 fn store_with_account() -> Arc<Store> {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     store
@@ -130,7 +152,7 @@ async fn manager_with(
     now: Arc<AtomicI64>,
 ) -> (CredentialManager, Arc<Store>, FakeUpstream) {
     let up = FakeUpstream::start(rules).await;
-    let p = claude_code_2_1_269_linux_x64();
+    let p = claude_code_2_1_310_linux_x64();
     let mut b = connector_builder(p, Plane::Control).unwrap();
     phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
     let addr = up.addr();
@@ -199,6 +221,53 @@ async fn concurrent_acquires_coalesce_into_one_refresh() {
     assert_eq!(stored.expires_at, 1_000_000 + 28_800_000);
     assert!(store.pending_refresh_attempts().unwrap().is_empty());
     up.shutdown().await;
+}
+
+/// A bundle paired under an older build asks for the scopes it was granted, since the pinned build's wider list
+/// would ask for a scope that grant never held. The pinned list serves a bundle that stored none.
+#[tokio::test]
+async fn a_bundle_with_stored_scopes_refreshes_with_them() {
+    const OLDER_BUILD: &str =
+        "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+    const PINNED_FALLBACK: &str = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins";
+    for (stored, granted) in [(OLDER_BUILD, OLDER_BUILD), ("", PINNED_FALLBACK)] {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let token_rule = Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: control_response(ControlFixture::Token).to_vec(),
+            },
+        };
+        let (mgr, store, up) = manager_with(vec![token_rule], now).await;
+        store
+            .commit_credentials(
+                "a",
+                1,
+                1,
+                None,
+                None,
+                &NewBundle {
+                    access_token: Secret::new("old"),
+                    refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                    issued_at: 0,
+                    expires_at: 1,
+                    refresh_expires_at: None,
+                    scopes: stored.into(),
+                },
+            )
+            .unwrap();
+        mgr.acquire("a").await.unwrap();
+        let requests = up.requests();
+        let grant = requests
+            .iter()
+            .find(|r| r.line.starts_with("POST /v1/oauth/token"))
+            .expect("the expired bundle sends one refresh grant");
+        let body: serde_json::Value = serde_json::from_slice(&grant.body).unwrap();
+        assert_eq!(body["scope"], granted, "stored scopes {stored:?}");
+        up.shutdown().await;
+    }
 }
 
 /// An expired bundle at generation 1 under `a`, and a manager whose token endpoint answers the fixture, so the first
@@ -807,7 +876,7 @@ async fn refresh_now_serves_the_stored_token_when_the_generation_already_moved()
 
 /// A manager whose resolver never yields an address, so every refresh fails before a byte is written.
 async fn manager_without_upstream(now: Arc<AtomicI64>) -> (CredentialManager, Arc<Store>) {
-    let p = claude_code_2_1_269_linux_x64();
+    let p = claude_code_2_1_310_linux_x64();
     let resolver: Resolver = Arc::new(|_| Box::pin(async { None }) as ResolveFuture);
     let control = Arc::new(ControlClient::new(
         p,

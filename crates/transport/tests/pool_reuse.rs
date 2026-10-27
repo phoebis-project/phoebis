@@ -1,5 +1,5 @@
 use fake_upstream::FakeUpstream;
-use phoebis_profile::claude_code_2_1_269_linux_x64;
+use phoebis_profile::claude_code_2_1_310_linux_x64;
 use phoebis_transport::pool::{Pool, PoolKey};
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 use std::time::Duration;
@@ -10,7 +10,7 @@ const HOST: &str = "api.anthropic.com";
 async fn checkout_reports_whether_the_connection_came_from_the_idle_list() {
     let up = FakeUpstream::start(vec![]).await;
     let connector = || {
-        let profile = claude_code_2_1_269_linux_x64();
+        let profile = claude_code_2_1_310_linux_x64();
         let mut builder = connector_builder(profile, Plane::Inference).unwrap();
         trust_extra_ca(&mut builder, up.ca_pem()).unwrap();
         builder.build()

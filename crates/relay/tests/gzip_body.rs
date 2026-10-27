@@ -264,7 +264,7 @@ async fn with_the_switch_on_the_signed_placeholder_covers_the_tail() {
 async fn a_gzip_full_shape_body_carrying_the_clients_placeholder_is_relayed_with_it_unsigned() {
     let placeholder = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
         .unwrap()
-        .replacen("cch=9b244", "cch=00000", 1)
+        .replacen("cch=91984", "cch=00000", 1)
         .into_bytes();
     let up = FakeUpstream::start(messages(json_200())).await;
     let h = harness_with(&up, &[account()], PoolSpec::default(), default_limits()).await;

@@ -21,7 +21,7 @@ use phoebis_ledger::{
 };
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_profile::{
-    claude_code_2_1_269_linux_x64,
+    claude_code_2_1_310_linux_x64,
     fixtures::{control_response, ControlFixture},
 };
 use phoebis_relay::{AccountingSource, CatalogService, Limits, Relay, UpstreamGzip};
@@ -896,7 +896,7 @@ async fn build_app_routed(
     ledger_config: LedgerConfig,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
-    let p = claude_code_2_1_269_linux_x64();
+    let p = claude_code_2_1_310_linux_x64();
     let clock_cell = Arc::new(AtomicI64::new(NOW));
     let clock: Clock = {
         let c = clock_cell.clone();

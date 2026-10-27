@@ -4946,7 +4946,7 @@ async fn the_session_route_answers_the_session_id_and_settings_say_the_admin_sec
     );
     assert_eq!(
         settings["about"]["profile"].as_str(),
-        Some("claude-code-2.1.269-linux-x64")
+        Some("claude-code-2.1.310-linux-x64")
     );
     assert!(settings["compatibility"].is_null());
     assert!(

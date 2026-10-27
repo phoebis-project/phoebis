@@ -103,7 +103,7 @@ pub async fn run_until(
     deadline: &ShutdownDeadline,
 ) -> anyhow::Result<()> {
     init_tracing();
-    let profile = phoebis_profile::claude_code_2_1_269_linux_x64();
+    let profile = phoebis_profile::claude_code_2_1_310_linux_x64();
 
     let key = StorageKey::from_file(&config.storage.encryption_key_file).with_context(|| {
         format!(
@@ -1758,7 +1758,7 @@ revisions:
             ))
             .unwrap()
         };
-        let profile = phoebis_profile::claude_code_2_1_269_linux_x64();
+        let profile = phoebis_profile::claude_code_2_1_310_linux_x64();
         let plain = settings_view(&config(""), profile);
         let paired = settings_view(
             &config("  tls:\n    cert_file: cert.pem\n    key_file: key.pem\n"),
@@ -1776,7 +1776,7 @@ revisions:
              storage:\n  encryption_key_file: storage.key\n  path: router.sqlite\n",
         )
         .unwrap();
-        let view = settings_view(&config, phoebis_profile::claude_code_2_1_269_linux_x64());
+        let view = settings_view(&config, phoebis_profile::claude_code_2_1_310_linux_x64());
         assert_eq!((view.retention_days, view.rollup_retention_days), (30, 0));
     }
 

@@ -37,6 +37,7 @@ fn inference_heads_serialize_byte_identical() {
 fn control_heads_serialize_byte_identical() {
     for k in [
         ControlFixture::Token,
+        ControlFixture::TokenCode,
         ControlFixture::Profile,
         ControlFixture::Roles,
         ControlFixture::Usage,

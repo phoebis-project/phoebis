@@ -1,11 +1,11 @@
 //! Typed access to the measured fixture files embedded at compile time.
 
-/// The request heads `inference_head` answers. The count heads were measured from client 2.1.278 where the
-/// inference heads are 2.1.269's, so the build and the request path vary together and no difference between the
-/// two belongs to the count path alone. Every count head carries no `X-Stainless-Timeout` and none of the
-/// `extended-cache-ttl-2025-04-11`, `prompt-caching-scope-2026-01-05`, and `thinking-token-count-2026-05-13`
-/// betas, the first-party one also none of `advanced-tool-use-2025-11-20` and `cache-diagnosis-2026-04-07`, and
-/// all three append `token-counting-2024-11-01`.
+/// The request heads `inference_head` answers. The count heads come from the same capture as the inference heads,
+/// so a difference between the two belongs to the count path. Every count head carries no `X-Stainless-Timeout`
+/// and none of the `advanced-tool-use-2025-11-20`, `extended-cache-ttl-2025-04-11`,
+/// `prompt-caching-scope-2026-01-05` and `thinking-token-count-2026-05-13` betas, the first-party one also none of
+/// `cache-diagnosis-2026-04-07` and `thinking-binding-controls-2026-08-01`, and all three append
+/// `token-counting-2024-11-01`.
 pub enum FixtureKind {
     OauthNonFirstParty,
     OauthFirstParty,
@@ -28,7 +28,10 @@ pub enum Plane {
     Control,
 }
 pub enum ControlFixture {
+    /// The refresh grant.
     Token,
+    /// The authorization-code grant of a login. The capture's token endpoint answers both grants with one body.
+    TokenCode,
     Profile,
     Roles,
     Usage,
@@ -117,6 +120,7 @@ pub fn client_hello(plane: Plane) -> Vec<u8> {
 pub fn control_head(which: ControlFixture) -> &'static [u8] {
     match which {
         ControlFixture::Token => include_bytes!("../fixtures/control_token.http"),
+        ControlFixture::TokenCode => include_bytes!("../fixtures/control_token_code.http"),
         ControlFixture::Profile => include_bytes!("../fixtures/control_profile.http"),
         ControlFixture::Roles => include_bytes!("../fixtures/control_roles.http"),
         ControlFixture::Usage => include_bytes!("../fixtures/control_usage.http"),
@@ -125,7 +129,9 @@ pub fn control_head(which: ControlFixture) -> &'static [u8] {
 
 pub fn control_response(which: ControlFixture) -> &'static [u8] {
     match which {
-        ControlFixture::Token => include_bytes!("../fixtures/responses/token.json"),
+        ControlFixture::Token | ControlFixture::TokenCode => {
+            include_bytes!("../fixtures/responses/token.json")
+        }
         ControlFixture::Profile => include_bytes!("../fixtures/responses/profile.json"),
         ControlFixture::Roles => include_bytes!("../fixtures/responses/roles.json"),
         ControlFixture::Usage => include_bytes!("../fixtures/responses/usage.json"),

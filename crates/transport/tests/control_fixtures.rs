@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use phoebis_profile::{
-    claude_code_2_1_269_linux_x64,
+    claude_code_2_1_310_linux_x64,
     fixtures::{control_head, control_response, ControlFixture},
 };
 use phoebis_transport::request::{parse_head, RawRequest};
@@ -33,7 +33,7 @@ async fn control_requests_reach_the_upstream_byte_identical_and_close() {
         },
     ])
     .await;
-    let profile = claude_code_2_1_269_linux_x64();
+    let profile = claude_code_2_1_310_linux_x64();
     let mut b = connector_builder(profile, Plane::Control).unwrap();
     phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
     let addr = up.addr();
@@ -89,7 +89,7 @@ fn token_request() -> RawRequest {
 
 #[tokio::test]
 async fn a_request_that_never_leaves_reports_an_unreachable_upstream() {
-    let profile = claude_code_2_1_269_linux_x64();
+    let profile = claude_code_2_1_310_linux_x64();
 
     let unresolved: Resolver = Arc::new(|_| Box::pin(async { None }) as ResolveFuture);
     let client = ControlClient::new(
@@ -140,7 +140,7 @@ async fn a_timeout_after_the_body_was_handed_over_is_not_unreachable() {
         respond: Respond::Gated(Box::new(Respond::CloseAfterRequest)),
     }])
     .await;
-    let profile = claude_code_2_1_269_linux_x64();
+    let profile = claude_code_2_1_310_linux_x64();
     let mut b = connector_builder(profile, Plane::Control).unwrap();
     phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
     let addr = up.addr();
@@ -172,7 +172,7 @@ async fn a_zstd_bomb_response_is_refused_at_the_control_bound() {
         },
     }])
     .await;
-    let profile = claude_code_2_1_269_linux_x64();
+    let profile = claude_code_2_1_310_linux_x64();
     let mut b = connector_builder(profile, Plane::Control).unwrap();
     phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
     let addr = up.addr();

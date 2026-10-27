@@ -113,7 +113,7 @@ fn a_body_without_a_stream_flag_gains_one_and_a_stamped_body_is_resigned() {
     assert_ne!(
         phoebis_cch::find_cch(&recipe.body)
             .map(|l| recipe.body[l.digits_start..l.digits_start + 5].to_vec()),
-        Some(b"9b244".to_vec()),
+        Some(b"91984".to_vec()),
         "and differs from the client's stamp over the unedited body"
     );
 }

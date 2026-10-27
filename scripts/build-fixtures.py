@@ -25,8 +25,8 @@ DIFF_LINES = 40
 
 # Both ClientHellos carry the same server name, so their byte length is the only thing that tells the inference
 # path from the control path in a connect.json.
-CONTROL_HELLO_LEN = 1473
-INFERENCE_HELLO_LEN = 1499
+CONTROL_HELLO_LEN = 1477
+INFERENCE_HELLO_LEN = 1503
 
 # The fixtures only the control plane produces. scripts/capture-control.sh records it and the baseline capture records
 # none, so --check lists these names as not captured, rather than as drift, when no directory of control recordings

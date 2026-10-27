@@ -122,7 +122,7 @@ pub fn restorable_version(cli_version: &str) -> Option<&str> {
 }
 
 /// The token in the entrypoint's position of a `claude-cli/` user agent, the second comma-separated token of the
-/// parenthesis, after `external`: `sdk-cli` out of `claude-cli/2.1.269 (external, sdk-cli)`, `claude-desktop-3p` out
+/// parenthesis, after `external`: `sdk-cli` out of `claude-cli/2.1.310 (external, sdk-cli)`, `claude-desktop-3p` out
 /// of `(external, claude-desktop-3p, agent-sdk/0.3.295)`, `cli` out of `(external, cli, workload/cron)`. `cli` when
 /// the agent carries no parenthesis, no second token, or one outside the entrypoint token alphabet:
 /// `claude-cli/<version>` alone is the client's own spelling of the interactive entrypoint. The alphabet admits a

@@ -18,7 +18,12 @@ fn expected_wire(head: &[u8], native_len: usize, edited_body: &[u8]) -> Vec<u8> 
         &format!("Content-Length: {native_len}"),
         &format!("Content-Length: {}", edited_body.len()),
     );
-    if text.starts_with("POST /v1/messages?") || text.starts_with("POST /v1/messages ") {
+    let inference =
+        text.starts_with("POST /v1/messages?") || text.starts_with("POST /v1/messages ");
+    let has_class = text
+        .to_ascii_lowercase()
+        .contains("\r\nx-claude-code-request-class:");
+    if inference && !has_class {
         let end = text.rfind("\r\n\r\n").expect("a head ends in a blank line");
         text.insert_str(end + 2, "x-claude-code-request-class: main\r\n");
     }

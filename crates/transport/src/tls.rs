@@ -20,6 +20,10 @@ pub fn connector_builder(
     let mut b = SslConnector::builder(SslMethod::tls())?;
     b.set_min_proto_version(Some(SslVersion::TLS1_2))?;
     b.set_curves_list(profile.tls.curves)?;
+    // The client's runtime (Bun 1.4.4) advertises two more algorithms than BoringSSL's default verify list. The string
+    // form keeps the profile free of a `boring` dependency, as the curves and the cipher list are. The call sets the
+    // signing preferences too, which a client without a certificate never uses.
+    b.set_sigalgs_list(profile.tls.signature_algorithms)?;
     // The native client offers no GREASE and no permuted extensions on either plane.
     b.set_grease_enabled(false);
     b.set_permute_extensions(false);
