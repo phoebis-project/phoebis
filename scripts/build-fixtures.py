@@ -304,10 +304,13 @@ def build(src: pathlib.Path, out: pathlib.Path, resign: bool = True, control: pa
     control_fixtures(control, out, FIXTURES / "responses")
 
 
-def build_count(src: pathlib.Path, out: pathlib.Path) -> None:
+def build_count(src: pathlib.Path, out: pathlib.Path, resign: bool = True) -> None:
     """Write count_<mode>.json and count_<mode>.http for each mode directory under `src`, from the one
     count_tokens request each run recorded; the inference entries beside it are the client's turn and are not
-    extracted, since the inference fixtures stay pinned to the build that measured them."""
+    extracted, since the inference fixtures stay pinned to the build that measured them.
+
+    The bodies are written redacted, and with `resign` their cch digits are re-signed over the redacted bytes, as
+    `build` does. `check_count` builds with `resign` off, since its comparison masks the digits."""
     for mode in COUNT_MODES:
         cm = json.load(open(src / mode / "clean_modes.json"))
         counts = count_entries(cm)
@@ -323,6 +326,9 @@ def build_count(src: pathlib.Path, out: pathlib.Path) -> None:
             )
         written = redact_body(body)
         (out / f"{mode}.json").write_bytes(written)
+        if resign:
+            # The re-sign rewrites the five digits alone, so the length below still holds.
+            resign_written(out / f"{mode}.json")
         (out / f"{mode}.http").write_bytes(head(entry, len(written)))
 
 
@@ -499,6 +505,9 @@ def _self_test_capture_partition() -> None:
             status = check_count(capture, tree)
         if status == 0 or "count_apikey.http" not in report.getvalue():
             raise AssertionError(f"check_count passed with a count fixture missing: {report.getvalue()!r}")
+        # The comparison masks the digits, so the fresh side is built without the re-sign step, as check() builds its.
+        if "resign" in report.getvalue():
+            raise AssertionError(f"check_count re-signed its fresh side: {report.getvalue()!r}")
         print("self-test passed: check_count requires every count fixture and names the one that is gone")
 
         # A recapture whose head and body disagree on the length must stop the build rather than write a short
@@ -939,16 +948,33 @@ def _self_test_build_reads_control() -> None:
 
 def _self_test_build_count_redacts() -> None:
     """A written count body carries the placeholders in place of the capture's ids, and its head declares the
-    length of the body written."""
+    length of the body written. Each body passes through the re-sign step, which leaves one without a stamp as the
+    redaction wrote it and needs no cargo for it."""
     # The emptied account_uuid shortens the body, so a head sized from the captured body would declare too much.
     members = rb'\"device_id\":\"' + _TEST_DEVICE_ID + rb'\",\"account_uuid\":\"' + _TEST_ACCOUNT_UUID + rb'\",'
     with tempfile.TemporaryDirectory() as tmp:
         capture = _count_capture(pathlib.Path(tmp) / "capture", _TEST_SESSION_ID, members)
         out = pathlib.Path(tmp) / "out"
         out.mkdir()
-        build_count(capture, out)
+        no_cargo = pathlib.Path(tmp) / "bin"
+        no_cargo.mkdir()
+        saved_path = os.environ.get("PATH")
+        os.environ["PATH"] = str(no_cargo)
+        report = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(report):
+                build_count(capture, out)
+        finally:
+            if saved_path is None:
+                del os.environ["PATH"]
+            else:
+                os.environ["PATH"] = saved_path
         for mode in COUNT_MODES:
             body = (out / f"{mode}.json").read_bytes()
+            if body != redact_body((capture / mode / "clean_body_1.json").read_bytes()):
+                raise AssertionError(f"build_count wrote a {mode}.json other than its redacted capture")
+            if f"resign skipped: {mode}.json carries no cch= stamp\n" not in report.getvalue():
+                raise AssertionError(f"build_count wrote {mode}.json past the re-sign step: {report.getvalue()!r}")
             for wanted in (
                 rb'\"device_id\":\"' + DEVICE_ID_PLACEHOLDER.encode() + rb'\"',
                 rb'\"session_id\":\"' + SESSION_ID_PLACEHOLDER.encode() + rb'\"',
@@ -962,6 +988,7 @@ def _self_test_build_count_redacts() -> None:
             if f"Content-Length: {len(body)}" not in lines:
                 raise AssertionError(f"build_count wrote {mode}.http without Content-Length {len(body)}")
         print("self-test passed: build_count writes redacted bodies and heads sized to them")
+        print("self-test passed: build_count passes each count body through the re-sign step")
 
 
 def _self_test_mask_hello() -> None:
@@ -1368,7 +1395,7 @@ def check_count(capture_dir: pathlib.Path, committed_dir: pathlib.Path = FIXTURE
     with tempfile.TemporaryDirectory() as tmp:
         fresh_dir = pathlib.Path(tmp) / "fixtures"
         fresh_dir.mkdir(parents=True)
-        build_count(capture_dir, fresh_dir)
+        build_count(capture_dir, fresh_dir, resign=False)
         committed = {k: v for k, v in normalize_tree(committed_dir).items() if k in COUNT_FIXTURES}
         fresh = {k: v for k, v in normalize_tree(fresh_dir).items() if k in COUNT_FIXTURES}
         missing = sorted(name for name in COUNT_FIXTURES if name not in committed or name not in fresh)
