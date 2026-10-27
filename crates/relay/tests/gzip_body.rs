@@ -216,7 +216,7 @@ async fn a_gzip_body_is_inflated_edited_and_relayed_with_its_tail_unchanged() {
 #[tokio::test]
 async fn a_client_stamped_body_with_a_tail_passes_the_drift_check_and_is_relayed() {
     // The client stamps the bytes it sends, the tail among them.
-    let stamped = phoebis_cch::sign(&tailed(body(BodyFixture::FirstParty9b244))).unwrap();
+    let stamped = phoebis_cch::sign(&tailed(body(BodyFixture::FirstParty))).unwrap();
     let up = FakeUpstream::start(messages(json_200())).await;
     let h = harness_with(&up, &[account()], PoolSpec::default(), default_limits()).await;
     let resp = h
@@ -262,7 +262,7 @@ async fn with_the_switch_on_the_signed_placeholder_covers_the_tail() {
 /// stream; inflated, it is the same placeholder an identity body carries and travels unsigned.
 #[tokio::test]
 async fn a_gzip_full_shape_body_carrying_the_clients_placeholder_is_relayed_with_it_unsigned() {
-    let placeholder = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+    let placeholder = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
         .unwrap()
         .replacen("cch=9b244", "cch=00000", 1)
         .into_bytes();

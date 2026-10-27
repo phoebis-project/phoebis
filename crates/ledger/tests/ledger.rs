@@ -341,7 +341,7 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let native =
-        String::from_utf8(phoebis_profile::fixtures::body(BodyFixture::FirstParty9b244).to_vec())
+        String::from_utf8(phoebis_profile::fixtures::body(BodyFixture::FirstParty).to_vec())
             .unwrap();
     let (line, headers) =
         phoebis_transport::request::parse_head(phoebis_profile::fixtures::inference_head(
@@ -871,7 +871,7 @@ async fn the_recorded_first_party_fixtures_shape_reaches_the_row_and_its_effort_
         .app
         .clone()
         .oneshot(request_for_fixture(
-            BodyFixture::FirstParty9b244,
+            BodyFixture::FirstParty,
             KEY,
             "claude-sonnet-4-5",
             "s1",
@@ -898,7 +898,7 @@ async fn the_recorded_first_party_fixtures_shape_reaches_the_row_and_its_effort_
     assert_eq!(row.effort, None);
 
     let spliced =
-        String::from_utf8(phoebis_profile::fixtures::body(BodyFixture::FirstParty9b244).to_vec())
+        String::from_utf8(phoebis_profile::fixtures::body(BodyFixture::FirstParty).to_vec())
             .unwrap()
             .replacen(
                 r#""model":"claude-sonnet-4-5""#,
@@ -944,7 +944,7 @@ async fn a_version_suffix_drift_refusal_is_recorded_on_the_request_row() {
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let native =
-        String::from_utf8(phoebis_profile::fixtures::body(BodyFixture::FirstParty9b244).to_vec())
+        String::from_utf8(phoebis_profile::fixtures::body(BodyFixture::FirstParty).to_vec())
             .unwrap()
             .replacen("cc_version=2.1.269.517", "cc_version=2.1.269.abc", 1);
     let drifted = String::from_utf8(phoebis_cch::sign(native.as_bytes()).unwrap()).unwrap();

@@ -16,13 +16,12 @@ pub enum FixtureKind {
     CountApiKey,
 }
 pub enum BodyFixture {
-    FirstParty9b244,
-    FirstPartyE142e,
+    FirstParty,
+    FirstPartyAgain,
     Oauth,
     ApiKey,
-    CountOauth,
-    CountOauthFirstParty,
-    CountApiKey,
+    /// The one count body the three count heads share.
+    Count,
 }
 pub enum Plane {
     Inference,
@@ -49,13 +48,11 @@ pub fn inference_head(kind: FixtureKind) -> &'static [u8] {
 
 pub fn body(kind: BodyFixture) -> &'static [u8] {
     match kind {
-        BodyFixture::FirstParty9b244 => include_bytes!("../fixtures/body_fp_9b244.json"),
-        BodyFixture::FirstPartyE142e => include_bytes!("../fixtures/body_fp_e142e.json"),
+        BodyFixture::FirstParty => include_bytes!("../fixtures/body_fp.json"),
+        BodyFixture::FirstPartyAgain => include_bytes!("../fixtures/body_fp_again.json"),
         BodyFixture::Oauth => include_bytes!("../fixtures/body_oauth.json"),
         BodyFixture::ApiKey => include_bytes!("../fixtures/body_apikey.json"),
-        BodyFixture::CountOauth => include_bytes!("../fixtures/count_oauth.json"),
-        BodyFixture::CountOauthFirstParty => include_bytes!("../fixtures/count_oauth_fp.json"),
-        BodyFixture::CountApiKey => include_bytes!("../fixtures/count_apikey.json"),
+        BodyFixture::Count => include_bytes!("../fixtures/count.json"),
     }
 }
 

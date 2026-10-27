@@ -1536,7 +1536,7 @@ async fn a_token_count_answered_200_on_a_marked_account_leaves_the_mark_standing
             phoebis_profile::fixtures::inference_head(
                 phoebis_profile::fixtures::FixtureKind::CountApiKey,
             ),
-            phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::CountApiKey),
+            phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::Count),
             KEY,
         ))
         .await
@@ -3397,7 +3397,7 @@ async fn the_renewal_report_carries_the_usage_the_origin_and_the_ttl_and_a_probe
 /// reproduce over a body re-signed so its hash does: one body per drift, with the trigger each files.
 fn drifted_first_party_bodies() -> [(Vec<u8>, &'static str); 2] {
     use phoebis_profile::fixtures::{body, BodyFixture};
-    let fixture = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec()).unwrap();
+    let fixture = String::from_utf8(body(BodyFixture::FirstParty).to_vec()).unwrap();
     let hash = fixture.replacen("cch=9b244", "cch=9b245", 1).into_bytes();
     let suffix = phoebis_cch::sign(
         fixture
@@ -3631,7 +3631,7 @@ async fn a_drifted_stamp_under_a_key_that_refuses_the_model_gets_the_model_refus
         },
     )
     .await;
-    let fixture = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec()).unwrap();
+    let fixture = String::from_utf8(body(BodyFixture::FirstParty).to_vec()).unwrap();
     // A stamp this build does not compute, and one only the decoded walk reaches.
     let drifted = fixture.replacen("cch=9b244", "cch=9b245", 1);
     let escaped = fixture.replacen(

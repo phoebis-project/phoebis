@@ -50,10 +50,10 @@ async fn relayed(kind: AccountKind, head: &'static [u8], native: &'static [u8]) 
 }
 
 #[tokio::test]
-async fn the_first_party_9b244_body_relays_as_the_base_commit_relayed_it() {
+async fn the_first_party_body_relays_as_the_base_commit_relayed_it() {
     let (head, native) = (
         inference_head(FixtureKind::OauthFirstParty),
-        body(BodyFixture::FirstParty9b244),
+        body(BodyFixture::FirstParty),
     );
     let expected_body = phoebis_cch::sign(&with_uuid(native)).unwrap();
     assert_eq!(
@@ -63,10 +63,10 @@ async fn the_first_party_9b244_body_relays_as_the_base_commit_relayed_it() {
 }
 
 #[tokio::test]
-async fn the_first_party_e142e_body_relays_as_the_base_commit_relayed_it() {
+async fn the_second_first_party_body_relays_as_the_base_commit_relayed_it() {
     let (head, native) = (
         inference_head(FixtureKind::OauthFirstParty),
-        body(BodyFixture::FirstPartyE142e),
+        body(BodyFixture::FirstPartyAgain),
     );
     let expected_body = phoebis_cch::sign(&with_uuid(native)).unwrap();
     assert_eq!(
@@ -79,7 +79,7 @@ async fn the_first_party_e142e_body_relays_as_the_base_commit_relayed_it() {
 async fn the_recorded_oauth_count_relays_under_the_defaults_as_the_client_sent_it() {
     let (head, native) = (
         inference_head(FixtureKind::CountOauthNonFirstParty),
-        body(BodyFixture::CountOauth),
+        body(BodyFixture::Count),
     );
     assert_eq!(
         relayed(AccountKind::Oauth, head, native).await,
@@ -91,7 +91,7 @@ async fn the_recorded_oauth_count_relays_under_the_defaults_as_the_client_sent_i
 async fn the_recorded_first_party_count_relays_under_the_defaults_as_the_client_sent_it() {
     let (head, native) = (
         inference_head(FixtureKind::CountOauthFirstParty),
-        body(BodyFixture::CountOauthFirstParty),
+        body(BodyFixture::Count),
     );
     assert_eq!(
         relayed(AccountKind::Oauth, head, native).await,
@@ -103,7 +103,7 @@ async fn the_recorded_first_party_count_relays_under_the_defaults_as_the_client_
 async fn the_recorded_api_key_count_relays_under_the_defaults_as_the_client_sent_it() {
     let (head, native) = (
         inference_head(FixtureKind::CountApiKey),
-        body(BodyFixture::CountApiKey),
+        body(BodyFixture::Count),
     );
     assert_eq!(
         relayed(AccountKind::ApiKey, head, native).await,

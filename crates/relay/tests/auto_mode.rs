@@ -35,7 +35,7 @@ fn account() -> TestAccount {
 
 /// The recorded first-party body with the member spliced in and re-signed, as the client in auto mode stamps it.
 fn first_party_with_safeguards() -> Vec<u8> {
-    phoebis_cch::sign(&with_safeguards(body(BodyFixture::FirstParty9b244))).unwrap()
+    phoebis_cch::sign(&with_safeguards(body(BodyFixture::FirstParty))).unwrap()
 }
 
 /// The fixture head of `kind` with the beta the client sends beside the member.
@@ -238,7 +238,7 @@ async fn off_on_the_key_drops_the_member_and_the_beta_and_restamps_a_first_party
     assert_eq!(&phoebis_cch::sign(received).unwrap(), received);
     assert_ne!(stamp(received), stamp(&sent_body), "the body was restamped");
     assert!(
-        received == &phoebis_cch::sign(&with_uuid(body(BodyFixture::FirstParty9b244))).unwrap(),
+        received == &phoebis_cch::sign(&with_uuid(body(BodyFixture::FirstParty))).unwrap(),
         "the body is the one the recording without the member relays as"
     );
 
@@ -289,7 +289,7 @@ async fn off_on_the_pool_drops_the_pair_from_an_oauth_body_and_never_reports_the
 #[tokio::test]
 async fn off_drops_the_beta_alone_from_a_request_without_the_member() {
     let head = head_with_beta(FixtureKind::OauthFirstParty);
-    let native = body(BodyFixture::FirstParty9b244);
+    let native = body(BodyFixture::FirstParty);
     let on = relay(&[account()], PoolSpec::default(), json_200(), &head, native).await;
     let off = relay(&[account()], key_off(), json_200(), &head, native).await;
     assert_eq!((on.status, off.status), (200, 200));
@@ -351,7 +351,7 @@ async fn a_probe_under_an_off_key_loses_the_beta_as_an_inference_does() {
 #[tokio::test]
 async fn a_count_under_off_loses_the_beta_as_an_inference_does() {
     let head = head_with_beta(FixtureKind::CountApiKey);
-    let native = body(BodyFixture::CountApiKey);
+    let native = body(BodyFixture::Count);
     let r = relay(
         &[api_key("acct", A, 0)],
         pool_off(),
@@ -376,7 +376,7 @@ async fn a_count_under_off_loses_the_beta_as_an_inference_does() {
 #[tokio::test]
 async fn a_count_carrying_the_member_under_an_off_key_reaches_the_upstream_as_the_native_count() {
     let head = head_with_beta(FixtureKind::CountApiKey);
-    let native = body(BodyFixture::CountApiKey);
+    let native = body(BodyFixture::Count);
     let sent_body = with_safeguards(native);
     assert_eq!(count(&sent_body, br#""safeguards":["#), 1);
     let r = relay(
@@ -455,16 +455,14 @@ async fn off_refuses_a_body_whose_member_the_walk_cannot_place() {
 /// spelled with an escape and stamped as a client serializing that spelling stamps it: the relay's restamp
 /// cannot reach it.
 fn first_party_with_an_escaped_stamp() -> Vec<u8> {
-    let mut sent = String::from_utf8(with_uuid(&with_safeguards(body(
-        BodyFixture::FirstParty9b244,
-    ))))
-    .unwrap()
-    .replacen(
-        r#""text":"x-anthropic-billing-header"#,
-        r#""te\u0078t":"x-anthropic-billing-header"#,
-        1,
-    )
-    .into_bytes();
+    let mut sent = String::from_utf8(with_uuid(&with_safeguards(body(BodyFixture::FirstParty))))
+        .unwrap()
+        .replacen(
+            r#""text":"x-anthropic-billing-header"#,
+            r#""te\u0078t":"x-anthropic-billing-header"#,
+            1,
+        )
+        .into_bytes();
     let at = sent
         .windows(4)
         .position(|w| w == b"cch=")

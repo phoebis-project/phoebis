@@ -277,7 +277,7 @@ async fn the_beta_and_the_member_are_added_when_absent_with_the_previous_id_acro
 /// The first-party fixture as a client that sends no `diagnostics` member signs it: the fixture's own member cut
 /// and the hash signed over what is left, so the relay has a member to insert under a client hash.
 fn first_party_without_diagnostics() -> Vec<u8> {
-    let mut native = body(BodyFixture::FirstParty9b244).to_vec();
+    let mut native = body(BodyFixture::FirstParty).to_vec();
     phoebis_cch::remove_top_level_member(&mut native, "diagnostics")
         .expect("the fixture carries the client's own member");
     phoebis_cch::sign(&native).expect("the fixture signs")
@@ -534,7 +534,7 @@ async fn a_full_shape_request_gets_the_beta_and_the_member_on_a_pool_with_the_sw
     .await;
     let req = request_from_fixture(
         inference_head(FixtureKind::OauthFirstParty),
-        body(BodyFixture::FirstParty9b244),
+        body(BodyFixture::FirstParty),
         KEY,
     );
     let resp = h.app.clone().oneshot(req).await.unwrap();
@@ -769,7 +769,7 @@ async fn a_client_sent_member_on_a_body_without_tools_passes_through_as_sent_and
     )
     .await;
     // The first-party fixture as a client that sends its own member and no tools signs it.
-    let mut native = body(BodyFixture::FirstParty9b244).to_vec();
+    let mut native = body(BodyFixture::FirstParty).to_vec();
     phoebis_cch::remove_top_level_member(&mut native, "tools").expect("the fixture carries tools");
     let native = phoebis_cch::sign(&native).expect("the fixture signs");
     let (start, end) = phoebis_cch::object_member_span(&native, &["diagnostics"])
@@ -2215,7 +2215,7 @@ const DRIFT_WARNING: &str = "a caller stamped a billing line this build cannot r
 /// placeholder where `resumed`, and re-signed so the hash check passes and the suffix check decides. The fixture's
 /// own `517` is the empty prompt's suffix under 2.1.269.
 fn stamped(suffix: &str, resumed: bool) -> Vec<u8> {
-    let mut text = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+    let mut text = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
         .unwrap()
         .replacen(
             "cc_version=2.1.269.517",

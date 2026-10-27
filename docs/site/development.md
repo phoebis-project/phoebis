@@ -204,11 +204,14 @@ cd crates/profile/fixtures && find . -type f | sort | sed 's#^\./##' | xargs sha
 | File | SHA-256 |
 | --- | --- |
 | `body_apikey.json` | `64d28fb040dc9c5fcb713288e2296c34fd4b2d9a65f64a84ef59193bc561afe7` |
+| `body_fp.json` | `d45a2bf083289b4785db406daaf9270b87ebc87dc23a4c9be421109451b25ac4` |
+| `body_fp_again.json` | `e8b9a6c2df66b324ce8dc5850cd78a1fc4fa524ee5a4aefa801de0f24b2dd336` |
 | `body_oauth.json` | `5c596c45025d12340b1bc9bb90aa41df2c3af49000369d5a4cd6fa2fb62efeb5` |
 | `control_profile.http` | `4c8d36c9f0a634191eff458cc19cce358e0c91bdc9d193df5f576916b1e08118` |
 | `control_roles.http` | `6d279e276eff083b3c0564f8e73c2524aa576d920b9cfd5a7666ccd4b6e238e8` |
 | `control_token.http` | `6f9142f141b27a065019141847cf212d7fbe4ef3ad8b49fd5391442f572c25dc` |
 | `control_usage.http` | `b69acf572b0fdcb0b5f9ebeaa3e990643db8fd6ad827e1586eaf3d1bbaf61645` |
+| `count.json` | `171d74dd208d02a3a50dd278e9e3c1d475abddd6399fc5a0a8cf8f472dae3308` |
 | `count_apikey.http` | `3b319a66fa6b276d5a1b8b463658567644af70ed3c6976076751c8cbd19e804d` |
 | `count_oauth.http` | `4eb20f37f181a60bcc7ab10983784c4a8d7d94b3d5407ececc51a53b211f2e97` |
 | `count_oauth_fp.http` | `722c04e20acdfbb78ea9da932c586afd7d49684f1cffc14d81259a109a878d0d` |

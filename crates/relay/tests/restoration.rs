@@ -192,7 +192,7 @@ async fn absent_fields_are_restored_in_native_order_and_present_ones_are_left_al
     app.clone()
         .oneshot(request_from_fixture(
             inference_head(FixtureKind::OauthFirstParty),
-            body(BodyFixture::FirstParty9b244),
+            body(BodyFixture::FirstParty),
             KEY,
         ))
         .await
@@ -243,7 +243,7 @@ async fn the_restored_placeholder_is_signed_when_the_switch_is_on() {
 /// it is no hash to check and none to sign, so it travels as the client sent it, whether or not the switch is on.
 #[tokio::test]
 async fn a_client_sent_placeholder_on_a_full_shape_line_is_relayed_intact() {
-    let placeholder = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+    let placeholder = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
         .unwrap()
         .replacen("cch=9b244", "cch=00000", 1)
         .into_bytes();
@@ -419,7 +419,7 @@ async fn a_subagents_first_request_takes_no_prompt_id_from_its_parent() {
         .oneshot(with_prompt_id(
             request_from_fixture(
                 inference_head(FixtureKind::OauthFirstParty),
-                body(BodyFixture::FirstParty9b244),
+                body(BodyFixture::FirstParty),
                 KEY,
             ),
             SENT,
@@ -738,7 +738,7 @@ async fn an_api_key_account_toward_api_anthropic_com_is_restored_too() {
 /// The stamped first-party body naming `u-1` in its identity slot and signed again, as a client signed in to an
 /// account sends it, so the admission's hash check reads a current stamp.
 fn naming_an_account() -> Vec<u8> {
-    let spliced = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+    let spliced = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
         .unwrap()
         .replacen(r#"\"account_uuid\":\"\""#, r#"\"account_uuid\":\"u-1\""#, 1);
     assert!(
@@ -1489,7 +1489,7 @@ async fn a_failover_leg_reads_the_saved_record_back_before_it_builds() {
 /// The first-party 9b244 body with a system reminder cut mid-pair, stamped again as the client stamps what it
 /// sends: a strict decoder refuses it and the drift check admits it.
 fn cut_first_party_body(container: bool) -> Vec<u8> {
-    let fixture = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec()).unwrap();
+    let fixture = String::from_utf8(body(BodyFixture::FirstParty).to_vec()).unwrap();
     let mut native = fixture.replacen(
         "Today's date is 2026-09-13.",
         "Today's date is 2026-09-13. \\ud83d",

@@ -1569,7 +1569,7 @@ async fn a_probe_and_a_count_take_no_key_permit() {
         .clone()
         .oneshot(request_from_fixture(
             inference_head(FixtureKind::CountOauthNonFirstParty),
-            body(BodyFixture::CountOauth),
+            body(BodyFixture::Count),
             KEY,
         ))
         .await
@@ -1823,7 +1823,7 @@ async fn a_token_count_at_the_accounts_cap_is_served_and_takes_no_slot() {
         .clone()
         .oneshot(request_from_fixture(
             inference_head(FixtureKind::CountOauthNonFirstParty),
-            body(BodyFixture::CountOauth),
+            body(BodyFixture::Count),
             KEY,
         ))
         .await

@@ -136,9 +136,10 @@ mod tests {
     /// The fixtures are redacted client captures that are never edited by hand; a changed byte, a missing row or an
     /// extra file fails here rather than at the next capture comparison.
     #[test]
-    fn every_fixture_matches_the_release_evidence_manifest() {
+    fn every_fixture_matches_the_development_page_manifest() {
         let manifest = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/site/development.md"
         ))
         .unwrap();
         let rows: BTreeMap<String, String> = manifest
@@ -181,7 +182,7 @@ mod tests {
                 .starts_with(b"POST /v1/messages?beta=true HTTP/1.1\r\n")
         );
         assert_eq!(
-            fixtures::body(fixtures::BodyFixture::FirstParty9b244).len(),
+            fixtures::body(fixtures::BodyFixture::FirstParty).len(),
             80404
         );
     }
@@ -192,8 +193,8 @@ mod tests {
         let member = SAFEGUARDS_MEMBER.as_bytes();
         for fixture in [
             BodyFixture::ApiKey,
-            BodyFixture::FirstParty9b244,
-            BodyFixture::FirstPartyE142e,
+            BodyFixture::FirstParty,
+            BodyFixture::FirstPartyAgain,
             BodyFixture::Oauth,
         ] {
             let native = fixtures::body(fixture);
@@ -201,16 +202,10 @@ mod tests {
             assert!(spliced.ends_with(&[b",", member, br#","stream":true}"#].concat()));
             assert_eq!(spliced.len(), native.len() + member.len() + 1);
         }
-        for fixture in [
-            BodyFixture::CountApiKey,
-            BodyFixture::CountOauth,
-            BodyFixture::CountOauthFirstParty,
-        ] {
-            let native = fixtures::body(fixture);
-            let spliced = fixtures::with_safeguards(native);
-            assert!(spliced.ends_with(&[b",", member, b"}"].concat()));
-            assert_eq!(spliced.len(), native.len() + member.len() + 1);
-        }
+        let native = fixtures::body(BodyFixture::Count);
+        let spliced = fixtures::with_safeguards(native);
+        assert!(spliced.ends_with(&[b",", member, b"}"].concat()));
+        assert_eq!(spliced.len(), native.len() + member.len() + 1);
         for kind in [
             FixtureKind::ApiKey,
             FixtureKind::CountApiKey,

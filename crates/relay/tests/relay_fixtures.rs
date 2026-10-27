@@ -15,7 +15,7 @@ async fn oauth_first_party_request_is_byte_identical_except_the_two_edits() {
     let up = FakeUpstream::start(vec![Rule { path_prefix: "/v1/messages".into(), respond: Respond::Json { status: 200, headers: vec![], body: br#"{"id":"msg_1","type":"message","content":[],"usage":{"input_tokens":1,"output_tokens":1}}"#.to_vec() } }]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;
     let head = inference_head(FixtureKind::OauthFirstParty);
-    let native = body(BodyFixture::FirstParty9b244);
+    let native = body(BodyFixture::FirstParty);
     let resp = app
         .oneshot(request_from_fixture(head, native, "phoebis-testkey"))
         .await
@@ -196,7 +196,7 @@ async fn model_suffix_is_stripped_without_changing_the_cch() {
     }])
     .await;
     let app = relay_with(AccountKind::Oauth, &up).await;
-    let native = body(BodyFixture::FirstParty9b244);
+    let native = body(BodyFixture::FirstParty);
     let suffixed = String::from_utf8(native.to_vec()).unwrap().replacen(
         r#""model":"claude-sonnet-4-5""#,
         r#""model":"claude-sonnet-4-5[1m]""#,
@@ -355,7 +355,7 @@ async fn ready_answers_503_naming_what_the_readiness_source_reads_dead() {
 /// is relayed as the placeholder rather than refused as drift.
 #[tokio::test]
 async fn a_client_sent_placeholder_is_relayed_as_the_placeholder() {
-    let placeholder = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+    let placeholder = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
         .unwrap()
         .replacen("cch=9b244", "cch=00000", 1)
         .into_bytes();
@@ -385,7 +385,7 @@ async fn a_client_sent_placeholder_is_relayed_as_the_placeholder() {
 
 #[tokio::test]
 async fn an_uppercase_cch_counts_as_drift() {
-    let drifted = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+    let drifted = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
         .unwrap()
         .replacen("cch=9b244", "cch=9B244", 1)
         .into_bytes();
@@ -396,7 +396,7 @@ async fn an_uppercase_cch_counts_as_drift() {
 /// rules sends; the uppercase case never reaches the comparison, so this is the one that drives it.
 #[tokio::test]
 async fn a_lowercase_hash_this_build_does_not_compute_counts_as_drift() {
-    let drifted = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+    let drifted = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
         .unwrap()
         .replacen("cch=9b244", "cch=9b245", 1)
         .into_bytes();
@@ -405,7 +405,7 @@ async fn a_lowercase_hash_this_build_does_not_compute_counts_as_drift() {
 
 /// The edited fixture, re-signed so the hash check passes and the suffix check is what decides.
 fn resigned(from: &str, to: &str) -> Vec<u8> {
-    let edited = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+    let edited = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
         .unwrap()
         .replacen(from, to, 1);
     phoebis_cch::sign(edited.as_bytes()).unwrap()
@@ -460,7 +460,7 @@ async fn a_stamped_body_with_the_right_suffix_relays() {
     let same = resigned("cc_version=2.1.269.517", "cc_version=2.1.269.517");
     assert_eq!(
         same,
-        body(BodyFixture::FirstParty9b244),
+        body(BodyFixture::FirstParty),
         "re-signing the unchanged fixture reproduces its own stamp"
     );
     let resp = app
@@ -490,7 +490,7 @@ async fn a_suffix_over_a_supplementary_character_prompt_relays() {
     let app = relay_with(AccountKind::Oauth, &up).await;
     // "a\u{1D11E}bcdefghijklmnopqrstuvwxyz": UTF-16 units 4, 7, and 20 are 'c', 'f', 's'; sha256 of
     // "59cf53e54c78" + "cfs" + "2.1.269", first three hex characters, is "596".
-    let spliced = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+    let spliced = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
         .unwrap()
         .replacen(
             "\"text\":\"hi\"",

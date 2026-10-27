@@ -891,7 +891,7 @@ mod tests {
 
     /// The recorded first-party body with its own member naming `previous`, signed as the client signs it.
     fn client_hashed_naming(previous: Option<&str>) -> Vec<u8> {
-        let mut body = fixture_body(BodyFixture::FirstParty9b244).to_vec();
+        let mut body = fixture_body(BodyFixture::FirstParty).to_vec();
         phoebis_cch::remove_top_level_member(&mut body, "diagnostics")
             .expect("the fixture carries the client's own member");
         assert!(insert_diagnostics(&mut body, previous));
@@ -1216,7 +1216,7 @@ mod tests {
 
     /// The recorded first-party body with the member spliced in and re-signed, as a client in auto mode sends it.
     fn stamped_with_safeguards() -> Vec<u8> {
-        phoebis_cch::sign(&with_safeguards(fixture_body(BodyFixture::FirstParty9b244))).unwrap()
+        phoebis_cch::sign(&with_safeguards(fixture_body(BodyFixture::FirstParty))).unwrap()
     }
 
     #[test]
@@ -1233,7 +1233,7 @@ mod tests {
             "the stamp is current"
         );
         assert!(
-            body == fixture_body(BodyFixture::FirstParty9b244),
+            body == fixture_body(BodyFixture::FirstParty),
             "one comma went with the member, so the body is the recording again"
         );
     }
@@ -1242,7 +1242,7 @@ mod tests {
     /// an account sends it. The raw splice signs nothing, and a stale stamp would stop the drift assertion before
     /// the edit runs.
     fn stamped_with_a_uuid() -> Vec<u8> {
-        let mut body = fixture_body(BodyFixture::FirstParty9b244).to_vec();
+        let mut body = fixture_body(BodyFixture::FirstParty).to_vec();
         assert_eq!(replace_account_uuid(&mut body, "u-1"), Spliced::Replaced);
         phoebis_cch::sign(&body).unwrap()
     }
@@ -1282,7 +1282,7 @@ mod tests {
             "the stamp covers the blank"
         );
         assert!(
-            body == fixture_body(BodyFixture::FirstParty9b244),
+            body == fixture_body(BodyFixture::FirstParty),
             "blanked and signed again, the body is the recording again"
         );
     }
@@ -1429,15 +1429,14 @@ mod tests {
     /// The recorded first-party body with the member, its billing line under a `text` key spelled with an
     /// escape, stamped as a client serializing that spelling stamps it.
     fn escaped_stamp_with_safeguards() -> Vec<u8> {
-        let mut body =
-            String::from_utf8(with_safeguards(fixture_body(BodyFixture::FirstParty9b244)))
-                .unwrap()
-                .replacen(
-                    r#""text":"x-anthropic-billing-header"#,
-                    r#""te\u0078t":"x-anthropic-billing-header"#,
-                    1,
-                )
-                .into_bytes();
+        let mut body = String::from_utf8(with_safeguards(fixture_body(BodyFixture::FirstParty)))
+            .unwrap()
+            .replacen(
+                r#""text":"x-anthropic-billing-header"#,
+                r#""te\u0078t":"x-anthropic-billing-header"#,
+                1,
+            )
+            .into_bytes();
         let at = find(&body, b"cch=").unwrap() + 4;
         let stamp = client_stamp(&body);
         body[at..at + CCH_DIGITS].copy_from_slice(stamp.as_bytes());
@@ -1600,7 +1599,7 @@ mod tests {
 
     /// The recorded first-party body with `stamps` in place of its one `cch=9b244;` field.
     fn a_line_stamped(stamps: &str) -> Vec<u8> {
-        String::from_utf8(fixture_body(BodyFixture::FirstParty9b244).to_vec())
+        String::from_utf8(fixture_body(BodyFixture::FirstParty).to_vec())
             .unwrap()
             .replacen("cch=9b244;", stamps, 1)
             .into_bytes()

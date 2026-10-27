@@ -384,10 +384,9 @@ pub fn rename(
 fn head_of(fixture: &BodyFixture) -> FixtureKind {
     match fixture {
         BodyFixture::ApiKey => FixtureKind::ApiKey,
-        BodyFixture::CountApiKey => FixtureKind::CountApiKey,
-        BodyFixture::CountOauth => FixtureKind::CountOauthNonFirstParty,
-        BodyFixture::CountOauthFirstParty => FixtureKind::CountOauthFirstParty,
-        BodyFixture::FirstParty9b244 | BodyFixture::FirstPartyE142e => FixtureKind::OauthFirstParty,
+        // The count body travels under all three count heads. The OAuth one matches `request_for`'s credential.
+        BodyFixture::Count => FixtureKind::CountOauthNonFirstParty,
+        BodyFixture::FirstParty | BodyFixture::FirstPartyAgain => FixtureKind::OauthFirstParty,
         BodyFixture::Oauth => FixtureKind::OauthNonFirstParty,
     }
 }

@@ -773,7 +773,7 @@ async fn the_completion_event_names_the_members_source_and_the_writers_follow_it
 
     let client = request_from_fixture(
         inference_head(FixtureKind::OauthFirstParty),
-        body(BodyFixture::FirstParty9b244),
+        body(BodyFixture::FirstParty),
         KEY,
     );
     let (status, complete) = completion_of(&h, &mut sub, client).await;
@@ -907,7 +907,7 @@ async fn a_null_diagnostics_member_reads_none_only_where_the_body_named_a_messag
     let unnamed = || {
         request_from_fixture(
             inference_head(FixtureKind::OauthFirstParty),
-            body(BodyFixture::FirstParty9b244),
+            body(BodyFixture::FirstParty),
             KEY,
         )
     };

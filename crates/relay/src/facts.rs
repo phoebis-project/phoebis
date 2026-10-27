@@ -767,7 +767,7 @@ mod tests {
     #[test]
     fn the_shape_is_read_from_the_recorded_first_party_body() {
         let facts = BodyFacts::read(phoebis_profile::fixtures::body(
-            phoebis_profile::fixtures::BodyFixture::FirstParty9b244,
+            phoebis_profile::fixtures::BodyFixture::FirstParty,
         ));
         let shape = facts.shape;
         assert_eq!(

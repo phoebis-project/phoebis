@@ -36,17 +36,25 @@ fn reference_vectors_from_the_proxy_test_suite() {
     }
 }
 
+/// The builder re-signs a body after redacting it, so no literal pins the committed digits. Its `check_hashes`
+/// compares the raw capture's digits with the signer's at capture time.
 #[test]
 fn captured_first_party_bodies_resign_to_their_native_value() {
-    for (fixture, want) in [
-        (BodyFixture::FirstParty9b244, "9b244"),
-        (BodyFixture::FirstPartyE142e, "e142e"),
-    ] {
+    let digits = [BodyFixture::FirstParty, BodyFixture::FirstPartyAgain].map(|fixture| {
         let native = body(fixture);
-        assert_eq!(cch_of(native), want);
+        let digits = cch_of(native);
+        assert_ne!(
+            digits, "00000",
+            "a first-party fixture carries a stamp, not the unpatched placeholder"
+        );
         let signed = sign(native).unwrap();
         assert_eq!(signed, native, "re-signing a native body is a fixed point");
-    }
+        digits
+    });
+    assert_ne!(
+        digits[0], digits[1],
+        "the two first-party fixtures are two hash vectors"
+    );
 }
 
 #[test]

@@ -33,7 +33,7 @@ fn header_bytes(headers: &[(String, String)]) -> usize {
 /// retains; it keeps the client's stamp over the unedited body.
 fn stamped_adaptive() -> String {
     let stamped =
-        phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::FirstParty9b244);
+        phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::FirstParty);
     String::from_utf8(stamped.to_vec()).unwrap().replacen(
         r#""thinking":{"budget_tokens":31999,"type":"enabled","display":"omitted"}"#,
         r#""thinking":{"type":"adaptive"}"#,

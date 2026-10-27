@@ -139,7 +139,7 @@ async fn every_marker_is_rewritten_to_the_policys_ttl_and_the_beta_follows_the_b
     .await;
     let mut sub_oauth = request_from_fixture(
         inference_head(FixtureKind::OauthFirstParty),
-        body(BodyFixture::FirstParty9b244),
+        body(BodyFixture::FirstParty),
         KEY,
     );
     set_header(&mut sub_oauth, "x-claude-code-agent-id", "sub-1");
@@ -564,14 +564,14 @@ async fn a_token_count_never_takes_the_member() {
     .await;
     let count = request_from_fixture(
         inference_head(FixtureKind::CountApiKey),
-        body(BodyFixture::CountApiKey),
+        body(BodyFixture::Count),
         KEY,
     );
     let resp = h.app.clone().oneshot(count).await.unwrap();
     assert_eq!(resp.status(), 200);
     let sent = &up.requests()[0];
     assert!(
-        sent.body == body(BodyFixture::CountApiKey),
+        sent.body == body(BodyFixture::Count),
         "the toggle never reaches a count, which carries no marker of its own and travels as sent"
     );
     assert!(
@@ -612,7 +612,7 @@ async fn a_marker_less_count_under_when_cached_with_the_toggle_on_creates_no_pin
     set_affinity_mode(&h, AffinityMode::WhenCached).await;
     let count = request_from_fixture(
         inference_head(FixtureKind::CountApiKey),
-        body(BodyFixture::CountApiKey),
+        body(BodyFixture::Count),
         KEY,
     );
     let resp = h.app.clone().oneshot(count).await.unwrap();

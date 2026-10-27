@@ -59,19 +59,19 @@ CREDENTIAL_HEADERS = {"authorization", "cookie", "proxy-authorization", "x-api-k
 THROUGH_ROUTER = False
 
 # The inference runs the capture drives, in the order it drives them, and the fixture each one's body becomes.
-INFERENCE_BODIES = ["body_oauth.json", "body_fp_9b244.json", "body_apikey.json", "body_fp_e142e.json"]
+INFERENCE_BODIES = ["body_oauth.json", "body_fp.json", "body_apikey.json", "body_fp_again.json"]
 
 # The three of those runs whose request head is pinned. The fourth repeats the first-party override and is kept
 # for its body alone, as a second hash vector.
 INFERENCE_HEADS = ["inference_oauth.http", "inference_oauth_fp.http", "inference_apikey.http"]
 
-# The credential modes the count capture drives, each its own directory, and the fixture pair each one's count
-# request becomes.
+# The credential modes the count capture drives, each its own directory, and the head each one's count request
+# becomes. The three share one body, count.json.
 COUNT_MODES = ["count_oauth", "count_oauth_fp", "count_apikey"]
 
 # The fixtures only the count capture produces. The baseline and the router capture never send a count, so
 # --check without --count reports these as not captured rather than as drift, and --count --check requires them.
-COUNT_FIXTURES = {f"{mode}{suffix}" for mode in COUNT_MODES for suffix in (".json", ".http")}
+COUNT_FIXTURES = {"count.json"} | {f"{mode}.http" for mode in COUNT_MODES}
 
 # The billing block, and the two values inside it a session mints fresh on every run. A new cc_prompt_id changes
 # the cch digits with it, so masking the id alone would still leave --check reporting drift with no protocol change.
@@ -492,12 +492,19 @@ def build(
 
 
 def build_count(src: pathlib.Path, out: pathlib.Path, resign: bool = True) -> None:
-    """Write count_<mode>.json and count_<mode>.http for each mode directory under `src`, from the one
-    count_tokens request each run recorded; the inference entries beside it are the client's turn and are not
-    extracted, since the inference fixtures stay pinned to the build that measured them.
+    """Write count.json, and count_<mode>.http for each mode directory under `src`, from the one count_tokens request
+    each run recorded. The inference entries beside it are the client's turn and are not extracted, since the
+    inference fixtures stay pinned to the build that measured them.
 
-    The bodies are written redacted, and with `resign` their cch digits are re-signed over the redacted bytes, as
-    `build` does. `check_count` builds with `resign` off, since its comparison masks the digits."""
+    The three runs' count bodies have been byte-identical in every capture so far, so the redacted body is written
+    once and the three heads declare its length. Redacted bodies that differ stop the build before its first write
+    and name the two modes and the first differing byte offset, so the operator reads the difference instead of
+    committing three bodies.
+
+    The body is written redacted, and with `resign` its cch digits are re-signed over the redacted bytes, as `build`
+    does. `check_count` builds with `resign` off, since its comparison masks the digits."""
+    entries = []
+    bodies = []
     for mode in COUNT_MODES:
         cm = json.load(open(src / mode / "clean_modes.json"))
         counts = count_entries(cm)
@@ -511,12 +518,20 @@ def build_count(src: pathlib.Path, out: pathlib.Path, resign: bool = True) -> No
                 f"{src}/{mode}/clean_modes.json declares Content-Length {declared} on its count_tokens entry, "
                 f"but the body captured beside it is {len(body)} bytes"
             )
-        written = redact_body(body)
-        (out / f"{mode}.json").write_bytes(written)
-        if resign:
-            # The re-sign rewrites the five digits alone, so the length below still holds.
-            resign_written(out / f"{mode}.json")
-        (out / f"{mode}.http").write_bytes(head(entry, len(written)))
+        entries.append(entry)
+        bodies.append(redact_body(body))
+    first = bodies[0]
+    for mode, other in zip(COUNT_MODES[1:], bodies[1:]):
+        if other != first:
+            # A body that is a prefix of the other differs first where the shorter one ends.
+            offset = next((i for i, (a, b) in enumerate(zip(first, other)) if a != b), min(len(first), len(other)))
+            raise SystemExit(f"count bodies differ: {COUNT_MODES[0]} and {mode} at byte {offset}")
+    (out / "count.json").write_bytes(first)
+    if resign:
+        # The re-sign rewrites the five digits alone, so the length below still holds.
+        resign_written(out / "count.json")
+    for mode, entry in zip(COUNT_MODES, entries):
+        (out / f"{mode}.http").write_bytes(head(entry, len(first)))
 
 
 def mask_hello(raw: bytes) -> bytes:
@@ -595,6 +610,7 @@ def _self_test() -> None:
     _self_test_build_reports_partial_control()
     _self_test_main_write_report()
     _self_test_build_count_redacts()
+    _self_test_build_count_stops_on_differing_bodies()
 
 
 def _self_test_declared_length() -> None:
@@ -707,7 +723,7 @@ def _count_capture(root: pathlib.Path, session: bytes, members: bytes = b"") -> 
 
 
 def _self_test_capture_partition() -> None:
-    """The six count fixtures are exempt from every other capture's grade and required by the count's own.
+    """The four count fixtures are exempt from every other capture's grade and required by the count's own.
 
     Both halves read the code under test rather than a copy of it: the headings come from `partition_names`,
     which `check` calls, and the missing report from `check_count` itself.
@@ -732,11 +748,11 @@ def _self_test_capture_partition() -> None:
         tree = pathlib.Path(tmp) / "committed"
         tree.mkdir()
         build_count(capture, tree)
-        # The committed copy carries the session id of another run: a count body reaches normalize_body only
-        # because normalize_tree routes count_ names to it, and without that this reads as drift.
-        written = (tree / "count_oauth.json").read_bytes()
+        # The committed copy carries the session id of another run: the count body reaches normalize_body only
+        # because normalize_tree routes count.json to it, and without that this reads as drift.
+        written = (tree / "count.json").read_bytes()
         stale = written.replace(SESSION_ID_PLACEHOLDER.encode(), b"b2b1f4ca-1f6e-4a52-9d54-2f9b4a6c0e11")
-        (tree / "count_oauth.json").write_bytes(stale)
+        (tree / "count.json").write_bytes(stale)
         if check_count(capture, tree) != 0:
             raise AssertionError("check_count reported drift against the fixtures it just built")
         (tree / "count_apikey.http").unlink()
@@ -995,7 +1011,7 @@ def _self_test_restored_report_reads_billing_line() -> None:
         lines = restored_report(fresh)
     wanted = [
         "run 0 (body_oauth.json): carries none of the restored fields",
-        "run 1 (body_fp_9b244.json): carries cch, cc_prev_req, cc_prompt_id",
+        "run 1 (body_fp.json): carries cch, cc_prev_req, cc_prompt_id",
     ]
     if lines[:2] != wanted:
         raise AssertionError(f"restored_report gave {lines[:2]!r}, want {wanted!r}")
@@ -1013,7 +1029,7 @@ def _self_test_resign_written() -> None:
         )
         stamped = pathlib.Path(tmp) / "body_oauth.json"
         stamped.write_bytes(_identified_body(b"claude-sonnet-4-5"))
-        placeholder = pathlib.Path(tmp) / "body_fp_9b244.json"
+        placeholder = pathlib.Path(tmp) / "body_fp.json"
         placeholder.write_bytes(_identified_body(b"claude-sonnet-4-5").replace(b"cch=4f1c2;", b"cch=00000;"))
         no_cargo = pathlib.Path(tmp) / "bin"
         no_cargo.mkdir()
@@ -1035,7 +1051,7 @@ def _self_test_resign_written() -> None:
                 resign_written(placeholder)
             if placeholder.read_bytes() != before:
                 raise AssertionError("resign_written changed a body carrying the unpatched placeholder")
-            if report.getvalue() != "resign skipped: body_fp_9b244.json carries the unpatched placeholder cch=00000\n":
+            if report.getvalue() != "resign skipped: body_fp.json carries the unpatched placeholder cch=00000\n":
                 raise AssertionError(f"resign_written skipped the placeholder with the note {report.getvalue()!r}")
             print("self-test passed: resign_written leaves a body carrying the unpatched placeholder alone and says so")
             try:
@@ -1713,8 +1729,8 @@ def _self_test_main_write_report() -> None:
 
 
 def _self_test_build_count_redacts() -> None:
-    """A written count body carries the placeholders in place of the capture's ids, and its head declares the
-    length of the body written. Each body passes through the re-sign step, which leaves one without a stamp as the
+    """The written count body carries the placeholders in place of the capture's ids, and each head declares the
+    length of the body written. The body passes through the re-sign step, which leaves one without a stamp as the
     redaction wrote it and needs no cargo for it."""
     # The emptied account_uuid shortens the body, so a head sized from the captured body would declare too much.
     members = rb'\"device_id\":\"' + _TEST_DEVICE_ID + rb'\",\"account_uuid\":\"' + _TEST_ACCOUNT_UUID + rb'\",'
@@ -1735,26 +1751,78 @@ def _self_test_build_count_redacts() -> None:
                 del os.environ["PATH"]
             else:
                 os.environ["PATH"] = saved_path
+        body = (out / "count.json").read_bytes()
         for mode in COUNT_MODES:
-            body = (out / f"{mode}.json").read_bytes()
             if body != redact_body((capture / mode / "clean_body_1.json").read_bytes()):
-                raise AssertionError(f"build_count wrote a {mode}.json other than its redacted capture")
-            if f"resign skipped: {mode}.json carries no cch= stamp\n" not in report.getvalue():
-                raise AssertionError(f"build_count wrote {mode}.json past the re-sign step: {report.getvalue()!r}")
-            for wanted in (
-                rb'\"device_id\":\"' + DEVICE_ID_PLACEHOLDER.encode() + rb'\"',
-                rb'\"session_id\":\"' + SESSION_ID_PLACEHOLDER.encode() + rb'\"',
-            ):
-                if wanted not in body:
-                    raise AssertionError(f"build_count wrote {mode}.json without {wanted!r}")
-            for original in (_TEST_ACCOUNT_UUID, _TEST_DEVICE_ID, _TEST_SESSION_ID):
-                if original in body:
-                    raise AssertionError(f"build_count kept {original!r} in {mode}.json")
+                raise AssertionError(f"build_count wrote a count.json other than the redacted {mode} capture")
+        if report.getvalue() != "resign skipped: count.json carries no cch= stamp\n":
+            raise AssertionError(f"build_count wrote count.json past the re-sign step: {report.getvalue()!r}")
+        for wanted in (
+            rb'\"device_id\":\"' + DEVICE_ID_PLACEHOLDER.encode() + rb'\"',
+            rb'\"session_id\":\"' + SESSION_ID_PLACEHOLDER.encode() + rb'\"',
+        ):
+            if wanted not in body:
+                raise AssertionError(f"build_count wrote count.json without {wanted!r}")
+        for original in (_TEST_ACCOUNT_UUID, _TEST_DEVICE_ID, _TEST_SESSION_ID):
+            if original in body:
+                raise AssertionError(f"build_count kept {original!r} in count.json")
+        for mode in COUNT_MODES:
             lines = (out / f"{mode}.http").read_bytes().decode().split("\r\n")
             if f"Content-Length: {len(body)}" not in lines:
                 raise AssertionError(f"build_count wrote {mode}.http without Content-Length {len(body)}")
-        print("self-test passed: build_count writes redacted bodies and heads sized to them")
-        print("self-test passed: build_count passes each count body through the re-sign step")
+        print("self-test passed: build_count writes a redacted body and heads sized to it")
+        print("self-test passed: build_count passes the count body through the re-sign step once")
+
+
+def _self_test_build_count_stops_on_differing_bodies() -> None:
+    """Count bodies that differ stop build_count before it writes a file, naming the first mode and the mode that
+    differs with the first differing byte offset, which is the shorter body's length when it is a prefix of the
+    longer. Three identical bodies write count.json and the three heads and nothing else."""
+
+    def rewrite_count_body(mode_dir: pathlib.Path, body: bytes) -> None:
+        (mode_dir / "clean_body_1.json").write_bytes(body)
+        modes = json.loads((mode_dir / "clean_modes.json").read_text())
+        modes[1]["headers"][1] = f"Content-Length: {len(body)}"
+        modes[1]["body"] = body.decode()
+        (mode_dir / "clean_modes.json").write_text(json.dumps(modes))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        for label, edit in (
+            ("one byte", lambda body: (body.replace(b"4-5", b"4-6", 1), body.index(b"4-5") + 2)),
+            ("a trailing byte", lambda body: (body + b" ", len(body))),
+        ):
+            capture = _count_capture(root / label / "capture", _TEST_SESSION_ID)
+            third, offset = edit((capture / "count_apikey" / "clean_body_1.json").read_bytes())
+            rewrite_count_body(capture / "count_apikey", third)
+            out = root / label / "out"
+            out.mkdir()
+            try:
+                build_count(capture, out, resign=False)
+            except SystemExit as e:
+                wanted = f"count bodies differ: count_oauth and count_apikey at byte {offset}"
+                if str(e) != wanted:
+                    raise AssertionError(f"build_count stopped with {str(e)!r}, want {wanted!r}") from e
+                written = _written_files(out)
+                if written:
+                    raise AssertionError(f"build_count wrote {written} before stopping on bodies differing in {label}")
+                print("self-test passed:", e)
+            else:
+                raise AssertionError(f"build_count wrote {_written_files(out)} from count bodies differing in {label}")
+
+        capture = _count_capture(root / "identical" / "capture", _TEST_SESSION_ID)
+        out = root / "identical" / "out"
+        out.mkdir()
+        build_count(capture, out, resign=False)
+        written = _written_files(out)
+        wanted = ["count.json", "count_apikey.http", "count_oauth.http", "count_oauth_fp.http"]
+        if written != wanted:
+            raise AssertionError(f"build_count wrote {written} from three identical bodies, want {wanted}")
+        length = len((out / "count.json").read_bytes())
+        for name in wanted[1:]:
+            if f"Content-Length: {length}" not in (out / name).read_bytes().decode().split("\r\n"):
+                raise AssertionError(f"build_count wrote {name} without the one body's Content-Length {length}")
+        print("self-test passed: build_count writes one count.json and three heads sized to it from identical bodies")
 
 
 def _self_test_mask_hello() -> None:
@@ -2071,7 +2139,7 @@ def normalize_tree(root: pathlib.Path) -> dict:
             raw = mask_hello(bytes.fromhex(raw.decode().strip())).hex().encode() + b"\n"
         elif rel.endswith(".http"):
             raw = normalize_head(raw)
-        elif rel.startswith(("body_", "count_")) and rel.endswith(".json"):
+        elif (rel.startswith("body_") and rel.endswith(".json")) or rel == "count.json":
             raw = normalize_body(raw)
         normalized[rel] = raw
     return normalized
@@ -2189,7 +2257,7 @@ def check(
 
 
 def check_count(capture_dir: pathlib.Path, committed_dir: pathlib.Path = FIXTURES) -> int:
-    """Diff the count fixtures a capture produces against the committed ones. All six are required here: this
+    """Diff the count fixtures a capture produces against the committed ones. All four are required here: this
     is the only capture that writes them, so one absent is a run that recorded no count, not a plane it could
     not reach."""
     with tempfile.TemporaryDirectory() as tmp:

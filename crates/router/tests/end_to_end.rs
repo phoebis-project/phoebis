@@ -1280,7 +1280,7 @@ async fn a_key_set_off_through_the_admin_api_strips_the_next_request_and_set_bac
 
     // First-party, so the off state's restamp has a client stamp to replace.
     let head = with_dangerous_tool_use_beta(inference_head(FixtureKind::OauthFirstParty));
-    let sent = phoebis_cch::sign(&with_safeguards(body(BodyFixture::FirstParty9b244))).unwrap();
+    let sent = phoebis_cch::sign(&with_safeguards(body(BodyFixture::FirstParty))).unwrap();
     let member = SAFEGUARDS_MEMBER.as_bytes();
     let posts = || -> Vec<fake_upstream::RecordedRequest> {
         up.requests()
@@ -5206,13 +5206,13 @@ usage:
         ),
         (
             FixtureKind::OauthFirstParty,
-            BodyFixture::FirstParty9b244,
+            BodyFixture::FirstParty,
             &oauth_key,
         ),
         (FixtureKind::ApiKey, BodyFixture::ApiKey, &api_key),
         (
             FixtureKind::OauthFirstParty,
-            BodyFixture::FirstPartyE142e,
+            BodyFixture::FirstPartyAgain,
             &oauth_key,
         ),
     ];

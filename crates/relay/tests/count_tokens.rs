@@ -78,16 +78,13 @@ async fn under_the_defaults_the_recorded_count_reaches_the_upstream_as_the_clien
     let resp = h
         .app
         .clone()
-        .oneshot(count_request(
-            FixtureKind::CountApiKey,
-            BodyFixture::CountApiKey,
-        ))
+        .oneshot(count_request(FixtureKind::CountApiKey, BodyFixture::Count))
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
     let sent = &up.requests()[0];
     assert!(
-        sent.body == body(BodyFixture::CountApiKey),
+        sent.body == body(BodyFixture::Count),
         "no edit under the defaults"
     );
     assert!(sent.line.starts_with("POST /v1/messages/count_tokens"));
@@ -113,20 +110,17 @@ async fn under_the_policy_the_recorded_count_travels_as_sent() {
     let resp = h
         .app
         .clone()
-        .oneshot(count_request(
-            FixtureKind::CountApiKey,
-            BodyFixture::CountApiKey,
-        ))
+        .oneshot(count_request(FixtureKind::CountApiKey, BodyFixture::Count))
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
     let sent = &up.requests()[0];
     assert!(
-        markers(body(BodyFixture::CountApiKey)).is_empty(),
+        markers(body(BodyFixture::Count)).is_empty(),
         "the client sends a count with no marker of its own"
     );
     assert!(
-        sent.body == body(BodyFixture::CountApiKey),
+        sent.body == body(BodyFixture::Count),
         "the count endpoint gets no top-level member the client never sent"
     );
     assert!(
@@ -161,7 +155,7 @@ async fn a_marked_count_travels_as_sent_and_no_beta_follows_under_the_policy() {
         policy(r#"{"enabled":true,"metered":{"main":"1h"}}"#),
     )
     .await;
-    let marked = marked_count(BodyFixture::CountApiKey);
+    let marked = marked_count(BodyFixture::Count);
     let resp = h
         .app
         .clone()
@@ -221,26 +215,23 @@ async fn a_marked_count_under_an_oauth_key_travels_as_sent_and_gets_no_restorati
         policy(r#"{"enabled":true,"plan":{"main":"1h"}}"#),
     )
     .await;
-    let marked: Vec<Vec<u8>> = vec![
-        marked_count(BodyFixture::CountOauth),
-        marked_count(BodyFixture::CountOauthFirstParty),
-    ];
-    for (kind, body) in [
-        (FixtureKind::CountOauthNonFirstParty, &marked[0]),
-        (FixtureKind::CountOauthFirstParty, &marked[1]),
+    let marked = marked_count(BodyFixture::Count);
+    for kind in [
+        FixtureKind::CountOauthNonFirstParty,
+        FixtureKind::CountOauthFirstParty,
     ] {
         let resp = h
             .app
             .clone()
-            .oneshot(count_request_with(kind, body))
+            .oneshot(count_request_with(kind, &marked))
             .await
             .unwrap();
         assert_eq!(resp.status(), 200);
     }
     assert_eq!(up.requests().len(), 2);
-    for (sent, marked) in up.requests().iter().zip(marked.iter()) {
+    for sent in up.requests().iter() {
         assert!(
-            sent.body == *marked,
+            sent.body == marked,
             "an oauth count travels as sent under the policy, as an api-key one does"
         );
         assert!(
@@ -405,7 +396,7 @@ async fn a_count_without_the_session_header_is_refused_for_the_contract() {
     let up = FakeUpstream::start(vec![count_rule()]).await;
     let h = harness(&up, &[api_key("acct", A, 0)], PoolSpec::default()).await;
     let mut decisions = h.router.subscribe_events();
-    let mut req = count_request(FixtureKind::CountApiKey, BodyFixture::CountApiKey);
+    let mut req = count_request(FixtureKind::CountApiKey, BodyFixture::Count);
     remove_header(&mut req, "x-claude-code-session-id");
     let resp = h.app.clone().oneshot(req).await.unwrap();
     assert_count_refused_for(
@@ -426,7 +417,7 @@ async fn a_count_with_a_version_outside_the_clients_spelling_is_refused_for_the_
     let up = FakeUpstream::start(vec![count_rule()]).await;
     let h = harness(&up, &[api_key("acct", A, 0)], PoolSpec::default()).await;
     let mut decisions = h.router.subscribe_events();
-    let mut req = count_request(FixtureKind::CountApiKey, BodyFixture::CountApiKey);
+    let mut req = count_request(FixtureKind::CountApiKey, BodyFixture::Count);
     set_header(
         &mut req,
         "user-agent",
