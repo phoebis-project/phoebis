@@ -1034,8 +1034,8 @@ def _self_test_normalize_body() -> None:
         b'{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517;'
         b' cc_entrypoint=sdk-cli; cch=%s; cc_prompt_id=%s;"}]}'
     )
-    first_id = b"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-    second_id = b"33333333-3333-4333-8333-333333333333"
+    first_id = b"44444444-4444-4444-8444-444444444444"
+    second_id = b"55555555-5555-4555-8555-555555555555"
     cases = [
         ("the cch digits", block % (b"9b244", first_id), block % (b"e142e", first_id), b"9b244"),
         ("cc_prompt_id", block % (b"9b244", first_id), block % (b"9b244", second_id), first_id),
@@ -1080,7 +1080,7 @@ def _self_test_normalize_body() -> None:
     restored_body = (
         b'{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517;'
         b" cc_entrypoint=sdk-cli; cch=9b244; cc_prev_req=req_up_0001;"
-        b' cc_prompt_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa;"}]}'
+        b' cc_prompt_id=44444444-4444-4444-8444-444444444444;"}]}'
     )
     reduced_head = b"POST /v1/messages HTTP/1.1\r\nx-app: cli\r\n\r\n"
     restored_head = (
