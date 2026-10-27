@@ -62,6 +62,10 @@ if [[ "${PHOEBIS_CAPTURE_NETNS:-}" != "1" ]]; then
   exec unshare -rn bash -c 'ip link set lo up && exec bash "$0" "$@"' "$SELF" "$@"
 fi
 
+# runcli and client_env read these two from a call's prefix, and a value exported in the operator's shell would
+# otherwise reach every run of the baseline and count scripts too.
+unset KEEP_CONFIG ALLOW_NONESSENTIAL_TRAFFIC
+
 # A test points PHOEBIS_CAPTURE_STATE at a throwaway tree. A real capture leaves it unset: the system prompt embeds
 # the paths of the working and config directories, and the committed fixtures were captured under /tmp/cc-capture.
 STATE=${PHOEBIS_CAPTURE_STATE:-/tmp/cc-capture}

@@ -8,8 +8,9 @@
 # screen saved when the client stops answering. The stub reaches the receiver alone, NO_PROXY or not, and refuses a
 # proxy off loopback. capture-control.sh records the stub's login and refresh phases in both of its variants, with the
 # refresh run starting from the credentials the login wrote, moves on past a login the driver gives up on, and refuses
-# a real token. Every case runs against a throwaway tree, never /tmp/cc-capture or ~/.claude, and reaches no host off
-# loopback.
+# a real token. lib.sh's runcli takes KEEP_CONFIG and ALLOW_NONESSENTIAL_TRAFFIC from a call's prefix and never from
+# the caller's environment. Every case runs against a throwaway tree, never /tmp/cc-capture or ~/.claude, and reaches
+# no host off loopback.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -419,5 +420,50 @@ done
 skipped=$(grep -cxF "phase refresh skipped: login-claude left no claudeAiOauth.expiresAt in .credentials.json" \
   <<<"$out") || true
 [[ "$skipped" -eq 2 ]] || fail "capture-control.sh printed the refresh phase's skip note $skipped times, want 2: $out"
+
+# --- lib.sh ---
+
+# runcli resets its config directory and sets the non-essential-traffic flag unless the call's own prefix says
+# otherwise, so a KEEP_CONFIG or ALLOW_NONESSENTIAL_TRAFFIC exported in the operator's shell must not change a run of
+# the baseline or count script. The harness sources lib.sh the way those scripts do, from beside a capture/ directory
+# of its own, and its client prints the flag it was started with.
+harness="$tmp/harness"
+mkdir -p "$harness/capture"
+ln -s "$capture/lib.sh" "$harness/capture/lib.sh"
+cat >"$harness/lib-check.sh" <<'EOF'
+source "$(dirname "$0")/capture/lib.sh"
+for call in exported prefixed; do
+  mkdir -p "$STATE/cfg-$call"
+  touch "$STATE/cfg-$call/marker"
+done
+runcli exported exported hi
+KEEP_CONFIG=1 ALLOW_NONESSENTIAL_TRAFFIC=1 runcli prefixed prefixed hi
+for call in exported prefixed; do
+  if [[ -e "$STATE/cfg-$call/marker" ]]; then
+    echo "$call: config kept"
+  else
+    echo "$call: config reset"
+  fi
+done
+EOF
+cat >"$harness/client" <<'EOF'
+#!/usr/bin/env bash
+echo "flag ${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-unset}"
+EOF
+chmod +x "$harness/client"
+want='=== exported ===
+flag 1
+run exported: client exited 0
+=== prefixed ===
+flag unset
+run prefixed: client exited 0
+exported: config reset
+prefixed: config kept'
+status=0
+out=$(env -u ANTHROPIC_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN KEEP_CONFIG=1 ALLOW_NONESSENTIAL_TRAFFIC=1 \
+  PHOEBIS_CAPTURE_STATE="$tmp/harness-state" bash "$harness/lib-check.sh" "$harness/client" "$tmp/harness-out" 2>&1) \
+  || status=$?
+[[ "$status" -eq 0 ]] || fail "the lib.sh harness exited $status, want 0: $out"
+[[ "$out" == "$want" ]] || fail "runcli under an exported KEEP_CONFIG and ALLOW_NONESSENTIAL_TRAFFIC printed: $out"
 
 echo "capture-tooling: ok"
