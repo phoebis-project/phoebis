@@ -54,6 +54,7 @@ usage=$(openssl x509 -in "$tmp/run/certs/ca.pem" -noout -ext keyUsage 2>&1) || f
 echo "$usage" | grep -qF 'Certificate Sign' || fail "the CA's keyUsage does not list Certificate Sign: $usage"
 for cert in ca.pem leaf.pem; do
   text=$(openssl x509 -in "$tmp/run/certs/$cert" -noout -text)
+  echo "$text" | grep -qF 'Public Key Algorithm: rsaEncryption' || fail "certs/$cert does not carry an RSA key"
   echo "$text" | grep -qF 'Public-Key: (2048 bit)' || fail "certs/$cert does not carry a 2048-bit RSA key"
 done
 openssl x509 -in "$tmp/run/certs/leaf.pem" -noout -checkend $((6 * 86400)) >/dev/null \
