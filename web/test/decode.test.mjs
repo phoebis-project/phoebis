@@ -2150,10 +2150,10 @@ test("the downstream snippet is the seven recommended lines, its base URL the pr
 
 test('a session fold groups on the client each row named', () => {
   const [captured, failed] = d.decodeRequestPage(fixture('requests')).requests;
-  assert.equal(captured.userAgent, 'claude-cli/2.1.269 (external, cli)', 'the row carries the agent the route answers');
+  assert.equal(captured.userAgent, 'claude-cli/2.1.310 (external, cli)', 'the row carries the agent the route answers');
   const rows = [captured, { ...failed, userAgent: 'phoebis-batch/0.9 (external, ci)' }, { ...failed, id: 'r-none', userAgent: null }];
   const groups = d.foldGroups(rows, 'user_agent');
-  assert.deepEqual(groups.map((g) => g.key).sort(), ['-', 'claude-cli/2.1.269', 'phoebis-batch/0.9'], 'a row that named no client falls under the marker the rollups file it as');
+  assert.deepEqual(groups.map((g) => g.key).sort(), ['-', 'claude-cli/2.1.310', 'phoebis-batch/0.9'], 'a row that named no client falls under the marker the rollups file it as');
   assert.equal(groups.find((g) => g.key === '-').label, 'unattributed', 'which every route answers as unattributed');
   assert.deepEqual(groups.map((g) => g.requests), [1, 1, 1]);
   const named = d.foldGroups(rows, 'user_agent', { agentGroups: ['claude-cli/2.1.*', 'phoebis-batch/*'] });
@@ -2161,7 +2161,7 @@ test('a session fold groups on the client each row named', () => {
   assert.deepEqual(named.map((g) => g.requests), [1, 1, 1]);
   assert.equal(d.foldGroups(rows, 'all', { agentPatterns: ['claude-cli/*'] })[0].requests, 1, 'the pattern keeps only the clients it admits');
   assert.equal(
-    d.foldGroups(rows, 'all', { agentPatterns: ['claude-cli/2.1.269'] })[0]?.requests,
+    d.foldGroups(rows, 'all', { agentPatterns: ['claude-cli/2.1.310'] })[0]?.requests,
     1,
     'an exact token selects the row it folds from, as the unscoped page matches the rollups',
   );

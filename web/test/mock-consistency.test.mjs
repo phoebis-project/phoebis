@@ -2842,7 +2842,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const refusals = s.requests.filter((r) => r.errorCode === 'client_contract');
     assert.equal(refusals.length, 1, 'one row is a contract refusal');
     const [refused] = refusals;
-    assert.deepEqual([refused.clientContract, refused.status, refused.outcome, refused.attempts.length, refused.requestClass, refused.userAgent?.startsWith('claude-cli/')], ['class_header', 400, 'rejected', 0, null, true]);
+    assert.deepEqual([refused.clientContract, refused.status, refused.outcome, refused.attempts.length, refused.requestClass, refused.userAgent?.startsWith('claude-cli/')], ['class_header', 403, 'rejected', 0, null, true]);
     assert.deepEqual(s.requests.filter((r) => r.clientContract !== null).map((r) => r.id), [refused.id], 'the item stands on the refusal alone');
   });
 

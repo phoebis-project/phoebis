@@ -900,7 +900,7 @@ const settingsFixture = FIXTURES.settings.body as Record<string, Record<string, 
  */
 export const SETTINGS_WIRE = {
   ...settingsFixture,
-  about: { profile: 'claude-code-2.1.269-linux-x64', version: SETTINGS_SAMPLE.about.version },
+  about: { profile: 'claude-code-2.1.310-linux-x64', version: SETTINGS_SAMPLE.about.version },
   access: { admin_configured: true },
   api_prices: API_PRICES_WIRE,
   listeners: { metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080', proxy_tls: false },

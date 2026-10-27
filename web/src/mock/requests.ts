@@ -50,7 +50,7 @@ const AGENT_IDS = ['main', 'main', 'main', 'a7f3', 'c21e', 'e90b', '4d1a'];
 /** One client per key, the way a machine runs one build of Claude Code and a runner its job on the Agent SDK. */
 export const USER_AGENTS: Record<string, string> = {
   ci: 'claude-cli/2.1.302 (external, sdk-cli)',
-  desktop: 'claude-cli/2.1.269 (external, cli)',
+  desktop: 'claude-cli/2.1.310 (external, cli)',
   laptop: 'claude-cli/2.0.44 (external, cli)',
 };
 
@@ -1151,9 +1151,9 @@ function storyRequests(): RequestLog[] {
     { agentId: 'main', at: t(14, 16, 40), attempts: [], errorCode: 'accounts_exhausted', id: 'req_51d0e2b8-7a0', keyId: 'ci', model: HAIKU, outcome: 'exhausted', requestClass: 'main', session: 'cd9a5904', status: 429 },
     { agentId: null, at: t(14, 15, 48), attempts: [], client: 'other', errorCode: 'client_not_allowed', id: 'req_9b4f1c62-a07', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: null, session: null, status: 403, userAgent: BATCH_AGENT },
     { agentId: null, at: t(14, 15, 12), attempts: [], client: 'other', errorCode: 'client_not_allowed', id: 'req_2d8e5b13-f40', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: null, session: null, status: 403, userAgent: BATCH_AGENT },
-    { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', refused: true, requestClass: 'main', session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
+    { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', refused: true, requestClass: 'main', session: '5eeed6ce', status: 403, userAgent: 'claude-cli/2.1.271 (external, cli)' },
     // The same client's next request carried no class header, so the contract refused it before any account was chosen.
-    { agentId: 'main', at: t(14, 14, 20), attempts: [], clientContract: 'class_header', errorCode: 'client_contract', id: 'req_f1c8e3a5-29d', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', refused: true, requestClass: null, session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
+    { agentId: 'main', at: t(14, 14, 20), attempts: [], clientContract: 'class_header', errorCode: 'client_contract', id: 'req_f1c8e3a5-29d', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', refused: true, requestClass: null, session: '5eeed6ce', status: 403, userAgent: 'claude-cli/2.1.271 (external, cli)' },
     { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', pending: true, requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
     // The model takes no inference geography parameter, so its answer reports the geography as not available.
     { agentId: 'main', at: t(14, 9, 41), attempts: [{ accountId: 'primary', at: t(14, 9, 41), ms: 4_800, status: 200 }], geo: 'not_available', id: 'req_ef099b34-453', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 31_000, input: 9_800, output: 2_100 } },

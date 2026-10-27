@@ -342,7 +342,7 @@ fn request(
         ttfc_ms: Some(300),
         duration_ms: Some(900),
         error_code: (outcome != "succeeded").then(|| "upstream_error".into()),
-        user_agent: Some("claude-cli/2.1.269 (external, cli)".into()),
+        user_agent: Some("claude-cli/2.1.310 (external, cli)".into()),
         client: Some("claude-code/cli".into()),
         effort: Some("high".into()),
         thinking_type: Some("enabled".into()),

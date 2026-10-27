@@ -20539,7 +20539,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const tokens = trafficRows('user agent').map((row) => row[0]);
     results.push({
       name: '/analytics the user agent grouping lists each agent by its product token, as the rollups key it',
-      ok: tokens.includes('claude-cli/2.1.269') && tokens.includes('phoebis-batch/0.9') && tokens.every((t) => !t.includes(' (')),
+      ok: tokens.includes('claude-cli/2.1.310') && tokens.includes('phoebis-batch/0.9') && tokens.every((t) => !t.includes(' (')),
       missing: tokens,
     });
     const listCheck = '/analytics a user agent pattern list names the groups and gathers the rest';
@@ -25395,7 +25395,7 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   const revisionsText = (revisions) => `effective ${effectiveLabel(revisionAt(revisions, CLOCK_ORIGIN).effective)}, ${revisions.length === 1 ? '1 revision' : `${revisions.length} revisions`}`;
   const priceRow = `API prices path=./api_prices.yaml, ${revisionsText(wired.apiPrices.revisions)}`;
   const costRow = `Subscription costs path=./subscription_costs.yaml, ${revisionsText(wired.subscriptionCosts.revisions)}`;
-  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Requests, samples and the routing log=kept for 365 days', 'Rollups=kept for 365 days', `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.310-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Requests, samples and the routing log=kept for 365 days', 'Rollups=kept for 365 days', `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
   results.push({
     name: '/settings each path and retention line names its key in the configuration file and the admin secret line its variable',

@@ -577,11 +577,11 @@ test('the session fold files a request under the speed its serving attempt repor
 
 test('the session fold groups a user agent under its first product token, as the rollups key it', () => {
   const [captured, failed] = d.decodeRequestPage(fixture('requests')).requests;
-  assert.equal(captured.userAgent, 'claude-cli/2.1.269 (external, cli)');
-  const rows = [captured, { ...failed, userAgent: 'claude-cli/2.1.269 (external, sdk-cli)' }, { ...failed, id: 'r-curl', userAgent: 'curl' }, { ...failed, id: 'r-none', userAgent: null }];
-  assert.deepEqual(d.foldGroups(rows, 'user_agent').map((g) => [g.key, g.requests]).sort(), [['-', 1], ['claude-cli/2.1.269', 2], ['other', 1]], 'a header without a product token files under other, and one never sent under the reserved id');
-  const named = d.foldGroups(rows, 'user_agent', { agentGroups: ['claude-cli/2.1.269'] });
-  assert.deepEqual(named.map((g) => [g.key, g.requests]), [['claude-cli/2.1.269', 2], ['other', 2]], 'a pattern list names its groups by the token, as the breakdown route matches them');
+  assert.equal(captured.userAgent, 'claude-cli/2.1.310 (external, cli)');
+  const rows = [captured, { ...failed, userAgent: 'claude-cli/2.1.310 (external, sdk-cli)' }, { ...failed, id: 'r-curl', userAgent: 'curl' }, { ...failed, id: 'r-none', userAgent: null }];
+  assert.deepEqual(d.foldGroups(rows, 'user_agent').map((g) => [g.key, g.requests]).sort(), [['-', 1], ['claude-cli/2.1.310', 2], ['other', 1]], 'a header without a product token files under other, and one never sent under the reserved id');
+  const named = d.foldGroups(rows, 'user_agent', { agentGroups: ['claude-cli/2.1.310'] });
+  assert.deepEqual(named.map((g) => [g.key, g.requests]), [['claude-cli/2.1.310', 2], ['other', 2]], 'a pattern list names its groups by the token, as the breakdown route matches them');
 });
 
 test('the session fold keys an effort and a request class as the rollups fold them', () => {
