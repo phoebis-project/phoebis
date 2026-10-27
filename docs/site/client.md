@@ -429,3 +429,9 @@ appends to `messages` beside `output_config.effort` on a model it marks for it, 
 [The per-turn effort form](relay.md#the-per-turn-effort-form). Remote Control is unavailable behind the router: the
 client reports that `ANTHROPIC_BASE_URL` does not point at `api.anthropic.com`, and that the override does not apply to
 Remote Control.
+
+An interactive start of the client also reaches past the router. It opens connections to `downloads.claude.ai`,
+`github.com` and, without `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `raw.githubusercontent.com`, all three by name
+and none through `ANTHROPIC_BASE_URL`, runs `npm --global config get prefix` and `gh` where the host has them, and
+registers a URL handler (`claude-code-url-handler.desktop`) in the user's applications directory. On a host that reaches
+the router alone those connections fail and the client starts regardless.

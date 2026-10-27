@@ -157,7 +157,7 @@ the client's own stamp.
 
 The restoration applies to an inference request whose body carries the line, and the version the contract admitted lands
 in it: `claude-cli/` followed by a version the client itself would spell, digits and dots with at most one `-` and a
-prerelease suffix of letters, digits, dots and hyphens, as in `claude-cli/2.1.269 (external, cli)`, any other spelling
+prerelease suffix of letters, digits, dots and hyphens, as in `claude-cli/2.1.310 (external, cli)`, any other spelling
 refused `403` `client_contract` under the item `client_version` ([The required set](client.md#the-required-set)). A
 request without the class header is refused before the restoration reads it, so the restoration reads the class from
 every request and falls back on nothing. A token count has no line to fill, and a probe replays a request as the client
@@ -213,7 +213,7 @@ router reproduces a resumed conversation's stamp over the empty prompt.
 The router fails closed because a stamp it cannot verify never travels under an account's credential, edited or not: a
 wrong hash is indistinguishable from tampering, and the cost would fall on the account rather than on the request, which
 is why neither relaying the body unedited under the client's stamp nor stripping the stamp is an answer. No setting
-clears the refusal. The formula comes from the profile compiled into the build, `claude-code-2.1.269-linux-x64`, and
+clears the refusal. The formula comes from the profile compiled into the build, `claude-code-2.1.310-linux-x64`, and
 every reader takes it from there, so the cure is a build re-pinned to the client's version
 ([Re-pinning the client build](operations.md#re-pinning-the-client-build)). The user agent's version itself is recorded
 for the ledger and never judged: every version is relayed the same way.

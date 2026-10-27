@@ -787,7 +787,7 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
   call's row reads its zero figures under Native and Window shares and its dollar equivalent under All in dollars and
   Dollar equivalent, with the hover "Free on the plan: a client classifier call takes no window share".
 - Request: Session, Agent, Client with the request class badge and the fork line where the session branched from another
-  conversation, User agent (such as `claude-cli/2.1.269 (external, cli)`), Key, Pool, Kind, and one `Attempt {n}` row
+  conversation, User agent (such as `claude-cli/2.1.310 (external, cli)`), Key, Pool, Kind, and one `Attempt {n}` row
   per attempt with the upstream's request id and, on the answer that served, its message id.
 - Request shape: Effort (the level the upstream applies), Thinking, Max tokens, "Tools, system blocks, messages",
   Context edits, Temperature, "Speed, service tier", Auto mode and Classifier (`client` for the client's own auto-mode
@@ -828,7 +828,7 @@ offers Account, Classifier, Client, Key, Effort, Kind, Model, Pool, Request clas
 only)", the last the Burn section's own grouping. While it reads User agent, "Groups (N)" opens the "User agent groups"
 box with one pattern per line, N the patterns it holds, where each pattern names a group and every other agent groups
 under `other` (`claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups). The user agent grouping reads the agent's first
-product token, `claude-cli/2.1.269` for `claude-cli/2.1.269 (external, cli)`. The classifier grouping lists the requests
+product token, `claude-cli/2.1.310` for `claude-cli/2.1.310 (external, cli)`. The classifier grouping lists the requests
 with no classifier call under `none`, as the Requests view's Classifier filter names them.
 
 Auto reload is at 5 s when the view opens, set on the split Refresh button's dropdown as on the Requests view and kept

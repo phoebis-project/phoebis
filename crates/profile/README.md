@@ -1,44 +1,52 @@
 # phoebis-profile
 
-Pinned wire constants of Claude Code 2.1.269 on Linux x64, and the fixture files measured from it.
+Pinned wire constants of Claude Code 2.1.310 on Linux x64, and the fixture files measured from it.
 
 ## Fixtures
 
-The 18 files captured on 2026-09-13 come from the pinned 2.1.269 binary running against loopback receivers with
-dummy credentials; the six `count_apikey`, `count_oauth`, and `count_oauth_fp` files (`.http` and `.json` each)
-come from a 2026-09-21 capture of the 2.1.278 build against the same loopback receivers (`docs/site/development.md`
-records both captures).
+The 23 files under `fixtures/` come from one capture of 2026-10-27 of the pinned 2.1.310 binary running against
+loopback receivers with dummy credentials: the inference plane and the count path from print-mode runs, and the control
+plane from a scripted `/login`, `/status` and `/usage` session in a pseudo-terminal, every control call tunneled through
+`HTTPS_PROXY` to a receiver that answered with canned responses. `scripts/build-fixtures.py` wrote every file from that
+capture, and nothing else writes one. [The pinned client build](../../docs/site/development.md#the-pinned-client-build)
+records the binary, the capture and the manifest.
 
-- `body_apikey.json`, `body_fp_9b244.json`, `body_fp_e142e.json`, `body_oauth.json`: the four captured
-  `/v1/messages` request bodies (API-key, first-party OAuth, non-first-party OAuth, and a second first-party
-  sample), byte for byte.
-- `control_profile.http`, `control_roles.http`, `control_token.http`, `control_usage.http`: request heads for the
-  control-plane login and usage endpoints, with their captured bodies.
-- `count_apikey.http`, `count_apikey.json`, `count_oauth.http`, `count_oauth.json`, `count_oauth_fp.http`,
-  `count_oauth_fp.json`: the three `/v1/messages/count_tokens` request heads and bodies of the Read tool's
-  pre-turn count, one per credential mode.
+- `body_apikey.json`, `body_fp.json`, `body_fp_again.json`, `body_oauth.json`: the four captured `/v1/messages`
+  request bodies, one per inference run (an API key, an OAuth token with the first-party override, the override a
+  second time as a second hash vector, and an OAuth token without it), the client's bytes after the redaction below.
+- `control_profile.http`, `control_roles.http`, `control_token.http`, `control_token_code.http`,
+  `control_usage.http`: the request heads of the profile read, the roles read, the refresh grant, the code grant and
+  the usage read, with their captured bodies.
+- `count.json`, `count_apikey.http`, `count_oauth.http`, `count_oauth_fp.http`: the one `/v1/messages/count_tokens`
+  body of the Read tool's pre-turn count, which the three credential modes send byte for byte, and the three heads.
 - `hello.http`: the `HEAD /api/hello` request head.
-- `hello_control.hex`, `hello_inference.hex`: raw ClientHello bytes captured on the control and inference TLS
-  connections, including the 5-byte TLS record header.
-- `inference_apikey.http`, `inference_oauth.http`, `inference_oauth_fp.http`: request heads for the three
-  `/v1/messages` credential modes (API-key, non-first-party OAuth, first-party OAuth).
-- `responses/`: the synthetic bodies the capture harness's fake upstream returned to the login and usage requests.
+- `hello_control.hex`, `hello_inference.hex`: the raw ClientHello bytes of the control and inference TLS connections,
+  the 5-byte TLS record header included.
+- `inference_apikey.http`, `inference_oauth.http`, `inference_oauth_fp.http`: the request heads of the three
+  `/v1/messages` credential modes (an API key, an OAuth token, and an OAuth token with the first-party override).
+- `responses/`: the canned bodies the capture's control receiver returned to the token, profile, roles and usage
+  requests.
 
 ## Re-pinning
 
 A new Claude Code build requires a re-capture and a diff against these fixtures before the profile is re-pinned.
-`scripts/capture-baseline.sh <binary> <output-dir>` reproduces the inference-plane half of the capture recipe
-against loopback receivers; its header comment covers the control-plane half, which needs a live login session and
-cannot run unattended. `scripts/capture-count-tokens.sh <binary> <output-dir>` reproduces the count half beside it,
-past a receiver that answers with a canned tool call so the Read tool's pre-turn count reaches the wire.
-`scripts/build-fixtures.py --check <capture-dir>` builds fixtures from a capture directory into a temporary
-location, normalizes the per-run randomness out of both trees, and diffs the result against this directory,
-printing `fixtures match` or the differing files; `--count` alongside `--check` builds and grades the six count
-fixtures the same way.
+`scripts/capture-baseline.sh <binary> <output-dir>` reproduces the inference-plane half of the capture against
+loopback receivers, the hello probe run included. `scripts/capture-count-tokens.sh <binary> <output-dir>` reproduces
+the count half past a receiver that answers with a canned tool call, so the Read tool's pre-turn count reaches the
+wire. `scripts/capture-control.sh <binary> <output-dir>` records the control plane in two variants, with and without
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, the login driven by `scripts/capture/drive_login.py` in a pseudo-terminal.
+`scripts/build-fixtures.py --check <capture-dir>` builds fixtures from a capture directory into a temporary location,
+normalizes the per-run randomness out of both trees, and diffs the result against this directory, printing
+`fixtures match` or the differing files. `--control <variant-dir>` beside it grades the control fixtures from that
+variant's recordings, and without one the check lists them under `not captured (control plane):`.
+`--count <count-dir> --check` builds and grades the four count fixtures the same way. The write commands, the profile
+value and the manifest a re-pin changes are on [Re-pinning](../../docs/site/development.md#re-pinning).
 
 ## Redaction
 
-The only redacted values are the credentials (`Authorization: Bearer`, `x-api-key`, and the refresh token in the
-token-endpoint body) and the `Host` line of each request head. Every request body is native, and
-`X-Claude-Code-Session-Id`, `x-client-request-id`, and the `metadata.user_id` identifiers keep their captured
-values because the CCH digits in the heads are the hash of those exact bytes.
+Every fixture is what `scripts/build-fixtures.py` wrote from the capture and is never edited by hand. The builder puts
+a placeholder in for the device id, the session id (one value in the session header and in `metadata.user_id`), the
+prompt id (one value in the prompt id header and in the billing line's `cc_prompt_id`), the request id header, the
+tokens and the code grant's `code`, `code_verifier` and `state`, empties `account_uuid`, rewrites the receiver's
+loopback `Host` to `api.anthropic.com`, and re-signs each body's `cch` over the redacted bytes. Everything else is the
+client's bytes.
