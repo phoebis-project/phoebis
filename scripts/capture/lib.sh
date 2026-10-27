@@ -81,7 +81,8 @@ RECEIVER_PID=
 CONTROL_RECEIVER_PID=
 
 start_receiver() { # $1=script $2=port $3=output $4=seconds, then any further arguments the receiver takes
-  python3 "$CAPTURE_DIR/$1" "${@:2}" &
+  # -I also leaves the script's own directory off sys.path, so a receiver that imports hello_lib puts it there itself.
+  python3 -I "$CAPTURE_DIR/$1" "${@:2}" &
   RECEIVER_PID=$!
   sleep 1
 }
