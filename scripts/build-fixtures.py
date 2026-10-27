@@ -812,14 +812,17 @@ def _self_test_control_selection() -> None:
         first = [
             {"seq": 0, "target": "?", "error": "ConnectionError('closed after 0 bytes of an unfinished head')"},
             _control_entry(1, "POST /v1/oauth/token HTTP/1.1", refresh),
-            _control_entry(2, "POST /v1/oauth/token HTTP/1.1", retry),
-            _control_entry(3, "GET /api/oauth/profile HTTP/1.1"),
+            _control_entry(2, "GET /api/oauth/profile HTTP/1.1"),
         ]
-        second = [_control_entry(4, "GET /api/oauth/claude_cli/roles HTTP/1.1")]
+        second = [
+            _control_entry(3, "POST /v1/oauth/token HTTP/1.1", retry),
+            _control_entry(4, "GET /api/oauth/claude_cli/roles HTTP/1.1"),
+        ]
         if nonces is not None:
             second.append(_control_entry(5, "POST /v1/oauth/token HTTP/1.1", _code_grant(*nonces)))
         second.append(_control_entry(6, "GET /api/oauth/usage?x=1 HTTP/1.1"))
-        # Written in reverse, so the order read is the names' rather than the order the files were made in.
+        # Written in reverse, so the order read is the names' rather than the order the files were made in. The retry
+        # sits in the second file, so a read in any other order pins it in place of the first refresh grant.
         (root / "phase-2.json").write_text(json.dumps(second))
         (root / "phase-1.json").write_text(json.dumps(first))
         return root
