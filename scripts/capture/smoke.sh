@@ -61,16 +61,19 @@ PY
 sleep 1
 kill "$CONNECT_PID" 2>/dev/null || true
 wait "$CONNECT_PID" 2>/dev/null || true
-python3 - "$TMP/connect.json" <<'PY'
+python3 - "$TMP/connect.json" "$ROOT/crates/profile/fixtures/hello_inference.hex" <<'PY'
 import json, pathlib, sys
 recorded = json.loads(pathlib.Path(sys.argv[1]).read_text())
+hello_bytes = bytes.fromhex(pathlib.Path(sys.argv[2]).read_text().strip())
 assert len(recorded) == 1, f"connect.json holds {len(recorded)} entries, want 1"
 hello = recorded[0]
-assert hello.get("hello_len") == 1499, hello.get("hello_len") or hello
+# connect_capture.py records the handshake's length, without the five-byte record header the hex fixture
+# carries ahead of it.
+assert hello.get("hello_len") == len(hello_bytes) - 5, hello.get("hello_len") or hello
 assert hello.get("target") == "api.anthropic.com:443", hello.get("target")
 sni = next(e.get("sni") for e in hello["extensions"] if e["type"] == 0)
 assert sni == "api.anthropic.com", sni
-print("smoke passed: connect_capture.py recorded a 1499-byte ClientHello for api.anthropic.com")
+print(f"smoke passed: connect_capture.py recorded a {hello['hello_len']}-byte ClientHello for api.anthropic.com")
 PY
 
 CA_DIR="$TMP/ca"

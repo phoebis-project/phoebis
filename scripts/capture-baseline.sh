@@ -22,12 +22,19 @@
 #   4. OAuth token with the first-party override again, which is the second CCH vector
 #   5. OAuth token with gzipped request bodies forced. Its request is evidence only, so it is recorded into
 #      <output-dir>/gzip/ and its modes file moved to <output-dir>/gzip_modes.json, out of clean_modes.json.
-#   6. one run with HTTPS_PROXY pointed at connect_capture.py and no ANTHROPIC_BASE_URL, so the client sends
+#   6. OAuth token without CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, recorded into <output-dir>/probe/ and its modes
+#      file moved to <output-dir>/probe_modes.json, where scripts/build-fixtures.py reads the hello probe. The
+#      2.1.310 client sends HEAD <ANTHROPIC_BASE_URL>/api/hello only without that variable, behind no proxy and
+#      with a first-party provider. Leaving it out also frees calls the namespace refuses (the version lookup, the
+#      Cloudflare probe, the bootstrap reads), which fail without reaching anything. The run's inference body
+#      differs from the compared runs', so its post stays out of clean_modes.json, and its config name pr is new,
+#      so no compared body changes.
+#   7. one run with HTTPS_PROXY pointed at connect_capture.py and no ANTHROPIC_BASE_URL, so the client sends
 #      CONNECT api.anthropic.com:443 and the recorded ClientHello carries the server name api.anthropic.com,
 #      which is what makes it comparable to hello_inference.hex. This step depends on the client honoring
 #      HTTPS_PROXY, measured on 2.1.269; a run that records no ClientHello fails the script.
 #
-# Runs 1 to 5 point ANTHROPIC_BASE_URL at http_raw.py. The client's working directory is fixed at
+# Runs 1 to 6 point ANTHROPIC_BASE_URL at http_raw.py. The client's working directory is fixed at
 # /tmp/cc-capture/cwd and its config directory at /tmp/cc-capture/cfg-<name>, wiped before each run. The system
 # prompt embeds both paths, in the working-directory line and in the auto-memory section, so a mktemp directory
 # would show up as body drift on every capture. The four cfg names of the compared runs are pinned by the
@@ -69,6 +76,12 @@ runcli gzip-forced gz "$LONG" \
 stop_receiver
 mv "$OUT/gzip/clean_modes.json" "$OUT/gzip_modes.json"
 
+start_receiver http_raw.py "$HTTP_PORT" "$OUT/probe" "$SHORT_DURATION"
+ALLOW_NONESSENTIAL_TRAFFIC=1 runcli probe pr hi \
+  ANTHROPIC_BASE_URL="$HTTP_BASE" CLAUDE_CODE_OAUTH_TOKEN="$DUMMY_OAUTH_TOKEN"
+stop_receiver
+mv "$OUT/probe/clean_modes.json" "$OUT/probe_modes.json"
+
 start_receiver connect_capture.py "$CONNECT_PORT" "$OUT/connect.json" "$SHORT_DURATION"
 runcli hello hello hi \
   HTTPS_PROXY="http://127.0.0.1:$CONNECT_PORT" CLAUDE_CODE_OAUTH_TOKEN="$DUMMY_OAUTH_TOKEN"
@@ -84,7 +97,8 @@ print(f"recorded {len(hellos)} ClientHello(s), lengths {sorted({h['hello_len'] f
 PY
 
 echo "ran $RUN_COUNT runs, $RUN_FAILURES exited non-zero"
-echo "capture written under $OUT: clean_modes.json, clean_body_<i>.json, gzip_modes.json, connect.json"
+echo "capture written under $OUT: clean_modes.json, clean_body_<i>.json, gzip_modes.json, probe_modes.json," \
+  "connect.json"
 
 trap - EXIT
 cd "$ROOT" || exit 1

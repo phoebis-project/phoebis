@@ -175,7 +175,9 @@ def control_bytes(entry, name: str) -> bytes:
 
     The substitutions read the body as text, so a body that parses as a JSON object is read back as JSON, and each of
     those members it holds must hold its placeholder. A spelling the substitutions miss, such as an escaped key, then
-    stops the build before the value reaches a file. The stop names the fixture and the member, never the value.
+    stops the build before the value reaches a file. A key spelled twice stops it as well, since the parse keeps one
+    of the two values and the substitutions may have replaced only that one. The stop names the fixture and the
+    member, never the value.
     """
     body = entry.get("body", "")
     body = re.sub(r'sk-ant-ort01-[^"\s]*\s*"', 'sk-ant-ort01-PLACEHOLDER"', body)
@@ -187,19 +189,29 @@ def control_bytes(entry, name: str) -> bytes:
     }
     for key in ("code", "code_verifier", "state"):
         body = re.sub(rf'("{key}"\s*:\s*")[^"]*(")', rf"\g<1>{placeholders[key]}\g<2>", body)
+
+    def refuse_duplicates(pairs: list) -> dict:
+        seen = set()
+        for key, _ in pairs:
+            if key in seen:
+                raise SystemExit(f"{name}: {key} appears twice")
+            seen.add(key)
+        return dict(pairs)
+
     try:
-        members = json.loads(body)
+        members = json.loads(body, object_pairs_hook=refuse_duplicates)
     except ValueError:
         members = None
     if isinstance(members, dict):
         for key, placeholder in placeholders.items():
             if key in members and members[key] != placeholder:
                 raise SystemExit(f"{name}: {key} kept a captured value")
-    # control_receiver.py records the body's bytes decoded as latin1, so encoding it back the same way restores them.
+    # control_receiver.py records the head and the body decoded as latin1, so encoding them back the same way
+    # restores their bytes.
     payload = body.encode("latin1")
     lines = [entry["request_line"]] + [redact(h) for h in entry["headers"]]
     lines = [l if not l.startswith("Content-Length:") else f"Content-Length: {len(payload)}" for l in lines]
-    return ("\r\n".join(lines) + "\r\n\r\n").encode() + payload
+    return ("\r\n".join(lines) + "\r\n\r\n").encode("latin1") + payload
 
 
 def control(entry, name, out):
@@ -335,6 +347,21 @@ def count_entries(cm: list) -> list:
     return [(i, e) for i, e in enumerate(cm) if e["request_line"].startswith("POST /v1/messages/count_tokens")]
 
 
+def probe_entry(src: pathlib.Path) -> dict | None:
+    """The first HEAD /api/hello entry of probe_modes.json when the capture holds that file, else of clean_modes.json,
+    or None when the file read holds none.
+
+    The client sends the probe only with the nonessential-traffic switch off, and that run's body differs from the
+    four compared runs (its deferred-tools reminder lists more tools), so the probe run records into a file of its own
+    and its post never joins the four bodies. A capture from a client that sends the probe in every run carries it
+    in clean_modes.json beside the four posts.
+    """
+    path = src / "probe_modes.json"
+    if not path.exists():
+        path = src / "clean_modes.json"
+    return next((e for e in json.load(open(path)) if e["request_line"].startswith("HEAD /api/hello")), None)
+
+
 def build(
     src: pathlib.Path,
     out: pathlib.Path,
@@ -357,9 +384,9 @@ def build(
     there instead.
 
     Returns a pair: the names of the fixture files written, the canned responses aside, then the required fixtures
-    left unwritten, each with its reason. These are the probe and the ClientHello of a non-strict native build and
-    the control fixtures a supplied or present control directory lacks. The build prints nothing about them, so the
-    caller reports them.
+    left unwritten, each with its reason. These are the probe and the inference ClientHello of a non-strict native
+    build, the control ClientHello of any native build, and the control fixtures a supplied or present control
+    directory lacks. The build prints nothing about them, so the caller reports them.
     """
     # A fixture write targets the committed tree, so a mistyped directory stops the build before it rewrites the
     # inference plane.
@@ -384,7 +411,7 @@ def build(
                     f"{src}/clean_modes.json entry {idx} ({entry['request_line']}) declares Content-Length "
                     f"{declared}, but the body captured beside it is {len(body)} bytes"
                 )
-    hello = next((e for e in cm if e["request_line"].startswith("HEAD /api/hello")), None)
+    hello = probe_entry(src)
     # In a router capture, connect.json, which tls_raw.py always writes, holds the ClientHello the router itself sent
     # toward its upstream. crates/transport/tests/client_hello.rs grades that shape, so the build never opens the file
     # under THROUGH_ROUTER.
@@ -394,7 +421,11 @@ def build(
     # half rewritten.
     if strict and not THROUGH_ROUTER:
         if hello is None:
-            raise SystemExit(f"{src}/clean_modes.json holds no HEAD /api/hello entry")
+            read = "probe_modes.json" if (src / "probe_modes.json").exists() else "clean_modes.json"
+            raise SystemExit(
+                f"{src}/{read} holds no HEAD /api/hello entry "
+                "(probe_modes.json is read when the capture holds it, clean_modes.json otherwise)"
+            )
         if inf is None:
             raise SystemExit(f"{src}/connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello")
     bodies = [redact_body(body) for body in captured]
@@ -427,21 +458,30 @@ def build(
         (out / "hello.http").write_bytes(head(hello))
         written.append("hello.http")
     if not THROUGH_ROUTER:
+        lengths = ", ".join(str(n) for n in sorted({h["hello_len"] for h in conn if "hello_len" in h})) or "none"
         if inf is not None:
             (out / "hello_inference.hex").write_text(inf["raw_hex"] + "\n")
             written.append("hello_inference.hex")
         else:
-            lengths = ", ".join(str(n) for n in sorted({h["hello_len"] for h in conn if "hello_len" in h})) or "none"
             unwritten.append(
                 (
                     "hello_inference.hex",
                     f"connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello (recorded lengths: {lengths})",
                 )
             )
+        # Reported without a stop in either mode: the fixture write goes on and main() names the committed copy it
+        # keeps, which would otherwise sit unnoticed beside the fixtures of another build.
         ctl = next((h for h in conn if h.get("hello_len") == CONTROL_HELLO_LEN), None)
         if ctl is not None:
             (out / "hello_control.hex").write_text(ctl["raw_hex"] + "\n")
             written.append("hello_control.hex")
+        else:
+            unwritten.append(
+                (
+                    "hello_control.hex",
+                    f"connect.json holds no {CONTROL_HELLO_LEN}-byte ClientHello (recorded lengths: {lengths})",
+                )
+            )
     if control is None:
         return written, unwritten
     # The control receiver answers from the committed responses, so they are the canned bodies this capture saw.
@@ -532,6 +572,7 @@ def _self_test() -> None:
     _self_test_resend_selector()
     _self_test_check_reports_resends()
     _self_test_check_reports_probe_and_hello()
+    _self_test_build_reads_the_probe_file()
     _self_test_build_stops_without_client_hello()
     _self_test_build_reports_no_recorded_length()
     _self_test_build_needs_cargo_before_writing()
@@ -546,6 +587,7 @@ def _self_test() -> None:
     _self_test_check_hashes_placeholder()
     _self_test_control_selection()
     _self_test_control_fails_closed()
+    _self_test_control_bytes_refuses_a_duplicate_key()
     _self_test_build_control_stop_writes_nothing()
     _self_test_build_reads_control()
     _self_test_build_reports_partial_control()
@@ -750,7 +792,8 @@ def _identified_body(model: bytes, session: bytes = _TEST_SESSION_ID) -> bytes:
 
 def _inference_capture(root: pathlib.Path) -> pathlib.Path:
     """A capture directory shaped like the one the baseline script writes: the hello probe, then the four
-    inference posts, each head and body carrying the invented ids and its run's own session id."""
+    inference posts, each head and body carrying the invented ids and its run's own session id, and both
+    ClientHellos in connect.json."""
     root.mkdir(parents=True)
     entries = [{"request_line": "HEAD /api/hello HTTP/1.1", "headers": ["Host: 127.0.0.1:48442"], "body": ""}]
     for i, name in enumerate(INFERENCE_BODIES, start=1):
@@ -772,8 +815,9 @@ def _inference_capture(root: pathlib.Path) -> pathlib.Path:
         )
         (root / f"clean_body_{i}.json").write_bytes(body)
     (root / "clean_modes.json").write_text(json.dumps(entries))
-    hello = {"hello_len": INFERENCE_HELLO_LEN, "raw_hex": _client_hello().hex()}
-    (root / "connect.json").write_text(json.dumps([hello]))
+    lengths = (INFERENCE_HELLO_LEN, CONTROL_HELLO_LEN)
+    hellos = [{"hello_len": length, "raw_hex": _client_hello().hex()} for length in lengths]
+    (root / "connect.json").write_text(json.dumps(hellos))
     return root
 
 
@@ -1062,8 +1106,8 @@ def _self_test_check_reports_resends() -> None:
 
 
 def _self_test_check_reports_probe_and_hello() -> None:
-    """A capture without the hello probe and without the inference ClientHello grades to its end in check mode, the
-    two missing fixtures named, while the fixture write stops on the missing probe before it writes a file."""
+    """A capture without the hello probe and without either ClientHello grades to its end in check mode, the three
+    missing fixtures named, while the fixture write stops on the missing probe before it writes a file."""
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
         first = _inference_capture(root / "first")
@@ -1074,24 +1118,28 @@ def _self_test_check_reports_probe_and_hello() -> None:
         for i in range(1, len(entries) + 1):
             (second / f"clean_body_{i}.json").rename(second / f"clean_body_{i - 1}.json")
         (second / "connect.json").write_text(json.dumps([{"hello_len": INFERENCE_HELLO_LEN + 4, "raw_hex": "16"}]))
+        missing_lines = (
+            "hello.http: the capture holds no HEAD /api/hello",
+            f"hello_inference.hex: connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello "
+            f"(recorded lengths: {INFERENCE_HELLO_LEN + 4})",
+            f"hello_control.hex: connect.json holds no {CONTROL_HELLO_LEN}-byte ClientHello "
+            f"(recorded lengths: {INFERENCE_HELLO_LEN + 4})",
+        )
+        not_captured = "fixtures not captured: hello.http, hello_inference.hex, hello_control.hex"
         report = io.StringIO()
         with contextlib.redirect_stdout(report):
             status = check(second, baseline=first, skip_hashes=True)
         output = report.getvalue()
         if status != 1:
-            raise AssertionError(f"check graded a capture without the probe and the ClientHello with status {status}")
-        for line in (
-            "hello.http: the capture holds no HEAD /api/hello",
-            f"hello_inference.hex: connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello "
-            f"(recorded lengths: {INFERENCE_HELLO_LEN + 4})",
-        ):
+            raise AssertionError(f"check graded a capture without the probe and the ClientHellos with status {status}")
+        for line in missing_lines:
             if line not in output.splitlines():
                 raise AssertionError(f"check printed no {line!r}: {output!r}")
         listed = "fixtures differ:\n  hello.http\n  hello_inference.hex\n"
-        if not output.endswith(listed + "fixtures not captured: hello.http, hello_inference.hex\n"):
-            raise AssertionError(f"check listed other fixtures than the probe and the ClientHello: {output!r}")
-        print("self-test passed: check reports a capture without the hello probe and the inference ClientHello")
-        # A baseline that lacks them too leaves the same two fixtures unwritten on both sides, where the comparison
+        if not output.endswith(listed + not_captured + "\n"):
+            raise AssertionError(f"check listed other fixtures than the probe and the ClientHellos: {output!r}")
+        print("self-test passed: check reports a capture without the hello probe and either ClientHello")
+        # A baseline that lacks them too leaves the same three fixtures unwritten on both sides, where the comparison
         # finds no difference.
         report = io.StringIO()
         with contextlib.redirect_stdout(report):
@@ -1099,19 +1147,14 @@ def _self_test_check_reports_probe_and_hello() -> None:
         output = report.getvalue()
         if status != 1:
             raise AssertionError(
-                f"check graded two captures without the probe and the ClientHello with status {status}"
+                f"check graded two captures without the probe and the ClientHellos with status {status}"
             )
-        for line in (
-            "baseline hello.http: the capture holds no HEAD /api/hello",
-            f"baseline hello_inference.hex: connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello "
-            f"(recorded lengths: {INFERENCE_HELLO_LEN + 4})",
-            "fixtures not captured: hello.http, hello_inference.hex",
-        ):
+        for line in [f"baseline {line}" for line in missing_lines] + [not_captured]:
             if line not in output.splitlines():
                 raise AssertionError(f"check printed no {line!r}: {output!r}")
         if "fixtures match" in output:
             raise AssertionError(f"check printed fixtures match for two incomplete captures: {output!r}")
-        print("self-test passed: check grades two captures without the probe and the ClientHello with status 1")
+        print("self-test passed: check grades two captures without the probe and the ClientHellos with status 1")
         try:
             build(second, root / "strict", resign=False)
         except SystemExit as e:
@@ -1125,9 +1168,63 @@ def _self_test_check_reports_probe_and_hello() -> None:
             raise AssertionError("the build wrote fixtures from a capture without the hello probe")
 
 
+def _self_test_build_reads_the_probe_file() -> None:
+    """A capture whose probe run recorded into probe_modes.json writes hello.http from that file and keeps the probe
+    run's post out of the four bodies. Without the file the probe is looked for in clean_modes.json, where a
+    non-strict build reports it missing and a strict one stops before it writes, naming both files."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        capture = _inference_capture(root / "capture")
+        entries = json.loads((capture / "clean_modes.json").read_text())
+        probe, posts = entries[0], entries[1:]
+        (capture / "clean_modes.json").write_text(json.dumps(posts))
+        # The probe was entry 0, so each post moves up one index and its body has to follow it.
+        for i in range(1, len(posts) + 1):
+            (capture / f"clean_body_{i}.json").rename(capture / f"clean_body_{i - 1}.json")
+        # A session of its own, so the selector would keep the probe run's post as a fifth body were it read.
+        session = _TEST_SESSION_ID[:-1] + str(len(INFERENCE_BODIES) + 1).encode()
+        body = _identified_body(b"probe-run", session)
+        probe_post = {
+            "request_line": "POST /v1/messages?beta=true HTTP/1.1",
+            "headers": ["X-Claude-Code-Session-Id: " + session.decode(), f"Content-Length: {len(body)}"],
+            "body": body.decode(),
+        }
+        (capture / "probe_modes.json").write_text(json.dumps([probe, probe_post]))
+        out = root / "with-probe"
+        written, unwritten = build(capture, out, resign=False, strict=False)
+        if "hello.http" not in written or (out / "hello.http").read_bytes() != head(probe):
+            raise AssertionError(f"the build wrote no hello.http from probe_modes.json, its written names {written!r}")
+        if any(name == "hello.http" for name, _ in unwritten):
+            raise AssertionError(f"the build reported hello.http unwritten beside probe_modes.json: {unwritten!r}")
+        kept = inference_entries(json.loads((capture / "clean_modes.json").read_text()))
+        if len(kept) != len(INFERENCE_BODIES):
+            raise AssertionError(f"the inference selector kept {len(kept)} posts, want {len(INFERENCE_BODIES)}")
+        if any(b"probe-run" in (out / name).read_bytes() for name in INFERENCE_BODIES):
+            raise AssertionError("the probe run's post reached one of the four bodies")
+        print("self-test passed: build writes hello.http from probe_modes.json and keeps the probe run's post out")
+
+        (capture / "probe_modes.json").unlink()
+        _, unwritten = build(capture, root / "without-probe", resign=False, strict=False)
+        if ("hello.http", "the capture holds no HEAD /api/hello") not in unwritten:
+            raise AssertionError(f"the build without probe_modes.json returned {unwritten!r} as unwritten")
+        print("self-test passed: build without probe_modes.json reports the probe missing from clean_modes.json")
+        try:
+            build(capture, root / "strict", resign=False)
+        except SystemExit as e:
+            if "probe_modes.json" not in str(e) or "clean_modes.json" not in str(e):
+                raise AssertionError(f"the build stopped without naming both files: {e}") from e
+            written = _written_files(root / "strict")
+            if written:
+                raise AssertionError(f"the build wrote {written} before it stopped on the missing probe")
+            print("self-test passed:", e)
+        else:
+            raise AssertionError("the build wrote fixtures from a capture whose probe neither file holds")
+
+
 def _self_test_build_stops_without_client_hello() -> None:
     """A fixture write from a capture that keeps the hello probe but holds no inference ClientHello stops before it
-    writes a file."""
+    writes a file. One that holds the inference ClientHello alone goes on, reports the control ClientHello as
+    unwritten, and the fixture write names the committed copy it keeps and exits 1."""
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
         capture = _inference_capture(root / "capture")
@@ -1144,10 +1241,45 @@ def _self_test_build_stops_without_client_hello() -> None:
         else:
             raise AssertionError("the build wrote fixtures from a capture without the inference ClientHello")
 
+        inference = {"hello_len": INFERENCE_HELLO_LEN, "raw_hex": _client_hello().hex()}
+        (capture / "connect.json").write_text(json.dumps([inference]))
+        written, unwritten = build(capture, root / "partial", resign=False)
+        wanted = (
+            "hello_control.hex",
+            f"connect.json holds no {CONTROL_HELLO_LEN}-byte ClientHello (recorded lengths: {INFERENCE_HELLO_LEN})",
+        )
+        if unwritten != [wanted]:
+            raise AssertionError(f"build returned {unwritten!r} as unwritten, want [{wanted!r}]")
+        if "hello_control.hex" in written or (root / "partial" / "hello_control.hex").exists():
+            raise AssertionError(f"build wrote a hello_control.hex from a connect.json without one: {written!r}")
+        print("self-test passed: build reports a capture without the control ClientHello and goes on writing")
+
+        # Placeholder bodies, so the write in the scratch tree needs no cargo.
+        for path in capture.glob("clean_body_*.json"):
+            path.write_bytes(path.read_bytes().replace(b"cch=4f1c2;", b"cch=00000;"))
+        tree = root / "tree"
+        (tree / FIXTURES).mkdir(parents=True)
+        committed = b"hello_control.hex as committed\n"
+        (tree / FIXTURES / "hello_control.hex").write_bytes(committed)
+        run = subprocess.run(
+            [sys.executable, "-I", os.path.abspath(__file__), str(capture)],
+            cwd=tree,
+            capture_output=True,
+            text=True,
+        )
+        if "fixtures kept from the committed tree: hello_control.hex" not in run.stdout.splitlines():
+            raise AssertionError(f"the fixture write named no kept hello_control.hex: {run.stdout + run.stderr!r}")
+        if run.returncode != 1:
+            raise AssertionError(f"the fixture write exited {run.returncode}, want 1: {run.stdout + run.stderr!r}")
+        if (tree / FIXTURES / "hello_control.hex").read_bytes() != committed:
+            raise AssertionError("the fixture write changed the committed hello_control.hex")
+        print("self-test passed: the fixture write names the hello_control.hex it keeps and exits 1")
+
 
 def _self_test_build_reports_no_recorded_length() -> None:
     """A non-strict build over a connect.json whose records carry no length, here a plain-http connection's error
-    entry in hello_lib.parse_hello's shape, returns none as the recorded lengths and prints nothing itself."""
+    entry in hello_lib.parse_hello's shape, returns none as the recorded lengths of both ClientHellos and prints
+    nothing itself."""
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
         capture = _inference_capture(root / "capture")
@@ -1155,12 +1287,15 @@ def _self_test_build_reports_no_recorded_length() -> None:
         report = io.StringIO()
         with contextlib.redirect_stdout(report):
             _, unwritten = build(capture, root / "fresh", resign=False, strict=False)
-        wanted = (
-            "hello_inference.hex",
-            f"connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello (recorded lengths: none)",
-        )
-        if unwritten != [wanted]:
-            raise AssertionError(f"build returned {unwritten!r}, want [{wanted!r}]")
+        wanted = [
+            (name, f"connect.json holds no {length}-byte ClientHello (recorded lengths: none)")
+            for name, length in (
+                ("hello_inference.hex", INFERENCE_HELLO_LEN),
+                ("hello_control.hex", CONTROL_HELLO_LEN),
+            )
+        ]
+        if unwritten != wanted:
+            raise AssertionError(f"build returned {unwritten!r}, want {wanted!r}")
         if report.getvalue():
             raise AssertionError(f"build printed {report.getvalue()!r} about the fixture it left unwritten")
         print("self-test passed: a connect.json without a recorded length reports none as the lengths")
@@ -1353,6 +1488,16 @@ def _self_test_control_selection() -> None:
             raise AssertionError(f"control wrote {body!r} under {lines!r}, want the recorded bytes and their length")
         print("self-test passed: control writes the recorded bytes and declares their length")
 
+        # The receiver decodes the head as latin1 too, so a header byte above 0x7f has to round-trip the same way.
+        wire_header = b"X-Note: caf\xc3\xa9"
+        entry = _control_entry(10, "GET /api/oauth/profile HTTP/1.1")
+        entry["headers"].append(wire_header.decode("latin1"))
+        control(entry, "latin1_head.http", root)
+        head_bytes = (root / "latin1_head.http").read_bytes().partition(b"\r\n\r\n")[0]
+        if wire_header not in head_bytes.split(b"\r\n"):
+            raise AssertionError(f"control wrote the head {head_bytes!r}, want the recorded header bytes")
+        print("self-test passed: control writes the recorded header bytes")
+
 
 def _escaped_code_recording(root: pathlib.Path) -> pathlib.Path:
     """A control directory under `root` holding the profile read, then a code grant whose key's first letter is
@@ -1386,6 +1531,24 @@ def _self_test_control_fails_closed() -> None:
             print("self-test passed:", e)
         else:
             raise AssertionError("control_fixtures wrote a code grant whose escaped key kept the captured code")
+
+
+def _self_test_control_bytes_refuses_a_duplicate_key() -> None:
+    """A grant that spells a member twice, an escaped code key ahead of a plain one, stops control_bytes, naming the
+    fixture and the member. The substitutions replace the plain value alone, and a parse that kept the last value
+    would read the placeholder and pass the escaped key's value through to the file."""
+    grant = (
+        '{"grant_type":"authorization_code","' + "\\u0063ode" + '":"DUMMYCODE",'
+        '"code":"OTHERCODE","state":"S","code_verifier":"V"}'
+    )
+    try:
+        control_bytes(_control_entry(0, "POST /v1/oauth/token HTTP/1.1", grant), "control_token_code.http")
+    except SystemExit as e:
+        if str(e) != "control_token_code.http: code appears twice":
+            raise AssertionError(f"control_bytes stopped for the wrong reason: {e}") from e
+        print("self-test passed:", e)
+    else:
+        raise AssertionError("control_bytes wrote a grant whose escaped code key ahead of a plain one kept its value")
 
 
 def _self_test_build_control_stop_writes_nothing() -> None:
@@ -2087,9 +2250,9 @@ def main() -> int:
         return check(src, baseline=baseline, skip_hashes=args.skip_hash_check, control=control)
     written, unwritten = build(src, FIXTURES, control=control)
     print("fixtures written:", sorted(written))
-    # A strict build stops on a gap in the inference plane, so what it leaves unwritten is a control fixture the
-    # recording lacks. A committed copy of one now sits beside fixtures of another build, and one without a copy is
-    # missing from the tree.
+    # A strict build stops on a gap in the inference plane, so what it leaves unwritten is the control ClientHello
+    # connect.json lacks or a control fixture the recording lacks. A committed copy of one now sits beside fixtures of
+    # another build, and one without a copy is missing from the tree.
     if unwritten:
         for name, reason in unwritten:
             print(f"{name}: {reason}")
