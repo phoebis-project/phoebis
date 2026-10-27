@@ -27,8 +27,9 @@ DIFF_LINES = 40
 CONTROL_HELLO_LEN = 1473
 INFERENCE_HELLO_LEN = 1499
 
-# The fixtures only the control-plane half of the capture produces. scripts/capture-baseline.sh cannot reach it
-# without a live login session, so --check reports these as not captured rather than as drift.
+# The fixtures only the control plane produces. scripts/capture-control.sh records it and the baseline capture records
+# none, so --check lists these names as not captured, rather than as drift, when no directory of control recordings
+# is present.
 CONTROL_PLANE = {
     "control_profile.http",
     "control_roles.http",
