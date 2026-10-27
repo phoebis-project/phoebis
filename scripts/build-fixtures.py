@@ -206,13 +206,16 @@ def control(entry, name, out):
     (out / name).write_bytes(control_bytes(entry, name))
 
 
-def control_fixtures(control_dir: pathlib.Path, out: pathlib.Path, responses: pathlib.Path) -> list[str]:
+def control_fixtures(
+    control_dir: pathlib.Path, out: pathlib.Path, responses: pathlib.Path
+) -> tuple[list[str], list[tuple[str, str]]]:
     """Write the control fixtures from the control receiver's recordings in `control_dir`, one file per phase, and
     copy the canned responses the receiver answered with from `responses` into `out/responses/`.
 
     Each fixture is the first request of its kind across the phase files in name order, so a retried refresh grant
-    leaves the first one pinned. A grant or read the recording lacks writes nothing, for check() to report as not
-    captured. Returns the names of the fixtures written.
+    leaves the first one pinned. A grant or read the recording lacks writes nothing, and an earlier copy of that
+    fixture in `out` stays as it was. Returns the names of the fixtures written, then each fixture the recording
+    lacks with the reason.
     """
     if not control_dir.is_dir():
         raise SystemExit(f"{control_dir} is not a directory of control recordings")
@@ -240,6 +243,7 @@ def control_fixtures(control_dir: pathlib.Path, out: pathlib.Path, responses: pa
 
     # Every fixture's bytes come before the first write, so a stop in control_bytes leaves no control fixture written.
     derived = []
+    missing = []
     for name, method, path, grant_type in (
         ("control_profile.http", "GET", "/api/oauth/profile", None),
         ("control_roles.http", "GET", "/api/oauth/claude_cli/roles", None),
@@ -248,7 +252,10 @@ def control_fixtures(control_dir: pathlib.Path, out: pathlib.Path, responses: pa
         ("control_usage.http", "GET", "/api/oauth/usage", None),
     ):
         entry = first(method, path, grant_type)
-        if entry is not None:
+        if entry is None:
+            request = f"{method} {path}" + (f" with grant_type {grant_type}" if grant_type else "")
+            missing.append((name, f"the recording holds no {request}"))
+        else:
             derived.append((name, control_bytes(entry, name)))
     (out / "responses").mkdir(parents=True, exist_ok=True)
     for name, data in derived:
@@ -258,7 +265,7 @@ def control_fixtures(control_dir: pathlib.Path, out: pathlib.Path, responses: pa
     if (out / "responses").resolve() != responses.resolve():
         for name in ("profile.json", "roles.json", "token.json", "usage.json"):
             shutil.copyfile(responses / name, out / "responses" / name)
-    return written
+    return written, missing
 
 
 def session_id(entry) -> str | None:
@@ -322,7 +329,7 @@ def build(
     resign: bool = True,
     control: pathlib.Path | None = None,
     strict: bool = True,
-) -> list[tuple[str, str]]:
+) -> tuple[list[str], list[tuple[str, str]]]:
     """Write the fixture tree at `out`, sourced from the capture directory `src`.
 
     The control plane is read from the control receiver's recordings in `control`, or in `src/control/` when
@@ -337,8 +344,10 @@ def build(
     inference ClientHello leaves its fixture unwritten. A write to the committed tree keeps `strict` on and stops
     there instead.
 
-    Returns the required fixtures left unwritten, each with its reason, and prints nothing about them, so the caller
-    reports them.
+    Returns a pair: the names of the fixture files written, the canned responses aside, then the required fixtures
+    left unwritten, each with its reason. These are the probe and the ClientHello of a non-strict native build and
+    the control fixtures a supplied or present control directory lacks. The build prints nothing about them, so the
+    caller reports them.
     """
     # A fixture write targets the committed tree, so a mistyped directory stops the build before it rewrites the
     # inference plane.
@@ -383,6 +392,7 @@ def build(
             resign_written(out / name)
     for (_, entry), name, body_name in zip(posts, INFERENCE_HEADS, INFERENCE_BODIES):
         (out / name).write_bytes(head(entry, len((out / body_name).read_bytes())))
+    written = INFERENCE_BODIES + INFERENCE_HEADS
     unwritten = []
     # The relay answers HEAD /api/hello itself, so a router capture never carries one; both it and the hex
     # files below are optional in this mode.
@@ -391,9 +401,11 @@ def build(
             unwritten.append(("hello.http", "the capture holds no HEAD /api/hello"))
     else:
         (out / "hello.http").write_bytes(head(hello))
+        written.append("hello.http")
     if not THROUGH_ROUTER:
         if inf is not None:
             (out / "hello_inference.hex").write_text(inf["raw_hex"] + "\n")
+            written.append("hello_inference.hex")
         else:
             lengths = ", ".join(str(n) for n in sorted({h["hello_len"] for h in conn if "hello_len" in h})) or "none"
             unwritten.append(
@@ -405,13 +417,14 @@ def build(
         ctl = next((h for h in conn if h.get("hello_len") == CONTROL_HELLO_LEN), None)
         if ctl is not None:
             (out / "hello_control.hex").write_text(ctl["raw_hex"] + "\n")
+            written.append("hello_control.hex")
     if control is None:
         control = src / "control"
         if not control.is_dir():
-            return unwritten
+            return written, unwritten
     # The control receiver answers from the committed responses, so they are the canned bodies this capture saw.
-    control_fixtures(control, out, FIXTURES / "responses")
-    return unwritten
+    control_written, control_missing = control_fixtures(control, out, FIXTURES / "responses")
+    return written + control_written, unwritten + control_missing
 
 
 def build_count(src: pathlib.Path, out: pathlib.Path, resign: bool = True) -> None:
@@ -510,6 +523,7 @@ def _self_test() -> None:
     _self_test_control_selection()
     _self_test_control_fails_closed()
     _self_test_build_reads_control()
+    _self_test_build_reports_partial_control()
     _self_test_build_count_redacts()
 
 
@@ -1086,7 +1100,7 @@ def _self_test_build_reports_no_recorded_length() -> None:
         (capture / "connect.json").write_text(json.dumps([{"error": "not-tls", "head": b"POST /v1/message".hex()}]))
         report = io.StringIO()
         with contextlib.redirect_stdout(report):
-            unwritten = build(capture, root / "fresh", resign=False, strict=False)
+            _, unwritten = build(capture, root / "fresh", resign=False, strict=False)
         wanted = (
             "hello_inference.hex",
             f"connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello (recorded lengths: none)",
@@ -1170,7 +1184,7 @@ def _self_test_control_selection() -> None:
             (responses / name).write_text(json.dumps({"canned": name}) + "\n")
 
         full = root / "full"
-        names = control_fixtures(recording(root / "control-full", first_nonces), full, responses)
+        names, _ = control_fixtures(recording(root / "control-full", first_nonces), full, responses)
         if sorted(names) != all_names:
             raise AssertionError(f"control_fixtures returned {names}, want {all_names}")
         written = sorted(p.name for p in full.glob("control_*.http"))
@@ -1209,10 +1223,13 @@ def _self_test_control_selection() -> None:
         print("self-test passed: control_fixtures leaves the responses alone when source and target are one")
 
         partial = root / "partial"
-        names = control_fixtures(recording(root / "control-partial", None), partial, responses)
+        names, missing = control_fixtures(recording(root / "control-partial", None), partial, responses)
         want = [name for name in all_names if name != "control_token_code.http"]
         if sorted(names) != want or (partial / "control_token_code.http").exists():
             raise AssertionError(f"a recording without a code grant wrote {names}, want {want}")
+        reason = "the recording holds no POST /v1/oauth/token with grant_type authorization_code"
+        if missing != [("control_token_code.http", reason)]:
+            raise AssertionError(f"a recording without a code grant returned {missing!r} as missing")
         print("self-test passed: a recording without a code grant writes the four other fixtures")
 
         again = root / "again"
@@ -1328,6 +1345,40 @@ def _self_test_build_reads_control() -> None:
             print("self-test passed: build refuses a control directory that does not exist before it writes")
         else:
             raise AssertionError("the build went on with a control directory that does not exist")
+
+
+def _self_test_build_reports_partial_control() -> None:
+    """A control directory that lacks a grant or a read writes the fixture it holds, returns each one it lacks with the
+    reason, and leaves an earlier copy of a lacking one in `out` as it was."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        src = _inference_capture(root / "capture")
+        recording = root / "control"
+        recording.mkdir()
+        (recording / "login-claude.json").write_text(json.dumps([_control_entry(0, "GET /api/oauth/profile HTTP/1.1")]))
+        out = root / "out"
+        out.mkdir()
+        earlier = b"GET /api/oauth/usage HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n"
+        (out / "control_usage.http").write_bytes(earlier)
+        written, unwritten = build(src, out, resign=False, control=recording)
+        wanted = [
+            ("control_roles.http", "the recording holds no GET /api/oauth/claude_cli/roles"),
+            ("control_token.http", "the recording holds no POST /v1/oauth/token with grant_type refresh_token"),
+            (
+                "control_token_code.http",
+                "the recording holds no POST /v1/oauth/token with grant_type authorization_code",
+            ),
+            ("control_usage.http", "the recording holds no GET /api/oauth/usage"),
+        ]
+        if unwritten != wanted:
+            raise AssertionError(f"build returned {unwritten!r} as unwritten, want {wanted!r}")
+        if not (out / "control_profile.http").exists() or "control_profile.http" not in written:
+            raise AssertionError(f"build did not write control_profile.http, its written names {written!r}")
+        if any(name in written for name, _ in wanted):
+            raise AssertionError(f"build named a control fixture it did not derive among {written!r}")
+        if (out / "control_usage.http").read_bytes() != earlier:
+            raise AssertionError("build changed the control_usage.http the recording holds no read for")
+        print("self-test passed: build reports each control fixture a partial recording lacks and keeps its copy")
 
 
 def _self_test_build_count_redacts() -> None:
@@ -1754,7 +1805,7 @@ def check(
 ) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         fresh_dir = pathlib.Path(tmp) / "fixtures"
-        unwritten = build(capture_dir, fresh_dir, resign=False, control=control, strict=False)
+        _, unwritten = build(capture_dir, fresh_dir, resign=False, control=control, strict=False)
         for name, reason in unwritten:
             print(f"{name}: {reason}")
         cm = json.load(open(capture_dir / "clean_modes.json"))
@@ -1772,7 +1823,8 @@ def check(
             # The same two masks that apply to the router capture apply here too, so a live date or a live
             # account_uuid in the baseline's own bodies never shows up as drift against itself.
             baseline_dir = pathlib.Path(tmp) / "baseline"
-            for name, reason in build(baseline, baseline_dir, resign=False, strict=False):
+            _, baseline_unwritten = build(baseline, baseline_dir, resign=False, strict=False)
+            for name, reason in baseline_unwritten:
                 print(f"baseline {name}: {reason}")
             committed = normalize_tree(baseline_dir)
         else:
@@ -1890,8 +1942,15 @@ def main() -> int:
     if args.check:
         baseline = pathlib.Path(args.baseline).expanduser() if args.baseline else None
         return check(src, baseline=baseline, skip_hashes=args.skip_hash_check, control=control)
-    build(src, FIXTURES, control=control)
-    print("fixtures written:", sorted(p.name for p in FIXTURES.rglob("*") if p.is_file()))
+    written, unwritten = build(src, FIXTURES, control=control)
+    print("fixtures written:", sorted(written))
+    # A strict build stops on a gap in the inference plane, so what it leaves unwritten is a control fixture the
+    # recording lacks, whose committed copy now sits beside fixtures of another build.
+    if unwritten:
+        for name, reason in unwritten:
+            print(f"{name}: {reason}")
+        print("fixtures kept from the committed tree: " + ", ".join(name for name, _ in unwritten))
+        return 1
     return 0
 
 
