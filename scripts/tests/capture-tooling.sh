@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Each case pins a rule a real capture leans on, checked here without the client: the leaf a receiver presents
-# chains to the run's own CA and names the control hosts, mkcerts.sh refuses to start on a host without openssl,
-# and control_receiver.py answers the control calls with the committed canned bodies, records each call, and keeps
-# serving after a client that drops its tunnel before the handshake. The resign example's --write mode leaves a body
-# stamped with the digits the signer computes over its own bytes. Every case runs against a throwaway tree, never
-# /tmp/cc-capture or ~/.claude, and reaches no host off loopback.
+# chains to the run's own CA and names the control hosts, the CA carries the key usage a strict verifier asks for,
+# mkcerts.sh refuses to start on a host without openssl, and control_receiver.py answers the control calls with the
+# committed canned bodies, records each call, and keeps serving after a client that drops its tunnel before the
+# handshake. The resign example's --write mode leaves a body stamped with the digits the signer computes over its own
+# bytes. drive_login.py logs stub_client.py in with the authorize URL's state and reads /status, and gives up with its
+# screen saved when the client stops answering. The stub reaches the receiver alone, NO_PROXY or not, and refuses a
+# proxy off loopback. Every case runs against a throwaway tree, never /tmp/cc-capture or ~/.claude, and reaches no
+# host off loopback.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -41,6 +44,10 @@ for host in api.anthropic.com platform.claude.com claude.com; do
 done
 subject=$(openssl x509 -in "$tmp/run/certs/ca.pem" -noout -subject -nameopt RFC2253)
 [[ "$subject" == "subject=CN=phoebis capture CA" ]] || fail "the CA's subject is not CN=phoebis capture CA: $subject"
+# Python's default TLS context verifies under strict rules that refuse a CA without keyUsage, so the stub client's
+# handshake with the receiver fails on a CA that curl still accepts.
+usage=$(openssl x509 -in "$tmp/run/certs/ca.pem" -noout -ext keyUsage 2>&1) || fail "the CA's keyUsage: $usage"
+echo "$usage" | grep -qF 'Certificate Sign' || fail "the CA's keyUsage does not list Certificate Sign: $usage"
 for cert in ca.pem leaf.pem; do
   text=$(openssl x509 -in "$tmp/run/certs/$cert" -noout -text)
   echo "$text" | grep -qF 'Public-Key: (2048 bit)' || fail "certs/$cert does not carry a 2048-bit RSA key"
@@ -186,5 +193,121 @@ out=$(resign --write "$tmp/bare.json" 2>"$tmp/resign.err") || status=$?
 grep -qxF "resign: $tmp/bare.json: the billing block carries no cch= stamp" "$tmp/resign.err" \
   || fail "resign --write on a body without a stamp printed: $(<"$tmp/resign.err")"
 [[ "$(<"$tmp/bare.json")" == "$bare" ]] || fail "resign --write rewrote a body without a stamp: $(<"$tmp/bare.json")"
+
+# --- drive_login.py and stub_client.py ---
+
+# The control capture logs the client in through drive_login.py with no human at the terminal, so the driver has to
+# get through the login menu, paste a code carrying the authorize URL's state, and read /status. stub_client.py
+# plays the client against a receiver of its own, so the recording holds the stub's calls alone. Each run starts
+# from an empty environment holding the variables a capture sets, so no proxy or config directory of the host's
+# reaches the stub, and ANTHROPIC_BASE_URL names the receiver too, so a stray inference post would leave an entry.
+# The receiver gets no readiness probe, since a probe would leave an entry of its own: the driver waits out three
+# quiet screens before the stub's first call, seconds more than the receiver needs to listen.
+driver="$capture/drive_login.py"
+stub="$here/scripts/tests/stub_client.py"
+login_recording="$tmp/login.json"
+login_port=$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])') \
+  || fail "found no free loopback port for the login receiver"
+python3 -I "$capture/control_receiver.py" "$login_port" "$login_recording" 120 "$tmp/run/certs" "$responses" &
+receiver_pid=$!
+mkdir -p "$tmp/cwd"
+stub_env=(env -i PATH="$PATH" HTTPS_PROXY="http://127.0.0.1:$login_port"
+  NODE_EXTRA_CA_CERTS="$tmp/run/certs/ca.pem" ANTHROPIC_BASE_URL="http://127.0.0.1:$login_port")
+
+# The seq the receiver gives its next connection, so a sub-case reads the entries its own run left.
+next_seq() {
+  python3 -I - "$login_recording" <<'PY'
+import json, os, sys
+
+entries = json.load(open(sys.argv[1])) if os.path.exists(sys.argv[1]) else []
+print(max((e["seq"] for e in entries), default=-1) + 1)
+PY
+}
+
+# A login leaves, from seq $1 on, the stub's code grant with the driver's dummy code and the state of the URL the
+# driver wrote to $2, then the profile, roles and usage reads and no other call, each with the stub's header. The
+# credentials file in $3 holds the canned token, as the client's own would after a login.
+check_login() {
+  python3 -I - "$login_recording" "$@" <<'PY'
+import json, sys, time, urllib.parse
+
+recording, first, url_file, credentials = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+url = open(url_file).read().strip()
+state = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("state", [""])[0]
+entries = sorted((e for e in json.load(open(recording)) if e["seq"] >= first), key=lambda e: e["seq"])
+calls = [(e.get("target"), e.get("request_line")) for e in entries]
+want = [
+    ("platform.claude.com:443", "POST /v1/oauth/token HTTP/1.1"),
+    ("api.anthropic.com:443", "GET /api/oauth/profile HTTP/1.1"),
+    ("api.anthropic.com:443", "GET /api/oauth/claude_cli/roles HTTP/1.1"),
+    ("api.anthropic.com:443", "GET /api/oauth/usage HTTP/1.1"),
+]
+if calls != want:
+    sys.exit(f"the recording holds {calls}")
+grant = json.loads(entries[0]["body"])
+if grant.get("grant_type") != "authorization_code" or grant.get("code") != "DUMMYCODE":
+    sys.exit(f"the code grant reads {grant}")
+if not state or grant.get("state") != state:
+    sys.exit(f"the code grant's state {grant.get('state')!r} is not the URL's {state!r}")
+if not grant.get("code_verifier"):
+    sys.exit(f"the code grant carries no code_verifier: {grant}")
+for entry in entries:
+    if "x-stub-nonessential: unset" not in entry["headers"]:
+        sys.exit(f"{entry['request_line']} lacks x-stub-nonessential: unset: {entry['headers']}")
+oauth = json.load(open(credentials)).get("claudeAiOauth", {})
+tokens = (oauth.get("accessToken"), oauth.get("refreshToken"), oauth.get("scopes"))
+if tokens != ("sk-ant-oat01-PLACEHOLDER", "sk-ant-ort01-PLACEHOLDER", ["user:profile"]):
+    sys.exit(f"the stub's credentials read {oauth}")
+if not isinstance(oauth.get("expiresAt"), int) or oauth["expiresAt"] <= time.time() * 1000:
+    sys.exit(f"the stub's credentials expire at {oauth.get('expiresAt')!r}, want a time ahead")
+PY
+}
+
+first=$(next_seq) || fail "the login recording does not parse: $first"
+status=0
+out=$("${stub_env[@]}" CLAUDE_CONFIG_DIR="$tmp/cfg-claude" python3 -I "$driver" --binary "$stub" --cwd "$tmp/cwd" \
+  --out "$tmp/login" --method claude 2>&1) || status=$?
+[[ "$status" -eq 0 ]] || fail "drive_login.py against the stub exited $status, want 0: $out"
+[[ -s "$tmp/login/login-claude-url.txt" ]] || fail "drive_login.py wrote no login-claude-url.txt: $out"
+grep -qxE 'https://claude\.com/cai/oauth/authorize\?code=true&client_id=stub&state=[A-Za-z0-9_-]{43}' \
+  "$tmp/login/login-claude-url.txt" || fail "login-claude-url.txt holds $(<"$tmp/login/login-claude-url.txt")"
+got=$(check_login "$first" "$tmp/login/login-claude-url.txt" "$tmp/cfg-claude/.credentials.json" 2>&1) \
+  || fail "after the login run, $got"
+
+# A client that stops answering after its first prompt, as on a screen the driver does not know, ends the run with
+# exit 2 once the timeout passes, and the screen read so far is on disk to show where it stopped.
+status=0
+out=$("${stub_env[@]}" CLAUDE_CONFIG_DIR="$tmp/cfg-hang" STUB_HANG=1 python3 -I "$driver" --binary "$stub" \
+  --cwd "$tmp/cwd" --out "$tmp/hang" --method claude --timeout 3 2>&1) || status=$?
+[[ "$status" -eq 2 ]] || fail "drive_login.py against a client that stopped answering exited $status, want 2: $out"
+[[ -s "$tmp/hang/login-claude-screen.txt" ]] || fail "drive_login.py left no screen of the client that stopped: $out"
+
+# urllib's proxy handler honors an inherited NO_PROXY=* and would dial the real host, so the same login with it set
+# has to leave the same calls in the recording.
+first=$(next_seq) || fail "the login recording does not parse: $first"
+status=0
+out=$("${stub_env[@]}" NO_PROXY='*' CLAUDE_CONFIG_DIR="$tmp/cfg-no-proxy" python3 -I "$driver" --binary "$stub" \
+  --cwd "$tmp/cwd" --out "$tmp/no-proxy" --method claude 2>&1) || status=$?
+[[ "$status" -eq 0 ]] || fail "drive_login.py against the stub with NO_PROXY=* exited $status, want 0: $out"
+got=$(check_login "$first" "$tmp/no-proxy/login-claude-url.txt" "$tmp/cfg-no-proxy/.credentials.json" 2>&1) \
+  || fail "after the login run with NO_PROXY=*, $got"
+
+# A proxy off loopback is refused before a socket opens, so neither 203.0.113.9 nor the receiver behind
+# ANTHROPIC_BASE_URL sees a connection, though the expired token would otherwise start a refresh grant.
+mkdir -p "$tmp/cfg-expired"
+expired='{"claudeAiOauth":{"accessToken":"sk-ant-oat01-PLACEHOLDER","refreshToken":"sk-ant-ort01-PLACEHOLDER",'
+expired+='"expiresAt":0,"scopes":["user:profile"]}}'
+printf '%s' "$expired" >"$tmp/cfg-expired/.credentials.json"
+cp "$login_recording" "$tmp/login-before.json"
+status=0
+env -i PATH="$PATH" HTTPS_PROXY=http://203.0.113.9:3128 NODE_EXTRA_CA_CERTS="$tmp/run/certs/ca.pem" \
+  CLAUDE_CONFIG_DIR="$tmp/cfg-expired" ANTHROPIC_BASE_URL="http://127.0.0.1:$login_port" \
+  python3 -I "$stub" -p hi --model x >"$tmp/stub.out" 2>"$tmp/stub.err" || status=$?
+[[ "$status" -eq 3 ]] || fail "the stub behind a proxy off loopback exited $status, want 3: $(<"$tmp/stub.err")"
+[[ "$(<"$tmp/stub.err")" == "stub_client: refusing a proxy off loopback: http://203.0.113.9:3128" ]] \
+  || fail "the stub behind a proxy off loopback printed: $(<"$tmp/stub.err")"
+cmp -s "$login_recording" "$tmp/login-before.json" \
+  || fail "the stub behind a proxy off loopback left an entry: $(<"$login_recording")"
+stop_receiver
 
 echo "capture-tooling: ok"

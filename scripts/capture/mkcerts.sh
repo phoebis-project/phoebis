@@ -24,10 +24,18 @@ fi
 certs="$1/certs"
 mkdir -p "$certs"
 
-openssl req -x509 -newkey rsa:2048 -nodes -days 7 -subj "/CN=phoebis capture CA" \
-  -keyout "$certs/ca.key" -out "$certs/ca.pem"
+# Python's default TLS context verifies under OpenSSL's strict rules, which refuse a CA without keyUsage that curl
+# accepts, so both certificates carry the extensions a strict verifier asks for. openssl req reads no extension
+# file, so the CA is self-signed through x509 -req as the leaf is signed.
+printf '%s\n' "basicConstraints = critical, CA:TRUE" "keyUsage = critical, keyCertSign, cRLSign" > "$certs/ca-ext.cnf"
+openssl req -newkey rsa:2048 -nodes -subj "/CN=phoebis capture CA" \
+  -keyout "$certs/ca.key" -out "$certs/ca.csr"
+openssl x509 -req -in "$certs/ca.csr" -signkey "$certs/ca.key" -days 7 -extfile "$certs/ca-ext.cnf" \
+  -out "$certs/ca.pem"
 openssl req -newkey rsa:2048 -nodes -subj "/CN=api.anthropic.com" \
   -keyout "$certs/leaf.key" -out "$certs/leaf.csr"
-echo "subjectAltName = DNS:api.anthropic.com,DNS:platform.claude.com,DNS:claude.com" > "$certs/ext.cnf"
+printf '%s\n' "basicConstraints = CA:FALSE" "extendedKeyUsage = serverAuth" \
+  "keyUsage = digitalSignature, keyEncipherment" \
+  "subjectAltName = DNS:api.anthropic.com,DNS:platform.claude.com,DNS:claude.com" > "$certs/ext.cnf"
 openssl x509 -req -in "$certs/leaf.csr" -CA "$certs/ca.pem" -CAkey "$certs/ca.key" -CAcreateserial -days 7 \
   -extfile "$certs/ext.cnf" -out "$certs/leaf.pem"
