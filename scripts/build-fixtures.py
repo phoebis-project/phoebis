@@ -113,7 +113,7 @@ HEADER_PLACEHOLDERS = {
 
 # The authorization-code grant's two nonces, which the client mints with randomBytes(32) for every login. A code
 # fixture that kept them would report drift on every later capture of the same build. check() writes its fresh side
-# through control() as well, so two logins of one build write the same bytes.
+# through control_bytes() as well, so two logins of one build write the same bytes.
 CODE_VERIFIER_PLACEHOLDER = "CODE-VERIFIER-PLACEHOLDER"
 STATE_PLACEHOLDER = "STATE-PLACEHOLDER"
 
@@ -127,10 +127,11 @@ def redact(line: str) -> str:
     line = re.sub(r"x-api-key: sk-ant-api03-\S+", "x-api-key: sk-ant-api03-PLACEHOLDER", line)
     line = re.sub(r"^Host: 127\.0\.0\.1:\d+$", "Host: api.anthropic.com", line)
     # The client spells the session and request names in different cases, so these match in any case and keep their
-    # spelling. The prompt id name matches the same way to follow its neighbors.
-    line = re.sub(r"(?i)^(x-claude-code-prompt-id:\s*)\S+$", rf"\g<1>{PROMPT_ID_PLACEHOLDER}", line)
-    line = re.sub(r"(?i)^(x-claude-code-session-id:\s*)\S+$", rf"\g<1>{SESSION_ID_PLACEHOLDER}", line)
-    line = re.sub(r"(?i)^(x-client-request-id:\s*)\S+$", rf"\g<1>{REQUEST_ID_PLACEHOLDER}", line)
+    # spelling. The prompt id name matches the same way to follow its neighbors. Whitespace after the value is matched
+    # apart from it and kept, so an id followed by a space is replaced too.
+    line = re.sub(r"(?i)^(x-claude-code-prompt-id:\s*)\S+(\s*)$", rf"\g<1>{PROMPT_ID_PLACEHOLDER}\g<2>", line)
+    line = re.sub(r"(?i)^(x-claude-code-session-id:\s*)\S+(\s*)$", rf"\g<1>{SESSION_ID_PLACEHOLDER}\g<2>", line)
+    line = re.sub(r"(?i)^(x-client-request-id:\s*)\S+(\s*)$", rf"\g<1>{REQUEST_ID_PLACEHOLDER}\g<2>", line)
     return line
 
 
@@ -168,17 +169,41 @@ def head(entry, content_length=None):
     return ("\r\n".join(lines) + "\r\n\r\n").encode()
 
 
-def control(entry, name, out):
+def control_bytes(entry, name: str) -> bytes:
+    """The bytes of the control fixture `name` written from `entry`, its tokens and the code grant's code,
+    code_verifier and state replaced by their placeholders.
+
+    The substitutions read the body as text, so a body that parses as a JSON object is read back as JSON, and each of
+    those members it holds must hold its placeholder. A spelling the substitutions miss, such as an escaped key, then
+    stops the build before the value reaches a file. The stop names the fixture and the member, never the value.
+    """
     body = entry.get("body", "")
-    body = re.sub(r"sk-ant-ort01-\S+?\"", 'sk-ant-ort01-PLACEHOLDER"', body)
-    body = re.sub(r'"code":"[^"]*"', f'"code":"{CODE_PLACEHOLDER}"', body)
-    body = re.sub(r'"code_verifier":"[^"]*"', f'"code_verifier":"{CODE_VERIFIER_PLACEHOLDER}"', body)
-    body = re.sub(r'"state":"[^"]*"', f'"state":"{STATE_PLACEHOLDER}"', body)
+    body = re.sub(r'sk-ant-ort01-[^"\s]*\s*"', 'sk-ant-ort01-PLACEHOLDER"', body)
+    placeholders = {
+        "code": CODE_PLACEHOLDER,
+        "code_verifier": CODE_VERIFIER_PLACEHOLDER,
+        "refresh_token": "sk-ant-ort01-PLACEHOLDER",
+        "state": STATE_PLACEHOLDER,
+    }
+    for key in ("code", "code_verifier", "state"):
+        body = re.sub(rf'("{key}"\s*:\s*")[^"]*(")', rf"\g<1>{placeholders[key]}\g<2>", body)
+    try:
+        members = json.loads(body)
+    except ValueError:
+        members = None
+    if isinstance(members, dict):
+        for key, placeholder in placeholders.items():
+            if key in members and members[key] != placeholder:
+                raise SystemExit(f"{name}: {key} kept a captured value")
     # control_receiver.py records the body's bytes decoded as latin1, so encoding it back the same way restores them.
     payload = body.encode("latin1")
     lines = [entry["request_line"]] + [redact(h) for h in entry["headers"]]
     lines = [l if not l.startswith("Content-Length:") else f"Content-Length: {len(payload)}" for l in lines]
-    (out / name).write_bytes(("\r\n".join(lines) + "\r\n\r\n").encode() + payload)
+    return ("\r\n".join(lines) + "\r\n\r\n").encode() + payload
+
+
+def control(entry, name, out):
+    (out / name).write_bytes(control_bytes(entry, name))
 
 
 def control_fixtures(control_dir: pathlib.Path, out: pathlib.Path, responses: pathlib.Path) -> list[str]:
@@ -191,7 +216,6 @@ def control_fixtures(control_dir: pathlib.Path, out: pathlib.Path, responses: pa
     """
     if not control_dir.is_dir():
         raise SystemExit(f"{control_dir} is not a directory of control recordings")
-    (out / "responses").mkdir(parents=True, exist_ok=True)
     entries = []
     for path in sorted(control_dir.glob("*.json")):
         entries.extend(json.load(open(path)))
@@ -214,7 +238,8 @@ def control_fixtures(control_dir: pathlib.Path, out: pathlib.Path, responses: pa
                 return entry
         return None
 
-    written = []
+    # Every fixture's bytes come before the first write, so a stop in control_bytes leaves no control fixture written.
+    derived = []
     for name, method, path, grant_type in (
         ("control_profile.http", "GET", "/api/oauth/profile", None),
         ("control_roles.http", "GET", "/api/oauth/claude_cli/roles", None),
@@ -224,8 +249,11 @@ def control_fixtures(control_dir: pathlib.Path, out: pathlib.Path, responses: pa
     ):
         entry = first(method, path, grant_type)
         if entry is not None:
-            control(entry, name, out)
-            written.append(name)
+            derived.append((name, control_bytes(entry, name)))
+    (out / "responses").mkdir(parents=True, exist_ok=True)
+    for name, data in derived:
+        (out / name).write_bytes(data)
+    written = [name for name, _ in derived]
     # The builder's own write passes the committed responses as the source and the tree holding them as `out`.
     if (out / "responses").resolve() != responses.resolve():
         for name in ("profile.json", "roles.json", "token.json", "usage.json"):
@@ -480,6 +508,7 @@ def _self_test() -> None:
     _self_test_resign_written()
     _self_test_check_hashes_placeholder()
     _self_test_control_selection()
+    _self_test_control_fails_closed()
     _self_test_build_reads_control()
     _self_test_build_count_redacts()
 
@@ -765,10 +794,13 @@ def _self_test_redact_head() -> None:
     }
     for session in _TEST_SESSION_IDS:
         cases["X-Claude-Code-Session-Id: " + session.decode()] = f"X-Claude-Code-Session-Id: {SESSION_ID_PLACEHOLDER}"
+    trailing = "x-claude-code-session-id: " + _TEST_SESSION_ID.decode() + " "
+    cases[trailing] = f"x-claude-code-session-id: {SESSION_ID_PLACEHOLDER} "
     for line, wanted in cases.items():
         if redact(line) != wanted:
             raise AssertionError(f"redact({line!r}) gave {redact(line)!r}, want {wanted!r}")
     print("self-test passed: redact writes the prompt, session and request placeholders into a head")
+    print("self-test passed: redact replaces an id followed by whitespace and keeps the whitespace")
 
 
 def _self_test_build_redacts() -> None:
@@ -1197,6 +1229,23 @@ def _self_test_control_selection() -> None:
             raise AssertionError(f"control kept a nonce of a grant in another member order: {body!r}")
         print("self-test passed: control replaces the nonces in any member order")
 
+        # json.dumps's default separators put a space after each colon, which a client is free to send as well.
+        spaced = {"grant_type": "authorization_code", "code": "DUMMYCODE", "state": first_nonces[0]}
+        spaced["code_verifier"] = first_nonces[1]
+        control(_control_entry(9, "POST /v1/oauth/token HTTP/1.1", json.dumps(spaced)), "spaced.http", root)
+        _, body = split(root / "spaced.http")
+        for wanted in (
+            f'"code": "{CODE_PLACEHOLDER}"',
+            f'"code_verifier": "{CODE_VERIFIER_PLACEHOLDER}"',
+            f'"state": "{STATE_PLACEHOLDER}"',
+        ):
+            if wanted.encode() not in body:
+                raise AssertionError(f"control wrote no {wanted!r} for a grant with spaces: {body!r}")
+        for value in first_nonces + ("DUMMYCODE",):
+            if value.encode() in body:
+                raise AssertionError(f"control kept the spaced grant's {value!r}")
+        print("self-test passed: control replaces the code and the nonces of a grant serialized with spaces")
+
         # The receiver records a body's bytes decoded as latin1, so a byte above 0x7f has to reach the fixture as the
         # same byte, and Content-Length has to count the bytes written.
         wire = b'{"grant_type":"refresh_token","name":"caf\xc3\xa9"}'
@@ -1205,6 +1254,35 @@ def _self_test_control_selection() -> None:
         if body != wire or f"Content-Length: {len(wire)}" not in lines:
             raise AssertionError(f"control wrote {body!r} under {lines!r}, want the recorded bytes and their length")
         print("self-test passed: control writes the recorded bytes and declares their length")
+
+
+def _self_test_control_fails_closed() -> None:
+    """A grant member the substitutions miss stops control_fixtures before it writes any control fixture, and the stop
+    names the fixture and the member, never the value."""
+    # The key's first letter spelled as a JSON unicode escape, which json.loads reads as code and the substitutions
+    # do not.
+    grant = '{"grant_type":"authorization_code","' + "\\u0063ode" + '":"DUMMYCODE","state":"S","code_verifier":"V"}'
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        recording = root / "control"
+        recording.mkdir()
+        entries = [
+            _control_entry(0, "GET /api/oauth/profile HTTP/1.1"),
+            _control_entry(1, "POST /v1/oauth/token HTTP/1.1", grant),
+        ]
+        (recording / "login-claude.json").write_text(json.dumps(entries))
+        out = root / "out"
+        try:
+            control_fixtures(recording, out, FIXTURES / "responses")
+        except SystemExit as e:
+            if str(e) != "control_token_code.http: code kept a captured value":
+                raise AssertionError(f"control_fixtures stopped for the wrong reason: {e}") from e
+            written = _written_files(out) if out.exists() else []
+            if written:
+                raise AssertionError(f"control_fixtures wrote {written} before it stopped")
+            print("self-test passed:", e)
+        else:
+            raise AssertionError("control_fixtures wrote a code grant whose escaped key kept the captured code")
 
 
 def _self_test_build_reads_control() -> None:
