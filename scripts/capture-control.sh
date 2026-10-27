@@ -19,8 +19,11 @@
 # when the flag suppresses it, and in neither when the build no longer makes it.
 #
 # The phases of each variant, in order, each recorded by a control receiver of its own into <variant>/<phase>.json:
-#   1. login-claude: scripts/capture/drive_login.py logs the client in with a Claude account from a fresh config
-#      directory and reads /status, and writes the authorize URL and the screen it read beside the recording.
+#   1. login-claude: scripts/capture/drive_login.py logs the client in with a Claude account and reads /status, and
+#      writes the authorize URL and the screen it read beside the recording. The config directory starts fresh of any
+#      account, seeded with .claude.json's hasCompletedOnboarding and the working directory's hasTrustDialogAccepted:
+#      on an empty one the client first runs its onboarding wizard, whose connectivity preflight fails against the
+#      receiver and exits, and then its folder trust dialog, where a return picks the focused No, exit.
 #   2. login-console: the same with an Anthropic Console account.
 #   3. refresh: the config directory login-claude left, copied with its token's expiresAt set to 0, so the client's
 #      print-mode run starts with the refresh grant. The phase is skipped with a note when login-claude left no
@@ -37,7 +40,7 @@
 # verbatim, the authorization header and the token grants included, which is safe only while the client holds
 # lib.sh's dummy credentials and the canned tokens the receiver hands out. The recordings, URLs and screens are raw
 # capture output and stay out of the repository. scripts/build-fixtures.py puts placeholders in for the tokens and
-# the code grant's state and code_verifier before it compares a recording or writes a fixture from one.
+# the code grant's code, state and code_verifier before it compares a recording or writes a fixture from one.
 
 source "$(dirname "$0")/capture/lib.sh"
 
@@ -63,16 +66,32 @@ login_phase() { # $1=variant dir $2=1 to leave the non-essential-traffic flag ou
   local cfg="$STATE/cfg-$phase"
   rm -rf "$cfg"
   mkdir -p "$cfg"
+  # The two members the head comment names, beside the two others of the config the client's plugin evaluation sandbox
+  # seeds to skip the wizard. The trust record is keyed by the resolved working directory, as the client keys it.
+  python3 -I - "$cfg/.claude.json" "$CLIENT_CWD" <<'PY'
+import json, os, sys
+
+path, cwd = sys.argv[1], os.path.realpath(sys.argv[2])
+config = {
+    "hasCompletedOnboarding": True,
+    "autoUpdates": False,
+    "bypassPermissionsModeAccepted": False,
+    "projects": {cwd: {"hasTrustDialogAccepted": True}},
+}
+with open(path, "w") as f:
+    json.dump(config, f)
+PY
   # The driver writes the URL file only once it has read a URL, so an earlier run's would sit beside this run's screen.
   rm -f "$dir/$phase-url.txt" "$dir/$phase-screen.txt"
   ALLOW_NONESSENTIAL_TRAFFIC=$allow client_env "$cfg"
   echo "=== $phase ==="
   start_control_receiver "$dir/$phase.json" "$CLEAN_DURATION" "$OUT/certs" "$RESPONSES"
-  # A terminal UI may not draw its menus without TERM and a locale. The print-mode runs keep runcli's list, the
-  # environment the committed fixtures were captured under.
-  env -i "${CLIENT_ENV[@]}" HOME="$STATE/home" HTTPS_PROXY="$PROXY" LANG=C.UTF-8 NODE_EXTRA_CA_CERTS="$CA" \
-    TERM=xterm-256color python3 -I "$CAPTURE_DIR/drive_login.py" --binary "$BINARY" --cwd "$CLIENT_CWD" \
-    --out "$dir" --method "$method" || status=$?
+  # A terminal UI may not draw its menus without TERM and a locale. BROWSER=true has the login run the true command for
+  # a browser and show the paste form at once, the same on a host with a display as on one without. The print-mode
+  # runs keep runcli's list, the environment the committed fixtures were captured under.
+  env -i "${CLIENT_ENV[@]}" BROWSER=true HOME="$STATE/home" HTTPS_PROXY="$PROXY" LANG=C.UTF-8 \
+    NODE_EXTRA_CA_CERTS="$CA" TERM=xterm-256color python3 -I "$CAPTURE_DIR/drive_login.py" --binary "$BINARY" \
+    --cwd "$CLIENT_CWD" --out "$dir" --method "$method" || status=$?
   stop_control_receiver
   case $status in
     0) ;;

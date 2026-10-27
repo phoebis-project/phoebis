@@ -4,11 +4,12 @@
 # mkcerts.sh refuses to start on a host without openssl, and control_receiver.py answers the control calls with the
 # committed canned bodies, records each call, keeps serving after a client that drops its tunnel before the handshake,
 # and records a chunked request as an error. The resign example's --write mode leaves a body stamped with the digits
-# the signer computes over its own bytes. drive_login.py logs stub_client.py in with the authorize URL's state and
-# reads /status, and gives up with its screen saved when the client stops answering. The stub reaches the receiver
-# alone, NO_PROXY or not, and refuses a proxy off loopback. capture-control.sh records the stub's login and refresh
-# phases in both of its variants, with the refresh run starting from the credentials the login wrote, moves on past a
-# login the driver gives up on, and refuses a real token. lib.sh's runcli takes KEEP_CONFIG and
+# the signer computes over its own bytes. drive_login.py logs stub_client.py in by either login method with the
+# authorize URL's state and reads /status, and gives up with its screen saved when the client stops answering or
+# refuses the code. The stub reaches the receiver alone, NO_PROXY or not, and refuses a proxy off loopback.
+# capture-control.sh seeds each login's config directory past the client's first-start screens, records the stub's
+# login and refresh phases in both of its variants, with the refresh run starting from the credentials the login
+# wrote, moves on past a login the driver gives up on, and refuses a real token. lib.sh's runcli takes KEEP_CONFIG and
 # ALLOW_NONESSENTIAL_TRAFFIC from a call's prefix and never from the caller's environment, and its start_receiver runs
 # the receiver isolated. Every case runs against a throwaway tree, never /tmp/cc-capture or ~/.claude, and reaches no
 # host off loopback.
@@ -215,12 +216,12 @@ grep -qxF "resign: $tmp/bare.json: the billing block carries no cch= stamp" "$tm
 # --- drive_login.py and stub_client.py ---
 
 # The control capture logs the client in through drive_login.py with no human at the terminal, so the driver has to
-# get through the login menu, paste a code carrying the authorize URL's state, and read /status. stub_client.py
-# plays the client against a receiver of its own, so the recording holds the stub's calls alone. Each run starts
-# from an empty environment holding the variables a capture sets, so no proxy or config directory of the host's
-# reaches the stub, and ANTHROPIC_BASE_URL names the receiver too, so a stray inference post would leave an entry.
-# The receiver gets no readiness probe, since a probe would leave an entry of its own: the driver waits out three
-# quiet screens before the stub's first call, seconds more than the receiver needs to listen.
+# get through the login menus, paste a code carrying the authorize URL's state, confirm the success screen, and open
+# and close /status. stub_client.py plays the client against a receiver of its own, so the recording holds the stub's
+# calls alone. Each run starts from an empty environment holding the variables a capture sets, so no proxy or config
+# directory of the host's reaches the stub, and ANTHROPIC_BASE_URL names the receiver too, so a stray inference post
+# would leave an entry. The receiver gets no readiness probe, since a probe would leave an entry of its own: the
+# driver waits out three quiet screens before the stub's first call, seconds more than the receiver needs to listen.
 driver="$capture/drive_login.py"
 stub="$here/scripts/tests/stub_client.py"
 login_recording="$tmp/login.json"
@@ -304,6 +305,31 @@ grep -qF 'drive_login.py: no sign of ' "$tmp/hang.err" \
   || fail "drive_login.py against a client that stopped answering printed no timeout message: $out"
 [[ -s "$tmp/hang/login-claude-screen.txt" ]] || fail "drive_login.py left no screen of the client that stopped: $out"
 
+# A pasted code the client refuses leaves the login on an error screen that waits for a key. The same dummy code would
+# be refused again, so the driver cancels the dialog and exits 2 with a message of its own, which tells the refusal
+# from a timeout, and the stub writes no credentials. --timeout bounds a driver that waits on the error screen.
+status=0
+out=$("${stub_env[@]}" CLAUDE_CONFIG_DIR="$tmp/cfg-reject" STUB_REJECT_CODE=1 python3 -I "$driver" --binary "$stub" \
+  --cwd "$tmp/cwd" --out "$tmp/reject" --method claude --timeout 10 2>&1) || status=$?
+[[ "$status" -eq 2 ]] || fail "drive_login.py against a refused code exited $status, want 2: $out"
+grep -qF 'drive_login.py: the client answered the pasted code with an error' <<<"$out" \
+  || fail "drive_login.py against a refused code printed: $out"
+grep -qF 'Invalid code' "$tmp/reject/login-claude-screen.txt" \
+  || fail "the screen of the refused code holds: $(<"$tmp/reject/login-claude-screen.txt")"
+[[ ! -e "$tmp/cfg-reject/.credentials.json" ]] || fail "the stub wrote credentials after a refused code: $out"
+
+# The Console method is the login menu's second entry, which opens a second menu whose first entry signs in with a
+# Console account, so the stub's grant follows a down arrow and two returns and its authorize URL is the Console's.
+first=$(next_seq) || fail "the login recording does not parse: $first"
+status=0
+out=$("${stub_env[@]}" CLAUDE_CONFIG_DIR="$tmp/cfg-console" python3 -I "$driver" --binary "$stub" --cwd "$tmp/cwd" \
+  --out "$tmp/login" --method console 2>&1) || status=$?
+[[ "$status" -eq 0 ]] || fail "drive_login.py --method console against the stub exited $status, want 0: $out"
+grep -qxE 'https://platform\.claude\.com/oauth/authorize\?code=true&client_id=stub&state=[A-Za-z0-9_-]{43}' \
+  "$tmp/login/login-console-url.txt" || fail "login-console-url.txt holds $(<"$tmp/login/login-console-url.txt")"
+got=$(check_login "$first" "$tmp/login/login-console-url.txt" "$tmp/cfg-console/.credentials.json" 2>&1) \
+  || fail "after the --method console run, $got"
+
 # urllib's proxy handler honors an inherited NO_PROXY=* and would dial the real host, so the same login with it set
 # has to leave the same calls in the recording.
 first=$(next_seq) || fail "the login recording does not parse: $first"
@@ -348,10 +374,10 @@ capture_control() {
 # Each phase file under $1 holds its phase's calls alone, in order, each carrying x-stub-nonessential: $2 and
 # x-stub-home: $3, since the receivers record token grants verbatim and every client run gets a throwaway HOME in
 # place of the operator's. A terminal UI may not draw its menus without TERM and a locale, so the login phases' client
-# sees both, and the refresh run keeps runcli's print-mode environment, the one the committed fixtures were captured
-# under. The refresh grant carries the refresh token the stub stored at its login, which only a config directory that
-# outlived runcli's reset still holds, and the inference receiver beside the control receiver recorded the refresh
-# run's turn.
+# sees both, and BROWSER=true, so its login shows the paste form at once on any host. The refresh run keeps runcli's
+# print-mode environment, the one the committed fixtures were captured under. The refresh grant carries the refresh
+# token the stub stored at its login, which only a config directory that outlived runcli's reset still holds, and the
+# inference receiver beside the control receiver recorded the refresh run's turn.
 check_variant() {
   python3 -I - "$@" <<'PY'
 import json, pathlib, sys
@@ -360,8 +386,8 @@ variant, nonessential, home = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3
 token, profile = "POST /v1/oauth/token HTTP/1.1", "GET /api/oauth/profile HTTP/1.1"
 login = [token, profile, "GET /api/oauth/claude_cli/roles HTTP/1.1", "GET /api/oauth/usage HTTP/1.1"]
 phases = {"login-claude": login, "login-console": login, "refresh": [token, profile]}
-terminal = ["x-stub-lang: C.UTF-8", "x-stub-term: xterm-256color"]
-print_mode = ["x-stub-lang: unset", "x-stub-term: unset"]
+terminal = ["x-stub-browser: true", "x-stub-lang: C.UTF-8", "x-stub-term: xterm-256color"]
+print_mode = ["x-stub-browser: unset", "x-stub-lang: unset", "x-stub-term: unset"]
 for phase, want in phases.items():
     entries = sorted(json.load(open(variant / f"{phase}.json")), key=lambda e: e["seq"])
     if [e.get("request_line") for e in entries] != want:
@@ -379,6 +405,31 @@ for phase, want in phases.items():
 turns = [e["request_line"] for e in json.load(open(variant / "inference" / "clean_modes.json"))]
 if turns != ["POST /v1/messages HTTP/1.1"]:
     sys.exit(f"the inference receiver recorded {turns}")
+PY
+}
+
+# Each login phase's config directory under the state directory $1 holds a .claude.json with no account in it: the
+# client's own smallest config that skips its onboarding wizard, plus the trust record for the working directory keyed
+# by the resolved path as the client keys it. The client then starts at its prompt, and /login starts signed out.
+check_seed() {
+  python3 -I - "$1" <<'PY'
+import json, os, sys
+
+state = sys.argv[1]
+want = {
+    "hasCompletedOnboarding": True,
+    "autoUpdates": False,
+    "bypassPermissionsModeAccepted": False,
+    "projects": {os.path.realpath(os.path.join(state, "cwd")): {"hasTrustDialogAccepted": True}},
+}
+for method in ("claude", "console"):
+    path = os.path.join(state, f"cfg-login-{method}", ".claude.json")
+    if not os.path.exists(path):
+        sys.exit(f"cfg-login-{method} holds no .claude.json")
+    with open(path) as f:
+        config = json.load(f)
+    if config != want:
+        sys.exit(f"cfg-login-{method}/.claude.json reads {config}")
 PY
 }
 
@@ -402,6 +453,7 @@ done
 got=$(check_variant "$out_dir/control" 1 "$PHOEBIS_CAPTURE_STATE/home" 2>&1) || fail "in control/, $got"
 got=$(check_variant "$out_dir/control-unflagged" unset "$PHOEBIS_CAPTURE_STATE/home" 2>&1) \
   || fail "in control-unflagged/, $got"
+got=$(check_seed "$PHOEBIS_CAPTURE_STATE" 2>&1) || fail "after capture-control.sh, $got"
 # The capture stops both receivers before it exits, so the next capture finds lib.sh's ports free.
 python3 -I - <<'PY' || fail "capture-control.sh left a receiver listening on port 48442 or 48444"
 import socket
