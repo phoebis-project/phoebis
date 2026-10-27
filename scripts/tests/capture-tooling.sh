@@ -280,11 +280,15 @@ got=$(check_login "$first" "$tmp/login/login-claude-url.txt" "$tmp/cfg-claude/.c
   || fail "after the login run, $got"
 
 # A client that stops answering after its first prompt, as on a screen the driver does not know, ends the run with
-# exit 2 once the timeout passes, and the screen read so far is on disk to show where it stopped.
+# exit 2 once the timeout passes, and the screen read so far is on disk to show where it stopped. The driver exits 2
+# for a client that exited as well, so the timeout's own message is what tells the two apart.
 status=0
 out=$("${stub_env[@]}" CLAUDE_CONFIG_DIR="$tmp/cfg-hang" STUB_HANG=1 python3 -I "$driver" --binary "$stub" \
-  --cwd "$tmp/cwd" --out "$tmp/hang" --method claude --timeout 3 2>&1) || status=$?
+  --cwd "$tmp/cwd" --out "$tmp/hang" --method claude --timeout 3 2>"$tmp/hang.err") || status=$?
+out+=$(<"$tmp/hang.err")
 [[ "$status" -eq 2 ]] || fail "drive_login.py against a client that stopped answering exited $status, want 2: $out"
+grep -qF 'drive_login.py: no sign of ' "$tmp/hang.err" \
+  || fail "drive_login.py against a client that stopped answering printed no timeout message: $out"
 [[ -s "$tmp/hang/login-claude-screen.txt" ]] || fail "drive_login.py left no screen of the client that stopped: $out"
 
 # urllib's proxy handler honors an inherited NO_PROXY=* and would dial the real host, so the same login with it set
