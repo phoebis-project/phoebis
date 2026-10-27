@@ -347,9 +347,9 @@ def count_entries(cm: list) -> list:
     return [(i, e) for i, e in enumerate(cm) if e["request_line"].startswith("POST /v1/messages/count_tokens")]
 
 
-def probe_entry(src: pathlib.Path) -> dict | None:
-    """The first HEAD /api/hello entry of probe_modes.json when the capture holds that file, else of clean_modes.json,
-    or None when the file read holds none.
+def probe_file(src: pathlib.Path) -> pathlib.Path:
+    """The recording the hello probe is read from: probe_modes.json when the capture holds that file, else
+    clean_modes.json.
 
     The client sends the probe only with the nonessential-traffic switch off, and that run's body differs from the
     four compared runs (its deferred-tools reminder lists more tools), so the probe run records into a file of its own
@@ -357,9 +357,12 @@ def probe_entry(src: pathlib.Path) -> dict | None:
     in clean_modes.json beside the four posts.
     """
     path = src / "probe_modes.json"
-    if not path.exists():
-        path = src / "clean_modes.json"
-    return next((e for e in json.load(open(path)) if e["request_line"].startswith("HEAD /api/hello")), None)
+    return path if path.exists() else src / "clean_modes.json"
+
+
+def probe_entry(src: pathlib.Path) -> dict | None:
+    """The first HEAD /api/hello entry of the recording probe_file names, or None when it holds none."""
+    return next((e for e in json.load(open(probe_file(src))) if e["request_line"].startswith("HEAD /api/hello")), None)
 
 
 def build(
@@ -421,9 +424,8 @@ def build(
     # half rewritten.
     if strict and not THROUGH_ROUTER:
         if hello is None:
-            read = "probe_modes.json" if (src / "probe_modes.json").exists() else "clean_modes.json"
             raise SystemExit(
-                f"{src}/{read} holds no HEAD /api/hello entry "
+                f"{probe_file(src)} holds no HEAD /api/hello entry "
                 "(probe_modes.json is read when the capture holds it, clean_modes.json otherwise)"
             )
         if inf is None:
@@ -1170,8 +1172,9 @@ def _self_test_check_reports_probe_and_hello() -> None:
 
 def _self_test_build_reads_the_probe_file() -> None:
     """A capture whose probe run recorded into probe_modes.json writes hello.http from that file and keeps the probe
-    run's post out of the four bodies. Without the file the probe is looked for in clean_modes.json, where a
-    non-strict build reports it missing and a strict one stops before it writes, naming both files."""
+    run's post out of the four bodies. A probe_modes.json without the probe, and a capture without the file whose
+    clean_modes.json holds none, each have a non-strict build report the probe missing and a strict one stop before
+    it writes, naming the file it read."""
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
         capture = _inference_capture(root / "capture")
@@ -1203,6 +1206,25 @@ def _self_test_build_reads_the_probe_file() -> None:
             raise AssertionError("the probe run's post reached one of the four bodies")
         print("self-test passed: build writes hello.http from probe_modes.json and keeps the probe run's post out")
 
+        # http_raw.py writes its recording on exit whatever it saw, so a client that stopped sending the probe in this
+        # run leaves a probe_modes.json holding the run's post alone.
+        (capture / "probe_modes.json").write_text(json.dumps([probe_post]))
+        _, unwritten = build(capture, root / "post-only", resign=False, strict=False)
+        if ("hello.http", "the capture holds no HEAD /api/hello") not in unwritten:
+            raise AssertionError(f"the build over a probe_modes.json without the probe returned {unwritten!r}")
+        print("self-test passed: build over a probe_modes.json without the probe reports the probe missing")
+        try:
+            build(capture, root / "post-only-strict", resign=False)
+        except SystemExit as e:
+            if not str(e).startswith(f"{capture}/probe_modes.json holds no HEAD /api/hello entry"):
+                raise AssertionError(f"the build stopped without naming probe_modes.json as the file read: {e}") from e
+            written = _written_files(root / "post-only-strict")
+            if written:
+                raise AssertionError(f"the build wrote {written} before it stopped on the missing probe")
+            print("self-test passed:", e)
+        else:
+            raise AssertionError("the build wrote fixtures from a probe_modes.json without the probe")
+
         (capture / "probe_modes.json").unlink()
         _, unwritten = build(capture, root / "without-probe", resign=False, strict=False)
         if ("hello.http", "the capture holds no HEAD /api/hello") not in unwritten:
@@ -1211,8 +1233,8 @@ def _self_test_build_reads_the_probe_file() -> None:
         try:
             build(capture, root / "strict", resign=False)
         except SystemExit as e:
-            if "probe_modes.json" not in str(e) or "clean_modes.json" not in str(e):
-                raise AssertionError(f"the build stopped without naming both files: {e}") from e
+            if not str(e).startswith(f"{capture}/clean_modes.json holds no"):
+                raise AssertionError(f"the build stopped without naming clean_modes.json as the file read: {e}") from e
             written = _written_files(root / "strict")
             if written:
                 raise AssertionError(f"the build wrote {written} before it stopped on the missing probe")
