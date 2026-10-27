@@ -549,6 +549,7 @@ def _self_test() -> None:
     _self_test_build_control_stop_writes_nothing()
     _self_test_build_reads_control()
     _self_test_build_reports_partial_control()
+    _self_test_main_write_report()
     _self_test_build_count_redacts()
 
 
@@ -1487,6 +1488,45 @@ def _self_test_build_reports_partial_control() -> None:
         print("self-test passed: build reports each control fixture a partial recording lacks and keeps its copy")
 
 
+def _self_test_main_write_report() -> None:
+    """The fixture write lists a control fixture the recording lacks as kept from the committed tree only when a copy
+    sits under crates/profile/fixtures, lists the others as not written, and exits 1. FIXTURES is relative, so a run
+    from a scratch tree holding its own crates/profile/fixtures takes the write. Placeholder bodies need no cargo."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        capture = _inference_capture(root / "capture")
+        for path in capture.glob("clean_body_*.json"):
+            path.write_bytes(path.read_bytes().replace(b"cch=4f1c2;", b"cch=00000;"))
+        recording = root / "control"
+        recording.mkdir()
+        (recording / "login-claude.json").write_text(json.dumps([_control_entry(0, "GET /api/oauth/profile HTTP/1.1")]))
+        tree = root / "tree"
+        (tree / FIXTURES).mkdir(parents=True)
+        committed = {name: f"{name} as committed\n".encode() for name in ("control_roles.http", "control_usage.http")}
+        for name, data in committed.items():
+            (tree / FIXTURES / name).write_bytes(data)
+        script = os.path.abspath(__file__)
+        run = subprocess.run(
+            [sys.executable, "-I", script, str(capture), "--control", str(recording)],
+            cwd=tree,
+            capture_output=True,
+            text=True,
+        )
+        kept = {name: (tree / FIXTURES / name).read_bytes() for name in committed}
+    lines = run.stdout.splitlines()
+    for line in (
+        "fixtures kept from the committed tree: control_roles.http, control_usage.http",
+        "fixtures not written: control_token.http, control_token_code.http",
+    ):
+        if line not in lines:
+            raise AssertionError(f"the fixture write printed no {line!r}: {run.stdout + run.stderr!r}")
+    if run.returncode != 1:
+        raise AssertionError(f"the fixture write exited {run.returncode}, want 1: {run.stdout + run.stderr!r}")
+    if kept != committed:
+        raise AssertionError("the fixture write changed a committed control fixture the recording holds no request for")
+    print("self-test passed: the fixture write tells kept control fixtures from ones it could not write")
+
+
 def _self_test_build_count_redacts() -> None:
     """A written count body carries the placeholders in place of the capture's ids, and its head declares the
     length of the body written. Each body passes through the re-sign step, which leaves one without a stamp as the
@@ -2048,11 +2088,17 @@ def main() -> int:
     written, unwritten = build(src, FIXTURES, control=control)
     print("fixtures written:", sorted(written))
     # A strict build stops on a gap in the inference plane, so what it leaves unwritten is a control fixture the
-    # recording lacks, whose committed copy now sits beside fixtures of another build.
+    # recording lacks. A committed copy of one now sits beside fixtures of another build, and one without a copy is
+    # missing from the tree.
     if unwritten:
         for name, reason in unwritten:
             print(f"{name}: {reason}")
-        print("fixtures kept from the committed tree: " + ", ".join(name for name, _ in unwritten))
+        kept = [name for name, _ in unwritten if (FIXTURES / name).exists()]
+        missing = [name for name, _ in unwritten if not (FIXTURES / name).exists()]
+        if kept:
+            print("fixtures kept from the committed tree: " + ", ".join(kept))
+        if missing:
+            print("fixtures not written: " + ", ".join(missing))
         return 1
     return 0
 
