@@ -166,9 +166,11 @@ def control(entry, name, out):
     body = re.sub(r'"code":"[^"]*"', f'"code":"{CODE_PLACEHOLDER}"', body)
     body = re.sub(r'"code_verifier":"[^"]*"', f'"code_verifier":"{CODE_VERIFIER_PLACEHOLDER}"', body)
     body = re.sub(r'"state":"[^"]*"', f'"state":"{STATE_PLACEHOLDER}"', body)
+    # control_receiver.py records the body's bytes decoded as latin1, so encoding it back the same way restores them.
+    payload = body.encode("latin1")
     lines = [entry["request_line"]] + [redact(h) for h in entry["headers"]]
-    lines = [l if not l.startswith("Content-Length:") else f"Content-Length: {len(body)}" for l in lines]
-    (out / name).write_bytes(("\r\n".join(lines) + "\r\n\r\n").encode() + body.encode())
+    lines = [l if not l.startswith("Content-Length:") else f"Content-Length: {len(payload)}" for l in lines]
+    (out / name).write_bytes(("\r\n".join(lines) + "\r\n\r\n").encode() + payload)
 
 
 def control_fixtures(control_dir: pathlib.Path, out: pathlib.Path, responses: pathlib.Path) -> list[str]:
@@ -883,6 +885,15 @@ def _self_test_control_selection() -> None:
         if any(nonce.encode() in body for nonce in other_nonces):
             raise AssertionError(f"control kept a nonce of a grant in another member order: {body!r}")
         print("self-test passed: control replaces the nonces in any member order")
+
+        # The receiver records a body's bytes decoded as latin1, so a byte above 0x7f has to reach the fixture as the
+        # same byte, and Content-Length has to count the bytes written.
+        wire = b'{"grant_type":"refresh_token","name":"caf\xc3\xa9"}'
+        control(_control_entry(8, "POST /v1/oauth/token HTTP/1.1", wire.decode("latin1")), "latin1.http", root)
+        lines, body = split(root / "latin1.http")
+        if body != wire or f"Content-Length: {len(wire)}" not in lines:
+            raise AssertionError(f"control wrote {body!r} under {lines!r}, want the recorded bytes and their length")
+        print("self-test passed: control writes the recorded bytes and declares their length")
 
 
 def _self_test_build_reads_control() -> None:
