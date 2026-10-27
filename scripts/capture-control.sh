@@ -61,6 +61,13 @@ trap 'stop_receiver; stop_control_receiver; rm -f "$OUT"/certs/*.key' EXIT
 rm -rf "${STATE:?}/home"
 mkdir -p "$STATE/home"
 
+# A phase whose control receiver failed has recorded nothing, and its client would run against no receiver, so the
+# capture stops there the way it stops on a driver failure.
+receiver_failed() { # $1=phase $2=status
+  echo "$SCRIPT_NAME: control receiver failed in phase $1" >&2
+  exit "$2"
+}
+
 login_phase() { # $1=variant dir $2=1 to leave the non-essential-traffic flag out $3=claude or console
   local dir=$1 allow=$2 method=$3 status=0
   local phase="login-$method"
@@ -86,14 +93,15 @@ PY
   rm -f "$dir/$phase-url.txt" "$dir/$phase-screen.txt"
   ALLOW_NONESSENTIAL_TRAFFIC=$allow client_env "$cfg"
   echo "=== $phase ==="
-  start_control_receiver "$dir/$phase.json" "$CLEAN_DURATION" "$OUT/certs" "$RESPONSES"
+  start_control_receiver "$dir/$phase.json" "$CLEAN_DURATION" "$OUT/certs" "$RESPONSES" \
+    || receiver_failed "$phase" "$?"
   # A terminal UI may not draw its menus without TERM and a locale. BROWSER=true has the login run the true command for
   # a browser and show the paste form at once, the same on a host with a display as on one without. The print-mode
   # runs keep runcli's list, the environment the committed fixtures were captured under.
   env -i "${CLIENT_ENV[@]}" BROWSER=true HOME="$STATE/home" HTTPS_PROXY="$PROXY" LANG=C.UTF-8 \
     NODE_EXTRA_CA_CERTS="$CA" TERM=xterm-256color python3 -I "$CAPTURE_DIR/drive_login.py" --binary "$BINARY" \
     --cwd "$CLIENT_CWD" --out "$dir" --method "$method" || status=$?
-  stop_control_receiver
+  stop_control_receiver || receiver_failed "$phase" "$?"
   case $status in
     0) ;;
     2) echo "phase $phase: drive_login.py exited 2, screen in $dir/$phase-screen.txt" ;;
@@ -132,11 +140,12 @@ PY
     return 0
   fi
   [[ "$status" -eq 0 ]] || exit "$status"
-  start_control_receiver "$dir/refresh.json" "$CLEAN_DURATION" "$OUT/certs" "$RESPONSES"
+  start_control_receiver "$dir/refresh.json" "$CLEAN_DURATION" "$OUT/certs" "$RESPONSES" \
+    || receiver_failed refresh "$?"
   ALLOW_NONESSENTIAL_TRAFFIC=$allow KEEP_CONFIG=1 runcli refresh refresh hi \
     ANTHROPIC_BASE_URL="http://127.0.0.1:$HTTP_PORT" HOME="$STATE/home" HTTPS_PROXY="$PROXY" NODE_EXTRA_CA_CERTS="$CA" \
     NO_PROXY=127.0.0.1
-  stop_control_receiver
+  stop_control_receiver || receiver_failed refresh "$?"
 }
 
 capture_variant() { # $1=variant dir name $2=1 to leave the non-essential-traffic flag out

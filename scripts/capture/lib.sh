@@ -96,18 +96,42 @@ stop_receiver() {
 }
 
 # The control capture starts this receiver per phase while the inference receiver of start_receiver serves the whole
-# variant, so each keeps a pid of its own.
+# variant, so each keeps a pid of its own. The receiver writes its empty recording once its port is bound, so the
+# file's appearance is its readiness, and a receiver that exits first, as on a port already held, fails the start.
 start_control_receiver() { # $1=output $2=seconds $3=certs dir $4=responses dir
+  local status=0 step
+  # A recording an earlier run left would read as a receiver already listening.
+  rm -f "$1"
   python3 -I "$CAPTURE_DIR/control_receiver.py" "$CONTROL_RECEIVER_PORT" "$@" &
   CONTROL_RECEIVER_PID=$!
-  sleep 1
+  for ((step = 0; step < 100; step++)); do
+    if [[ -e "$1" ]]; then
+      return 0
+    fi
+    if ! kill -0 "$CONTROL_RECEIVER_PID" 2>/dev/null; then
+      wait "$CONTROL_RECEIVER_PID" || status=$?
+      CONTROL_RECEIVER_PID=
+      echo "control receiver exited $status" >&2
+      return "$status"
+    fi
+    sleep 0.1
+  done
+  echo "control receiver not ready after 10 seconds" >&2
+  stop_control_receiver || true
+  return 1
 }
 
 stop_control_receiver() {
   [[ -n "$CONTROL_RECEIVER_PID" ]] || return 0
+  local status=0
   kill "$CONTROL_RECEIVER_PID" 2>/dev/null || true
-  wait "$CONTROL_RECEIVER_PID" 2>/dev/null || true
+  # SIGTERM has the receiver write its recording and exit 0, so any other status is a receiver that failed.
+  wait "$CONTROL_RECEIVER_PID" 2>/dev/null || status=$?
   CONTROL_RECEIVER_PID=
+  if [[ "$status" -ne 0 ]]; then
+    echo "control receiver exited $status" >&2
+  fi
+  return "$status"
 }
 
 trap 'stop_receiver; stop_control_receiver' EXIT

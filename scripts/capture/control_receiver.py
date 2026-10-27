@@ -128,6 +128,9 @@ server = socket.socket()
 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 server.bind(("127.0.0.1", PORT))
 server.listen(32)
+# start_control_receiver in scripts/capture/lib.sh waits for this file as the sign the port is bound, and a bind
+# failure exits before it is written.
+dump()
 server.settimeout(1)
 end = time.time() + DUR
 # Numbered at accept, so seq follows the order the client opened its connections even where a slow request is

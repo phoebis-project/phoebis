@@ -526,6 +526,48 @@ skipped=$(grep -cxF "phase refresh skipped: login-claude left no claudeAiOauth.e
   <<<"$out") || true
 [[ "$skipped" -eq 2 ]] || fail "capture-control.sh printed the refresh phase's skip note $skipped times, want 2: $out"
 
+# A control receiver that cannot bind its port, here held by a listener the test opens first, exits before it writes
+# its recording, and the capture stops in that phase rather than logging the client in against nothing. The holder
+# closes each connection it accepts, so a client sent to it fails its calls at once instead of waiting them out. The
+# capture's exit trap still stops the inference receiver.
+held=$(realpath -m "$tmp/held")
+python3 -I - "$tmp/holder-ready" <<'PY' &
+import pathlib, socket, sys
+
+with socket.socket() as s:
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("127.0.0.1", 48444))
+    s.listen(8)
+    pathlib.Path(sys.argv[1]).touch()
+    while True:
+        conn, _ = s.accept()
+        conn.close()
+PY
+receiver_pid=$!
+for ((step = 0; step < 100; step++)); do
+  [[ -e "$tmp/holder-ready" ]] && break
+  sleep 0.1
+done
+[[ -e "$tmp/holder-ready" ]] || fail "the listener meant to hold port 48444 did not start"
+status=0
+out=$(capture_control "$stub" "$tmp/held" 2>&1) || status=$?
+stop_receiver
+[[ "$status" -ne 0 ]] || fail "capture-control.sh with the control receiver's port held exited 0: $out"
+grep -qxF "capture-control.sh: control receiver failed in phase login-claude" <<<"$out" \
+  || fail "capture-control.sh with the control receiver's port held named no failed phase: $out"
+grep -qxE "control receiver exited [1-9][0-9]*" <<<"$out" \
+  || fail "capture-control.sh with the control receiver's port held printed no receiver status: $out"
+for file in "$held"/control/*.json "$held"/control-unflagged/*.json; do
+  [[ ! -e "$file" ]] || fail "capture-control.sh with the control receiver's port held wrote $file: $out"
+done
+python3 -I - <<'PY' || fail "capture-control.sh left the inference receiver listening on port 48442 after the failure"
+import socket
+
+with socket.socket() as s:
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("127.0.0.1", 48442))
+PY
+
 # --- lib.sh ---
 
 # runcli resets its config directory and sets the non-essential-traffic flag unless the call's own prefix says
