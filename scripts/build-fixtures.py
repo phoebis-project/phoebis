@@ -541,6 +541,7 @@ def _self_test() -> None:
     _self_test_build_redacts()
     _self_test_placeholder()
     _self_test_billing_line_decoy()
+    _self_test_restored_report_reads_billing_line()
     _self_test_resign_written()
     _self_test_check_hashes_placeholder()
     _self_test_control_selection()
@@ -924,6 +925,34 @@ def _self_test_billing_line_decoy() -> None:
     if not carries_only_the_placeholder(body(b"cch=4f1c2;", b"cch=00000;")):
         raise AssertionError("a stamped decoy ahead of the placeholder line hid the placeholder")
     print("self-test passed: a billing header in a tool-use input leaves the stamp to system[0].text")
+
+
+def _self_test_restored_report_reads_billing_line() -> None:
+    """restored_report reads the restored fields from system[0].text alone, so a billing header in a tool-use input,
+    which the client serializes ahead of system, neither adds a field nor hides one."""
+    plain = "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli;"
+    restored = plain + " cch=9b244; cc_prev_req=req_up_0001; cc_prompt_id=" + PROMPT_ID_PLACEHOLDER + ";"
+
+    def body(decoy: str, real: str) -> bytes:
+        tool_use = {"type": "tool_use", "id": "toolu_1", "name": "echo", "input": {"system": [{"text": decoy}]}}
+        turn = {"role": "assistant", "content": [tool_use]}
+        return json.dumps({"messages": [turn], "system": [{"type": "text", "text": real}]}).encode()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        fresh = pathlib.Path(tmp)
+        bodies = [body(restored, plain), body(plain, restored), body(plain, plain), body(plain, plain)]
+        for name, data in zip(INFERENCE_BODIES, bodies):
+            (fresh / name).write_bytes(data)
+        for name in INFERENCE_HEADS:
+            (fresh / name).write_bytes(b"POST /v1/messages HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n")
+        lines = restored_report(fresh)
+    wanted = [
+        "run 0 (body_oauth.json): carries none of the restored fields",
+        "run 1 (body_fp_9b244.json): carries cch, cc_prev_req, cc_prompt_id",
+    ]
+    if lines[:2] != wanted:
+        raise AssertionError(f"restored_report gave {lines[:2]!r}, want {wanted!r}")
+    print("self-test passed: restored_report reads the restored fields from system[0].text")
 
 
 def _self_test_resign_written() -> None:
@@ -1830,12 +1859,8 @@ def restored_report(fresh_dir: pathlib.Path) -> list:
     """
     lines = []
     for i, body_name in enumerate(INFERENCE_BODIES):
-        block = BILLING_BLOCK.search((fresh_dir / body_name).read_bytes())
-        carried = [
-            field.decode()
-            for field in RESTORED_BILLING_FIELDS
-            if block and (field + b"=") in block.group(0)
-        ]
+        line = billing_line((fresh_dir / body_name).read_bytes())
+        carried = [field.decode() for field in RESTORED_BILLING_FIELDS if line and field.decode() + "=" in line]
         if i < len(INFERENCE_HEADS):
             head_bytes = (fresh_dir / INFERENCE_HEADS[i]).read_bytes()
             if re.search(rb"(?im)^x-client-request-id:", head_bytes):
