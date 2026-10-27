@@ -2,15 +2,16 @@
 # Each case pins a rule a real capture leans on, checked here without the client: the leaf a receiver presents
 # chains to the run's own CA and names the control hosts, the CA carries the key usage a strict verifier asks for,
 # mkcerts.sh refuses to start on a host without openssl, and control_receiver.py answers the control calls with the
-# committed canned bodies, records each call, and keeps serving after a client that drops its tunnel before the
-# handshake. The resign example's --write mode leaves a body stamped with the digits the signer computes over its own
-# bytes. drive_login.py logs stub_client.py in with the authorize URL's state and reads /status, and gives up with its
-# screen saved when the client stops answering. The stub reaches the receiver alone, NO_PROXY or not, and refuses a
-# proxy off loopback. capture-control.sh records the stub's login and refresh phases in both of its variants, with the
-# refresh run starting from the credentials the login wrote, moves on past a login the driver gives up on, and refuses
-# a real token. lib.sh's runcli takes KEEP_CONFIG and ALLOW_NONESSENTIAL_TRAFFIC from a call's prefix and never from
-# the caller's environment, and its start_receiver runs the receiver isolated. Every case runs against a throwaway
-# tree, never /tmp/cc-capture or ~/.claude, and reaches no host off loopback.
+# committed canned bodies, records each call, keeps serving after a client that drops its tunnel before the handshake,
+# and records a chunked request as an error. The resign example's --write mode leaves a body stamped with the digits
+# the signer computes over its own bytes. drive_login.py logs stub_client.py in with the authorize URL's state and
+# reads /status, and gives up with its screen saved when the client stops answering. The stub reaches the receiver
+# alone, NO_PROXY or not, and refuses a proxy off loopback. capture-control.sh records the stub's login and refresh
+# phases in both of its variants, with the refresh run starting from the credentials the login wrote, moves on past a
+# login the driver gives up on, and refuses a real token. lib.sh's runcli takes KEEP_CONFIG and
+# ALLOW_NONESSENTIAL_TRAFFIC from a call's prefix and never from the caller's environment, and its start_receiver runs
+# the receiver isolated. Every case runs against a throwaway tree, never /tmp/cc-capture or ~/.claude, and reaches no
+# host off loopback.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -153,6 +154,11 @@ code=$(control_curl -o "$tmp/profile-again.out" -w '%{http_code}' https://api.an
 cmp -s "$tmp/profile-again.out" "$responses/profile.json" \
   || fail "the profile call after a dropped tunnel is not responses/profile.json"
 
+# The receiver frames a body by Content-Length alone, so it would record a chunked grant cut short. It records an
+# error entry naming the chunked body in place of the request.
+control_curl -o /dev/null -H 'Content-Type: application/json' -H 'Transfer-Encoding: chunked' \
+  --data-raw '{"grant_type":"refresh_token"}' https://platform.claude.com/v1/oauth/token || true
+
 # The recording is removed first, so only the SIGTERM handler's own dump can bring it back.
 rm "$recording"
 kill -TERM "$receiver_pid"
@@ -161,11 +167,18 @@ wait "$receiver_pid" || status=$?
 receiver_pid=
 [[ "$status" -eq 0 ]] || fail "control_receiver.py exited $status on SIGTERM, want 0"
 [[ -s "$recording" ]] || fail "control_receiver.py wrote no recording on SIGTERM"
-five="$three
+six="$three
 3 x:443 error
-4 api.anthropic.com:443 GET /api/oauth/profile HTTP/1.1 -> 200"
+4 api.anthropic.com:443 GET /api/oauth/profile HTTP/1.1 -> 200
+5 platform.claude.com:443 error"
 got=$(summarize "$recording") || fail "the recording written on SIGTERM does not parse: $got"
-[[ "$got" == "$five" ]] || fail "the recording written on SIGTERM reads: $got"
+[[ "$got" == "$six" ]] || fail "the recording written on SIGTERM reads: $got"
+python3 -I - "$recording" <<'PY' || fail "control_receiver.py's error entry for the chunked call: $(<"$recording")"
+import json, sys
+
+entry = next(e for e in json.load(open(sys.argv[1])) if e["seq"] == 5)
+sys.exit("chunked" not in entry.get("error", ""))
+PY
 
 # --- resign --write ---
 

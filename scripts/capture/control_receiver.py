@@ -14,9 +14,10 @@
 # included, which is safe only while the client holds the dummy credentials of scripts/capture/lib.sh and, after
 # the grant, the canned token. A recording is raw capture output and stays out of the repository.
 #
-# <output-json> holds one entry per request, or one error entry for a connection that failed, each carrying the
-# seq of its connection. A connection whose answer fails after its request was recorded keeps both entries under
-# its seq. The file is rewritten after every entry and on SIGTERM, so a capture stopped early keeps what it saw.
+# <output-json> holds one entry per request, or one error entry for a connection that failed or sent a chunked body,
+# each carrying the seq of its connection. A connection whose answer fails after its request was recorded keeps both
+# entries under its seq. The file is rewritten after every entry and on SIGTERM, so a capture stopped early keeps what
+# it saw.
 import json, pathlib, signal, socket, ssl, sys, threading, time
 
 if len(sys.argv) != 6:
@@ -97,6 +98,9 @@ def handle(conn, seq):
             name, _, value = line.partition(":")
             if name.strip().lower() == "content-length":
                 length = int(value.strip())
+            # The body is framed by Content-Length alone, so a chunked one would be recorded cut short as if whole.
+            elif name.strip().lower() == "transfer-encoding" and "chunked" in value.lower():
+                raise ValueError(f"a chunked body, which the receiver does not read, on {lines[0]}")
         while len(body) < length:
             chunk = tls.recv(65536)
             if not chunk:
