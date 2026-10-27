@@ -13,9 +13,10 @@
 # base URL off loopback. The tokens it sends are the dummy ones the tests seed and the canned ones the receiver
 # answers with.
 #
-# Every request carries x-stub-nonessential with the value of CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, so a
-# recording shows which environment its run had. STUB_HANG=1 makes terminal mode print its prompt and then nothing,
-# as a client stuck on a screen the driver does not know.
+# Every request carries x-stub-lang, x-stub-nonessential and x-stub-term with the values of LANG,
+# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and TERM, or "unset" for a variable the run lacks, so a recording shows
+# which environment its run had. STUB_HANG=1 makes terminal mode print its prompt and then nothing, as a client stuck
+# on a screen the driver does not know.
 import http.client, json, os, pathlib, secrets, signal, ssl, sys, time, urllib.parse
 
 AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize"
@@ -26,7 +27,11 @@ TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
-NONESSENTIAL = os.environ.get("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "unset")
+RECORDED = {
+    "x-stub-lang": os.environ.get("LANG", "unset"),
+    "x-stub-nonessential": os.environ.get("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "unset"),
+    "x-stub-term": os.environ.get("TERM", "unset"),
+}
 TIMEOUT = 10
 
 
@@ -53,7 +58,7 @@ def request(method, url, body=None, token=None):
         conn.set_tunnel(parts.hostname, parts.port or 443)
     else:
         conn = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=TIMEOUT)
-    headers = {"Accept": "application/json", "x-stub-nonessential": NONESSENTIAL}
+    headers = {"Accept": "application/json", **RECORDED}
     payload = None
     if body is not None:
         headers["Content-Type"] = "application/json"

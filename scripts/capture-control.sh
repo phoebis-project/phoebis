@@ -57,7 +57,9 @@ login_phase() { # $1=variant dir $2=1 to leave the non-essential-traffic flag ou
   ALLOW_NONESSENTIAL_TRAFFIC=$allow client_env "$cfg"
   echo "=== $phase ==="
   start_control_receiver "$dir/$phase.json" "$CLEAN_DURATION" "$OUT/certs" "$RESPONSES"
-  env -i "${CLIENT_ENV[@]}" HTTPS_PROXY="$PROXY" NODE_EXTRA_CA_CERTS="$CA" \
+  # A terminal UI may not draw its menus without TERM and a locale. The print-mode runs keep runcli's list, the
+  # environment the committed fixtures were captured under.
+  env -i "${CLIENT_ENV[@]}" HTTPS_PROXY="$PROXY" LANG=C.UTF-8 NODE_EXTRA_CA_CERTS="$CA" TERM=xterm-256color \
     python3 -I "$CAPTURE_DIR/drive_login.py" --binary "$BINARY" --cwd "$CLIENT_CWD" --out "$dir" --method "$method" \
     || status=$?
   stop_control_receiver

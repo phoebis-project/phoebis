@@ -326,9 +326,11 @@ capture_control() {
   env -u ANTHROPIC_API_KEY -u CAPTURE_BASELINE -u CLAUDE_CODE_OAUTH_TOKEN "$here/scripts/capture-control.sh" "$@"
 }
 
-# Each phase file under $1 holds its phase's calls alone, in order, each carrying x-stub-nonessential: $2. The refresh
-# grant carries the refresh token the stub stored at its login, which only a config directory that outlived runcli's
-# reset still holds, and the inference receiver beside the control receiver recorded the refresh run's turn.
+# Each phase file under $1 holds its phase's calls alone, in order, each carrying x-stub-nonessential: $2. A terminal
+# UI may not draw its menus without TERM and a locale, so the login phases' client sees both, and the refresh run keeps
+# runcli's print-mode environment, the one the committed fixtures were captured under. The refresh grant carries the
+# refresh token the stub stored at its login, which only a config directory that outlived runcli's reset still holds,
+# and the inference receiver beside the control receiver recorded the refresh run's turn.
 check_variant() {
   python3 -I - "$@" <<'PY'
 import json, pathlib, sys
@@ -337,13 +339,17 @@ variant, nonessential = pathlib.Path(sys.argv[1]), sys.argv[2]
 token, profile = "POST /v1/oauth/token HTTP/1.1", "GET /api/oauth/profile HTTP/1.1"
 login = [token, profile, "GET /api/oauth/claude_cli/roles HTTP/1.1", "GET /api/oauth/usage HTTP/1.1"]
 phases = {"login-claude": login, "login-console": login, "refresh": [token, profile]}
+terminal = ["x-stub-lang: C.UTF-8", "x-stub-term: xterm-256color"]
+print_mode = ["x-stub-lang: unset", "x-stub-term: unset"]
 for phase, want in phases.items():
     entries = sorted(json.load(open(variant / f"{phase}.json")), key=lambda e: e["seq"])
     if [e.get("request_line") for e in entries] != want:
         sys.exit(f"{phase}.json holds {entries}")
+    headers = [f"x-stub-nonessential: {nonessential}"] + (print_mode if phase == "refresh" else terminal)
     for entry in entries:
-        if f"x-stub-nonessential: {nonessential}" not in entry["headers"]:
-            sys.exit(f"{phase}.json's {entry['request_line']} lacks x-stub-nonessential: {nonessential}: {entry}")
+        for header in headers:
+            if header not in entry["headers"]:
+                sys.exit(f"{phase}.json's {entry['request_line']} lacks {header}: {entry}")
     if phase == "refresh":
         grant = json.loads(entries[0]["body"])
         if grant.get("grant_type") != "refresh_token" or grant.get("refresh_token") != "sk-ant-ort01-PLACEHOLDER":
