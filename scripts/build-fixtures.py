@@ -111,6 +111,10 @@ SESSION_ID_PLACEHOLDER = "11111111-1111-4111-8111-111111111111"
 CODE_VERIFIER_PLACEHOLDER = "CODE-VERIFIER-PLACEHOLDER"
 STATE_PLACEHOLDER = "STATE-PLACEHOLDER"
 
+# The grant's code. The login driver pastes a dummy one, but an operator who completes a login by hand at the terminal
+# pastes a real one-time code from a browser login.
+CODE_PLACEHOLDER = "CODE-PLACEHOLDER"
+
 
 def redact(line: str) -> str:
     line = re.sub(r"Bearer sk-ant-oat01-\S+", "Bearer sk-ant-oat01-PLACEHOLDER", line)
@@ -159,6 +163,7 @@ def head(entry, content_length=None):
 def control(entry, name, out):
     body = entry.get("body", "")
     body = re.sub(r"sk-ant-ort01-\S+?\"", 'sk-ant-ort01-PLACEHOLDER"', body)
+    body = re.sub(r'"code":"[^"]*"', f'"code":"{CODE_PLACEHOLDER}"', body)
     body = re.sub(r'"code_verifier":"[^"]*"', f'"code_verifier":"{CODE_VERIFIER_PLACEHOLDER}"', body)
     body = re.sub(r'"state":"[^"]*"', f'"state":"{STATE_PLACEHOLDER}"', body)
     lines = [entry["request_line"]] + [redact(h) for h in entry["headers"]]
@@ -832,14 +837,15 @@ def _self_test_control_selection() -> None:
         lines, body = split(full / "control_token_code.http")
         for wanted in (
             b'"grant_type":"authorization_code"',
+            b'"code":"' + CODE_PLACEHOLDER.encode() + b'"',
             b'"code_verifier":"' + CODE_VERIFIER_PLACEHOLDER.encode() + b'"',
             b'"state":"' + STATE_PLACEHOLDER.encode() + b'"',
         ):
             if wanted not in body:
                 raise AssertionError(f"the code fixture carries no {wanted!r}: {body!r}")
-        for nonce in first_nonces:
-            if nonce.encode() in body:
-                raise AssertionError(f"the code fixture kept the nonce {nonce!r}")
+        for value in first_nonces + ("DUMMYCODE",):
+            if value.encode() in body:
+                raise AssertionError(f"the code fixture kept the grant's {value!r}")
         if f"Content-Length: {len(body)}" not in lines:
             raise AssertionError(f"the code fixture's head declares no Content-Length {len(body)}: {lines!r}")
         usage_line = split(full / "control_usage.http")[0][0]
