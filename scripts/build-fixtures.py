@@ -79,9 +79,12 @@ BILLING_BLOCK = re.compile(rb'"x-anthropic-billing-header:[^"]*"')
 BILLING_PROMPT_ID = re.compile(rb"cc_prompt_id=[^;\"]*;")
 BILLING_STAMP = re.compile(rb"cch=[0-9a-f]{5};")
 
+# billing_line hands back the decoded line, so its stamp is matched as text.
+LINE_STAMP = re.compile(r"cch=[0-9a-f]{5};")
+
 # The field the client writes where its native patch does not run. It claims no hash, and the relay passes such a body
 # unsigned (phoebis_cch::carries_only_the_placeholder), so the builder neither re-signs it nor grades it as drift.
-UNPATCHED_STAMP = b"cch=00000;"
+UNPATCHED_STAMP = "cch=00000;"
 
 # The billing fields the relay restores on a reduced-shape request; under THROUGH_ROUTER these are dropped
 # outright rather than masked, since a baseline that never carried one has no value for a placeholder to replace.
@@ -466,6 +469,7 @@ def _self_test() -> None:
     _self_test_redact_head()
     _self_test_build_redacts()
     _self_test_placeholder()
+    _self_test_billing_line_decoy()
     _self_test_resign_written()
     _self_test_check_hashes_placeholder()
     _self_test_control_selection()
@@ -820,6 +824,29 @@ def _self_test_placeholder() -> None:
         if carries_only_the_placeholder(body) != wanted:
             raise AssertionError(f"carries_only_the_placeholder read {line!r} as {not wanted}")
     print("self-test passed: the unpatched placeholder is told from a stamp and from a line claiming a hash")
+
+
+def _self_test_billing_line_decoy() -> None:
+    """A billing header in a tool-use input, which the client serializes ahead of the top-level system array, leaves
+    the stamp to system[0].text, the line phoebis_cch::find_cch reads."""
+    header = b"x-anthropic-billing-header: cc_version=2.1.269.517; "
+
+    def body(decoy: bytes, real: bytes) -> bytes:
+        tool_use = (
+            b'{"type":"tool_use","id":"toolu_1","name":"echo","input":{"system":[{"type":"text","text":"'
+            + header + decoy + b'"}]}}'
+        )
+        return (
+            b'{"messages":[{"role":"assistant","content":[' + tool_use + b']}],'
+            b'"system":[{"type":"text","text":"' + header + real + b'"}]}'
+        )
+
+    stamped = body(b"cch=00000;", b"cch=4f1c2;")
+    if not has_stamp(stamped) or carries_only_the_placeholder(stamped):
+        raise AssertionError("a placeholder decoy ahead of the stamped line hid the stamp")
+    if not carries_only_the_placeholder(body(b"cch=4f1c2;", b"cch=00000;")):
+        raise AssertionError("a stamped decoy ahead of the placeholder line hid the placeholder")
+    print("self-test passed: a billing header in a tool-use input leaves the stamp to system[0].text")
 
 
 def _self_test_resign_written() -> None:
@@ -1432,25 +1459,39 @@ def normalize_body(raw: bytes) -> bytes:
     return BILLING_BLOCK.sub(lambda m: mask_billing(m.group(0)), raw)
 
 
+def billing_line(body: bytes) -> str | None:
+    """The decoded top-level system[0].text when it is a billing header, the one line phoebis_cch::find_cch reads, or
+    None. A tool-use input can carry a billing header of its own, and the client serializes messages ahead of system,
+    so a search of the bytes finds that one first. A body that does not parse carries no billing line."""
+    try:
+        parsed = json.loads(body)
+    except (RecursionError, ValueError):
+        return None
+    system = parsed.get("system") if isinstance(parsed, dict) else None
+    first = system[0] if isinstance(system, list) and system else None
+    text = first.get("text") if isinstance(first, dict) else None
+    if isinstance(text, str) and text.startswith("x-anthropic-billing-header:"):
+        return text
+    return None
+
+
 def has_stamp(body: bytes) -> bool:
-    """Whether the first billing block carries a cch=, which is the block phoebis_cch::find_cch signs."""
-    block = BILLING_BLOCK.search(body)
-    return bool(block and BILLING_STAMP.search(block.group(0)))
+    """Whether the billing line carries a cch= with five hex digits and its semicolon, the field
+    phoebis_cch::find_cch signs."""
+    line = billing_line(body)
+    return line is not None and LINE_STAMP.search(line) is not None
 
 
 def carries_only_the_placeholder(body: bytes) -> bool:
-    """Whether the first billing block's one and only cch= field is the unpatched placeholder, read the way
+    """Whether the billing line's one and only cch= field is the unpatched placeholder, read the way
     phoebis_cch::carries_only_the_placeholder reads it."""
-    block = BILLING_BLOCK.search(body)
-    stamp = block and BILLING_STAMP.search(block.group(0))
-    if not stamp or stamp.group(0) != UNPATCHED_STAMP:
+    line = billing_line(body)
+    stamp = LINE_STAMP.search(line) if line is not None else None
+    if stamp is None or stamp.group(0) != UNPATCHED_STAMP:
         return False
     # Beside a second cch=, the line claims a hash after all. Counted over the decoded line, so an escaped spelling
-    # counts as the server reads it, and a line that does not decode is not taken for the placeholder.
-    try:
-        return json.loads(block.group(0)).count("cch=") == 1
-    except ValueError:
-        return False
+    # counts as the server reads it.
+    return line.count("cch=") == 1
 
 
 def resign_written(path: pathlib.Path) -> None:
@@ -1508,8 +1549,8 @@ def check_hashes(capture_dir: pathlib.Path) -> int:
         stamped, status = [], 2
     for name, path in stamped:
         raw = path.read_bytes()
-        stamp = BILLING_STAMP.search(BILLING_BLOCK.search(raw).group(0)).group(0)
-        line = f"raw {name} sha256={hashlib.sha256(raw).hexdigest()} cch={stamp[len(b'cch='):-1].decode()}"
+        stamp = LINE_STAMP.search(billing_line(raw)).group(0)
+        line = f"raw {name} sha256={hashlib.sha256(raw).hexdigest()} cch={stamp[len('cch='):-1]}"
         print(line)
         trace.append(line + "\n")
         run = subprocess.run(
