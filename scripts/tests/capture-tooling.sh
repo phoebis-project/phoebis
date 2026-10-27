@@ -47,8 +47,9 @@ for host in api.anthropic.com platform.claude.com claude.com; do
 done
 subject=$(openssl x509 -in "$tmp/run/certs/ca.pem" -noout -subject -nameopt RFC2253)
 [[ "$subject" == "subject=CN=phoebis capture CA" ]] || fail "the CA's subject is not CN=phoebis capture CA: $subject"
-# Python's default TLS context verifies under strict rules that refuse a CA without keyUsage, so the stub client's
-# handshake with the receiver fails on a CA that curl still accepts.
+# Python 3.13's default TLS context verifies under strict rules that refuse a CA without keyUsage, so there the stub
+# client's handshake with the receiver fails on a CA that curl still accepts. This check pins the extension on an
+# older Python as well.
 usage=$(openssl x509 -in "$tmp/run/certs/ca.pem" -noout -ext keyUsage 2>&1) || fail "the CA's keyUsage: $usage"
 echo "$usage" | grep -qF 'Certificate Sign' || fail "the CA's keyUsage does not list Certificate Sign: $usage"
 for cert in ca.pem leaf.pem; do

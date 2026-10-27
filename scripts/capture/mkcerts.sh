@@ -24,9 +24,9 @@ fi
 certs="$1/certs"
 mkdir -p "$certs"
 
-# Python's default TLS context verifies under OpenSSL's strict rules, which refuse a CA without keyUsage that curl
-# accepts, so both certificates carry the extensions a strict verifier asks for. openssl req reads no extension
-# file, so the CA is self-signed through x509 -req as the leaf is signed.
+# Python 3.13's default TLS context verifies under OpenSSL's strict rules, which refuse a CA without keyUsage that
+# curl accepts, so both certificates carry the extensions a strict verifier asks for. openssl req takes no -extfile,
+# so the CA is self-signed through x509 -req as the leaf is signed.
 printf '%s\n' "basicConstraints = critical, CA:TRUE" "keyUsage = critical, keyCertSign, cRLSign" > "$certs/ca-ext.cnf"
 openssl req -newkey rsa:2048 -nodes -subj "/CN=phoebis capture CA" \
   -keyout "$certs/ca.key" -out "$certs/ca.csr"

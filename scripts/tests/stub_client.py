@@ -169,8 +169,8 @@ PROXY_PORT = PROXY_PORT or 80
 if not os.environ.get("CLAUDE_CONFIG_DIR"):
     refuse("refusing to run without CLAUDE_CONFIG_DIR")
 CONFIG = pathlib.Path(os.environ["CLAUDE_CONFIG_DIR"])
-# Python's default context verifies under OpenSSL's strict flags and none is cleared here, so a handshake that passes
-# shows the run's certificates well-formed for a strict client too.
+# Python 3.13's default context verifies under OpenSSL's strict flags and none is cleared here, so on 3.13 and later a
+# handshake that passes shows the run's certificates well-formed for a strict client too.
 CONTEXT = ssl.create_default_context(cafile=os.environ.get("NODE_EXTRA_CA_CERTS"))
 
 if "-p" in sys.argv[1:]:
