@@ -3,16 +3,19 @@
 # canned token whatever code it gets, so the driver pastes a dummy code and the login completes.
 #
 # Usage: drive_login.py --binary <path> --cwd <dir> --out <dir> --method claude|console [--timeout <seconds>]
+#        drive_login.py --self-test
+#
+# --self-test checks the screen grid against fixed escape sequences, with no client and no terminal.
 #
 # The client inherits the driver's environment, which the capture sets to the loopback proxy, the run's CA and a
 # throwaway config directory, so the client's calls reach the loopback receiver alone. The capture also passes a
-# throwaway HOME, TERM and LANG, and BROWSER=true, which has the login show its paste form at once. The driver opens
+# throwaway HOME, LANG and TERM, and BROWSER=true, which has the login show its paste form at once. The driver opens
 # no socket and sends the client nothing but keystrokes. It writes the authorize URL to <out>/login-<method>-url.txt
 # and every byte the client printed to <out>/login-<method>-screen.txt, so a screen it failed to recognize is readable
 # afterwards. Both files are raw capture output and stay out of the repository. A wait longer than --timeout, a client
 # that exits while the driver still waits on it, or a login that ends on the client's error screen exits 2 once the
 # screen is on disk, which a capture logs and moves past. A run that gets through /exit exits 0.
-import argparse, fcntl, os, pty, re, select, signal, struct, sys, termios, time, urllib.parse
+import argparse, codecs, fcntl, io, os, pty, re, select, signal, struct, sys, termios, time, urllib.parse
 
 # A step's text can arrive in several chunks and the client redraws its screen between steps, so a wait acts on what
 # it read only after this long without a new byte.
@@ -25,15 +28,25 @@ SETTLE = 0.3
 COLUMNS, ROWS = 500, 50
 
 DOWN, ESC = b"\x1b[B", b"\x1b"
-ESCAPES = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_]")
 # A row's lead: blanks, among them the no-break space a client may draw, and the border of a boxed row.
 LEAD = r"^[ \t\xa0│┃|]*"
-# The /login menu lists the subscription first and the Console second, and the Console entry opens a second menu whose
-# first entry, the Console sign-in, holds the cursor.
+# The /login menu lists three entries, the subscription first, the Console second and the third-party platforms third,
+# and the Console entry opens a second menu whose first entry, the Console sign-in, holds the cursor.
 METHOD_KEYS = {"claude": [], "console": [DOWN]}
 # The input marker at a line start, behind the border of a boxed input line, and never a menu's selected entry.
 PROMPT = re.compile(LEAD + r"[>❯](?:[ \xa0]|$)(?![ \xa0]*\d+\.)", re.M)
-URL = re.compile(r"https://\S+/oauth/authorize\S*")
+# The escape sequence at an ESC, in order: a CSI with its parameters, intermediates and final, an OSC or another string
+# up to its BEL or ESC \ terminator, the start of either that the chunk cut off (`partial`), or a short escape such as
+# ESC 7 or ESC ( B. An ESC that starts none of them matches alone.
+SEQUENCE = re.compile(
+    r"\x1b(?:\[(?P<params>[0-?]*)(?P<inter>[ -/]*)(?P<final>[@-~])"
+    r"|[\]PX^_].*?(?:\x07|\x1b\\)"
+    r"|(?P<partial>(?:\[[0-?]*[ -/]*|[\]PX^_].*|[ -/]*)\Z)"
+    r"|[ -/]*[0-~])?",
+    re.S,
+)
+# Printable ASCII alone, so a box-drawing border the dialog draws right after the URL never joins it.
+URL = re.compile(r"https://[!-~]+/oauth/authorize[!-~]*")
 
 
 class Exited(Exception):
@@ -56,15 +69,27 @@ class Parser(argparse.ArgumentParser):
 
 
 class Terminal:
+    """The client's side of the pseudo-terminal, read onto a grid of cells. The client's renderer repaints a changed
+    line cell by cell and moves the cursor past each cell that already holds its character, so only the grid shows
+    such a line in full."""
+
     def __init__(self, fd, screen, timeout):
         self.fd, self.screen, self.timeout = fd, screen, timeout
         self.read = bytearray()
         self.mark = 0
         self.last = time.monotonic()
+        # A line per row and a character per cell, both counted from 0, and per row the length of `read` at its last
+        # write or erase, which text() compares with the mark.
+        self.lines, self.stamps = [], []
+        self.row = self.column = 0
+        self.saved = (0, 0)
+        # A chunk can end inside a UTF-8 character or an escape sequence, whose rest comes with the next chunk.
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self.pending = ""
 
     def pump(self, seconds):
-        """Reads what the client prints within `seconds` into the screen file, and raises Exited once the client's
-        side of the terminal has closed."""
+        """Reads what the client prints within `seconds` onto the grid and into the screen file, and raises Exited
+        once the client's side of the terminal has closed."""
         ready, _, _ = select.select([self.fd], [], [], seconds)
         if not ready:
             return
@@ -75,15 +100,110 @@ class Terminal:
             chunk = b""
         if not chunk:
             raise Exited
+        self.take(chunk)
+        self.last = time.monotonic()
+
+    def take(self, chunk):
         self.read += chunk
         self.screen.write(chunk)
         self.screen.flush()
-        self.last = time.monotonic()
+        self.draw(self.decoder.decode(chunk))
+
+    def draw(self, text):
+        text, self.pending = self.pending + text, ""
+        i = 0
+        while i < len(text):
+            char = text[i]
+            if char == "\x1b":
+                match = SEQUENCE.match(text, i)
+                if match["partial"] is not None:
+                    self.pending = text[i:]
+                    return
+                # Private CSIs set modes or speak the keyboard protocol, whose CSI < u and CSI ? u look like a cursor
+                # restore, and CSIs with intermediates scroll or set the cursor's shape. None of them changes the grid.
+                if match["final"] and not match["inter"] and not match["params"].startswith(("<", "=", ">", "?")):
+                    self.csi(match["params"], match["final"])
+                i = match.end()
+                continue
+            if char == "\r":
+                self.column = 0
+            elif char == "\n":
+                self.row += 1
+            elif char == "\b":
+                self.column = max(self.column - 1, 0)
+            elif char == "\t":
+                self.column = self.column // 8 * 8 + 8
+            elif char >= " " and not "\x7f" <= char <= "\x9f":
+                self.put(char)
+            i += 1
+
+    def csi(self, params, final):
+        args = [int(p) if p.isdigit() else 0 for p in params.split(";")]
+        # A terminal reads a count or a position of 0 as 1.
+        n = max(args[0], 1)
+        if final == "A":
+            self.row = max(self.row - n, 0)
+        elif final == "B":
+            self.row += n
+        elif final == "C":
+            self.column += n
+        elif final == "D":
+            self.column = max(self.column - n, 0)
+        elif final == "G":
+            self.column = n - 1
+        elif final in ("H", "f"):
+            self.row, self.column = n - 1, max(args[1] if len(args) > 1 else 0, 1) - 1
+        elif final == "J" and args[0] in (0, 1, 2, 3):
+            self.erase_screen(args[0])
+        elif final == "K" and args[0] in (0, 1, 2):
+            self.erase_line(args[0])
+        elif final == "s":
+            self.saved = self.row, self.column
+        elif final == "u":
+            self.row, self.column = self.saved
+
+    def line(self):
+        """The cursor's line, stamped as changed, with the lines up to it made where the cursor sits below the last."""
+        while len(self.lines) <= self.row:
+            self.lines.append([])
+            self.stamps.append(0)
+        self.stamps[self.row] = len(self.read)
+        return self.lines[self.row]
+
+    def put(self, char):
+        line = self.line()
+        line.extend(" " * (self.column + 1 - len(line)))
+        line[self.column] = char
+        self.column += 1
+
+    def erase_line(self, mode):
+        """Erases from the cursor to the line's end (0), from its start to the cursor (1), or the whole line (2)."""
+        line = self.line()
+        if mode == 0:
+            del line[self.column :]
+        elif mode == 1:
+            line[: self.column + 1] = " " * min(len(line), self.column + 1)
+        else:
+            line.clear()
+
+    def erase_screen(self, mode):
+        """Erases from the cursor to the screen's end (0), from its start to the cursor (1), or all of it (2, 3)."""
+        if mode == 0:
+            self.erase_line(0)
+            rows = range(self.row + 1, len(self.lines))
+        elif mode == 1:
+            self.erase_line(1)
+            rows = range(self.row)
+        else:
+            rows = range(len(self.lines))
+        for row in rows:
+            self.lines[row] = []
+            self.stamps[row] = len(self.read)
 
     def text(self):
-        """What the client printed since the last return the driver sent, without escape sequences."""
-        text = ESCAPES.sub("", self.read[self.mark:].decode("utf-8", "replace"))
-        return text.replace("\r\n", "\n").replace("\r", "\n")
+        """The lines the client wrote or erased since the last key the driver sent, as the grid shows them."""
+        lines = zip(self.lines, self.stamps)
+        return "\n".join("".join(line).rstrip(" ") for line, stamp in lines if stamp > self.mark)
 
     def wait(self, what, found):
         """Returns what found() makes of the text once the screen has been quiet for QUIET seconds and found() returns
@@ -219,7 +339,54 @@ def stop(pid, grace):
         grace = 2
 
 
+def repaint(old, new):
+    """What the client's renderer sends to turn a line holding `old` into `new` from the line's start: each run of
+    cells that already holds its character skipped with a cursor-forward, then the rest of the line erased."""
+    out, skip = "", 0
+    for i, char in enumerate(new):
+        if i < len(old) and old[i] == char:
+            skip += 1
+            continue
+        out += (f"\x1b[{skip}C" if skip else "") + char
+        skip = 0
+    return out + (f"\x1b[{skip}C" if skip else "") + "\x1b[K"
+
+
+def self_test():
+    """Runs the grid against one sequence per rule the client's screens lean on. A None among a case's chunks sets the
+    mark as a key the driver sends does."""
+    url = "https://claude.com/cai/oauth/authorize?code=true&state=abc"
+    old, new = "Select login method:", "How do you want to sign in?"
+    cases = [
+        ("a line repainted cell by cell reads in full", [f"{old}\x1b[1;1H{repaint(old, new)}".encode()], new),
+        (
+            "an erased line holds the shorter line written over it alone",
+            [b"Opening browser to sign in...\x1b[2K\rPaste code here >"],
+            "Paste code here >",
+        ),
+        ("a hyperlink reads as its URL", [f"\x1b]8;;{url}\x07{url}\x1b]8;;\x1b\\".encode()], url),
+        ("the text holds the lines written after the mark alone", [b"one\r\ntwo\r\n", None, b"three"], "three"),
+        ("an escape split across two chunks is one sequence", [b"stale\x1b[", b"2K\rfresh"], "fresh"),
+    ]
+    for name, chunks, want in cases:
+        terminal = Terminal(None, io.BytesIO(), 0)
+        for chunk in chunks:
+            if chunk is None:
+                terminal.mark = len(terminal.read)
+            else:
+                terminal.take(chunk)
+        got = terminal.text()
+        if got != want:
+            print(f"drive_login.py: self-test failed: {name}: the text reads {got!r}, want {want!r}", file=sys.stderr)
+            return 1
+        print(f"self-test passed: {name}")
+    return 0
+
+
 def main():
+    # The self-test starts no client, so it needs none of the arguments a run does.
+    if sys.argv[1:] == ["--self-test"]:
+        sys.exit(self_test())
     parser = Parser(description="Drive a client's /login and /status in a pseudo-terminal.")
     parser.add_argument("--binary", required=True)
     parser.add_argument("--cwd", required=True)

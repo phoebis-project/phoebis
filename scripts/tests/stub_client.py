@@ -3,10 +3,11 @@
 # control capture without the real client. It makes the control calls a capture records. In print mode (-p among
 # its arguments) it sends the refresh grant when the credentials file holds an expired token, then the profile read
 # and the inference post, and exits 1 as the client does against the canned 400. In terminal mode it draws the
-# client's screens as text. It answers /login with the method menu, the Console sign-in menu after a down arrow, the
-# paste form with the authorize URL, then the code grant, the profile and roles reads and the success screen, and
-# after a return a credentials file holding the token the grant returned. It answers /status with the settings
-# dialog and the usage read after Esc, and /exit by exiting 0.
+# client's screens as text. It answers /login with the method menu's three entries, the Console sign-in menu after a
+# down arrow (its header repainted over the method menu's the way the client repaints a line), the paste form with
+# the authorize URL, then the code grant, the profile and roles reads and the success screen, and after a return a
+# credentials file holding the token the grant returned. It answers /status with the settings dialog and the usage
+# read after Esc, and /exit by exiting 0.
 #
 # It reaches no host but loopback. Every https call goes through a CONNECT tunnel opened to HTTPS_PROXY, so the stub
 # never resolves or dials a control host itself, and it reads no NO_PROXY, which urllib's proxy handler would honor
@@ -126,14 +127,34 @@ def wait_for_escape():
         termios.tcsetattr(fd, termios.TCSANOW, saved)
 
 
+def repaint(old, new):
+    """What the client's renderer sends to turn a line holding `old` into `new` from the line's start: each run of
+    cells that already holds its character skipped with a cursor-forward, then the rest of the line erased."""
+    out, skip = "", 0
+    for i, char in enumerate(new):
+        if i < len(old) and old[i] == char:
+            skip += 1
+            continue
+        out += (f"\x1b[{skip}C" if skip else "") + char
+        skip = 0
+    return out + (f"\x1b[{skip}C" if skip else "") + "\x1b[K"
+
+
 def login_command():
     say("Select login method:")
-    say("> 1. Claude account with subscription")
-    say("  2. Anthropic Console account")
+    say("> 1. Claude account with subscription · Pro, Max, Team, or Enterprise")
+    say("  2. Anthropic Console account · API usage billing")
+    say("  3. 3rd-party platform · Amazon Bedrock, Microsoft Foundry, Google Vertex AI")
     authorize = AUTHORIZE_URL
     # The line mode hands a down arrow over with the return that follows it.
     if "\x1b[B" in sys.stdin.readline():
-        say("How do you want to sign in?")
+        # A return sent before the second menu shows can land on the client's first menu, so the stub drops one sent
+        # that early and the driver's run times out.
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+        # The client draws the second menu's header over the first's, rewriting only the cells that change, so only a
+        # reader that keeps a screen grid sees it in full. Its row is five up, past the line the terminal echoed for
+        # the arrow and the return and the menu's three entries.
+        say(f"\x1b[5A\r{repaint('Select login method:', 'How do you want to sign in?')}\r\x1b[5B", end="")
         say("> 1. Sign in with your Console account (recommended)")
         say("  2. Create an API key (legacy)")
         sys.stdin.readline()
