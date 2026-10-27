@@ -385,9 +385,16 @@ def build(
             raise SystemExit(f"{src}/clean_modes.json holds no HEAD /api/hello entry")
         if inf is None:
             raise SystemExit(f"{src}/connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello")
+    bodies = [redact_body(body) for body in captured]
+    # resign_written finds cargo missing only after the first body is written, which would leave the committed tree
+    # half rewritten, so it is looked for here. A body carrying the placeholder or no stamp needs no re-sign, so
+    # cargo is asked for only when a body is stamped.
+    stamped = any(has_stamp(body) and not carries_only_the_placeholder(body) for body in bodies)
+    if resign and stamped and shutil.which("cargo") is None:
+        raise SystemExit("cargo is needed to re-sign the redacted bodies")
     (out / "responses").mkdir(parents=True, exist_ok=True)
-    for body, name in zip(captured, INFERENCE_BODIES):
-        (out / name).write_bytes(redact_body(body))
+    for body, name in zip(bodies, INFERENCE_BODIES):
+        (out / name).write_bytes(body)
         if resign:
             resign_written(out / name)
     for (_, entry), name, body_name in zip(posts, INFERENCE_HEADS, INFERENCE_BODIES):
@@ -512,6 +519,7 @@ def _self_test() -> None:
     _self_test_check_reports_probe_and_hello()
     _self_test_build_stops_without_client_hello()
     _self_test_build_reports_no_recorded_length()
+    _self_test_build_needs_cargo_before_writing()
     _self_test_capture_partition()
     _self_test_redact_body()
     _self_test_redact_head()
@@ -1110,6 +1118,33 @@ def _self_test_build_reports_no_recorded_length() -> None:
         if report.getvalue():
             raise AssertionError(f"build printed {report.getvalue()!r} about the fixture it left unwritten")
         print("self-test passed: a connect.json without a recorded length reports none as the lengths")
+
+
+def _self_test_build_needs_cargo_before_writing() -> None:
+    """A fixture write over a stamped capture on a host without cargo stops before it writes a file."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        capture = _inference_capture(root / "capture")
+        no_cargo = root / "bin"
+        no_cargo.mkdir()
+        saved_path = os.environ.get("PATH")
+        os.environ["PATH"] = str(no_cargo)
+        try:
+            build(capture, root / "strict", resign=True)
+        except SystemExit as e:
+            if str(e) != "cargo is needed to re-sign the redacted bodies":
+                raise AssertionError(f"the build refused for the wrong reason: {e}") from e
+            written = _written_files(root / "strict")
+            if written:
+                raise AssertionError(f"the build wrote {written} before it stopped on the missing cargo")
+            print("self-test passed: build stops on a missing cargo before it writes")
+        else:
+            raise AssertionError("the build wrote stamped bodies with no cargo to re-sign them")
+        finally:
+            if saved_path is None:
+                del os.environ["PATH"]
+            else:
+                os.environ["PATH"] = saved_path
 
 
 def _control_entry(seq: int, request_line: str, body: str = "") -> dict:
