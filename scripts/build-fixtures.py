@@ -251,6 +251,10 @@ def build(src: pathlib.Path, out: pathlib.Path, resign: bool = True, control: pa
     `check()` builds with `resign` off, since its comparison masks the digits and `check_hashes` grades the raw
     bodies' own.
     """
+    # A fixture write targets the committed tree, so a mistyped directory stops the build before it rewrites the
+    # inference plane.
+    if control is not None and not control.is_dir():
+        raise SystemExit(f"{control} is not a directory of control recordings")
     (out / "responses").mkdir(parents=True, exist_ok=True)
     cm = json.load(open(src / "clean_modes.json"))
     # Selected by request line rather than by index: a capture that interleaves its HEAD /api/hello probes
@@ -939,12 +943,16 @@ def _self_test_build_reads_control() -> None:
             raise AssertionError(f"the build given another control directory wrote {other}")
         print("self-test passed: build reads the control directory it is given in place of the capture's")
 
+        # The write targets the committed tree, so a mistyped --control must stop the build before its first write.
         try:
             build(src, root / "missing", resign=False, control=root / "absent")
         except SystemExit as e:
             if str(root / "absent") not in str(e):
                 raise AssertionError(f"the build refused for the wrong reason: {e}") from e
-            print("self-test passed: build refuses a control directory that does not exist")
+            if (root / "missing").exists():
+                written = sorted(p.name for p in (root / "missing").rglob("*"))
+                raise AssertionError(f"the build wrote {written} before it refused the control directory")
+            print("self-test passed: build refuses a control directory that does not exist before it writes")
         else:
             raise AssertionError("the build went on with a control directory that does not exist")
 
