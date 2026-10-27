@@ -52,6 +52,8 @@ login_phase() { # $1=variant dir $2=1 to leave the non-essential-traffic flag ou
   local cfg="$STATE/cfg-$phase"
   rm -rf "$cfg"
   mkdir -p "$cfg"
+  # The driver writes the URL file only once it has read a URL, so an earlier run's would sit beside this run's screen.
+  rm -f "$dir/$phase-url.txt" "$dir/$phase-screen.txt"
   ALLOW_NONESSENTIAL_TRAFFIC=$allow client_env "$cfg"
   echo "=== $phase ==="
   start_control_receiver "$dir/$phase.json" "$CLEAN_DURATION" "$OUT/certs" "$RESPONSES"
@@ -107,6 +109,9 @@ capture_variant() { # $1=variant dir name $2=1 to leave the non-essential-traffi
   local dir="$OUT/$1" allow=$2
   echo "--- $1 ---"
   mkdir -p "$dir"
+  # A re-run into the same directory writes no phase file for a phase it skips or whose receiver fails to start, and
+  # the builder would grade the earlier run's file in its place.
+  rm -f "$dir/login-claude.json" "$dir/login-console.json" "$dir/refresh.json"
   start_receiver http_raw.py "$HTTP_PORT" "$dir/inference" "$CLEAN_DURATION"
   login_phase "$dir" "$allow" claude
   login_phase "$dir" "$allow" console

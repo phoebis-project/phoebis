@@ -392,6 +392,8 @@ out=$(env -u ANTHROPIC_API_KEY -u CAPTURE_BASELINE CLAUDE_CODE_OAUTH_TOKEN=sk-an
 # with its screen file, and the capture goes on to the next phase. The refresh phase then finds no credentials to
 # expire and is skipped with a note. The client waits before it exits so the driver reads the screen before the
 # terminal closes, and it exits rather than hangs, since a hang would cost the driver's 90-second timeout per variant.
+# The output directory holds an earlier run's refresh recording and authorize URL, which this run neither makes nor
+# keeps, so the builder cannot grade a stale phase file and no URL sits beside a screen it did not come from.
 wrapper="$tmp/unknown-screen-client"
 cat >"$wrapper" <<EOF
 #!/usr/bin/env bash
@@ -404,6 +406,11 @@ exec python3 -I "$stub" "\$@"
 EOF
 chmod +x "$wrapper"
 gave_up=$(realpath -m "$tmp/gave-up")
+for variant in control control-unflagged; do
+  mkdir -p "$gave_up/$variant"
+  echo '[]' >"$gave_up/$variant/refresh.json"
+  echo 'https://claude.com/cai/oauth/authorize?state=stale' >"$gave_up/$variant/login-claude-url.txt"
+done
 status=0
 out=$(capture_control "$wrapper" "$tmp/gave-up" 2>&1) || status=$?
 [[ "$status" -eq 0 ]] || fail "capture-control.sh past a login the driver gave up on exited $status, want 0: $out"
@@ -415,7 +422,9 @@ for variant in control control-unflagged; do
   grep -qF '"request_line": "GET /api/oauth/usage HTTP/1.1"' "$gave_up/$variant/login-console.json" \
     || fail "capture-control.sh ran no login-console in $variant/ after the driver gave up: $out"
   [[ ! -e "$gave_up/$variant/refresh.json" ]] \
-    || fail "capture-control.sh ran a refresh in $variant/ without credentials: $out"
+    || fail "capture-control.sh left a refresh.json in $variant/ from a run without credentials: $out"
+  [[ ! -e "$gave_up/$variant/login-claude-url.txt" ]] \
+    || fail "capture-control.sh kept a stale login-claude-url.txt in $variant/: $out"
 done
 skipped=$(grep -cxF "phase refresh skipped: login-claude left no claudeAiOauth.expiresAt in .credentials.json" \
   <<<"$out") || true
