@@ -2238,7 +2238,7 @@ fn stamped(suffix: &str, resumed: bool) -> Vec<u8> {
     phoebis_cch::sign(text.as_bytes()).expect("the fixture signs")
 }
 
-/// Sends `native`, asserts its `400` `client_drift` refusal of `kind` before any account is tried, with the
+/// Sends `native`, asserts its `403` `client_drift` refusal of `kind` before any account is tried, with the
 /// decision's reason and nothing dialled, and answers the client's message with the drift warning's line.
 async fn drift_refusal(native: &[u8], kind: &str) -> (String, String) {
     let captured = Captured::default();
@@ -2263,7 +2263,7 @@ async fn drift_refusal(native: &[u8], kind: &str) -> (String, String) {
                 .get("x-phoebis-error-code")
                 .and_then(|v| v.to_str().ok())
         ),
-        (StatusCode::BAD_REQUEST, Some("client_drift"))
+        (StatusCode::FORBIDDEN, Some("client_drift"))
     );
     let o = outcome(&resp);
     assert_eq!(

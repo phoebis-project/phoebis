@@ -252,7 +252,7 @@ key ([Refusal codes](client.md#refusal-codes)), and the answer carries `x-should
 client's own claim, read off a user agent the client sends, so the gate is a routing rule and not authentication: the
 contract behind it holds every admitted request to what Claude Code sends. A Claude Code request whose `claude-cli/`
 version is not spelled as the client spells one, or that lacks the headers and the body members the router reads, is
-refused `400` `client_contract` before any account is chosen, the client page naming them ([The required
+refused `403` `client_contract` before any account is chosen, the client page naming them ([The required
 set](client.md#the-required-set)).
 
 With the pool's `auto_mode_server` on, or a key's override on, the upstream reviews a Claude Code session's tool uses on

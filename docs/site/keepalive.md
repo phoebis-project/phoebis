@@ -355,6 +355,10 @@ a ledger that stays behind never pauses the recipe. The entry's expiry and the c
 the entry expires, the recipe ends under `expired`, as under any other hold, and a ceiling that runs out first ends it
 under its own reason.
 
+A probe the router refused with `403 client_contract` or `403 client_drift` (see [Refusal
+codes](client.md#refusal-codes)) pauses under `unsupported_probe`: the router refused the request the probe replays, not
+its credential, and any other `401` or `403` pauses the recipe under `probe_authentication_error`.
+
 ### The wasted probes
 
 A wasted probe settles on its own with one of nine reasons: when the recipe stops with a probe unanswered (at the idle

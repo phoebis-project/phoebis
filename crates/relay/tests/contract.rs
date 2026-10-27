@@ -143,10 +143,10 @@ fn probe_of(h: &Harness) -> Probe {
     }
 }
 
-/// The contract's answer for `item`: a `400` the client is told not to retry, its message naming `name` with no
+/// The contract's answer for `item`: a `403` the client is told not to retry, its message naming `name` with no
 /// semicolon, the item's word on the completion, and nothing sent upstream.
 fn assert_refused_for(answer: &Answer, up: &FakeUpstream, item: &str, name: &str) {
-    assert_eq!(answer.status, 400, "{item}");
+    assert_eq!(answer.status, 403, "{item}");
     assert_eq!(
         answer.headers["x-phoebis-error-code"], "client_contract",
         "{item}"
@@ -154,7 +154,7 @@ fn assert_refused_for(answer: &Answer, up: &FakeUpstream, item: &str, name: &str
     assert_eq!(answer.headers["x-should-retry"], "false", "{item}");
     assert!(answer.headers.get("retry-after").is_none(), "{item}");
     let body: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-    assert_eq!(body["error"]["type"], "invalid_request_error", "{item}");
+    assert_eq!(body["error"]["type"], "permission_error", "{item}");
     let message = answer.message();
     assert!(
         message.contains(name) && !message.contains(';'),
@@ -247,7 +247,7 @@ async fn the_pair_without_a_class_header_marks_nothing() {
             client.request_class.as_deref(),
             client.classifier
         ),
-        (400, None, None)
+        (403, None, None)
     );
     assert_refused_for(&answer, &up, "class_header", "x-claude-code-request-class");
     up.shutdown().await;
@@ -422,7 +422,7 @@ async fn a_request_whose_user_id_lacks_the_account_uuid_member_is_refused_for_th
             shaped(FixtureKind::OauthFirstParty, &body, Some("main")),
         )
         .await;
-        assert_eq!(answer.status, 400, "{kind:?}");
+        assert_eq!(answer.status, 403, "{kind:?}");
         assert_refused_for(&answer, &up, "metadata_user_id", "account_uuid");
         up.shutdown().await;
     }

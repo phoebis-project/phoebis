@@ -340,7 +340,7 @@ async fn a_count_on_a_pinned_session_leaves_the_pins_refresh_its_ttl_and_its_war
     up.shutdown().await;
 }
 
-/// The contract's answer to a count for `item`: a `400` whose message names `name` with no semicolon, nothing sent
+/// The contract's answer to a count for `item`: a `403` whose message names `name` with no semicolon, nothing sent
 /// upstream, and the router's record of a count refused for the item.
 async fn assert_count_refused_for(
     resp: axum::http::Response<axum::body::Body>,
@@ -349,7 +349,7 @@ async fn assert_count_refused_for(
     item: &str,
     name: &str,
 ) {
-    assert_eq!(resp.status(), 400, "{item}");
+    assert_eq!(resp.status(), 403, "{item}");
     assert_eq!(
         resp.headers()["x-phoebis-error-code"],
         "client_contract",

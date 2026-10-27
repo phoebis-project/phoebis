@@ -1377,6 +1377,65 @@ async fn probe_outcomes_are_classified() {
     );
 }
 
+/// The relay answers a probe without the session header with its 403 `client_contract`, which refuses the probe's
+/// own request shape rather than the credential, so the recipe pauses under `UnsupportedProbe` and not under the
+/// authentication reason the status alone would pick.
+#[tokio::test]
+async fn a_probe_the_relay_refuses_for_the_client_contract_pauses_as_an_unsupported_probe() {
+    let mut r = rig(RigSpec::default()).await;
+    let phoebis_bus::Event::RequestObserved(mut observed) = r.observed("contract", "main", BODY)
+    else {
+        unreachable!()
+    };
+    observed
+        .headers
+        .retain(|(name, _)| name != "x-claude-code-session-id");
+    r.engine
+        .observe(phoebis_bus::Event::RequestObserved(observed));
+    r.engine.observe(r.selected("contract", "a"));
+    r.engine.observe(read_evidence("contract", 2_000));
+    r.advance(270_000);
+    r.step().await;
+    assert!(
+        r.up.requests().is_empty(),
+        "the relay refused the probe before any account"
+    );
+    let status = r.status("main");
+    assert_eq!(
+        (status.paused, status.reason, status.next_probe_at),
+        (true, Reason::UnsupportedProbe, None),
+        "{status:?}"
+    );
+    let probe = wait_for(std::time::Duration::from_secs(5), || {
+        let (rows, _) =
+            r.db.read_blocking(|c| {
+                phoebis_ledger::list_requests(
+                    c,
+                    &phoebis_ledger::RequestFilter {
+                        include_probes: true,
+                        ..Default::default()
+                    },
+                    &phoebis_ledger::LiveKeys::default(),
+                    None,
+                    10,
+                )
+            })
+            .unwrap();
+        rows.into_iter()
+            .map(|(row, _)| row)
+            .find(|row| row.kind == "probe")
+    })
+    .await;
+    assert_eq!(
+        (
+            probe.status,
+            probe.error_code.as_deref(),
+            probe.client_contract.as_deref()
+        ),
+        (Some(403), Some("client_contract"), Some("session_header"))
+    );
+}
+
 /// `a` alone at a monthly budget of 5.0, with 5.01 of priced spend the router's view of `a` reads, so the next tick's
 /// gate holds a probe pinned to `a` under `budget`.
 async fn over_budget(r: &Rig) {

@@ -475,7 +475,7 @@ async fn a_carried_prompt_id_of_any_length_travels_as_sent_and_a_later_turn_with
 /// The answer to a body that carries no attribution line under a `claude-cli/` agent: the contract's refusal for
 /// the line, naming its slot, with nothing sent upstream.
 async fn assert_refused_for_the_line(resp: axum::http::Response<Body>, up: &FakeUpstream) {
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 403);
     assert_eq!(resp.headers()["x-phoebis-error-code"], "client_contract");
     assert_eq!(
         outcome(&resp).client_contract.as_deref(),
@@ -491,10 +491,10 @@ async fn assert_refused_for_the_line(resp: axum::http::Response<Body>, up: &Fake
     assert!(up.requests().is_empty(), "nothing was sent upstream");
 }
 
-/// The contract's answer to a `claude-cli/` version spelled any other way than the client's: a `400` the client is
+/// The contract's answer to a `claude-cli/` version spelled any other way than the client's: a `403` the client is
 /// told not to retry, its message naming the User-Agent header with no semicolon, and nothing sent upstream.
 async fn assert_refused_for_the_version(resp: axum::http::Response<Body>, up: &FakeUpstream) {
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 403);
     assert_eq!(resp.headers()["x-phoebis-error-code"], "client_contract");
     assert_eq!(resp.headers()["x-should-retry"], "false");
     assert_eq!(
@@ -503,7 +503,7 @@ async fn assert_refused_for_the_version(resp: axum::http::Response<Body>, up: &F
     );
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let refusal: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(refusal["error"]["type"], "invalid_request_error");
+    assert_eq!(refusal["error"]["type"], "permission_error");
     let message = refusal["error"]["message"].as_str().unwrap();
     assert!(
         message.contains("User-Agent") && !message.contains(';'),

@@ -1226,7 +1226,7 @@ async fn a_contract_refusal_lists_its_item() {
             Some("desktop"),
             "claude-sonnet-5-5",
             "rejected",
-            400,
+            403,
             "inference",
         )
     };

@@ -517,7 +517,7 @@ async fn a_suffix_over_a_supplementary_character_prompt_relays() {
 }
 
 /// A first-party body whose billing stamp this build cannot reproduce never reaches the upstream: the client
-/// moved past the pinned profile, the caller gets a 400 that names which check refused it, and the outcome
+/// moved past the pinned profile, the caller gets a 403 that names which check refused it, and the outcome
 /// carries it for the ledger.
 async fn a_drifted_stamp_is_refused(drifted: Vec<u8>, kind: &str) {
     let up = FakeUpstream::start(vec![Rule {
@@ -538,7 +538,7 @@ async fn a_drifted_stamp_is_refused(drifted: Vec<u8>, kind: &str) {
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     let outcome = resp
         .extensions()
         .get::<RelayOutcome>()
@@ -554,7 +554,7 @@ async fn a_drifted_stamp_is_refused(drifted: Vec<u8>, kind: &str) {
     );
     let refusal: serde_json::Value =
         serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert_eq!(refusal["error"]["type"], "invalid_request_error");
+    assert_eq!(refusal["error"]["type"], "permission_error");
     assert!(
         up.requests().is_empty(),
         "a drifted body is not sent upstream in any form"
@@ -590,7 +590,7 @@ async fn a_body_whose_user_id_lacks_the_account_uuid_member_is_refused_for_the_c
         ))
         .unwrap();
     let resp = app.oneshot(request).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     assert_eq!(
         resp.headers()
             .get("x-phoebis-error-code")
@@ -613,7 +613,7 @@ async fn a_body_whose_user_id_lacks_the_account_uuid_member_is_refused_for_the_c
     );
     let refusal: serde_json::Value =
         serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert_eq!(refusal["error"]["type"], "invalid_request_error");
+    assert_eq!(refusal["error"]["type"], "permission_error");
     let message = refusal["error"]["message"].as_str().unwrap();
     assert!(
         message.contains("account_uuid")
@@ -653,7 +653,7 @@ async fn an_oauth_count_tokens_body_without_the_session_header_is_refused_for_th
         ))
         .unwrap();
     let resp = app.oneshot(request).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     assert_eq!(
         resp.headers()
             .get("x-phoebis-error-code")

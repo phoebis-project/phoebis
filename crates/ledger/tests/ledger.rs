@@ -959,7 +959,7 @@ async fn a_version_suffix_drift_refusal_is_recorded_on_the_request_row() {
         .oneshot(request_with_native_body(drifted, KEY, "s1"))
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 403);
     let id = request_id(&resp);
     let _ = resp.into_body().collect().await.unwrap();
     let (row, attempts) = ledgered(&h, &id).await;
@@ -4822,7 +4822,7 @@ async fn a_contract_refusal_round_trips_its_item() {
     };
     h.bus.publish(BusEvent::RequestComplete(RequestComplete {
         outcome: BusOutcome::Rejected,
-        status: 400,
+        status: 403,
         error_code: Some("client_contract".into()),
         client_contract: Some("class_header".into()),
         ..refused

@@ -307,7 +307,7 @@ async fn a_claude_code_inference_request_without_the_class_header_is_refused_for
     let mut request = request_to("/v1/messages");
     request.headers_mut().remove("x-claude-code-request-class");
     let response = h.app.clone().oneshot(request).await.unwrap();
-    assert_eq!(response.status(), 400);
+    assert_eq!(response.status(), 403);
     assert_eq!(
         response.headers()["x-phoebis-error-code"],
         "client_contract"

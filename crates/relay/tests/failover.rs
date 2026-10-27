@@ -3441,7 +3441,7 @@ async fn a_drifted_stamp_is_refused_at_admission_before_any_account_is_selected(
                 resp.status().as_u16(),
                 resp.headers()["x-phoebis-error-code"].to_str().unwrap()
             ),
-            (400, "client_drift"),
+            (403, "client_drift"),
             "{trigger}"
         );
         let o = outcome(&resp);
@@ -3522,7 +3522,7 @@ async fn a_drift_refusal_emits_one_decision_with_the_client_trigger_and_version(
             ))
             .await
             .unwrap();
-        assert_eq!(resp.status().as_u16(), 400, "{trigger}");
+        assert_eq!(resp.status().as_u16(), 403, "{trigger}");
         let id = outcome(&resp).request_id;
         // The record is try-sent ahead of the answer and lands on the loop's next turn.
         let mut seen = router_events_until(&mut events, |event| {

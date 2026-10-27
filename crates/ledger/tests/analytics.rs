@@ -7962,7 +7962,7 @@ fn plant_asked_and_refused(db: &LedgerDb) {
     for request in [
         refused(0, "s1", 403, "guardrail_blocked"),
         refused(1, "s1", 403, "guardrail_blocked"),
-        refused(2, "s2", 400, "client_contract"),
+        refused(2, "s2", 403, "client_contract"),
     ] {
         db.insert_request(&request, &[], None).unwrap();
     }

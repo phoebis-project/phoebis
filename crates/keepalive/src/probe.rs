@@ -939,6 +939,12 @@ impl Inner {
             ),
             _ if exhausted => (Reason::ProbePoolExhausted, RetryWait::Step),
             500..=599 => (Reason::RetryableProbeError, RetryWait::Step),
+            // Under these codes the relay's 403 refuses the probe's own request shape, not the credential.
+            _ if matches!(error_code, Some("client_contract") | Some("client_drift")) => {
+                self.set_reason(key, agent_id, Reason::UnsupportedProbe);
+                self.pause(key, agent_id);
+                return;
+            }
             401 | 403 => {
                 self.set_reason(key, agent_id, Reason::ProbeAuthenticationError);
                 self.pause(key, agent_id);
@@ -1285,6 +1291,37 @@ mod tests {
             crate::view::recipe_state(agent.reason, agent.paused),
             crate::view::RecipeState::Held
         );
+    }
+
+    /// The relay answers its client refusals with a 403 that refuses the probe's own request shape, so the code and
+    /// not the status picks the reason, and a 403 under any other code keeps the authentication reason.
+    #[test]
+    fn a_403_client_refusal_pauses_as_an_unsupported_probe_and_another_403_as_an_authentication_error(
+    ) {
+        for (code, reason) in [
+            ("auth_unknown", Reason::ProbeAuthenticationError),
+            ("client_contract", Reason::UnsupportedProbe),
+            ("client_drift", Reason::UnsupportedProbe),
+        ] {
+            let (mut inner, key) = one_agent_inner();
+            inner.probe_error(
+                &key,
+                "main",
+                403,
+                Some(code),
+                None,
+                None,
+                false,
+                false,
+                1_000,
+            );
+            let agent = &inner.sessions[&key].agents["main"];
+            assert_eq!(
+                (agent.reason, agent.paused, agent.retry_at),
+                (reason, true, None),
+                "{code}"
+            );
+        }
     }
 
     #[test]

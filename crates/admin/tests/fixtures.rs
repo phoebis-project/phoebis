@@ -1281,7 +1281,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 refused_at,
                 "desktop",
                 "s2",
-                400,
+                403,
                 "rejected",
             )
         },

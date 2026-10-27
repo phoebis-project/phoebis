@@ -27,7 +27,7 @@ pub(crate) struct Failure {
     /// The `Retry-After` the answer carries, in seconds.
     pub retry_after: Option<u64>,
     /// Writes `x-should-retry: false`, so a client that retries its 4xx answers resends neither a refused
-    /// credential nor what a guardrail or the contract refused.
+    /// credential nor what a guardrail, the contract or the drift check refused.
     pub no_retry: bool,
 }
 
@@ -330,9 +330,14 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             retry_after: None,
             no_retry: false,
         },
+        // The client refusals answer the 403 `permission_error` Claude Code reads as final. From 2.1.310 on, the
+        // client heals a 400 whose message it does not recognize: it sends the request again without one feature
+        // after another and keeps each feature off for the rest of the conversation, so one refusal cost the
+        // captured client four posts. The gateway protocol the client embeds gives 403 to a caller that is
+        // authenticated but not allowed, and 400 to a malformed body, which the body refusals keep.
         RelayError::ClientContract { item } => Failure {
-            status: StatusCode::BAD_REQUEST,
-            error_type: "invalid_request_error",
+            status: StatusCode::FORBIDDEN,
+            error_type: "permission_error",
             code: "client_contract",
             message: Cow::Borrowed(contract_message(item)),
             retry_after: None,
@@ -348,35 +353,35 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             kind: "version_suffix",
             resumed: true,
         } => Failure {
-            status: StatusCode::BAD_REQUEST,
-            error_type: "invalid_request_error",
+            status: StatusCode::FORBIDDEN,
+            error_type: "permission_error",
             code: "client_drift",
             message: Cow::Borrowed("the conversation was resumed, and the client's version suffix does not reproduce \
                       from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this \
                       client version"),
             retry_after: None,
-            no_retry: false,
+            no_retry: true,
         },
         RelayError::ClientDrift {
             kind: "version_suffix",
             resumed: false,
         } => Failure {
-            status: StatusCode::BAD_REQUEST,
-            error_type: "invalid_request_error",
+            status: StatusCode::FORBIDDEN,
+            error_type: "permission_error",
             code: "client_drift",
             message: Cow::Borrowed("the client's version suffix does not reproduce from the prompt and the user agent. \
                       Re-pin the router to this client version"),
             retry_after: None,
-            no_retry: false,
+            no_retry: true,
         },
         RelayError::ClientDrift { .. } => Failure {
-            status: StatusCode::BAD_REQUEST,
-            error_type: "invalid_request_error",
+            status: StatusCode::FORBIDDEN,
+            error_type: "permission_error",
             code: "client_drift",
             message: Cow::Borrowed("the client's billing hash does not match the pinned profile. \
                       Re-pin the router to this client version"),
             retry_after: None,
-            no_retry: false,
+            no_retry: true,
         },
         RelayError::ClientRefused => Failure {
             status: StatusCode::FORBIDDEN,
@@ -604,8 +609,8 @@ mod tests {
                     failure.no_retry
                 ),
                 (
-                    StatusCode::BAD_REQUEST,
-                    "invalid_request_error",
+                    StatusCode::FORBIDDEN,
+                    "permission_error",
                     "client_contract",
                     None,
                     true
@@ -750,12 +755,40 @@ mod tests {
         );
     }
 
-    /// The arms that refuse by rule answer the 403 `permission_error` the client reads as final, each under its
-    /// own code, and the block and the gate both ask the client not to resend the request.
+    /// The client refusals, the gate and the guardrail block answer the 403 `permission_error` the client reads as
+    /// final, each under its own code, and each asks the client not to resend the request. None of their messages
+    /// holds a phrase the client reads in a 4xx as a cue to act on its own.
     #[test]
-    fn each_403_arm_answers_permission_error_under_its_own_code_and_the_block_and_the_gate_ask_for_no_retry(
-    ) {
+    fn each_403_arm_answers_permission_error_under_its_own_code_and_asks_for_no_retry() {
+        use crate::identity::ITEM_CLIENT_VERSION;
         for (error, code) in [
+            (
+                RelayError::ClientContract {
+                    item: ITEM_CLIENT_VERSION,
+                },
+                "client_contract",
+            ),
+            (
+                RelayError::ClientDrift {
+                    kind: "hash",
+                    resumed: false,
+                },
+                "client_drift",
+            ),
+            (
+                RelayError::ClientDrift {
+                    kind: "version_suffix",
+                    resumed: false,
+                },
+                "client_drift",
+            ),
+            (
+                RelayError::ClientDrift {
+                    kind: "version_suffix",
+                    resumed: true,
+                },
+                "client_drift",
+            ),
             (RelayError::ClientRefused, "client_not_allowed"),
             (
                 RelayError::GuardrailBlocked {
@@ -775,12 +808,23 @@ mod tests {
                 (StatusCode::FORBIDDEN, "permission_error", code, true),
                 "{error:?}"
             );
+            for phrase in [
+                "prompt is too long",
+                "model:",
+                "OAuth token has been revoked",
+            ] {
+                assert!(
+                    !failure.message.contains(phrase),
+                    "{error:?}: the client acts on {phrase:?} in a 4xx: {}",
+                    failure.message
+                );
+            }
         }
     }
 
-    /// A client that retries its 4xx answers would send a blocked request, one the gate or the contract refused, or
-    /// a refused credential again unchanged, and no other refusal asks the client to stop, so the header rides
-    /// those answers alone.
+    /// A client that retries its 4xx answers would send a blocked request, one the gate, the contract or the drift
+    /// check refused, or a refused credential again unchanged, and no other refusal asks the client to stop, so the
+    /// header rides those answers alone.
     #[test]
     fn no_retry_writes_the_header_and_no_other_arm_does() {
         let errors = [
@@ -792,18 +836,6 @@ mod tests {
             RelayError::BodyTooDeep,
             RelayError::BodyTooLarge,
             RelayError::Cch(phoebis_cch::CchError::Json(0)),
-            RelayError::ClientDrift {
-                kind: "hash",
-                resumed: false,
-            },
-            RelayError::ClientDrift {
-                kind: "version_suffix",
-                resumed: false,
-            },
-            RelayError::ClientDrift {
-                kind: "version_suffix",
-                resumed: true,
-            },
             RelayError::InvalidModel,
             RelayError::LedgerBehind,
             RelayError::NoModel,
@@ -855,6 +887,22 @@ mod tests {
         .response("r-1");
         assert_eq!(contract.headers()[SHOULD_RETRY_HEADER], "false");
         assert_eq!(contract.headers()[ERROR_CODE_HEADER], "client_contract");
+        for (kind, resumed) in [
+            ("hash", false),
+            ("version_suffix", false),
+            ("version_suffix", true),
+        ] {
+            let drift = relay_failure(&RelayError::ClientDrift { kind, resumed }).response("r-1");
+            assert_eq!(
+                drift
+                    .headers()
+                    .get(SHOULD_RETRY_HEADER)
+                    .and_then(|value| value.to_str().ok()),
+                Some("false"),
+                "{kind} resumed {resumed}"
+            );
+            assert_eq!(drift.headers()[ERROR_CODE_HEADER], "client_drift");
+        }
         for credential in [
             auth_failure(&AuthError::Ambiguous),
             auth_failure(&AuthError::Malformed),

@@ -151,14 +151,14 @@ the client sends the reduced shape, and the router restores toward `api.anthropi
 `cch` billing hash as the placeholder `cch=00000`, `cc_prev_req`, `cc_prompt_id` and the `x-client-request-id` header,
 each only when absent and under the rules below, at the place the client's own field order gives it. A present field is
 never rewritten. A Claude Code request whose `system` is an array and carries no line, as under
-`CLAUDE_CODE_ATTRIBUTION_HEADER=0`, is refused `400` `client_contract` before the restoration reads it ([The required
+`CLAUDE_CODE_ATTRIBUTION_HEADER=0`, is refused `403` `client_contract` before the restoration reads it ([The required
 set](client.md#the-required-set)), and the router still writes no line the client did not, so every restoration carries
 the client's own stamp.
 
 The restoration applies to an inference request whose body carries the line, and the version the contract admitted lands
 in it: `claude-cli/` followed by a version the client itself would spell, digits and dots with at most one `-` and a
 prerelease suffix of letters, digits, dots and hyphens, as in `claude-cli/2.1.269 (external, cli)`, any other spelling
-refused `400` `client_contract` under the item `client_version` ([The required set](client.md#the-required-set)). A
+refused `403` `client_contract` under the item `client_version` ([The required set](client.md#the-required-set)). A
 request without the class header is refused before the restoration reads it, so the restoration reads the class from
 every request and falls back on nothing. A token count has no line to fill, and a probe replays a request as the client
 sent it.
@@ -192,8 +192,9 @@ client and model checks and before any account is chosen, so the refusal names n
 The contract check runs before both, so a body without the line is a contract refusal and never a drift, and a request
 that fails the contract and a drift check is refused for the contract ([The required set](client.md#the-required-set)).
 
-Either refuses the request as `400` `invalid_request_error` with the code `client_drift`, the header
-`x-phoebis-error-code: client_drift` and the message of its kind ([refusal codes](client.md#refusal-codes)):
+Either refuses the request as `403` `permission_error` with the code `client_drift`, the headers
+`x-phoebis-error-code: client_drift` and `x-should-retry: false`, and the message of its kind ([refusal
+codes](client.md#refusal-codes)):
 
 | Drift kind | Message |
 | --- | --- |
