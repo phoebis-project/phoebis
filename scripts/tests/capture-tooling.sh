@@ -368,6 +368,11 @@ status=0
 out=$(capture_control "$stub" "$tmp/out" 2>&1) || status=$?
 [[ "$status" -eq 0 ]] || fail "capture-control.sh against the stub exited $status, want 0: $out"
 [[ -s "$out_dir/certs/ca.pem" ]] || fail "capture-control.sh wrote no certs/ca.pem: $out"
+# A capture directory may be committed, and a private key in it trips secret scanners, while the CA's key has no use
+# once the run is over.
+for key in ca.key leaf.key; do
+  [[ ! -e "$out_dir/certs/$key" ]] || fail "capture-control.sh left certs/$key behind: $out"
+done
 for variant in control control-unflagged; do
   for phase in login-claude login-console refresh; do
     [[ -s "$out_dir/$variant/$phase.json" ]] || fail "capture-control.sh wrote no $variant/$phase.json: $out"
