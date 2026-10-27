@@ -29,8 +29,8 @@
 #      print-mode run starts with the refresh grant. The client sends every request through the proxy, the inference
 #      post included, so NO_PROXY=127.0.0.1 sends that post to the inference receiver directly. The phase is skipped
 #      with a note when login-claude left no expiresAt.
-# A login whose driver gives up (exit 2, on a screen it does not know or a client that exited) is logged with its
-# screen file and the next phase runs. Any other failure of the driver stops the capture.
+# A login whose driver gives up (exit 2, on a screen it does not know, a code the client refuses, or a client that
+# exited) is logged with its screen file and the next phase runs. Any other failure of the driver stops the capture.
 #
 # With CAPTURE_BASELINE naming a capture directory of scripts/capture-baseline.sh (one holding clean_modes.json), the
 # script ends with `python3 -I scripts/build-fixtures.py --check --control <variant-dir> "$CAPTURE_BASELINE"` for each
@@ -41,7 +41,7 @@
 # verbatim, the authorization header and the token grants included, which is safe only while the client holds
 # lib.sh's dummy credentials and the canned tokens the receiver hands out. The recordings, URLs and screens are raw
 # capture output and stay out of the repository. scripts/build-fixtures.py puts placeholders in for the tokens and
-# the code grant's code, state and code_verifier before it compares a recording or writes a fixture from one.
+# the code grant's code, code_verifier and state before it compares a recording or writes a fixture from one.
 
 source "$(dirname "$0")/capture/lib.sh"
 
