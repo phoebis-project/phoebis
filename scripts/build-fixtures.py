@@ -124,7 +124,7 @@ def redact(line: str) -> str:
     line = re.sub(r"x-api-key: sk-ant-api03-\S+", "x-api-key: sk-ant-api03-PLACEHOLDER", line)
     line = re.sub(r"^Host: 127\.0\.0\.1:\d+$", "Host: api.anthropic.com", line)
     # The client spells the session and request names in different cases, so these match in any case and keep their
-    # spelling.
+    # spelling. The prompt id name matches the same way to follow its neighbors.
     line = re.sub(r"(?i)^(x-claude-code-prompt-id:\s*)\S+$", rf"\g<1>{PROMPT_ID_PLACEHOLDER}", line)
     line = re.sub(r"(?i)^(x-claude-code-session-id:\s*)\S+$", rf"\g<1>{SESSION_ID_PLACEHOLDER}", line)
     line = re.sub(r"(?i)^(x-client-request-id:\s*)\S+$", rf"\g<1>{REQUEST_ID_PLACEHOLDER}", line)
@@ -360,7 +360,7 @@ def build(
         if inf is not None:
             (out / "hello_inference.hex").write_text(inf["raw_hex"] + "\n")
         else:
-            lengths = ", ".join(str(n) for n in sorted({h["hello_len"] for h in conn if "hello_len" in h}))
+            lengths = ", ".join(str(n) for n in sorted({h["hello_len"] for h in conn if "hello_len" in h})) or "none"
             print(
                 f"hello_inference.hex: connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello "
                 f"(recorded lengths: {lengths})"
@@ -460,6 +460,7 @@ def _self_test() -> None:
     _self_test_check_reports_resends()
     _self_test_check_reports_probe_and_hello()
     _self_test_build_stops_without_client_hello()
+    _self_test_build_reports_no_recorded_length()
     _self_test_capture_partition()
     _self_test_redact_body()
     _self_test_redact_head()
@@ -907,8 +908,8 @@ def _self_test_check_hashes_placeholder() -> None:
 
 
 def _self_test_check_reports_resends() -> None:
-    """A capture whose first run the client re-sent grades on that run's first post, and the report names the run's
-    fixture and its post count."""
+    """A capture whose first run the client re-sent grades with status 0, and the report names the run's fixture and
+    its post count."""
     with tempfile.TemporaryDirectory() as tmp:
         capture = _inference_capture(pathlib.Path(tmp) / "capture")
         entries = json.loads((capture / "clean_modes.json").read_text())
@@ -923,7 +924,7 @@ def _self_test_check_reports_resends() -> None:
         wanted = "re-sent after the receiver's answer:\n  body_oauth.json: 2 posts, the first kept\n"
         if wanted not in report.getvalue():
             raise AssertionError(f"check did not report the re-sent run: {report.getvalue()!r}")
-        print("self-test passed: check grades a re-sent run on its first post and reports the re-send")
+        print("self-test passed: check grades a capture holding a re-sent run with status 0 and reports the re-send")
 
 
 def _self_test_check_reports_probe_and_hello() -> None:
@@ -986,6 +987,25 @@ def _self_test_build_stops_without_client_hello() -> None:
             print("self-test passed: build stops on a capture without the inference ClientHello before it writes")
         else:
             raise AssertionError("the build wrote fixtures from a capture without the inference ClientHello")
+
+
+def _self_test_build_reports_no_recorded_length() -> None:
+    """A non-strict build over a connect.json whose records carry no length, here a plain-http connection's error
+    entry in hello_lib.parse_hello's shape, prints none as the recorded lengths."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        capture = _inference_capture(root / "capture")
+        (capture / "connect.json").write_text(json.dumps([{"error": "not-tls", "head": b"POST /v1/message".hex()}]))
+        report = io.StringIO()
+        with contextlib.redirect_stdout(report):
+            build(capture, root / "fresh", resign=False, strict=False)
+        line = (
+            f"hello_inference.hex: connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello "
+            "(recorded lengths: none)"
+        )
+        if line not in report.getvalue().splitlines():
+            raise AssertionError(f"build printed no {line!r}: {report.getvalue()!r}")
+        print("self-test passed: a connect.json without a recorded length prints none as the lengths")
 
 
 def _control_entry(seq: int, request_line: str, body: str = "") -> dict:
@@ -1332,6 +1352,13 @@ def _self_test_normalize_body() -> None:
     if normalize_head(reduced_head) == normalize_head(restored_head):
         raise AssertionError("normalize_head dropped x-client-request-id with THROUGH_ROUTER off")
     print("self-test passed: THROUGH_ROUTER treats a restored field as absent, not drift")
+
+    prompt_head = b"POST /v1/messages HTTP/1.1\r\nx-claude-code-prompt-id: " + _TEST_PROMPT_ID + b"\r\n\r\n"
+    masked_prompt = normalize_head(prompt_head)
+    wanted = f"\r\nx-claude-code-prompt-id: {PROMPT_ID_PLACEHOLDER}\r\n".encode()
+    if _TEST_PROMPT_ID in masked_prompt or wanted not in masked_prompt:
+        raise AssertionError(f"normalize_head gave {masked_prompt!r} for a head carrying a raw prompt id")
+    print("self-test passed: normalize_head masks x-claude-code-prompt-id")
 
 
 def normalize_head(raw: bytes) -> bytes:
