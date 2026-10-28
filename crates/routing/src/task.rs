@@ -1229,7 +1229,7 @@ impl RouterHandle {
 
     /// A request the relay refused before asking for a selection, recorded as the request's one decision: sends
     /// `Command::RecordRefusal { request, refusal }` through `try_send` and never waits for mailbox room, so the
-    /// 400 toward the client is not delayed by a full router queue. A full or closed mailbox drops the record,
+    /// 403 toward the client is not delayed by a full router queue. A full or closed mailbox drops the record,
     /// counted in `dropped_refusals` beside a warn. The loop's arm builds `DecisionRecord::refused` on its snapshot
     /// and emits the `Decision`.
     pub fn record_refusal(&self, request: RefusedRequest, refusal: RefusalFacts) {

@@ -4187,7 +4187,7 @@ impl Relay {
 
     /// A client-drift refusal with its trigger, the warn that tells the operator which client to re-pin to, and the
     /// refusal's record as the request's one decision. The record is try-sent, so a full router queue drops it
-    /// rather than delaying the 400. A moved client is cured by the re-pin, and a resumed body warns `resume` and
+    /// rather than delaying the 403. A moved client is cured by the re-pin, and a resumed body warns `resume` and
     /// its suffix refusal's words name the resume, so the operator sees the refused conversation was a resumed one.
     #[allow(clippy::too_many_arguments)]
     fn drift_refusal(
