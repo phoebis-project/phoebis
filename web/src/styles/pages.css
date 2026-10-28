@@ -3251,6 +3251,13 @@
   white-space: nowrap;
 }
 
+/* The sort popover's rule parts the keys from the directions. */
+.sort-popover__rule {
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--hairline);
+}
+
 /* The Groups popover's field keeps the box's 8 px inset, as the Custom range popover's fields do. */
 .groups-popover {
   padding: 4px 8px 8px;

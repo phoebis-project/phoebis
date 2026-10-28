@@ -12,11 +12,12 @@ import { CoolingDown } from '@/components/CoolingDown';
 import { FastLane } from '@/components/FastLane';
 import { FilterBar } from '@/components/FilterBar';
 import { MeterRatio } from '@/components/MeterRatio';
+import { SortControl } from '@/components/SortControl';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, Segmented, Select, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, Segmented, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
-import { ACCOUNTS_CODEC, METER_CODEC } from '@/lib/address';
+import { ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, METER_CODEC, sortAddressOf, sortDirOf } from '@/lib/address';
 import { FREE_NOTE, allowanceFigure, allowanceSpan, allowanceSubtitle, allowanceWindows, newestResets, resetDate, resetHover, resetInstant, type AllowanceFigure } from '@/lib/allowance';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
@@ -62,6 +63,7 @@ export function AccountsPage() {
     accounts.reload();
   };
 
+  const dir = sortDirOf(ACCOUNT_SORT_KEYS, filters);
   const list = useMemo(() => {
     const { search, sort, status } = filters;
     const rows = (accounts.data ?? []).filter((a) => {
@@ -71,13 +73,14 @@ export function AccountsPage() {
     });
     const nextReset = (a: Account) => Math.min(...a.windows.flatMap((w) => (w.resetsAt === null ? [] : [Date.parse(w.resetsAt)])).filter((t) => t > now), Number.POSITIVE_INFINITY);
     const usage = (a: Account) => Math.max(0, ...a.windows.map((w) => w.utilization));
+    const byKey = (a: Account, b: Account) => (sort === 'reset' ? nextReset(a) - nextReset(b) : sort === 'usage' ? usage(a) - usage(b) : sort === 'status' ? a.status.localeCompare(b.status) : a.label.localeCompare(b.label));
     return rows.sort((a, b) => {
-      if (sort === 'reset') return nextReset(a) - nextReset(b);
-      if (sort === 'usage') return usage(b) - usage(a);
-      if (sort === 'status') return a.status.localeCompare(b.status);
-      return a.label.localeCompare(b.label);
+      // No reset ahead sorts last under either direction, so the direction flips the dated rows alone.
+      if (sort === 'reset' && (nextReset(a) === Number.POSITIVE_INFINITY) !== (nextReset(b) === Number.POSITIVE_INFINITY)) return nextReset(a) === Number.POSITIVE_INFINITY ? 1 : -1;
+      const order = byKey(a, b);
+      return (dir === 'desc' ? -order : order) || a.label.localeCompare(b.label);
     });
-  }, [accounts.data, filters, now]);
+  }, [accounts.data, dir, filters, now]);
 
   const selected = accounts.data?.find((a) => a.id === accountId) ?? null;
   // The row a confirmed pairing created: the read that lists it lands after the URL names it, so the redirect below
@@ -139,15 +142,7 @@ export function AccountsPage() {
         refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: refresh, paused: dialogOpen ? 'dialog' : barOpen ? 'menu' : null, refreshTitle: 'Reads the list again now' }}
         update={update}
       >
-        <label className="row">
-          <span className="muted">Sort</span>
-          <Select value={filters.sort} onChange={(e) => update({ sort: e.target.value })} aria-label="Sort">
-            <option value="name">Name</option>
-            <option value="reset">Soonest reset</option>
-            <option value="usage">Most used</option>
-            <option value="status">Status</option>
-          </Select>
-        </label>
+        <SortControl keys={ACCOUNT_SORT_KEYS} onChange={(next) => update(sortAddressOf(ACCOUNT_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
         <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setAddOpen(true)}>
           Add account
         </Button>

@@ -8,15 +8,17 @@ a row's hover or selection reads over it.
 
 Every list view (Accounts, Analytics, Guardrails, Keys, Pools, Quota, Requests, the Routing log and Sessions) opens on
 one filter bar, which draws the slots the view has in one order: the range pills, the search, Add filter, the view's own
-controls with its primary action last, and at the right edge the split Refresh button and the count of what the view
-lists. When the window is too narrow for the bar's controls on one line, the trailing ones wrap onto a second row. Add
-filter opens a popover over the view's filters, and each filter in force stands as a chip on a line under the bar. The
-Refresh button's body reads the view again now, and its dropdown sets auto reload to Off, 5 s, 10 s, 30 s or 1 min, 5 s
-when a view opens and off on Requests and the Routing log. Auto reload waits while the tab is hidden, while a drawer, a
-dialog or a menu is open and on an older page, with a muted mark and the cause in the dropdown's hover. The filters, the
-search and the range live in the view's address, so a reload or a shared link keeps them, and the interval stays with
-the open page. An Accounts address that names no account, or names one the router no longer holds, opens the first
-account the router lists among the rows the list shows, or the router's first account where the filters hide every row.
+controls with its primary action last, among them on a view with an order the Sort control, a button reading the key and
+its direction whose popover offers the view's keys and Ascending or Descending, the choice carried in the address, and
+at the right edge the split Refresh button and the count of what the view lists. When the window is too narrow for the
+bar's controls on one line, the trailing ones wrap onto a second row. Add filter opens a popover over the view's
+filters, and each filter in force stands as a chip on a line under the bar. The Refresh button's body reads the view
+again now, and its dropdown sets auto reload to Off, 5 s, 10 s, 30 s or 1 min, 5 s when a view opens and off on Requests
+and the Routing log. Auto reload waits while the tab is hidden, while a drawer, a dialog or a menu is open and on an
+older page, with a muted mark and the cause in the dropdown's hover. The filters, the search and the range live in the
+view's address, so a reload or a shared link keeps them, and the interval stays with the open page. An Accounts address
+that names no account, or names one the router no longer holds, opens the first account the router lists among the rows
+the list shows, or the router's first account where the filters hide every row.
 
 ## The shell
 
@@ -263,20 +265,21 @@ it opened to when it resets, and labeled with the instant it resets. Lanes endin
 ![The Accounts view: the list with the selected account's detail](assets/accounts-dark.png#only-dark)
 
 The bar above the list and the detail offers "Search accounts", Add filter with the Status filter ("All statuses" and
-the six status labels, its chip reading such as "status: Paused"), the Sort select with Name, Soonest reset, Most used
-or Status, and "Add account", and at the right edge the split Refresh button and the count of the rows the list shows,
-`{n} accounts`. The search, the sort and the status live in the page's address, so a link or a reload keeps them, and
-they stay while an account opens. Auto reload starts at 5 s and waits while a dialog or an editor of the detail is open,
-or while its save runs, and while it is off the page reads the list every 2 s after a pairing's confirm, with the same
-wait, until the account's first reading lands or 30 s pass. The six labels, with the state each stands for, are Cooling
-down (`cooldown`), Needs funding (`funding_required`), Paused (`paused`), Needs re-auth (`reauth_required`), Ready
-(`ready`) and Not paired (`unpaired`). A row reads the label with a badge that names the plan the router resolved from
-the organization type and the tier ("Free", "Pro", "Max 5x", "Max 20x", "Max", "Team", "Enterprise" or "Usage-based",
-none on an API-key row), the status badge with the speed chip beside it on a slowed account, the email, `pool {id}` or
-"no pool", "Overage" while requests bill as extra usage and "extra usage on" while it is enabled and unused. The pane
-reads "The router holds no account yet" with "Add account" before the first account, "No accounts match" with "Clear the
-search or the status filter." under a filter, and "No account to show" until a row is selected. What the states mean and
-how an account moves between them is on [Pairing an account](pairing.md).
+the six status labels, its chip reading such as "status: Paused"), the Sort control with Name (ascending by default),
+Soonest reset (ascending, an account with no reset ahead last under either direction), Most used (descending) or Status
+(ascending), and "Add account", and at the right edge the split Refresh button and the count of the rows the list shows,
+`{n} accounts`. The search, the sort with its direction and the status live in the page's address, so a link or a reload
+keeps them, and they stay while an account opens. Auto reload starts at 5 s and waits while a dialog or an editor of the
+detail is open, or while its save runs, and while it is off the page reads the list every 2 s after a pairing's confirm,
+with the same wait, until the account's first reading lands or 30 s pass. The six labels, with the state each stands
+for, are Cooling down (`cooldown`), Needs funding (`funding_required`), Paused (`paused`), Needs re-auth
+(`reauth_required`), Ready (`ready`) and Not paired (`unpaired`). A row reads the label with a badge that names the plan
+the router resolved from the organization type and the tier ("Free", "Pro", "Max 5x", "Max 20x", "Max", "Team",
+"Enterprise" or "Usage-based", none on an API-key row), the status badge with the speed chip beside it on a slowed
+account, the email, `pool {id}` or "no pool", "Overage" while requests bill as extra usage and "extra usage on" while it
+is enabled and unused. The pane reads "The router holds no account yet" with "Add account" before the first account, "No
+accounts match" with "Clear the search or the status filter." under a filter, and "No account to show" until a row is
+selected. What the states mean and how an account moves between them is on [Pairing an account](pairing.md).
 
 The detail opens on the account's label with "Edit label", its email and its badges: the status, `quarantined` while
 the last refresh's outcome is uncertain, `cooldown ends {ago}`, "Overage active" and "Routing paused", with `Overage

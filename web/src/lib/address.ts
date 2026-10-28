@@ -40,6 +40,37 @@ export type KeySpec =
   | { kind: 'range'; default: string; presets: readonly RangePreset[] }
   | { kind: 'text'; name: string };
 
+export type SortDir = 'asc' | 'desc';
+export const SORT_DIRS = ['asc', 'desc'] as const;
+
+/** One key of a view's sort control: its address value, its label and the direction a pick of it starts in. */
+export interface SortKey {
+  defaultDir: SortDir;
+  id: string;
+  label: string;
+}
+
+/**
+ * A view's `sort` and `dir` keys: `choice` keys with the view's default key as `sort`'s default and the empty value
+ * as `dir`'s, which stands for the picked key's own default direction, so the address carries `dir` only where it
+ * differs from that direction and `?sort=usage` alone keeps its meaning. `sort` comes first, since `codecOf` writes
+ * the keys in the specification's order, so a spread writes `sort=...&dir=...`.
+ */
+export const sortSpecs = (keys: readonly SortKey[], defaultKey: string): { sort: KeySpec; dir: KeySpec } => ({
+  sort: { default: defaultKey, kind: 'choice', name: 'sort', values: keys.map((k) => k.id) },
+  dir: { default: '', kind: 'choice', name: 'dir', values: SORT_DIRS },
+});
+
+/** The direction an address means: its `dir` where it names one, else the sort key's own default. */
+export const sortDirOf = (keys: readonly SortKey[], address: { dir: string; sort: string }): SortDir =>
+  address.dir === 'asc' || address.dir === 'desc' ? address.dir : (keys.find((k) => k.id === address.sort)?.defaultDir ?? 'asc');
+
+/** The address fields of a pick: `dir` empty where it is the key's own default, so the address omits it. */
+export const sortAddressOf = (keys: readonly SortKey[], next: { dir: SortDir; sort: string }): { dir: string; sort: string } => ({
+  dir: next.dir === keys.find((k) => k.id === next.sort)?.defaultDir ? '' : next.dir,
+  sort: next.sort,
+});
+
 export type Codec<F> = { fromParams(params: URLSearchParams, now?: number): F; toParams(filters: F): URLSearchParams };
 
 /** The instant a window key carries, or empty: any RFC 3339 instant parses, a bare integer reads as milliseconds. */
@@ -291,6 +322,8 @@ export const KEYS_CODEC = codecOf<KeysAddress>({
 });
 
 export interface AccountsAddress {
+  /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
+  dir: string;
   search: string;
   /** The list's order: `name` the default, `reset` the soonest reset, `usage` the most used, `status`. */
   sort: string;
@@ -298,11 +331,16 @@ export interface AccountsAddress {
   status: string;
 }
 
-const ACCOUNT_SORTS = ['name', 'reset', 'usage', 'status'] as const;
+export const ACCOUNT_SORT_KEYS: readonly SortKey[] = [
+  { defaultDir: 'asc', id: 'name', label: 'Name' },
+  { defaultDir: 'asc', id: 'reset', label: 'Soonest reset' },
+  { defaultDir: 'desc', id: 'usage', label: 'Most used' },
+  { defaultDir: 'asc', id: 'status', label: 'Status' },
+];
 
 export const ACCOUNTS_CODEC = codecOf<AccountsAddress>({
   search: text('search'),
-  sort: { default: 'name', kind: 'choice', name: 'sort', values: ACCOUNT_SORTS },
+  ...sortSpecs(ACCOUNT_SORT_KEYS, 'name'),
   status: { default: 'all', kind: 'choice', name: 'status', values: ['all', ...ACCOUNT_STATUSES] },
 });
 

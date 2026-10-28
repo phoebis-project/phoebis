@@ -7290,6 +7290,78 @@ async function accountBadges(theme) {
 }
 
 /**
+ * The Accounts bar's sort control: its button in the height, top edge, type size and weight of the Add filter button
+ * beside it, recorded with its text and title, then opened: the popover inside the window under the button, its six
+ * radio rows (the four keys, then Ascending and Descending) one height, the checked key's and direction's marks drawn
+ * and no other, and Escape closing it with the focus back on the button.
+ */
+async function accountsSortControl(theme) {
+  const say = (what) => failures.push(`${theme} /accounts sort control: ${what}`);
+  const sort = page.locator('.filter-bar button[aria-label="Sort"]');
+  if ((await sort.count()) === 0) {
+    say('the bar draws no Sort button');
+    return;
+  }
+  try {
+    const rest = await page.evaluate(() => {
+      const row = document.querySelector('.filter-bar__row');
+      const box = (el) => {
+        if (!el) return null;
+        const style = getComputedStyle(el);
+        const b = el.getBoundingClientRect();
+        return { fontSize: style.fontSize, fontWeight: style.fontWeight, height: Math.round(b.height), top: Math.round(b.top) };
+      };
+      const button = row?.querySelector('button[aria-label="Sort"]') ?? null;
+      return {
+        addFilter: box([...(row?.querySelectorAll(':scope > button') ?? [])].find((b) => b.textContent?.trim() === 'Add filter')),
+        sort: button === null ? null : { ...box(button), text: button.textContent?.trim() ?? '', title: button.getAttribute('title') },
+      };
+    });
+    measurements.push(`${theme} /accounts sort button ${JSON.stringify(rest)}`);
+    for (const what of compare(rest.sort, rest.addFilter, ['fontSize', 'fontWeight', 'height', 'top'], 'the Sort button against the Add filter button')) say(what);
+    if (rest.sort?.text !== 'Sort: Name' || rest.sort?.title !== 'Sorted by Name, ascending') say(`the button reads ${JSON.stringify(rest.sort?.text ?? null)} titled ${JSON.stringify(rest.sort?.title ?? null)} on a bare address, not "Sort: Name" titled "Sorted by Name, ascending"`);
+    await sort.click();
+    await advance(CLOCK_STEP_MS);
+    const open = await page.evaluate(() => {
+      const button = document.querySelector('.filter-bar button[aria-label="Sort"]');
+      const popover = document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
+      if (!button || !popover) return null;
+      const b = popover.getBoundingClientRect();
+      return {
+        box: { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) },
+        button: Math.round(button.getBoundingClientRect().bottom),
+        radios: [...popover.querySelectorAll('[role="radio"]')].map((r) => ({
+          checked: r.getAttribute('aria-checked'),
+          height: Math.round(r.getBoundingClientRect().height * 10) / 10,
+          mark: (r.querySelector('.mselect__check svg')?.getBoundingClientRect().width ?? 0) > 0,
+          text: r.textContent?.trim() ?? '',
+        })),
+        window: { height: document.documentElement.clientHeight, width: document.documentElement.clientWidth },
+      };
+    });
+    measurements.push(`${theme} /accounts sort popover ${JSON.stringify(open)}`);
+    if (open === null) {
+      say('a click on the button opened no popover');
+      return;
+    }
+    if (open.box.left < 0 || open.box.top < 0 || open.box.right > open.window.width || open.box.bottom > open.window.height) say(`the popover stands at ${JSON.stringify(open.box)}, past the ${open.window.width} by ${open.window.height} window`);
+    if (open.box.top <= open.button) say(`the popover's top ${open.box.top}px is not under the button's bottom ${open.button}px`);
+    const texts = open.radios.map((r) => r.text);
+    if (JSON.stringify(texts) !== JSON.stringify(['Name', 'Soonest reset', 'Most used', 'Status', 'Ascending', 'Descending'])) say(`the radios read ${JSON.stringify(texts)}`);
+    if (new Set(open.radios.map((r) => r.height)).size !== 1) say(`the radio rows measure ${JSON.stringify(open.radios.map((r) => r.height))}, not one height`);
+    const marked = open.radios.filter((r) => r.mark).map((r) => r.text);
+    const checked = open.radios.filter((r) => r.checked === 'true').map((r) => r.text);
+    if (JSON.stringify(marked) !== JSON.stringify(['Name', 'Ascending']) || JSON.stringify(checked) !== JSON.stringify(marked)) say(`the marks stand on ${JSON.stringify(marked)} and the checked radios are ${JSON.stringify(checked)}, not Name and Ascending`);
+    await page.keyboard.press('Escape');
+    await advance(CLOCK_STEP_MS);
+    const closed = await page.evaluate(() => ({ focus: document.activeElement?.getAttribute('aria-label') ?? null, open: document.querySelector('.popover .sort-popover') !== null }));
+    if (closed.open || closed.focus !== 'Sort') say(`Escape left the popover ${closed.open ? 'open' : 'closed'} with the focus on ${JSON.stringify(closed.focus)}, not closed onto the button`);
+  } finally {
+    await atRest();
+  }
+}
+
+/**
  * An account's fast lane against the card it sits in: on the account page the lane is a section of the Usage card as
  * extra usage is, with the same rule and spacing. Only an account with extra usage draws its section, so the check
  * compares where both are drawn and stands down where the neighbor is missing, as it does against the router's seed,
@@ -9005,8 +9077,8 @@ async function routingLogPickLine(theme) {
 }
 
 /**
- * The identity card's subscription end editor on an OAuth account: its date field is the box of the Sort select in
- * the bar (the page's other plain control, where the label editor's field takes the heading's type), its checkbox
+ * The identity card's subscription end editor on an OAuth account: its date field is the box of the search field in
+ * the bar (the page's other plain field, where the label editor's field takes the heading's type), its checkbox
  * label reads Canceled in the type of the Ends label beside it, its Save the size of the Edit end button it opened
  * from, and opening it moves no row of the card. Ticking the box leaves the date field empty for the operator to type,
  * the refusal callout names the date and holds the Save, and the hint reads the billing page's words. The router's seed
@@ -9053,7 +9125,7 @@ async function subscriptionEndForm(theme) {
       fieldLabel: type(card?.querySelector('.field .field__label')),
       fieldText: card?.querySelector('.field .field__label')?.textContent?.trim() ?? null,
       hint: card?.querySelector('.field .field__hint')?.textContent?.trim() ?? null,
-      sort: box(document.querySelector('.filter-bar select[aria-label="Sort"]')),
+      search: box(document.querySelector('.filter-bar input.filter-bar__search')),
       tickLabel: type(card?.querySelector('label.row .field__label')),
       tickText: card?.querySelector('label.row .field__label')?.textContent?.trim() ?? null,
     };
@@ -9067,8 +9139,8 @@ async function subscriptionEndForm(theme) {
   if (!(read.callout ?? '').includes('A canceled plan needs the date it ends.') || !held) say(`ticking Canceled with no end drew ${JSON.stringify(read.callout)} with Save ${held ? 'held' : 'open'}, not the refusal that names the date`);
   if (read.hint !== "The date the plan's billing settings show as its end. An annual plan is marked canceled in its final month only. The time is in this browser's zone.") say(`the Ends hint reads ${JSON.stringify(read.hint)}`);
   for (const finding of [
-    // A select keeps room for its chevron, so the padding is left out.
-    ...compare(read.ends, read.sort, ['background', 'border', 'font', 'height', 'radius'], 'the Ends field against the Sort select'),
+    // The search field keeps room for its icon, so the padding is left out.
+    ...compare(read.ends, read.search, ['background', 'border', 'font', 'height', 'radius'], 'the Ends field against the search field'),
     ...compare(save, editButton, ['font', 'height', 'padding', 'radius'], "the editor's Save against the Edit end button"),
   ]) say(finding);
   if (read.tickLabel !== read.fieldLabel) say(`the Canceled label reads ${read.tickLabel} against the Ends label's ${read.fieldLabel}`);
@@ -11085,6 +11157,7 @@ try {
       }
       if (view.path === '/accounts') {
         if (mock) await accountBadges(theme);
+        await accountsSortControl(theme);
         if (mock) await accountsMeterCards(theme);
         await tableColumns(theme, 'accounts', '.cooling-down table', ['Reason']);
         await fastLane(theme, view.path);

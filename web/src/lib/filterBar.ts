@@ -262,7 +262,7 @@ export const SESSIONS_DIMENSIONS: Dimension[] = [
 
 /** The codec keys that are no dimension: `range`, `rows` and `search` everywhere, and per view the keys named here. */
 export const NOT_DIMENSIONS: Record<'accounts' | 'analytics' | 'keys' | 'requests' | 'routingLog' | 'sessions', readonly string[]> = {
-  accounts: ['range', 'rows', 'search', 'sort'],
+  accounts: ['dir', 'range', 'rows', 'search', 'sort'],
   analytics: ['by', 'groups', 'key', 'range', 'rows', 'search', 'unit'],
   keys: ['range', 'rows', 'search'],
   requests: ['range', 'rows', 'search'],

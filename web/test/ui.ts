@@ -18,6 +18,7 @@ export { FilterChip } from '@/components/FilterChip';
 export { GroupBy, GroupsButton } from '@/components/GroupBy';
 export { RangeControl } from '@/components/RangeControl';
 export { RefreshControl } from '@/components/RefreshControl';
+export { SortControl } from '@/components/SortControl';
 export { ChartTooltip } from '@/components/charts/Tooltip';
 export { PAGE_TITLES } from '@/components/shell/Shell';
 export { OptionList } from '@/components/ui/OptionList';

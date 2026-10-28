@@ -125,6 +125,10 @@ test('each dimension list names keys of its codec, and every codec key but the e
   }
 });
 
+test("the Accounts view's sort key and its direction draw no chip, since the bar's sort control holds both", () => {
+  assert.deepEqual(d.NOT_DIMENSIONS.accounts, ['dir', 'range', 'rows', 'search', 'sort']);
+});
+
 test("the lists are alphabetical inside each group, the groups in the view's order, and the Routing log leads with its kinds", () => {
   const groups = (dimensions) => [...new Set(dimensions.map((x) => x.group))];
   assert.deepEqual(groups(d.REQUESTS_DIMENSIONS), ['Routing', 'Outcome', 'Request', 'Subject']);

@@ -11,7 +11,7 @@ const write = (codec, filters) => codec.toParams(filters).toString();
 
 /** Each view's codec over a filled address: every list with two ids, every text set, every flag on, every choice off its default. */
 const FILLED = {
-  ACCOUNTS_CODEC: { search: 'git', sort: 'usage', status: 'paused' },
+  ACCOUNTS_CODEC: { dir: 'asc', search: 'git', sort: 'usage', status: 'paused' },
   ANALYTICS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', by: 'session', class: 'claude-code/*', groups: 'claude-cli/2.1.*\nclaude-cli/2.0.*', key: 'desktop@1000', keys: ['desktop', 'laptop'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], probes: true, range: preset('7d'), session: '407dd39b-dd60', unit: 'share' },
   KEYS_CODEC: { pools: ['all', 'jobs'], search: 'lap', status: 'active' },
   METER_CODEC: { accounts: ['primary', 'secondary'] },
@@ -47,6 +47,29 @@ test('the Sessions codec writes the filters off their defaults alone, in the bar
   assert.equal(write(d.SESSIONS_CODEC, { ...set, finished: true, ...reset }), '');
 });
 
+test("the Accounts codec carries the sort's direction after its key, written only where it differs from the key's own", () => {
+  const bare = read(d.ACCOUNTS_CODEC, '');
+  assert.deepEqual(bare, { dir: '', search: '', sort: 'name', status: 'all' });
+  assert.equal(write(d.ACCOUNTS_CODEC, { ...bare, dir: 'asc', sort: 'usage' }), 'sort=usage&dir=asc');
+  assert.equal(write(d.ACCOUNTS_CODEC, { ...bare, dir: '', sort: 'usage' }), 'sort=usage', "the key's own direction leaves the address");
+  assert.equal(write(d.ACCOUNTS_CODEC, { ...bare, dir: '', sort: 'name' }), '');
+  assert.equal(read(d.ACCOUNTS_CODEC, 'sort=usage&dir=bogus').dir, '');
+  // A saved `?sort=usage` keeps meaning the most used first.
+  assert.equal(d.sortDirOf(d.ACCOUNT_SORT_KEYS, { dir: '', sort: 'usage' }), 'desc');
+  assert.equal(d.sortDirOf(d.ACCOUNT_SORT_KEYS, { dir: 'asc', sort: 'usage' }), 'asc');
+  assert.deepEqual(d.sortAddressOf(d.ACCOUNT_SORT_KEYS, { dir: 'desc', sort: 'usage' }), { dir: '', sort: 'usage' });
+  assert.deepEqual(d.sortAddressOf(d.ACCOUNT_SORT_KEYS, { dir: 'asc', sort: 'usage' }), { dir: 'asc', sort: 'usage' });
+  assert.deepEqual(
+    d.ACCOUNT_SORT_KEYS.map((k) => [k.id, k.label, k.defaultDir]),
+    [
+      ['name', 'Name', 'asc'],
+      ['reset', 'Soonest reset', 'asc'],
+      ['usage', 'Most used', 'desc'],
+      ['status', 'Status', 'asc'],
+    ],
+  );
+});
+
 test('every filter at its default leaves a bare address', () => {
   for (const name of Object.keys(FILLED)) assert.equal(write(d[name], read(d[name], '')), '', name);
 });
@@ -77,15 +100,15 @@ test('the Requests codec carries a request and a session after the search, each 
 
 test('the Accounts codec round-trips its search, sort and status and writes nothing at the defaults', () => {
   const filters = read(d.ACCOUNTS_CODEC, 'search=git&sort=usage&status=paused');
-  assert.deepEqual(filters, { search: 'git', sort: 'usage', status: 'paused' });
+  assert.deepEqual(filters, { dir: '', search: 'git', sort: 'usage', status: 'paused' });
   assert.equal(write(d.ACCOUNTS_CODEC, filters), 'search=git&sort=usage&status=paused');
-  assert.deepEqual(read(d.ACCOUNTS_CODEC, ''), { search: '', sort: 'name', status: 'all' });
+  assert.deepEqual(read(d.ACCOUNTS_CODEC, ''), { dir: '', search: '', sort: 'name', status: 'all' });
   assert.equal(write(d.ACCOUNTS_CODEC, read(d.ACCOUNTS_CODEC, '')), '');
   for (const sort of ['name', 'reset', 'usage', 'status']) assert.equal(read(d.ACCOUNTS_CODEC, `sort=${sort}`).sort, sort, sort);
   // Every status the list labels is a value of the codec, so a link to any of them lands on its rows.
   assert.ok(d.ACCOUNT_STATUSES.length > 1);
   for (const status of d.ACCOUNT_STATUSES) assert.equal(read(d.ACCOUNTS_CODEC, `status=${status}`).status, status, status);
-  assert.deepEqual(read(d.ACCOUNTS_CODEC, 'sort=newest&status=disabled'), { search: '', sort: 'name', status: 'all' });
+  assert.deepEqual(read(d.ACCOUNTS_CODEC, 'sort=newest&status=disabled'), { dir: '', search: '', sort: 'name', status: 'all' });
 });
 
 test('from and to win over range while both parse, and the next write drops range', () => {

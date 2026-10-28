@@ -222,51 +222,52 @@ draws its state alone, with no amounts and no meter, on the Accounts view's Usag
 ([Accounts](console.md#accounts), [Quota](console.md#quota)). The account's cancellation flag is spelled `canceled` on
 the account view, the account edit, the routing log's term facts and the `wind_down_started` event, with the error code
 `account_canceled`, the probe outcome `canceled` and the pairing session's status `canceled`
-([Accounts](console.md#accounts), [API reference](api-reference.md)). The Accounts view shows a paired account's first
-reading once the confirm's poll lands, a few seconds after the confirm, with "The first quota reading is in flight." in
-its Usage card until then and a read of the list every 2 s for up to 30 s while auto reload is off
-([Accounts](console.md#accounts)). A new pool's dialog starts with cache warming off ([Pools](console.md#pools)). A pool
-card's Active pins fact counts every pin under the pool's keys, as the Dashboard's Sessions card does, and reads how
-many sit on a former member under the figure ([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The pool
-dialog's idle window set above the break-even reads a note that the ceiling lies above it and prices its cost from the
-set value, while the parked and horizon ceilings stay capped at the break-even ([Pools](console.md#pools)). The Pools
-view names the third selection tier `metered` in its serving table and its Selection hint, the tier holding the API-key
-accounts and the usage-based seats ([Pools](console.md#pools)). The Keys view's Pool filter draws one chip per pool, and
-a pool the address names that the router does not list shows its chip until the pools load ([Keys](console.md#keys)). A
-request whose answer the upstream refused draws the refusal's category as a warning badge beside its status, and the
-Outcome group of Add filter offers Stop reason and Refusal category ([Requests](console.md#requests)). A request whose
-stream was cut after its head reads what cut it in its drawer's Error row ([Requests](console.md#requests)). An auto
-reload on a custom range reads once a request received inside the range and written after an earlier read, as a preset
-range does ([Requests](console.md#requests)). Each captured body block in the request drawer has a find field that
-counts the lines holding a term, opens the wide window on a hit, marks every occurrence on the drawn rows and walks the
-hits with Enter and Shift+Enter ([Requests](console.md#requests)). On the Requests view a custom range's late row that
-lands below the rows shown draws on the next auto reload read ([Requests](console.md#requests)). On the Requests view
-and the Routing log the list's late answer replaces the page an auto reload poll stood in for it, and Next past an
-overrun under a preset reads to the router's clock ([Requests](console.md#requests), [Routing
-log](console.md#routing-log)). The pressed range pill names its range and its end on hover, and when the tab comes back
-to a read at once the rows it brought keep their tint through the read after it ([Requests](console.md#requests),
-[Routing log](console.md#routing-log)). The Requests and Routing log Time cells print the date before the time on a row
-older than a day, and the Routing log's columns fit their content ([Requests](console.md#requests), [Routing
-log](console.md#routing-log)). The Requests, Sessions and Routing log tables lay their columns out by one rule, with a
-minimum per column kind, one fill column and a set wider than the card scrolling inside it, so the Requests table fits
-1280 px with its default columns ([Requests](console.md#requests), [Sessions](console.md#sessions), [Routing
-log](console.md#routing-log)). The Requests view's empty state reads "Widen the range or clear a filter.", as the
-Routing log's does, and a request the router refused before it resolved a model reads a dash for its model
-([Requests](console.md#requests)). Unchecking Select all in a filter's list clears every check, the inverse of checking
-it, and an empty list keeps its meaning ([Requests](console.md#requests), [Routing log](console.md#routing-log)). A
-deleted key's group reads `<id> (deleted, created <time>)`, its creation instant in the viewer's zone
-([Analytics](console.md#analytics)). The Accounts section's card "Unused allowance by account" ranks the subscription
-accounts by the share of their weekly windows left unused over the last four weeks, with the fleet's figures
-([Analytics](console.md#analytics)). The Analytics session view reads the session's rows through the route's session
-filter, and each auto reload re-reads the first page alone ([Analytics](console.md#analytics)). The Analytics view's
-Burn tab lays Plan per hour's three cards and Spend per minute out two by two where three would share a row and the
-fourth would sit alone ([Analytics](console.md#analytics)). The Analytics view's Cache warming tab spans its last card
-across the row where that card would sit alone, as the Burn tab does ([Analytics](console.md#analytics)). The Analytics
-view's model grouping lists a request refused before it resolved a model under "no model"
-([Analytics](console.md#analytics)). The Burn section closes on Member budgets, its reconciliation rows listed on the
-Meter view ([Analytics](console.md#analytics), [Meter](console.md#meter)). The Cache warming tab shows what the probes
-saved and the net saving after their cost, as tiles, a chart and a Saved column per pool
-([Analytics](console.md#analytics)). The Cost by chart's note names the unpriced groups it draws as gaps
+([Accounts](console.md#accounts), [API reference](api-reference.md)). The Accounts view orders its list through the
+filter bar's sort control, a key and a direction carried in the address, Name ascending by default
+([Accounts](console.md#accounts)). The Accounts view shows a paired account's first reading once the confirm's poll
+lands, a few seconds after the confirm, with "The first quota reading is in flight." in its Usage card until then and a
+read of the list every 2 s for up to 30 s while auto reload is off ([Accounts](console.md#accounts)). A new pool's
+dialog starts with cache warming off ([Pools](console.md#pools)). A pool card's Active pins fact counts every pin under
+the pool's keys, as the Dashboard's Sessions card does, and reads how many sit on a former member under the figure
+([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The pool dialog's idle window set above the break-even
+reads a note that the ceiling lies above it and prices its cost from the set value, while the parked and horizon
+ceilings stay capped at the break-even ([Pools](console.md#pools)). The Pools view names the third selection tier
+`metered` in its serving table and its Selection hint, the tier holding the API-key accounts and the usage-based seats
+([Pools](console.md#pools)). The Keys view's Pool filter draws one chip per pool, and a pool the address names that the
+router does not list shows its chip until the pools load ([Keys](console.md#keys)). A request whose answer the upstream
+refused draws the refusal's category as a warning badge beside its status, and the Outcome group of Add filter offers
+Stop reason and Refusal category ([Requests](console.md#requests)). A request whose stream was cut after its head reads
+what cut it in its drawer's Error row ([Requests](console.md#requests)). An auto reload on a custom range reads once a
+request received inside the range and written after an earlier read, as a preset range does
+([Requests](console.md#requests)). Each captured body block in the request drawer has a find field that counts the lines
+holding a term, opens the wide window on a hit, marks every occurrence on the drawn rows and walks the hits with Enter
+and Shift+Enter ([Requests](console.md#requests)). On the Requests view a custom range's late row that lands below the
+rows shown draws on the next auto reload read ([Requests](console.md#requests)). On the Requests view and the Routing
+log the list's late answer replaces the page an auto reload poll stood in for it, and Next past an overrun under a
+preset reads to the router's clock ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The pressed
+range pill names its range and its end on hover, and when the tab comes back to a read at once the rows it brought keep
+their tint through the read after it ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The
+Requests and Routing log Time cells print the date before the time on a row older than a day, and the Routing log's
+columns fit their content ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests,
+Sessions and Routing log tables lay their columns out by one rule, with a minimum per column kind, one fill column and a
+set wider than the card scrolling inside it, so the Requests table fits 1280 px with its default columns
+([Requests](console.md#requests), [Sessions](console.md#sessions), [Routing log](console.md#routing-log)). The Requests
+view's empty state reads "Widen the range or clear a filter.", as the Routing log's does, and a request the router
+refused before it resolved a model reads a dash for its model ([Requests](console.md#requests)). Unchecking Select all
+in a filter's list clears every check, the inverse of checking it, and an empty list keeps its meaning
+([Requests](console.md#requests), [Routing log](console.md#routing-log)). A deleted key's group reads `<id> (deleted,
+created <time>)`, its creation instant in the viewer's zone ([Analytics](console.md#analytics)). The Accounts section's
+card "Unused allowance by account" ranks the subscription accounts by the share of their weekly windows left unused over
+the last four weeks, with the fleet's figures ([Analytics](console.md#analytics)). The Analytics session view reads the
+session's rows through the route's session filter, and each auto reload re-reads the first page alone
+([Analytics](console.md#analytics)). The Analytics view's Burn tab lays Plan per hour's three cards and Spend per minute
+out two by two where three would share a row and the fourth would sit alone ([Analytics](console.md#analytics)). The
+Analytics view's Cache warming tab spans its last card across the row where that card would sit alone, as the Burn tab
+does ([Analytics](console.md#analytics)). The Analytics view's model grouping lists a request refused before it resolved
+a model under "no model" ([Analytics](console.md#analytics)). The Burn section closes on Member budgets, its
+reconciliation rows listed on the Meter view ([Analytics](console.md#analytics), [Meter](console.md#meter)). The Cache
+warming tab shows what the probes saved and the net saving after their cost, as tiles, a chart and a Saved column per
+pool ([Analytics](console.md#analytics)). The Cost by chart's note names the unpriced groups it draws as gaps
 ([Analytics](console.md#analytics)). The Cost split's subscription rows and the Plan per hour legend figures name their
 window in full on hover ([Analytics](console.md#analytics)). The ledger records a null diagnostics member on a request
 that named a message as `none` and a comparison the upstream was still running as `pending`, which Misses by reason and

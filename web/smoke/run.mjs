@@ -22522,7 +22522,7 @@ const CARD_VIEWS = [
     count: page.container.querySelector('.filter-bar__count')?.textContent ?? null,
     rows: [...page.container.querySelectorAll('a.account-row')].map((a) => (a.getAttribute('href') ?? '').split(/[?#]/)[0].split('/').pop()),
     search: barSearch(page)?.value ?? null,
-    sort: page.container.querySelector('.filter-bar select[aria-label="Sort"]')?.value ?? null,
+    sort: page.container.querySelector('.filter-bar button[aria-label="Sort"]')?.textContent ?? null,
   });
   let page = await mount(`/accounts${QUERY}#top`, { now: CLOCK_ORIGIN });
   const landed = { ...read(page), at: page.location() };
@@ -22533,7 +22533,7 @@ const CARD_VIEWS = [
   page = await mount(`${clicked.pathname}${clicked.search}${clicked.hash}`, { now: CLOCK_ORIGIN });
   const remounted = { ...read(page), at: page.location() };
   page.unmount();
-  const view = { chip: 'status: Cooling down', count: `${wanted.length} accounts`, rows: wanted, search: 'operator', sort: 'usage' };
+  const view = { chip: 'status: Cooling down', count: `${wanted.length} accounts`, rows: wanted, search: 'operator', sort: 'Sort: Most used' };
   results.push({
     name,
     ok:
@@ -22543,6 +22543,129 @@ const CARD_VIEWS = [
       JSON.stringify(clicked) === JSON.stringify({ hash: '#top', pathname: `/accounts/${other}`, search: QUERY }) &&
       JSON.stringify(remounted) === JSON.stringify({ ...view, at: clicked }),
     missing: [`wanted ${wanted.join(',')}, landing on ${landing}`, `landed ${JSON.stringify(landed)}`, `clicked ${JSON.stringify(clicked)}`, `remounted ${JSON.stringify(remounted)}`],
+  });
+}
+{
+  // The bar's sort control on a bare /accounts. Each order is read off the story's accounts (`ACCOUNTS` in
+  // `web/src/mock/accounts.ts`) through `api.listAccounts`, the next reset at the mount's frozen clock as the page reads
+  // it. A key's own direction leaves the address, so a pick of Most used writes `sort=usage` alone.
+  const name = "/accounts the sort control reads its key and its direction's arrow, lists the keys over the directions, and each pick writes the address and orders the rows";
+  const accounts = await api.listAccounts();
+  const usage = (a) => Math.max(0, ...a.windows.map((w) => w.utilization));
+  const nextReset = (a) => Math.min(...a.windows.flatMap((w) => (w.resetsAt === null ? [] : [Date.parse(w.resetsAt)])).filter((t) => t > CLOCK_ORIGIN), Number.POSITIVE_INFINITY);
+  const byLabel = (a, b) => a.label.localeCompare(b.label);
+  const ordered = (rows, compare) => [...rows].sort((a, b) => compare(a, b) || byLabel(a, b)).map((a) => a.id);
+  const dated = accounts.filter((a) => nextReset(a) !== Number.POSITIVE_INFINITY);
+  const undated = ordered(accounts.filter((a) => nextReset(a) === Number.POSITIVE_INFINITY), () => 0);
+  const want = {
+    name: ordered(accounts, () => 0),
+    usage: ordered(accounts, (a, b) => usage(b) - usage(a)),
+    usageAsc: ordered(accounts, (a, b) => usage(a) - usage(b)),
+    status: ordered(accounts, (a, b) => a.status.localeCompare(b.status)),
+    // An account with no reset ahead sorts last under either direction.
+    reset: [...ordered(dated, (a, b) => nextReset(a) - nextReset(b)), ...undated],
+    resetDesc: [...ordered(dated, (a, b) => nextReset(b) - nextReset(a)), ...undated],
+  };
+  // Each order moves rows past the label order, and ties stand on usage and on status, so a sort left out or a tie
+  // broken any other way than by label fails.
+  const shared = (of) => new Set(accounts.map(of)).size < accounts.length;
+  const story = [want.usage, want.status, want.reset].every((rows) => JSON.stringify(rows) !== JSON.stringify(want.name)) && shared(usage) && shared((a) => a.status) && dated.length > 1 && undated.length > 0;
+  const page = await mount('/accounts', { now: CLOCK_ORIGIN });
+  const button = () => page.container.querySelector('.filter-bar button[aria-label="Sort"]');
+  const box = () => document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
+  const ARROWS = { 'rotate(-90 12 12)': 'up', 'rotate(90 12 12)': 'down' };
+  const read = () => ({
+    arrow: ARROWS[button()?.querySelector('svg path')?.getAttribute('transform') ?? ''] ?? 'no arrow',
+    rows: [...page.container.querySelectorAll('a.account-row')].map((a) => (a.getAttribute('href') ?? '').split(/[?#]/)[0].split('/').pop()),
+    search: page.location().search,
+    text: button()?.textContent ?? null,
+    title: button()?.getAttribute('title') ?? null,
+  });
+  const shown = (arrow, rows, search, label, word) => ({ arrow, rows, search, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}` });
+  const bare = read();
+  button()?.click();
+  await page.settle(100);
+  const radios = [...(box()?.querySelectorAll('[role="radiogroup"]') ?? [])].map((g) => [...g.querySelectorAll('[role="radio"]')].map((r) => `${r.textContent?.trim()} ${r.getAttribute('aria-checked')}`));
+  const ruled = box()?.querySelector('[role="radiogroup"] + hr.sort-popover__rule + [role="radiogroup"]') != null;
+  await closeBoxes(page);
+  const picks = {};
+  for (const [key, label] of [
+    ['usage', 'Most used'],
+    ['usageAsc', 'Ascending'],
+    ['status', 'Status'],
+    ['reset', 'Soonest reset'],
+    ['resetDesc', 'Descending'],
+  ]) {
+    button()?.click();
+    await page.settle(100);
+    [...(box()?.querySelectorAll('[role="radio"]') ?? [])].find((r) => r.textContent?.trim() === label)?.click();
+    await page.settle(300);
+    picks[key] = { ...read(), open: box() !== null };
+  }
+  page.unmount();
+  const wantPicks = {
+    usage: { ...shown('down', want.usage, '?sort=usage', 'Most used', 'descending'), open: false },
+    usageAsc: { ...shown('up', want.usageAsc, '?sort=usage&dir=asc', 'Most used', 'ascending'), open: false },
+    status: { ...shown('up', want.status, '?sort=status', 'Status', 'ascending'), open: false },
+    reset: { ...shown('up', want.reset, '?sort=reset', 'Soonest reset', 'ascending'), open: false },
+    resetDesc: { ...shown('down', want.resetDesc, '?sort=reset&dir=desc', 'Soonest reset', 'descending'), open: false },
+  };
+  const wantRadios = [
+    ['Name true', 'Soonest reset false', 'Most used false', 'Status false'],
+    ['Ascending true', 'Descending false'],
+  ];
+  results.push({
+    name,
+    ok: story && JSON.stringify(bare) === JSON.stringify(shown('up', want.name, '', 'Name', 'ascending')) && JSON.stringify(radios) === JSON.stringify(wantRadios) && ruled && JSON.stringify(picks) === JSON.stringify(wantPicks),
+    missing: [`story ${story}`, `bare ${JSON.stringify(bare)}`, `radios ${JSON.stringify(radios)}, the rule between them ${ruled}`, ...Object.entries(picks).map(([key, read]) => `${key} ${JSON.stringify(read)} against ${JSON.stringify(wantPicks[key])}`)],
+  });
+}
+{
+  // The sort control from the keyboard. jsdom moves no focus on Tab and fires no click for Enter on a button, so a Tab
+  // here is the focus moved to the next stop in the bar's or the popover's order, and an Enter on a button its click.
+  const name = '/accounts the sort control walks from the keyboard: its stop follows Add filter, Enter opens onto the first key, Tab moves through the six radios, Enter on one picks and closes onto the button, and Escape closes onto the button';
+  const TABBABLE = 'a[href], button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
+  const page = await mount('/accounts', { now: CLOCK_ORIGIN });
+  const button = page.container.querySelector('.filter-bar button[aria-label="Sort"]');
+  const box = () => document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
+  const named = (el) => (el === null ? 'nothing' : el === document.body ? 'the body' : (el.getAttribute('aria-label') ?? el.textContent?.trim() ?? ''));
+  const enter = async () => {
+    pressKey('Enter');
+    document.activeElement?.click();
+    await page.settle(100);
+  };
+  const state = () => ({ expanded: button?.getAttribute('aria-expanded') ?? null, focus: named(document.activeElement), open: box() !== null, search: page.location().search });
+  const bar = [...(page.container.querySelector('.filter-bar__row')?.querySelectorAll(TABBABLE) ?? [])].map(named);
+  const after = bar.slice(bar.indexOf('Add filter'), bar.indexOf('Add filter') + 3);
+  button?.focus();
+  await enter();
+  const opened = state();
+  const walk = [];
+  for (const stop of [...(box()?.querySelectorAll(TABBABLE) ?? [])]) {
+    stop.focus();
+    await page.settle(50);
+    walk.push(`${named(document.activeElement)} ${box() === null ? 'closed' : 'open'}`);
+  }
+  // The walk ends on Descending, which on the default key writes the direction alone.
+  await enter();
+  const picked = { ...state(), text: button?.textContent ?? null, title: button?.getAttribute('title') ?? null };
+  await enter();
+  const reopened = state();
+  pressKey('Escape');
+  await page.settle(100);
+  const escaped = state();
+  page.unmount();
+  const wantWalk = ['Name', 'Soonest reset', 'Most used', 'Status', 'Ascending', 'Descending'].map((label) => `${label} open`);
+  results.push({
+    name,
+    ok:
+      JSON.stringify(after) === JSON.stringify(['Add filter', 'Sort', 'Add account']) &&
+      JSON.stringify(opened) === JSON.stringify({ expanded: 'true', focus: 'Name', open: true, search: '' }) &&
+      JSON.stringify(walk) === JSON.stringify(wantWalk) &&
+      JSON.stringify(picked) === JSON.stringify({ expanded: 'false', focus: 'Sort', open: false, search: '?dir=desc', text: 'Sort: Name', title: 'Sorted by Name, descending' }) &&
+      JSON.stringify(reopened) === JSON.stringify({ expanded: 'true', focus: 'Name', open: true, search: '?dir=desc' }) &&
+      JSON.stringify(escaped) === JSON.stringify({ expanded: 'false', focus: 'Sort', open: false, search: '?dir=desc' }),
+    missing: [`the bar's stops from Add filter ${JSON.stringify(after)}`, `opened ${JSON.stringify(opened)}`, `walk ${JSON.stringify(walk)}`, `picked ${JSON.stringify(picked)}`, `reopened ${JSON.stringify(reopened)}`, `escaped ${JSON.stringify(escaped)}`],
   });
 }
 {
@@ -22571,7 +22694,7 @@ const CARD_VIEWS = [
     return el.getAttribute('aria-label') ?? (el.textContent?.trim() || 'an empty slot');
   };
   const SLOTS = {
-    '/accounts': ['search: Search accounts', 'Add filter', 'Sort select', 'Add account', 'edge: Refresh, count'],
+    '/accounts': ['search: Search accounts', 'Add filter', 'Sort', 'Add account', 'edge: Refresh, count'],
     '/keys': ['search: Search keys', 'Add filter', 'Create key', 'edge: Refresh, count'],
     '/pools': ['Create pool', 'edge: Refresh, count'],
     '/quota': ['Refresh all', 'edge: Refresh, count'],
