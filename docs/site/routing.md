@@ -413,8 +413,9 @@ reset advanced by whole weeks, the 5-hour window's next reset named by the next 
 taken before the reset of the reading it replaces, stands under that reset and reads zero at it. One taken at or past
 that reset opens the next window and stands until the next reading, as does one where the reading it replaces names no
 reset to stand under. An API-key account's rate-limit buckets stand until their reset or, without one, for a minute. The
-share is priced through the account's stored tier: a tier change is read at the next profile refresh, within the hour,
-and applied when the router reloads, and a tier changed while the router was down is read at start. The newest reading
+share is priced through the account's stored tier: a tier change is read at the next profile refresh, within a quarter
+hour, and applied when the router reloads, and a tier changed while the router was down is read at start.
+The newest reading
 per account and window is kept in the registry and loaded at startup, so a restart, and an account whose first poll the
 endpoint refuses, route from the last known windows. A reading carries the plan and the tier the account held when it
 was taken, which the `window_reset` event names when its reset passes. The router never fetches usage at a selection:

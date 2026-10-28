@@ -13,7 +13,7 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{
     hourly_window_samples, lead_over_pace, HourlyWindowSample, LedgerConfig, LedgerDb, QuotaPoll,
-    QuotaSampleRecord, Sampled, POLL_INTERVAL, PROFILE_EVERY_POLLS,
+    QuotaSampleRecord, Sampled, POLL_INTERVAL,
 };
 use phoebis_oauth::PollOutcome;
 use phoebis_routing::{EvidenceSource, FIVE_HOUR};
@@ -538,28 +538,15 @@ async fn every_polled_account_is_read_once_per_interval_on_its_own_phase_and_rep
         "the poll's overage evidence reached the router"
     );
 
-    // With the startup step's read as the first, the twelfth scheduled poll of each account reads the profile
-    // again, an hour after the startup step.
+    // With the startup step's read as the first, the third scheduled poll of each account reads the profile
+    // again, a quarter hour after the startup step.
     let interval = POLL_INTERVAL.as_secs();
-    step_to(&h, &up, &paused, secs(452 + 10 * interval)).await;
-    assert_eq!(
-        (usage_asked(&up, A), usage_asked(&up, OAUTH_C)),
-        (
-            PROFILE_EVERY_POLLS as usize - 1,
-            PROFILE_EVERY_POLLS as usize - 1
-        )
-    );
-    assert_eq!(profiles(&up), 0, "none before the twelfth poll");
-    step_to(&h, &up, &paused, secs(452 + 11 * interval)).await;
-    assert_eq!(
-        (usage_asked(&up, A), usage_asked(&up, OAUTH_C)),
-        (PROFILE_EVERY_POLLS as usize, PROFILE_EVERY_POLLS as usize)
-    );
-    assert_eq!(
-        profiles(&up),
-        2,
-        "the twelfth poll of each reads the profile"
-    );
+    step_to(&h, &up, &paused, secs(452 + interval)).await;
+    assert_eq!((usage_asked(&up, A), usage_asked(&up, OAUTH_C)), (2, 2));
+    assert_eq!(profiles(&up), 0, "none before the third poll");
+    step_to(&h, &up, &paused, secs(452 + 2 * interval)).await;
+    assert_eq!((usage_asked(&up, A), usage_asked(&up, OAUTH_C)), (3, 3));
+    assert_eq!(profiles(&up), 2, "the third poll of each reads the profile");
     assert_eq!(usage_asked(&up, B), 0);
     assert!(
         h.store.profile_json("b").unwrap().is_none(),
@@ -1021,7 +1008,11 @@ async fn the_scheduler_reaps_its_attempts_and_the_ledger_tracks_none_of_them() {
         (11, 11),
         "the startup read and ten slots each"
     );
-    assert_eq!(profiles(), 2, "the startup step's profile reads alone");
+    assert_eq!(
+        profiles(),
+        8,
+        "the startup step's two reads and the third, sixth and ninth slots of each"
+    );
     assert_eq!(
         h.ledger.tracked(),
         before,
@@ -2001,7 +1992,7 @@ fn plan_ended_at(h: &Harness, id: &str) -> Option<i64> {
 }
 
 #[tokio::test]
-async fn a_profile_reporting_no_plan_flags_the_account_and_its_slots_read_the_profile_hourly_and_no_usage(
+async fn a_profile_reporting_no_plan_flags_the_account_and_its_slots_read_the_profile_every_third_poll_and_no_usage(
 ) {
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
     up.add_credential_rule(A, "/api/oauth/profile", no_plan_profile());
@@ -2070,17 +2061,17 @@ async fn a_profile_reporting_no_plan_flags_the_account_and_its_slots_read_the_pr
     );
 
     let paused = start_polling(&h, &up).await;
-    step_to(&h, &up, &paused, secs(3_599)).await;
+    step_to(&h, &up, &paused, secs(899)).await;
     assert_eq!(
         (usage_asked(&up, A), profile_asked(&up, A)),
         (0, 1),
-        "no usage request while the flag stands, and no profile read before the hour"
+        "no usage request while the flag stands, and no profile read before the third slot"
     );
-    step_to(&h, &up, &paused, secs(3_602)).await;
+    step_to(&h, &up, &paused, secs(902)).await;
     assert_eq!(
         (usage_asked(&up, A), profile_asked(&up, A)),
         (0, 2),
-        "the hourly slot reads the profile alone"
+        "the third slot reads the profile alone"
     );
     assert_eq!(
         resumed(rows_of(&h, "plan_ended")).await.len(),

@@ -36,16 +36,17 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(300);
 /// too soon and the read would skip to the slot after next.
 const WAKE_TOLERANCE: Duration = Duration::from_secs(1);
 
-/// The profile is read again on every twelfth poll of an account, an hour apart: a tier moves rarely, and the
-/// profile endpoint shares the usage endpoint's per-account limit.
-pub const PROFILE_EVERY_POLLS: u32 = 12;
+/// The profile is read again on every third poll of an account, a quarter hour apart. It is not read on every poll
+/// because the profile endpoint shares the usage endpoint's per-account limit and a profile 429 pauses the account's
+/// usage poll for up to fifteen minutes. A faster cadence waits for a live measure of that limit.
+pub const PROFILE_EVERY_POLLS: u32 = 3;
 
 /// The usage endpoint's key for the week the head reports as `7d_oi`.
 pub(crate) const SEVEN_DAY_OVERAGE_INCLUDED: &str = "seven_day_overage_included";
 
 const OPEN_RUNS_POISONED: &str = "the poll backoff's open-run set poisoned by a prior panic";
 
-/// The `source` of a plan event a profile read wrote, the hourly one, the startup's or the Refresh button's.
+/// The `source` of a plan event a profile read wrote, the third poll's, the startup's or the Refresh button's.
 const PROFILE_SOURCE: &str = "profile";
 
 /// The `source` of a `plan_ended` row whose profile read a usage 403 made due.
@@ -362,7 +363,7 @@ impl QuotaPoll {
     ///
     /// Spawned once the startup step is done: that step has just read every account, so an account the first
     /// pass finds is next read an interval after the start, on its phase, or when its hold ends after a 429, and
-    /// its profile an hour on.
+    /// its profile a quarter hour on.
     pub fn spawn(
         store: Arc<Store>,
         usage: Arc<UsageService>,
@@ -426,7 +427,7 @@ impl QuotaPoll {
                     let (store, usage, ledger, router) =
                         (store.clone(), usage.clone(), ledger.clone(), router.clone());
                     let handle = attempts.spawn(async move {
-                        // A slot of an account whose plan ended keeps its cadence for the hourly profile read.
+                        // A slot of an account whose plan ended keeps its cadence for the third poll's profile read.
                         let mut profile_read = false;
                         if !Self::plan_paused(&store, &account.id) {
                             (_, profile_read) = Self::poll_reading(

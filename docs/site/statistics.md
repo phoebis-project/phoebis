@@ -154,8 +154,8 @@ accepts requests and bounded by `routing.startup_fetch_seconds`, so selection ho
 request after a restart. An account whose first answer is a 429 serves from the windows kept in the registry from its
 last run, predicted forward, and its backoff starts at once. One whose first answer is a transport failure or another
 error serves from them too and keeps the cadence. The poll counts that read as its own: it next reads each account five
-minutes after the startup step, on the account's phase, or when its hold ends after a 429, and its profile an hour
-after, on every twelfth poll. A pairing's confirm and the Quota view's Refresh read the endpoint at once, outside the
+minutes after the startup step, on the account's phase, or when its hold ends after a 429, and its profile a quarter
+hour after, on every third poll. A pairing's confirm and the Quota view's Refresh read the endpoint at once, outside the
 cadence, and hand the reading to the router and the ledger as a scheduled read does, under the same hold and coalescing,
 and the card draws the reading the refresh took the moment it answers, its time the reading's own instant, and the
 Accounts view shows the first reading once the poll lands, a few seconds after the confirm.
