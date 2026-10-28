@@ -5130,7 +5130,8 @@ enum DeferredKey {
 /// round purge, one stale-window sweep, and every rekey in order. A rekey closes the rows before it into a segment of
 /// their own, so a pin's write dated after a resolution never lands ahead of the rekey that moved its rows. A round
 /// may land on either side of the pin writes held beside it: a mark is read back only for the pin and the epoch its
-/// row names.
+/// row names. A session's end drops the open segment's first-seen records of the session at or before its instant,
+/// since a segment lands in map order and such a record landing after the end's cascade would bring its row back.
 #[derive(Default)]
 struct Deferred {
     /// Oldest first: each closed segment's rows and the rekey that closed it.
@@ -5171,6 +5172,14 @@ impl Deferred {
                                     *marked_ordinal = *held;
                                 }
                             }
+                        }
+                        if let StateWrite::EndPin(pin, Some(ended)) = &write {
+                            self.open.retain(|_, held| {
+                                !matches!(held, StateWrite::InsertFirstSeen(row)
+                                    if row.key_id == pin.key_id
+                                        && row.session_id == pin.session_id
+                                        && row.first_seen_at <= *ended)
+                            });
                         }
                         self.open.insert(key, write);
                     }

@@ -16,9 +16,10 @@ use phoebis_routing::{
     IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
-    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemberWrite,
-    ModelRule, OveragePolicy, OverageRow, PinBurn, PinKey, PinRow, PoolRow, RoutingLoad, RulesMode,
-    Shedding, StateCause, StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
+    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, FirstSeenRow,
+    MemberWrite, ModelRule, OveragePolicy, OverageRow, PinBurn, PinKey, PinRow, PoolRow,
+    RoutingLoad, RulesMode, Shedding, StateCause, StorageKey, Store, Strategy, SubscriptionRow,
+    WindowRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -1605,6 +1606,45 @@ async fn a_delete_arriving_while_the_backlog_holds_the_pins_upsert_never_recreat
             .iter()
             .all(|p| p.session_id != "s1"),
         "the release lands after the placement it releases, or replaces it in the backlog"
+    );
+}
+
+#[tokio::test]
+async fn a_sessions_end_in_the_backlog_drops_the_first_seen_record_it_holds_so_none_lands_behind_the_cascade(
+) {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (handle, hold) = parked_writer(&store, &now).await;
+    for index in 0..WRITER_DEPTH {
+        fill(&handle, index).await;
+    }
+    handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    assert_eq!(
+        handle.writer_status().deferred,
+        2,
+        "the placement waits in the backlog, its pin and its first-seen record"
+    );
+    now.store(2_000, Ordering::SeqCst);
+    assert_eq!(handle.release_session("k", "s1").await.unwrap(), 1);
+    assert_eq!(
+        handle.writer_status().deferred,
+        1,
+        "the end replaces the pin's upsert and drops the record its cascade takes"
+    );
+    hold.release();
+    wait_for(DRAINED, || {
+        let landed = store.load_routing().unwrap().cooldowns.len();
+        (handle.writer_status().deferred == 0 && landed == WRITER_DEPTH).then_some(())
+    })
+    .await;
+    handle.shutdown().await.unwrap();
+    let rows = stored_first_seen(&store);
+    assert!(
+        rows.iter().all(|(session, _, _)| session != "s1"),
+        "no first-seen row of the ended session lands: {rows:?}"
     );
 }
 
@@ -13569,7 +13609,7 @@ async fn creation_times(handle: &RouterHandle) -> Vec<CreationTimes> {
     times
 }
 
-/// The store's first-seen rows of key `k` as session, agent and instant, in that order.
+/// The store's first-seen rows of every key as session, agent and instant, in that order.
 fn stored_first_seen(store: &Store) -> Vec<(String, String, i64)> {
     store
         .load_routing()
@@ -13820,6 +13860,38 @@ async fn a_rekey_keeps_a_one_pin_sessions_creation_time_under_the_dated_id_and_a
 }
 
 #[tokio::test]
+async fn a_start_sweeps_the_first_seen_rows_of_a_session_with_no_pin_and_keeps_a_pinned_sessions() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_000))
+        .await
+        .unwrap();
+    handle.shutdown().await.unwrap();
+    // An orphan written while no router runs, the row an account's cascade or a failover that never landed leaves.
+    store
+        .insert_first_seen(&FirstSeenRow {
+            key_id: "k".into(),
+            session_id: "s2".into(),
+            agent_id: "main".into(),
+            first_seen_at: 500,
+        })
+        .unwrap();
+    assert_eq!(
+        stored_first_seen(&store),
+        [seen("s1", "main", 1_000), seen("s2", "main", 500)],
+        "the orphan stands before the start"
+    );
+    let _handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    assert_eq!(
+        stored_first_seen(&store),
+        [seen("s1", "main", 1_000)],
+        "the start takes the row of the session holding no pin and keeps the row of the session holding one"
+    );
+}
+
+#[tokio::test]
 async fn a_sessions_release_drops_its_records_so_its_return_reads_a_new_instant() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
@@ -14016,6 +14088,17 @@ async fn a_failover_with_no_landing_inside_the_migration_window_ends_the_session
         (stored_first_seen(&store) == [seen("s1", "main", 1_000)]).then_some(())
     })
     .await;
+    assert_eq!(
+        creation_times(&handle).await,
+        vec![standing(
+            "s1",
+            "main",
+            "claude-sonnet-5",
+            Some(1_000),
+            Some(1_000)
+        )],
+        "the record stands before the invalidation"
+    );
     handle.report(rejected(&from, pin, 1_000 + HOUR)).await;
     wait_for(WRITTEN, || {
         store.load_routing().unwrap().pins.is_empty().then_some(())
