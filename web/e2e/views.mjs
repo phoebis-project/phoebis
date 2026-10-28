@@ -3185,7 +3185,7 @@ async function settingsOrder(theme) {
     };
   });
   measurements.push(`${theme} /settings about ${JSON.stringify(about)}`);
-  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Body capture', 'Admin secret'];
+  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Body capture', 'Session expiry', 'Non-companion timeout', 'Admin secret'];
   if (JSON.stringify(about.labels) !== JSON.stringify(lines)) say(`About runs ${JSON.stringify(about.labels)}, not ${JSON.stringify(lines)}`);
   const storage = about.types[about.labels.indexOf('Storage path')];
   const offType = about.labels.filter((label, i) => about.types[i] !== storage);
@@ -3258,6 +3258,40 @@ async function settingsRetentionLines(theme) {
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
   await atRest();
+}
+
+/**
+ * About's two session lines drawn in the style of the Body capture line above them: the label's type and ink, the
+ * value's type, the row's height and the label's and the value's left edges. Each line's text and hover are recorded.
+ */
+async function settingsAboutRows(theme) {
+  const read = await page.evaluate(() => {
+    const card = [...document.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+    const type = (el) => `${getComputedStyle(el).fontSize} ${getComputedStyle(el).fontWeight} ${getComputedStyle(el).fontFamily}`;
+    const round = (px) => Math.round(px * 10) / 10;
+    const at = (label) => {
+      const row = [...(card?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === label);
+      const dt = row?.querySelector('dt');
+      const dd = row?.querySelector('dd');
+      if (!dt || !dd) return null;
+      const [dtBox, ddBox] = [dt, dd].map((el) => el.getBoundingClientRect());
+      return {
+        height: round(Math.max(dtBox.bottom, ddBox.bottom) - Math.min(dtBox.top, ddBox.top)),
+        hover: dd.getAttribute('title'),
+        labelInk: getComputedStyle(dt).color,
+        labelLeft: round(dtBox.left),
+        labelType: type(dt),
+        text: `${dt.textContent?.trim()}=${dd.textContent?.trim()}`,
+        valueLeft: round(ddBox.left),
+        valueType: type(dd),
+      };
+    };
+    return { bodyCapture: at('Body capture'), nonCompanionTimeout: at('Non-companion timeout'), sessionExpiry: at('Session expiry') };
+  });
+  measurements.push(`${theme} /settings session lines ${JSON.stringify(read)}`);
+  for (const [name, row] of [['Session expiry', read.sessionExpiry], ['Non-companion timeout', read.nonCompanionTimeout]]) {
+    failures.push(...compare(row, read.bodyCapture, ['height', 'labelInk', 'labelLeft', 'labelType', 'valueLeft', 'valueType'], `${theme} /settings: About's ${name} line against Body capture`));
+  }
 }
 
 /**
@@ -11191,6 +11225,7 @@ try {
       if (view.path === '/settings') {
         await settingsOrder(theme);
         await settingsRetentionLines(theme);
+        await settingsAboutRows(theme);
         await settingsUnitLegend(theme);
       }
       if (view.path === '/accounts') {

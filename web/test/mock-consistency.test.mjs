@@ -727,13 +727,18 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.requests.filter((r) => r.keyId === 'desktop').every((r) => r.keyGeneration === (Date.parse(r.at) < created ? generation : created)), 'each request row carries the holder it ran under');
   });
 
-  test(`the earlier holder's session row reads its own requests and stays listed inside the session expiry, at ${at}`, async () => {
+  test(`the earlier holder's session row reads its own requests inside the session expiry and is listed while its last request is inside the non-companion timeout, at ${at}`, async () => {
     const s = await story;
     const created = Date.parse(s.keys.find((k) => k.id === 'desktop').createdAt);
-    const historical = s.sessions.filter((x) => x.historical);
-    assert.deepEqual(historical.map((x) => x.keyId), ['desktop'], 'one earlier holder is listed');
-    const [held] = historical;
     // The rows run newest first.
+    const earlier = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration !== created);
+    assert.ok(earlier.length > 0, 'the earlier holder has requests');
+    // The holder's last request ran hours before the story's clock, so the route's list leaves the row out there and
+    // keeps it inside the hour of that request.
+    assert.ok(!s.sessions.some((x) => x.historical) && !s.lib.sessionsListedAt(s.now).some((x) => x.historical), "the route's list at the story's clock holds no earlier holder");
+    const historical = s.lib.sessionsListedAt(Date.parse(earlier[0].at) + HOUR / 2).filter((x) => x.historical);
+    assert.deepEqual(historical.map((x) => x.keyId), ['desktop'], 'one earlier holder is listed inside the hour of its last request');
+    const [held] = historical;
     const holders = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === held.keyGeneration);
     const own = holders.filter((r) => r.sessionId === held.sessionId);
     assert.ok(held.keyGeneration < created && own.length > 0, 'the row is the earlier generation, with rows of its own');
@@ -745,20 +750,26 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.sessions.some((x) => !x.historical && x.keyId === 'desktop' && x.sessionId === held.sessionId), 'the live key holds the same session id');
   });
 
-  test(`the desktop session its key's guardrail refused whole is listed while its newest refusal is inside the session expiry, and none past it, at ${at}`, async () => {
+  test(`the desktop session its key's guardrail refused whole is listed while its newest refusal is inside the non-companion timeout, and none past it, at ${at}`, async () => {
     const s = await story;
     const span = s.settings.sessions.expireAfterSeconds * 1000;
     assert.equal(s.lib.insideSessionExpiry(iso(s.now - span + 1_000), s.now), true, 'one second inside the span');
     assert.equal(s.lib.insideSessionExpiry(iso(s.now - span - 1_000), s.now), false, 'one second past the span');
+    const timeout = s.settings.sessions.nonCompanionIdleSeconds;
+    assert.equal(s.lib.withinNonCompanionTimeout(iso(s.now - timeout * 1000 + 1_000), timeout, s.now), true, 'one second inside the timeout');
+    assert.equal(s.lib.withinNonCompanionTimeout(iso(s.now - timeout * 1000 - 1_000), timeout, s.now), false, 'one second past the timeout');
     // The rows run newest first.
     const refusals = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.errorCode === 'guardrail_blocked');
     const [newest] = refusals;
     assert.ok(refusals.length > 0 && refusals.every((r) => r.refused && r.sessionId === newest.sessionId), 'one session holds the refusals');
     assert.ok(s.lib.insideSessionExpiry(newest.at, s.now), `the newest refusal at ${newest.at} is inside the span`);
-    const listed = s.sessions.filter((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId);
-    assert.deepEqual(listed.map((x) => [x.accountId, x.requests, x.lastRequestAt]), [[null, 0, newest.at]], 'listed off the ledger with no count');
-    assert.deepEqual(s.lib.refusalOnlyRows(s.now), listed, "the builder's row at the story's now is the listed one");
-    assert.deepEqual(s.lib.refusalOnlyRows(s.now + span), [], 'none a span later');
+    const listedAt = (now) => s.lib.sessionsListedAt(now).filter((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId);
+    const listed = listedAt(Date.parse(newest.at) + HOUR / 2);
+    assert.deepEqual(listed.map((x) => [x.accountId, x.requests, x.lastRequestAt]), [[null, 0, newest.at]], 'listed off the ledger with no count inside the hour of the newest refusal');
+    assert.deepEqual(s.lib.refusalOnlyRows(s.now), listed, "the builder's row at the story's now is the one listed inside the hour");
+    assert.deepEqual(listedAt(Date.parse(newest.at) + timeout * 1000 + 1_000), [], 'none past the timeout');
+    assert.ok(!s.sessions.some((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId), `the route's list at the story's clock, ${Math.round((s.now - Date.parse(newest.at)) / 60_000)} min after the newest refusal, leaves it out`);
+    assert.deepEqual(s.lib.refusalOnlyRows(s.now + span), [], 'the builder writes none a span later');
   });
 
   test(`a live session row counts the non-probe requests of its own key, generation and session, at ${at}`, async () => {
@@ -830,8 +841,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the runner's sessions on ci read their last use off their own newest request, at ${at}`, async () => {
     const s = await story;
-    const runner = s.sessions.filter((x) => x.keyId === 'ci' && !x.historical);
-    assert.ok(runner.length > 0, 'the story lists sessions of the ci key');
+    // The runner's rows left the route's list under the non-companion timeout, so the case reads the seed through the
+    // session expiry, which lists every row the story seeds.
+    const runner = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds).filter((x) => x.keyId === 'ci' && !x.historical);
+    assert.ok(runner.length > 0, 'the story holds sessions of the ci key');
     for (const x of runner) assert.equal(x.lastUsedAt, x.lastRequestAt, `${x.sessionId}'s last use`);
   });
 
@@ -908,7 +921,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const overview = await s.api.getKeepaliveOverview();
     const count = (word) => recipes.filter((r) => r.agentState === word).length;
     assert.deepEqual([overview.agents.busy, overview.agents.idle, overview.agents.parked], [count('busy'), count('idle'), count('parked')], 'the tiles count the recipe rows by lifecycle word, released ones left out');
-    assert.equal(overview.limits.agents.count, s.sessions.filter((x) => x.companion !== 'none' || x.keepalive.state !== null).reduce((n, x) => n + x.agents, 0), 'the cap counts every record');
+    // The engine's cap counts every seeded record, the idle recipe of the row two hours back among them, which left the
+    // route's list under the non-companion timeout, so the sum reads the seed through the session expiry.
+    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds);
+    assert.equal(overview.limits.agents.count, seeded.filter((x) => x.companion !== 'none' || x.keepalive.state !== null).reduce((n, x) => n + x.agents, 0), 'the cap counts every record');
   });
 
   test(`the all-released session lists every record released, keeps its row and the pin its last probe renewed, at ${at}`, async () => {
@@ -971,9 +987,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the session idle for two hours is pinned with no companion and reads its last use two hours back, at ${at}`, async () => {
     const s = await story;
-    // Written out in the mock's seeds, as the smoke reads it.
-    const row = s.sessions.find((x) => x.sessionId === 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58');
-    assert.ok(row !== undefined, 'the session is listed');
+    // Written out in the mock's seeds, as the smoke reads it. The row left the route's list under the non-companion
+    // timeout, so the case reads the seed through the session expiry.
+    const row = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds).find((x) => x.sessionId === 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58');
+    assert.ok(row !== undefined, 'the session is in the seed');
     assert.deepEqual([row.pinned, row.companion], [true, 'none']);
     assert.equal(Date.parse(row.lastUsedAt), s.now - 2 * HOUR, 'last used two hours before the mock\'s now');
     assert.ok(Date.parse(row.createdAt) < Date.parse(row.lastUsedAt), 'created before its last use');
@@ -1017,8 +1034,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`a session no companion reports carries no agent lines, the plain row idle for two hours with the main pin's figures, at ${at}`, async () => {
     const s = await story;
     for (const row of s.sessions.filter((x) => x.companion === 'none')) assert.equal(row.agentContexts, null, `${row.keyId} ${row.sessionId} carries none`);
-    // Written out in the mock's seeds, as the smoke reads it.
-    const row = s.sessions.find((x) => x.sessionId === 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58');
+    // Written out in the mock's seeds, as the smoke reads it. The row left the route's list under the non-companion
+    // timeout, so the case reads the seed through the session expiry.
+    const row = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds).find((x) => x.sessionId === 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58');
     assert.deepEqual([row.companion, row.lastInputTokens, row.contextWindowTokens, row.contextShare, row.cachedPrefixTokens, row.agentContexts], ['none', 6_400, 200_000, 0.032, 5_000, null]);
   });
 
@@ -2045,9 +2063,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the story lists three forks, one on its base's account, one on another and one without a pin, at ${at}`, async () => {
     const s = await story;
-    // The mock lists its live sessions in the order it seeds them, one per slot of its session ids, so a row's place
-    // among them is the slot the story pinned its fork on.
-    const listed = s.sessions.filter((x) => !x.historical);
+    // The mock seeds its live sessions one per slot of its session ids, so a row's place among them is the slot the
+    // story pinned its fork on. The runner's rows on ci left the route's list under the non-companion timeout, so the
+    // slots are read off the seed through the session expiry.
+    const listed = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds).filter((x) => !x.historical);
     const forks = s.sessions.filter((x) => x.forkedFrom !== null);
     assert.equal(forks.length, 3, `${forks.length} forks are listed`);
     const pairs = forks.map((fork) => {

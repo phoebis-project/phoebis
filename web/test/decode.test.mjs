@@ -2435,7 +2435,7 @@ test('settings decode the members the route answers and nothing more', () => {
       apiPrices: ['effective', 'effectiveDate', 'models', 'revisions', 'source'],
       listeners: ['metrics', 'proxy', 'proxyTls'],
       retention: ['bodyCaptureMaxHours', 'retentionDays', 'rollupRetentionDays'],
-      sessions: ['expireAfterSeconds'],
+      sessions: ['expireAfterSeconds', 'nonCompanionIdleSeconds'],
       storage: ['apiPricesPath', 'ledgerPath', 'path', 'subscriptionCostsPath'],
       subscriptionCosts: ['capacity', 'effective', 'modelTier', 'modelWeight', 'modelWindows', 'overrides', 'peak', 'problem', 'regimes', 'revisions', 'source', 'tierOrder', 'typeMultiplier', 'unit'],
     },
@@ -2466,7 +2466,7 @@ test('a settings member the answer leaves out decodes to its default', () => {
   assert.deepEqual(without('access'), { adminConfigured: true }, 'no session reaches the console without the admin secret');
   assert.deepEqual(without('listeners'), { metrics: '', proxy: '', proxyTls: false });
   assert.deepEqual(without('retention'), { bodyCaptureMaxHours: 0, retentionDays: 0, rollupRetentionDays: 0 });
-  assert.deepEqual(without('sessions'), { expireAfterSeconds: 0 });
+  assert.deepEqual(without('sessions'), { expireAfterSeconds: 0, nonCompanionIdleSeconds: 0 });
   assert.deepEqual(without('storage'), { apiPricesPath: null, ledgerPath: '', path: '', subscriptionCostsPath: null });
   const bare = { ...wire };
   delete bare.subscription_costs;
@@ -2711,6 +2711,11 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
   const wire = fixture('settings');
   const s = d.decodeSettings(wire);
   assert.equal(s.sessions.expireAfterSeconds, 86400);
+  assert.deepEqual(
+    d.decodeSettings({ ...wire, sessions: { expire_after_seconds: 86400, non_companion_idle_seconds: 3600 } }).sessions,
+    { expireAfterSeconds: 86400, nonCompanionIdleSeconds: 3600 },
+    'the two keys of the sessions block read under their own names',
+  );
   assert.equal(s.listeners.metrics, '127.0.0.1:9464');
   const rows = wire.api_prices.content.models;
   assert.equal(s.apiPrices.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, rows['claude-sonnet-5'].input);

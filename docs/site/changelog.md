@@ -286,6 +286,8 @@ non-companion session idle for over an hour by default, and counts the rows the 
 ([Sessions](console.md#sessions)). The Sessions view reads the main agent's context in tokens with its share of the
 model's window and its cached prefix on every row, and the same figures per agent on a companion session, and the
 Requests column shows through the Columns control to make room ([Sessions](console.md#sessions)). The Settings page's
+About card lists the session expiry and the non-companion timeout, the two keys of the `sessions` block, each as a
+duration with its seconds beside it and its hover naming the key ([Settings](console.md#settings)). The Settings page's
 About card names the bootstrap's body capture limit beside its two retention lines ([Settings](console.md#settings)). A
 decision card's cache-map row folds a record of four entries or more to one chip per tier with the count and the depth
 range and the latest three depths, behind a control that lists every entry ([Routing log](console.md#routing-log)). An

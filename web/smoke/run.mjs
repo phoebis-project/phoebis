@@ -1002,15 +1002,17 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 }
 {
   // The story's pools hold 29, 0, 6 and 1 pins, one per key, session, agent and model under their keys, on primary,
-  // nightly, secondary, studio and contract, over 21 pinned rows, so a hero counting the pinned rows or a note counting
-  // every row's account reads otherwise. A hero counting every session row reads otherwise only while the story's row
-  // count differs from its pins, so the count is read first and a story where the two meet fails here.
+  // nightly, secondary, studio and contract, over 20 listed pinned rows on four of those accounts, since secondary's
+  // one pinned row, idle for two hours, left the route's list under the non-companion timeout. So a hero counting the
+  // pinned rows or a note counting every row's account reads otherwise. A hero counting every session row reads
+  // otherwise only while the story's row count differs from its pins, so the count is read first and a story where
+  // the two meet fails here.
   const PINS = 36;
   const sessionRows = (await api.listSessions()).length;
   const hero = m.container.querySelector('.sess-summary__hero');
   results.push({
     name: "/ the sessions card counts the router's live pins, which the story keeps apart from its session rows, over the pinned rows' accounts",
-    ok: sessionRows !== PINS && hero?.querySelector('.stat__value')?.textContent === String(PINS) && hero?.querySelector('.stat__note')?.textContent === 'active pins across 5 accounts',
+    ok: sessionRows !== PINS && hero?.querySelector('.stat__value')?.textContent === String(PINS) && hero?.querySelector('.stat__note')?.textContent === 'active pins across 4 accounts',
     missing: [`${sessionRows} session rows against ${PINS} pins`, hero?.textContent ?? 'absent'],
   });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
@@ -21868,10 +21870,10 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
   });
   retries[0]?.click();
   await page.settle();
-  // At the story's instant the default filters hide eight of its 28 rows (the three finished sessions, the earlier
-  // holder 20 hours back, the ci key's two rows, the row idle for two hours and the refusal-only row), so the
-  // Sessions and Agents tiles carry the hidden count on their hover.
-  const away = '8 sessions hidden by the filters';
+  // At the story's instant the default filters hide three of the route's 24 rows, the three finished sessions, so the
+  // Sessions and Agents tiles carry the hidden count on their hover. The earlier holder 20 hours back, the ci key's two
+  // rows, the row idle for two hours and the refusal-only row left the list under the non-companion timeout.
+  const away = '3 sessions hidden by the filters';
   results.push({
     name: '/sessions Try again under the tiles reads the overview again, the Sessions and Agents tiles titled with the rows the filters hide',
     ok: retries.length === 1 && tiles().every((t) => t.value !== '-' && t.value !== '' && t.title === (['Sessions', 'Agents'].includes(t.label) ? away : null)) && page.container.querySelector('.sessions__notice') === null,
@@ -22119,6 +22121,14 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
   });
   page.unmount();
 }
+/**
+ * The mock's sessions whole, the rows the route's non-companion timeout leaves out among them, answered after the
+ * mock's own latency. A case that reads such a row's drawing installs it in place of `api.listSessions`.
+ */
+const seedSessions = (listSessions) => async () => {
+  await listSessions.call(api);
+  return [...api.sessions];
+};
 {
   // The request log reads the ledger, so its entry waits on a ledgered request, and it opens on the session the client
   // sent under the row's key lifetime inside the narrowest of the log's ranges that covers the row's last request. A
@@ -22140,11 +22150,11 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
   const listed = await api.listSessions();
   const lifetime = (s) => `${s.keyId}@${s.keyGeneration}`;
   const rowsOf = (page) => [...page.container.querySelectorAll('tbody tr.srow')];
-  const sessionOf = (page, tr) => {
+  const sessionOf = (page, tr, from = listed) => {
     const id = sessionCell(page, tr, 'Session')?.getAttribute('title');
     const key = sessionCell(page, tr, 'Key');
     const historical = key?.querySelector('.sub') !== null;
-    return listed.find((s) => s.sessionId === id && s.keyId === key?.firstChild?.textContent && s.historical === historical);
+    return from.find((s) => s.sessionId === id && s.keyId === key?.firstChild?.textContent && s.historical === historical);
   };
   const toggleMenu = async (page, tr) => {
     tr?.querySelector('.menu__trigger')?.click();
@@ -22204,9 +22214,14 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
   // The story's two rows of one session id under two generations of a key id, each clicked in turn. The log's reads
   // are wrapped to capture the query the page sent and the rows it answered, and the drawn Key cells are read beside
   // them, since the cells name the key id alone. The same search over the earlier holder's window without the key,
-  // read at a page size past the story's rows, holds both generations, so a scope the address drops shows.
-  const gone = listed.find((s) => s.historical && s.requests > 0);
-  const kept = listed.find((s) => gone !== undefined && !s.historical && s.keyId === gone.keyId && s.sessionId === gone.sessionId && s.requests > 0);
+  // read at a page size past the story's rows, holds both generations, so a scope the address drops shows. The
+  // earlier holder's row left the route's list under the non-companion timeout, so the pair reads its drawing from the
+  // seed, the list answering the mock's sessions whole until the pair is read.
+  const { listSessions: routeList } = api;
+  api.listSessions = seedSessions(routeList);
+  const seeded = await api.listSessions();
+  const gone = seeded.find((s) => s.historical && s.requests > 0);
+  const kept = seeded.find((s) => gone !== undefined && !s.historical && s.keyId === gone.keyId && s.sessionId === gone.sessionId && s.requests > 0);
   const { listRequests } = api;
   const reads = [];
   api.listRequests = async (...args) => {
@@ -22215,13 +22230,14 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
     return answer;
   };
   const pair = [];
-  // The earlier holder's row lies past the default hour, so the pair is read with every row shown.
+  // The pair is read with every row shown, the view mounted again past another page so it reads the seed.
+  await page.navigate('/settings');
   await page.navigate('/sessions?age=none&finished=1');
   await page.settle(300);
   for (const s of [gone, kept]) {
     if (s === undefined) continue;
     const tr = rowsOf(page).find((r) => {
-      const at = sessionOf(page, r);
+      const at = sessionOf(page, r, seeded);
       return at !== undefined && at.keyId === s.keyId && at.sessionId === s.sessionId && at.historical === s.historical;
     });
     reads.length = 0;
@@ -22259,6 +22275,7 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
     await page.settle(300);
   }
   api.listRequests = listRequests;
+  api.listSessions = routeList;
   // Unmounted before the next mount, since an unmount puts the clock back to live and `tick` needs it frozen.
   page.unmount();
   // The first row with traffic, keyed beyond its session id, which an earlier holder of its key id shares, moved to one
@@ -22990,14 +23007,15 @@ const CARD_VIEWS = [
 {
   // The Sessions view's four filters live in its address: each draws its chip and narrows the rows, the bare address
   // reads the defaults, and the chip line's clear returns to it. Each view is read on the story's instant, so a row's
-  // age is its seed's. The row idle for two hours is found by the id the mock's seeds write out for it.
+  // age is its seed's. The row idle for two hours is found by the id the mock's seeds write out for it, in the seed,
+  // since it left the route's list under the non-companion timeout.
   const TWO_HOURS_ID = 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58';
   const RELEASED_SENTENCE = 'The mod released every agent of this session. Their records keep their slots of the cap for one cache TTL after the release and then leave the engine.';
   const listed = await api.listSessions();
   const recipes = await api.listKeepaliveRecipes();
   const idOfRow = (s) => `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`;
   const finished = listed.find((s) => !s.historical && s.keepalive.cause === 'session_ended');
-  const twoHours = listed.find((s) => s.sessionId === TWO_HOURS_ID);
+  const twoHours = api.sessions.find((s) => s.sessionId === TWO_HOURS_ID);
   const companionRow = (s) => s.companion === 'reporting' || s.companion === 'silent';
   const chipsOn = (page) => [...page.container.querySelectorAll('.chip--filter')].map((c) => c.textContent?.trim() ?? '');
   const tileOf = (page, label) => [...page.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === label);
@@ -23018,19 +23036,20 @@ const CARD_VIEWS = [
     page.unmount();
     return got;
   };
-  // The story's 29 rows at its instant: the three finished sessions (the two the mod released whole and the one it
-  // ended), twelve rows a companion reports or went silent on, the registration-only row among them, and fourteen no
-  // companion reports: the laptop row the ledger never saw, with no last use, and by their last use the fleet row 4
-  // minutes back, the pinless fork 16, nightly's notebook row 20, overflow's desktop row 28, studio's four notebook
-  // rows 25 to 42, the refusal-only row 98 by its newest refusal, the ci rows 118 and 240, the row idle for two hours
-  // 120 and the earlier holder 20 hours back. The one hour keeps 21 and hides 8.
+  // The route's 24 rows at the story's instant: the three finished sessions (the two the mod released whole and the
+  // one it ended), twelve rows a companion reports or went silent on, the registration-only row among them, and nine
+  // no companion reports: the laptop row the ledger never saw, with no last use, and by their last use the fleet row 4
+  // minutes back, the pinless fork 16, nightly's notebook row 20, overflow's desktop row 28 and studio's four notebook
+  // rows 25 to 42. The non-companion timeout leaves out the five past the hour: the refusal-only row 98 by its newest
+  // refusal, the ci rows 118 and 240, the row idle for two hours 120 and the earlier holder 20 hours back. The one
+  // hour keeps 21 and hides the three finished.
   const bare = await read('');
-  const AWAY = '8 sessions hidden by the filters';
+  const AWAY = '3 sessions hidden by the filters';
   const drawnOf = (got) => got.drawn.map((id) => listed.find((s) => idOfRow(s) === id)).filter(Boolean);
   results.push({
-    name: '/sessions the bare address keeps the rows the default filters keep, with no chip, the finished session and the row idle for two hours hidden',
-    ok: finished !== undefined && twoHours !== undefined && bare.chips.length === 0 && !bare.finished && !bare.twoHours && bare.drawn.length === 21 && bare.count === '21 sessions',
-    missing: [`finished ${finished?.sessionId ?? 'absent'}, two hours ${twoHours?.sessionId ?? 'absent'}`, JSON.stringify(bare.chips), `${bare.drawn.length} rows`, String(bare.count)],
+    name: '/sessions the bare address keeps the rows the default filters keep, with no chip and the finished session hidden',
+    ok: finished !== undefined && bare.chips.length === 0 && !bare.finished && bare.drawn.length === 21 && bare.count === '21 sessions',
+    missing: [`finished ${finished?.sessionId ?? 'absent'}`, JSON.stringify(bare.chips), `${bare.drawn.length} rows`, String(bare.count)],
   });
   results.push({
     name: '/sessions the Sessions and Agents tiles count the rows the filters keep and name the rows they hide on hover',
@@ -23053,8 +23072,8 @@ const CARD_VIEWS = [
   }
   {
     // The age hides a row no companion reports past its preset and never a companion row, inside the expiry: fifteen
-    // minutes keeps the twelve companion rows, the laptop row with no last use and the fleet row, six hours all but the
-    // earlier holder, and no limit every row that is not finished.
+    // minutes keeps the twelve companion rows, the laptop row with no last use and the fleet row, and six hours and no
+    // limit every row that is not finished, since the non-companion timeout leaves out every row past the hour.
     const ages = {};
     for (const query of ['?age=15m', '?age=6h', '?age=none']) ages[query] = await read(query);
     const minutes = ages['?age=15m'];
@@ -23066,19 +23085,19 @@ const CARD_VIEWS = [
       missing: [JSON.stringify(minutes.chips), `${minutes.drawn.length} rows, ${drawnOf(minutes).filter(companionRow).length} companion rows`],
     });
     results.push({
-      name: '/sessions ?age=6h keeps the rows no companion reports last used inside six hours and hides the older, under the chip age: 6 h',
-      ok: JSON.stringify(sixHours.chips) === JSON.stringify(['age: 6 h']) && sixHours.drawn.length === 25 && holder !== undefined && !sixHours.drawn.includes(idOfRow(holder)) && ages['?age=none'].drawn.includes(idOfRow(holder)),
-      missing: [JSON.stringify(sixHours.chips), `${sixHours.drawn.length} rows`, holder === undefined ? 'no earlier holder' : 'the holder read'],
+      name: '/sessions ?age=6h keeps every row no companion reports the route lists, under the chip age: 6 h',
+      ok: JSON.stringify(sixHours.chips) === JSON.stringify(['age: 6 h']) && sixHours.drawn.length === 21 && holder === undefined,
+      missing: [JSON.stringify(sixHours.chips), `${sixHours.drawn.length} rows`, holder === undefined ? 'no earlier holder' : 'the earlier holder listed'],
     });
     results.push({
-      name: '/sessions the row idle for two hours is hidden on the bare address and under ?age=15m, and listed under ?age=6h and ?age=none',
-      ok: !bare.twoHours && !minutes.twoHours && sixHours.twoHours && ages['?age=none'].twoHours && ages['?age=none'].drawn.length === 26,
-      missing: [JSON.stringify(Object.fromEntries(Object.entries(ages).map(([q, a]) => [q, a.twoHours]))), `${ages['?age=none'].drawn.length} rows with no limit`],
+      name: '/sessions the row idle for two hours, past the non-companion timeout, is drawn under no age, and ?age=none draws every row that is not finished',
+      ok: twoHours !== undefined && !listed.some((s) => s.sessionId === TWO_HOURS_ID) && !bare.twoHours && !minutes.twoHours && !sixHours.twoHours && !ages['?age=none'].twoHours && ages['?age=none'].drawn.length === 21,
+      missing: [`two hours ${twoHours?.sessionId ?? 'absent'}`, JSON.stringify(Object.fromEntries(Object.entries(ages).map(([q, a]) => [q, a.twoHours]))), `${ages['?age=none'].drawn.length} rows with no limit`],
     });
   }
   {
     // While the filters hide every row the router lists, the card says so with the hidden count and no expiry sentence:
-    // the story's fourteen rows no companion reports, read under Companion only.
+    // the route's nine rows no companion reports inside the non-companion timeout, read under Companion only.
     const { listSessions } = api;
     api.listSessions = async (...args) => (await listSessions.apply(api, args)).filter((s) => s.companion === 'none');
     const page = await mount('/sessions?companion=1', { now: CLOCK_ORIGIN });
@@ -23088,7 +23107,7 @@ const CARD_VIEWS = [
     api.listSessions = listSessions;
     results.push({
       name: '/sessions with every row hidden by the filters the card reads No sessions kept by the filters with the hidden count',
-      ok: got.rows === 0 && (got.body ?? '').includes('No sessions kept by the filters') && (got.body ?? '').includes('14 sessions hidden by the filters.') && !(got.body ?? '').includes('session expiry') && !(got.body ?? '').includes('No live sessions'),
+      ok: got.rows === 0 && (got.body ?? '').includes('No sessions kept by the filters') && (got.body ?? '').includes('9 sessions hidden by the filters.') && !(got.body ?? '').includes('session expiry') && !(got.body ?? '').includes('No live sessions'),
       missing: [JSON.stringify(got)],
     });
   }
@@ -23304,13 +23323,17 @@ const CARD_VIEWS = [
   }
   {
     // The row no companion reports, idle for two hours, shows under the six-hour age with the main pin's figures, and
-    // its agents table draws neither column.
-    const plain = listed.find((s) => s.sessionId === TWO_HOURS_ID);
+    // its agents table draws neither column. The row left the route's list under the non-companion timeout, so the
+    // case reads its drawing from the seed.
+    const { listSessions } = api;
+    api.listSessions = seedSessions(listSessions);
+    const plain = api.sessions.find((s) => s.sessionId === TWO_HOURS_ID);
     const page = await mount('/sessions?age=6h', { now: CLOCK_ORIGIN });
     const tr = page.container.querySelector(`[id="${plain === undefined ? '' : idOfRow(plain)}"]`);
     const drawn = cellText(sessionCell(page, tr, 'Context'));
     const { head, lines } = linesOf(page, await open(page, plain));
     page.unmount();
+    api.listSessions = listSessions;
     results.push({
       name: "/sessions a session no companion reports reads the main pin's figures on its row, and its agents table draws no Context or Prefix",
       ok:
@@ -23382,7 +23405,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const note = tile?.querySelector('.stat__note')?.textContent?.trim() ?? '';
     results.push({ name: '/sessions the tile counts the rows whose companion reports or went silent', ok: companions > 0 && note.startsWith(`${companions} with the keepalive mod,`), missing: [`${companions} rows`, note || 'no note'] });
     // Twelve of the rows the default filters keep hold a recipe: the session the mod released whole is finished and
-    // hidden, and the row idle for two hours lies past the hour.
+    // hidden, and the row idle for two hours left the route's list under the non-companion timeout.
     results.push({ name: '/sessions the tile counts the rows that hold a recipe, not every session', ok: (tile?.textContent ?? '').includes(', 12 with a recipe'), missing: [tile?.textContent ?? 'absent'] });
   }
   {
@@ -23391,8 +23414,9 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     // session or dropping a recipe. The Agents figure leaves out the subagents the mod released under a live session,
     // which draw no line, and its title names them beside the records and then the rows the filters hide. Read on the
     // story's instant, where the defaults keep 21 rows holding 32 records, two of them the written session's released
-    // subagents, and whose lines read 9 busy, 7 idle and 4 parked: the overview's ninth idle agent is the main of a
-    // row the defaults hide.
+    // subagents, and whose lines read 9 busy, 7 idle and 4 parked: the overview's other two idle agents are the mains
+    // of the session the mod ended, which the defaults hide, and of the row idle for two hours, which the route's list
+    // leaves out under the non-companion timeout.
     const ov = await api.getKeepaliveOverview();
     const pinned = await mount('/sessions', { now: CLOCK_ORIGIN });
     const strip = [...pinned.container.querySelectorAll('.stat-grid > .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector(':scope > .stat__note')?.textContent?.trim()]);
@@ -23409,15 +23433,15 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       ok:
         JSON.stringify(strip.map(([l]) => l)) === JSON.stringify(['Sessions', 'Agents', 'Retained', 'Cache probes, 24h', 'Expired between turns, 24h', 'Bus gaps']) &&
         JSON.stringify([ov.agents.busy, ov.agents.idle, ov.agents.parked]) === JSON.stringify([9, 9, 4]) &&
-        agentsTitle === 'The rows shown hold 32 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine. 8 sessions hidden by the filters.' &&
+        agentsTitle === 'The rows shown hold 32 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine. 3 sessions hidden by the filters.' &&
         want.every(([label, value, note]) => read(label)[1] === value && (note === undefined || read(label)[2] === note)),
       missing: [...strip.map((t) => t.join(' | ')), `overview ${ov.agents.busy} busy, ${ov.agents.idle} idle, ${ov.agents.parked} parked`, agentsTitle || 'no Agents title'],
     });
   }
   {
     // With no line hidden the title's second sentence would count none, so it draws the records' sentence alone. The
-    // view shows every row, so no row is hidden either and the title carries no hidden count. The story's 29 rows hold
-    // 43 agent records.
+    // view shows every row, so no row is hidden either and the title carries no hidden count. The route's 24 rows hold
+    // 39 agent records, the ci key's two rows and the row idle for two hours holding the other four of the story's 43.
     const { listKeepaliveRecipes } = api;
     api.listKeepaliveRecipes = async (...args) => (await listKeepaliveRecipes.apply(api, args)).filter((r) => !(r.agentState === 'released' && r.cause === 'agent_released'));
     const none = await mount('/sessions?age=none&finished=1');
@@ -23425,7 +23449,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     api.listKeepaliveRecipes = listKeepaliveRecipes;
     results.push({
       name: "/sessions the Agents tile's title carries one sentence with no line and no row hidden",
-      ok: title === 'The rows shown hold 43 agent records against the cap.',
+      ok: title === 'The rows shown hold 39 agent records against the cap.',
       missing: [title || 'no Agents title'],
     });
     none.unmount();
@@ -23518,10 +23542,25 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     });
   }
   await showColumn(m, 'Next probe');
-  const ci = rows().filter((r) => cell(r, 'Key')?.textContent === 'ci');
-  results.push({ name: '/sessions still lists the ci key\'s sessions', ok: ci.length === 2, missing: [String(ci.length)] });
-  const ciCells = ci.map((r) => [cell(r, 'Cache warming')?.textContent?.trim(), cell(r, 'Next probe')?.textContent?.trim()]);
-  results.push({ name: '/sessions ci sessions read no recipe, not scheduled', ok: ciCells.every(([k, n]) => k === 'no recipe' && n === 'not scheduled'), missing: ciCells.flat() });
+  {
+    // The ci key's two rows left the route's list under the non-companion timeout, so the cases read their drawing
+    // from the seed, the view mounted again past another page with its columns back on, then drawn as it was.
+    const { listSessions } = api;
+    const redraw = async () => {
+      await m.navigate('/settings');
+      await m.navigate('/sessions?age=none&finished=1');
+      await showColumn(m, 'Requests');
+      await showColumn(m, 'Next probe');
+    };
+    api.listSessions = seedSessions(listSessions);
+    await redraw();
+    const ci = rows().filter((r) => cell(r, 'Key')?.textContent === 'ci');
+    const ciCells = ci.map((r) => [cell(r, 'Cache warming')?.textContent?.trim(), cell(r, 'Next probe')?.textContent?.trim()]);
+    api.listSessions = listSessions;
+    await redraw();
+    results.push({ name: '/sessions still lists the ci key\'s sessions', ok: ci.length === 2, missing: [String(ci.length)] });
+    results.push({ name: '/sessions ci sessions read no recipe, not scheduled', ok: ciCells.every(([k, n]) => k === 'no recipe' && n === 'not scheduled'), missing: ciCells.flat() });
+  }
   await m.navigate('/sessions');
   results.push({ name: '/sessions rows start collapsed', ok: m.container.querySelectorAll('.srow__detail').length === 0, missing: [] });
   // The default filters keep one row on an API-key account, last used under half an hour before the story's instant,
@@ -23540,8 +23579,9 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     });
     // A slowed session's speed chip is the cell's other badge, read by the check after this one.
     const badges = [...m.container.querySelectorAll('.srow__account .badge')].filter((b) => !b.closest('.speed-chip')).map((b) => b.textContent?.trim() ?? '');
-    // The 26 rows under no age limit less the registration-only row and the refusal-only row, which name no account.
-    const pinnedTo = 24;
+    // The route's 21 rows under no age limit less the registration-only row, which names no account. The refusal-only
+    // row, which names none either, left the list under the non-companion timeout.
+    const pinnedTo = 20;
     results.push({
       name: '/sessions account cells carry the account kind on their title and description rather than a badge',
       ok: kinds.length === pinnedTo && kinds.includes('oauth') && kinds.includes('api_key') && undescribed.length === 0 && badges.every((b) => /^\+\d+$/.test(b)),
@@ -23624,13 +23664,14 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
 
   // Expiry now rides under the last-used time rather than in a column of its own.
   const expiries = rows().map((r) => cell(r, 'Last used')?.querySelector('.sub')?.textContent?.trim() ?? '');
-  // Of the 26 rows under no age limit, the registration-only row and the laptop row the ledger never saw carry no last
-  // use and no request, so they have no expiry to count down.
-  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 26 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 24, missing: [`${expiries.length} rows`, ...expiries.slice(0, 3)] });
+  // Of the route's 21 rows under no age limit, the registration-only row and the laptop row the ledger never saw carry
+  // no last use and no request, so they have no expiry to count down.
+  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 21 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 19, missing: [`${expiries.length} rows`, ...expiries.slice(0, 3)] });
   const counts = rows().map((r) => Number(cell(r, 'Requests')?.textContent?.trim()));
-  // 21 of the 26 rows under no age limit hold ledgered requests, and the two rows with no last use, the row idle for
-  // two hours, nightly's notebook row and the refusal-only row hold none.
-  results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length === 21 && counts.includes(0), missing: counts.map(String) });
+  // 18 of the route's 21 rows under no age limit hold ledgered requests, and the two rows with no last use and
+  // nightly's notebook row hold none. The ci key's two rows and the earlier holder, which hold some, left the list
+  // under the non-companion timeout.
+  results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length === 18 && counts.includes(0), missing: counts.map(String) });
 
   // Per-agent pins: a "+N" badge wherever an agent runs another model or sits on another account.
   {
@@ -23713,9 +23754,9 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       missing: epochLines,
     });
     const lasts = rows().map((r) => cell(r, 'Last request')?.textContent?.trim() ?? '');
-    // The 21 rows under no age limit that hold ledgered requests and the refusal-only row read a last request, the
-    // other four none.
-    results.push({ name: '/sessions last request is relative or none', ok: lasts.filter((v) => v === 'none').length === 4 && lasts.filter((v) => /ago$|^now$/.test(v)).length === 22, missing: lasts });
+    // The route's 18 rows under no age limit that hold ledgered requests read a last request and the other three none,
+    // the refusal-only row having left the list under the non-companion timeout.
+    results.push({ name: '/sessions last request is relative or none', ok: lasts.filter((v) => v === 'none').length === 3 && lasts.filter((v) => /ago$|^now$/.test(v)).length === 18, missing: lasts });
     const silentRows = rows().filter((r) => (cell(r, 'Companion')?.textContent?.trim() ?? '').startsWith('silent'));
     const silentWarming = silentRows.map((r) => cell(r, 'Cache warming')?.textContent?.trim() ?? '');
     results.push({
@@ -23920,7 +23961,14 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   }
   {
     // The count leaves a refused request out, while the log lists it and the session's analytics fold holds it, so a
-    // session whose every request was refused opens both views. One with no ledgered row has nothing to open.
+    // session whose every request was refused opens both views. One with no ledgered row has nothing to open. The
+    // refusal-only row left the route's list under the non-companion timeout, so the case reads its drawing from the
+    // seed, the view mounted again past another page with the Requests column back on.
+    const { listSessions } = api;
+    api.listSessions = seedSessions(listSessions);
+    await m.navigate('/settings');
+    await m.navigate('/sessions?age=none&finished=1');
+    await showColumn(m, 'Requests');
     const ledgerJumps = (items) => items.filter((b) => ['View in analytics', 'View in requests'].includes(b.textContent?.trim() ?? ''));
     const read = async (row) => {
       const count = cell(row, 'Requests');
@@ -23928,7 +23976,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       await openMenu(row);
       return { count: count?.textContent?.trim() ?? null, hover: count?.getAttribute('title') ?? null, jumps: jumps.map((b) => ({ disabled: b.disabled, title: b.getAttribute('title') })), muted: count?.querySelector('.muted') != null };
     };
-    const refusedOnly = ledgerSessions.find((s) => !s.historical && s.requests === 0 && s.lastRequestAt !== null);
+    const refusedOnly = api.sessions.find((s) => !s.historical && s.requests === 0 && s.lastRequestAt !== null);
     const refused = await read(rowOfSession(refusedOnly));
     // Found again, since the navigation above drew the table anew.
     const unledgered = await read(rowOfSession(ledgerSessions.find((s) => !s.historical && s.lastRequestAt === null)));
@@ -23947,6 +23995,10 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
         unledgered.jumps.every((j) => j.disabled && (j.title ?? '').includes('no ledgered requests')),
       missing: [refusedOnly === undefined ? 'no refusal-only session' : `${refusedOnly.keyId} ${refusedOnly.sessionId}`, JSON.stringify(refused), JSON.stringify(unledgered)],
     });
+    api.listSessions = listSessions;
+    await m.navigate('/settings');
+    await m.navigate('/sessions?age=none&finished=1');
+    await showColumn(m, 'Requests');
   }
   {
     const release = (await openMenu(busyRow())).find((b) => b.textContent?.trim() === 'Release');
@@ -23959,8 +24011,15 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   }
 
   // One row per key, generation and session: a key id created again leaves the earlier holder's sessions in
-  // the ledger, so the id they share appears twice.
+  // the ledger, so the id they share appears twice. The earlier holder's row left the route's list under the
+  // non-companion timeout, so these cases read its drawing from the seed, the view mounted again past another page
+  // with the Requests column back on.
   {
+    const { listSessions } = api;
+    api.listSessions = seedSessions(listSessions);
+    await m.navigate('/settings');
+    await m.navigate('/sessions?age=none&finished=1');
+    await showColumn(m, 'Requests');
     await showColumn(m, 'Agents');
     const idOf = (r) => cell(r, 'Session')?.getAttribute('title') ?? '';
     const shared = rows().filter((r) => idOf(r) !== '' && idOf(r) === idOf(rows()[0]));
@@ -24012,6 +24071,11 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     });
     gone?.click();
     await m.settle(200);
+    api.listSessions = listSessions;
+    await m.navigate('/settings');
+    await m.navigate('/sessions?age=none&finished=1');
+    await showColumn(m, 'Requests');
+    await showColumn(m, 'Agents');
   }
 
   // A row opens into one line per agent and closes again.
@@ -24164,7 +24228,25 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       missing: [...new Set(counts)],
     });
   }
-  expect('/sessions says why the ci sessions have no recipe', m.text(), ['pool jobs keeps no caches warm', 'key ci opts out']);
+  {
+    // The ci key's rows left the route's list under the non-companion timeout, so the case reads their explanations
+    // from the seed with every row expanded, the view mounted again past another page, then drawn as it was.
+    const { listSessions } = api;
+    const expanded = async () => {
+      await m.navigate('/settings');
+      await m.navigate('/sessions?age=none&finished=1');
+      await showColumn(m, 'Requests');
+      await showColumn(m, 'Agents');
+      [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all')?.click();
+      await m.settle(250);
+    };
+    api.listSessions = seedSessions(listSessions);
+    await expanded();
+    const explained = m.text();
+    api.listSessions = listSessions;
+    await expanded();
+    expect('/sessions says why the ci sessions have no recipe', explained, ['pool jobs keeps no caches warm', 'key ci opts out']);
+  }
   const collapseAll = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all');
   results.push({ name: '/sessions Expand all flips to Collapse all', ok: Boolean(collapseAll), missing: [] });
   collapseAll?.click();
@@ -24317,8 +24399,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     }));
     const count = cell(row, 'Agents')?.textContent?.trim();
     const tile = [...m.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value')?.textContent?.trim();
-    // The 26 rows under no age limit hold 36 records, two of them the written session's released subagents.
-    const want = '34 of 1,024';
+    // The route's 21 rows under no age limit hold 32 records, two of them the written session's released subagents.
+    const want = '30 of 1,024';
     results.push({
       name: '/sessions a line the mod released is not listed, one the session\'s end released is, and the Agents column and tile leave the hidden ones out of their counts',
       ok:
@@ -24336,7 +24418,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   }
 
   // Last of the /sessions blocks: the release drops a row from the shared mock that every count above still expects.
-  // The earlier holder lies past the hour, so the release is read with every row shown.
+  // The release is read with every row the route lists shown.
   await m.navigate('/sessions?age=none&finished=1');
   // The view drew its default set again on the way back from analytics, which leaves the count to the Columns control.
   await showColumn(m, 'Requests');
@@ -24347,13 +24429,26 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     await m.settle(250);
     [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(600);
-    const released = rows().filter((r) => cell(r, 'Session')?.getAttribute('title') === id);
-    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 28, missing: [String(rows().length)] });
-    results.push({
-      name: '/sessions releasing the live holder leaves the earlier one in the ledger',
-      ok: released.length === 1 && cell(released[0], 'Key')?.querySelector('.sub')?.textContent?.trim() === 'deleted holder',
-      missing: released.map((r) => cell(r, 'Key')?.textContent?.trim() ?? ''),
-    });
+    // The route's 24 rows under no age limit with the finished sessions shown, less the one released.
+    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 23, missing: [String(rows().length)] });
+    {
+      // The earlier holder left the route's list under the non-companion timeout, so the case reads its drawing from
+      // the seed, the view mounted again past another page.
+      const { listSessions } = api;
+      api.listSessions = seedSessions(listSessions);
+      await m.navigate('/settings');
+      await m.navigate('/sessions?age=none&finished=1');
+      const released = rows().filter((r) => cell(r, 'Session')?.getAttribute('title') === id);
+      const keys = released.map((r) => ({ key: cell(r, 'Key')?.textContent?.trim() ?? '', sub: cell(r, 'Key')?.querySelector('.sub')?.textContent?.trim() ?? null }));
+      api.listSessions = listSessions;
+      await m.navigate('/settings');
+      await m.navigate('/sessions?age=none&finished=1');
+      results.push({
+        name: '/sessions releasing the live holder leaves the earlier one in the ledger',
+        ok: keys.length === 1 && keys[0].sub === 'deleted holder',
+        missing: keys.map((k) => k.key),
+      });
+    }
   }
   {
     // A fork whose base is no longer listed reads its depth, names the base on its title and links nowhere.
@@ -25536,7 +25631,7 @@ m.unmount();
   const rows = [...(about()?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim());
   results.push({
     name: '/settings Try again reads the settings into About and the hint beside the block',
-    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Body capture', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null && (failed.container.querySelector('pre.snippet')?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=http://router.example.com:8080',
+    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Body capture', 'Session expiry', 'Non-companion timeout', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null && (failed.container.querySelector('pre.snippet')?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=http://router.example.com:8080',
     missing: [...rows, (failed.container.querySelector('pre.snippet')?.textContent ?? 'no block').split('\n')[0]],
   });
   failed.unmount();
@@ -25687,21 +25782,21 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
   // Each cost file's row carries its date in force and its revision count, read off the captured revisions through the
   // page's own label. The three keepalive limits read on the Sessions page beside their counts, so About carries none
-  // of them.
+  // of them. The two session lines read the mock's `SETTINGS_WIRE.sessions`, 86400 s and 3600 s.
   const wired = decodeSettings(SETTINGS_WIRE);
   const revisionsText = (revisions) => `effective ${effectiveLabel(revisionAt(revisions, CLOCK_ORIGIN).effective)}, ${revisions.length === 1 ? '1 revision' : `${revisions.length} revisions`}`;
   const priceRow = `API prices path=./api_prices.yaml, ${revisionsText(wired.apiPrices.revisions)}`;
   const costRow = `Subscription costs path=./subscription_costs.yaml, ${revisionsText(wired.subscriptionCosts.revisions)}`;
-  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.310-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Requests, samples and the routing log=kept for 365 days', 'Rollups=kept for 365 days', `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines, the two session lines and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.310-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Requests, samples and the routing log=kept for 365 days', 'Rollups=kept for 365 days', `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, 'Session expiry=1d (86400 s)', 'Non-companion timeout=1h (3600 s)', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
   results.push({
-    name: '/settings each path and retention line names its key in the configuration file and the admin secret line its variable',
-    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', 'Requests, samples and the routing log=Set by stats.retention_days in the configuration file', 'Rollups=Set by stats.rollup_retention_days in the configuration file', 'Body capture=Set by stats.body_capture_max_hours in the configuration file', 'Admin secret=The secret the variable admin.secret_env names. It reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
+    name: '/settings each path, retention line and session line names its key in the configuration file and the admin secret line its variable',
+    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', 'Requests, samples and the routing log=Set by stats.retention_days in the configuration file', 'Rollups=Set by stats.rollup_retention_days in the configuration file', 'Body capture=Set by stats.body_capture_max_hours in the configuration file', 'Session expiry=Set by sessions.expire_after_seconds in the configuration file', 'Non-companion timeout=Set by sessions.non_companion_idle_seconds in the configuration file', 'Admin secret=The secret the variable admin.secret_env names. It reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
     missing: titled,
   });
   const mirrored = ['Body capture, max hours', 'Cache TTL (seconds)', 'Catalog refresh (seconds)', 'Max workers', 'Sample retention (days)'].filter((w) => m.text().includes(w));
   results.push({ name: '/settings carries no mirror words', ok: mirrored.length === 0, missing: mirrored });
-  results.push({ name: '/settings no card reads a configuration mirror', ok: ['Sessions', 'Retention', 'Keepalive', 'Listeners', 'Compatibility', 'Quota', 'Routing', 'Storage', 'Usage'].every((t) => !titles.includes(t)) && !m.text().includes('Session expiry') && !m.text().includes('HTTP/1.1'), missing: titles });
+  results.push({ name: '/settings no card reads a configuration mirror', ok: ['Sessions', 'Retention', 'Keepalive', 'Listeners', 'Compatibility', 'Quota', 'Routing', 'Storage', 'Usage'].every((t) => !titles.includes(t)) && !m.text().includes('HTTP/1.1'), missing: titles });
   const block = m.container.querySelector('pre.snippet');
   const hint = block?.nextElementSibling;
   const SNIPPET_HINT =

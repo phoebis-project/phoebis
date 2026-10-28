@@ -2083,8 +2083,11 @@ export interface Settings {
   listeners: { metrics: string; proxy: string; proxyTls: boolean };
   /** The two day counts are file settings of the `stats` section, 0 for forever. */
   retention: { bodyCaptureMaxHours: number; retentionDays: number; rollupRetentionDays: number };
-  /** How long a session stays listed after its last activity. */
-  sessions: { expireAfterSeconds: number };
+  /**
+   * How long a session stays listed after its last activity, and how long a session no mod reports stays listed
+   * after its last use.
+   */
+  sessions: { expireAfterSeconds: number; nonCompanionIdleSeconds: number };
   /** Each path is null when no override file is configured. */
   storage: { apiPricesPath: string | null; ledgerPath: string; path: string; subscriptionCostsPath: string | null };
   /**

@@ -21,7 +21,7 @@ import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, 
 import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
-import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins, pinsUnderPool } from './operations';
+import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins, pinsUnderPool, sessionsListedAt } from './operations';
 import { KEYS, POOLS, composedFor, resolvedFor, servedFigures } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRICED_REQUEST, UNPRICED_ROLLUPS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
@@ -1289,7 +1289,7 @@ export class MockApi implements Api {
 
   listSessions() {
     if (sessionsFail()) return Promise.reject(new ApiError(503, 'store busy', null));
-    return latency(emptyStore() ? [] : this.sessions);
+    return latency(emptyStore() ? [] : sessionsListedAt(NOW, this.sessions, this.settings.sessions.nonCompanionIdleSeconds));
   }
 
   login(secret: string, stayLoggedIn = false): Promise<SessionInfo> {

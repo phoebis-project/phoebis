@@ -95,9 +95,9 @@ const sessionSpec: ({
   // cache TTL, since the router lists a released record for one TTL after its release and then not at all.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'idle', agents: 3, companion: 'reporting', released: true, sessionId: RELEASED_SESSION_ID },
   { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-6', state: 'busy', agents: 1, companion: 'reporting', sessionId: CLIENT_SESSION_ID },
-  // The two sessions the Sessions view's default filters hide: one the mod ended, which keeps its lines, its released
-  // subagents' last probes dating their release inside all's one-hour cache TTL, and one no companion reports, last
-  // used two hours ago, past the view's one-hour age.
+  // One session the mod ended, which keeps its lines, its released subagents' last probes dating their release inside
+  // all's one-hour cache TTL, and which the Sessions view's default filters hide, and one no companion reports, last
+  // used two hours ago, past the one-hour non-companion timeout, so the route's list leaves it out.
   {
     keyId: 'desktop',
     accountId: 'nightly',
@@ -193,11 +193,19 @@ const sessionSpec: ({
 
 /** How long the router lists a session after its last request, which the settings answer as well. */
 const SESSION_EXPIRE_SECONDS = 86_400;
+const NON_COMPANION_IDLE_SECONDS = 3_600;
 /**
  * The router drops a session past `SESSION_EXPIRE_SECONDS`, so a ledger-only row is listed only while its last request
  * is inside the span. Exported for the consistency test's two instants.
  */
 export const insideSessionExpiry = (lastAt: string, now: number): boolean => Date.parse(lastAt) + SESSION_EXPIRE_SECONDS * 1000 > now;
+/** Whether an instant is inside the non-companion timeout: a row or a line with no use on record is never older. */
+export const withinNonCompanionTimeout = (at: string | null, seconds: number, now: number): boolean => at === null || now - Date.parse(at) <= seconds * 1000;
+/** The later of a session's own last use and its last ledgered request, which the route's timeout reads. */
+export const lastUseOf = (s: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>): string | null => {
+  const stamps = [s.lastUsedAt, s.lastRequestAt].filter((t): t is string => t !== null);
+  return stamps.length === 0 ? null : stamps.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
+};
 
 // Grouped as the route's activity query groups a session's rows, by key, generation and session with probes left out,
 // so the earlier holder's rows count for its own row below, never for the live session that shares their id. A refused
@@ -390,8 +398,9 @@ const RECIPE_CAUSES: (RecipeCause | null)[] = [
   null,
   // One row for each session past the story's ids, so the modulo wraps none of them onto the first causes. The
   // finished row's main is written over its own, the row idle for two hours ran past the `all` pool's one-hour max
-  // idle as the 95-minute `laptop` row did, the pin on the work pool's former member waits for its next probe, and the
-  // released row's main is written over its own.
+  // idle as the 95-minute `laptop` row did and keeps its recipe in the engine's figures while the route's list leaves
+  // the row out under the non-companion timeout, the pin on the work pool's former member waits for its next probe,
+  // and the released row's main is written over its own.
   null,
   null,
   null,
@@ -717,9 +726,9 @@ if (FLEET_PINS.length > 0) {
 
 // The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...)`
 // with the creation minute in the viewer's zone: the router lists a holder's session while its last request is inside
-// the session expiry, with that holder's own requests and no pin or recipe. The holder's last request ran on the
-// session the live key holds now, so the row carries that id, and it joins the list after the probe times are filled
-// in, which would otherwise hand it that session's next probe.
+// the session expiry and the non-companion timeout, with that holder's own requests and no pin or recipe. The holder's
+// last request ran on the session the live key holds now, so the row carries that id, and it joins the list after the
+// probe times are filled in, which would otherwise hand it that session's next probe.
 const holderRows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION && r.sessionId === SESSION_IDS[0]);
 const holderLast = holderRows[0];
 if (holderLast && insideSessionExpiry(holderLast.at, NOW)) {
@@ -764,8 +773,9 @@ if (holderLast && insideSessionExpiry(holderLast.at, NOW)) {
 // The desktop session whose every request the key's own guardrail refused before any account was asked. The router
 // lists it off the ledger's rows with no pin and no recipe, so a drifting or blocked client stays visible, and the
 // activity fold gives it a count of none and the newest refusal as its last request, and only while that refusal is
-// inside the router's session expiry. The row is built at an instant since the mock's now is fixed at load, so the
-// consistency test reads it inside the expiry and past it.
+// inside the router's session expiry, the non-companion timeout leaving it out of the route's list sooner. The row is
+// built at an instant since the mock's now is fixed at load, so the consistency test reads it inside the expiry and
+// past it.
 const blockedGeneration = Date.parse(keyById.get('desktop')!.createdAt);
 const blocked = ledgered.get(activityOf('desktop', blockedGeneration, BLOCKED_SESSION_ID));
 const blockedLast = REQUESTS.find((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === blockedGeneration && r.sessionId === BLOCKED_SESSION_ID);
@@ -810,6 +820,12 @@ export function refusalOnlyRows(now: number): Session[] {
   return [row];
 }
 SESSIONS.push(...refusalOnlyRows(NOW));
+/**
+ * The sessions the route lists at `now`: a session no mod reports leaves once its last use is older than the timeout.
+ * The clock is handed in, as `refusalOnlyRows` takes it, since the story is built against `NOW` and a test reads the
+ * list at any instant without moving `Date.now`.
+ */
+export const sessionsListedAt = (now: number, sessions: readonly Session[] = SESSIONS, seconds = NON_COMPANION_IDLE_SECONDS): Session[] => sessions.filter((s) => s.companion !== 'none' || withinNonCompanionTimeout(lastUseOf(s), seconds, now));
 
 // A pin is the engine's: one per key, session, agent and model, so a session's subagents hold pins of their own, on
 // another account where they run there. The router renews a pin on each request and each keepalive probe, and the
@@ -905,7 +921,7 @@ export const SETTINGS_WIRE = {
   api_prices: API_PRICES_WIRE,
   listeners: { metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080', proxy_tls: false },
   retention: { body_capture_max_hours: 72, retention_days: 365, rollup_retention_days: 365 },
-  sessions: { expire_after_seconds: SESSION_EXPIRE_SECONDS },
+  sessions: { expire_after_seconds: SESSION_EXPIRE_SECONDS, non_companion_idle_seconds: NON_COMPANION_IDLE_SECONDS },
   storage: { api_prices_path: './api_prices.yaml', ledger_path: './data/ledger.sqlite', path: './data/router.sqlite', subscription_costs_path: './subscription_costs.yaml' },
   subscription_costs: SUBSCRIPTION_COSTS_WIRE,
 };

@@ -5,7 +5,7 @@ import { IconMonitor, IconMoon, IconSun } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, ErrorState, KeyValue, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { UnitLegend } from '@/components/ui/UnitControls';
 import { revisionAt } from '@/lib/costs';
-import type { TimeFormat } from '@/lib/format';
+import { fmtDuration, type TimeFormat } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { snippetFor } from '@/lib/snippet';
 import { positionOf, UNIT_LABEL, UNIT_POSITIONS } from '@/lib/unit';
@@ -143,6 +143,8 @@ export function SettingsPage() {
                 { label: 'Requests, samples and the routing log', value: keptFor(s.retention.retentionDays), title: bootstrapNote('stats.retention_days') },
                 { label: 'Rollups', value: keptFor(s.retention.rollupRetentionDays), title: bootstrapNote('stats.rollup_retention_days') },
                 { label: 'Body capture', value: `at most ${s.retention.bodyCaptureMaxHours} ${s.retention.bodyCaptureMaxHours === 1 ? 'hour' : 'hours'}`, title: bootstrapNote('stats.body_capture_max_hours') },
+                { label: 'Session expiry', value: `${fmtDuration(s.sessions.expireAfterSeconds * 1000)} (${s.sessions.expireAfterSeconds} s)`, title: bootstrapNote('sessions.expire_after_seconds') },
+                { label: 'Non-companion timeout', value: `${fmtDuration(s.sessions.nonCompanionIdleSeconds * 1000)} (${s.sessions.nonCompanionIdleSeconds} s)`, title: bootstrapNote('sessions.non_companion_idle_seconds') },
                 { label: 'Admin secret', value: <SecretBadge configured={s.access.adminConfigured} />, title: 'The secret the variable admin.secret_env names. It reaches every route.' },
               ]}
             />

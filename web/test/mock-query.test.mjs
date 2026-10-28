@@ -181,3 +181,28 @@ test("the mock answers an agent id with the agent's rows on both logs, an event 
     assert.deepEqual(page.rows.map(key), kept.map(key), `the ${agentId} page is the hour's rows of ${agentId}`);
   }
 });
+
+test('the mock leaves out a session no mod reports once its last use is older than the non-companion timeout, as the route does', async () => {
+  const now = Date.parse(AT);
+  const HOUR_S = 3_600;
+  const TWO_HOURS_BACK = 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58';
+  const key = (s) => `${s.keyId}|${s.keyGeneration}|${s.sessionId}`;
+  const named = (s) => `${s.keyId} on ${s.accountId ?? 'no account'} ${s.sessionId.slice(0, 8)}${s.historical ? ' earlier holder' : ''}`;
+  const back = (s) => (d.lastUseOf(s) === null ? 'no use on record' : `${Math.round((now - Date.parse(d.lastUseOf(s))) / 60_000)} min back`);
+  const sessions = await api.listSessions();
+  const plain = sessions.filter((s) => s.companion === 'none');
+  const past = plain.filter((s) => !d.withinNonCompanionTimeout(d.lastUseOf(s), HOUR_S, now));
+  assert.equal(past.length, 0, `listed past the hour: ${past.map((s) => `${named(s)} (${back(s)})`).join(', ')}`);
+  const overflow = plain.find((s) => s.keyId === 'desktop' && s.accountId === 'overflow');
+  const pinless = plain.find((s) => s.keyId === 'laptop' && s.accountId === 'secondary' && !s.pinned);
+  assert.ok(overflow && pinless, `the unpinned rows on overflow and secondary stay listed, their last use inside the hour: ${plain.map((s) => `${named(s)} (${back(s)})`).join(', ')}`);
+  // The laptop row the ledger never saw holds no pin and no request: a null last use is never older than the timeout.
+  const unused = plain.filter((s) => d.lastUseOf(s) === null);
+  assert.deepEqual(unused.map((s) => `${s.keyId} on ${s.accountId}`), ['laptop on nightly'], 'one row no mod reports has no use on record and is listed at any instant');
+  assert.deepEqual(d.sessionsListedAt(now).map(key), sessions.map(key), "the helper reads the route's list at the story's clock");
+  assert.ok(d.sessionsListedAt(now, undefined, 10_800).some((s) => s.sessionId === TWO_HOURS_BACK), 'a three-hour timeout lists the row last used two hours back');
+  assert.ok(!d.sessionsListedAt(now, undefined, HOUR_S).some((s) => s.sessionId === TWO_HOURS_BACK), 'the one-hour timeout leaves it out');
+  const later = d.sessionsListedAt(now + 2 * HOUR_S * 1000);
+  assert.deepEqual(later.filter((s) => s.companion === 'none').map(named), unused.map(named), 'two hours on, no row no mod reports with a use on record stays listed');
+  assert.deepEqual(later.filter((s) => s.companion !== 'none').map(key), sessions.filter((s) => s.companion !== 'none').map(key), "every companion row of the story's list still stands two hours on");
+});

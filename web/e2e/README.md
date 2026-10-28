@@ -74,7 +74,9 @@ key dialog's Key group (the Name input, the Pool select and the footer's buttons
 label above its control), the settings cards' order, the listener hint's gaps and size and About's lines (their order,
 one type and one gap), About's three retention lines (the label's type and ink, the value's ink and the row's height of
 the Storage path line above them, the label's and the value's type and ink of the Admin secret line below them, and in
-the 720 px strip and at 400 px those types and inks again with the label column at most half the list's width), the
+the 720 px strip and at 400 px those types and inks again with the label column at most half the list's width), About's
+Session expiry and Non-companion timeout lines (the label's type and ink, the value's type, the row's height and the
+label's and the value's left edges of the Body capture line above them, each line's text and hover recorded), the
 Settings page's Unit row at 1280 and 400 px (the legend's button on the select's line, and its popover inside the
 viewport's width, at or below its button's bottom, uncovered, in the legend's 12 px type and closed by Escape), the
 Appearance card's Theme, Time format and Unit rows at 400 px (each control under its label), the cooling-down block's
