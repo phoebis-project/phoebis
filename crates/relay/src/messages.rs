@@ -3886,7 +3886,6 @@ impl Relay {
         Some(AffinityFacts {
             router: self.router.clone(),
             pending: self.pending_reports.clone(),
-            session_id: ctx.identity.session_id.clone(),
             account_id: ctx.account.id.clone(),
             incarnation: ctx.account.incarnation,
             key_id: ctx.key.id.clone(),

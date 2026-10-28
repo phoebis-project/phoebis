@@ -20994,6 +20994,44 @@ fn a_renewal_on_an_account_whose_pins_draw_no_fable_week_names_no_fable_week() {
     }
 }
 
+#[test]
+fn a_renewal_on_a_usage_based_seat_names_the_idle_age_where_a_plan_members_week_would_cross_the_ceiling(
+) {
+    // A hundred tokens a second take the week's 0.93 to 0.96 at its horizon, over the ceiling, so a plan member's
+    // renewal names the week. On a usage-based seat of the same tier the reading is one kept from before it converted,
+    // and no round reads a seat's plan week, so its renewal names the idle age.
+    let renew = |s: &RegistrySnapshot| {
+        let mut st = priced(vec![burning("s1", "a", 100.0, true, T)]);
+        st.record_sample("a", sample(0.1, 0.93, T - 500));
+        decide(&mut st, s, &auxiliary(s, "s1", T), &mut rng())
+    };
+    let pool = || Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    };
+    let d = renew(&tiered(pool()));
+    assert_eq!(d.record.outcome.kind, "renewed");
+    assert_eq!(
+        summary_facts(&d),
+        vec![(SEVEN_DAY, FactValue::Number(0.93), Some("percent"))],
+        "on a plan member the week's projection crosses the ceiling"
+    );
+    let seat = snapshot_with_terms(
+        pool(),
+        vec![SubscriptionTerm {
+            tier: Some(TIER.into()),
+            ..usage_based_seat("a")
+        }],
+    );
+    let d = renew(&seat);
+    assert_eq!(d.record.outcome.kind, "renewed");
+    assert_eq!(
+        summary_facts(&d),
+        vec![("idle", FactValue::Int(1_000), Some("ms"))],
+        "the seat's renewal names its idle age, never the old week's utilization"
+    );
+}
+
 /// The 5-hour projection's source for the round cases: `a` at 0.80 with the reset an hour out and its pins burning
 /// 0.42 of the window an hour, so the projection reads 1.22 and the excess 0.27 an hour under a cap of half the burn.
 fn three_pins_projecting_over() -> RoutingState {
