@@ -442,7 +442,7 @@ band.
 ## Metrics
 
 `stats.metrics_listen` (`127.0.0.1:9464` by default) serves `/metrics` in Prometheus text format and nothing else. It
-speaks plain HTTP and asks for no credential, so it belongs behind a network only the scraper can reach. Twenty-four
+speaks plain HTTP and asks for no credential, so it belongs behind a network only the scraper can reach. Twenty-five
 families are rendered, each with a `# TYPE` line and no `# HELP` line:
 
 | Metric | Type | Labels |
@@ -455,6 +455,7 @@ families are rendered, each with a `# TYPE` line and no `# HELP` line:
 | `phoebis_bus_dropped_total` | counter | `subscriber` |
 | `phoebis_bus_subscriber_panics_total` | counter | `subscriber` |
 | `phoebis_keepalive_agents` | gauge | `state` |
+| `phoebis_keepalive_chain_contradictions_total` | counter | `client_version` |
 | `phoebis_keepalive_probes_total` | counter | `outcome`, `pool` |
 | `phoebis_keepalive_skipped_total` | counter | `pool`, `state` |
 | `phoebis_ledger_behind_refusals_total` | counter | none |

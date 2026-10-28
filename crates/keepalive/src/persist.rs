@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::{KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LEASE_MS};
 use crate::engine::{
     kind_of_word, kind_word, utc_day, Agent, AgentState, Engine, Guard, IdleEpisode,
-    IdleReturnBucket, Inner, Kept, Observation, ParkKind, PriorCoverage, Reason, SavingsUnit,
-    Session, SessionKey, Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
+    IdleReturnBucket, Inner, Kept, Observation, ParkKind, PrefixAnchor, PriorCoverage, Reason,
+    SavingsUnit, Session, SessionKey, Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::usage::ProbeUsage;
@@ -78,7 +78,11 @@ pub(crate) struct PersistedAgent {
     pub park_ended_at: Option<i64>,
     pub idle_episode: Option<PersistedEpisode>,
     pub idle_window_floor: Option<i64>,
-    pub last_prefix: Option<(String, String)>,
+    pub last_prefix: Option<PersistedAnchor>,
+    /// Absent from a row saved before agents carried one, which loads as `None`, so the watch marks nothing until the
+    /// next main completion reports a prompt.
+    #[serde(default)]
+    pub last_prompt_tokens: Option<u64>,
     pub generation: u64,
     pub current: Option<PersistedObservation>,
     pub expires: Option<i64>,
@@ -129,9 +133,43 @@ pub(crate) struct PersistedAgent {
 pub(crate) struct PersistedEpisode {
     pub started: i64,
     pub bucket: Option<usize>,
-    pub anchor: Option<(String, String)>,
+    pub anchor: Option<PersistedAnchor>,
     pub prompt_at: Option<i64>,
     pub pool_key: String,
+}
+
+/// Saved as `[static_hash, last, before_last]`, read from that or from the saved `[static_hash, last]` pair, so a row
+/// an earlier build saved loads under the same record version with no boundary before the last.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum PersistedAnchor {
+    Anchor(String, String, Option<String>),
+    Tail(String, String),
+}
+
+impl PersistedAnchor {
+    fn of(anchor: &PrefixAnchor) -> PersistedAnchor {
+        PersistedAnchor::Anchor(
+            anchor.static_hash.clone(),
+            anchor.last.clone(),
+            anchor.before_last.clone(),
+        )
+    }
+
+    fn restore(self) -> PrefixAnchor {
+        match self {
+            PersistedAnchor::Anchor(static_hash, last, before_last) => PrefixAnchor {
+                static_hash,
+                last,
+                before_last,
+            },
+            PersistedAnchor::Tail(static_hash, last) => PrefixAnchor {
+                static_hash,
+                last,
+                before_last: None,
+            },
+        }
+    }
 }
 
 /// `poisoned` is written as it stood and read back false: the gap that poisoned the observation is this process's,
@@ -386,12 +424,13 @@ impl PersistedAgent {
             idle_episode: agent.idle_episode.as_ref().map(|episode| PersistedEpisode {
                 started: episode.started,
                 bucket: episode.bucket,
-                anchor: episode.anchor.clone(),
+                anchor: episode.anchor.as_ref().map(PersistedAnchor::of),
                 prompt_at: episode.prompt_at,
                 pool_key: episode.pool_key.clone(),
             }),
             idle_window_floor: agent.idle_window_floor,
-            last_prefix: agent.last_prefix.clone(),
+            last_prefix: agent.last_prefix.as_ref().map(PersistedAnchor::of),
+            last_prompt_tokens: agent.last_prompt_tokens,
             generation: agent.generation,
             current: agent.current.as_ref().map(|o| PersistedObservation {
                 id: o.id.clone(),
@@ -520,12 +559,13 @@ impl PersistedAgent {
         agent.idle_episode = self.idle_episode.map(|episode| IdleEpisode {
             started: episode.started,
             bucket: episode.bucket,
-            anchor: episode.anchor,
+            anchor: episode.anchor.map(PersistedAnchor::restore),
             prompt_at: episode.prompt_at,
             pool_key: episode.pool_key,
         });
         agent.idle_window_floor = self.idle_window_floor;
-        agent.last_prefix = self.last_prefix;
+        agent.last_prefix = self.last_prefix.map(PersistedAnchor::restore);
+        agent.last_prompt_tokens = self.last_prompt_tokens;
         agent.generation = self.generation;
         agent.expires = self.expires;
         agent.leaves_at = self.leaves_at;

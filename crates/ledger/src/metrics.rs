@@ -200,6 +200,15 @@ impl Metrics {
         );
     }
 
+    /// One contradiction between the keepalive engine's chain model and the upstream's cache, per client version.
+    pub fn observe_chain_contradiction(&self, client_version: &str) {
+        self.add(
+            "phoebis_keepalive_chain_contradictions_total",
+            vec![("client_version", client_version.into())],
+            1.0,
+        );
+    }
+
     pub fn render(
         &self,
         gauges: &RoutingGauges,
@@ -212,6 +221,7 @@ impl Metrics {
             out.push_str(&format!("# TYPE {name} {kind}\n"));
             match name {
                 "phoebis_attempts_total"
+                | "phoebis_keepalive_chain_contradictions_total"
                 | "phoebis_keepalive_probes_total"
                 | "phoebis_keepalive_skipped_total"
                 | "phoebis_ledger_dropped_total"
@@ -440,6 +450,7 @@ pub const FAMILIES: &[(&str, &str)] = &[
     ("phoebis_bus_dropped_total", "counter"),
     ("phoebis_bus_subscriber_panics_total", "counter"),
     ("phoebis_keepalive_agents", "gauge"),
+    ("phoebis_keepalive_chain_contradictions_total", "counter"),
     ("phoebis_keepalive_probes_total", "counter"),
     ("phoebis_keepalive_skipped_total", "counter"),
     ("phoebis_ledger_behind_refusals_total", "counter"),

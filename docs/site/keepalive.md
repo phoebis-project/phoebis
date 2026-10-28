@@ -233,7 +233,16 @@ reports idle or parked, from the idle window's start above, and two counters per
 
 - `reached`, the windows that lasted to the bucket's start.
 - `returned`, the windows whose next request from the main conversation continued the conversation inside the bucket:
-  one of the request's message boundaries is the last one of the request before the window opened.
+  one of the request's message boundaries is either of the last two of the request before the window opened.
+
+The router hashes a content array of text blocks as its blocks up to the last one carrying the cache marker, a single
+remaining block as its text, so the last message the client sends again in the next request holds its boundary (see
+[The boundary chains](relay.md#the-boundary-chains)). A main conversation's request of class `main` or `subagent`,
+neither a compaction nor the first request after one, whose chain holds neither of the two boundaries while its answer
+read at least nine tenths of the previous request's prompt from the cache contradicts the router's chain model. The
+router logs it at warn once per client version per hour, naming the version, the session and the two token counts,
+counts each one in `phoebis_keepalive_chain_contradictions_total` by client version, and changes no return counter and
+no recipe for it.
 
 The ten buckets run 0 to 5, 5 to 15, 15 to 30 and 30 to 60 minutes, then 1 to 2, 2 to 4, 4 to 8, 8 to 16 and 16 to 32
 hours, and above. Windows are counted whether or not a recipe is retained, so one that outlives the idle window still
@@ -412,7 +421,8 @@ found it had missed bus events. Each gap discarded every observation still open,
 request while an armed recipe keeps its schedule.
 
 Prometheus carries `phoebis_keepalive_agents`, the agents holding a recipe by the mod's lifecycle word,
-`phoebis_keepalive_probes_total` by pool and outcome (`landed`, `cold`, `failed` or `held`), and
+`phoebis_keepalive_chain_contradictions_total`, the [chain contradictions](#the-return-rate-by-idle-age) by client
+version, `phoebis_keepalive_probes_total` by pool and outcome (`landed`, `cold`, `failed` or `held`), and
 `phoebis_keepalive_skipped_total`, the withheld probes by pool and recipe state (see [Metrics](statistics.md#metrics)).
 
 ## In the console

@@ -1,12 +1,14 @@
 //! The idle-age counters: per pool and idle-age bucket, the idle windows of the main conversation that reached the
 //! bucket's start and those whose next request continued the prefix the window opened on. The windows are counted at
-//! every tick and at the request that ends one, whether or not a recipe is still retained.
+//! every tick and at the request that ends one, whether or not a recipe is still retained. Beside them, the chain watch:
+//! a refreshing request whose chain holds neither boundary of that prefix while its answer reads the cache.
 mod common;
 
 use common::*;
+use phoebis_bus::{ClientFacts, Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
     continues_prefix, idle_age_bucket, AgentState, Event, Guard, IdleReturns, KeepalivePolicy,
-    Reason, IDLE_AGE_BOUNDS_SECONDS,
+    PrefixAnchor, Reason, IDLE_AGE_BOUNDS_SECONDS,
 };
 
 const OAUTH: &str = "sk-ant-oat01-OOOO";
@@ -25,6 +27,32 @@ fn next_turn() -> String {
 /// The rig's system prompt and model on a fresh message chain: a new prefix under the same static one.
 fn fresh_chain() -> String {
     BODY.replace("hello", "a fresh conversation")
+}
+
+/// Main's request on two messages, so the prefix a window opens on holds two boundaries.
+fn two_messages() -> String {
+    BODY.replace(
+        r#"{"role":"user","content":"hello"}]"#,
+        r#"{"role":"user","content":"hello"},{"role":"user","content":"and then"}]"#,
+    )
+}
+
+/// The next turn after `two_messages`, its last message re-sent whole.
+fn after_two_messages() -> String {
+    BODY.replace(
+        r#"{"role":"user","content":"hello"}]"#,
+        r#"{"role":"user","content":"hello"},{"role":"user","content":"and then"},{"role":"assistant","content":"hi"},{"role":"user","content":"more"}]"#,
+    )
+}
+
+/// The next turn after `two_messages` with its last message re-sent as a text block carrying a member beyond `type`,
+/// `text` and `cache_control`, a shape the canonical form keeps apart from the string: the chain holds the boundary
+/// before the last alone.
+fn reshaped_after_two_messages() -> String {
+    BODY.replace(
+        r#"{"role":"user","content":"hello"}]"#,
+        r#"{"role":"user","content":"hello"},{"role":"user","content":[{"type":"text","text":"and then","citations":[]}]},{"role":"assistant","content":"hi"},{"role":"user","content":"more"}]"#,
+    )
 }
 
 fn with_idle_window(seconds: u64) -> KeepalivePolicy {
@@ -90,7 +118,11 @@ fn last_guard(r: &Rig) -> Option<Guard> {
 
 /// A request on main, then the mod's idle report: the window main's next return is judged in starts at the request.
 async fn idle_after_request(r: &mut Rig) -> i64 {
-    r.observe("main").await;
+    idle_after_request_with(r, BODY).await
+}
+
+async fn idle_after_request_with(r: &mut Rig, body: &str) -> i64 {
+    r.observe_with("main", body).await;
     let start = r.now();
     r.state("main", "idle");
     start
@@ -558,6 +590,125 @@ async fn a_changed_prefix_counts_as_no_return_before_and_after_the_recipes_dispo
 }
 
 #[tokio::test]
+async fn a_return_holding_the_boundary_before_the_last_alone_counts() {
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request_with(&mut r, &two_messages()).await;
+    tick_to(&mut r, start, 12).await;
+    r.observe_with("main", &reshaped_after_two_messages()).await;
+    assert_eq!(
+        (reached(&r), returned(&r)),
+        (
+            [1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+        )
+    );
+}
+
+/// The window keeps the pair apart from the recipe, so the boundary before the last counts a return while the recipe
+/// is retained, after the idle ceiling discarded it, and under a refreshing class, where the class decides the re-arm
+/// and the chain the return.
+#[tokio::test]
+async fn the_boundary_before_the_last_counts_a_return_before_and_after_the_recipes_disposal() {
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request_with(&mut r, &two_messages()).await;
+    tick_to(&mut r, start, 12).await;
+    assert!(retained(&r));
+    r.observe_with("main", &reshaped_after_two_messages()).await;
+    assert_eq!(
+        (reached(&r), returned(&r)),
+        (
+            [1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+        ),
+        "retained"
+    );
+    let mut r = rig(RigSpec {
+        policy: with_idle_window(600),
+        ..RigSpec::default()
+    })
+    .await;
+    let start = idle_after_request_with(&mut r, &two_messages()).await;
+    tick_to(&mut r, start, 20).await;
+    assert_eq!(
+        (r.status("main").reason, retained(&r)),
+        (Reason::IdleLimit, false)
+    );
+    r.observe_with("main", &reshaped_after_two_messages()).await;
+    assert_eq!(
+        (reached(&r), returned(&r)),
+        (
+            [1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
+        ),
+        "disposed"
+    );
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request_with(&mut r, &two_messages()).await;
+    tick_to(&mut r, start, 12).await;
+    observe_classed(&mut r, "main", &reshaped_after_two_messages()).await;
+    assert_eq!(last_guard(&r), Some(Guard::Rearm));
+    assert_eq!(
+        returned(&r),
+        [0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+        "refreshing class"
+    );
+}
+
+#[tokio::test]
+async fn a_return_holding_the_last_of_two_boundaries_counts() {
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request_with(&mut r, &two_messages()).await;
+    tick_to(&mut r, start, 12).await;
+    r.observe_with("main", &after_two_messages()).await;
+    assert_eq!(returned(&r), [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+}
+
+#[tokio::test]
+async fn a_request_holding_neither_of_the_last_two_boundaries_counts_no_return() {
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request_with(&mut r, &two_messages()).await;
+    tick_to(&mut r, start, 12).await;
+    r.observe_with("main", &fresh_chain()).await;
+    assert_eq!(
+        (reached(&r), returned(&r)),
+        ([1, 1, 0, 0, 0, 0, 0, 0, 0, 0], [0; 10])
+    );
+}
+
+/// A one-message chain leaves no boundary before its last, so neither a request with no chain nor a fresh chain
+/// counts a return on the absent one, and the next turn of the conversation counts on the one boundary.
+#[tokio::test]
+async fn a_one_message_requests_anchor_counts_a_return_on_its_one_boundary_alone() {
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 12).await;
+    r.engine.observe(r.observed_with(
+        "chainless",
+        "main",
+        None,
+        None,
+        &[],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    assert_eq!(returned(&r), [0; 10], "no chain");
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 12).await;
+    r.observe_with("main", &fresh_chain()).await;
+    assert_eq!(returned(&r), [0; 10], "a fresh chain");
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 12).await;
+    r.observe_with("main", &next_turn()).await;
+    assert_eq!(
+        returned(&r),
+        [0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+        "the next turn"
+    );
+}
+
+#[tokio::test]
 async fn a_main_class_request_that_continues_the_prefix_counts_as_a_return() {
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
@@ -580,6 +731,217 @@ async fn a_return_after_the_ceiling_discarded_the_recipe_still_counts() {
     assert_eq!(reached(&r), [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]);
     r.observe_with("main", &next_turn()).await;
     assert_eq!(returned(&r), [0, 0, 0, 0, 1, 0, 0, 0, 0, 0]);
+}
+
+const VERSION: &str = "2.1.305";
+const WATCH_LINE: &str = "a refreshing request's chain holds neither anchor boundary";
+
+/// A conversation of its own under the rig's static prefix, whose chain holds no boundary of another.
+fn conversation(n: u32) -> String {
+    BODY.replace("hello", &format!("conversation {n}"))
+}
+
+/// A main request handed to the engine as the relay publishes one: the chain the relay reads off `body`, the request
+/// class, and the client's other hint facts as `facts` sets them.
+fn arrive(r: &Rig, id: &str, class: &str, body: &str, facts: impl FnOnce(&mut ClientFacts)) {
+    let value: serde_json::Value = serde_json::from_str(body).unwrap();
+    let chains = phoebis_relay::Chains::read(&value).unwrap();
+    let boundaries: Vec<&str> = chains
+        .message_boundaries
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let BusEvent::RequestObserved(mut observed) = r.observed_with(
+        id,
+        "main",
+        Some(class),
+        chains.static_hash(),
+        &boundaries,
+        body.as_bytes(),
+        value["model"].as_str().unwrap(),
+    ) else {
+        unreachable!("observed_with builds an observation")
+    };
+    facts(&mut observed.client);
+    r.engine.observe(BusEvent::RequestObserved(observed));
+}
+
+/// The completion of `id` under the client `version`, with the prompt `usage` reports.
+fn answer(r: &Rig, id: &str, version: &str, usage: Usage) {
+    let BusEvent::RequestComplete(mut complete) = r.complete(id, Outcome::Succeeded, Some(usage))
+    else {
+        unreachable!("complete builds a completion")
+    };
+    complete.client_version = Some(version.into());
+    r.engine.observe(BusEvent::RequestComplete(complete));
+}
+
+/// An answer of 200 uncached tokens and `read` cache reads.
+fn reading(read: u64) -> Usage {
+    Usage {
+        input_tokens: Some(200),
+        cache_read_tokens: Some(read),
+        ..Usage::default()
+    }
+}
+
+/// Main's first request on two messages, answered with a prompt of 2,000 tokens: 500 uncached, 1,000 read and 500
+/// written, the prompt the watch reads the next completion against.
+fn first_turn(r: &Rig) {
+    arrive(r, "first", "main", &two_messages(), |_| {});
+    answer(
+        r,
+        "first",
+        VERSION,
+        Usage {
+            input_tokens: Some(500),
+            cache_read_tokens: Some(1_000),
+            cache_write_5m_tokens: Some(500),
+            ..Usage::default()
+        },
+    );
+}
+
+/// The watch's series as the scrape renders them.
+fn contradictions(r: &Rig) -> Vec<String> {
+    r.metrics
+        .render(&phoebis_ledger::RoutingGauges::default(), &[], 0)
+        .lines()
+        .filter(|line| line.starts_with("phoebis_keepalive_chain_contradictions_total{"))
+        .map(String::from)
+        .collect()
+}
+
+fn series(version: &str, count: u64) -> String {
+    format!(r#"phoebis_keepalive_chain_contradictions_total{{client_version="{version}"}} {count}"#)
+}
+
+#[tokio::test]
+async fn a_refreshing_request_whose_chain_holds_neither_boundary_and_whose_answer_reads_the_cache_is_counted_and_logged(
+) {
+    let r = rig(RigSpec::default()).await;
+    let captured = Captured::default();
+    let _log = captured.install();
+    first_turn(&r);
+    r.advance(MINUTE);
+    arrive(&r, "moved", "main", &conversation(1), |_| {});
+    answer(&r, "moved", VERSION, reading(1_800));
+    assert_eq!(contradictions(&r), [series(VERSION, 1)]);
+    let text = captured.text();
+    assert_eq!(text.matches(WATCH_LINE).count(), 1, "{text}");
+    for field in [
+        "client_version=2.1.305",
+        "session=session",
+        "cache_read_tokens=1800",
+        "previous_prompt_tokens=2000",
+    ] {
+        assert!(text.contains(field), "missing {field} in {text}");
+    }
+}
+
+#[tokio::test]
+async fn a_second_contradiction_within_the_hour_under_the_same_version_is_counted_without_a_line() {
+    let r = rig(RigSpec::default()).await;
+    let captured = Captured::default();
+    let _log = captured.install();
+    first_turn(&r);
+    r.advance(MINUTE);
+    arrive(&r, "moved", "main", &conversation(1), |_| {});
+    answer(&r, "moved", VERSION, reading(1_800));
+    r.advance(30 * MINUTE);
+    arrive(&r, "moved again", "main", &conversation(2), |_| {});
+    answer(&r, "moved again", VERSION, reading(1_800));
+    assert_eq!(contradictions(&r), [series(VERSION, 2)]);
+    let text = captured.text();
+    assert_eq!(text.matches(WATCH_LINE).count(), 1, "{text}");
+}
+
+#[tokio::test]
+async fn another_client_version_logs_its_own_contradiction() {
+    let r = rig(RigSpec::default()).await;
+    let captured = Captured::default();
+    let _log = captured.install();
+    first_turn(&r);
+    r.advance(MINUTE);
+    arrive(&r, "moved", "main", &conversation(1), |_| {});
+    answer(&r, "moved", VERSION, reading(1_800));
+    r.advance(MINUTE);
+    arrive(&r, "moved again", "main", &conversation(2), |_| {});
+    answer(&r, "moved again", "2.1.310", reading(1_800));
+    assert_eq!(
+        contradictions(&r),
+        [series(VERSION, 1), series("2.1.310", 1)]
+    );
+    let text = captured.text();
+    assert_eq!(text.matches(WATCH_LINE).count(), 2, "{text}");
+    assert!(text.contains("client_version=2.1.310"), "{text}");
+}
+
+/// The mark is taken at the arrival before the engine's refusals, so a request whose recipe the engine refuses still
+/// reaches the watch at its completion.
+#[tokio::test]
+async fn a_marked_request_whose_recipe_the_engine_refuses_still_reaches_the_watch() {
+    let r = rig(RigSpec::default()).await;
+    first_turn(&r);
+    r.advance(MINUTE);
+    let forced = conversation(1).replace(
+        r#""max_tokens":1024,"#,
+        r#""max_tokens":1024,"tool_choice":{"type":"tool","name":"x"},"#,
+    );
+    arrive(&r, "forced", "main", &forced, |_| {});
+    assert_eq!(r.status("main").reason, Reason::ForcedTool);
+    answer(&r, "forced", VERSION, reading(1_800));
+    assert_eq!(contradictions(&r), [series(VERSION, 1)]);
+}
+
+#[tokio::test]
+async fn a_compactions_first_request_logs_no_contradiction() {
+    let r = rig(RigSpec::default()).await;
+    let captured = Captured::default();
+    let _log = captured.install();
+    first_turn(&r);
+    r.advance(MINUTE);
+    arrive(&r, "compaction", "compaction", &conversation(1), |facts| {
+        facts.compaction = Some("true".into());
+    });
+    answer(&r, "compaction", VERSION, reading(1_800));
+    arrive(&r, "compacted", "main", &conversation(2), |facts| {
+        facts.context_compacted = Some("true".into());
+    });
+    answer(&r, "compacted", VERSION, reading(1_900));
+    assert_eq!(contradictions(&r), Vec::<String>::new());
+    assert!(!captured.text().contains(WATCH_LINE), "{}", captured.text());
+}
+
+#[tokio::test]
+async fn a_completion_under_nine_tenths_of_the_previous_prompt_logs_no_contradiction() {
+    let r = rig(RigSpec::default()).await;
+    let captured = Captured::default();
+    let _log = captured.install();
+    first_turn(&r);
+    r.advance(MINUTE);
+    arrive(&r, "moved", "main", &conversation(1), |_| {});
+    answer(&r, "moved", VERSION, reading(1_799));
+    assert_eq!(contradictions(&r), Vec::<String>::new());
+    assert!(!captured.text().contains(WATCH_LINE), "{}", captured.text());
+}
+
+#[tokio::test]
+async fn the_contradiction_line_names_no_hash() {
+    let r = rig(RigSpec::default()).await;
+    let captured = Captured::default();
+    let _log = captured.install();
+    first_turn(&r);
+    r.advance(MINUTE);
+    arrive(&r, "moved", "main", &conversation(1), |_| {});
+    answer(&r, "moved", VERSION, reading(1_800));
+    let text = captured.text();
+    let longest_hex_run = text
+        .split(|c: char| !c.is_ascii_hexdigit())
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    assert!(longest_hex_run < 64, "a 64-hex run in the log: {text}");
 }
 
 #[tokio::test]
@@ -856,16 +1218,28 @@ fn the_bucket_bounds_are_the_specs() {
 }
 
 #[test]
-fn continues_prefix_needs_the_anchors_tail_hash() {
-    let anchor = Some(("static", "tail"));
-    let holding = ["first".to_string(), "tail".to_string()];
-    assert!(continues_prefix(anchor, &holding));
-    assert!(!continues_prefix(anchor, &[]));
-    assert!(!continues_prefix(
-        anchor,
-        &["first".to_string(), "static".to_string()]
+fn continues_prefix_holds_either_of_the_anchors_two_boundaries() {
+    let chain =
+        |boundaries: &[&str]| -> Vec<String> { boundaries.iter().map(|b| b.to_string()).collect() };
+    let pair = PrefixAnchor {
+        static_hash: "static".into(),
+        last: "tail".into(),
+        before_last: Some("before".into()),
+    };
+    let one = PrefixAnchor {
+        before_last: None,
+        ..pair.clone()
+    };
+    assert!(continues_prefix(Some(&pair), &chain(&["first", "tail"])));
+    assert!(continues_prefix(
+        Some(&pair),
+        &chain(&["first", "before", "reshaped"])
     ));
-    assert!(!continues_prefix(None, &holding));
+    assert!(!continues_prefix(Some(&pair), &[]));
+    assert!(!continues_prefix(Some(&pair), &chain(&["first", "static"])));
+    assert!(continues_prefix(Some(&one), &chain(&["first", "tail"])));
+    assert!(!continues_prefix(Some(&one), &chain(&["first", "before"])));
+    assert!(!continues_prefix(None, &chain(&["before", "tail"])));
 }
 
 /// The window opens at the idle report itself, so a person who prompts inside the same second still ends a window:
