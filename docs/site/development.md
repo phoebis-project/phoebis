@@ -187,13 +187,13 @@ ClientHello. The probe run alone leaves `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFI
 bodies. Into the output directory the script writes `clean_modes.json` with one entry per recorded request, one
 `clean_body_<i>.json` per request holding that body's raw bytes, `gzip_modes.json` for the gzip-forced run,
 `probe_modes.json` for the probe run, and `connect.json` for the hello. It finishes by running
-`python3 scripts/build-fixtures.py --check <output-dir>` and exits with that status, so capturing and comparing are the
-same command. The system prompt carries the current date, so a re-capture on a later day differs there, and `--check`
-prints a bounded diff of each changed body to tell that apart from a change in the request shape.
+`python3 -I scripts/build-fixtures.py --check <output-dir>` and exits with that status, so capturing and comparing are
+the same command. The system prompt carries the current date, so a re-capture on a later day differs there, and
+`--check` prints a bounded diff of each changed body to tell that apart from a change in the request shape.
 `scripts/capture-count-tokens.sh` reproduces the count half beside it, in the same namespace and with the same dummy
 credentials: three runs, one per credential mode, past `scripts/capture/count_receiver.py`, which answers the first
 request with a canned tool call so the count the Read tool sends before a large file reaches the wire. It finishes by
-running `python3 scripts/build-fixtures.py --count <output-dir> --check`.
+running `python3 -I scripts/build-fixtures.py --count <output-dir> --check`.
 
 `scripts/capture-control.sh` records the control plane in the same namespace. The control hosts are ones the client
 dials by name, which `ANTHROPIC_BASE_URL` cannot redirect, so `scripts/capture/mkcerts.sh` writes a throwaway CA into
@@ -296,9 +296,9 @@ profile against a new build:
    and otherwise re-executes itself in the loopback-only namespace, drives the three credential modes, the first-party
    override a second time, a gzip-forced run and a probe run without the nonessential-traffic switch past the recording
    receiver, records the ClientHello through the CONNECT receiver, and ends with
-   `python3 scripts/build-fixtures.py --check <output-dir>`, exiting with that command's status. The system prompt the
-   client sends embeds the current date, so a re-capture taken on another day differs there, and `--check` prints a
-   bounded diff per body so that shows as a date difference rather than a shape change.
+   `python3 -I scripts/build-fixtures.py --check <output-dir>`, exiting with that command's status. The system prompt
+   the client sends embeds the current date, so a re-capture taken on another day differs there, and `--check` prints
+   a bounded diff per body so that shows as a date difference rather than a shape change.
 2. Read the diff. A header added or renamed, a beta list that changed, or a new body field is the signal that the
    client has moved past the pinned profile.
 3. `scripts/capture-control.sh <path-to-claude-binary> <output-dir>` records the control plane (the code and refresh
@@ -338,7 +338,7 @@ profile against a new build:
    fails at the TLS handshake and the capture fails with it.
 6. `scripts/capture-count-tokens.sh <path-to-claude-binary> <output-dir>` records the client's own token count in each
    credential mode, inside the same namespace and past a receiver that answers the first request with a canned tool
-   call, so the count the Read tool sends before a large file reaches the wire. `python3 scripts/build-fixtures.py
+   call, so the count the Read tool sends before a large file reaches the wire. `python3 -I scripts/build-fixtures.py
    --count <output-dir>` writes `count.json`, the one body the three modes send byte for byte, and the three
    `count_*.http` heads, and stops before its first write when the three bodies differ, naming the two modes and the
    first differing byte. `--check` beside it grades a new build against them.
