@@ -1971,6 +1971,44 @@ fn a_pool_save_that_changes_no_field_no_policy_no_member_and_no_guardrail_writes
 }
 
 #[test]
+fn a_pool_save_whose_keepalive_policy_differs_in_key_order_and_whitespace_alone_writes_nothing_and_answers_the_stamp_it_was_given(
+) {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_pool(
+            &PoolRow {
+                keepalive_json: r#"{"enabled":true,"max_idle_seconds":43200}"#.into(),
+                ..pool("main")
+            },
+            "test",
+        )
+        .unwrap();
+    let read = store.pool("main").unwrap().unwrap();
+    let changes = change_count(&store);
+    let stamp = store
+        .update_pool(
+            &PoolRow {
+                keepalive_json: r#"{ "max_idle_seconds": 43200, "enabled": true }"#.into(),
+                ..read.clone()
+            },
+            read.updated_at,
+            "test",
+        )
+        .unwrap();
+    assert_eq!(stamp, read.updated_at, "the stamp the save was given");
+    assert_eq!(
+        format!("{:?}", store.pool("main").unwrap().unwrap()),
+        format!("{read:?}"),
+        "the row as it was read, its policy text among it"
+    );
+    assert_eq!(
+        change_count(&store),
+        changes,
+        "the same policy in another spelling records no change row"
+    );
+}
+
+#[test]
 fn a_pool_save_that_changes_nothing_under_a_stale_stamp_or_another_incarnation_is_refused_as_stale()
 {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
@@ -2023,13 +2061,21 @@ fn a_pool_save_that_changes_nothing_under_a_stale_stamp_or_another_incarnation_i
 }
 
 #[test]
-fn a_pool_save_that_changes_the_keepalive_policy_alone_writes_one_pool_edit_with_empty_pairs_and_moves_the_stamp(
+fn a_pool_save_that_changes_the_keepalive_policy_alone_writes_one_pool_edit_naming_the_member_it_moved_and_moves_the_stamp(
 ) {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .insert_pool(
+            &PoolRow {
+                keepalive_json: r#"{"enabled":true,"max_idle_seconds":43200,"max_parked_seconds":null,"scheduled_horizon_seconds":null}"#.into(),
+                ..pool("main")
+            },
+            "test",
+        )
+        .unwrap();
     let read = store.pool("main").unwrap().unwrap();
     let changes = change_count(&store);
-    let policy = r#"{"enabled":true,"lead_seconds_5m":90}"#;
+    let policy = r#"{"enabled":true,"max_idle_seconds":86400,"max_parked_seconds":null,"scheduled_horizon_seconds":null}"#;
     let stamp = store
         .update_pool(
             &PoolRow {
@@ -2052,8 +2098,83 @@ fn a_pool_save_that_changes_the_keepalive_policy_alone_writes_one_pool_edit_with
     assert_eq!(change_count(&store), changes + 1);
     assert_eq!(
         last_change(&store, "main"),
-        ("pool_updated".to_string(), serde_json::json!({})),
-        "the policy sits outside the logged fields, so the edit's row names none"
+        (
+            "pool_updated".to_string(),
+            serde_json::json!({
+                "keepalive.max_idle_seconds": { "from": 43200, "to": 86400 },
+            })
+        ),
+        "the one policy member the save moved, under its dotted name"
+    );
+}
+
+#[test]
+fn a_pool_created_with_a_keepalive_policy_lists_each_member_under_its_dotted_name_in_its_snapshot()
+{
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_pool(
+            &PoolRow {
+                keepalive_json: r#"{"enabled":true,"max_idle_seconds":43200,"max_parked_seconds":7200,"scheduled_horizon_seconds":1800}"#.into(),
+                ..pool("main")
+            },
+            "test",
+        )
+        .unwrap();
+    let (kind, diff) = last_change(&store, "main");
+    let policy: serde_json::Map<String, serde_json::Value> = diff
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(field, _)| field.starts_with("keepalive."))
+        .map(|(field, value)| (field.clone(), value.clone()))
+        .collect();
+    assert_eq!(
+        (kind.as_str(), serde_json::Value::Object(policy)),
+        (
+            "pool_created",
+            serde_json::json!({
+                "keepalive.enabled": true,
+                "keepalive.max_idle_seconds": 43200,
+                "keepalive.max_parked_seconds": 7200,
+                "keepalive.scheduled_horizon_seconds": 1800,
+            })
+        ),
+        "the snapshot names each member of the stored policy with its value"
+    );
+}
+
+#[test]
+fn a_first_save_over_a_pool_stored_with_an_empty_policy_names_each_member_of_the_whole_policy_from_null(
+) {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    let read = store.pool("main").unwrap().unwrap();
+    assert_eq!(read.keepalive_json, "{}");
+    // The whole policy the admin route writes once a member moves off the defaults it reads `{}` as.
+    let policy = r#"{"enabled":false,"max_idle_seconds":86400,"max_parked_seconds":null,"scheduled_horizon_seconds":null}"#;
+    store
+        .update_pool(
+            &PoolRow {
+                keepalive_json: policy.into(),
+                ..read.clone()
+            },
+            read.updated_at,
+            "test",
+        )
+        .unwrap();
+    assert_eq!(
+        last_change(&store, "main"),
+        (
+            "pool_updated".to_string(),
+            serde_json::json!({
+                "keepalive.enabled": { "from": null, "to": false },
+                "keepalive.max_idle_seconds": { "from": null, "to": 86400 },
+                "keepalive.max_parked_seconds": { "from": null, "to": null },
+                "keepalive.scheduled_horizon_seconds": { "from": null, "to": null },
+            })
+        ),
+        "every member the stored text gained, each read as null on the side that lacked it"
     );
 }
 

@@ -2950,8 +2950,11 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             actor: Some("admin".into()),
             pool_id: Some("main".into()),
             detail: Some(
-                j!({ "kind": "pool_updated", "target": "main", "diff": { "in_flight_cap": { "from": 16, "to": 1 } } })
-                    .to_string(),
+                j!({ "kind": "pool_updated", "target": "main", "diff": {
+                    "in_flight_cap": { "from": 16, "to": 1 },
+                    "keepalive.max_idle_seconds": { "from": 43200, "to": 86400 },
+                } })
+                .to_string(),
             ),
             ..written(17, "registry_changed")
         },

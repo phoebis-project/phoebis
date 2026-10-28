@@ -4443,8 +4443,8 @@ async fn a_patch_with_the_revision_the_post_answered_lands_on_a_recreated_pool_a
     );
 }
 
-/// Each pool write answers the stamp it wrote, the one the next fenced edit reads back; a pool created from an id
-/// and a label alone holds the shipped defaults `PoolRow::for_tests` holds.
+/// Each pool write answers the stamp it wrote, the one the next fenced edit reads back. A pool created from an id and
+/// a label alone holds the shipped defaults, its keepalive policy stored whole.
 #[tokio::test]
 async fn every_pool_write_answers_the_stamp_it_wrote_and_a_bare_create_holds_the_shipped_defaults()
 {
@@ -4468,6 +4468,10 @@ async fn every_pool_write_answers_the_stamp_it_wrote_and_a_bare_create_holds_the
             "{:?}",
             phoebis_store::PoolRow {
                 label: "Bare".into(),
+                keepalive_json: serde_json::to_string(
+                    &phoebis_keepalive::KeepalivePolicy::default()
+                )
+                .unwrap(),
                 created_at: row.created_at,
                 updated_at: row.updated_at,
                 ..phoebis_store::PoolRow::for_tests("bare")
@@ -4566,6 +4570,196 @@ async fn a_pool_edit_through_the_route_reads_on_the_routing_log_as_the_pairs_of_
             })
         ),
         "the two fields the edit changed, each with its value before and after"
+    );
+}
+
+/// The diff of the newest `registry_changed` row of `kind` for `target`, once the ledger's mirror lands it on the
+/// routing log.
+async fn landed_diff(
+    app: &axum::Router,
+    cookie: &str,
+    kind: &str,
+    target: &str,
+) -> serde_json::Value {
+    let row = |page: &serde_json::Value| {
+        page["rows"].as_array().and_then(|rows| {
+            rows.iter()
+                .find(|row| row["detail"]["kind"] == kind && row["detail"]["target"] == target)
+                .cloned()
+        })
+    };
+    let page = common::wait_json(
+        app,
+        &format!(
+            "/admin/routing-log?kinds=registry_changed&from={}&to={}",
+            common::NOW - 60_000,
+            common::NOW + 60_000
+        ),
+        cookie,
+        |page| row(page).is_some(),
+    )
+    .await;
+    row(&page).unwrap()["detail"]["diff"].clone()
+}
+
+#[tokio::test]
+async fn a_pool_created_without_a_keepalive_policy_stores_the_default_policy_whole_and_its_created_row_names_the_four_members(
+) {
+    // The mirror reads the change log every `event_poll`, so a short one lands the create's row inside the wait.
+    let parts = common::admin_parts_full_retained(phoebis_ledger::LedgerConfig {
+        event_poll: std::time::Duration::from_millis(20),
+        ..phoebis_ledger::LedgerConfig::default()
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let created = post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let default = phoebis_keepalive::KeepalivePolicy::default();
+    assert_eq!(
+        parts.store.pool("main").unwrap().unwrap().keepalive_json,
+        serde_json::to_string(&default).unwrap(),
+        "the stored text is the default policy written whole"
+    );
+    let snapshot = landed_diff(&parts.app, &cookie, "pool_created", "main").await;
+    let policy: serde_json::Map<String, serde_json::Value> = snapshot
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(field, _)| field.starts_with("keepalive."))
+        .map(|(field, value)| (field.clone(), value.clone()))
+        .collect();
+    let default = serde_json::to_value(&default).unwrap();
+    assert_eq!(
+        serde_json::Value::Object(policy),
+        serde_json::json!({
+            "keepalive.enabled": default["enabled"],
+            "keepalive.max_idle_seconds": default["max_idle_seconds"],
+            "keepalive.max_parked_seconds": default["max_parked_seconds"],
+            "keepalive.scheduled_horizon_seconds": default["scheduled_horizon_seconds"],
+        }),
+        "the create's snapshot names each member of the stored policy with its value"
+    );
+}
+
+#[tokio::test]
+async fn a_pool_save_naming_the_keepalive_policy_an_empty_stored_policy_reads_as_writes_no_row_and_keeps_its_stamp_and_its_text(
+) {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    // The store takes the text `{}`, which reads as the defaults, so a row the route did not write can hold it.
+    store
+        .insert_pool(
+            &phoebis_store::PoolRow {
+                label: "Legacy".into(),
+                ..phoebis_store::PoolRow::for_tests("legacy")
+            },
+            "test",
+        )
+        .unwrap();
+    let read = store.pool("legacy").unwrap().unwrap();
+    let start = store.newest_registry_change_id().unwrap().unwrap_or(0);
+    let saved = patch(
+        &app,
+        "/admin/pools/legacy",
+        &format!(
+            r#"{{"keepalive":{}}}"#,
+            serde_json::to_string(&phoebis_keepalive::KeepalivePolicy::default()).unwrap()
+        ),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(saved.status(), 200);
+    let saved = json(saved).await;
+    let after = store.pool("legacy").unwrap().unwrap();
+    assert_eq!(
+        (
+            saved["updated_at"].as_i64(),
+            after.updated_at,
+            after.keepalive_json.as_str()
+        ),
+        (Some(read.updated_at), read.updated_at, "{}"),
+        "the save answers the stamp it read, and the row keeps its stamp and its stored text"
+    );
+    assert_eq!(
+        store.registry_changes_after(start, 100).unwrap().len(),
+        0,
+        "the change log the routing log mirrors gains no row"
+    );
+}
+
+#[tokio::test]
+async fn a_pool_policy_edit_through_the_route_reads_on_the_routing_log_as_the_dotted_member_it_moved_and_over_an_empty_stored_policy_as_the_four_members_from_null(
+) {
+    // The mirror reads the change log every `event_poll`, so a short one lands each edit's row inside the wait.
+    let parts = common::admin_parts_full_retained(phoebis_ledger::LedgerConfig {
+        event_poll: std::time::Duration::from_millis(20),
+        ..phoebis_ledger::LedgerConfig::default()
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let created = post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let created = json(created).await;
+    // The store takes the text `{}`, so a row the route did not write can hold it.
+    parts
+        .store
+        .insert_pool(
+            &phoebis_store::PoolRow {
+                label: "Legacy".into(),
+                ..phoebis_store::PoolRow::for_tests("legacy")
+            },
+            "test",
+        )
+        .unwrap();
+    for id in ["main", "legacy"] {
+        let patched = patch(
+            &parts.app,
+            &format!("/admin/pools/{id}"),
+            r#"{"keepalive":{"max_idle_seconds":86400}}"#,
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(patched.status(), 200, "{id}");
+    }
+    assert_eq!(
+        landed_diff(&parts.app, &cookie, "pool_updated", "main").await,
+        serde_json::json!({
+            "keepalive.max_idle_seconds": {
+                "from": created["keepalive"]["max_idle_seconds"],
+                "to": 86400
+            },
+        }),
+        "the one member the edit moved, on a pool whose create stored its policy whole"
+    );
+    let written = serde_json::to_value(phoebis_keepalive::KeepalivePolicy {
+        max_idle_seconds: 86_400,
+        ..phoebis_keepalive::KeepalivePolicy::default()
+    })
+    .unwrap();
+    assert_eq!(
+        landed_diff(&parts.app, &cookie, "pool_updated", "legacy").await,
+        serde_json::json!({
+            "keepalive.enabled": { "from": null, "to": written["enabled"] },
+            "keepalive.max_idle_seconds": { "from": null, "to": 86400 },
+            "keepalive.max_parked_seconds": { "from": null, "to": written["max_parked_seconds"] },
+            "keepalive.scheduled_horizon_seconds": {
+                "from": null,
+                "to": written["scheduled_horizon_seconds"]
+            },
+        }),
+        "the first edit over an empty stored policy writes it whole and names each member from null"
     );
 }
 

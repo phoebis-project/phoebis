@@ -16749,7 +16749,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "subagent_placement": "by_strategy",
               "session_placement": "by_strategy",
               "min_shared_prefix_tokens": 20000,
-              "auto_mode_server": true
+              "auto_mode_server": true,
+              "keepalive.enabled": true,
+              "keepalive.max_idle_seconds": 3600,
+              "keepalive.max_parked_seconds": null,
+              "keepalive.scheduled_horizon_seconds": null
             }
           }
         },
@@ -16831,6 +16835,10 @@ export const FIXTURES: Record<string, Fixture> = {
               "in_flight_cap": {
                 "from": 16,
                 "to": 1
+              },
+              "keepalive.max_idle_seconds": {
+                "from": 43200,
+                "to": 86400
               }
             }
           }

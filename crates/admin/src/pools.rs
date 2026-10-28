@@ -423,7 +423,11 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
             Ok(policy) => policy,
             Err(error) => return Err(failure(StatusCode::BAD_REQUEST, &error.to_string())),
         };
-        row.keepalive_json = serde_json::to_string(&policy).unwrap_or_else(|_| "{}".into());
+        // The stored text stays where it reads as the same policy, so a save naming the values a pool holds writes no
+        // change row whatever spelling the text was stored in.
+        if policy != KeepalivePolicy::from_json(&row.keepalive_json) {
+            row.keepalive_json = serde_json::to_string(&policy).unwrap_or_else(|_| "{}".into());
+        }
     }
     if let Some(cache_ttl) = &input.cache_ttl {
         let mut merged = merged_cache_ttl(row, cache_ttl);
@@ -719,7 +723,9 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         overage_policy: OveragePolicy::PreferPlan,
         window_ceiling: phoebis_routing::DEFAULT_WINDOW_CEILING,
         model_rules: Vec::new(),
-        keepalive_json: "{}".into(),
+        // Stored whole, so the create's change row names each member of the policy the pool starts with.
+        keepalive_json: serde_json::to_string(&KeepalivePolicy::default())
+            .unwrap_or_else(|_| "{}".into()),
         body_capture_hours: 0,
         prefer_subscription: true,
         shedding: Shedding::default(),
