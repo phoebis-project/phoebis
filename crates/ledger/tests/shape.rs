@@ -71,7 +71,7 @@ fn shape(conn: &Connection) -> String {
 }
 
 #[test]
-fn a_fresh_ledger_has_the_shape_the_migration_chain_left() {
+fn a_fresh_ledger_has_the_shape_the_fixture_holds() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ledger.sqlite");
     drop(LedgerDb::open(&path).unwrap());
