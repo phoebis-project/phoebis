@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# The backticks inside single quotes are literal Markdown the test writes and matches, never expansions.
+# shellcheck disable=SC2016
 # The checker has to fail on what it exists to catch: a dangling link, a fragment its page lacks, a route the
 # client page skipped, a row the proxy listener does not serve, and a handler call it cannot consume. Every
 # checker case runs against a throwaway tree, never the real site. The five content checks run against throwaway
