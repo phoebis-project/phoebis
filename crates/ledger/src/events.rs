@@ -507,6 +507,7 @@ pub fn poll_backoff(edge: &BackoffEdge) -> Record {
             since,
             attempts,
             resumed_at,
+            cause,
         } => (
             *at,
             "poll_backoff_ended",
@@ -515,6 +516,7 @@ pub fn poll_backoff(edge: &BackoffEdge) -> Record {
                 "duration_ms": at - since,
                 "attempts": attempts,
                 "resumed_at": resumed_at,
+                "cause": cause.as_str(),
             }),
         ),
     };

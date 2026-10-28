@@ -15508,7 +15508,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "rows": [
         {
           "type": "event",
-          "id": 56,
+          "id": 57,
           "at": 1791721060000,
           "kind": "router_started",
           "account_id": null,
@@ -16825,7 +16825,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 55,
+          "id": 56,
           "at": 1791718420000,
           "kind": "registry_changed",
           "account_id": null,
@@ -16853,7 +16853,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 54,
+          "id": 55,
           "at": 1791718360000,
           "kind": "refresh_uncertain",
           "account_id": "business",
@@ -16871,7 +16871,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 53,
+          "id": 54,
           "at": 1791718300000,
           "kind": "refresh_failed",
           "account_id": "business",
@@ -16889,7 +16889,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 52,
+          "id": 53,
           "at": 1791718240000,
           "kind": "refresh_succeeded",
           "account_id": "business",
@@ -16908,7 +16908,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 51,
+          "id": 52,
           "at": 1791718180000,
           "kind": "account_state_changed",
           "account_id": "business",
@@ -16928,7 +16928,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 50,
+          "id": 51,
           "at": 1791718120000,
           "kind": "ledger_gap",
           "account_id": null,
@@ -16967,7 +16967,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 49,
+          "id": 50,
           "at": 1791718060000,
           "kind": "budget_period_ended",
           "account_id": "business",
@@ -16986,7 +16986,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 48,
+          "id": 49,
           "at": 1791718000000,
           "kind": "budget_reached",
           "account_id": "business",
@@ -17007,7 +17007,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 47,
+          "id": 48,
           "at": 1791717940000,
           "kind": "catalog_changed",
           "account_id": "business",
@@ -17044,7 +17044,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "detail": {
             "duration_ms": 120000,
             "attempts": 2,
-            "resumed_at": 1791717880000
+            "resumed_at": 1791717880000,
+            "cause": "clean_poll"
           }
         },
         {
@@ -17117,7 +17118,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 44,
+          "id": 45,
           "at": 1791717640000,
           "kind": "poll_failed",
           "account_id": "business",
@@ -17156,7 +17157,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 46,
+          "id": 47,
           "at": 1791717580000,
           "kind": "plan_restored",
           "account_id": "business",
@@ -17203,7 +17204,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 45,
+          "id": 46,
           "at": 1791717520000,
           "kind": "plan_ended",
           "account_id": "business",
@@ -17219,6 +17220,26 @@ export const FIXTURES: Record<string, Fixture> = {
             "organization_type": "claude_free",
             "rate_limit_tier": "default_claude_ai",
             "subscription_status": "canceled"
+          }
+        },
+        {
+          "type": "event",
+          "id": 44,
+          "at": 1791717520000,
+          "kind": "poll_backoff_ended",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "duration_ms": 60000,
+            "attempts": 1,
+            "resumed_at": 1791717520000,
+            "cause": "plan_ended"
           }
         },
         {

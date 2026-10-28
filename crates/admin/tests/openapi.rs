@@ -1461,6 +1461,23 @@ async fn the_account_windows_doc_says_a_disconnected_reauth_required_or_plan_end
 }
 
 #[tokio::test]
+async fn the_event_kind_doc_names_the_cause_a_backoff_s_end_carries() {
+    let (_app, _up, document) = document().await;
+    let kind = &document["components"]["schemas"]["Event"]["properties"]["kind"];
+    let description = kind["description"]
+        .as_str()
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+    assert!(
+        description.as_deref().is_some_and(|text| text.contains(
+            "- `poll_backoff_ended`: the usage poll's backoff on an account ended, with `duration_ms` and `cause`, \
+             `clean_poll` where a clean answer ended it or `plan_ended` where the account's plan-ended pause closed \
+             it."
+        )),
+        "{kind}"
+    );
+}
+
+#[tokio::test]
 async fn the_guardrail_counts_describe_the_range_on_the_body_and_one_row_per_guardrail_on_its_member(
 ) {
     let (_app, _up, document) = document().await;

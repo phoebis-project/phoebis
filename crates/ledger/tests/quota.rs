@@ -2133,15 +2133,17 @@ async fn a_profile_reporting_no_plan_ends_the_open_backoff_run_with_its_row() {
             ended.2,
             ended.3["attempts"].as_u64(),
             ended.3["duration_ms"].as_i64(),
-            ended.3["resumed_at"].as_i64()
+            ended.3["resumed_at"].as_i64(),
+            ended.3["cause"].as_str()
         ),
         (
             flagged_at,
             Some(1),
             Some(flagged_at - started.2),
-            Some(flagged_at)
+            Some(flagged_at),
+            Some("plan_ended")
         ),
-        "the run lasted from its first 429 to the flag's instant"
+        "the run lasted from its first 429 to the flag's instant, and its end names the pause"
     );
     up.shutdown().await;
 }
@@ -2354,9 +2356,14 @@ async fn a_backoff_run_open_at_the_restore_closes_at_the_first_clean_poll() {
         "the run the 429 opened closes at the first clean poll"
     );
     assert_eq!(
-        (after_restore, rows[1].3["attempts"].as_u64()),
-        (Some((1, true)), Some(1)),
-        "the restore leaves the run's count and start to the clean poll, whose end row counts the run's 429s"
+        (
+            after_restore,
+            rows[1].3["attempts"].as_u64(),
+            rows[1].3["cause"].as_str()
+        ),
+        (Some((1, true)), Some(1), Some("clean_poll")),
+        "the restore leaves the run's count and start to the clean poll, whose end row counts the run's 429s and \
+         names the clean poll"
     );
     up.shutdown().await;
 }

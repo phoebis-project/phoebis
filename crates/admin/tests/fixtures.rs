@@ -2855,6 +2855,18 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             since: at(6),
             attempts: 2,
             resumed_at: at(8),
+            cause: phoebis_oauth::BackoffEndCause::CleanPoll,
+        },
+    ));
+    // The plan-ended pause closes a run at the flag's instant, so this close shares the `plan_ended` row's minute.
+    parts.ledger.record(phoebis_ledger::poll_backoff(
+        &phoebis_oauth::BackoffEdge::Ended {
+            account_id: "business".into(),
+            at: at(2),
+            since: at(1),
+            attempts: 1,
+            resumed_at: at(2),
+            cause: phoebis_oauth::BackoffEndCause::PlanEnded,
         },
     ));
     parts.ledger.record(phoebis_ledger::poll_failed(

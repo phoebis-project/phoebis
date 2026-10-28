@@ -670,7 +670,8 @@ id with nothing to open. The item dates from the oldest row, and the detail coun
 **`poll_backoff`** holds once the usage poll has been backing off from the endpoint's 429 answers on the account for
 thirty minutes, counted from the run's first 429. The condition clears with the account's plan-ended pause as well,
 since the paused poll sends no clean answer. The detail gives when the run started, when the next attempt comes, and how
-many 429s the endpoint answered in a row.
+many 429s the endpoint answered in a row. The `poll_backoff_ended` event that closes a run names its `cause`,
+`clean_poll` for a clean answer or `plan_ended` for the pause.
 
 **`model_unweighted`** holds while a model the cost model does not weigh has served plan-funded requests since the
 start, each priced at the weight of the latest weighed model of its model tier and marked estimated wherever its figure

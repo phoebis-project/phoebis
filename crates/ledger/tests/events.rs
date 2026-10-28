@@ -2213,6 +2213,46 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
     }
 }
 
+#[test]
+fn a_backoff_s_end_row_names_its_cause_a_clean_poll_or_the_plan_ended_pause() {
+    let ended = |cause: phoebis_oauth::BackoffEndCause| {
+        let edge = phoebis_oauth::BackoffEdge::Ended {
+            account_id: "a".into(),
+            at: 2_000,
+            since: 1_000,
+            attempts: 2,
+            resumed_at: 2_000,
+            cause,
+        };
+        let phoebis_ledger::Record::Event(row) = phoebis_ledger::poll_backoff(&edge) else {
+            panic!("a backoff edge is an event row");
+        };
+        assert_eq!(row.kind, "poll_backoff_ended");
+        detail_of(&row)
+    };
+    assert_eq!(
+        (
+            ended(phoebis_oauth::BackoffEndCause::CleanPoll),
+            ended(phoebis_oauth::BackoffEndCause::PlanEnded)
+        ),
+        (
+            serde_json::json!({
+                "duration_ms": 1_000,
+                "attempts": 2,
+                "resumed_at": 2_000,
+                "cause": "clean_poll"
+            }),
+            serde_json::json!({
+                "duration_ms": 1_000,
+                "attempts": 2,
+                "resumed_at": 2_000,
+                "cause": "plan_ended"
+            })
+        ),
+        "the end row names what closed the run beside its length, its 429s and its resume"
+    );
+}
+
 /// The account rows the mirror wrote, in order: each kind with its detail.
 async fn account_rows(h: &Harness) -> Vec<(String, serde_json::Value)> {
     let rows = h.db.events(0, i64::MAX, 100).await.unwrap();
