@@ -627,6 +627,17 @@ mod tests {
                 "{item}: {}",
                 failure.message
             );
+            for phrase in [
+                "prompt is too long",
+                "model:",
+                "OAuth token has been revoked",
+            ] {
+                assert!(
+                    !failure.message.contains(phrase),
+                    "{item}: the client acts on {phrase:?} in a 4xx: {}",
+                    failure.message
+                );
+            }
         }
     }
 
