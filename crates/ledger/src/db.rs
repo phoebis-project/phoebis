@@ -94,7 +94,7 @@ impl LedgerDb {
         // A power loss may lose the last transactions before a checkpoint, which the spec accepts for a
         // best-effort ledger; `FULL` would fsync on every request.
         writer.pragma_update(None, "synchronous", "NORMAL")?;
-        prepare(&mut writer, path)?;
+        prepare(&mut writer, path, schema::MIGRATIONS)?;
         let reader = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -117,7 +117,7 @@ impl LedgerDb {
 
     pub fn open_in_memory() -> Result<LedgerDb, LedgerError> {
         let mut writer = Connection::open_in_memory()?;
-        prepare(&mut writer, Path::new(":memory:"))?;
+        prepare(&mut writer, Path::new(":memory:"), schema::MIGRATIONS)?;
         Ok(LedgerDb {
             writer: Mutex::new(writer),
             reader: None,
@@ -848,7 +848,11 @@ pub(crate) fn row_to_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptR
 
 /// The store's rule: a file a newer build wrote is refused before the schema or a migration runs over it. Then
 /// `SCHEMA`, the baseline at version 1, and `migrate` over the steps above the stored version.
-fn prepare(conn: &mut Connection, path: &Path) -> Result<(), LedgerError> {
+fn prepare(
+    conn: &mut Connection,
+    path: &Path,
+    migrations: &[(u32, &str)],
+) -> Result<(), LedgerError> {
     let current = read_version(conn)?;
     let supported = latest_version();
     if current > supported {
@@ -865,7 +869,7 @@ fn prepare(conn: &mut Connection, path: &Path) -> Result<(), LedgerError> {
             [],
         )?;
     }
-    migrate(conn, current.max(1), schema::MIGRATIONS)
+    migrate(conn, current.max(1), migrations)
 }
 
 /// Applies every step above `current` in order, each inside its own transaction with the version it reaches, so a
@@ -1213,9 +1217,10 @@ mod tests {
         ),
     ];
 
+    /// The baseline with no step above it, so the chain tests start at version 1 whatever the build's own chain holds.
     fn prepared_in_memory() -> Connection {
         let mut conn = Connection::open_in_memory().unwrap();
-        prepare(&mut conn, Path::new(":memory:")).unwrap();
+        prepare(&mut conn, Path::new(":memory:"), &[]).unwrap();
         conn
     }
 
