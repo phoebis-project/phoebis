@@ -877,6 +877,40 @@ fn an_unknown_upstream_key_fails_check_config() {
     );
 }
 
+/// The non-companion timeout parses with the `sessions` block, left out or set inside its bounds, and a value outside
+/// them fails the check with the bound's own sentence.
+#[test]
+fn the_non_companion_timeout_passes_inside_its_bounds_and_fails_check_config_outside_them() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, extra) in [
+        ("absent", ""),
+        ("lowest", "sessions:\n  non_companion_idle_seconds: 60\n"),
+        (
+            "highest",
+            "sessions:\n  non_companion_idle_seconds: 31536000\n",
+        ),
+    ] {
+        let out = check_config(&mut phoebis(), &config_file(dir.path(), name, extra));
+        assert!(out.status.success(), "{name}: {}", printed(&out));
+    }
+    for value in [59, 31_536_001] {
+        let config = config_file(
+            dir.path(),
+            &format!("refused-{value}"),
+            &format!("sessions:\n  non_companion_idle_seconds: {value}\n"),
+        );
+        let out = check_config(&mut phoebis(), &config);
+        assert!(!out.status.success(), "{value}: {}", printed(&out));
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(&format!(
+                "sessions.non_companion_idle_seconds must be between 60 and 31536000, not {value}"
+            )),
+            "{value}: {}",
+            printed(&out)
+        );
+    }
+}
+
 /// The shipped key paths do not exist on a test host and an absent key file refuses the check, so each file is
 /// copied with its two `storage` members pointed into the temp directory and nothing else changed.
 #[test]

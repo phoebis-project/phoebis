@@ -439,6 +439,7 @@ pub async fn run_until(
         catalog: catalog.clone(),
         body_capture_max_hours: config.stats.body_capture_max_hours,
         session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
+        non_companion_idle: Duration::from_secs(config.sessions.non_companion_idle_seconds),
         bus: bus.clone(),
         ledger: ledger.clone(),
         metrics: metrics.clone(),
@@ -856,6 +857,7 @@ fn settings_view(config: &Config, profile: &phoebis_profile::Profile) -> Setting
         retention_days: config.stats.retention_days,
         rollup_retention_days: config.stats.rollup_retention_days,
         session_expire_after_seconds: config.sessions.expire_after_seconds,
+        session_non_companion_idle_seconds: config.sessions.non_companion_idle_seconds,
         storage_path: config.storage.path.display().to_string(),
         subscription_costs_path: config
             .stats

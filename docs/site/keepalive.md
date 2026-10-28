@@ -424,6 +424,10 @@ row's expanded detail reads each agent's state and cause with the sentence of ea
 resolves to and the figure in effect under one switched on past it (see [Pools](console.md#pools)). The Analytics view's
 Cache warming tab draws the probes by outcome and the wasted probes by reason (see [Analytics](console.md#analytics)).
 
+A session's row reads main's conversation pin, the newest by last use where main holds two, else the newest
+conversation pin of another agent of the session, else no pin, and never a pin only auxiliary requests have used, such
+as the one a title or a quota call placed on a model of its own.
+
 The state's cause on the Sessions view reads a label in place of the engine's id, and the table maps the two.
 
 | Label | Cause id |

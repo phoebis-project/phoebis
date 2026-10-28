@@ -2191,6 +2191,7 @@ impl Relay {
                     fast: admitted.fast,
                     classifier: admitted.classifier,
                     body_tokens,
+                    effort: facts.shape.effort.clone(),
                 })
                 .await
             {

@@ -1162,6 +1162,14 @@ pub struct PinStanding {
     /// The pin's cycle from its pace, `None` until two requests of the pin after its placement have measured a gap
     /// under the pool's burn average.
     pub cycle_ms: Option<f64>,
+    /// Only auxiliary requests have used the pin since its placement, read from the row.
+    pub auxiliary_only: bool,
+    /// The pin's stored effort, `None` for `""`.
+    pub effort: Option<String>,
+    /// The first placement of the pin's agent under the key and session, `None` where no record stands.
+    pub first_seen_at: Option<i64>,
+    /// The first placement of the session's main agent, `None` where main never placed a pin.
+    pub session_first_seen_at: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -1471,22 +1479,6 @@ impl RouterHandle {
     /// The pins with their standing, the one ask the sessions list makes.
     pub async fn pins_standing(&self) -> Result<Vec<PinStanding>, RouterGone> {
         self.ask(|reply| Command::PinsStanding { reply }).await
-    }
-    /// The greatest live cache-map prefix on the account and incarnation whose root is `root` and whose model is
-    /// `model`, `None` where none stands. Read under the shared map's lock, so the sessions list asks it per pin
-    /// without a command round trip.
-    pub fn cached_prefix(
-        &self,
-        account_id: &str,
-        incarnation: u64,
-        root: &str,
-        model: &str,
-        now: i64,
-    ) -> Option<u64> {
-        self.affinity
-            .read()
-            .expect("affinity lock poisoned")
-            .cached_prefix(account_id, incarnation, root, model, now)
     }
     /// Every member of `pool_id` with its projections, its Pace score and its slow-down entry in force under that
     /// pool's settings (the pins the pool keeps, its burn average, its ceiling), one ask, one instant, by account: an
@@ -2691,6 +2683,8 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
                 .and_then(|pool| state.slow_down_in_force(pool, &pin.account_id, now))
                 .map(|entry| entry.factor);
             let cycle_ms = state.pin_pace(&pin.key()).and_then(|pace| pace.cycle_ms);
+            let auxiliary_only = state.auxiliary_only(&pin.key());
+            let effort = Some(pin.effort.clone()).filter(|effort| !effort.is_empty());
             PinStanding {
                 pin: decayed(pin, now, average_ms),
                 runway_ms,
@@ -2698,6 +2692,10 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
                 binding,
                 speed,
                 cycle_ms,
+                auxiliary_only,
+                effort,
+                first_seen_at: None,
+                session_first_seen_at: None,
             }
         })
         .collect()
@@ -4027,10 +4025,11 @@ impl Task {
                             ..current
                         };
                         renewed.cache_ttl_ms = cache_ttl_ms;
-                        // A probe replays another request's headers, so the row keeps its entrypoint as it keeps
-                        // its lane.
+                        // A probe replays another request's headers and body, so the row keeps its entrypoint and its
+                        // effort as it keeps its lane.
                         if origin == "client" {
                             renewed.entrypoint = pin.entrypoint.clone();
+                            renewed.effort = pin.effort.clone().unwrap_or_default();
                         }
                         if origin == "keepalive" {
                             // A probe's selection judged nothing, since it replays another request's facts; the

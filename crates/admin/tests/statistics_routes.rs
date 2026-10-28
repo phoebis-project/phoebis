@@ -121,7 +121,10 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
                 "rollup_retention_days",
             ],
         ),
-        ("sessions", &["expire_after_seconds"]),
+        (
+            "sessions",
+            &["expire_after_seconds", "non_companion_idle_seconds"],
+        ),
         (
             "storage",
             &[
@@ -152,10 +155,17 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         (
             settings["retention"]["body_capture_max_hours"].as_u64(),
             settings["sessions"]["expire_after_seconds"].as_u64(),
+            settings["sessions"]["non_companion_idle_seconds"].as_u64(),
             settings["listeners"]["metrics"].as_str(),
             settings["listeners"]["proxy_tls"].as_bool(),
         ),
-        (Some(72), Some(86_400), Some("127.0.0.1:9464"), Some(false))
+        (
+            Some(72),
+            Some(86_400),
+            Some(3_600),
+            Some("127.0.0.1:9464"),
+            Some(false)
+        )
     );
     assert_eq!(
         (
@@ -5151,6 +5161,7 @@ fn select_request(
         fast: false,
         classifier: false,
         body_tokens: 0,
+        effort: None,
     }
 }
 
@@ -5937,6 +5948,7 @@ async fn select_s1(
             fast: false,
             classifier: false,
             body_tokens: 0,
+            effort: None,
         })
         .await
         .unwrap()

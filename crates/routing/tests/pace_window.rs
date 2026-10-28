@@ -123,6 +123,7 @@ fn request(s: &RegistrySnapshot, model: &str, now: i64) -> SelectRequest {
         fast: false,
         classifier: false,
         body_tokens: 0,
+        effort: None,
     }
 }
 

@@ -1055,22 +1055,37 @@ async fn the_request_detail_answers_stream_cut_as_null_or_the_cuts_six_members()
 }
 
 #[tokio::test]
-async fn a_session_row_answers_its_context_figures_and_agent_lines_as_null_or_their_values() {
+async fn a_session_row_answers_its_effort_and_its_agent_lines_and_no_context_window() {
     let (_app, _up, document) = document().await;
     let schemas = &document["components"]["schemas"];
+    let session = &schemas["Session"];
     for member in [
-        "agent_contexts",
         "cached_prefix_tokens",
         "context_share",
         "context_window_tokens",
     ] {
         assert!(
-            admits_null(&schemas["Session"]["properties"][member]),
-            "Session.{member}: a row with no figure answers null: {}",
-            schemas["Session"]
+            session["properties"].get(member).is_none(),
+            "Session.{member}: the row answers no context window: {session}"
         );
     }
-    let properties: BTreeSet<&str> = schemas["AgentContext"]["properties"]
+    assert!(
+        admits_null(&session["properties"]["effort"]),
+        "Session.effort: a row with no pin answers null: {session}"
+    );
+    let lines = &session["properties"]["agent_contexts"];
+    assert!(
+        lines["type"] == "array" && !admits_null(lines),
+        "Session.agent_contexts: every row answers a list, empty where no line draws: {lines}"
+    );
+    assert!(
+        session["required"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|m| m == "agent_contexts")),
+        "every row carries its lines: {session}"
+    );
+    let line = &schemas["AgentContext"];
+    let properties: BTreeSet<&str> = line["properties"]
         .as_object()
         .unwrap()
         .keys()
@@ -1079,24 +1094,27 @@ async fn a_session_row_answers_its_context_figures_and_agent_lines_as_null_or_th
     assert_eq!(
         properties,
         BTreeSet::from([
+            "account_id",
             "agent_id",
-            "cached_prefix_tokens",
-            "context_share",
-            "context_window_tokens",
+            "cache_ttl_ms",
+            "created_at",
+            "effort",
             "last_input_tokens",
-            "model"
+            "last_used_at",
+            "model",
+            "warm"
         ])
     );
-    for member in [
-        "cached_prefix_tokens",
-        "context_share",
-        "context_window_tokens",
-    ] {
+    for member in ["created_at", "effort"] {
         assert!(
-            admits_null(&schemas["AgentContext"]["properties"][member]),
-            "AgentContext.{member}: a line with no turn answers null"
+            admits_null(&line["properties"][member]),
+            "AgentContext.{member}: a line answers null where the pin holds none: {line}"
         );
     }
+    assert_eq!(
+        line["properties"]["warm"]["type"], "boolean",
+        "AgentContext.warm: {line}"
+    );
 }
 
 #[tokio::test]

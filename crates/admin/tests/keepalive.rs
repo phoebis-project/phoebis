@@ -1302,15 +1302,15 @@ async fn a_session_row_on_a_usage_based_seat_reads_its_burn_in_dollars() {
     );
 }
 
-/// A main pin of `session` on `business` under the plain `claude-opus-5`, the model the router folds a `[1m]`
-/// spelling into, holding a last prompt so its row answers a window.
-fn spelling_pin(session: &str, key_generation: i64) -> phoebis_store::PinRow {
+/// A conversation pin of `agent` on `session` on `business` under `model`, used five milliseconds before the rig's clock
+/// and holding a last prompt.
+fn line_pin(session: &str, agent: &str, model: &str, key_generation: i64) -> phoebis_store::PinRow {
     let now = common::NOW;
     phoebis_store::PinRow {
         key_id: "desktop".into(),
         session_id: session.into(),
-        agent_id: "main".into(),
-        model: "claude-opus-5".into(),
+        agent_id: agent.into(),
+        model: model.into(),
         account_id: "business".into(),
         epoch: 1,
         created_at: now - 10,
@@ -1331,7 +1331,7 @@ fn spelling_pin(session: &str, key_generation: i64) -> phoebis_store::PinRow {
         shed_reason: None,
         static_hash: None,
         tail_hash: None,
-        lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
+        lane: phoebis_routing::lane_key(model, "standard", "none", "-"),
         entrypoint: String::new(),
         marked_at: None,
         marked_on: None,
@@ -1341,9 +1341,9 @@ fn spelling_pin(session: &str, key_generation: i64) -> phoebis_store::PinRow {
     }
 }
 
-/// The pool `main` over `business` behind key `desktop` with a main pin on each of `sessions`, written through one
-/// harness and served by a second one, since the router task loads its pins at spawn.
-async fn spelling_harness(sessions: &[&str]) -> common::Full {
+/// The pool `main` over `business` behind key `desktop` holding `pins`, written through one harness and served by a
+/// second one, since the router task loads its pins at spawn.
+async fn lines_harness(pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>) -> common::Full {
     let seed = common::admin_parts_full().await;
     let seeding = login(&seed.app, "admin-secret").await;
     post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&seeding)).await;
@@ -1354,13 +1354,44 @@ async fn spelling_harness(sessions: &[&str]) -> common::Full {
         Some(&seeding),
     )
     .await;
-    let generation = common::generation(&seed.store, "desktop");
-    for session in sessions {
-        seed.store
-            .upsert_pin(&spelling_pin(session, generation))
-            .unwrap();
+    for pin in pins(common::generation(&seed.store, "desktop")) {
+        seed.store.upsert_pin(&pin).unwrap();
     }
     common::admin_parts_full_on(seed.store.clone()).await
+}
+
+/// Registers `session` with the companion, with one observed turn of main and of each of `agents`, so the engine holds
+/// a recipe for each and the row is a companion row.
+fn register_with_the_engine(parts: &common::Full, session: &str, agents: &[&str]) {
+    let generation = common::generation(&parts.store, "desktop");
+    let mut sequence = 0;
+    let mut report = |event: &str, agent: Option<&str>| {
+        sequence += 1;
+        parts
+            .keepalive
+            .apply_event(
+                "desktop",
+                generation,
+                Event {
+                    event: event.into(),
+                    session_id: session.into(),
+                    instance_id: "i1".into(),
+                    sequence,
+                    agent_id: agent.map(String::from),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    };
+    let observe = |agent: &str| {
+        parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: format!("k-{session}-{agent}"), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: generation, pool_id: Some("main".into()), session_id: Some(session.into()), agent_id: Some(agent.to_string()), parent_agent_id: (agent != "main").then(|| "main".into()), owner_id: None, model: "claude-opus-5".into(), canonical_model: "claude-opus-5".into(), wire_model: "claude-opus-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-opus-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: common::NOW }));
+    };
+    report("session_start", None);
+    observe("main");
+    for agent in agents {
+        report("agent_start", Some(agent));
+        observe(agent);
+    }
 }
 
 /// A client request of `agent` on `session` naming `model`, classed as the client's `x-claude-code-request-class`
@@ -1396,8 +1427,12 @@ fn classed_request(
     }
 }
 
-/// Each of `sessions`' rows' `context_window_tokens`, read once every row counts the requests its pair names.
-async fn windows(parts: &common::Full, cookie: &str, sessions: &[(&str, u64)]) -> Vec<Option<u64>> {
+/// Each of `sessions`' rows' agent lines, read once every row counts the requests its pair names.
+async fn lines(
+    parts: &common::Full,
+    cookie: &str,
+    sessions: &[(&str, u64)],
+) -> Vec<serde_json::Value> {
     let listed = common::wait_json(&parts.app, "/admin/sessions", cookie, |v| {
         sessions.iter().all(|(session, requests)| {
             v["sessions"]
@@ -1416,19 +1451,47 @@ async fn windows(parts: &common::Full, cookie: &str, sessions: &[(&str, u64)]) -
                 .unwrap()
                 .iter()
                 .find(|r| r["session_id"] == *session)
-                .and_then(|r| r["context_window_tokens"].as_u64())
+                .map(|r| r["agent_contexts"].clone())
+                .unwrap_or_default()
         })
         .collect()
 }
 
-/// An auxiliary request (a title, a summary, a classifier call) names a model of its own, which sizes nothing of the
-/// conversation, so the client's window follows the conversation's own spelling.
+/// The line the route answers for a `line_pin` of `agent` under `model` used at `last_used_at`.
+fn line(agent: &str, model: &str, last_used_at: i64) -> serde_json::Value {
+    serde_json::json!({
+        "agent_id": agent,
+        "model": model,
+        "account_id": "business",
+        "effort": null,
+        "last_input_tokens": 100_000,
+        "cache_ttl_ms": 300_000,
+        "last_used_at": last_used_at,
+        "warm": true,
+        "created_at": null,
+    })
+}
+
+/// An auxiliary request (a title, a summary, a classifier call) names a model of its own, and the pin it places is
+/// one only auxiliary requests use, which draws no line, so main's line reads its conversation pin.
 #[tokio::test]
-async fn a_main_pins_line_reads_its_newest_conversation_spelling_under_a_newer_auxiliary_request() {
-    let parts = spelling_harness(&["s1"]).await;
+async fn a_main_pins_line_reads_its_conversation_pin_beside_a_newer_auxiliary_pin() {
+    let now = common::NOW;
+    let parts = lines_harness(|g| {
+        vec![
+            phoebis_store::PinRow {
+                last_used_at: now - 50,
+                ..line_pin("s1", "main", "claude-opus-5", g)
+            },
+            phoebis_store::PinRow {
+                auxiliary_only: true,
+                ..line_pin("s1", "main", "claude-haiku-4-5", g)
+            },
+        ]
+    })
+    .await;
     let cookie = login(&parts.app, "admin-secret").await;
     let g = common::generation(&parts.store, "desktop");
-    let now = common::NOW;
     for (id, model, class, at) in [
         ("r1", "claude-opus-5[1m]", "main", now - 60_000),
         ("r2", "claude-haiku-4-5", "auxiliary", now - 30_000),
@@ -1437,23 +1500,35 @@ async fn a_main_pins_line_reads_its_newest_conversation_spelling_under_a_newer_a
             .ledger
             .record(classed_request(id, "s1", "main", model, Some(class), at, g));
     }
+    register_with_the_engine(&parts, "s1", &[]);
     assert_eq!(
-        windows(&parts, &cookie, &[("s1", 2)]).await,
-        [Some(1_000_000)],
-        "main's conversation named the long-context twin, and its newer auxiliary request's model sizes nothing"
+        lines(&parts, &cookie, &[("s1", 2)]).await,
+        [serde_json::json!([line("main", "claude-opus-5", now - 50)])],
+        "main's line is its conversation pin, and the newer pin of its auxiliary request draws none"
     );
 }
 
-/// The read keeps one row per agent with no read per pin, so an agent whose requests in the window are all auxiliary
-/// falls back to the session's newest conversation request of any agent, and only a session that sent no
-/// conversation request keeps the pin's own model.
+/// A pin only auxiliary requests have used draws no line, whether another agent of the session holds a conversation
+/// pin or none does.
 #[tokio::test]
-async fn a_pin_whose_requests_are_all_auxiliary_reads_the_sessions_newest_conversation_spelling_else_its_own(
-) {
-    let parts = spelling_harness(&["s-borrowed", "s-auxiliary"]).await;
+async fn a_pin_whose_requests_are_all_auxiliary_draws_no_line() {
+    let now = common::NOW;
+    let parts = lines_harness(|g| {
+        vec![
+            phoebis_store::PinRow {
+                auxiliary_only: true,
+                ..line_pin("s-borrowed", "main", "claude-haiku-4-5", g)
+            },
+            line_pin("s-borrowed", "worker-1", "claude-opus-5", g),
+            phoebis_store::PinRow {
+                auxiliary_only: true,
+                ..line_pin("s-auxiliary", "main", "claude-opus-5", g)
+            },
+        ]
+    })
+    .await;
     let cookie = login(&parts.app, "admin-secret").await;
     let g = common::generation(&parts.store, "desktop");
-    let now = common::NOW;
     for (id, session, agent, model, class, at) in [
         (
             "r1",
@@ -1490,22 +1565,27 @@ async fn a_pin_whose_requests_are_all_auxiliary_reads_the_sessions_newest_conver
             g,
         ));
     }
+    register_with_the_engine(&parts, "s-borrowed", &["worker-1"]);
+    register_with_the_engine(&parts, "s-auxiliary", &[]);
     assert_eq!(
-        windows(&parts, &cookie, &[("s-borrowed", 2), ("s-auxiliary", 1)]).await,
-        [Some(1_000_000), Some(200_000)],
-        "main sent auxiliary requests alone, so it reads the subagent's conversation spelling where the session holds \
-         one and the pin's plain model where it holds none"
+        lines(&parts, &cookie, &[("s-borrowed", 2), ("s-auxiliary", 1)]).await,
+        [
+            serde_json::json!([line("worker-1", "claude-opus-5", now - 5)]),
+            serde_json::json!([]),
+        ],
+        "main sent auxiliary requests alone, so its pin draws no line beside the subagent's and none where it is the one \
+         pin"
     );
 }
 
-/// A raw caller sends no `x-claude-code-request-class`, so its conversation requests carry no class and stay in the
-/// spelling read.
+/// A raw caller sends no `x-claude-code-request-class` and runs no companion, so its unclassed pin is a conversation
+/// pin, which its row lists as main's line within the non-companion timeout.
 #[tokio::test]
-async fn a_raw_callers_unclassed_session_reads_its_newest_requests_spelling_over_the_pins_own() {
-    let parts = spelling_harness(&["s-raw"]).await;
+async fn a_raw_callers_session_with_no_companion_lists_its_pin_as_mains_line() {
+    let now = common::NOW;
+    let parts = lines_harness(|g| vec![line_pin("s-raw", "main", "claude-opus-5", g)]).await;
     let cookie = login(&parts.app, "admin-secret").await;
     let g = common::generation(&parts.store, "desktop");
-    let now = common::NOW;
     for (id, model, at) in [
         ("r1", "claude-opus-5", now - 60_000),
         ("r2", "claude-opus-5[1m]", now - 30_000),
@@ -1515,9 +1595,9 @@ async fn a_raw_callers_unclassed_session_reads_its_newest_requests_spelling_over
             .record(classed_request(id, "s-raw", "main", model, None, at, g));
     }
     assert_eq!(
-        windows(&parts, &cookie, &[("s-raw", 2)]).await,
-        [Some(1_000_000)],
-        "the newest unclassed request named the long-context twin, where the pin's own model would read 200,000"
+        lines(&parts, &cookie, &[("s-raw", 2)]).await,
+        [serde_json::json!([line("main", "claude-opus-5", now - 5)])],
+        "the unclassed session's pin is main's line on a row no companion reports"
     );
 }
 

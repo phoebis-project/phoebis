@@ -283,33 +283,6 @@ impl AffinityMap {
         walk
     }
 
-    /// The greatest `prefix_tokens` among the live entries on `account_id` under `incarnation` whose root is `root`
-    /// and whose model resolves to `model`'s, both chains counted, `None` where none stands. The greatest rather than
-    /// the deepest entry's, since the two chains count their depths apart and a message entry's count covers the
-    /// static blocks before it: a conversation whose only live entries are static reads the relay's estimate.
-    pub fn cached_prefix(
-        &self,
-        account_id: &str,
-        incarnation: u64,
-        root: &str,
-        model: &str,
-        now: i64,
-    ) -> Option<u64> {
-        let model = self.canonical(model);
-        self.entries
-            .iter()
-            .filter(|(spelling, _)| self.canonical(spelling) == model)
-            .flat_map(|(_, hashes)| hashes.values())
-            .filter(|entry| {
-                entry.account_id == account_id
-                    && entry.incarnation == incarnation
-                    && entry.root == root
-                    && entry.live(now)
-            })
-            .max_by_key(|entry| (entry.prefix_tokens, entry.depth))
-            .map(|entry| entry.prefix_tokens)
-    }
-
     /// Upserts the report's boundaries; answers the rows to persist (new or moved).
     pub fn record(&mut self, report: &AffinityReport) -> Vec<AffinityRow> {
         let canonical_model = self.canonical(&report.canonical_model).to_string();
@@ -1129,65 +1102,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             [("b1", Some("msg_01"))],
             "the refreshed row persists the id the refresh wrote"
-        );
-    }
-
-    #[test]
-    fn the_cached_prefix_is_the_greatest_live_count_on_the_holder_root_and_model_across_both_chains(
-    ) {
-        use AffinityChain::{Message, Static};
-        let now = 1_000_000;
-        let lapsed = now - 300_001;
-        // (model, hash, chain, root, incarnation, written_at, prefix_tokens, depth), every entry on account `a`.
-        let rows = [
-            ("m-dated", "s1", Static, "root-a", 1, now, 3_000, 1),
-            // Written under the spelling before its dated id was known, so it counts under the resolved model too.
-            ("m", "x4", Message, "root-a", 1, now, 9_000, 4),
-            ("m-dated", "x6", Message, "root-a", 1, lapsed, 20_000, 6),
-            ("m-dated", "o5", Message, "root-b", 1, now, 30_000, 5),
-            ("m-dated", "i5", Message, "root-a", 2, now, 40_000, 5),
-            ("m-dated", "t1", Static, "root-c", 1, now, 2_500, 1),
-        ];
-        let mut map = AffinityMap::from_rows(
-            rows.into_iter()
-                .map(
-                    |(model, hash, chain, root, incarnation, written_at, prefix_tokens, depth)| {
-                        AffinityRow {
-                            model: model.into(),
-                            hash: hash.into(),
-                            chain,
-                            account_id: "a".into(),
-                            incarnation,
-                            written_at,
-                            ttl_ms: 300_000,
-                            prefix_tokens,
-                            key_id: "k".into(),
-                            key_generation: 0,
-                            root: root.into(),
-                            lane: crate::lane_key(model, "standard", "none", "-"),
-                            depth,
-                            message_id: None,
-                        }
-                    },
-                )
-                .collect(),
-        );
-        map.learn_resolution("m", "m-dated");
-        assert_eq!(
-            map.cached_prefix("a", 1, "root-a", "m", now),
-            Some(9_000),
-            "the message entry's count over the static estimate, the expired entry, another root's and another \
-             incarnation's left out"
-        );
-        assert_eq!(
-            map.cached_prefix("a", 1, "root-c", "m-dated", now),
-            Some(2_500),
-            "a conversation with only a static entry live reads its estimate"
-        );
-        assert_eq!(
-            map.cached_prefix("a", 1, "root-z", "m", now),
-            None,
-            "no live entry stands on the root"
         );
     }
 }

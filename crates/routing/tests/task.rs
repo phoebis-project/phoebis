@@ -183,6 +183,7 @@ fn request(
         fast: false,
         classifier: false,
         body_tokens: 0,
+        effort: None,
     }
 }
 
@@ -881,6 +882,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
         epoch: 1,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         entrypoint: String::new(),
+        effort: None,
     };
     let reports = [
         Report::AccountState {
@@ -1162,6 +1164,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             fast: false,
             classifier: false,
             body_tokens: 0,
+            effort: None,
         }
     };
     let epoch;
@@ -1303,6 +1306,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             fast: false,
             classifier: false,
             body_tokens: 0,
+            effort: None,
         })
         .await
         .unwrap();
@@ -2121,6 +2125,7 @@ async fn pin_of(handle: &phoebis_routing::RouterHandle) -> phoebis_routing::PinR
         epoch: row.epoch,
         lane: row.lane,
         entrypoint: String::new(),
+        effort: None,
     }
 }
 
@@ -8549,7 +8554,7 @@ fn quota_turn(handle: &RouterHandle, session: Option<&str>, now: i64) -> SelectR
 
 /// Session `session`'s pin under the store's key `k` on `account`, burning `burn` input tokens a second in both
 /// copies, placed an hour before `AT`, used a second before it and last refreshed half an hour before it, so it is
-/// live and cold: a refresh after the placement leaves it unflagged at the load.
+/// live and cold, its row unflagged.
 fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64) -> PinRow {
     let rates = PinBurn {
         input: burn,
@@ -9095,6 +9100,7 @@ async fn a_cooldown_report_naming_a_marked_pin_clears_its_mark_as_released() {
                 epoch: 1,
                 lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
                 entrypoint: String::new(),
+                effort: None,
             }),
             incarnation: 1,
             lifecycle_generation: 1,
@@ -12882,6 +12888,7 @@ async fn a_quiet_accounts_slow_down_entry_and_a_gone_pins_pace_leave_at_the_purg
                 epoch: 1,
                 lane: s1.lane.clone(),
                 entrypoint: String::new(),
+                effort: None,
             },
             "a",
         )
@@ -13424,6 +13431,130 @@ async fn pins_standing_answers_the_speed_and_the_cycle_of_a_pin() {
         (of("s2"), of("s3")),
         ((Some(factor), Some(12_000.0)), (Some(factor), None)),
         "each pin reads its account's factor, and the cycle stands from a pin's third request on"
+    );
+}
+
+#[tokio::test]
+async fn a_restarted_router_reads_each_pins_flag_and_effort_from_its_row_and_a_refreshing_turn_persists_the_clear(
+) {
+    let store = seeded(&["a"]);
+    // Both last refreshed at their placement: a conversation pin no second refreshing turn renewed, and a pin only
+    // auxiliary requests used.
+    let conversation = PinRow {
+        last_refresh_at: AT - HOUR,
+        effort: "high".into(),
+        ..stored_pin(&store, "s1", "a", 1, 0.0)
+    };
+    let auxiliary = PinRow {
+        last_refresh_at: AT - HOUR,
+        auxiliary_only: true,
+        ..stored_pin(&store, "s2", "a", 2, 0.0)
+    };
+    for pin in [&conversation, &auxiliary] {
+        store.upsert_pin(pin).unwrap();
+    }
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let standing = handle.pins_standing().await.unwrap();
+    let of = |session: &str| {
+        standing
+            .iter()
+            .find(|p| p.pin.session_id == session)
+            .map(|p| {
+                (
+                    p.auxiliary_only,
+                    p.effort.clone(),
+                    p.first_seen_at,
+                    p.session_first_seen_at,
+                )
+            })
+            .unwrap_or_else(|| panic!("no pin of {session}: {standing:?}"))
+    };
+    assert_eq!(
+        of("s1"),
+        (false, Some("high".to_string()), None, None),
+        "the conversation pin reads as one after the restart, with its stored effort"
+    );
+    assert_eq!(
+        of("s2"),
+        (true, None, None, None),
+        "the flagged row reads flagged, and a row with no effort answers none"
+    );
+    handle
+        .select(SelectRequest {
+            request_class: Some("main".into()),
+            ..request(&handle, Some("s2"), AT)
+        })
+        .await
+        .unwrap();
+    wait_for(WRITTEN, || {
+        store
+            .load_routing()
+            .unwrap()
+            .pins
+            .into_iter()
+            .find(|p| p.session_id == "s2" && !p.auxiliary_only)
+    })
+    .await;
+    assert!(
+        !handle
+            .pins_standing()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.auxiliary_only),
+        "the main turn's refresh clears the flag in the state and in the store"
+    );
+}
+
+#[tokio::test]
+async fn a_client_renewal_writes_the_effort_its_pin_names_to_the_row_and_a_probes_renewal_keeps_the_stored_one(
+) {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let placed = selected_pin(
+        handle
+            .select(SelectRequest {
+                effort: Some("high".into()),
+                ..request(&handle, Some("s1"), 1_000)
+            })
+            .await
+            .unwrap(),
+    );
+    let renewed = |effort: Option<&str>, origin: &'static str, at: i64| Report::PinRenewed {
+        pin: PinRef {
+            effort: effort.map(String::from),
+            ..placed.clone()
+        },
+        now: at,
+        usage: None,
+        origin,
+        cache_ttl_ms: 300_000,
+        fast: false,
+        classifier: false,
+    };
+    let stored = || async { handle.pins().await.unwrap().remove(0).effort };
+    assert_eq!(stored().await, "high", "the placement stamped the word");
+    handle.report(renewed(Some("low"), "client", 2_000)).await;
+    assert_eq!(
+        stored().await,
+        "low",
+        "a client's renewal writes the word its pin names"
+    );
+    handle
+        .report(renewed(Some("max"), "keepalive", 3_000))
+        .await;
+    assert_eq!(
+        stored().await,
+        "low",
+        "a probe replays another request's body, so its renewal keeps the stored word"
+    );
+    handle.report(renewed(None, "client", 4_000)).await;
+    assert_eq!(
+        stored().await,
+        "",
+        "a client's renewal whose pin names none writes none"
     );
 }
 

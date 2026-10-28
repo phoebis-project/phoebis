@@ -633,6 +633,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             fast: false,
             classifier: false,
             body_tokens: 0,
+            effort: None,
         })
         .await
         .unwrap();
@@ -732,6 +733,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             fast: false,
             classifier: false,
             body_tokens: 0,
+            effort: None,
         })
         .await
         .unwrap();
@@ -1349,16 +1351,37 @@ async fn every_route_is_captured_and_holds_its_shape() {
             },
         )
         .unwrap();
-    // The companion session's main pin and a pin of each of its two agents, each renewed with a prompt and holding one
-    // live cache-map entry rooted at the session, so `sessions.json` carries the row's context figures and its agents'
-    // lines. Each selection is narrowed to one member, so no two pins share an account and a model and their cached
-    // prefixes read apart, and each entry lands on its selection's decision, so the ledger counts no orphan for it. The
-    // pins are placed a minute before the routing log's hour, which holds the routing stories alone.
+    // The companion session's main pin and a pin of each of its two agents, each placed under an effort word, renewed
+    // with a prompt and holding one live cache-map entry rooted at the session, so `sessions.json` carries the row's
+    // prompt and effort and the lines of main and its agents. Each selection is narrowed to one member, so no two pins
+    // share an account and a model, and each entry lands on its selection's decision, so the ledger counts no orphan
+    // for it. The pins are placed a minute before the routing log's hour, which holds the routing stories alone.
     let placed_at = hour_ago - 60_000;
-    for (agent, model, account, prompt, prefix_tokens) in [
-        ("main", "claude-sonnet-5-5", "business", 52_000, 41_000),
-        ("worker-1", "claude-sonnet-5", "business", 31_000, 24_000),
-        ("worker-2", "claude-sonnet-5-5", "direct", 18_500, 12_000),
+    for (agent, model, account, effort, prompt, prefix_tokens) in [
+        (
+            "main",
+            "claude-sonnet-5-5",
+            "business",
+            "high",
+            52_000,
+            41_000,
+        ),
+        (
+            "worker-1",
+            "claude-sonnet-5",
+            "business",
+            "low",
+            31_000,
+            24_000,
+        ),
+        (
+            "worker-2",
+            "claude-sonnet-5-5",
+            "direct",
+            "low",
+            18_500,
+            12_000,
+        ),
     ] {
         let request_id = format!("r-s1-{agent}");
         let candidates = phoebis_routing::resolve(&snapshot, &key_row, model, model)
@@ -1405,6 +1428,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 fast: false,
                 classifier: false,
                 body_tokens: 0,
+                effort: Some(effort.into()),
             })
             .await
             .unwrap();
@@ -1459,6 +1483,36 @@ async fn every_route_is_captured_and_holds_its_shape() {
             ))
             .await;
     }
+    // One auxiliary request of main on a second model, naming no effort, so `sessions.json` reads the row from main's
+    // conversation pin beside a pin only auxiliary requests have used, which draws no line. It is placed at the pins'
+    // instant, before the routing log's hour, and renewed at its answer's end as theirs are, inside the pool's TTL.
+    let auxiliary = parts
+        .router
+        .select(phoebis_routing::SelectRequest {
+            now: placed_at,
+            received_at: placed_at,
+            request_class: Some("auxiliary".into()),
+            ..asked(&parts, key_generation, "r-s1-auxiliary", 1, Some("s1"))
+        })
+        .await
+        .unwrap();
+    let selection = match &auxiliary.result {
+        phoebis_routing::SelectResult::Selected(selection) => selection.clone(),
+        other => panic!("the auxiliary request is placed, not {other:?}"),
+    };
+    drop(auxiliary);
+    parts
+        .router
+        .report(phoebis_routing::Report::PinRenewed {
+            pin: selection.pin.expect("a session's selection holds a pin"),
+            now,
+            usage: None,
+            origin: "client",
+            cache_ttl_ms: 300_000,
+            fast: false,
+            classifier: false,
+        })
+        .await;
     // The two agents register and each sends one turn, so the keepalive's view carries their recipes and the row lists
     // their lines. Main's later `state` event takes a sequence past theirs.
     for (sequence, agent, model, account) in [
@@ -2219,6 +2273,7 @@ fn asked(
         fast: false,
         classifier: false,
         body_tokens: 0,
+        effort: None,
     }
 }
 

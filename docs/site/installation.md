@@ -445,6 +445,8 @@ sessions:
   memory_cap: 65536
   memory_idle_seconds: 86400
   memory_retention_days: 30
+  # How long a session no companion reports stays listed in the Sessions view past its last use or request.
+  non_companion_idle_seconds: 3600
 stats:
   # Overrides the shipped price table. A missing file is fine.
   api_prices_path: ./api_prices.yaml
@@ -611,8 +613,10 @@ unknown field, named in the error. How a cooldown and the failover use the timin
 ### sessions
 
 Defaults whole. `expire_after_seconds` is how long a session may go without a request before it leaves the Sessions
-view, taking its pin and any keepalive recipe with it. The three `memory_` keys bound the relay's memory of a session's
-previous request id and prompt id, the record behind `cc_prev_req` ([client](client.md#the-environment-block)).
+view, taking its pin and any keepalive recipe with it, and `non_companion_idle_seconds` how much sooner a session no
+companion reports leaves the view, past the later of its last use and last request, its pin staying to the expiry. The
+three `memory_` keys bound the relay's memory of a session's previous request id and prompt id, the record behind
+`cc_prev_req` ([client](client.md#the-environment-block)).
 
 | Key | Default | Accepts |
 | --- | --- | --- |
@@ -620,6 +624,7 @@ previous request id and prompt id, the record behind `cc_prev_req` ([client](cli
 | `memory_cap` | `65536` | 1 to 1048576 entries held in process, and past it the least recently seen entry leaves memory |
 | `memory_idle_seconds` | `86400` | 60 to 31536000, how long an entry may go unseen before it leaves memory |
 | `memory_retention_days` | `30` | 1 to 3650, how long the on-disk copy of an entry is kept after its last request |
+| `non_companion_idle_seconds` | `3600` | 60 to 31536000, how long a session no companion reports stays listed past its last use or request, and how long a line's pin stays listed on such a row past its last use |
 
 Refused with:
 
@@ -627,6 +632,7 @@ Refused with:
 - `memory_cap`: `sessions.memory_cap must be between 1 and 1048576, not {value}`
 - `memory_idle_seconds`: `sessions.memory_idle_seconds must be between 60 and 31536000, not {value}`
 - `memory_retention_days`: `sessions.memory_retention_days must be between 1 and 3650, not {value}`
+- `non_companion_idle_seconds`: `sessions.non_companion_idle_seconds must be between 60 and 31536000, not {value}`
 
 ### stats
 

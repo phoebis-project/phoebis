@@ -5039,6 +5039,25 @@ async fn sessions_harness_priced(
     prices: phoebis_ledger::PriceRevisions,
     pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
 ) -> common::Full {
+    let seed = sessions_seed(pins).await;
+    common::admin_parts_full_on_priced(seed.store.clone(), prices).await
+}
+
+/// `sessions_harness_with` with the sessions route bounded by `session_expiry` and `non_companion_idle` rather than
+/// the harness's 24 hours and one hour.
+async fn sessions_harness_bounded(
+    session_expiry: std::time::Duration,
+    non_companion_idle: std::time::Duration,
+    pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
+) -> common::Full {
+    let seed = sessions_seed(pins).await;
+    common::admin_parts_full_on_bounded(seed.store.clone(), session_expiry, non_companion_idle)
+        .await
+}
+
+/// The harness `sessions_harness_with` writes its store through: the pool, the key, the business account's tier and
+/// `pins`.
+async fn sessions_seed(pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>) -> common::Full {
     use common::{generation, login, post};
     let seed = common::admin_parts_full().await;
     let seeding = login(&seed.app, "admin-secret").await;
@@ -5054,7 +5073,7 @@ async fn sessions_harness_priced(
     for pin in pins(generation(&seed.store, "desktop")) {
         seed.store.upsert_pin(&pin).unwrap();
     }
-    common::admin_parts_full_on_priced(seed.store.clone(), prices).await
+    seed
 }
 
 fn session_row(sessions: &serde_json::Value, session: &str) -> serde_json::Value {
@@ -5326,6 +5345,7 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
             epoch: 1,
             lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
             entrypoint: String::new(),
+            effort: None,
         },
         now,
         usage: Some(phoebis_routing::PinUsage {
@@ -5386,6 +5406,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
                 epoch: 1,
                 lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
                 entrypoint: String::new(),
+                effort: None,
             },
             now,
             usage: Some(phoebis_routing::PinUsage {
@@ -5966,6 +5987,7 @@ async fn main_turn(
             fast: false,
             classifier: false,
             body_tokens: 0,
+            effort: None,
         })
         .await
         .unwrap()
@@ -6684,51 +6706,8 @@ fn context_pin(
     }
 }
 
-/// One live message entry rooted at `session` on `account` under `model`, as the answer to a turn of `agent` there
-/// reports it, the upstream's cached prefix `prefix_tokens`.
-async fn report_prefix(
-    parts: &common::Full,
-    session: &str,
-    agent: &str,
-    model: &str,
-    account: &str,
-    prefix_tokens: u64,
-) {
-    parts
-        .router
-        .report(phoebis_routing::Report::Affinity(
-            phoebis_routing::AffinityReport {
-                account_id: account.into(),
-                incarnation: 1,
-                key_id: "desktop".into(),
-                key_generation: common::generation(&parts.store, "desktop"),
-                canonical_model: model.into(),
-                lane: phoebis_routing::lane_key(model, "standard", "none", "-"),
-                root: session.into(),
-                static_boundaries: std::sync::Arc::from([]),
-                message_boundaries: std::sync::Arc::from([format!(
-                    "{session}-{agent}-{model}-{account}"
-                )]),
-                static_sizes: Vec::new(),
-                static_ttl_ms: None,
-                message_ttl_ms: Some(300_000),
-                cache_touched: true,
-                prefix_tokens,
-                now: common::NOW,
-                cache_write_5m_tokens: None,
-                cache_write_1h_tokens: None,
-                uniform_ttl_ms: None,
-                request_id: format!("r-{session}-{agent}"),
-                seq: 1,
-                attempt: 1,
-                message_id: None,
-            },
-        ))
-        .await;
-}
-
-/// Registers `session` with the companion and each of `agents` under it, each with one observed turn so the
-/// keepalive's view carries its recipe, then releases each of `released` as the mod reports it.
+/// Registers `session` with the companion and each of `agents` under it, main and each agent with one observed turn so
+/// the keepalive's view carries its recipe, then releases each of `released` as the mod reports it.
 fn register_companion(parts: &common::Full, session: &str, agents: &[&str], released: &[&str]) {
     let generation = common::generation(&parts.store, "desktop");
     let mut sequence = 0;
@@ -6760,9 +6739,13 @@ fn register_companion(parts: &common::Full, session: &str, agents: &[&str], rele
             .unwrap();
     };
     report("session_start", None, None);
+    let observe = |agent: &str| {
+        parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: format!("k-{session}-{agent}"), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: generation, pool_id: Some("main".into()), session_id: Some(session.into()), agent_id: Some(agent.to_string()), parent_agent_id: (agent != "main").then(|| "main".into()), owner_id: None, model: "claude-opus-5".into(), canonical_model: "claude-opus-5".into(), wire_model: "claude-opus-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-opus-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: common::NOW }));
+    };
+    observe("main");
     for agent in agents {
         report("agent_start", Some(agent), None);
-        parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: format!("k-{session}-{agent}"), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: generation, pool_id: Some("main".into()), session_id: Some(session.into()), agent_id: Some(agent.to_string()), parent_agent_id: Some("main".into()), owner_id: None, model: "claude-opus-5".into(), canonical_model: "claude-opus-5".into(), wire_model: "claude-opus-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-opus-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: common::NOW }));
+        observe(agent);
     }
     for agent in released {
         report("state", Some(agent), Some("released"));
@@ -6799,61 +6782,73 @@ fn spelled_request(
     }
 }
 
-/// A row's context window, share and cached prefix with its agent lines, each `None` where the row leaves it out.
-fn context_of(row: &serde_json::Value) -> [Option<serde_json::Value>; 4] {
-    [
-        "context_window_tokens",
-        "context_share",
-        "cached_prefix_tokens",
-        "agent_contexts",
-    ]
-    .map(|member| row.get(member).cloned())
+/// A row's prompt, effort and agent lines, each `None` where the row leaves it out.
+fn context_of(row: &serde_json::Value) -> [Option<serde_json::Value>; 3] {
+    ["last_input_tokens", "effort", "agent_contexts"].map(|member| row.get(member).cloned())
 }
 
-/// An agent line as the route answers it.
+/// The context window members a row or one of its lines still answers, none since the window left the route.
+fn dropped_members(row: &serde_json::Value) -> Vec<String> {
+    let lines = row["agent_contexts"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    std::iter::once(row)
+        .chain(lines.iter())
+        .flat_map(|value| {
+            [
+                "cached_prefix_tokens",
+                "context_share",
+                "context_window_tokens",
+            ]
+            .into_iter()
+            .filter(move |member| value.get(*member).is_some())
+            .map(String::from)
+        })
+        .collect()
+}
+
+/// An agent line as the route answers it, under the harness pins' five-minute TTL and with no first-seen record.
 fn agent_line(
     agent: &str,
     model: &str,
+    account: &str,
+    effort: Option<&str>,
     last_input_tokens: u64,
-    window: Option<u64>,
-    share: Option<f64>,
-    prefix: Option<u64>,
+    last_used_at: i64,
+    warm: bool,
 ) -> serde_json::Value {
     serde_json::json!({
         "agent_id": agent,
         "model": model,
+        "account_id": account,
+        "effort": effort,
         "last_input_tokens": last_input_tokens,
-        "context_window_tokens": window,
-        "context_share": share,
-        "cached_prefix_tokens": prefix,
+        "cache_ttl_ms": 300_000,
+        "last_used_at": last_used_at,
+        "warm": warm,
+        "created_at": null,
     })
 }
 
 #[tokio::test]
-async fn a_plain_session_row_answers_its_pins_context_window_share_and_cached_prefix_and_no_agent_lines(
-) {
+async fn a_plain_session_row_answers_its_pins_prompt_and_effort_and_lists_the_pin_as_mains_line() {
     use common::{login, wait_json, NOW};
     use serde_json::{json, Value};
     let parts = sessions_harness_with(|generation| {
         vec![
-            context_pin(
-                "s-plain",
-                "main",
-                "claude-opus-5",
-                "business",
-                generation,
-                50_000,
-                NOW - 5,
-            ),
-            context_pin(
-                "s-cold",
-                "main",
-                "claude-opus-5",
-                "business",
-                generation,
-                30_000,
-                NOW - 5,
-            ),
+            phoebis_store::PinRow {
+                effort: "high".into(),
+                ..context_pin(
+                    "s-plain",
+                    "main",
+                    "claude-opus-5",
+                    "business",
+                    generation,
+                    50_000,
+                    NOW - 5,
+                )
+            },
             context_pin(
                 "s-fresh",
                 "main",
@@ -6868,24 +6863,6 @@ async fn a_plain_session_row_answers_its_pins_context_window_share_and_cached_pr
     .await;
     let generation = common::generation(&parts.store, "desktop");
     let cookie = login(&parts.app, "admin-secret").await;
-    report_prefix(
-        &parts,
-        "s-plain",
-        "main",
-        "claude-opus-5",
-        "business",
-        42_000,
-    )
-    .await;
-    report_prefix(
-        &parts,
-        "s-fresh",
-        "main",
-        "claude-opus-5",
-        "business",
-        42_000,
-    )
-    .await;
     // A request of the key id's earlier holder, so the list carries a historical row.
     parts.ledger.record(spelled_request(
         "r-earlier",
@@ -6903,39 +6880,58 @@ async fn a_plain_session_row_answers_its_pins_context_window_share_and_cached_pr
             .any(|r| r["session_id"] == "s-earlier")
     })
     .await;
-    let null = Some(Value::Null);
     assert_eq!(
         context_of(&session_row(&sessions, "s-plain")),
-        [Some(json!(200_000)), Some(json!(0.25)), Some(json!(42_000)), null.clone()],
-        "the client's window for a model no request named as its long-context twin, the prompt's share of it and the \
-         entry's prefix, with no agent lines off a companion session"
-    );
-    assert_eq!(
-        context_of(&session_row(&sessions, "s-cold")),
         [
-            Some(json!(200_000)),
-            Some(json!(0.15)),
-            null.clone(),
-            null.clone()
+            Some(json!(50_000)),
+            Some(json!("high")),
+            Some(json!([agent_line(
+                "main",
+                "claude-opus-5",
+                "business",
+                Some("high"),
+                50_000,
+                NOW - 5,
+                true
+            )])),
         ],
-        "no live entry stands on the session, so the prefix alone reads null"
+        "the pin's prompt and effort on the row, and the pin as main's line, warm a few milliseconds after its last use"
     );
     assert_eq!(
         context_of(&session_row(&sessions, "s-fresh")),
-        [null.clone(), null.clone(), null.clone(), null.clone()],
-        "a pin with no turn yet reads no figure, whatever entry stands"
+        [
+            Some(json!(0)),
+            Some(Value::Null),
+            Some(json!([agent_line(
+                "main",
+                "claude-opus-5",
+                "business",
+                None,
+                0,
+                NOW - 5,
+                true
+            )])),
+        ],
+        "a pin with no turn yet reads no prompt, and a request that named no effort reads none"
     );
     let earlier = session_row(&sessions, "s-earlier");
     assert_eq!(earlier["historical"], json!(true));
     assert_eq!(
         context_of(&earlier),
-        [null.clone(), null.clone(), null.clone(), null],
-        "a historical row reads no figure"
+        [Some(Value::Null), Some(Value::Null), Some(json!([]))],
+        "a historical row holds no pin and draws no line"
     );
+    for row in sessions["sessions"].as_array().unwrap() {
+        assert_eq!(
+            dropped_members(row),
+            Vec::<String>::new(),
+            "no row or line answers a context window: {row}"
+        );
+    }
 }
 
 #[tokio::test]
-async fn a_companion_session_lists_its_unreleased_agents_pins_beside_the_main_pins_figures() {
+async fn a_companion_session_lists_main_and_each_unreleased_agents_conversation_pins_as_lines() {
     use common::{login, wait_json, NOW};
     use serde_json::json;
     let parts = sessions_harness_with(|generation| {
@@ -6943,10 +6939,16 @@ async fn a_companion_session_lists_its_unreleased_agents_pins_beside_the_main_pi
             context_pin(session, agent, model, account, generation, prompt, used)
         };
         vec![
-            pin("s1", "main", "claude-opus-5", "business", 80_000, NOW - 5),
-            // Main's older pin on another model is main's, never an agent's line.
+            phoebis_store::PinRow {
+                effort: "high".into(),
+                ..pin("s1", "main", "claude-opus-5", "business", 80_000, NOW - 5)
+            },
+            // Main's older conversation pin on another model draws a line of its own.
             pin("s1", "main", "claude-sonnet-5", "business", 5_000, NOW - 50),
-            pin("s1", "worker-1", "claude-opus-5", "direct", 30_000, NOW - 5),
+            phoebis_store::PinRow {
+                effort: "low".into(),
+                ..pin("s1", "worker-1", "claude-opus-5", "direct", 30_000, NOW - 5)
+            },
             pin("s1", "worker-1", "claude-sonnet-5", "direct", 0, NOW - 5),
             pin(
                 "s1",
@@ -6979,9 +6981,6 @@ async fn a_companion_session_lists_its_unreleased_agents_pins_beside_the_main_pi
     })
     .await;
     let cookie = login(&parts.app, "admin-secret").await;
-    report_prefix(&parts, "s1", "main", "claude-opus-5", "business", 64_000).await;
-    report_prefix(&parts, "s1", "worker-1", "claude-opus-5", "direct", 25_000).await;
-    report_prefix(&parts, "s2", "main", "claude-opus-5", "business", 15_000).await;
     register_companion(
         &parts,
         "s1",
@@ -7003,39 +7002,49 @@ async fn a_companion_session_lists_its_unreleased_agents_pins_beside_the_main_pi
     assert_eq!(
         (s1["agent_id"].as_str(), s1["model"].as_str()),
         (Some("main"), Some("claude-opus-5")),
-        "the row is main's newest pin"
+        "the row is main's conversation pin used last"
     );
     assert_eq!(
         context_of(&s1),
         [
-            Some(json!(200_000)),
-            Some(json!(0.4)),
-            Some(json!(64_000)),
+            Some(json!(80_000)),
+            Some(json!("high")),
             Some(json!([
-                agent_line("worker-1", "claude-opus-5", 30_000, Some(200_000), Some(0.15), Some(25_000)),
-                agent_line("worker-1", "claude-sonnet-5", 0, None, None, None),
-                agent_line("worker-2", "claude-sonnet-5", 12_000, Some(200_000), Some(0.06), None),
+                agent_line("main", "claude-opus-5", "business", Some("high"), 80_000, NOW - 5, true),
+                agent_line("main", "claude-sonnet-5", "business", None, 5_000, NOW - 50, true),
+                agent_line("worker-1", "claude-opus-5", "direct", Some("low"), 30_000, NOW - 5, true),
+                agent_line("worker-1", "claude-sonnet-5", "direct", None, 0, NOW - 5, true),
+                agent_line("worker-2", "claude-sonnet-5", "business", None, 12_000, NOW - 5, true),
             ])),
         ],
-        "main's figures on the row and one line per pin of each agent the companion has not released, by agent then \
-         model, its own prefix on its own account and model"
+        "main's figures on the row, and one line per conversation pin of main and of each agent the companion has not \
+         released, main first, then by agent and model"
     );
     assert_eq!(
         context_of(&session_row(&sessions, "s2")),
         [
-            Some(json!(200_000)),
-            Some(json!(0.1)),
-            Some(json!(15_000)),
-            Some(json!([]))
+            Some(json!(20_000)),
+            Some(serde_json::Value::Null),
+            Some(json!([agent_line(
+                "main",
+                "claude-opus-5",
+                "business",
+                None,
+                20_000,
+                NOW - 5,
+                true
+            )])),
         ],
-        "a companion session whose every other agent is released lists no line"
+        "a companion session whose every other agent is released lists main's line alone"
     );
+    assert_eq!(dropped_members(&s1), Vec::<String>::new(), "{s1}");
 }
 
 #[tokio::test]
-async fn a_session_whose_newest_request_named_the_long_context_twin_reads_a_window_of_a_million() {
+async fn a_session_whose_requests_named_the_long_context_twin_answers_its_pins_prompts_and_no_window(
+) {
     use common::{login, wait_json, NOW};
-    use serde_json::json;
+    use serde_json::{json, Value};
     let parts = sessions_harness_with(|generation| {
         let pin = |session, agent, model, account, prompt| {
             context_pin(session, agent, model, account, generation, prompt, NOW - 5)
@@ -7044,7 +7053,6 @@ async fn a_session_whose_newest_request_named_the_long_context_twin_reads_a_wind
             pin("s-long", "main", "claude-opus-5", "business", 300_000),
             pin("s-long", "worker-1", "claude-opus-5", "direct", 100_000),
             pin("s-long", "worker-2", "claude-sonnet-5", "direct", 40_000),
-            pin("s-short", "main", "claude-opus-5", "business", 150_000),
             pin("s-root", "main", "claude-opus-5", "business", 300_000),
         ]
     })
@@ -7056,24 +7064,14 @@ async fn a_session_whose_newest_request_named_the_long_context_twin_reads_a_wind
         ("r1", "s-long", "main", "claude-opus-5", NOW - 60_000),
         ("r2", "s-long", "worker-1", "claude-opus-5", NOW - 40_000),
         ("r3", "s-long", "main", "claude-opus-5[1m]", NOW - 30_000),
-        ("r4", "s-short", "main", "claude-opus-5[1m]", NOW - 60_000),
-        ("r5", "s-short", "main", "claude-opus-5", NOW - 30_000),
+        ("r4", "s-root", "main", "claude-opus-5[1m]", NOW - 30_000),
     ] {
         parts
             .ledger
             .record(spelled_request(id, session, agent, model, at, generation));
     }
-    // The only request of `s-root`, the pinned session, named the twin.
-    parts.ledger.record(spelled_request(
-        "r6",
-        "s-root",
-        "main",
-        "claude-opus-5[1m]",
-        NOW - 30_000,
-        generation,
-    ));
     let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
-        [("s-long", 3), ("s-short", 2), ("s-root", 1)]
+        [("s-long", 3), ("s-root", 1)]
             .iter()
             .all(|(session, requests)| {
                 v["sessions"]
@@ -7084,29 +7082,427 @@ async fn a_session_whose_newest_request_named_the_long_context_twin_reads_a_wind
             })
     })
     .await;
+    let line = |agent, model, account, prompt| {
+        agent_line(agent, model, account, None, prompt, NOW - 5, true)
+    };
     assert_eq!(
         context_of(&session_row(&sessions, "s-long")),
         [
-            Some(json!(1_000_000)),
-            Some(json!(0.3)),
-            Some(serde_json::Value::Null),
+            Some(json!(300_000)),
+            Some(Value::Null),
             Some(json!([
-                agent_line("worker-1", "claude-opus-5", 100_000, Some(200_000), Some(0.5), None),
-                agent_line("worker-2", "claude-sonnet-5", 40_000, Some(1_000_000), Some(0.04), None),
+                line("main", "claude-opus-5", "business", 300_000),
+                line("worker-1", "claude-opus-5", "direct", 100_000),
+                line("worker-2", "claude-sonnet-5", "direct", 40_000),
             ])),
         ],
-        "main's newest request named the twin, the first agent's newest the plain model, and the second agent, which \
-         sent none, reads the session's newest"
+        "main's newest request named the twin, and the row and its lines read each pin's prompt alone"
     );
     assert_eq!(
-        context_of(&session_row(&sessions, "s-short"))[..2],
-        [Some(json!(200_000)), Some(json!(0.75))],
-        "an older request that named the twin gives way to the newest"
+        context_of(&session_row(&sessions, "s-root")),
+        [
+            Some(json!(300_000)),
+            Some(Value::Null),
+            Some(json!([line("main", "claude-opus-5", "business", 300_000)])),
+        ],
+        "a session whose only request named the twin reads its pin's prompt"
+    );
+    for row in sessions["sessions"].as_array().unwrap() {
+        assert_eq!(
+            dropped_members(row),
+            Vec::<String>::new(),
+            "no row or line answers a context window: {row}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_session_row_reads_mains_conversation_pin_beside_a_later_auxiliary_only_pin_of_main() {
+    use common::{login, wait_json, NOW};
+    use serde_json::json;
+    let parts = sessions_harness_with(|generation| {
+        vec![
+            phoebis_store::PinRow {
+                effort: "high".into(),
+                ..context_pin(
+                    "s1",
+                    "main",
+                    "claude-opus-5",
+                    "business",
+                    generation,
+                    40_000,
+                    NOW - 50,
+                )
+            },
+            // A title request renewed main's auxiliary-only pin after the conversation's last turn.
+            phoebis_store::PinRow {
+                auxiliary_only: true,
+                effort: "low".into(),
+                ..context_pin(
+                    "s1",
+                    "main",
+                    "claude-haiku-4-5",
+                    "direct",
+                    generation,
+                    1_000,
+                    NOW - 5,
+                )
+            },
+        ]
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["session_id"] == "s1")
+    })
+    .await;
+    let row = session_row(&sessions, "s1");
+    assert_eq!(
+        (
+            row["agent_id"].as_str(),
+            row["model"].as_str(),
+            row["account_id"].as_str(),
+            row["last_used_at"].as_i64()
+        ),
+        (
+            Some("main"),
+            Some("claude-opus-5"),
+            Some("business"),
+            Some(NOW - 50)
+        ),
+        "the row reads main's conversation pin, never the auxiliary-only pin used later: {row}"
     );
     assert_eq!(
-        context_of(&session_row(&sessions, "s-root"))[..2],
-        [Some(json!(1_000_000)), Some(json!(0.3))],
-        "a request names the twin for its own session"
+        context_of(&row),
+        [
+            Some(json!(40_000)),
+            Some(json!("high")),
+            Some(json!([agent_line(
+                "main",
+                "claude-opus-5",
+                "business",
+                Some("high"),
+                40_000,
+                NOW - 50,
+                true
+            )])),
+        ],
+        "main's line reads the conversation pin, and the auxiliary-only pin draws none"
+    );
+}
+
+#[tokio::test]
+async fn a_session_whose_main_holds_an_auxiliary_pin_alone_reads_its_subagents_conversation_pin_and_no_main_line(
+) {
+    use common::{login, wait_json, NOW};
+    use serde_json::json;
+    let parts = sessions_harness_with(|generation| {
+        vec![
+            phoebis_store::PinRow {
+                auxiliary_only: true,
+                ..context_pin(
+                    "s1",
+                    "main",
+                    "claude-haiku-4-5",
+                    "business",
+                    generation,
+                    1_000,
+                    NOW - 5,
+                )
+            },
+            phoebis_store::PinRow {
+                effort: "low".into(),
+                ..context_pin(
+                    "s1",
+                    "worker-1",
+                    "claude-opus-5",
+                    "direct",
+                    generation,
+                    25_000,
+                    NOW - 50,
+                )
+            },
+        ]
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["session_id"] == "s1")
+    })
+    .await;
+    let row = session_row(&sessions, "s1");
+    assert_eq!(
+        (
+            row["agent_id"].as_str(),
+            row["model"].as_str(),
+            row["account_id"].as_str(),
+            row["pinned"].as_bool()
+        ),
+        (
+            Some("worker-1"),
+            Some("claude-opus-5"),
+            Some("direct"),
+            Some(true)
+        ),
+        "with no conversation pin of main the row reads the subagent's: {row}"
+    );
+    assert_eq!(
+        context_of(&row),
+        [
+            Some(json!(25_000)),
+            Some(json!("low")),
+            Some(json!([agent_line(
+                "worker-1",
+                "claude-opus-5",
+                "direct",
+                Some("low"),
+                25_000,
+                NOW - 50,
+                true
+            )])),
+        ],
+        "the subagent's line, and none for main's auxiliary-only pin"
+    );
+}
+
+#[tokio::test]
+async fn a_session_whose_one_pin_is_mains_auxiliary_one_reads_a_pinless_row_from_its_activity_and_no_line(
+) {
+    use common::{login, wait_json, NOW};
+    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
+    use serde_json::{json, Value};
+    let parts = sessions_harness_with(|generation| {
+        vec![phoebis_store::PinRow {
+            auxiliary_only: true,
+            ..context_pin(
+                "s1",
+                "main",
+                "claude-haiku-4-5",
+                "business",
+                generation,
+                1_000,
+                NOW - 5,
+            )
+        }]
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // The title request that placed the pin, its attempt on another account than the pin's, so the row's account
+    // tells the ledger's from the pin's.
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "r-title".into(),
+            received_at: NOW - 1_000,
+            finished_at: Some(NOW - 500),
+            key_id: Some("desktop".into()),
+            key_generation: common::generation(&parts.store, "desktop"),
+            session_id: Some("s1".into()),
+            agent_id: Some("main".into()),
+            model: "claude-haiku-4-5".into(),
+            canonical_model: "claude-haiku-4-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            request_class: Some("title".into()),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: "r-title".into(),
+            attempt: 1,
+            account_id: "direct".into(),
+            account_kind: "api_key".into(),
+            started_at: NOW - 1_000,
+            outcome: "succeeded".into(),
+            ..Default::default()
+        }],
+        bodies: None,
+    });
+    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["session_id"] == "s1" && r["requests"] == 1)
+    })
+    .await;
+    let row = session_row(&sessions, "s1");
+    assert_eq!(
+        (
+            row["agent_id"].clone(),
+            row["model"].as_str(),
+            row["account_id"].as_str(),
+            row["pinned"].as_bool()
+        ),
+        (
+            Value::Null,
+            Some("claude-haiku-4-5"),
+            Some("direct"),
+            Some(false)
+        ),
+        "no conversation pin stands, so the row reads the ledger's model and serving account: {row}"
+    );
+    for member in [
+        "epoch",
+        "created_at",
+        "last_used_at",
+        "burn",
+        "burn_unit",
+        "burn_equivalent",
+        "burn_at",
+        "runway_ms",
+        "runway_bounded",
+        "speed",
+        "cycle_ms",
+        "cache_ttl_ms",
+        "last_input_tokens",
+        "effort",
+        "last_refresh_at",
+        "shed_from",
+        "shed_reason",
+    ] {
+        assert_eq!(
+            row[member],
+            Value::Null,
+            "{member} reads null on the row with no pin: {row}"
+        );
+    }
+    assert_eq!(
+        row["agent_contexts"],
+        json!([]),
+        "the auxiliary-only pin draws no line"
+    );
+}
+
+#[tokio::test]
+async fn a_session_no_companion_reports_leaves_after_the_timeout_and_its_old_lines_leave_while_newer_ones_stay(
+) {
+    use common::{login, wait_json, NOW};
+    use serde_json::json;
+    // A ten-minute timeout, so every pin below stays inside the pool's one-hour idle TTL.
+    const IDLE_MS: i64 = 600_000;
+    let parts = sessions_harness_bounded(
+        std::time::Duration::from_secs(86_400),
+        std::time::Duration::from_millis(IDLE_MS as u64),
+        |generation| {
+            let pin = |session, agent, account, used| {
+                context_pin(
+                    session,
+                    agent,
+                    "claude-opus-5",
+                    account,
+                    generation,
+                    10_000,
+                    used,
+                )
+            };
+            vec![
+                pin("s-idle", "main", "business", NOW - IDLE_MS - 1),
+                pin("s-mixed", "main", "business", NOW - 5),
+                pin("s-mixed", "worker-1", "direct", NOW - 400_000),
+                pin("s-mixed", "worker-2", "direct", NOW - IDLE_MS - 1),
+                pin("s-companion", "main", "business", NOW - IDLE_MS - 1),
+            ]
+        },
+    )
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    register_companion(&parts, "s-companion", &[], &[]);
+    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["session_id"] == "s-companion" && r["companion"] == "reporting")
+    })
+    .await;
+    let listed: Vec<&str> = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["session_id"].as_str())
+        .collect();
+    assert!(
+        !listed.contains(&"s-idle"),
+        "a session no companion reports leaves once its last use is older than the timeout: {listed:?}"
+    );
+    assert_eq!(
+        context_of(&session_row(&sessions, "s-mixed"))[2],
+        Some(json!([
+            agent_line("main", "claude-opus-5", "business", None, 10_000, NOW - 5, true),
+            agent_line("worker-1", "claude-opus-5", "direct", None, 10_000, NOW - 400_000, false),
+        ])),
+        "a line whose pin was used within the timeout stays, warm or cold by its cache TTL, and an older one leaves"
+    );
+    assert_eq!(
+        context_of(&session_row(&sessions, "s-companion"))[2],
+        Some(json!([agent_line(
+            "main",
+            "claude-opus-5",
+            "business",
+            None,
+            10_000,
+            NOW - IDLE_MS - 1,
+            false
+        )])),
+        "a companion row stays past the timeout within the session expiry, its line kept by the engine's own lifecycle"
+    );
+}
+
+/// A guard: the session expiry already leaves a pin older than it out of the read, so a timeout longer than the expiry
+/// never keeps a row the expiry dropped.
+#[tokio::test]
+async fn the_lesser_of_the_timeout_and_the_session_expiry_bounds_a_session_no_companion_reports() {
+    use common::{login, wait_json, NOW};
+    let parts = sessions_harness_bounded(
+        std::time::Duration::from_secs(1_800),
+        std::time::Duration::from_secs(3_600),
+        |generation| {
+            let pin = |session, used| {
+                context_pin(
+                    session,
+                    "main",
+                    "claude-opus-5",
+                    "business",
+                    generation,
+                    10_000,
+                    used,
+                )
+            };
+            vec![
+                pin("s-past-expiry", NOW - 2_000_000),
+                pin("s-inside", NOW - 1_000_000),
+            ]
+        },
+    )
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["session_id"] == "s-inside")
+    })
+    .await;
+    let listed: Vec<&str> = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["session_id"].as_str())
+        .collect();
+    assert_eq!(
+        listed,
+        ["s-inside"],
+        "idle for 2,000 s past a 30-minute expiry, a row leaves under the one-hour timeout"
     );
 }
 

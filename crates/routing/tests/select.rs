@@ -442,6 +442,7 @@ fn select_request(
         fast: false,
         classifier: false,
         body_tokens: 0,
+        effort: None,
     }
 }
 
@@ -9923,6 +9924,155 @@ fn a_main_turn_on_a_pin_only_auxiliary_requests_used_clears_its_flag_and_it_read
     );
 }
 
+/// The row the selection's `UpsertPin` write carries for session `session`'s main pin.
+fn upserted(writes: &[StateWrite], session: &str) -> PinRow {
+    writes
+        .iter()
+        .find_map(|w| match w {
+            StateWrite::UpsertPin(row) if row.session_id == session && row.agent_id == "main" => {
+                Some(row.clone())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the selection writes {session}'s pin: {writes:?}"))
+}
+
+/// The pin the selection handed out.
+fn handed_out(result: SelectResult) -> PinRef {
+    match result {
+        SelectResult::Selected(selection) => {
+            selection.pin.expect("a session's selection holds a pin")
+        }
+        other => panic!("expected a selection, got {other:?}"),
+    }
+}
+
+/// `req` naming `effort` as its effective effort.
+fn with_effort(req: SelectRequest, effort: Option<&str>) -> SelectRequest {
+    SelectRequest {
+        effort: effort.map(String::from),
+        ..req
+    }
+}
+
+#[test]
+fn a_placement_under_an_auxiliary_class_writes_its_row_flagged_and_a_refreshing_one_writes_it_clear(
+) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let (_, writes) = select(&mut st, &s, &classed(&s, "title", T), &mut rng());
+    assert!(
+        upserted(&writes, "s1").auxiliary_only,
+        "the title request's placement writes the flag on the row it persists"
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let (_, writes) = select(&mut st, &s, &classed(&s, "main", T), &mut rng());
+    assert!(
+        !upserted(&writes, "s1").auxiliary_only,
+        "a main turn's placement writes the row clear"
+    );
+}
+
+#[test]
+fn a_refreshing_renewal_of_a_row_stored_flagged_writes_it_clear_and_an_auxiliary_one_keeps_it() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    // A row a placement under an auxiliary class stored, as a restart loads it.
+    let mut st = loaded(vec![PinRow {
+        auxiliary_only: true,
+        ..seeded_pin("s1", "a", T)
+    }]);
+    let (_, writes) = select(&mut st, &s, &classed(&s, "quota", T), &mut rng());
+    assert!(
+        upserted(&writes, "s1").auxiliary_only,
+        "an auxiliary request renews the row with its flag"
+    );
+    let (_, writes) = select(&mut st, &s, &classed(&s, "main", T + 1_000), &mut rng());
+    assert!(
+        !upserted(&writes, "s1").auxiliary_only,
+        "the main turn's refresh writes the row clear"
+    );
+    assert!(
+        !st.auxiliary_only(&pin_key("s1")),
+        "the held row reads clear as well"
+    );
+}
+
+#[test]
+fn a_placement_stamps_the_requests_effort_on_its_row_and_its_pin_and_one_naming_none_stamps_none() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let (result, writes) = select(
+        &mut st,
+        &s,
+        &with_effort(classed(&s, "main", T), Some("high")),
+        &mut rng(),
+    );
+    assert_eq!(
+        (upserted(&writes, "s1").effort, handed_out(result).effort),
+        ("high".to_string(), Some("high".to_string())),
+        "the word the request named, on the stored row and on the pin the selection hands out"
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let (result, writes) = select(&mut st, &s, &classed(&s, "main", T), &mut rng());
+    assert_eq!(
+        (upserted(&writes, "s1").effort, handed_out(result).effort),
+        (String::new(), None),
+        "a request that named no effort stamps none"
+    );
+}
+
+#[test]
+fn a_renewal_restamps_the_effort_a_client_request_names_and_a_probes_renewal_keeps_the_stored_one()
+{
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &with_effort(classed(&s, "main", T), Some("high")),
+        &mut rng(),
+    );
+    let (result, writes) = select(
+        &mut st,
+        &s,
+        &with_effort(classed(&s, "main", T + 1_000), Some("low")),
+        &mut rng(),
+    );
+    assert_eq!(
+        (upserted(&writes, "s1").effort, handed_out(result).effort),
+        ("low".to_string(), Some("low".to_string())),
+        "a client request naming another word restamps the row and the pin it hands out"
+    );
+    let probe = SelectRequest {
+        probe: true,
+        ..with_effort(classed(&s, "main", T + 2_000), Some("max"))
+    };
+    let (result, writes) = select(&mut st, &s, &probe, &mut rng());
+    assert_eq!(
+        (upserted(&writes, "s1").effort, handed_out(result).effort),
+        ("low".to_string(), Some("low".to_string())),
+        "a probe replays another request's body, so the row keeps the word its own requests stamped"
+    );
+    let (result, writes) = select(&mut st, &s, &classed(&s, "main", T + 3_000), &mut rng());
+    assert_eq!(
+        (upserted(&writes, "s1").effort, handed_out(result).effort),
+        (String::new(), None),
+        "a client request naming none restamps none"
+    );
+}
+
 #[test]
 fn a_fresh_placement_under_main_or_with_no_class_leaves_the_new_pins_flag_clear() {
     let s = snapshot(Pool {
@@ -9982,41 +10132,44 @@ fn a_main_turn_on_another_lane_keeps_the_flag_of_a_pin_only_auxiliary_requests_u
 }
 
 #[test]
-fn a_loaded_pin_whose_last_refresh_is_its_creation_is_flagged_and_reads_warm_by_its_last_use() {
-    // Both created an hour before `T` and used a second before it.
+fn a_loaded_pin_whose_last_refresh_is_its_creation_reads_as_a_conversation_pin_unless_its_row_is_flagged(
+) {
+    // Both created an hour before `T`, last refreshed at their placement and used a second before it.
     let st = loaded(vec![
         PinRow {
             last_refresh_at: T - HOUR,
             ..seeded_pin("s1", "a", T)
         },
         PinRow {
-            last_refresh_at: T - HOUR + 1_000,
+            last_refresh_at: T - HOUR,
+            auxiliary_only: true,
             ..seeded_pin("s2", "a", T)
         },
     ]);
     assert!(
-        st.auxiliary_only(&pin_key("s1")),
-        "no refreshing turn moved the stamp since the placement"
+        !st.auxiliary_only(&pin_key("s1")),
+        "the row carries no flag, whatever its two stamps read"
     );
     assert!(
-        !st.auxiliary_only(&pin_key("s2")),
-        "a refreshing turn moved the stamp a second after the placement"
+        st.auxiliary_only(&pin_key("s2")),
+        "the row carries the flag"
     );
     assert!(
-        st.pin_warm(&pinned(&st, "s1"), T),
+        !st.pin_warm(&pinned(&st, "s1"), T),
+        "refreshed an hour ago, the conversation pin is cold"
+    );
+    assert!(
+        st.pin_warm(&pinned(&st, "s2"), T),
         "used a second ago, the flagged pin is warm"
-    );
-    assert!(
-        !st.pin_warm(&pinned(&st, "s2"), T),
-        "refreshed an hour ago, the other pin is cold"
     );
 }
 
-/// Both pins placed an hour before `T` and used a second before it: `flagged` last refreshed at its placement, so a
-/// load flags it, and `clear` a second after it.
+/// Both pins placed an hour before `T` and used a second before it: `flagged` last refreshed at its placement and
+/// stored with the flag, and `clear` refreshed a second after it.
 fn a_flagged_and_a_clear_pin(flagged_burn: f64, clear_burn: f64) -> (PinRow, PinRow) {
     let flagged = PinRow {
         last_refresh_at: T - HOUR,
+        auxiliary_only: true,
         ..burning("flagged", "a", flagged_burn, true, T)
     };
     let clear = PinRow {
@@ -11401,8 +11554,8 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
 }
 
 /// `seeded_pin` burning `burn` input tokens a second in both copies, warm or cold: the default tables price it
-/// at `burn`. A cold pin was last refreshed half an hour ago, after its placement, so a load leaves it unflagged and
-/// its use a second ago keeps it no warmer.
+/// at `burn`. A cold pin was last refreshed half an hour ago and its row carries no flag, so its use a second ago
+/// keeps it no warmer.
 fn burning(session: &str, account: &str, burn: f64, warm: bool, now: i64) -> PinRow {
     let rates = input_rate(burn);
     PinRow {
@@ -13879,6 +14032,7 @@ fn a_pin_that_fails_over_off_its_account_leaves_its_mark_with_the_row() {
                     epoch: current.epoch,
                     lane: current.lane,
                     entrypoint: String::new(),
+                    effort: None,
                 },
                 account,
             )
@@ -22872,6 +23026,7 @@ fn a_shed_move_and_a_failover_landing_keep_the_pins_cycle_under_its_key() {
                 epoch: current.epoch,
                 lane: current.lane.clone(),
                 entrypoint: String::new(),
+                effort: None,
             },
             "a",
         )
@@ -24231,6 +24386,7 @@ fn a_failover_landing_on_another_account_leaves_the_sources_deadline_and_keeps_t
                 epoch: current.epoch,
                 lane: current.lane.clone(),
                 entrypoint: String::new(),
+                effort: None,
             },
             "a",
         )
