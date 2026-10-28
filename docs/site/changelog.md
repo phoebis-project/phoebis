@@ -248,26 +248,28 @@ preset reads to the router's clock ([Requests](console.md#requests), [Routing lo
 range pill names its range and its end on hover, and when the tab comes back to a read at once the rows it brought keep
 their tint through the read after it ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The
 Requests and Routing log Time cells print the date before the time on a row older than a day, and the Routing log's
-columns fit their content ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests,
-Sessions and Routing log tables lay their columns out by one rule, with a minimum per column kind, one fill column and a
-set wider than the card scrolling inside it, so the Requests table fits 1280 px with its default columns
-([Requests](console.md#requests), [Sessions](console.md#sessions), [Routing log](console.md#routing-log)). The Requests
-view's empty state reads "Widen the range or clear a filter.", as the Routing log's does, and a request the router
-refused before it resolved a model reads a dash for its model ([Requests](console.md#requests)). Unchecking Select all
-in a filter's list clears every check, the inverse of checking it, and an empty list keeps its meaning
-([Requests](console.md#requests), [Routing log](console.md#routing-log)). A deleted key's group reads `<id> (deleted,
-created <time>)`, its creation instant in the viewer's zone ([Analytics](console.md#analytics)). The Accounts section's
-card "Unused allowance by account" ranks the subscription accounts by the share of their weekly windows left unused over
-the last four weeks, with the fleet's figures ([Analytics](console.md#analytics)). The Analytics session view reads the
-session's rows through the route's session filter, and each auto reload re-reads the first page alone
-([Analytics](console.md#analytics)). The Analytics view's Burn tab lays Plan per hour's three cards and Spend per minute
-out two by two where three would share a row and the fourth would sit alone ([Analytics](console.md#analytics)). The
-Analytics view's Cache warming tab spans its last card across the row where that card would sit alone, as the Burn tab
-does ([Analytics](console.md#analytics)). The Analytics view's model grouping lists a request refused before it resolved
-a model under "no model" ([Analytics](console.md#analytics)). The Burn section closes on Member budgets, its
-reconciliation rows listed on the Meter view ([Analytics](console.md#analytics), [Meter](console.md#meter)). The Cache
-warming tab shows what the probes saved and the net saving after their cost, as tiles, a chart and a Saved column per
-pool ([Analytics](console.md#analytics)). The Cost by chart's note names the unpriced groups it draws as gaps
+columns fit their content ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and
+Routing log views filter on an agent id through the Agent filter of the Subject group, carried in the address as
+`agent_id` ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests, Sessions and Routing
+log tables lay their columns out by one rule, with a minimum per column kind, one fill column and a set wider than the
+card scrolling inside it, so the Requests table fits 1280 px with its default columns ([Requests](console.md#requests),
+[Sessions](console.md#sessions), [Routing log](console.md#routing-log)). The Requests view's empty state reads "Widen
+the range or clear a filter.", as the Routing log's does, and a request the router refused before it resolved a model
+reads a dash for its model ([Requests](console.md#requests)). Unchecking Select all in a filter's list clears every
+check, the inverse of checking it, and an empty list keeps its meaning ([Requests](console.md#requests), [Routing
+log](console.md#routing-log)). A deleted key's group reads `<id> (deleted, created <time>)`, its creation instant in the
+viewer's zone ([Analytics](console.md#analytics)). The Accounts section's card "Unused allowance by account" ranks the
+subscription accounts by the share of their weekly windows left unused over the last four weeks, with the fleet's
+figures ([Analytics](console.md#analytics)). The Analytics session view reads the session's rows through the route's
+session filter, and each auto reload re-reads the first page alone ([Analytics](console.md#analytics)). The Analytics
+view's Burn tab lays Plan per hour's three cards and Spend per minute out two by two where three would share a row and
+the fourth would sit alone ([Analytics](console.md#analytics)). The Analytics view's Cache warming tab spans its last
+card across the row where that card would sit alone, as the Burn tab does ([Analytics](console.md#analytics)). The
+Analytics view's model grouping lists a request refused before it resolved a model under "no model"
+([Analytics](console.md#analytics)). The Burn section closes on Member budgets, its reconciliation rows listed on the
+Meter view ([Analytics](console.md#analytics), [Meter](console.md#meter)). The Cache warming tab shows what the probes
+saved and the net saving after their cost, as tiles, a chart and a Saved column per pool
+([Analytics](console.md#analytics)). The Cost by chart's note names the unpriced groups it draws as gaps
 ([Analytics](console.md#analytics)). The Cost split's subscription rows and the Plan per hour legend figures name their
 window in full on hover ([Analytics](console.md#analytics)). The ledger records a null diagnostics member on a request
 that named a message as `none` and a comparison the upstream was still running as `pending`, which Misses by reason and

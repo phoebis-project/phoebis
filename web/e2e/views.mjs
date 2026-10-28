@@ -5708,6 +5708,44 @@ async function requestsRefusalChip(theme) {
 }
 
 /**
+ * The Agent filter's chip on both logs, in the mock pass alone since the session it loads is the mock story's:
+ * `d7167642-751d-475e-b0bf-2f24fe70245e`, whose main agent's requests in `web/src/mock/requests.ts` fall inside the
+ * last hour, so both logs list its rows at their default range under `agent_id=main`. On each log the `agent: main`
+ * chip reads against the `session:` chip in height and top edge and in its values' font family and size, its text
+ * recorded, and a `user agent:` chip standing is a failure. The bare request log loads again after, as the view loop's
+ * shot reads it.
+ */
+async function agentChips(theme) {
+  if (!mock) return;
+  const session = 'd7167642-751d-475e-b0bf-2f24fe70245e';
+  try {
+    for (const [path, wait] of [
+      ['/routing-log', '.routing-log__table'],
+      ['/requests', '.requests__table'],
+    ]) {
+      await loadAtOrigin(`${path}?session=${session}&agent_id=main`, wait);
+      const read = await page.evaluate(() => {
+        const chips = [...document.querySelectorAll('.chip--filter')];
+        const chipOf = (word) => chips.find((c) => c.textContent?.trim().startsWith(`${word}:`)) ?? null;
+        const box = (chip) => {
+          if (chip === null) return null;
+          const at = chip.getBoundingClientRect();
+          const values = getComputedStyle(chip.querySelector('.chip__values') ?? chip);
+          return { fontFamily: values.fontFamily, fontSize: values.fontSize, height: Math.round(at.height * 10) / 10, text: chip.textContent?.trim() ?? '', top: Math.round(at.top * 10) / 10 };
+        };
+        return { agent: box(chipOf('agent')), session: box(chipOf('session')), userAgent: chipOf('user agent') !== null };
+      });
+      measurements.push(`${theme} ${path} agent chip ${JSON.stringify(read)}`);
+      failures.push(...compare(read.agent, read.session, ['fontFamily', 'fontSize', 'height', 'top'], `${theme} ${path}: the agent chip against the session chip`));
+      if (read.agent && read.agent.text !== 'agent: main') failures.push(`${theme} ${path}: the agent chip reads ${JSON.stringify(read.agent.text)}`);
+      if (read.userAgent) failures.push(`${theme} ${path}: a user agent chip stands beside the agent chip`);
+    }
+  } finally {
+    await loadAtOrigin('/requests', '.requests__table');
+  }
+}
+
+/**
  * The request table with Time, its fill, hidden through the Columns control, so no drawn column fills: the table
  * carries `table--no-fill` and takes its content width up to its wrap's, read at the pass's 1280 by 800 and at 1920
  * by 1080, where the content leaves the card's rest empty. The viewport and the column return afterwards.
@@ -11191,6 +11229,7 @@ try {
         if (mock) await requestsTableWide(theme);
         await requestsFundingWord(theme);
         await requestsRefusalChip(theme);
+        await agentChips(theme);
         await pagerControls(theme, view.path);
       }
       if (view.path === '/routing-log') {

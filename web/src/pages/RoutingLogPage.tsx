@@ -100,7 +100,7 @@ export function RoutingLogPage() {
   const ended = spanEnded(custom, range.to, rangeTakenAt);
   const polledMs = effectiveInterval(intervalMs, ended);
   const query = useMemo<RoutingLogQuery>(
-    () => ({ accountIds: filters.accounts, cursor, from: iso(range.from), keyIds: filters.keys, kinds: filters.kinds.length ? filters.kinds : undefined, limit: PAGE_SIZE, models: filters.models, poolIds: filters.pools, request: filters.request || undefined, session: filters.session || undefined, to: iso(readEnd(custom, range.to, pagedTo ?? range.to)) }),
+    () => ({ accountIds: filters.accounts, agentId: filters.agentId || undefined, cursor, from: iso(range.from), keyIds: filters.keys, kinds: filters.kinds.length ? filters.kinds : undefined, limit: PAGE_SIZE, models: filters.models, poolIds: filters.pools, request: filters.request || undefined, session: filters.session || undefined, to: iso(readEnd(custom, range.to, pagedTo ?? range.to)) }),
     [filters, custom, range, cursor, pagedTo],
   );
   const log = useAsync(() => api.listRoutingLog(query), [query]);

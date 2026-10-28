@@ -690,23 +690,23 @@ model, the error code, and an attempt's account, upstream request id or upstream
 characters), and applies 400 milliseconds after the last keystroke, on Enter, or when the field loses focus. Add filter
 opens a "Filter by" field over the filters in four groups: Routing (Account, Key, Model, Pool), Outcome (Cache miss
 reason, Guardrail, Held only, Outcome, Refusal category, Status, Stop reason), Request (Agent type, Classifier, Client,
-Effort, Kind, Request class, Speed, Turn origin, User agent) and Subject (Request, Session). Choosing one opens its
-values: a list with a Select all row that applies on each click (checking it checks every option and unchecking it
+Effort, Kind, Request class, Speed, Turn origin, User agent) and Subject (Agent, Request, Session). Choosing one opens
+its values: a list with a Select all row that applies on each click (checking it checks every option and unchecking it
 clears every check), a pattern field for Client and User agent (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of
 characters, `?` for one, a backslash quoting either, and a value with no wildcard matching in full), an id field for
-Request and Session, which match the id exactly, or the Kind choices (Any kind, Inference, Count tokens, Probe), while
-Held only applies at once. Guardrail lists the registry's guardrails by name, then the ids of deleted guardrails the
-loaded rows still carry as `{id} (deleted)`, then `none` for a request no guardrail matched
-([Guardrails](guardrails.md)). Stop reason lists the stop reasons the console names (`end_turn`, `max_tokens`,
-`model_context_window_exceeded`, `pause_turn`, `refusal`, `stop_sequence`, `tool_use`) and any other the loaded rows
-carry, Refusal category the categories it names (`cyber`) and any other the loaded rows carry, each list ending on
-`none` for a request whose serving attempt carries no value or that no attempt served. A pattern or an id applies on
-Enter or Apply. Each filter in force stands as a chip on a line under the bar, such as "account: primary, nightly" or
-"held only": a click on the chip opens its values again, its x removes it, the chips past five fold behind "+N more",
-and from two chips on "Clear all" removes them and keeps the range, the search and the page size. The account filter
-keeps the requests whose serving attempt ran on the account, so a request that failed over lists under the account that
-answered it. Every filter, the range and the page size live in the page's address, so a reload or a shared link keeps
-them.
+Agent, Request and Session, which match the id exactly (an agent id is `main` or a subagent's id, carried in the address
+as `agent_id`), or the Kind choices (Any kind, Inference, Count tokens, Probe), while Held only applies at once.
+Guardrail lists the registry's guardrails by name, then the ids of deleted guardrails the loaded rows still carry as
+`{id} (deleted)`, then `none` for a request no guardrail matched ([Guardrails](guardrails.md)). Stop reason lists the
+stop reasons the console names (`end_turn`, `max_tokens`, `model_context_window_exceeded`, `pause_turn`, `refusal`,
+`stop_sequence`, `tool_use`) and any other the loaded rows carry, Refusal category the categories it names (`cyber`) and
+any other the loaded rows carry, each list ending on `none` for a request whose serving attempt carries no value or that
+no attempt served. A pattern or an id applies on Enter or Apply. Each filter in force stands as a chip on a line under
+the bar, such as "account: primary, nightly" or "held only": a click on the chip opens its values again, its x removes
+it, the chips past five fold behind "+N more", and from two chips on "Clear all" removes them and keeps the range, the
+search and the page size. The account filter keeps the requests whose serving attempt ran on the account, so a request
+that failed over lists under the account that answered it. Every filter, the range and the page size live in the page's
+address, so a reload or a shared link keeps them.
 
 The table offers thirteen columns, Time, Key, Pool, Account, Model, Client, Kind, Transport, Status, Attempts, TTFB,
 Tokens and Cost, with Kind, Pool and Transport hidden until the Columns control turns them on, and shows Time, Model,
@@ -1151,22 +1151,23 @@ follows are on [Pools, keys and routing](routing.md).
 The filter bar holds one row: the range, Add filter, and at the right edge the split Refresh button and the count of
 rows shown ("25 shown, more available"). The range offers the pills 1h (the default), 6h, 24h, 7d, 30d and Custom, with
 From and To in a popover as on the Requests view. Add filter opens a "Filter by" field over the filters in three groups:
-Kinds, Routing (Account, Key, Model, Pool) and Subject (Request, and Session, which a prefix matches). Every decision
-and event kind lists by default. The Kinds filter opens with eight presets above the kinds: placements and pins, moves
-and holds, exhaustion and refusals, account state and windows, cooldowns and backoff, keepalive, registry changes,
-router life cycle. While every kind is shown, a preset's click lists its kinds alone, so keepalive reads the
-cache-warming traffic in one click. From there a preset checks or unchecks its members, two presets combine, a hand edit
-after a preset is one click apart, and unchecking the last kind returns to every kind. Checking Select all checks every
-kind and unchecking it clears every check while every kind still lists, so a kind's click from there lists that kind
-alone and a preset's click its members alone. Each filter in force stands as a chip on a line under the bar, as on the
-Requests view: a set of whole presets reads their names ("kinds: moves and holds"), any other set of kinds reads their
-words ("kinds: moved, held, placed +5"), and the request chip's hover counts the request's decisions and events ("1
-decision, 0 events"). The widenings stand on each decision's card, after "Widen to": "this minute", "this session" (an
-hour either side) and "this account" (a quarter hour either side). Every filter lives in the page's address (a preset
-range by its name as in `range=6h`, a custom range as `from` and `to`, two UTC instants, the lists as comma lists), so a
-filtered view is a link and Back returns to the view before it. A `kinds` value names exactly the kinds listed, so
-`kinds=probe` lists probe decisions alone. An empty range reads "No decisions or events in this range." with "Widen the
-range or clear a filter."
+Kinds, Routing (Account, Key, Model, Pool) and Subject (Agent, which the id matches exactly: a decision by its request's
+agent, an event by its own, so an event that names no agent is left out, Request, and Session, which a prefix matches).
+Every decision and event kind lists by default. The Kinds filter opens with eight presets above the kinds: placements
+and pins, moves and holds, exhaustion and refusals, account state and windows, cooldowns and backoff, keepalive,
+registry changes, router life cycle. While every kind is shown, a preset's click lists its kinds alone, so keepalive
+reads the cache-warming traffic in one click. From there a preset checks or unchecks its members, two presets combine, a
+hand edit after a preset is one click apart, and unchecking the last kind returns to every kind. Checking Select all
+checks every kind and unchecking it clears every check while every kind still lists, so a kind's click from there lists
+that kind alone and a preset's click its members alone. Each filter in force stands as a chip on a line under the bar,
+as on the Requests view: a set of whole presets reads their names ("kinds: moves and holds"), any other set of kinds
+reads their words ("kinds: moved, held, placed +5"), and the request chip's hover counts the request's decisions and
+events ("1 decision, 0 events"). The widenings stand on each decision's card, after "Widen to": "this minute", "this
+session" (an hour either side) and "this account" (a quarter hour either side). Every filter lives in the page's address
+(a preset range by its name as in `range=6h`, a custom range as `from` and `to`, two UTC instants, the lists as comma
+lists), so a filtered view is a link and Back returns to the view before it. A `kinds` value names exactly the kinds
+listed, so `kinds=probe` lists probe decisions alone. An empty range reads "No decisions or events in this range." with
+"Widen the range or clear a filter."
 
 Auto reload is off when the view opens, and its poll is the log's own: the split Refresh button's dropdown sets it to
 Off, 5 s, 10 s, 30 s or 1 min, out of the page's address, and each read takes every row that arrived since the read

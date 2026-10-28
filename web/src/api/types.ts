@@ -927,6 +927,8 @@ export interface RequestDetail {
 
 export interface RequestQuery {
   accountIds?: string[];
+  /** The requests whose agent id equals the value, `main` or a subagent's id. */
+  agentId?: string;
   agentTypes?: string[];
   /** The serving attempt's cache miss reason, any name the beta sent. */
   cacheMissReasons?: string[];
@@ -1093,6 +1095,11 @@ export interface RoutingLogPage {
 /** `from` and `to` are ISO instants, sent as they are: the route reads RFC 3339. */
 export interface RoutingLogQuery {
   accountIds?: string[];
+  /**
+   * The rows whose agent id equals the value: a decision's by its request, an event's own, so an event that names
+   * no agent is none.
+   */
+  agentId?: string;
   cursor?: string;
   from?: string;
   keyIds?: string[];

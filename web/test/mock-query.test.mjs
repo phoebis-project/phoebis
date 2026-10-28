@@ -156,3 +156,28 @@ test("the mock answers a session id with the session's rows beside the search", 
   assert.ok(searched.some((id) => !inside.has(id)), `the search ${search} also hits rows outside the session`);
   assert.deepEqual(await listed({ search, session }), searched.filter((id) => inside.has(id)), 'the session and the search combine');
 });
+
+test("the mock answers an agent id with the agent's rows on both logs, an event naming no agent left out", async () => {
+  const mains = unprobed.filter((r) => r.agentId === 'main');
+  narrowed(mains, 'of the main agent');
+  assert.deepEqual(await listed({ agentId: 'main' }), ids(mains));
+  const subagent = unprobed.find((r) => r.agentId !== 'main' && r.agentId !== null)?.agentId;
+  assert.ok(subagent, 'the story holds a subagent row');
+  const own = unprobed.filter((r) => r.agentId === subagent);
+  narrowed(own, `of subagent ${subagent}`);
+  assert.deepEqual(await listed({ agentId: subagent }), ids(own));
+  // Unasked, the mock reads the wall clock's last hour, which holds none of the story's rows.
+  const from = new Date(Date.parse(AT) - 3_600_000).toISOString();
+  const to = new Date(Date.parse(AT)).toISOString();
+  const hour = await api.listRoutingLog({ from, limit: 200, to });
+  assert.equal(hour.nextCursor, null, 'one page holds the hour');
+  assert.ok(hour.rows.some((r) => r.type === 'event' && r.agentId === null), 'the hour holds an event that names no agent');
+  const key = (r) => (r.type === 'decision' ? `${r.requestId}/${r.seq}` : `event/${r.id}`);
+  for (const agentId of ['main', subagent]) {
+    const kept = hour.rows.filter((r) => r.agentId === agentId);
+    assert.ok(kept.length > 0 && kept.length < hour.rows.length, `the hour holds ${kept.length} rows of ${agentId} of ${hour.rows.length}`);
+    const page = await api.listRoutingLog({ agentId, from, limit: 200, to });
+    assert.ok(page.rows.every((r) => r.agentId === agentId), `every row of the ${agentId} page carries its agent id`);
+    assert.deepEqual(page.rows.map(key), kept.map(key), `the ${agentId} page is the hour's rows of ${agentId}`);
+  }
+});

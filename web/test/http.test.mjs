@@ -145,12 +145,12 @@ test('listRoutingLog encodes comma lists, ISO instants and kinds, and getDecisio
   const record = JSON.parse(readFileSync(new URL('./fixtures/decision.json', import.meta.url), 'utf8')).body;
   const calls = stub((url) => (url.startsWith('/admin/routing-log') ? answer(200, { next_cursor: null, rows: [] }) : url.includes('/gone/') ? answer(404, { error: 'no decision 1 for request gone' }) : answer(200, record)));
   const api = new HttpApi();
-  const page = await api.listRoutingLog({ accountIds: ['primary'], cursor: '1000:1:r/1', from: '2026-09-16T13:30:00.000Z', keyIds: ['a', 'b'], kinds: ['placed', 'probe'], limit: 25, models: ['claude-sonnet-5'], poolIds: ['all'], request: 'req_1', session: 's1', to: '2026-09-16T14:30:00.000Z' });
+  const page = await api.listRoutingLog({ accountIds: ['primary'], agentId: 'main', cursor: '1000:1:r/1', from: '2026-09-16T13:30:00.000Z', keyIds: ['a', 'b'], kinds: ['placed', 'probe'], limit: 25, models: ['claude-sonnet-5'], poolIds: ['all'], request: 'req_1', session: 's1', to: '2026-09-16T14:30:00.000Z' });
   assert.deepEqual(page, { counts: null, nextCursor: null, rows: [] });
   const url = new URL(calls[0].url, 'http://x');
   assert.equal(url.pathname, '/admin/routing-log');
   assert.deepEqual(Object.fromEntries(url.searchParams), {
-    accounts: 'primary', cursor: '1000:1:r/1', from: '2026-09-16T13:30:00.000Z', keys: 'a,b', kinds: 'placed,probe', limit: '25', models: 'claude-sonnet-5', pools: 'all', request: 'req_1', session: 's1', to: '2026-09-16T14:30:00.000Z',
+    accounts: 'primary', agent_id: 'main', cursor: '1000:1:r/1', from: '2026-09-16T13:30:00.000Z', keys: 'a,b', kinds: 'placed,probe', limit: '25', models: 'claude-sonnet-5', pools: 'all', request: 'req_1', session: 's1', to: '2026-09-16T14:30:00.000Z',
   }, 'the route reads RFC 3339 instants, so both times travel as the page wrote them');
   await api.listRoutingLog();
   assert.equal(calls[1].url, '/admin/routing-log', 'no filter sends no query');
@@ -225,6 +225,16 @@ test('listRequests passes the client pattern, the agent types, and the turn orig
   await new HttpApi().listRequests({ agentTypes: ['Explore', 'Plan'], client: 'claude-code/*', turnOrigins: ['human'] });
   const url = String(calls[0].url);
   for (const part of ['client=claude-code%2F*', 'agent_types=Explore%2CPlan', 'turn_origins=human']) assert.ok(url.includes(part), `${part} in ${url}`);
+});
+
+test('listRequests passes the agent id as agent_id beside the session, and a query without either sends neither', async () => {
+  const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
+  await new HttpApi().listRequests({ agentId: 'main', session: 's1' });
+  const params = new URL(calls[0].url, 'http://x').searchParams;
+  assert.deepEqual([params.get('agent_id'), params.get('session')], ['main', 's1'], String(calls[0].url));
+  await new HttpApi().listRequests({});
+  const bare = new URL(calls[1].url, 'http://x').searchParams;
+  assert.deepEqual([bare.has('agent_id'), bare.has('session')], [false, false], String(calls[1].url));
 });
 
 test('listRequests asks for the held requests alone when the query says so', async () => {

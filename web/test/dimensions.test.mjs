@@ -14,3 +14,14 @@ test('a request class folds as the rollups file it: - for none, an identifier up
   for (const raw of ['main', 'a/b:c.d_e-f', 'x'.repeat(64)]) assert.equal(d.foldRequestClass(raw), raw, `${raw.length} bytes of ${raw.slice(0, 12)} read as itself`);
   for (const raw of ['bad class', 'x'.repeat(65), 'café']) assert.equal(d.foldRequestClass(raw), d.OTHER_DIMENSION, `${raw.slice(0, 12)} reads as other`);
 });
+
+test("the Agent dimension leads the Subject group on both logs with the word agent, apart from the user agent's word", () => {
+  assert.deepEqual(d.AGENT_ID, { field: 'agentId', group: 'Subject', kind: 'id', label: 'Agent', mono: true, word: 'agent' });
+  for (const [view, dimensions] of [['requests', d.REQUESTS_DIMENSIONS], ['routingLog', d.ROUTING_LOG_DIMENSIONS]]) {
+    assert.deepEqual(dimensions.slice(-3).map((x) => x.field), ['agentId', 'request', 'session'], `${view}: the list ends on the Subject group`);
+    assert.deepEqual(dimensions.filter((x) => x.group === 'Subject').map((x) => x.field), ['agentId', 'request', 'session'], `${view}: the Subject group`);
+    assert.equal(dimensions.at(-3), d.AGENT_ID, `${view}: the one shared dimension`);
+    assert.equal(new Set(dimensions.map((x) => x.word)).size, dimensions.length, `${view}: no two dimensions share a word`);
+  }
+  assert.equal(d.REQUESTS_DIMENSIONS.find((x) => x.field === 'agent')?.word, 'user agent');
+});

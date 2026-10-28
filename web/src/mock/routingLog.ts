@@ -2682,11 +2682,14 @@ export function listRoutingLog(query: RoutingLogQuery, now: number, written: rea
   const within = (at: string) => Date.parse(at) >= from && Date.parse(at) <= to;
   const inList = (list: string[] | undefined, value: string | null) => !list?.length || (value !== null && list.includes(value));
   const session = (value: string | null) => !query.session || (value !== null && value.startsWith(query.session));
+  // An event that names no agent matches none, as the route leaves a session-level event out.
+  const agent = (value: string | null) => !query.agentId || value === query.agentId;
   const decisions = SUMMARIES.filter(
     (s) =>
       within(s.at) &&
       (!query.request || s.requestId === query.request) &&
       session(s.sessionId) &&
+      agent(s.agentId) &&
       inList(query.keyIds, s.keyId) &&
       inList(query.poolIds, s.poolId) &&
       inList(query.models, s.model) &&
@@ -2699,6 +2702,7 @@ export function listRoutingLog(query: RoutingLogQuery, now: number, written: rea
       (e.id !== LATE_EVENT_ID || now >= LATE_EVENT_AT) &&
       (!query.request || e.requestId === query.request) &&
       session(e.sessionId) &&
+      agent(e.agentId) &&
       inList(query.keyIds, e.keyId) &&
       inList(query.poolIds, e.poolId) &&
       inList(query.models, e.model) &&

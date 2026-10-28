@@ -170,6 +170,7 @@ export interface RequestsAddress {
   accounts: string[];
   /** The user agent pattern. */
   agent: string;
+  agentId: string;
   agentTypes: string[];
   cacheMissReasons: string[];
   /** `client`, `-` for a request the marker does not hold. */
@@ -206,6 +207,7 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   search: text('search'),
   request: text('request'),
   session: text('session'),
+  agentId: text('agent_id'),
   client: text('client'),
   agent: text('agent'),
   agentTypes: list('agent_types'),
@@ -276,6 +278,7 @@ export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({
 /** The routing log's filters as the address holds them. */
 export interface LogFilters {
   accounts: string[];
+  agentId: string;
   keys: string[];
   kinds: string[];
   models: string[];
@@ -291,6 +294,7 @@ export interface LogFilters {
  */
 export const ROUTING_LOG_CODEC = codecOf<LogFilters>({
   accounts: list('accounts'),
+  agentId: text('agent_id'),
   keys: list('keys'),
   kinds: list('kinds'),
   models: list('models'),

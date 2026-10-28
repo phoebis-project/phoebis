@@ -158,6 +158,11 @@ const MODEL: Dimension = { field: 'models', group: 'Routing', kind: 'list', labe
 const CATALOG_MODEL: Dimension = { ...MODEL, searchable: true };
 const POOL: Dimension = { field: 'pools', group: 'Routing', kind: 'list', label: 'Pool', mono: true, word: 'pool' };
 const USER_AGENT: Dimension = { field: 'agent', group: 'Request', kind: 'pattern', label: 'User agent', mono: true, word: 'user agent' };
+/**
+ * The agent id of a request, which both logs match exactly. The word is `agent`, so its chip reads `agent: main` beside
+ * the user agent's chip.
+ */
+export const AGENT_ID: Dimension = { field: 'agentId', group: 'Subject', kind: 'id', label: 'Agent', mono: true, word: 'agent' };
 
 /**
  * A dimension's disabled reason while its option list did not load, `{ [field]: "The key list did not load: ..." }`,
@@ -210,6 +215,7 @@ export const REQUESTS_DIMENSIONS: Dimension[] = [
   { field: 'speeds', group: 'Request', kind: 'list', label: 'Speed', mono: true, word: 'speed' },
   { field: 'turnOrigins', group: 'Request', kind: 'list', label: 'Turn origin', mono: true, word: 'turn origin' },
   USER_AGENT,
+  AGENT_ID,
   { field: 'request', group: 'Subject', kind: 'id', label: 'Request', mono: true, word: 'request' },
   { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' },
 ];
@@ -221,6 +227,7 @@ export const ROUTING_LOG_DIMENSIONS: Dimension[] = [
   KEY,
   CATALOG_MODEL,
   POOL,
+  AGENT_ID,
   { field: 'request', group: 'Subject', kind: 'id', label: 'Request', mono: true, word: 'request' },
   { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' },
 ];

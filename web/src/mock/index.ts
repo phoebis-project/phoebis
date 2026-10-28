@@ -458,6 +458,7 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   if (q.to && Date.parse(r.at) > Date.parse(q.to)) return false;
   if (q.request && r.id !== q.request) return false;
   if (q.session && r.sessionId !== q.session) return false;
+  if (q.agentId && r.agentId !== q.agentId) return false;
   if (q.search) {
     const needle = q.search.toLowerCase();
     const hay = [r.id, r.sessionId ?? '', r.keyId ?? '', r.accountId ?? '', r.model, r.errorCode ?? '', r.agentId ?? '', ...r.attempts.flatMap((a) => [a.upstreamRequestId ?? '', a.upstreamMessageId ?? ''])].join(' ').toLowerCase();

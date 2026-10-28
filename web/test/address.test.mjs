@@ -17,8 +17,8 @@ const FILLED = {
   METER_CODEC: { accounts: ['primary', 'secondary'] },
   POOLS_CODEC: {},
   QUOTA_CODEC: {},
-  REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], classifiers: ['client', '-'], client: 'claude-code/*', efforts: ['high', 'low'], guardrails: ['large-auxiliary', '-'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), refusalCategories: ['cyber', '-'], request: 'req_f8085653', requestClasses: ['conversation', 'title'], rows: '50', search: 'req_1d9c3e55', session: '407dd39b-dd60', speeds: ['fast', 'standard'], statuses: ['200', '429'], stopReasons: ['refusal', '-'], turnOrigins: ['agent', 'user'] },
-  ROUTING_LOG_CODEC: { accounts: ['primary', 'secondary'], keys: ['desktop', 'laptop'], kinds: ['exhausted', 'moved'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], range: preset('6h'), request: 'req_1d9c3e55', session: '407dd39b-dd60' },
+  REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentId: 'main', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], classifiers: ['client', '-'], client: 'claude-code/*', efforts: ['high', 'low'], guardrails: ['large-auxiliary', '-'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), refusalCategories: ['cyber', '-'], request: 'req_f8085653', requestClasses: ['conversation', 'title'], rows: '50', search: 'req_1d9c3e55', session: '407dd39b-dd60', speeds: ['fast', 'standard'], statuses: ['200', '429'], stopReasons: ['refusal', '-'], turnOrigins: ['agent', 'user'] },
+  ROUTING_LOG_CODEC: { accounts: ['primary', 'secondary'], agentId: 'main', keys: ['desktop', 'laptop'], kinds: ['exhausted', 'moved'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], range: preset('6h'), request: 'req_1d9c3e55', session: '407dd39b-dd60' },
   SESSIONS_CODEC: { age: '6h', companion: true, finished: true, released: true },
 };
 
@@ -45,6 +45,17 @@ test('the Sessions codec writes the filters off their defaults alone, in the bar
   assert.equal(read(d.SESSIONS_CODEC, 'age=bogus').age, '1h');
   const reset = Object.fromEntries(d.SESSIONS_DIMENSIONS.map((x) => [x.field, d.emptyValue(x)]));
   assert.equal(write(d.SESSIONS_CODEC, { ...set, finished: true, ...reset }), '');
+});
+
+test("both logs' codecs carry the agent id as agent_id, and agent stays the Requests view's user agent pattern", () => {
+  for (const [name, codec] of [['requests', d.REQUESTS_CODEC], ['routing log', d.ROUTING_LOG_CODEC]]) {
+    const bare = read(codec, '');
+    assert.equal(bare.agentId, '', `${name}: a bare address reads no agent id`);
+    assert.equal(write(codec, { ...bare, agentId: 'main' }), 'agent_id=main', name);
+    assert.equal(read(codec, 'agent_id=main').agentId, 'main', name);
+  }
+  const both = read(d.REQUESTS_CODEC, 'agent=claude-cli%2F*&agent_id=main');
+  assert.deepEqual([both.agent, both.agentId], ['claude-cli/*', 'main']);
 });
 
 test("the Accounts codec carries the sort's direction after its key, written only where it differs from the key's own", () => {
@@ -84,7 +95,7 @@ test('a preset travels by its name, nothing for the default, and a custom span a
   assert.equal(write(d.ROUTING_LOG_CODEC, { ...read(d.ROUTING_LOG_CODEC, ''), range: preset('1h') }), '');
   assert.equal(write(d.REQUESTS_CODEC, { ...read(d.REQUESTS_CODEC, ''), range: preset('24h') }), '');
   const params = d.ROUTING_LOG_CODEC.toParams({ ...FILLED.ROUTING_LOG_CODEC, range: CUSTOM });
-  assert.deepEqual([...params.keys()], ['accounts', 'keys', 'kinds', 'models', 'pools', 'request', 'session', 'from', 'to']);
+  assert.deepEqual([...params.keys()], ['accounts', 'agent_id', 'keys', 'kinds', 'models', 'pools', 'request', 'session', 'from', 'to']);
   assert.deepEqual([params.get('from'), params.get('to'), params.get('range')], [FROM, TO, null]);
 });
 

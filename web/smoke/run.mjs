@@ -14082,11 +14082,14 @@ m.unmount();
     const page = await mount('/requests', { now: CLOCK_ORIGIN });
     addFilterButton(page)?.click();
     await page.settle(100);
+    const listed = [...(filterBox()?.querySelector('[role="listbox"]')?.children ?? [])];
+    const subjectAt = listed.findIndex((el) => el.classList.contains('mselect__group') && el.textContent?.trim() === 'Subject');
     const one = {
       expanded: addFilterButton(page)?.getAttribute('aria-expanded') ?? null,
       field: document.activeElement === filterBox()?.querySelector('.add-filter__search'),
       groups: [...(filterBox()?.querySelectorAll('.mselect__group') ?? [])].map((g) => g.textContent?.trim()),
       rows: filterRows().length,
+      subject: subjectAt < 0 ? [] : listed.slice(subjectAt + 1).filter((el) => el.classList.contains('add-filter__row')).map((el) => el.querySelector('.add-filter__label')?.textContent?.trim()),
     };
     await addFilter(page, 'Outcome');
     const head = { back: backButton() !== null, remove: removeLink() !== undefined, title: filterBox()?.querySelector('.popover__title')?.textContent?.trim() ?? null };
@@ -14135,7 +14138,7 @@ m.unmount();
     results.push({
       name: '/requests the Add filter popover walks its two steps for a list, a pattern, an id, a choice and a flag and closes on Escape, a click outside and focus leaving',
       ok:
-        JSON.stringify(one) === JSON.stringify({ expanded: 'true', field: true, groups: ['Routing', 'Outcome', 'Request', 'Subject'], rows: 22 }) &&
+        JSON.stringify(one) === JSON.stringify({ expanded: 'true', field: true, groups: ['Routing', 'Outcome', 'Request', 'Subject'], rows: 23, subject: ['Agent', 'Request', 'Session'] }) &&
         JSON.stringify(head) === JSON.stringify({ back: true, remove: false, title: 'Outcome' }) &&
         JSON.stringify(list) === JSON.stringify({ open: true, outcomes: 'canceled', remove: true }) &&
         back &&
@@ -14151,6 +14154,54 @@ m.unmount();
       missing: [JSON.stringify(one), JSON.stringify(head), JSON.stringify(list), `back ${back}`, `grammar ${JSON.stringify(grammar)}`, JSON.stringify(pattern), JSON.stringify(idStep), JSON.stringify(radios), JSON.stringify(choice), JSON.stringify(flag), JSON.stringify(escaped), `open after a click outside ${outside}`, `open after focus left ${left}`],
     });
     page.unmount();
+  }
+  {
+    // The Agent filter matches the agent id whole, so its chip reads `agent: main` in the mono face, apart from the
+    // user agent's chip, and the page sends the id on its first read and on its auto reload. The drawn rows are the
+    // answer's, each of main, and one opened row's drawer reads the id on its Agent row.
+    const recorded = recordedCalls('listRequests');
+    const page = await mount('/requests', { now: CLOCK_ORIGIN });
+    let applied;
+    let first;
+    let drawn;
+    let polled;
+    try {
+      applied = await applyText(page, 'Agent', 'main');
+      first = recorded.calls.at(-1) ?? null;
+      drawn = rowIds(page);
+      await chooseInterval(page, '5 s');
+      const before = recorded.calls.length;
+      tick(5_000);
+      await page.settle();
+      polled = recorded.calls.slice(before).map((c) => c.args[0]?.agentId ?? null);
+    } finally {
+      recorded.restore();
+    }
+    const chip = chipOf(page, 'agent');
+    const read = {
+      address: param(page, 'agent_id'),
+      chip: chip?.textContent?.trim() ?? null,
+      mono: chip?.querySelector('.chip__values')?.classList.contains('mono') ?? false,
+      userAgent: chipOf(page, 'user agent') !== undefined,
+    };
+    const answered = first?.answer?.requests ?? [];
+    const answeredIds = new Set(answered.map((r) => r.id));
+    page.container.querySelector('.requests__table tbody tr')?.click();
+    await page.settle(300);
+    const opened = drawerRowOf(page, 'Agent')?.querySelector('dd')?.textContent?.trim() ?? null;
+    page.unmount();
+    results.push({
+      name: '/requests the Agent filter writes agent_id, chips agent: main in the mono face, sends the id on its read and its poll, and an opened row reads main',
+      ok:
+        applied &&
+        JSON.stringify(read) === JSON.stringify({ address: 'main', chip: 'agent: main', mono: true, userAgent: false }) &&
+        first?.args[0]?.agentId === 'main' &&
+        answered.length > 0 && answered.every((r) => r.agentId === 'main') &&
+        drawn.length > 0 && drawn.every((id) => answeredIds.has(id)) &&
+        polled.length > 0 && polled.every((agentId) => agentId === 'main') &&
+        opened === 'main',
+      missing: [`applied ${applied}`, JSON.stringify(read), `first read ${JSON.stringify(first?.args[0]?.agentId ?? null)}`, `${answered.length} answered, agents ${JSON.stringify([...new Set(answered.map((r) => r.agentId))])}`, `${drawn.length} drawn`, `polled ${JSON.stringify(polled)}`, `opened ${opened}`],
+    });
   }
   {
     // A chip's body opens its dimension's values with Back, the label and Remove, and Remove clears the value, closes
@@ -14403,6 +14454,53 @@ m.unmount();
       name: "/routing-log a Session cell's agent line carries the whole agent id on its title",
       ok: agents.length > 0 && agents.every((a) => a.text === a.agent && a.title === a.agent),
       missing: [`${agents.length} rows with an agent`, JSON.stringify(agents.slice(0, 5))],
+    });
+  }
+  {
+    // The Agent filter matches a decision by its request's agent and an event by its own, so an event that names no
+    // agent, such as the hour's session-level `warm_prefix_expired`, leaves the list. Each drawn row's Session cell
+    // still reads the agent id under the session link, and the page sends the id on its first read and on its poll.
+    const recorded = recordedCalls('listRoutingLog');
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    let applied;
+    let first;
+    let drawn;
+    let polled;
+    try {
+      applied = await applyText(page, 'Agent', 'main');
+      first = recorded.calls.at(-1) ?? null;
+      drawn = trs(page).map((tr) => ({ agent: cell(tr, 'session')?.querySelector('.sub.mono')?.textContent ?? null, key: tr.getAttribute('data-row') }));
+      await chooseInterval(page, '5 s');
+      const before = recorded.calls.length;
+      tick(5_000);
+      await page.settle();
+      polled = recorded.calls.slice(before).map((c) => c.args[0]?.agentId ?? null);
+    } finally {
+      recorded.restore();
+    }
+    const chip = chipOf(page, 'agent');
+    const read = {
+      address: new URLSearchParams(page.location().search).get('agent_id'),
+      chip: chip?.textContent?.trim() ?? null,
+      mono: chip?.querySelector('.chip__values')?.classList.contains('mono') ?? false,
+      userAgent: chipOf(page, 'user agent') !== undefined,
+    };
+    page.unmount();
+    const answered = first?.answer?.rows ?? [];
+    const agentless = hour.rows.filter((r) => r.type === 'event' && r.agentId === null);
+    const left = new Set(agentless.map(rowKeyOf));
+    results.push({
+      name: '/routing-log the Agent filter writes agent_id, chips agent: main, sends the id on its read and its poll, and lists no event that names no agent',
+      ok:
+        applied &&
+        JSON.stringify(read) === JSON.stringify({ address: 'main', chip: 'agent: main', mono: true, userAgent: false }) &&
+        first?.args[0]?.agentId === 'main' &&
+        answered.length > 0 && answered.every((r) => r.agentId === 'main') &&
+        JSON.stringify(drawn.map((r) => r.key)) === JSON.stringify(answered.slice(0, 25).map(rowKeyOf)) &&
+        answered.some((r) => r.type === 'decision') && drawn.every((r) => r.agent === 'main') &&
+        agentless.some((r) => r.kind === 'warm_prefix_expired' && r.sessionId !== null) && drawn.every((r) => !left.has(r.key)) &&
+        polled.length > 0 && polled.every((agentId) => agentId === 'main'),
+      missing: [`applied ${applied}`, JSON.stringify(read), `first read ${JSON.stringify(first?.args[0]?.agentId ?? null)}`, `${answered.length} answered, agents ${JSON.stringify([...new Set(answered.map((r) => r.agentId))])}`, `drawn ${JSON.stringify(drawn.slice(0, 5))}`, `agentless ${agentless.map((r) => r.kind).join(',')}`, `polled ${JSON.stringify(polled)}`],
     });
   }
   {
