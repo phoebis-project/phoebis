@@ -40,7 +40,7 @@
 # would show up as body drift on every capture. The four cfg names of the compared runs are pinned by the
 # committed fixtures, which were captured under them; renaming one changes the body and its Content-Length.
 #
-# The script finishes by running `python3 scripts/build-fixtures.py --check <output-dir>` and exits with its
+# The script finishes by running `python3 -I scripts/build-fixtures.py --check <output-dir>` and exits with its
 # status, so one command captures and compares.
 #
 # The control plane (the OAuth token, profile, usage, and roles calls) is not captured here: those calls hit
@@ -102,4 +102,4 @@ echo "capture written under $OUT: clean_modes.json, clean_body_<i>.json, gzip_mo
 
 trap - EXIT
 cd "$ROOT" || exit 1
-exec python3 scripts/build-fixtures.py --check "$OUT"
+exec python3 -I scripts/build-fixtures.py --check "$OUT"

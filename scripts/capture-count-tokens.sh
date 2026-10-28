@@ -11,7 +11,7 @@
 #   1. oauth: OAuth token
 #   2. oauth-fp: OAuth token with the first-party override
 #   3. apikey: API key
-# then `python3 scripts/build-fixtures.py --count <output-dir> --check`, exiting with its status.
+# then `python3 -I scripts/build-fixtures.py --count <output-dir> --check`, exiting with its status.
 
 source "$(dirname "$0")/capture/lib.sh"
 
@@ -49,4 +49,4 @@ done
 echo "ran $RUN_COUNT runs, $RUN_FAILURES exited non-zero"
 trap - EXIT
 cd "$ROOT"
-exec python3 scripts/build-fixtures.py --count "$OUT" --check
+exec python3 -I scripts/build-fixtures.py --count "$OUT" --check
