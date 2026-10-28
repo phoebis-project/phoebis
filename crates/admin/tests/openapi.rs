@@ -1118,6 +1118,37 @@ async fn a_session_row_answers_its_effort_and_its_agent_lines_and_no_context_win
 }
 
 #[tokio::test]
+async fn the_rows_and_the_lines_creation_times_say_whose_first_placement_each_reads() {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    let description = |schema: &str| {
+        schemas[schema]["properties"]["created_at"]["description"]
+            .as_str()
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+    };
+    assert_eq!(
+        description("Session").as_deref(),
+        Some(
+            "The first placement of the session's main agent under the key and session, kept until the session's last pin leaves for good, so a failover, a move or a second pin leaves it alone. Null where main never placed a pin."
+        ),
+        "Session.created_at: {}",
+        schemas["Session"]
+    );
+    assert_eq!(
+        description("AgentContext").as_deref(),
+        Some(
+            "The first placement of the pin's agent under the key and session, null where no record stands."
+        ),
+        "AgentContext.created_at: {}",
+        schemas["AgentContext"]
+    );
+    assert!(
+        admits_null(&schemas["Session"]["properties"]["created_at"]),
+        "a row whose main never placed a pin answers null"
+    );
+}
+
+#[tokio::test]
 async fn the_login_takes_stay_logged_in_false_by_default_and_the_session_answers_persistent() {
     let (_app, _up, document) = document().await;
     let schemas = &document["components"]["schemas"];

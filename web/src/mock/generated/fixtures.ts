@@ -17437,7 +17437,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_ttl_ms": 300000,
               "last_used_at": 1791721000000,
               "warm": true,
-              "created_at": null
+              "created_at": 1791721000000
             }
           ],
           "forked_from": null,
@@ -17492,7 +17492,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_ttl_ms": 300000,
               "last_used_at": 1791721000000,
               "warm": true,
-              "created_at": null
+              "created_at": 1791721000000
             }
           ],
           "forked_from": null,
@@ -17547,7 +17547,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_ttl_ms": 300000,
               "last_used_at": 1791721000000,
               "warm": true,
-              "created_at": null
+              "created_at": 1791717340000
             },
             {
               "agent_id": "worker-1",
@@ -17558,7 +17558,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_ttl_ms": 300000,
               "last_used_at": 1791721000000,
               "warm": true,
-              "created_at": null
+              "created_at": 1791717340000
             },
             {
               "agent_id": "worker-2",
@@ -17569,7 +17569,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_ttl_ms": 300000,
               "last_used_at": 1791721000000,
               "warm": true,
-              "created_at": null
+              "created_at": 1791717340000
             }
           ],
           "forked_from": "s0",

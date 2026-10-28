@@ -409,7 +409,18 @@ impl Store {
 
     /// One transaction, as `upsert_pin` takes.
     pub fn delete_pin(&self, key: &PinKey) -> Result<bool, StoreError> {
-        self.routing_commit(|conn| in_transaction(conn, |tx| delete_pin_on(tx, key)))
+        self.routing_commit(|conn| in_transaction(conn, |tx| delete_pin_on(tx, key, None)))
+    }
+
+    /// `delete_pin` for a pin that leaves for good, one transaction.
+    pub fn end_pin(&self, key: &PinKey, ended: Option<i64>) -> Result<bool, StoreError> {
+        self.routing_commit(|conn| in_transaction(conn, |tx| delete_pin_on(tx, key, ended)))
+    }
+
+    /// Deletes the first-seen rows of a session with no pin (an account's cascade, a lapsed failover), called by
+    /// `spawn` ahead of `load_routing`, never inside it.
+    pub fn sweep_first_seen(&self) -> Result<usize, StoreError> {
+        self.routing_commit(|conn| in_transaction(conn, |tx| sweep_first_seen_on(tx)))
     }
 
     /// `INSERT OR REPLACE`: the router writes a record's row only when it creates the record, so a second write under
@@ -545,7 +556,11 @@ impl RoutingTx<'_> {
     }
 
     pub fn delete_pin(&mut self, key: &PinKey) -> Result<bool, StoreError> {
-        delete_pin_on(self.tx, key)
+        delete_pin_on(self.tx, key, None)
+    }
+
+    pub fn end_pin(&mut self, key: &PinKey, ended: Option<i64>) -> Result<bool, StoreError> {
+        delete_pin_on(self.tx, key, ended)
     }
 
     pub fn insert_first_seen(&mut self, row: &FirstSeenRow) -> Result<(), StoreError> {
@@ -730,11 +745,28 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
     Ok(())
 }
 
-fn delete_pin_on(conn: &Connection, key: &PinKey) -> Result<bool, StoreError> {
-    Ok(conn.execute(
+/// Deletes the pin, and under `ended` the session's first-seen rows written at or before that instant, so the
+/// cascade holds whatever order a backlog writes in. `delete_pin`, `RoutingTx::delete_pin` and
+/// `rekey_resolution_on` pass `None`, so a replacement keeps them.
+fn delete_pin_on(conn: &Connection, key: &PinKey, ended: Option<i64>) -> Result<bool, StoreError> {
+    let deleted = conn.execute(
         "DELETE FROM pins WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4",
         params![key.key_id, key.session_id, key.agent_id, key.model],
-    )? > 0)
+    )? > 0;
+    if let Some(ended) = ended {
+        conn.execute(
+            "DELETE FROM session_first_seen WHERE key_id = ?1 AND session_id = ?2 AND first_seen_at <= ?3",
+            params![key.key_id, key.session_id, ended],
+        )?;
+    }
+    Ok(deleted)
+}
+
+fn sweep_first_seen_on(conn: &Connection) -> Result<usize, StoreError> {
+    Ok(conn.execute(
+        "DELETE FROM session_first_seen WHERE NOT EXISTS (SELECT 1 FROM pins WHERE pins.key_id = session_first_seen.key_id AND pins.session_id = session_first_seen.session_id)",
+        [],
+    )?)
 }
 
 fn insert_first_seen_on(conn: &Connection, row: &FirstSeenRow) -> Result<(), StoreError> {
@@ -920,7 +952,7 @@ fn rekey_resolution_on(conn: &Connection, rekey: &RekeyWrite) -> Result<(), Stor
         ],
     )?;
     for key in &rekey.delete_pins {
-        delete_pin_on(conn, key)?;
+        delete_pin_on(conn, key, None)?;
     }
     for pin in &rekey.upsert_pins {
         upsert_pin_on(conn, pin)?;

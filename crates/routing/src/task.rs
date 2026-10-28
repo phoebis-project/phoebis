@@ -1787,6 +1787,9 @@ pub fn spawn(
         RegistrySnapshot::from_load(registry, store.digest_key(), now, 1)
             .with_guardrails(guardrails),
     )));
+    // Here and never in the load, which a reader may take while a failover's landing is a selection away and the
+    // session holds no pin.
+    store.sweep_first_seen()?;
     let load = store.load_routing()?;
     let load_counts = LoadCounts::of(
         &load,
@@ -2339,6 +2342,10 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
             StateWrite::DeletePin(key) => {
                 tx.delete_pin(key)?;
             }
+            StateWrite::EndPin(key, ended) => {
+                tx.end_pin(key, *ended)?;
+            }
+            StateWrite::InsertFirstSeen(row) => tx.insert_first_seen(row)?,
             StateWrite::PurgeShedRounds { before } => {
                 tx.purge_shed_rounds_before(*before)?;
             }
@@ -2396,6 +2403,8 @@ fn apply_one(store: &Store, write: &StateWrite) -> Result<Marks, StoreError> {
             store.delete_cooldown(account_id, scope).map(|_| none())
         }
         StateWrite::DeletePin(key) => store.delete_pin(key).map(|_| none()),
+        StateWrite::EndPin(key, ended) => store.end_pin(key, *ended).map(|_| none()),
+        StateWrite::InsertFirstSeen(row) => store.insert_first_seen(row).map(|()| none()),
         StateWrite::PurgeShedRounds { before } => {
             store.purge_shed_rounds_before(*before).map(|_| none())
         }
@@ -2651,7 +2660,7 @@ fn projections(
 /// the registry) and its runway on its own account under that pool, read by `standing_runway` once per pool, account
 /// and set of windows, since the account's projection already holds every pin's burn and every pin drawing those
 /// windows there reads the same runway. Each pin reads its account's factor from the slow-down entry in force under
-/// that pool and its cycle from its pace.
+/// that pool, its cycle from its pace, and its agent's and its session's main agent's first placements.
 fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) -> Vec<PinStanding> {
     type Runway = Option<(Option<i64>, Option<String>)>;
     let mut runways: HashMap<(String, String, Vec<&'static str>), Runway> = HashMap::new();
@@ -2685,6 +2694,8 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
             let cycle_ms = state.pin_pace(&pin.key()).and_then(|pace| pace.cycle_ms);
             let auxiliary_only = state.auxiliary_only(&pin.key());
             let effort = Some(pin.effort.clone()).filter(|effort| !effort.is_empty());
+            let first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, &pin.agent_id);
+            let session_first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, "main");
             PinStanding {
                 pin: decayed(pin, now, average_ms),
                 runway_ms,
@@ -2694,8 +2705,8 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
                 cycle_ms,
                 auxiliary_only,
                 effort,
-                first_seen_at: None,
-                session_first_seen_at: None,
+                first_seen_at,
+                session_first_seen_at,
             }
         })
         .collect()
@@ -3364,6 +3375,7 @@ impl Task {
                 // Every agent's pin of the session leaves together: the session's next request starts fresh
                 // wherever each of its agents lands, not only its main turn's.
                 let gone = self.state.release_session(&key_id, &session_id);
+                let ended = self.state.end_first_seen(&key_id, &session_id);
                 let count = gone.len();
                 let now = (self.clock)();
                 for key in &gone {
@@ -3381,7 +3393,13 @@ impl Task {
                         }
                     }
                 }
-                self.write(gone.into_iter().map(StateWrite::DeletePin).collect());
+                // Every end carries the session's, since a backlog may fold any one of them away under a later write
+                // of its key.
+                self.write(
+                    gone.into_iter()
+                        .map(|key| StateWrite::EndPin(key, ended.then_some(now)))
+                        .collect(),
+                );
                 let _ = reply.send(count);
             }
             Command::ClearCooldown {
@@ -3965,6 +3983,7 @@ impl Task {
                 // Nothing enters `invalidated`: the pin never served, so the session's next request is a fresh
                 // placement rather than a move away from it.
                 self.state.remove_pin(&key);
+                let ended = self.state.end_first_seen(&key.key_id, &key.session_id);
                 let now = (self.clock)();
                 self.emit(RouterEvent::PinExpired {
                     key_id: key.key_id.clone(),
@@ -3978,7 +3997,7 @@ impl Task {
                 if let Some(event) = released_mark(&current, now) {
                     self.emit(event);
                 }
-                self.write(vec![StateWrite::DeletePin(key)]);
+                self.write(vec![StateWrite::EndPin(key, ended.then_some(now))]);
             }
             Report::PinRenewed {
                 mut pin,
@@ -4549,6 +4568,13 @@ impl Task {
             .map(|p| (p.key(), p))
             .collect();
         let purged = self.state.purge(&snapshot, now);
+        // After the takes, so a session whose last pin the purge took ends with it.
+        let ended: HashSet<(String, String)> = purged
+            .pins
+            .iter()
+            .filter(|(key, _)| self.state.end_first_seen(&key.key_id, &key.session_id))
+            .map(|(key, _)| (key.key_id.clone(), key.session_id.clone()))
+            .collect();
         self.slow_down_edges(now);
         tracing::debug!(
             affinity = purged.affinity.len(),
@@ -4556,8 +4582,17 @@ impl Task {
             pins = purged.pins.len(),
             "purged expired and orphaned routing state"
         );
-        self.invalidated
-            .retain(|_, entry| now - entry.at <= MIGRATION_WINDOW_MS);
+        let mut lapsed = Vec::new();
+        self.invalidated.retain(|key, entry| {
+            let within = now - entry.at <= MIGRATION_WINDOW_MS;
+            if !within {
+                lapsed.push(key.clone());
+            }
+            within
+        });
+        // A failover whose landing never came ends its session as an expiry does. The invalidation already took the
+        // pin's row, so the end carries the cascade alone.
+        lapsed.retain(|key| self.state.end_first_seen(&key.key_id, &key.session_id));
         for (account_id, scope) in &purged.cooldowns {
             self.emit(RouterEvent::CooldownCleared {
                 account_id: account_id.clone(),
@@ -4591,11 +4626,14 @@ impl Task {
             .into_iter()
             .map(|(a, s)| StateWrite::DeleteCooldown(a, s))
             .collect();
+        writes.extend(purged.pins.into_iter().map(|(key, _)| {
+            let session = (key.key_id.clone(), key.session_id.clone());
+            StateWrite::EndPin(key, ended.contains(&session).then_some(now))
+        }));
         writes.extend(
-            purged
-                .pins
+            lapsed
                 .into_iter()
-                .map(|(key, _)| StateWrite::DeletePin(key)),
+                .map(|key| StateWrite::EndPin(key, Some(now))),
         );
         if !purged.affinity.is_empty() {
             writes.push(StateWrite::DeleteAffinity(purged.affinity));
@@ -5069,6 +5107,8 @@ enum DeferredKey {
         scope: String,
     },
     Credits(String),
+    /// An agent's record by key id, session id and agent id.
+    FirstSeen(String, String, String),
     Overage(String),
     Pin(PinKey),
     PurgeShedRounds,
@@ -5084,12 +5124,13 @@ enum DeferredKey {
     },
 }
 
-/// Writes the channel had no room for, the last write per row: a pin's last upsert or delete, a window's last
-/// upsert, a cooldown's last upsert or delete per scope, an overage, credits or account state per account, an
-/// affinity row's last upsert or delete per key, a pool's last round per account, one round purge, one stale-window
-/// sweep, and every rekey in order. A rekey closes the rows before it into a segment of their own, so a pin's write
-/// dated after a resolution never lands ahead of the rekey that moved its rows. A round may land on either side of
-/// the pin writes held beside it: a mark is read back only for the pin and the epoch its row names.
+/// Writes the channel had no room for, the last write per row: a pin's last upsert, delete or end, an agent's
+/// first-seen record, a window's last upsert, a cooldown's last upsert or delete per scope, an overage, credits or
+/// account state per account, an affinity row's last upsert or delete per key, a pool's last round per account, one
+/// round purge, one stale-window sweep, and every rekey in order. A rekey closes the rows before it into a segment of
+/// their own, so a pin's write dated after a resolution never lands ahead of the rekey that moved its rows. A round
+/// may land on either side of the pin writes held beside it: a mark is read back only for the pin and the epoch its
+/// row names.
 #[derive(Default)]
 struct Deferred {
     /// Oldest first: each closed segment's rows and the rekey that closed it.
@@ -5211,6 +5252,18 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
         StateWrite::DeletePin(key) => {
             one(DeferredKey::Pin(key.clone()), StateWrite::DeletePin(key))
         }
+        StateWrite::EndPin(key, ended) => one(
+            DeferredKey::Pin(key.clone()),
+            StateWrite::EndPin(key, ended),
+        ),
+        StateWrite::InsertFirstSeen(row) => one(
+            DeferredKey::FirstSeen(
+                row.key_id.clone(),
+                row.session_id.clone(),
+                row.agent_id.clone(),
+            ),
+            StateWrite::InsertFirstSeen(row),
+        ),
         StateWrite::PurgeShedRounds { before } => one(
             DeferredKey::PurgeShedRounds,
             StateWrite::PurgeShedRounds { before },

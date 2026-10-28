@@ -592,6 +592,156 @@ fn the_first_seen_rows_keep_the_last_write_load_whole_and_leave_by_session_and_w
     assert!(store.load_routing().unwrap().first_seen.is_empty());
 }
 
+/// A guard: the plain delete is a replacement's, a move's or a failover's, whose new row lands after it.
+#[test]
+fn delete_pin_of_a_sessions_last_pin_keeps_its_first_seen_rows() {
+    let store = store_with(&["a"]);
+    let only = pin("k", "s", "claude-opus-5-5", "a");
+    store.upsert_pin(&only).unwrap();
+    store
+        .insert_first_seen(&first_seen("k", "s", "main", 1_000))
+        .unwrap();
+    assert!(store.delete_pin(&only.key()).unwrap());
+    store.upsert_pin(&only).unwrap();
+    assert!(store
+        .write_routing(|tx| tx.delete_pin(&only.key()))
+        .unwrap());
+    let load = store.load_routing().unwrap();
+    assert_eq!(
+        (load.pins, load.first_seen),
+        (Vec::new(), vec![first_seen("k", "s", "main", 1_000)]),
+        "the pin leaves and the session's row stays"
+    );
+}
+
+#[test]
+fn end_pin_under_an_end_takes_the_sessions_first_seen_rows_written_at_or_before_it_and_keeps_a_later_one(
+) {
+    let store = store_with(&["a"]);
+    let ended = pin("k", "s", "claude-opus-5-5", "a");
+    store.upsert_pin(&ended).unwrap();
+    for row in [
+        first_seen("k", "s", "main", 1_000),
+        first_seen("k", "s", "sub-1", 3_000),
+        first_seen("k", "s", "sub-2", 3_001),
+        first_seen("k", "t", "main", 1_000),
+    ] {
+        store.insert_first_seen(&row).unwrap();
+    }
+    assert!(store.end_pin(&ended.key(), Some(3_000)).unwrap());
+    let load = store.load_routing().unwrap();
+    assert_eq!(
+        (load.pins, load.first_seen),
+        (
+            Vec::new(),
+            vec![
+                first_seen("k", "s", "sub-2", 3_001),
+                first_seen("k", "t", "main", 1_000)
+            ]
+        ),
+        "the session's rows up to the end leave with its pin, a later placement's row and another session's stay"
+    );
+    let other = pin("k", "t", "claude-opus-5-5", "a");
+    store.upsert_pin(&other).unwrap();
+    assert!(store
+        .write_routing(|tx| tx.end_pin(&other.key(), Some(1_000)))
+        .unwrap());
+    assert_eq!(
+        store.load_routing().unwrap().first_seen,
+        [first_seen("k", "s", "sub-2", 3_001)],
+        "the writer's transaction cascades as the single write does"
+    );
+    assert!(
+        !store.end_pin(&ended.key(), Some(3_001)).unwrap(),
+        "no pin row stands under the key"
+    );
+    assert!(
+        store.load_routing().unwrap().first_seen.is_empty(),
+        "an end whose pin already left still takes the session's rows"
+    );
+}
+
+/// A guard: memory carries no end on a pin whose session still holds another.
+#[test]
+fn end_pin_without_an_end_keeps_the_sessions_first_seen_rows() {
+    let store = store_with(&["a"]);
+    let main = pin("k", "s", "claude-opus-5-5", "a");
+    let sub = PinRow {
+        agent_id: "sub-1".into(),
+        ..main.clone()
+    };
+    store.upsert_pin(&main).unwrap();
+    store.upsert_pin(&sub).unwrap();
+    for row in [
+        first_seen("k", "s", "main", 1_000),
+        first_seen("k", "s", "sub-1", 2_000),
+    ] {
+        store.insert_first_seen(&row).unwrap();
+    }
+    assert!(store.end_pin(&sub.key(), None).unwrap());
+    let load = store.load_routing().unwrap();
+    assert_eq!(
+        (load.pins, load.first_seen),
+        (
+            vec![main],
+            vec![
+                first_seen("k", "s", "main", 1_000),
+                first_seen("k", "s", "sub-1", 2_000)
+            ]
+        )
+    );
+}
+
+/// A guard: a rekey deletes the pin under its spelling and writes it under the dated id in one transaction.
+#[test]
+fn a_rekey_moving_a_sessions_only_pin_keeps_its_first_seen_rows() {
+    let store = store_with(&["a"]);
+    store.upsert_pin(&spelling_pin()).unwrap();
+    store
+        .insert_first_seen(&first_seen("k", "s", "main", 1_000))
+        .unwrap();
+    store.rekey_resolution(&rekey_of_a()).unwrap();
+    let load = store.load_routing().unwrap();
+    assert_eq!(
+        (load.pins, load.first_seen),
+        (
+            rekey_of_a().upsert_pins,
+            vec![first_seen("k", "s", "main", 1_000)]
+        )
+    );
+}
+
+#[test]
+fn the_sweep_takes_the_first_seen_rows_of_a_session_whose_pins_an_accounts_deletion_cascaded_away()
+{
+    let store = store_with(&["a", "b"]);
+    store
+        .upsert_pin(&pin("k", "s", "claude-opus-5-5", "a"))
+        .unwrap();
+    store
+        .upsert_pin(&pin("k", "t", "claude-opus-5-5", "b"))
+        .unwrap();
+    for row in [
+        first_seen("k", "s", "main", 1_000),
+        first_seen("k", "s", "sub-1", 1_500),
+        first_seen("k", "t", "main", 2_000),
+    ] {
+        store.insert_first_seen(&row).unwrap();
+    }
+    store.delete_account("a", "test").unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().first_seen.len(),
+        3,
+        "the load sweeps nothing, so a reader during a failover's gap keeps the session's rows"
+    );
+    assert_eq!(store.sweep_first_seen().unwrap(), 2);
+    assert_eq!(
+        store.load_routing().unwrap().first_seen,
+        [first_seen("k", "t", "main", 2_000)],
+        "a session that still holds a pin keeps its rows"
+    );
+}
+
 #[test]
 fn a_pins_shed_reason_survives_a_reopen_and_a_rounds_move_stamps_its_own() {
     let dir = tempfile::tempdir().unwrap();

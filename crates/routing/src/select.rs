@@ -2346,7 +2346,9 @@ fn run(
                 request.now,
             );
         }
+        let first_seen = state.note_first_seen(&row, request.now);
         writes.push(StateWrite::UpsertPin(row));
+        writes.extend(first_seen.map(StateWrite::InsertFirstSeen));
         PinRef {
             key_id: request.key_id.clone(),
             session_id: session.to_string(),

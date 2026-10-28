@@ -14,9 +14,9 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
-    CooldownRow, Failover, OveragePolicy, PinBurn, PinKey, PinRow, PoolMember, PoolRow,
-    RegistryLoad, ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow, Shedding,
-    SlowDown, StateCause, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
+    CooldownRow, Failover, FirstSeenRow, OveragePolicy, PinBurn, PinKey, PinRow, PoolMember,
+    PoolRow, RegistryLoad, ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow,
+    Shedding, SlowDown, StateCause, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -6670,6 +6670,80 @@ fn after_a_return_to_plan_move_a_warm_entry_on_the_source_cannot_place_the_reque
     assert_eq!(
         sel.trace.placement, None,
         "a is not among the move's destinations, so rung 3 never considers its entry"
+    );
+}
+
+#[test]
+fn an_agents_first_placement_answers_its_first_seen_row_once_and_a_renewal_or_a_second_model_writes_none(
+) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let first_seen = |writes: &[StateWrite]| -> Vec<FirstSeenRow> {
+        writes
+            .iter()
+            .filter_map(|write| match write {
+                StateWrite::InsertFirstSeen(row) => Some(row.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let row = |agent: &str, at: i64| FirstSeenRow {
+        key_id: "k".into(),
+        session_id: "s1".into(),
+        agent_id: agent.into(),
+        first_seen_at: at,
+    };
+    let turn = |model: &str, agent: &str, at: i64| {
+        select_request(&s, "k", Some("s1"), model, agent, true, &[], at)
+    };
+    let (_, placed) = select(
+        &mut st,
+        &s,
+        &turn("claude-sonnet-5", "main", 1_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        first_seen(&placed),
+        [row("main", 1_000)],
+        "main's first placement writes its record"
+    );
+    let (_, renewed) = select(
+        &mut st,
+        &s,
+        &turn("claude-sonnet-5", "main", 2_000),
+        &mut rng(),
+    );
+    let (_, second) = select(
+        &mut st,
+        &s,
+        &turn("claude-opus-5", "main", 3_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        (first_seen(&renewed), first_seen(&second)),
+        (Vec::new(), Vec::new()),
+        "a renewal places nothing, and main's pin on a second model finds its record standing"
+    );
+    let (_, subagent) = select(
+        &mut st,
+        &s,
+        &turn("claude-sonnet-5", "worker-1", 4_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        first_seen(&subagent),
+        [row("worker-1", 4_000)],
+        "a subagent's first placement writes a record of its own"
+    );
+    assert_eq!(
+        (
+            st.first_seen("k", "s1", "main"),
+            st.first_seen("k", "s1", "worker-1")
+        ),
+        (Some(1_000), Some(4_000))
     );
 }
 

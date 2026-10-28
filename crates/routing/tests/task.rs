@@ -1579,8 +1579,8 @@ async fn a_delete_arriving_while_the_backlog_holds_the_pins_upsert_never_recreat
     );
     assert_eq!(
         handle.writer_status().deferred,
-        1,
-        "the placement waits in the backlog"
+        2,
+        "the placement waits in the backlog, folded to two rows, its pin and its first-seen record"
     );
     hold.release();
     handle
@@ -1625,8 +1625,8 @@ async fn a_shutdown_with_a_full_writer_channel_lands_every_deferred_write() {
     let placed = handle.pins().await.unwrap();
     assert_eq!(
         handle.writer_status().deferred,
-        4,
-        "the last filler and the three placements wait in the backlog"
+        7,
+        "the last filler and the three placements wait in the backlog, each placement folded to two rows, its pin and its first-seen record"
     );
     let shutdown = tokio::spawn({
         let handle = handle.clone();
@@ -13504,6 +13504,663 @@ async fn a_restarted_router_reads_each_pins_flag_and_effort_from_its_row_and_a_r
             .iter()
             .any(|p| p.auxiliary_only),
         "the main turn's refresh clears the flag in the state and in the store"
+    );
+}
+
+/// Session `session`'s request of `agent` on `model` at `now`, under a request id of its own.
+fn turn_of(
+    handle: &RouterHandle,
+    session: &str,
+    agent: &str,
+    model: &str,
+    now: i64,
+) -> SelectRequest {
+    let s = handle.snapshot();
+    SelectRequest {
+        request_id: format!("r-{session}-{agent}-{now}"),
+        agent_id: agent.into(),
+        canonical_model: model.into(),
+        folded_model: model.into(),
+        candidates: resolve(&s, s.key("k").unwrap(), model, model).unwrap(),
+        lane: lane_key(model, "standard", "none", "-"),
+        parent_agent_id: (agent != "main").then(|| "main".into()),
+        ..request(handle, Some(session), now)
+    }
+}
+
+/// A pin's creation times as `pins_standing` answers them: its session, agent and model, its agent's first placement
+/// and its session's main agent's.
+type CreationTimes = (String, String, String, Option<i64>, Option<i64>);
+
+fn standing(
+    session: &str,
+    agent: &str,
+    model: &str,
+    first_seen_at: Option<i64>,
+    session_first_seen_at: Option<i64>,
+) -> CreationTimes {
+    (
+        session.into(),
+        agent.into(),
+        model.into(),
+        first_seen_at,
+        session_first_seen_at,
+    )
+}
+
+/// Every standing pin's creation times, in session, agent and model order.
+async fn creation_times(handle: &RouterHandle) -> Vec<CreationTimes> {
+    let mut times: Vec<CreationTimes> = handle
+        .pins_standing()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| {
+            (
+                p.pin.session_id,
+                p.pin.agent_id,
+                p.pin.model,
+                p.first_seen_at,
+                p.session_first_seen_at,
+            )
+        })
+        .collect();
+    times.sort();
+    times
+}
+
+/// The store's first-seen rows of key `k` as session, agent and instant, in that order.
+fn stored_first_seen(store: &Store) -> Vec<(String, String, i64)> {
+    store
+        .load_routing()
+        .unwrap()
+        .first_seen
+        .into_iter()
+        .map(|row| (row.session_id, row.agent_id, row.first_seen_at))
+        .collect()
+}
+
+fn seen(session: &str, agent: &str, at: i64) -> (String, String, i64) {
+    (session.into(), agent.into(), at)
+}
+
+/// `handle` shut down once every write it holds has landed, and a router started again over its store.
+async fn restarted(handle: RouterHandle, store: &Arc<Store>, now: &Arc<AtomicI64>) -> RouterHandle {
+    handle.shutdown().await.unwrap();
+    spawn(store.clone(), clock(now), RouterConfig::default()).unwrap()
+}
+
+/// A rate limit on `account` that the request holding `pin` met, so the pin fails over.
+fn rejected(account: &str, pin: PinRef, until: i64) -> Report {
+    Report::Cooldown {
+        account_id: account.into(),
+        row: CooldownRow {
+            account_id: account.into(),
+            scope: "account".into(),
+            until,
+            set_at: 0,
+            reason: "rate_limit".into(),
+            window: "five_hour".into(),
+            source_request_id: None,
+            incarnation: 1,
+        },
+        pin: Some(pin),
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    }
+}
+
+#[tokio::test]
+async fn an_agents_first_placement_records_its_instant_which_its_second_model_keeps_and_a_restart_loads(
+) {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_000))
+        .await
+        .unwrap();
+    wait_for(WRITTEN, || {
+        (stored_first_seen(&store) == [seen("s1", "main", 1_000)]).then_some(())
+    })
+    .await;
+    now.store(2_000, Ordering::SeqCst);
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-opus-5", 2_000))
+        .await
+        .unwrap();
+    now.store(3_000, Ordering::SeqCst);
+    handle
+        .select(turn_of(&handle, "s1", "worker-1", "claude-sonnet-5", 3_000))
+        .await
+        .unwrap();
+    let expected = vec![
+        standing("s1", "main", "claude-opus-5", Some(1_000), Some(1_000)),
+        standing("s1", "main", "claude-sonnet-5", Some(1_000), Some(1_000)),
+        standing(
+            "s1",
+            "worker-1",
+            "claude-sonnet-5",
+            Some(3_000),
+            Some(1_000),
+        ),
+    ];
+    assert_eq!(
+        creation_times(&handle).await,
+        expected,
+        "main's pin on a second model reads main's first placement, and a subagent its own beside the session's"
+    );
+    let handle = restarted(handle, &store, &now).await;
+    assert_eq!(
+        stored_first_seen(&store),
+        [seen("s1", "main", 1_000), seen("s1", "worker-1", 3_000)],
+        "one row per agent, the second model's placement writing none"
+    );
+    assert_eq!(
+        creation_times(&handle).await,
+        expected,
+        "a restart loads the records"
+    );
+}
+
+#[tokio::test]
+async fn a_failover_keeps_a_one_pin_sessions_creation_time_through_its_gap_and_across_a_restart() {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let pin = selected_pin(
+        handle
+            .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_000))
+            .await
+            .unwrap(),
+    );
+    let from = handle.pins().await.unwrap()[0].account_id.clone();
+    wait_for(WRITTEN, || {
+        (stored_first_seen(&store) == [seen("s1", "main", 1_000)]).then_some(())
+    })
+    .await;
+    now.store(1_100, Ordering::SeqCst);
+    handle.report(rejected(&from, pin, 1_100 + HOUR)).await;
+    // The invalidation took the session's one pin, and the landing is a selection away.
+    wait_for(WRITTEN, || {
+        store.load_routing().unwrap().pins.is_empty().then_some(())
+    })
+    .await;
+    assert_eq!(
+        stored_first_seen(&store),
+        [seen("s1", "main", 1_000)],
+        "the gap keeps the session's row"
+    );
+    now.store(1_200, Ordering::SeqCst);
+    let landed = handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_200))
+        .await
+        .unwrap();
+    assert!(
+        matches!(&landed.result, SelectResult::Selected(s) if s.account.id != from),
+        "the session lands on the other account: {:?}",
+        landed.result
+    );
+    let expected = vec![standing(
+        "s1",
+        "main",
+        "claude-sonnet-5",
+        Some(1_000),
+        Some(1_000),
+    )];
+    assert_eq!(
+        creation_times(&handle).await,
+        expected,
+        "the landing finds the record standing"
+    );
+    let handle = restarted(handle, &store, &now).await;
+    assert_eq!(
+        stored_first_seen(&store),
+        [seen("s1", "main", 1_000)],
+        "the landing wrote no row of its own"
+    );
+    assert_eq!(
+        creation_times(&handle).await,
+        expected,
+        "a restart reads the first placement"
+    );
+}
+
+#[tokio::test]
+async fn a_move_keeps_a_one_pin_sessions_creation_time_and_a_restart_reads_it() {
+    use phoebis_routing::MigrateReason;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_000))
+        .await
+        .unwrap();
+    let from = handle.pins().await.unwrap()[0].account_id.clone();
+    let to = if from == "a" { "b" } else { "a" };
+    let read = |five_hour: f64, at: i64| {
+        sample_with(at, FIVE_HOUR, five_hour, Some(at + HOUR)).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.1,
+                reset: Some(at + 7 * 24 * HOUR),
+                observed_at: at,
+                source: WindowSource::Poll,
+            },
+        )
+    };
+    handle.report(observed(&from, read(1.0, 1_500))).await;
+    handle.report(observed(to, read(0.2, 1_500))).await;
+    handle.samples().await.unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    let moved = handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 2_000))
+        .await
+        .unwrap();
+    assert!(
+        matches!(&moved.result, SelectResult::Selected(s) if s.account.id == to && s.migrated == Some(MigrateReason::Spent)),
+        "the spent window moves the pin: {:?}",
+        moved.result
+    );
+    let expected = vec![standing(
+        "s1",
+        "main",
+        "claude-sonnet-5",
+        Some(1_000),
+        Some(1_000),
+    )];
+    assert_eq!(
+        creation_times(&handle).await,
+        expected,
+        "the move's fresh row finds the record standing"
+    );
+    let handle = restarted(handle, &store, &now).await;
+    assert_eq!(stored_first_seen(&store), [seen("s1", "main", 1_000)]);
+    assert_eq!(creation_times(&handle).await, expected);
+}
+
+#[tokio::test]
+async fn a_rekey_keeps_a_one_pin_sessions_creation_time_under_the_dated_id_and_a_restart_reads_it()
+{
+    const SPELLING: &str = "claude-sonnet-4-5";
+    const DATED: &str = "claude-sonnet-4-5-20250929";
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .select(turn_of(&handle, "s1", "main", SPELLING, 1_000))
+        .await
+        .unwrap();
+    now.store(1_500, Ordering::SeqCst);
+    handle.resolve(SPELLING, DATED, 1_500).await.unwrap();
+    wait_for(WRITTEN, || {
+        store
+            .load_routing()
+            .unwrap()
+            .pins
+            .iter()
+            .any(|p| p.model == DATED)
+            .then_some(())
+    })
+    .await;
+    let expected = vec![standing("s1", "main", DATED, Some(1_000), Some(1_000))];
+    assert_eq!(
+        creation_times(&handle).await,
+        expected,
+        "the rekey moves the pin and leaves the record"
+    );
+    let handle = restarted(handle, &store, &now).await;
+    assert_eq!(
+        stored_first_seen(&store),
+        [seen("s1", "main", 1_000)],
+        "the rekey's delete of the spelled row took no row"
+    );
+    assert_eq!(creation_times(&handle).await, expected);
+}
+
+#[tokio::test]
+async fn a_sessions_release_drops_its_records_so_its_return_reads_a_new_instant() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_000))
+        .await
+        .unwrap();
+    handle
+        .select(turn_of(&handle, "s1", "worker-1", "claude-sonnet-5", 1_100))
+        .await
+        .unwrap();
+    wait_for(WRITTEN, || {
+        (stored_first_seen(&store) == [seen("s1", "main", 1_000), seen("s1", "worker-1", 1_100)])
+            .then_some(())
+    })
+    .await;
+    assert_eq!(
+        creation_times(&handle).await,
+        vec![
+            standing("s1", "main", "claude-sonnet-5", Some(1_000), Some(1_000)),
+            standing(
+                "s1",
+                "worker-1",
+                "claude-sonnet-5",
+                Some(1_100),
+                Some(1_000)
+            ),
+        ],
+        "the records stand before the release"
+    );
+    now.store(2_000, Ordering::SeqCst);
+    assert_eq!(handle.release_session("k", "s1").await.unwrap(), 2);
+    wait_for(WRITTEN, || {
+        let load = store.load_routing().unwrap();
+        (load.pins.is_empty() && load.first_seen.is_empty()).then_some(())
+    })
+    .await;
+    now.store(3_000, Ordering::SeqCst);
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 3_000))
+        .await
+        .unwrap();
+    assert_eq!(
+        creation_times(&handle).await,
+        vec![standing(
+            "s1",
+            "main",
+            "claude-sonnet-5",
+            Some(3_000),
+            Some(3_000)
+        )],
+        "the session's return is a new session"
+    );
+}
+
+#[tokio::test]
+async fn the_purge_drops_the_records_of_a_session_whose_last_pin_expires() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_000))
+        .await
+        .unwrap();
+    wait_for(WRITTEN, || {
+        (stored_first_seen(&store) == [seen("s1", "main", 1_000)]).then_some(())
+    })
+    .await;
+    assert_eq!(
+        creation_times(&handle).await,
+        vec![standing(
+            "s1",
+            "main",
+            "claude-sonnet-5",
+            Some(1_000),
+            Some(1_000)
+        )],
+        "the record stands before the expiry"
+    );
+    // Past the pool's hour of idle affinity, so the next tick expires the pin.
+    let later = 1_000 + 2 * HOUR;
+    now.store(later, Ordering::SeqCst);
+    wait_for(WRITTEN, || {
+        let load = store.load_routing().unwrap();
+        (load.pins.is_empty() && load.first_seen.is_empty()).then_some(())
+    })
+    .await;
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", later))
+        .await
+        .unwrap();
+    assert_eq!(
+        creation_times(&handle).await,
+        vec![standing(
+            "s1",
+            "main",
+            "claude-sonnet-5",
+            Some(later),
+            Some(later)
+        )],
+        "the session's return after the expiry is a new session"
+    );
+}
+
+#[tokio::test]
+async fn a_client_error_on_the_request_that_placed_a_sessions_last_pin_drops_its_records() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let pin = selected_pin(
+        handle
+            .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_000))
+            .await
+            .unwrap(),
+    );
+    wait_for(WRITTEN, || {
+        (stored_first_seen(&store) == [seen("s1", "main", 1_000)]).then_some(())
+    })
+    .await;
+    assert_eq!(
+        creation_times(&handle).await,
+        vec![standing(
+            "s1",
+            "main",
+            "claude-sonnet-5",
+            Some(1_000),
+            Some(1_000)
+        )],
+        "the record stands before the error"
+    );
+    now.store(1_500, Ordering::SeqCst);
+    handle
+        .report(Report::PinReleased {
+            pin,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
+    wait_for(WRITTEN, || {
+        let load = store.load_routing().unwrap();
+        (load.pins.is_empty() && load.first_seen.is_empty()).then_some(())
+    })
+    .await;
+    now.store(2_000, Ordering::SeqCst);
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 2_000))
+        .await
+        .unwrap();
+    assert_eq!(
+        creation_times(&handle).await,
+        vec![standing(
+            "s1",
+            "main",
+            "claude-sonnet-5",
+            Some(2_000),
+            Some(2_000)
+        )],
+        "the session's next request places a pin with an instant of its own"
+    );
+}
+
+#[tokio::test]
+async fn a_failover_with_no_landing_inside_the_migration_window_ends_the_sessions_records_at_the_purge(
+) {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let pin = selected_pin(
+        handle
+            .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_000))
+            .await
+            .unwrap(),
+    );
+    let from = handle.pins().await.unwrap()[0].account_id.clone();
+    wait_for(WRITTEN, || {
+        (stored_first_seen(&store) == [seen("s1", "main", 1_000)]).then_some(())
+    })
+    .await;
+    handle.report(rejected(&from, pin, 1_000 + HOUR)).await;
+    wait_for(WRITTEN, || {
+        store.load_routing().unwrap().pins.is_empty().then_some(())
+    })
+    .await;
+    assert_eq!(
+        stored_first_seen(&store),
+        [seen("s1", "main", 1_000)],
+        "the record stands while the landing may still come"
+    );
+    // A minute past the invalidation and no landing: the purge drops the entry, and with it the session.
+    let later = 1_000 + 61_000;
+    now.store(later, Ordering::SeqCst);
+    wait_for(WRITTEN, || {
+        stored_first_seen(&store).is_empty().then_some(())
+    })
+    .await;
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", later))
+        .await
+        .unwrap();
+    assert_eq!(
+        creation_times(&handle).await,
+        vec![standing(
+            "s1",
+            "main",
+            "claude-sonnet-5",
+            Some(later),
+            Some(later)
+        )],
+        "the session that returns after the window starts anew"
+    );
+}
+
+#[tokio::test]
+async fn mains_record_stands_while_main_holds_an_auxiliary_only_pin_alone() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .select(SelectRequest {
+            request_class: Some("title".into()),
+            ..turn_of(&handle, "s1", "main", "claude-haiku-4-5", 1_000)
+        })
+        .await
+        .unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    handle
+        .select(SelectRequest {
+            request_class: Some("subagent".into()),
+            ..turn_of(&handle, "s1", "worker-1", "claude-sonnet-5", 2_000)
+        })
+        .await
+        .unwrap();
+    assert!(
+        handle
+            .pins_standing()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.pin.agent_id == "main" && p.auxiliary_only),
+        "main holds its auxiliary-only pin alone"
+    );
+    assert_eq!(
+        creation_times(&handle).await,
+        vec![
+            standing("s1", "main", "claude-haiku-4-5", Some(1_000), Some(1_000)),
+            standing(
+                "s1",
+                "worker-1",
+                "claude-sonnet-5",
+                Some(2_000),
+                Some(1_000)
+            ),
+        ],
+        "the subagent's standing answers the session's creation time from main's record"
+    );
+}
+
+#[tokio::test]
+async fn a_backlog_holding_a_sessions_end_and_its_return_lands_the_new_instant_and_no_row_the_end_took(
+) {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (handle, hold) = parked_writer(&store, &now).await;
+    // These land ahead of the backlog: s1's one pin, and s2's main and subagent pins.
+    for (session, agent, at) in [
+        ("s1", "main", 1_000),
+        ("s2", "main", 1_000),
+        ("s2", "worker-1", 1_100),
+    ] {
+        handle
+            .select(turn_of(&handle, session, agent, "claude-sonnet-5", at))
+            .await
+            .unwrap();
+    }
+    for index in 0..WRITER_DEPTH - 2 {
+        fill(&handle, index).await;
+    }
+    // Asked behind the fillers, so the loop has handled every one of them.
+    handle.pins().await.unwrap();
+    assert_eq!(
+        handle.writer_status().deferred,
+        1,
+        "the last filler finds the channel full"
+    );
+    now.store(2_000, Ordering::SeqCst);
+    for session in ["s1", "s2"] {
+        handle.release_session("k", session).await.unwrap();
+    }
+    // s1 returns on another model, s2 under the key its main pin's end holds in the backlog.
+    now.store(3_000, Ordering::SeqCst);
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-opus-5", 3_000))
+        .await
+        .unwrap();
+    handle
+        .select(turn_of(&handle, "s2", "main", "claude-sonnet-5", 3_000))
+        .await
+        .unwrap();
+    assert_eq!(
+        handle.writer_status().deferred,
+        7,
+        "the filler, then per session its ends, its return's pin and its return's record, s2's return folding its main pin's end away"
+    );
+    hold.release();
+    wait_for(DRAINED, || {
+        let landed = store.load_routing().unwrap().cooldowns.len();
+        (handle.writer_status().deferred == 0 && landed == WRITER_DEPTH - 2).then_some(())
+    })
+    .await;
+    handle.shutdown().await.unwrap();
+    assert_eq!(
+        stored_first_seen(&store),
+        [seen("s1", "main", 3_000), seen("s2", "main", 3_000)],
+        "each return's instant lands, and the subagent's row leaves with the end whatever order the backlog wrote in"
+    );
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    assert_eq!(
+        creation_times(&handle).await,
+        vec![
+            standing("s1", "main", "claude-opus-5", Some(3_000), Some(3_000)),
+            standing("s2", "main", "claude-sonnet-5", Some(3_000), Some(3_000)),
+        ],
+        "a restart reads each return's instant"
     );
 }
 

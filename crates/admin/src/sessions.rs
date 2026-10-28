@@ -33,6 +33,8 @@ pub(crate) struct Session {
     pub model: Option<String>,
     pub account_id: Option<String>,
     pub epoch: Option<u64>,
+    /// The first placement of the session's main agent under the key and session, kept until the session's last pin
+    /// leaves for good, so a failover, a move or a second pin leaves it alone. Null where main never placed a pin.
     pub created_at: Option<i64>,
     pub last_used_at: Option<i64>,
     pub last_request_at: Option<i64>,
@@ -257,6 +259,19 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     };
     let mut tiers: std::collections::HashMap<String, Option<String>> =
         std::collections::HashMap::new();
+    // Every standing carries its session's creation time, an auxiliary-only one and one past the expiry among them,
+    // so a row reads it whichever pin, if any, the row shows.
+    let created: std::collections::BTreeMap<(String, i64, String), i64> = pins
+        .iter()
+        .filter_map(|standing| {
+            let p = &standing.pin;
+            let generation = *live.get(&p.key_id)?;
+            Some((
+                (p.key_id.clone(), generation, p.session_id.clone()),
+                standing.session_first_seen_at?,
+            ))
+        })
+        .collect();
     // The router decays each pin's copies to the read and reads its runway in the same ask, so the burn priced below
     // and the runway are one instant's, and this crate projects nothing.
     for standing in pins.into_iter().filter(|s| s.pin.last_used_at >= cutoff) {
@@ -339,11 +354,12 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 .and_then(|factor| equivalent.map(|b| b / factor))
             }
         };
+        let created_at = created.get(&key).copied();
         rows.insert(
             key,
             json!({
                 "key_id": p.key_id, "key_generation": generation, "session_id": p.session_id, "agent_id": p.agent_id, "model": p.model, "account_id": p.account_id, "epoch": p.epoch,
-                "created_at": p.created_at, "last_used_at": p.last_used_at, "last_request_at": null, "requests": null, "pinned": true,
+                "created_at": created_at, "last_used_at": p.last_used_at, "last_request_at": null, "requests": null, "pinned": true,
                 "burn": burn, "burn_unit": unit, "burn_equivalent": equivalent, "estimated": estimated, "burn_at": p.burn_at, "runway_ms": standing.runway_ms, "runway_bounded": standing.runway_bounded, "cache_ttl_ms": p.cache_ttl_ms,
                 "speed": standing.speed,
                 "cycle_ms": standing.cycle_ms,
@@ -353,12 +369,14 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     }
     // Every row is keyed by its own session, as the pins are, so a session's requests land on the row of its pin.
     for a in activity {
+        let key = (a.key_id.clone(), a.key_generation, a.session_id.clone());
+        let created_at = created.get(&key).copied();
         let entry = rows
-            .entry((a.key_id.clone(), a.key_generation, a.session_id.clone()))
+            .entry(key)
             .or_insert_with(|| {
                 json!({
                     "key_id": a.key_id, "key_generation": a.key_generation, "session_id": a.session_id, "agent_id": null, "model": a.model, "account_id": null, "epoch": null,
-                    "created_at": null, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
+                    "created_at": created_at, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
                     "burn": null, "burn_unit": null, "burn_equivalent": null, "estimated": false, "burn_at": null, "runway_ms": null, "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
                     "speed": null,
                     "cycle_ms": null,
@@ -388,7 +406,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         let entry = rows.entry(key.clone()).or_insert_with(|| {
             json!({
                 "key_id": key.0, "key_generation": key.1, "session_id": key.2, "agent_id": null, "model": null, "account_id": null, "epoch": null,
-                "created_at": null, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
+                "created_at": created.get(key), "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
                 "burn": null, "burn_unit": null, "burn_equivalent": null, "estimated": false, "burn_at": null, "runway_ms": null, "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
                 "speed": null,
                 "cycle_ms": null,

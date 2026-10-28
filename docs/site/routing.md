@@ -353,7 +353,9 @@ lasts `affinity_ttl_seconds` from its last use: while it is live and its account
 to that account, and stickiness wins over priority even across a later priority change. A pin outlives its account's
 membership and counts under the pool until it moves or expires. A pool with affinity off (`affinity_ttl_seconds` at `0`)
 keeps no pins at all. A keepalive probe holds while `affinity_ttl_seconds` is shorter than its recipe's due time, the
-cache TTL less the lead ([The five states](keepalive.md#the-five-states)).
+cache TTL less the lead ([The five states](keepalive.md#the-five-states)). A session's creation time, the `created_at`
+the Sessions view orders by, is the instant its main agent first placed a pin under the key, kept until the session's
+last pin leaves for good, so a failover, a move or a second pin leaves it alone.
 
 Narrowing then trims what is left. For a model with a week of its own (a canonical id containing `fable`), an account
 whose week or either shared window reads at or above 1 drops outright, unless the pool's overage policy is `allow` and

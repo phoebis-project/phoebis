@@ -5940,14 +5940,26 @@ async fn main_turn(
     request_id: &str,
     at: i64,
 ) -> phoebis_routing::SelectResult {
+    agent_turn(parts, session, "main", "claude-sonnet-5", request_id, at).await
+}
+
+/// `main_turn` for `agent` asking for `model`, a subagent's turn naming main its parent.
+async fn agent_turn(
+    parts: &common::Full,
+    session: &str,
+    agent: &str,
+    model: &str,
+    request_id: &str,
+    at: i64,
+) -> phoebis_routing::SelectResult {
     let snapshot = parts.router.snapshot();
     let key = snapshot
         .key("desktop")
         .expect("the key is in the snapshot")
         .clone();
     let candidates =
-        phoebis_routing::resolve(&snapshot, &key, "claude-sonnet-5", "claude-sonnet-5")
-            .expect("the pool allows the model");
+        phoebis_routing::resolve(&snapshot, &key, model, model).expect("the pool allows the model");
+    let main = agent == "main";
     parts
         .router
         .select(phoebis_routing::SelectRequest {
@@ -5956,10 +5968,10 @@ async fn main_turn(
             seq: 1,
             key_id: "desktop".into(),
             key_generation: common::generation(&parts.store, "desktop"),
-            agent_id: "main".into(),
+            agent_id: agent.into(),
             session_id: session.into(),
-            canonical_model: "claude-sonnet-5".into(),
-            folded_model: "claude-sonnet-5".into(),
+            canonical_model: model.into(),
+            folded_model: model.into(),
             candidates,
             portable: true,
             credit_account: None,
@@ -5970,7 +5982,7 @@ async fn main_turn(
             revision: snapshot.revision,
             probe: false,
             count: false,
-            request_class: Some("main".into()),
+            request_class: Some(if main { "main" } else { "subagent" }.into()),
             context_compacted: false,
             static_hash: None,
             boundaries: std::sync::Arc::from([]),
@@ -5978,12 +5990,12 @@ async fn main_turn(
             entrypoint: None,
             static_boundaries: std::sync::Arc::from([]),
             marker: false,
-            parent_agent_id: None,
+            parent_agent_id: (!main).then(|| "main".into()),
             failed_over: None,
             holds: Vec::new(),
             dialed: false,
             held_out: false,
-            lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+            lane: phoebis_routing::lane_key(model, "standard", "none", "-"),
             fast: false,
             classifier: false,
             body_tokens: 0,
@@ -7379,6 +7391,212 @@ async fn a_session_whose_one_pin_is_mains_auxiliary_one_reads_a_pinless_row_from
         row["agent_contexts"],
         json!([]),
         "the auxiliary-only pin draws no line"
+    );
+}
+
+#[tokio::test]
+async fn a_sessions_creation_time_is_mains_first_placement_across_a_failover_and_a_second_pin_and_each_line_reads_its_own_agents(
+) {
+    use common::{get, json, login, NOW};
+    use phoebis_routing::SelectResult;
+    let parts = slow_down_harness(false).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let selected = |result: SelectResult| match result {
+        SelectResult::Selected(selection) => selection,
+        other => panic!("{other:?}"),
+    };
+    let first = selected(agent_turn(&parts, "s2", "main", "claude-sonnet-5", "r-1", NOW).await);
+    assert_eq!(first.account.id, "business");
+    // A rate limit on the request's account fails the pin over, and the session's next request lands on direct.
+    let snapshot = parts.router.snapshot();
+    let business = snapshot.account("business").unwrap();
+    parts
+        .clock_cell
+        .store(NOW + 500, std::sync::atomic::Ordering::SeqCst);
+    parts
+        .router
+        .report(phoebis_routing::Report::Cooldown {
+            account_id: "business".into(),
+            row: phoebis_store::CooldownRow {
+                account_id: "business".into(),
+                scope: "account".into(),
+                until: NOW + 3_600_000,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: business.incarnation,
+            },
+            pin: first.pin.clone(),
+            incarnation: business.incarnation,
+            lifecycle_generation: business.lifecycle_generation,
+            credential_generation: snapshot.credential_generation("business").unwrap_or(1),
+        })
+        .await;
+    for (agent, model, request_id, at) in [
+        ("main", "claude-sonnet-5", "r-2", NOW + 1_000),
+        // A second pin of main, on another model.
+        ("main", "claude-opus-5", "r-3", NOW + 2_000),
+        ("worker-1", "claude-sonnet-5", "r-4", NOW + 3_000),
+    ] {
+        parts
+            .clock_cell
+            .store(at, std::sync::atomic::Ordering::SeqCst);
+        let landed = selected(agent_turn(&parts, "s2", agent, model, request_id, at).await);
+        assert_eq!(landed.account.id, "direct", "{request_id}");
+    }
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = session_row(&sessions, "s2");
+    assert_eq!(
+        (row["model"].as_str(), row["created_at"].as_i64()),
+        (Some("claude-opus-5"), Some(NOW)),
+        "the row reads main's newest conversation pin and the session's first placement: {row}"
+    );
+    let lines: Vec<(&str, &str, Option<i64>)> = row["agent_contexts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| {
+            (
+                line["agent_id"].as_str().unwrap(),
+                line["model"].as_str().unwrap(),
+                line["created_at"].as_i64(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            ("main", "claude-opus-5", Some(NOW)),
+            ("main", "claude-sonnet-5", Some(NOW)),
+            ("worker-1", "claude-sonnet-5", Some(NOW + 3_000)),
+        ],
+        "each line reads its own agent's first placement"
+    );
+}
+
+#[tokio::test]
+async fn a_pinless_row_whose_main_holds_an_auxiliary_pin_alone_reads_mains_record_as_its_creation_time(
+) {
+    use common::{login, wait_json, NOW};
+    use serde_json::json;
+    let seed = sessions_seed(|generation| {
+        vec![phoebis_store::PinRow {
+            auxiliary_only: true,
+            ..context_pin(
+                "s1",
+                "main",
+                "claude-haiku-4-5",
+                "business",
+                generation,
+                1_000,
+                NOW - 5,
+            )
+        }]
+    })
+    .await;
+    seed.store
+        .insert_first_seen(&phoebis_store::FirstSeenRow {
+            key_id: "desktop".into(),
+            session_id: "s1".into(),
+            agent_id: "main".into(),
+            first_seen_at: NOW - 1_000,
+        })
+        .unwrap();
+    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.ledger.record(spelled_request(
+        "r-title",
+        "s1",
+        "main",
+        "claude-haiku-4-5",
+        NOW - 1_000,
+        common::generation(&parts.store, "desktop"),
+    ));
+    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["session_id"] == "s1" && r["requests"] == 1)
+    })
+    .await;
+    let row = session_row(&sessions, "s1");
+    assert_eq!(
+        (
+            row["pinned"].as_bool(),
+            row["created_at"].as_i64(),
+            row["agent_contexts"].clone()
+        ),
+        (Some(false), Some(NOW - 1_000), json!([])),
+        "the row holds no conversation pin and reads its creation time from main's record: {row}"
+    );
+}
+
+/// Main's auxiliary pin and the subagent's pin carry no record of main, as rows placed before the record existed do.
+#[tokio::test]
+async fn a_session_whose_main_has_no_record_reads_no_creation_time_while_its_subagents_line_reads_its_own(
+) {
+    use common::{login, wait_json, NOW};
+    let seed = sessions_seed(|generation| {
+        vec![
+            phoebis_store::PinRow {
+                auxiliary_only: true,
+                ..context_pin(
+                    "s1",
+                    "main",
+                    "claude-haiku-4-5",
+                    "business",
+                    generation,
+                    1_000,
+                    NOW - 5,
+                )
+            },
+            context_pin(
+                "s1",
+                "worker-1",
+                "claude-opus-5",
+                "direct",
+                generation,
+                25_000,
+                NOW - 50,
+            ),
+        ]
+    })
+    .await;
+    seed.store
+        .insert_first_seen(&phoebis_store::FirstSeenRow {
+            key_id: "desktop".into(),
+            session_id: "s1".into(),
+            agent_id: "worker-1".into(),
+            first_seen_at: NOW - 2_000,
+        })
+        .unwrap();
+    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["session_id"] == "s1")
+    })
+    .await;
+    let row = session_row(&sessions, "s1");
+    assert_eq!(
+        (
+            row["agent_id"].as_str(),
+            row["created_at"].clone(),
+            row["agent_contexts"][0]["agent_id"].as_str(),
+            row["agent_contexts"][0]["created_at"].as_i64()
+        ),
+        (
+            Some("worker-1"),
+            serde_json::Value::Null,
+            Some("worker-1"),
+            Some(NOW - 2_000)
+        ),
+        "the row reads the subagent's pin and no creation time, and the subagent's line its own record: {row}"
     );
 }
 

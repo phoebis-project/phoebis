@@ -6,9 +6,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use phoebis_store::{
-    AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CreditsRow, OverageRow,
-    PinBurn, PinKey, PinRow, PoolMember, PoolRow, RekeyWrite, ResolutionRow, RoutingLoad,
-    StateCause, WindowRow,
+    AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CreditsRow, FirstSeenRow,
+    OverageRow, PinBurn, PinKey, PinRow, PoolMember, PoolRow, RekeyWrite, ResolutionRow,
+    RoutingLoad, StateCause, WindowRow,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -349,6 +349,12 @@ pub enum StateWrite {
     DeleteAffinity(Vec<(String, String)>),
     DeleteCooldown(String, String),
     DeletePin(PinKey),
+    /// A pin that leaves for good (an expiry, a release, the purge): its row, and where memory dropped the session's
+    /// records with this pin (the session's last), the end's instant, under which the store deletes the session's
+    /// first-seen rows written at or before it, whatever a backlog's write order. A replacement's removal writes
+    /// `DeletePin`, which keeps them.
+    EndPin(PinKey, Option<i64>),
+    InsertFirstSeen(FirstSeenRow),
     /// `before` is `now` less the longest `shed_dwell_seconds` of the snapshot's pools, computed at the purge tick.
     PurgeShedRounds {
         before: i64,
@@ -1252,6 +1258,10 @@ pub struct RoutingState {
     cooldowns: HashMap<(String, String), CooldownRow>,
     /// The poll's newest extra-usage state per account, loaded at startup from the rows the last run persisted.
     credits: HashMap<String, CreditsState>,
+    /// Each agent's first placement by key id and session id, then agent id. It outlives `take_pin`, since a move, a
+    /// failover and a rekey take a session's one pin before its new row lands, and leaves once the session's last pin
+    /// leaves for good.
+    first_seen: HashMap<(String, String), BTreeMap<String, i64>>,
     /// Each account's last funding ordinal, which every mark and every claim that makes an entry takes one past. It
     /// outlives the entries, so an entry made after another's clearing never takes an ordinal a success still in
     /// flight was dispatched under. Memory only: a restart drops every in-flight leg with the router, so the count
@@ -1321,6 +1331,13 @@ impl RoutingState {
         for resolution in &load.resolutions {
             affinity_map.learn_resolution(&resolution.spelling, &resolution.dated_id);
         }
+        let mut first_seen: HashMap<(String, String), BTreeMap<String, i64>> = HashMap::new();
+        for row in load.first_seen {
+            first_seen
+                .entry((row.key_id, row.session_id))
+                .or_default()
+                .insert(row.agent_id, row.first_seen_at);
+        }
         let mut samples: HashMap<String, UtilizationSample> = HashMap::new();
         for row in load.windows {
             let sample = samples.entry(row.account_id).or_default();
@@ -1360,6 +1377,7 @@ impl RoutingState {
                     )
                 })
                 .collect(),
+            first_seen,
             funding_ordinals: HashMap::new(),
             funding_retries: HashMap::new(),
             head_marks: HashMap::new(),
@@ -1542,6 +1560,48 @@ impl RoutingState {
             ..key.clone()
         };
         self.take_pin(&key)
+    }
+
+    /// Records the agent's first placement under the key and session where no record stands, answering the row to
+    /// write, `None` where one stands (a failover, a move or a second pin of the agent).
+    pub(crate) fn note_first_seen(&mut self, pin: &PinRow, now: i64) -> Option<FirstSeenRow> {
+        let agents = self
+            .first_seen
+            .entry((pin.key_id.clone(), pin.session_id.clone()))
+            .or_default();
+        if agents.contains_key(&pin.agent_id) {
+            return None;
+        }
+        agents.insert(pin.agent_id.clone(), now);
+        Some(FirstSeenRow {
+            key_id: pin.key_id.clone(),
+            session_id: pin.session_id.clone(),
+            agent_id: pin.agent_id.clone(),
+            first_seen_at: now,
+        })
+    }
+
+    /// The agent's first placement under the key and session, `None` where no record stands.
+    pub fn first_seen(&self, key_id: &str, session_id: &str, agent_id: &str) -> Option<i64> {
+        self.first_seen
+            .get(&(key_id.to_string(), session_id.to_string()))?
+            .get(agent_id)
+            .copied()
+    }
+
+    /// Drops the session's records where no pin of the session remains and answers whether it did, so the caller's
+    /// `EndPin` carries the end's instant. Called by the removals that end a pin for good, never inside a
+    /// replacement, whose new row reaches `put_pin` after the old one left.
+    pub(crate) fn end_first_seen(&mut self, key_id: &str, session_id: &str) -> bool {
+        let held = self
+            .pins
+            .keys()
+            .any(|key| key.key_id == key_id && key.session_id == session_id);
+        !held
+            && self
+                .first_seen
+                .remove(&(key_id.to_string(), session_id.to_string()))
+                .is_some()
     }
 
     /// The one way a pin leaves the map, by a move, a fail-over, an expiry, a release or the purge. The row leaves
