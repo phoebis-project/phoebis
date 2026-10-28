@@ -13620,6 +13620,51 @@ m.unmount();
     });
   }
   {
+    // A custom range from a second before the story's late request (the seed `req_7a3f0c26-d81` in
+    // `web/src/mock/requests.ts`) to the clock fits one page of 100, so the list answers no next cursor and every row
+    // of the range is the list's. The late request arrived inside the range and lands after the list's read, below
+    // its last row, so the poll that brings it draws it there in the fresh tint rather than leaving it to Next, and
+    // the poll after it brings it no more.
+    const LATE = 'req_7a3f0c26-d81';
+    const lateAt = Date.parse(requests.find((r) => r.id === LATE)?.at ?? '');
+    const from = isoAt(lateAt - 1_000);
+    const end = isoAt(CLOCK_ORIGIN);
+    const page = await mount(`/requests?rows=100&from=${from}&to=${end}`, { now: CLOCK_ORIGIN });
+    const list = await api.listRequests({ from, limit: 100, to: end });
+    await chooseInterval(page, '5 s');
+    const polls = [];
+    const recorded = recordedCalls('listRequests');
+    try {
+      for (let n = 0; n < 3; n += 1) {
+        const before = recorded.calls.length;
+        tick(5_000);
+        await page.settle();
+        const calls = recorded.calls.slice(before);
+        const [sent] = calls[0]?.args ?? [];
+        const drawn = requestRows(page).map(idOf);
+        const tinted = [...page.container.querySelectorAll('.requests__table tbody tr.is-new')].map(idOf);
+        polls.push({ after: sent?.landedAfter, answered: calls[0]?.answer?.requests.map((r) => r.id) ?? null, calls: calls.length, drawn, fixed: sent?.fixedEnd ?? null, tinted, to: sent?.to ?? null });
+      }
+    } finally {
+      recorded.restore();
+    }
+    page.unmount();
+    const landing = polls.findIndex((p) => p.answered?.includes(LATE));
+    const [landed, next] = [polls[landing], polls[landing + 1]];
+    const answered = polls.flatMap((p) => p.answered ?? []);
+    results.push({
+      name: "/requests a custom range whose list answers no next cursor draws a request that lands below its last row at the poll that brings it, as the table's last row in the accent tint, and once",
+      ok:
+        list.nextCursor === null && !list.requests.some((r) => r.id === LATE) && lateAt < Date.parse(list.requests.at(-1)?.at ?? '') &&
+        polls.every((p) => p.calls === 1 && p.to === end && p.fixed === true && p.answered !== null) &&
+        landed !== undefined && next !== undefined && polls.slice(0, landing).every((p) => !p.drawn.includes(LATE)) &&
+        landed.drawn.filter((id) => id === LATE).length === 1 && landed.drawn.indexOf(LATE) === landed.drawn.length - 1 && landed.tinted.includes(LATE) &&
+        next.drawn.filter((id) => id === LATE).length === 1 && !next.tinted.includes(LATE) && next.answered.every((id) => landed.drawn.includes(id)) &&
+        new Set(answered).size === answered.length,
+      missing: [`list ${list.requests.length} rows, next cursor ${list.nextCursor}, late listed ${list.requests.some((r) => r.id === LATE)}, late at ${requests.find((r) => r.id === LATE)?.at}, last row at ${list.requests.at(-1)?.at}`, ...polls.map((p) => JSON.stringify({ ...p, drawn: p.drawn.length, late: p.drawn.indexOf(LATE), tinted: p.tinted.includes(LATE) }))],
+    });
+  }
+  {
     // A chip, the search or a view control leaves the range where it stood, so a link capped at the clock reads on at
     // the interval however long after landing the edit comes. The open interval menu holds the reads while the clock
     // moves two minutes, past the minute of grace.

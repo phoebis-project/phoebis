@@ -333,6 +333,33 @@ test("a custom range's poll over a stale list with no next cursor leaves a late 
   assert.deepEqual([f.last().rows.map(byId), [...f.last().fresh]], [rows.slice(0, 26).map(byId), []], 'row 26 stays for Next');
 });
 
+test("a custom range's poll that withholds a late row under a stale list keeps its stamp, so the poll after the list's return lands the row", async () => {
+  // The list was read through stamp 7. Row 0, above it, was written at 8 and row 26, below its last row, at 9, and a
+  // watermarked read answers only what was written after the stamp it sends, so a poll that passed 9 while row 26 was
+  // withheld would never read the row again.
+  const clock = frozen();
+  const { rows } = route(27);
+  const sent = [];
+  const read = async (_cursor, _to, landedAfter) => {
+    sent.push(landedAfter);
+    if (landedAfter < 8) return { landedThrough: 8, nextCursor: null, rows: [rows[0]] };
+    if (landedAfter < 9) return { landedThrough: 9, nextCursor: null, rows: [rows[26]] };
+    return { landedThrough: 9, nextCursor: null, rows: [] };
+  };
+  const f = follow({ fixedEnd: true, list: { landedThrough: 7, nextCursor: null, rows: rows.slice(1, 26) }, read });
+  act(() => clock.tick(5_000));
+  await settled();
+  f.render({ stale: true });
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual([f.last().rows.map(byId), [...f.last().fresh]], [rows.slice(0, 26).map(byId), []], 'the poll under the stale list withholds row 26');
+  f.render({ stale: false });
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(sent, [7, 8, 8], 'the poll after the list returns reads from the stamp the withholding poll kept');
+  assert.deepEqual([f.last().rows.map(byId), [...f.last().fresh]], [rows.map(byId), ['row_026']], 'the poll after the list returns lands row 26 below row 25, tinted');
+});
+
 /**
  * A watermarked reader for a custom range whose list read failed: the first poll's page stands in with rows 0 to 24 of
  * `route(26)`, the stamp 7 and `cursor` as its next cursor, the read at 7 answers row 25 alone, a second older than row

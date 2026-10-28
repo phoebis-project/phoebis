@@ -94,16 +94,26 @@ export function useFollow<R>(input: {
       // range by it walks one fixed range. A reader under a watermark may read to the router's clock instead, and the
       // instant still dates the poll's overrun and stand-in.
       const to = clock.now();
-      const page = (cursor: string | undefined) => (failures.failing ? quietly(() => reader(cursor, to, landedAfter)) : reader(cursor, to, landedAfter));
       const last = start?.[start.length - 1];
       const below = (r: R) => last !== undefined && order(r, last) > 0;
       // A stand-in is the list while it stands, so its page's cursor says whether the range holds rows past those
-      // shown. A stale list hands none, since its cursor is another query's.
+      // shown. A stale list hands none, since its cursor is another query's. On a custom range the reader notes a row
+      // the poll withholds below the rows shown while the ref holds no list (a stale or a failed read) and no
+      // stand-in, since such a poll lands nothing below and the stamp must not pass the row.
       const tail = standing === null ? list?.nextCursor : standing.cursor;
+      const lands = fixedEnd && tail === null;
+      let withheld = false;
+      const page = (cursor: string | undefined) => {
+        const answer = failures.failing ? quietly(() => reader(cursor, to, landedAfter)) : reader(cursor, to, landedAfter);
+        return answer.then((p) => {
+          if (fixedEnd && list === null && standing === null && p.rows.some(below)) withheld = true;
+          return p;
+        });
+      };
       // Before the list answers there is no row to stop at, so the poll reads the newest page alone and keeps the
       // cursor past it for the answer that stands in for a list read that failed.
       const pages: Promise<{ cursor?: string | null; landedThrough?: number; overrun: string | null; rows: R[] }> =
-        start === null ? page(undefined).then((p) => ({ cursor: p.nextCursor, landedThrough: p.landedThrough, overrun: null, rows: p.rows })) : followPages(page, new Set(start.map(identify)), identify, below, landedAfter === undefined, () => armed.alive, fixedEnd && tail === null);
+        start === null ? page(undefined).then((p) => ({ cursor: p.nextCursor, landedThrough: p.landedThrough, overrun: null, rows: p.rows })) : followPages(page, new Set(start.map(identify)), identify, below, landedAfter === undefined, () => armed.alive, lands);
       pages.then(
         (polledPages) => {
           if (!armed.alive) return;
@@ -129,14 +139,14 @@ export function useFollow<R>(input: {
           if (nth < newest) {
             // A later poll answered first and tinted what it brought. This older answer finds those rows known, so it
             // merges its rows and leaves the tint for a later poll to take away.
-            setFollowed((f) => ({ for: polled, fresh: f !== null && f.for === polled ? f.fresh : new Set(), landedThrough: polledPages.landedThrough ?? landedAfter, overrun: next, rows, standIn: current.standIn }));
+            setFollowed((f) => ({ for: polled, fresh: f !== null && f.for === polled ? f.fresh : new Set(), landedThrough: withheld ? landedAfter : (polledPages.landedThrough ?? landedAfter), overrun: next, rows, standIn: current.standIn }));
             return;
           }
           newest = nth;
           const brought = new Set(polledPages.rows.map(identify).filter((k) => !known.has(k)));
           const fresh = kept !== null && kept.for === polled ? new Set([...kept.rows, ...brought]) : brought;
           kept = returned ? { for: polled, rows: brought } : null;
-          setFollowed({ for: polled, fresh, landedThrough: polledPages.landedThrough ?? landedAfter, overrun: next, rows, standIn: current.standIn });
+          setFollowed({ for: polled, fresh, landedThrough: withheld ? landedAfter : (polledPages.landedThrough ?? landedAfter), overrun: next, rows, standIn: current.standIn });
         },
         (err: unknown) => {
           if (!armed.alive) return;
