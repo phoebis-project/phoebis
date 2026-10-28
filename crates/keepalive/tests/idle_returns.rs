@@ -497,6 +497,26 @@ async fn a_retention_of_0_keeps_every_day() {
     );
 }
 
+/// Under a retention of two days, a window reaches its last bucket on the rig's second UTC day and stays in it until it
+/// returns on the fourth, after the roll took that day: the return leaves with its reach and counts nowhere, so no day
+/// answers a return above its reach.
+#[tokio::test]
+async fn a_return_whose_reach_day_left_at_the_roll_counts_nothing() {
+    let mut r = rig(retained_for(2)).await;
+    let start = idle_after_request(&mut r).await;
+    attend_to(&mut r, start + 32 * 60 * MINUTE + MINUTE);
+    r.step().await;
+    assert_eq!(
+        by_day(&r, "main").into_keys().collect::<Vec<_>>(),
+        vec![1],
+        "every bucket reached on the second day"
+    );
+    attend_to(&mut r, 3 * DAY + MINUTE);
+    r.observe_with("main", &next_turn()).await;
+    assert_eq!(by_day(&r, "main").get(&1), None, "the reach's day left");
+    assert_eq!(returned(&r), [0; 10], "no return counted anywhere");
+}
+
 #[tokio::test]
 async fn a_request_at_its_prompts_instant_starts_the_next_window() {
     let mut r = rig(RigSpec::default()).await;

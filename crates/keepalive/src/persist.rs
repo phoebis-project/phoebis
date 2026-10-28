@@ -136,8 +136,9 @@ pub(crate) struct PersistedEpisode {
     pub anchor: Option<PersistedAnchor>,
     pub prompt_at: Option<i64>,
     pub pool_key: String,
-    /// Absent from a row saved before windows carried one, which loads as `None`, so that window's return counts on
-    /// the day of the request that ends it.
+    /// Absent from a row saved before windows carried one, which loads as `None`. That window's reach was counted
+    /// before the counters were kept by day, so it is held under no day, and its return counts nothing unless the
+    /// request that ends it raises a bucket.
     #[serde(default)]
     pub bucket_day: Option<i64>,
 }

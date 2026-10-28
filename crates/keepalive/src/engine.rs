@@ -337,7 +337,8 @@ pub(crate) struct IdleEpisode {
     pub prompt_at: Option<i64>,
     pub pool_key: String,
     /// The UTC day the episode's highest counted bucket was reached, where its return counts, so a day never
-    /// answers a return without its reach. `None` until a bucket is counted.
+    /// answers a return without its reach. `None` until a bucket is counted, and on a window restored from a row saved
+    /// without it, whose reach is held under no day, so its return counts nothing unless the request raises a bucket.
     pub bucket_day: Option<i64>,
 }
 
@@ -1470,7 +1471,7 @@ impl Engine {
         self.lock().reasons.clone()
     }
 
-    /// The counters per pool id and UTC day, for the flush and the tests.
+    /// The counters per pool id and UTC day, read by the tests.
     pub fn idle_returns(&self) -> BTreeMap<String, BTreeMap<i64, IdleReturns>> {
         self.lock().idle_returns.clone()
     }
@@ -2293,8 +2294,20 @@ impl Inner {
             .max(episode.bucket.unwrap_or(0));
         let today = utc_day(now);
         let raised = episode.bucket.is_none_or(|counted| bucket > counted);
-        let returned = continues_prefix(episode.anchor.as_ref(), boundaries);
-        if raised || returned {
+        // The return's bucket is the highest the window counted, so the return counts on the day that bucket was
+        // reached (today where this request raised it), and no day answers a return without its reach. Where that
+        // day has left at the roll, or a window restored from a row saved without it holds its reach under no day,
+        // the return leaves with its reach and counts nothing.
+        let retention = i64::from(self.timing.idle_return_retention_days);
+        let return_day = if raised {
+            Some(today)
+        } else {
+            episode
+                .bucket_day
+                .filter(|day| retention == 0 || *day >= self.idle_returns_day - (retention - 1))
+        }
+        .filter(|_| continues_prefix(episode.anchor.as_ref(), boundaries));
+        if raised || return_day.is_some() {
             let days = self
                 .idle_returns
                 .entry(episode.pool_key.clone())
@@ -2302,20 +2315,12 @@ impl Inner {
             if raised {
                 raise_reached(days.entry(today).or_default(), episode.bucket, bucket);
             }
-            if returned {
-                // The return's bucket is the highest the window counted, so the return counts on the day that bucket
-                // was reached (today where this request raised it), and no day answers a return without its reach. A
-                // window restored from a row saved without the day counts today.
-                let day = if raised {
-                    today
-                } else {
-                    episode.bucket_day.unwrap_or(today)
-                };
+            if let Some(day) = return_day {
                 days.entry(day).or_default().buckets[bucket].returned += 1;
             }
         }
         self.touch_agent(key, MAIN_AGENT);
-        if raised || returned {
+        if raised || return_day.is_some() {
             self.touch_pool(&episode.pool_key);
         }
     }

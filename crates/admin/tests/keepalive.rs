@@ -1247,7 +1247,7 @@ async fn a_return_after_midnight_counts_on_its_reachs_day_so_a_range_from_the_ne
         [1, 1, 1, 1, 1, 1, 1, 1, 0, 0],
         [0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
     );
-    // Six days after the return's day, the last 7 days still start on the reach's day.
+    // Five days after the return's day, the last 7 days still start on the reach's day.
     parts.clock_cell.store(
         midnight + 5 * DAY + MINUTE,
         std::sync::atomic::Ordering::SeqCst,

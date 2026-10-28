@@ -558,6 +558,58 @@ async fn an_open_windows_bucket_day_round_trips() {
     );
 }
 
+/// A saved open window whose row carries no day for its reached bucket loads, and its return, which raises no bucket,
+/// counts nothing: the reach it would answer beside is held under no day.
+#[tokio::test]
+async fn a_return_of_a_window_loaded_without_its_buckets_day_counts_nothing() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.state("main", "idle");
+    r.advance_attended(6 * MINUTE);
+    r.step().await;
+    r.engine.flush_persisted().await;
+    let conn = registry(&r);
+    let payload: String = conn
+        .query_row(
+            "SELECT payload FROM keepalive_agents WHERE agent_id = 'main'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    payload["idle_episode"]
+        .as_object_mut()
+        .unwrap()
+        .remove("bucket_day");
+    let rewritten = conn
+        .execute(
+            "UPDATE keepalive_agents SET payload = ?1 WHERE agent_id = 'main'",
+            [payload.to_string()],
+        )
+        .unwrap();
+    assert_eq!(rewritten, 1);
+    let second = r.restart().await;
+    second.load_persisted().await;
+    let (static_hash, boundaries) = chain_of(BODY);
+    second.observe(r.observed_with(
+        "back",
+        "main",
+        None,
+        Some(&static_hash),
+        &[&boundaries[0], "next"],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    let returned: Vec<u64> = second.idle_returns()["main"]
+        .values()
+        .flat_map(|counters| counters.buckets.iter().map(|bucket| bucket.returned))
+        .collect();
+    assert!(
+        returned.iter().all(|count| *count == 0),
+        "no return counted: {returned:?}"
+    );
+}
+
 /// A guard: an agent row saved before the timing carried the idle-return retention loads with its agent, since the
 /// member reads its default.
 #[tokio::test]
