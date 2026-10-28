@@ -16,7 +16,6 @@ import subprocess
 import sys
 import tempfile
 
-DEFAULT_CAPTURE = pathlib.Path.home() / "workspace/cc-capture-2026-09-13/cc-capture"
 FIXTURES = pathlib.Path("crates/profile/fixtures")
 
 # Bound on the unified diff --check prints per body. A whole Messages body runs to thousands of pretty-printed lines.
@@ -609,6 +608,7 @@ def _self_test() -> None:
     _self_test_build_reads_control()
     _self_test_build_reports_partial_control()
     _self_test_main_write_report()
+    _self_test_main_needs_a_capture_dir()
     _self_test_build_count_redacts()
     _self_test_build_count_stops_on_differing_bodies()
 
@@ -1728,6 +1728,42 @@ def _self_test_main_write_report() -> None:
     print("self-test passed: the fixture write tells kept control fixtures from ones it could not write")
 
 
+def _self_test_main_needs_a_capture_dir() -> None:
+    """Each mode that reads the capture stops at the argument parse when no capture directory is named, and the count
+    mode, which reads the directory --count names, runs without one."""
+    script = os.path.abspath(__file__)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        tree = root / "tree"
+        (tree / FIXTURES).mkdir(parents=True)
+        recording = root / "control"
+        recording.mkdir()
+        # An empty home keeps a path under the operator's home directory from feeding a run a real capture.
+        env = {**os.environ, "HOME": str(root)}
+        modes = ([], ["--check"], ["--control", str(recording)], ["--through-router"], ["--check", "--through-router"])
+        for args in modes:
+            run = subprocess.run(
+                [sys.executable, "-I", script, *args], cwd=tree, env=env, capture_output=True, text=True
+            )
+            if run.returncode != 2 or "capture_dir is required" not in run.stderr:
+                raise AssertionError(
+                    f"{args} without a capture directory exited {run.returncode}: {run.stdout + run.stderr!r}"
+                )
+        count = _count_capture(root / "count", _TEST_SESSION_ID)
+        run = subprocess.run(
+            [sys.executable, "-I", script, "--count", str(count), "--check"],
+            cwd=tree,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    if run.returncode != 1 or "count fixtures missing:" not in run.stdout:
+        raise AssertionError(
+            f"--count --check without a capture directory exited {run.returncode}: {run.stdout + run.stderr!r}"
+        )
+    print("self-test passed: a mode that reads the capture needs a capture directory and --count runs without one")
+
+
 def _self_test_build_count_redacts() -> None:
     """The written count body carries the placeholders in place of the capture's ids, and each head declares the
     length of the body written. The body passes through the re-sign step, which leaves one without a stamp as the
@@ -2290,7 +2326,9 @@ def check_count(capture_dir: pathlib.Path, committed_dir: pathlib.Path = FIXTURE
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "capture_dir", nargs="?", default=str(DEFAULT_CAPTURE), help="capture directory to build fixtures from"
+        "capture_dir",
+        nargs="?",
+        help="capture directory to build fixtures from or --check, required except with --count or --self-test",
     )
     parser.add_argument(
         "--check", action="store_true", help="diff the capture's fixtures against crates/profile/fixtures instead"
@@ -2333,6 +2371,8 @@ def main() -> int:
         build_count(count_src, FIXTURES)
         print("count fixtures written:", sorted(COUNT_FIXTURES))
         return 0
+    if args.capture_dir is None:
+        parser.error("capture_dir is required except with --count or --self-test")
     src = pathlib.Path(args.capture_dir).expanduser()
     control = pathlib.Path(args.control).expanduser() if args.control else None
     if args.check:
