@@ -1094,8 +1094,8 @@ pub fn request_from_fixture(head: &[u8], body: &[u8], key: &str) -> Request<Body
     }
     let mut req = req.body(Body::from(body.to_vec())).unwrap();
     req.extensions_mut().insert(original);
-    // The recorded heads predate the hint gate, and the client now sends the class header on every inference
-    // request, so a fixture request carries it as the client would.
+    // The client sends the class header on every inference request, so the harness adds it to a recorded head
+    // that lacks it.
     let claude_code = req
         .headers()
         .get("user-agent")
