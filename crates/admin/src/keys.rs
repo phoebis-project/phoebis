@@ -32,8 +32,10 @@ use crate::AdminState;
 const ACTOR: &str = "admin";
 const STALE_EDIT: &str = "the key changed while it was being edited, so reload and try again";
 
-/// The key's fields. On a create `id`, `label` and `pool_id` are required. On an edit any subset but `id`.
+/// The key's fields. On a create `id`, `label` and `pool_id` are required. On an edit any subset but `id`. An unknown
+/// field in the body is refused.
 #[derive(serde::Deserialize, Default, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct KeyInput {
     /// `[a-z0-9][a-z0-9-]{0,63}`.
     #[serde(default)]
@@ -424,7 +426,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     request_body(content = KeyInput, content_type = "application/json"),
     responses(
         (status = 201, description = "The created key.", body = KeyCreated),
-        (status = 400, description = "- `body must be a JSON object`\n- `id, label, and pool_id are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`\n- `guardrails applies on edit`: a new key starts with none of its own", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `id, label, and pool_id are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`\n- `guardrails applies on edit`: a new key starts with none of its own", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "`pool not found`", body = ErrorBody, example = json!({"error": "pool not found"})),
         (status = 409, description = "`a key with this id exists`", body = ErrorBody, example = json!({"error": "a key with this id exists"})),
         (status = 500, response = StorageFailure),
@@ -523,7 +525,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     request_body(content = KeyInput, content_type = "application/json"),
     responses(
         (status = 200, description = "The key's fields, the same shape as `POST /admin/keys` without `secret`.", body = Key),
-        (status = 400, description = "- `body must be a JSON object`\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`\n- `guardrails lists {id} twice`\n- `key {id} would hold more than 64 guardrails`, with nothing written, also where a `pool_id` change alone moves the key under a pool whose guardrails take it over the bound", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`\n- `guardrails lists {id} twice`\n- `key {id} would hold more than 64 guardrails`, with nothing written, also where a `pool_id` change alone moves the key under a pool whose guardrails take it over the bound", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "- `key not found`\n- `pool not found`\n- `guardrail {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "key not found"})),
         // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
         // attribute after it fails to parse.

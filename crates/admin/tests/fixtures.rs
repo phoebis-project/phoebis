@@ -2107,9 +2107,15 @@ async fn every_route_is_captured_and_holds_its_shape() {
             .map(|k| k.to_string())
             .collect::<std::collections::BTreeSet<_>>()
     };
+    // The guardrail block's record is try-sent, so the capture waits for it beside the kinds.
     let log = wait_json(app, &log_route, &cookie, |log| {
         kinds_of(log, "decision") == named(phoebis_ledger::DECISION_KINDS)
             && kinds_of(log, "event") == named(phoebis_ledger::EVENT_KINDS)
+            && log["rows"].as_array().unwrap().iter().any(|row| {
+                row["type"] == "decision"
+                    && row["kind"] == "refused"
+                    && row["refusal"]["kind"] == "guardrail"
+            })
     })
     .await;
     assert!(
@@ -2680,6 +2686,36 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
         .await
         .unwrap();
     assert!(matches!(refused.result, SelectResult::Refused(_)));
+
+    // The `r-blocked` request row sits 0.6 s before the captured hour, and a refusal's `received_at` is its `at`, so
+    // the block's record takes the hour's first instant to land in the log.
+    parts.router.record_refusal(
+        phoebis_routing::RefusedRequest {
+            request_id: "r-blocked".into(),
+            attempt: 1,
+            seq: 1,
+            at: hour_ago,
+            key_id: "desktop".into(),
+            key_generation,
+            agent_id: "main".into(),
+            parent_agent_id: None,
+            session_id: None,
+            request_class: Some("auxiliary".into()),
+            canonical_model: "claude-sonnet-5-5".into(),
+            lane: Default::default(),
+            flags: Default::default(),
+            chain: Default::default(),
+            attempted: Vec::new(),
+            holds: Vec::new(),
+            client: ClientClass::ClaudeCode,
+            client_version: Some("2.1.310".into()),
+        },
+        phoebis_routing::RefusalFacts {
+            kind: "guardrail",
+            code: "guardrail_blocked",
+            reason: "Large auxiliary requests".into(),
+        },
+    );
 
     // The kinds no report or route of this harness writes, each as its writer builds it: the harness's router prices
     // no burn, so it marks no pin, books no reservation and slows no account, and the round, its mark leaving with the

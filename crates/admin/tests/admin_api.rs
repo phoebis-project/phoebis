@@ -8416,6 +8416,83 @@ async fn an_array_body_is_refused_as_no_object_on_the_pool_and_key_routes() {
     );
 }
 
+/// A key body naming a member the input does not read is refused whole with the pool routes' object sentence, so a
+/// misspelled field never saves the rest of the body.
+#[tokio::test]
+async fn the_key_create_and_edit_refuse_an_unknown_member_and_take_a_known_body() {
+    use common::{get, json, login, patch, post};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let pool = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","members":[{"account_id":"business","priority":0}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(pool.status(), 201);
+    let keys = json(get(&app, "/admin/keys", Some(&cookie)).await).await;
+    let refused = post(
+        &app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main","labels":"misspelled"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let status = refused.status().as_u16();
+    assert_eq!(
+        (status, json(refused).await["error"].clone()),
+        (400, serde_json::json!("body must be a JSON object")),
+        "the create refuses the unknown member"
+    );
+    assert_eq!(
+        json(get(&app, "/admin/keys", Some(&cookie)).await).await,
+        keys,
+        "the refused create wrote no key"
+    );
+    let created = post(
+        &app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201, "a known body creates the key");
+    let refused = patch(
+        &app,
+        "/admin/keys/desktop",
+        r#"{"label":"Renamed","labels":"misspelled"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let status = refused.status().as_u16();
+    assert_eq!(
+        (status, json(refused).await["error"].clone()),
+        (400, serde_json::json!("body must be a JSON object")),
+        "the edit refuses the unknown member"
+    );
+    let listed = json(get(&app, "/admin/keys", Some(&cookie)).await).await;
+    let desktop = listed["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|key| key["id"] == "desktop")
+        .expect("the created key is listed");
+    assert_eq!(
+        desktop["label"], "Desktop",
+        "the refused edit wrote no label"
+    );
+    let edited = patch(
+        &app,
+        "/admin/keys/desktop",
+        r#"{"label":"Renamed"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(edited.status(), 200, "a known body edits the key");
+    assert_eq!(json(edited).await["label"], "Renamed");
+}
+
 #[tokio::test]
 async fn an_array_body_is_refused_as_no_object_on_the_account_create_and_edit() {
     use common::{get, json, login, patch, post};

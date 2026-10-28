@@ -7608,6 +7608,74 @@ fn an_absent_kinds_lists_every_kind_and_kinds_names_exactly_its_set() {
     );
 }
 
+/// The summary keeps a refusal's words as the router wrote them, so a guardrail's block lists under `refused` with
+/// its own kind and code.
+#[test]
+fn a_guardrails_refusal_reads_back_through_the_routing_log_with_its_kind_and_code() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let snapshot = phoebis_routing::RegistrySnapshot::from_load(
+        phoebis_store::RegistryLoad::default(),
+        [0; 32],
+        0,
+        1,
+    );
+    let (record, summary) = phoebis_routing::DecisionRecord::refused(
+        &phoebis_routing::RefusedRequest {
+            request_id: "r-blocked".into(),
+            attempt: 1,
+            seq: 1,
+            at: 100,
+            key_id: "desktop".into(),
+            key_generation: 0,
+            agent_id: "main".into(),
+            parent_agent_id: None,
+            session_id: Some("s1".into()),
+            request_class: Some("auxiliary".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            lane: Default::default(),
+            flags: Default::default(),
+            chain: Default::default(),
+            attempted: Vec::new(),
+            holds: Vec::new(),
+            client: phoebis_routing::ClientClass::ClaudeCode,
+            client_version: Some("2.1.310".into()),
+        },
+        &snapshot,
+        &phoebis_routing::RefusalFacts {
+            kind: "guardrail",
+            code: "guardrail_blocked",
+            reason: "Large auxiliary requests".into(),
+        },
+    );
+    put_decision(&db, &DecisionRow::of(summary, record, 100));
+    let refused = phoebis_ledger::RoutingLogFilter {
+        kinds: Some(vec!["refused".into()]),
+        ..log_filter()
+    };
+    let page = db
+        .read_blocking(|c| phoebis_ledger::list_routing_log(c, &refused, None, 25))
+        .unwrap();
+    let [phoebis_ledger::RoutingLogRow::Decision(row)] = page.rows.as_slice() else {
+        panic!("{:?}", page.rows)
+    };
+    assert_eq!(
+        (
+            row.request_id.as_str(),
+            row.kind.as_str(),
+            &row.summary["refusal"]
+        ),
+        (
+            "r-blocked",
+            "refused",
+            &serde_json::json!({
+                "kind": "guardrail",
+                "code": "guardrail_blocked",
+                "reason": "Large auxiliary requests"
+            })
+        )
+    );
+}
+
 #[test]
 fn counts_answer_under_a_request_filter_alone() {
     let db = LedgerDb::open_in_memory().unwrap();

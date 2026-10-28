@@ -179,11 +179,13 @@ the mode: the row's menu offers "Switch to enforce", and the dialog's Mode field
 on, a match is refused before any account is selected.
 
 A block is a refusal the router issued before any account was asked, and the ledger flags every such refusal on its
-row, a guardrail's beside the client's drift, a key's refusal and a malformed body. The hourly figures file a flagged
-request under a refusals map by code and under nothing else, so no request count, outcome, cache figure, latency or
-error rate carries it. The refused requests show where they are asked for: the Dashboard's "Refused, 24h" tile, the
-Analytics Traffic table's "Refused" column and its "Refusals by code" card, the Guardrails card by guardrail, and the
-Requests view, which lists every request the router answered ([Statistics](statistics.md#refused-requests)).
+row, a guardrail's beside the client's drift, a key's refusal and a malformed body. A block also writes a `refused`
+decision row beside its request row, with the kind `guardrail`, the code `guardrail_blocked` and the guardrail's name,
+so the routing log shows it ([Routing log](console.md#routing-log)). The hourly figures file a flagged request under a
+refusals map by code and under nothing else, so no request count, outcome, cache figure, latency or error rate carries
+it. The refused requests show where they are asked for: the Dashboard's "Refused, 24h" tile, the Analytics Traffic
+table's "Refused" column and its "Refusals by code" card, the Guardrails card by guardrail, and the Requests view, which
+lists every request the router answered ([Statistics](statistics.md#refused-requests)).
 
 ## Testing a guardrail
 
@@ -251,8 +253,8 @@ out of its pool's: a guardrail is attached where it applies, and the console sho
 key.
 
 The record is the count and the bytes. The Analytics card reports the blocked requests' bytes and no token estimate of
-what a block saved, since a token figure would be a guess over a body the upstream never read. A block writes no
-routing-log record, since the request row and its matches are the record, and no route lists a guardrail's matches,
-since the Requests view with the Guardrail filter lists them. The dry run has no rate limit, since its cap of 500
-requests, its pages of 50 and the ledger's one reader connection bound the work. No preset covers the client's `short`
-summary mode, since no router the presets were measured on has seen it.
+what a block saved, since a token figure would be a guess over a body the upstream never read. A block writes one
+`refused` decision record carrying the guardrail's name, and no route lists a guardrail's matches, since the Requests
+view with the Guardrail filter lists them. The dry run has no rate limit, since its cap of 500 requests, its pages of 50
+and the ledger's one reader connection bound the work. No preset covers the client's `short` summary mode, since no
+router the presets were measured on has seen it.

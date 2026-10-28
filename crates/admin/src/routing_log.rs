@@ -269,9 +269,12 @@ pub(crate) struct SummaryExhaustion {
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SummaryRefusal {
+    /// The refusal's kind: `key` for the router's own refusals, a resolve refusal among them, `client` for the relay's
+    /// drift and contract refusals, `guardrail` for a guardrail's block.
     pub kind: String,
     /// The refusal's structured word: a key refusal's variant in snake case, `model_not_allowed` for a resolve
-    /// refusal, `drift` for the relay's refusal of a drifted client.
+    /// refusal, `contract` for the relay's refusal of a Claude Code request that lacks an item of the contract, `drift`
+    /// for the relay's refusal of a drifted client, `guardrail_blocked` for a guardrail's block.
     pub code: String,
     pub reason: String,
 }
@@ -344,8 +347,10 @@ pub(crate) struct DecisionRecord {
     ///
     /// A refusal's `request` block reads what the refusal site held. A refusal of the router's own carries the
     /// request's `parent_agent_id`, `request_class`, `lane`, `flags` (a keepalive probe's `flags.probe` among
-    /// them), `chain`, `attempted` and `holds`. The relay's client-drift refusal, made before any selection, leaves
-    /// the seven at their empty values.
+    /// them), `chain`, `attempted` and `holds`. The relay records three refusals before any selection: a client drift
+    /// leaves `request_class` and `flags` at their empty values, a missing contract item and a guardrail's block
+    /// carry the request's `request_class` and `flags.count` and `flags.probe`, and each of the three leaves
+    /// `parent_agent_id`, `lane`, `chain`, `attempted` and `holds` at their empty values.
     #[schema(value_type = Object)]
     pub request: Value,
     /// The pin as the selection found it: `found` (`live`, `expired_idle`, `left_pool` or `none`), `account_id`,

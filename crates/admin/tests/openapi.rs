@@ -1516,6 +1516,61 @@ async fn the_pool_policy_inputs_are_closed_as_their_parsers_refuse_an_unknown_fi
     }
 }
 
+#[tokio::test]
+async fn the_key_input_is_closed_and_both_key_routes_name_the_unknown_field_in_their_400() {
+    let (_app, _up, document) = document().await;
+    let input = &document["components"]["schemas"]["KeyInput"];
+    assert!(input.is_object(), "KeyInput is a component");
+    assert_eq!(
+        input["additionalProperties"], false,
+        "KeyInput: the parser refuses an unknown field"
+    );
+    for operation_id in ["keys_create", "key_patch"] {
+        let (_, _, operation) = operations(&document)
+            .into_iter()
+            .find(|(_, _, operation)| operation["operationId"] == operation_id)
+            .unwrap_or_else(|| panic!("no operation is {operation_id}"));
+        let refusals = operation["responses"]["400"]["description"]
+            .as_str()
+            .unwrap_or_default();
+        assert_eq!(
+            refusals.lines().next(),
+            Some(
+                "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past \
+                 its field's type"
+            ),
+            "{operation_id}: the pool routes' clause"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_decision_rows_refusal_names_its_three_kinds_and_a_guardrails_code() {
+    let (_app, _up, document) = document().await;
+    let refusal = &document["components"]["schemas"]["SummaryRefusal"]["properties"];
+    let description = |member: &str| {
+        refusal[member]["description"]
+            .as_str()
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+    };
+    assert_eq!(
+        (description("kind").as_deref(), description("code").as_deref()),
+        (
+            Some(
+                "The refusal's kind: `key` for the router's own refusals, a resolve refusal among them, `client` \
+                 for the relay's drift and contract refusals, `guardrail` for a guardrail's block."
+            ),
+            Some(
+                "The refusal's structured word: a key refusal's variant in snake case, `model_not_allowed` for a \
+                 resolve refusal, `contract` for the relay's refusal of a Claude Code request that lacks an item of \
+                 the contract, `drift` for the relay's refusal of a drifted client, `guardrail_blocked` for a \
+                 guardrail's block."
+            )
+        ),
+        "{refusal}"
+    );
+}
+
 /// Whether a rendered schema admits null. Under OpenAPI 3.1 a nullable value is a `type` array naming `null`, and a
 /// nullable reference is a `oneOf` with a `null` member.
 fn admits_null(schema: &Value) -> bool {

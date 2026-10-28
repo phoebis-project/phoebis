@@ -12,7 +12,9 @@ use phoebis_bus::{
 };
 use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode, Operator, Selector, Subject};
 use phoebis_profile::fixtures::{inference_head, FixtureKind};
+use phoebis_routing::{RefusalFacts, RouterEvent};
 use phoebis_store::GuardrailRow;
+use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -202,6 +204,25 @@ async fn send(h: &Harness, sub: &mut Subscriber, req: Request<Body>) -> Answer {
     Answer::of(h.app.clone().oneshot(req).await.unwrap(), sub).await
 }
 
+/// The kinds of the request's decisions up to its placement, in the order the router made them.
+async fn decision_kinds_until_placed(
+    decisions: &mut broadcast::Receiver<RouterEvent>,
+    request_id: &str,
+) -> Vec<&'static str> {
+    let events = router_events_until(decisions, |event| {
+        matches!(
+            event,
+            RouterEvent::Decision { summary, record, .. }
+                if record.request.request_id == request_id && summary.kind == "placed"
+        )
+    })
+    .await;
+    decisions_of(&events, request_id)
+        .iter()
+        .map(|(summary, _)| summary.kind)
+        .collect()
+}
+
 #[tokio::test]
 async fn an_enforcing_pool_guardrail_refuses_the_fork_before_the_upstream_sees_it() {
     let up = upstream().await;
@@ -258,6 +279,98 @@ async fn an_enforcing_pool_guardrail_refuses_the_fork_before_the_upstream_sees_i
             complete.attempt
         ),
         (Outcome::Rejected, 403, Some("guardrail_blocked"), 0)
+    );
+    up.shutdown().await;
+}
+
+/// The block keeps its answer and its request row, and the router records it as the request's one decision, so the
+/// routing log shows the block under the name the answer carries.
+#[tokio::test]
+async fn an_enforcing_guardrails_block_records_a_refused_decision_under_the_guardrails_name() {
+    let up = upstream().await;
+    let (h, mut sub) = harness(&up, PoolSpec::default()).await;
+    guarded(&h, &summary(GuardrailMode::Enforce), &["main"], &[]).await;
+    let mut decisions = h.router.subscribe_events();
+    let answer = send(&h, &mut sub, fork()).await;
+    assert_eq!(
+        (
+            answer.status,
+            answer.header("x-phoebis-error-code"),
+            answer.header("x-should-retry"),
+            answer.error_type.as_str(),
+            answer.message.as_str()
+        ),
+        (
+            403,
+            Some("guardrail_blocked"),
+            Some("false"),
+            "permission_error",
+            r#"blocked by guardrail "Subagent status summary""#
+        )
+    );
+    assert!(up.requests().is_empty());
+    let [Event::RequestObserved(observed), Event::RequestComplete(complete)] =
+        answer.events.as_slice()
+    else {
+        panic!("{:?}", answer.events)
+    };
+    assert_eq!(observed.guardrail_id.as_deref(), Some("summary"));
+    assert_eq!(
+        (
+            complete.outcome,
+            complete.status,
+            complete.error_code.as_deref(),
+            complete.attempt
+        ),
+        (Outcome::Rejected, 403, Some("guardrail_blocked"), 0)
+    );
+    assert_eq!(
+        recorded_refusal(&mut decisions, &complete.request_id).await,
+        Some(RefusalFacts {
+            kind: "guardrail",
+            code: "guardrail_blocked",
+            reason: SUMMARY.into(),
+        })
+    );
+    up.shutdown().await;
+}
+
+/// The block reads the request's class and kind before it answers, so its record carries both, where a drift's
+/// carries neither.
+#[tokio::test]
+async fn a_blocked_count_tokens_requests_record_carries_its_class_and_the_count_flag() {
+    let up = upstream().await;
+    let (h, mut sub) = harness(&up, PoolSpec::default()).await;
+    guarded(&h, &summary(GuardrailMode::Enforce), &["main"], &[]).await;
+    let (_, body) = with_bytes(fork()).await;
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::CountOauthNonFirstParty),
+        &body,
+        KEY,
+    );
+    set_header(&mut req, "x-claude-code-session-id", "s1");
+    set_header(&mut req, "x-claude-code-request-class", "auxiliary");
+    let mut decisions = h.router.subscribe_events();
+    let answer = send(&h, &mut sub, req).await;
+    assert_eq!(answer.status, 403);
+    let request_id = answer.observed().request_id.clone();
+    let events = router_events_until(&mut decisions, |event| {
+        matches!(event, RouterEvent::Decision { record, .. } if record.request.request_id == request_id)
+    })
+    .await;
+    let recorded = decisions_of(&events, &request_id);
+    let [(summary, record)] = recorded.as_slice() else {
+        panic!("{recorded:?}")
+    };
+    assert_eq!(
+        (
+            summary.kind,
+            summary.refusal.as_ref().map(|refusal| refusal.kind),
+            record.request.request_class.as_deref(),
+            record.request.flags.count,
+            record.request.flags.probe
+        ),
+        ("refused", Some("guardrail"), Some("auxiliary"), true, false)
     );
     up.shutdown().await;
 }
@@ -335,6 +448,7 @@ async fn an_observing_guardrail_lets_the_fork_through_and_records_its_match() {
     let (h, mut sub) = harness(&up, PoolSpec::default()).await;
     let row = summary(GuardrailMode::Observe);
     guarded(&h, &row, &["main"], &[]).await;
+    let mut decisions = h.router.subscribe_events();
     let answer = send(&h, &mut sub, fork()).await;
     assert_eq!(answer.status, 200);
     assert_eq!(up.requests().len(), 1);
@@ -347,6 +461,11 @@ async fn an_observing_guardrail_lets_the_fork_through_and_records_its_match() {
             position: 0,
             blocked: false
         }]
+    );
+    assert_eq!(
+        decision_kinds_until_placed(&mut decisions, &observed.request_id).await,
+        ["placed"],
+        "the selection records the request, and the match records no refusal"
     );
     up.shutdown().await;
 }
@@ -382,10 +501,16 @@ async fn a_disabled_guardrail_records_nothing() {
         ..summary(GuardrailMode::Enforce)
     };
     guarded(&h, &row, &["main"], &[]).await;
+    let mut decisions = h.router.subscribe_events();
     let answer = send(&h, &mut sub, fork()).await;
     assert_eq!(answer.status, 200);
     assert_eq!(answer.observed().guardrail_id, None);
     assert!(answer.observed().guardrails.is_empty());
+    assert_eq!(
+        decision_kinds_until_placed(&mut decisions, &answer.observed().request_id).await,
+        ["placed"],
+        "the selection records the request, and the disabled guardrail records no refusal"
+    );
     up.shutdown().await;
 }
 

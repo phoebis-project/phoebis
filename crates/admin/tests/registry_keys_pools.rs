@@ -1467,10 +1467,10 @@ async fn an_overage_whose_reset_has_passed_no_longer_marks_the_pool() {
     );
 }
 
-/// An unknown member of a key body is accepted and ignored, at the creation and at the edit alike, and the answer
-/// never echoes it.
+/// Every key admits Claude Code alone, so the answer carries no policy, and a body that still names one is
+/// refused with the object sentence, as every unknown member of a key body is.
 #[tokio::test]
-async fn a_key_body_with_an_unknown_member_is_accepted_with_the_member_ignored() {
+async fn a_key_answers_no_client_policy_and_a_body_that_still_names_one_is_refused() {
     let (app, _up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
     post(
@@ -1480,11 +1480,24 @@ async fn a_key_body_with_an_unknown_member_is_accepted_with_the_member_ignored()
         Some(&cookie),
     )
     .await;
+    let named = post(
+        &app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main","client_policy":"claude_code_only"}"#, // removed name
+        Some(&cookie),
+    )
+    .await;
+    let status = named.status().as_u16();
+    assert_eq!(
+        (status, json(named).await["error"].clone()),
+        (400, serde_json::json!("body must be a JSON object")),
+        "the create refuses the member the input no longer reads"
+    );
     let created = json(
         post(
             &app,
             "/admin/keys",
-            r#"{"id":"desktop","label":"Desktop","pool_id":"main","nickname":"desk"}"#,
+            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
             Some(&cookie),
         )
         .await,
@@ -1503,12 +1516,12 @@ async fn a_key_body_with_an_unknown_member_is_accepted_with_the_member_ignored()
         Some(&cookie),
     )
     .await;
+    let status = patched.status().as_u16();
     assert_eq!(
-        patched.status(),
-        200,
-        "a member the input does not read refuses nothing"
+        (status, json(patched).await["error"].clone()),
+        (400, serde_json::json!("body must be a JSON object")),
+        "the edit refuses the member the input no longer reads"
     );
-    assert!(json(patched).await.get("nickname").is_none());
 }
 
 #[tokio::test]

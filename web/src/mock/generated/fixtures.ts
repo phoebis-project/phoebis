@@ -17411,6 +17411,57 @@ export const FIXTURES: Record<string, Fixture> = {
             "epoch": 2,
             "reason": "spent"
           }
+        },
+        {
+          "type": "decision",
+          "request_id": "r-blocked",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": 0,
+          "at": 1791717400000,
+          "kind": "refused",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": "main",
+          "model": "claude-sonnet-5-5",
+          "account_id": null,
+          "from_account_id": null,
+          "by": {
+            "kind": "refusal",
+            "value": "guardrail",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "key",
+              "value": "desktop",
+              "unit": null,
+              "entity": {
+                "kind": "key",
+                "id": "desktop"
+              }
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": null,
+          "rung": null,
+          "score": null,
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": null,
+          "refusal": {
+            "kind": "guardrail",
+            "code": "guardrail_blocked",
+            "reason": "Large auxiliary requests"
+          },
+          "fast": false,
+          "cache": null,
+          "status": null
         }
       ],
       "next_cursor": null
