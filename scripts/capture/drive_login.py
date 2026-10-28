@@ -315,10 +315,10 @@ def drive(terminal, method, url_path):
     terminal.escape()
     terminal.wait("the prompt after /status", prompt)
     terminal.press(b"/usage")
-    # The dialog is matched by its footer's prefix, which the filled dialog's "Esc to close" shares with the "Esc to
-    # cancel" of the client's other dialogs. Under CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 the client's admission
-    # check refuses the usage read, and the dialog's title is then not known. A dialog that never opens times out, with
-    # the login's calls already recorded.
+    # The match needs only the "Esc to cancel" footer the dialog draws under its loading row in both variants, so the
+    # driver closes the dialog whether the read then fills the two bars or the nonessential-traffic switch refuses it
+    # with an error row. It waits for neither of those, as QUIET seconds without a byte cover a loopback read before
+    # the Escape.
     terminal.wait("the usage dialog", showing("Esc to"))
     terminal.escape()
     terminal.wait("the prompt after /usage", prompt)
