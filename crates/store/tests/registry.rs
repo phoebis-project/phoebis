@@ -1494,7 +1494,7 @@ fn a_row_written_without_the_column_s_word_reads_unrecorded() {
     assert_eq!(
         store.account("a").unwrap().unwrap().state_cause,
         StateCause::Unrecorded,
-        "the column's default is the word a row from before the column reads"
+        "the column's default is the word a row written without it reads"
     );
 }
 

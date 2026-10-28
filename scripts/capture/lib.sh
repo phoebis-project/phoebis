@@ -12,6 +12,8 @@
 # stop_control_receiver, and stop_receiver.
 
 # shellcheck shell=bash
+# The sourcing scripts read the values defined here, as the header lists, so a lint of this file alone flags them.
+# shellcheck disable=SC2034
 set -euo pipefail
 
 # BASH_SOURCE[1] is the sourcing script, where BASH_SOURCE[0] would be this file. The re-exec below has to
