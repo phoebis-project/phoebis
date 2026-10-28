@@ -222,7 +222,7 @@ def status_command():
 def usage_command():
     request("GET", USAGE_URL, token=stored_oauth().get("accessToken"))
     say("Current session")
-    say("Esc to close")
+    say("Esc to cancel")
     wait_for_escape()
 
 
