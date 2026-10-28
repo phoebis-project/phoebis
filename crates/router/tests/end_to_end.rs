@@ -200,8 +200,8 @@ fn fixture_request(
 
 /// Replays a fixture's head and body to the binary byte for byte: the fixture's request line, then every header
 /// line in the fixture's order and spelling, with only the credential, the session id, the host, and the framing
-/// replaced, and an inference head ending in the class header the recorded heads predate and the client now sends.
-/// Answers the response's status.
+/// replaced, and the class header the client sends on every inference request appended to an inference head that
+/// lacks it. Answers the response's status.
 async fn replay_fixture(
     proxy_port: u16,
     head: &[u8],
@@ -230,9 +230,19 @@ async fn replay_fixture(
         .nth(1)
         .and_then(|target| target.split('?').next())
         == Some("/v1/messages")
+        && !headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("x-claude-code-request-class"))
     {
         wire.push_str("x-claude-code-request-class: main\r\n");
     }
+    assert!(
+        wire.to_ascii_lowercase()
+            .matches("\r\nx-claude-code-request-class:")
+            .count()
+            <= 1,
+        "the replayed head carries the class header once"
+    );
     wire.push_str("\r\n");
     let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", proxy_port))
         .await
