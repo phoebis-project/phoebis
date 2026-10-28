@@ -365,7 +365,10 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
             req = req
                 .header("User-Agent", user_agent)
                 .header("X-Stainless-Lang", lang);
-        } else {
+        } else if !req
+            .headers_ref()
+            .is_some_and(|h| h.contains_key("x-claude-code-request-class"))
+        {
             req = req.header("x-claude-code-request-class", "main");
         }
         req.header("x-claude-code-session-id", session)
@@ -378,6 +381,14 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
     let spliced = native.replacen("cc_turn_origin=sdk;", "cc_turn_origin=human;", 1);
     let spliced = String::from_utf8(phoebis_cch::sign(spliced.as_bytes()).unwrap()).unwrap();
     let mut req = build(spliced, "s1", None);
+    assert_eq!(
+        req.headers()
+            .get_all("x-claude-code-request-class")
+            .iter()
+            .count(),
+        1,
+        "the first-party head carries the class header once"
+    );
     req.headers_mut()
         .insert("x-claude-code-agent-type", "Explore".parse().unwrap());
     req.headers_mut()
@@ -856,10 +867,17 @@ fn request_with_native_body(
             _ => req = req.header(n, v),
         }
     }
-    req.header("x-claude-code-session-id", session)
-        .header("x-claude-code-request-class", "main")
+    let mut req = req
+        .header("x-claude-code-session-id", session)
         .body(axum::body::Body::from(native.into_bytes()))
-        .unwrap()
+        .unwrap();
+    if !req.headers().contains_key("x-claude-code-request-class") {
+        req.headers_mut().insert(
+            "x-claude-code-request-class",
+            axum::http::HeaderValue::from_static("main"),
+        );
+    }
+    req
 }
 
 /// The recorded first-party fixture's shape reaches the request row from the parse the relay already performs;
@@ -913,12 +931,16 @@ async fn the_recorded_first_party_fixtures_shape_reaches_the_row_and_its_effort_
     // The fixture carries a first-party client's billing stamp over its own bytes; a hand-spliced body needs
     // its own stamp, or the relay's drift check refuses it as tampered.
     let spliced = String::from_utf8(phoebis_cch::sign(spliced.as_bytes()).unwrap()).unwrap();
-    let resp2 = h
-        .app
-        .clone()
-        .oneshot(request_with_native_body(spliced, KEY, "s2"))
-        .await
-        .unwrap();
+    let req2 = request_with_native_body(spliced, KEY, "s2");
+    assert_eq!(
+        req2.headers()
+            .get_all("x-claude-code-request-class")
+            .iter()
+            .count(),
+        1,
+        "the first-party head carries the class header once"
+    );
+    let resp2 = h.app.clone().oneshot(req2).await.unwrap();
     assert_eq!(resp2.status(), 200);
     let id2 = request_id(&resp2);
     let _ = resp2.into_body().collect().await.unwrap();
