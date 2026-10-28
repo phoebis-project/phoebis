@@ -73,6 +73,9 @@ def self_test() -> None:
     assert sorted(block) == ["  listen: 127.0.0.1:48317"], f"the proxy block: {block!r}"
     assert "tls" not in paired, f"both listeners serve plain HTTP: {paired!r}"
     yaml.safe_load(paired)
+    assert yaml.safe_load(paired)["upstream"] == {"extra_ca_pem": "/tmp/ca.pem",
+                                                  "resolve_override": "127.0.0.1:49443"}, (
+        f"the appended upstream block: {paired!r}")
     gapped = rewrite("proxy:\n  listen: 0.0.0.0:8317\n  tls:\n    cert_file: /a\n\n    # the key beside it\n"
                      "    key_file: /b\n\n# the stats block\nstats:\n  retention_days: 90\n", 49443, "/tmp/ca.pem")
     assert "cert_file" not in gapped and "key_file" not in gapped, f"a gapped pair's children survived: {gapped!r}"
