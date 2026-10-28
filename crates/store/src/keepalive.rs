@@ -48,10 +48,11 @@ pub struct KeepaliveAgentRow {
     pub updated_at: i64,
 }
 
-/// One idle-age bucket of one pool.
+/// One idle-age bucket of one pool on one UTC day, the day as the engine keys its counters.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IdleReturnsRow {
     pub pool_id: String,
+    pub day: i64,
     pub bucket: u32,
     pub reached: u64,
     pub returned: u64,
@@ -68,6 +69,9 @@ pub struct KeepaliveBatch {
     /// `(key_id, key_generation, session_id, agent_id)`.
     pub removed_agents: Vec<(String, i64, String, String)>,
     pub counters: Vec<IdleReturnsRow>,
+    /// The counters' rows of a day before this one leave in the same transaction, `None` keeping every day. A batch
+    /// that carries the purge alone is not empty, so a flush with no other row still reaches the delete.
+    pub purge_counters_before: Option<i64>,
 }
 
 impl KeepaliveBatch {
@@ -77,6 +81,7 @@ impl KeepaliveBatch {
             && self.removed_sessions.is_empty()
             && self.removed_agents.is_empty()
             && self.counters.is_empty()
+            && self.purge_counters_before.is_none()
     }
 }
 
@@ -207,15 +212,23 @@ impl Store {
                 }
             }
         }
+        if let Some(day) = batch.purge_counters_before {
+            tx.execute(
+                "DELETE FROM keepalive_idle_returns WHERE day < ?1",
+                params![day],
+            )?;
+        }
         {
             let mut stmt = tx.prepare_cached(
-                "INSERT INTO keepalive_idle_returns (pool_id, bucket, reached, returned) VALUES (?1, ?2, ?3, ?4) \
-                 ON CONFLICT(pool_id, bucket) DO UPDATE SET \
+                "INSERT INTO keepalive_idle_returns (pool_id, day, bucket, reached, returned) \
+                 VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT(pool_id, day, bucket) DO UPDATE SET \
                  reached = excluded.reached, returned = excluded.returned",
             )?;
             for row in &batch.counters {
                 stmt.execute(params![
                     row.pool_id,
+                    row.day,
                     row.bucket,
                     row.reached as i64,
                     row.returned as i64
@@ -286,14 +299,16 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let counters = conn
             .prepare(
-                "SELECT pool_id, bucket, reached, returned FROM keepalive_idle_returns ORDER BY pool_id, bucket",
+                "SELECT pool_id, day, bucket, reached, returned FROM keepalive_idle_returns \
+                 ORDER BY pool_id, day, bucket",
             )?
             .query_map([], |r| {
                 Ok(IdleReturnsRow {
                     pool_id: r.get(0)?,
-                    bucket: r.get(1)?,
-                    reached: r.get::<_, i64>(2)?.max(0) as u64,
-                    returned: r.get::<_, i64>(3)?.max(0) as u64,
+                    day: r.get(1)?,
+                    bucket: r.get(2)?,
+                    reached: r.get::<_, i64>(3)?.max(0) as u64,
+                    returned: r.get::<_, i64>(4)?.max(0) as u64,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

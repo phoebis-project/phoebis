@@ -5524,6 +5524,8 @@ mod tests {
             marked_at: None,
             marked_on: None,
             marked_window: None,
+            auxiliary_only: false,
+            effort: String::new(),
         };
         assert_eq!(
             rates.price_pin(BurnUnit::Usd, &pin),
@@ -5824,7 +5826,9 @@ mod tests {
                     account_id: "a".into(),
                     incarnation: 1,
                     observed_at: 500,
+                    plan: None,
                     reset: Some(10_000),
+                    tier: None,
                     utilization: 0.5,
                     window: window.into(),
                 })
@@ -5948,6 +5952,8 @@ mod tests {
                 marked_at: None,
                 marked_on: None,
                 marked_window: None,
+                auxiliary_only: false,
+                effort: String::new(),
             }],
             ..RoutingLoad::default()
         });

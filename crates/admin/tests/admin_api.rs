@@ -5007,6 +5007,8 @@ fn burning_opus_pin(
         marked_at: None,
         marked_on: None,
         marked_window: None,
+        auxiliary_only: false,
+        effort: String::new(),
     }
 }
 
@@ -6371,6 +6373,8 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
             marked_at: None,
             marked_on: None,
             marked_window: None,
+            auxiliary_only: false,
+            effort: String::new(),
         })
         .unwrap();
     // A live pin the ledger has never recorded a request for at all, not merely one older than the cutoff:
@@ -6413,6 +6417,8 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
             marked_at: None,
             marked_on: None,
             marked_window: None,
+            auxiliary_only: false,
+            effort: String::new(),
         })
         .unwrap();
     // The router task loads its pins at spawn, so the pins above need the store written before this call.
@@ -6564,6 +6570,8 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_relea
             marked_at: None,
             marked_on: None,
             marked_window: None,
+            auxiliary_only: false,
+            effort: String::new(),
         })
         .unwrap();
     let parts = common::admin_parts_full_on(seed.store.clone()).await;

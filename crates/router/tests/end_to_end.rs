@@ -3580,6 +3580,8 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
                 marked_at: None,
                 marked_on: None,
                 marked_window: None,
+                auxiliary_only: false,
+                effort: String::new(),
             })
             .unwrap();
     }
@@ -4100,7 +4102,9 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
                         account_id: id.into(),
                         incarnation: 1,
                         observed_at: reset - 2 * 86_400_000,
+                        plan: None,
                         reset: Some(reset),
+                        tier: None,
                         utilization,
                         window: window.into(),
                     })

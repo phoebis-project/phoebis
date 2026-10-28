@@ -2480,6 +2480,8 @@ fn fresh_pin(
         marked_at: None,
         marked_on: None,
         marked_window: None,
+        auxiliary_only: false,
+        effort: String::new(),
     };
     stamp_hashes(&mut row, request);
     row

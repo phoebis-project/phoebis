@@ -4,7 +4,7 @@ use phoebis_store::{
     Affinity, ApiKeyRow, AttachmentSubject, CanaryRead, Failover, GuardrailAttachment,
     GuardrailRow, Identity, MemberWrite, MemoryKey, MemoryRecord, MemoryStore, ModelRule,
     NewBundle, PinBurn, PinRow, PoolRow, ReturnToPlan, RulesMode, Secret, SlowDown, StateCause,
-    StorageKey, Store, StoreError, Strategy, SubagentPlacement, SubscriptionRow,
+    StorageKey, Store, StoreError, Strategy, SubagentPlacement, SubscriptionRow, WindowRow,
 };
 
 fn account(id: &str, kind: AccountKind) -> AccountRow {
@@ -95,17 +95,17 @@ fn rename(
 }
 
 #[test]
-fn a_fresh_registry_is_at_version_one_and_a_second_open_changes_nothing() {
+fn a_fresh_registry_is_at_version_two_and_a_second_open_changes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 1);
+    assert_eq!(store.schema_version().unwrap(), 2);
     drop(store);
     let again = Store::open(&path, &key).unwrap();
     assert_eq!(
         again.schema_version().unwrap(),
-        1,
+        2,
         "a second open runs no migration and keeps the version"
     );
     assert!(again.pools().unwrap().is_empty());
@@ -115,6 +115,148 @@ fn a_fresh_registry_is_at_version_one_and_a_second_open_changes_nothing() {
     again.insert_pool(&pool("main"), "test").unwrap();
     assert_eq!(again.pools().unwrap()[0].cache_ttl_json, "{}");
     assert!(!again.pools().unwrap()[0].cache_diagnostics);
+}
+
+/// The names of `table`'s columns in their stored order.
+fn columns_of(conn: &rusqlite::Connection, table: &str) -> Vec<String> {
+    conn.prepare("SELECT name FROM pragma_table_info(?1) ORDER BY cid")
+        .unwrap()
+        .query_map([table], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+}
+
+#[test]
+fn a_version_one_registry_opens_at_two_with_the_new_columns_at_their_defaults_and_no_all_time_counters(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    {
+        let store = Store::open(&path, &key).unwrap();
+        store
+            .insert_account(&account("a", AccountKind::Oauth))
+            .unwrap();
+        store
+            .upsert_pin(&PinRow {
+                key_id: "k".into(),
+                session_id: "s".into(),
+                agent_id: "main".into(),
+                model: "claude-opus-5".into(),
+                account_id: "a".into(),
+                epoch: 1,
+                created_at: 1,
+                last_used_at: 1,
+                key_generation: 1,
+                incarnation: 1,
+                burn: PinBurn::default(),
+                burn_at: None,
+                burn_banded: PinBurn::default(),
+                burn_fast: PinBurn::default(),
+                burn_unmetered: PinBurn::default(),
+                last_input_tokens: 0,
+                last_classifier: false,
+                last_refresh_at: 1,
+                cache_ttl_ms: 300_000,
+                shed_from: None,
+                shed_at: None,
+                shed_reason: None,
+                static_hash: None,
+                tail_hash: None,
+                lane: String::new(),
+                entrypoint: String::new(),
+                marked_at: None,
+                marked_on: None,
+                marked_window: None,
+                auxiliary_only: true,
+                effort: "high".into(),
+            })
+            .unwrap();
+        let incarnation = store.account("a").unwrap().unwrap().incarnation;
+        assert!(store
+            .upsert_window(&WindowRow {
+                account_id: "a".into(),
+                incarnation,
+                observed_at: 1_000,
+                plan: Some("max".into()),
+                reset: None,
+                tier: Some("max_20x".into()),
+                utilization: 0.5,
+                window: "five_hour".into(),
+            })
+            .unwrap());
+    }
+    // The file as a version-1 build left it: the step's columns and tables taken back, the counters' table in the
+    // baseline's shape with an all-time row, and the marker at 1.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE pins DROP COLUMN auxiliary_only;
+         ALTER TABLE pins DROP COLUMN effort;
+         ALTER TABLE usage_windows DROP COLUMN plan;
+         ALTER TABLE usage_windows DROP COLUMN tier;
+         DROP TABLE session_first_seen;
+         DROP TABLE keepalive_idle_returns;
+         CREATE TABLE IF NOT EXISTS keepalive_idle_returns (
+           pool_id TEXT NOT NULL, bucket INTEGER NOT NULL, reached INTEGER NOT NULL, returned INTEGER NOT NULL,
+           PRIMARY KEY (pool_id, bucket)
+         );
+         INSERT INTO keepalive_idle_returns (pool_id, bucket, reached, returned) VALUES ('p', 0, 3, 2);
+         UPDATE meta SET value = '1' WHERE key = 'schema_version';",
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &key).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 2);
+    assert!(
+        store.load_keepalive().unwrap().2.is_empty(),
+        "the all-time counters leave with their table"
+    );
+    let load = store.load_routing().unwrap();
+    assert_eq!(
+        load.pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.auxiliary_only, p.effort.as_str()))
+            .collect::<Vec<_>>(),
+        [("s", false, "")],
+        "a pin from before the step reads the two columns' defaults"
+    );
+    assert_eq!(
+        load.windows
+            .iter()
+            .map(|w| (w.window.as_str(), w.plan.as_deref(), w.tier.as_deref()))
+            .collect::<Vec<_>>(),
+        [("five_hour", None, None)],
+        "a reading from before the step reads no plan and no tier"
+    );
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let pins = columns_of(&conn, "pins");
+    assert!(
+        pins.ends_with(&["auxiliary_only".to_string(), "effort".to_string()]),
+        "{pins:?}"
+    );
+    let windows = columns_of(&conn, "usage_windows");
+    assert!(
+        windows.ends_with(&["plan".to_string(), "tier".to_string()]),
+        "{windows:?}"
+    );
+    assert_eq!(
+        columns_of(&conn, "keepalive_idle_returns"),
+        ["pool_id", "day", "bucket", "reached", "returned"]
+    );
+    assert_eq!(
+        columns_of(&conn, "session_first_seen"),
+        ["key_id", "session_id", "agent_id", "first_seen_at"]
+    );
+    let listed: bool = conn
+        .query_row(
+            "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_first_seen'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(listed, "the first-seen table is listed");
 }
 
 #[test]
@@ -209,6 +351,8 @@ fn every_burn_copy_of_a_pin_and_the_columns_after_them_read_back_as_written() {
         marked_at: None,
         marked_on: None,
         marked_window: None,
+        auxiliary_only: false,
+        effort: String::new(),
     };
     store.upsert_pin(&before).unwrap();
     assert_eq!(
@@ -279,6 +423,8 @@ fn a_pins_last_classifier_flag_reads_back_as_written_and_a_standard_renewal_clea
         marked_at: None,
         marked_on: None,
         marked_window: None,
+        auxiliary_only: false,
+        effort: String::new(),
     };
     store.upsert_pin(&before).unwrap();
     assert_eq!(
@@ -543,6 +689,8 @@ fn the_pins_columns_after_the_rebuild_are_the_old_set_plus_the_agent() {
         "marked_at",
         "marked_on",
         "marked_window",
+        "auxiliary_only",
+        "effort",
         "burn_banded_cache_read",
         "burn_banded_input",
         "burn_banded_output",

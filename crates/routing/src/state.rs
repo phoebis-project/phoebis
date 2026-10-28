@@ -2311,7 +2311,9 @@ impl RoutingState {
                     account_id: account_id.to_string(),
                     incarnation,
                     observed_at: reading.observed_at,
+                    plan: None,
                     reset: reading.reset,
+                    tier: None,
                     utilization: reading.utilization,
                     window: window.clone(),
                 })
@@ -3823,6 +3825,8 @@ mod tests {
             marked_at: None,
             marked_on: None,
             marked_window: None,
+            auxiliary_only: false,
+            effort: String::new(),
         };
         (pin, Some(burn))
     }
@@ -4842,7 +4846,9 @@ mod tests {
                 account_id: "a".into(),
                 incarnation: 1,
                 observed_at: 1_000,
+                plan: None,
                 reset: Some(HOUR_MS),
+                tier: None,
                 utilization: 0.5,
                 window: FIVE_HOUR.into(),
             }],

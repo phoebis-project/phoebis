@@ -80,6 +80,12 @@ pub struct PinRow {
     pub marked_at: Option<i64>,
     pub marked_on: Option<String>,
     pub marked_window: Option<String>,
+    /// Only auxiliary requests have used the pin since its placement: written true at such a placement, cleared by
+    /// the first refreshing turn that renews the pin, so a restart reads the flag rather than deriving it.
+    pub auxiliary_only: bool,
+    /// The effective effort of the request that placed or last renewed the pin, the word as the client sent it,
+    /// `""` for none and on a row written before the column. A probe's renewal keeps it.
+    pub effort: String,
 }
 
 impl PinRow {
@@ -123,7 +129,13 @@ pub struct WindowRow {
     pub account_id: String,
     pub incarnation: u64,
     pub observed_at: i64,
+    /// The resolved plan word the account held when the reading was taken, `None` on a row written before the
+    /// column, so a reset priced from the reading reads the plan of its week.
+    pub plan: Option<String>,
     pub reset: Option<i64>,
+    /// The stored rate-limit tier the account held when the reading was taken, `None` on a row written before the
+    /// column, so a reset priced from the reading reads the tier of its week.
+    pub tier: Option<String>,
     pub utilization: f64,
     /// `five_hour`, `seven_day` or `seven_day_fable`.
     pub window: String,
@@ -267,11 +279,21 @@ pub struct ShedRoundRow {
     pub round_at: i64,
 }
 
+/// The first placement of an agent's pin under a key and session, kept until the session's last pin leaves.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FirstSeenRow {
+    pub key_id: String,
+    pub session_id: String,
+    pub agent_id: String,
+    pub first_seen_at: i64,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct RoutingLoad {
     pub affinity: Vec<AffinityRow>,
     pub cooldowns: Vec<CooldownRow>,
     pub credits: Vec<CreditsRow>,
+    pub first_seen: Vec<FirstSeenRow>,
     pub overage: Vec<OverageRow>,
     pub pins: Vec<PinRow>,
     pub resolutions: Vec<ResolutionRow>,
@@ -293,10 +315,13 @@ impl Store {
                  ORDER BY c.account_id")?
                 .query_map([], |r| Ok(CreditsRow { account_id: r.get(0)?, incarnation: r.get::<_, i64>(1)? as u64, enabled: r.get(2)?, disabled_reason: r.get(3)?, utilization: r.get(4)?, observed_at: r.get(5)? }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
+            first_seen: tx.prepare("SELECT key_id, session_id, agent_id, first_seen_at FROM session_first_seen ORDER BY key_id, session_id, agent_id")?
+                .query_map([], |r| Ok(FirstSeenRow { key_id: r.get(0)?, session_id: r.get(1)?, agent_id: r.get(2)?, first_seen_at: r.get(3)? }))?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
             overage: tx.prepare("SELECT account_id, in_use, since, reset, observed_at, source, incarnation FROM overage_state ORDER BY account_id")?
                 .query_map([], |r| Ok(OverageRow { account_id: r.get(0)?, in_use: r.get(1)?, since: r.get(2)?, reset: r.get(3)?, observed_at: r.get(4)?, source: r.get(5)?, incarnation: r.get::<_, i64>(6)? as u64 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
-            pins: tx.prepare(&format!("SELECT key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}, marked_at, marked_on, marked_window, entrypoint, last_classifier, shed_reason FROM pins ORDER BY key_id, session_id, agent_id, model"))?
+            pins: tx.prepare(&format!("SELECT key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}, marked_at, marked_on, marked_window, entrypoint, last_classifier, shed_reason, auxiliary_only, effort FROM pins ORDER BY key_id, session_id, agent_id, model"))?
                 .query_map([], |r| Ok(PinRow {
                     key_id: r.get(0)?, session_id: r.get(1)?, agent_id: r.get(2)?, model: r.get(3)?, account_id: r.get(4)?,
                     epoch: r.get::<_, i64>(5)? as u64, created_at: r.get(6)?, last_used_at: r.get(7)?,
@@ -309,6 +334,7 @@ impl Store {
                     marked_at: r.get(39)?, marked_on: r.get(40)?, marked_window: r.get(41)?,
                     entrypoint: r.get(42)?,
                     shed_reason: r.get(44)?,
+                    auxiliary_only: r.get(45)?, effort: r.get(46)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             resolutions: tx.prepare("SELECT spelling, dated_id, resolved_at FROM model_resolutions ORDER BY spelling")?
@@ -327,10 +353,10 @@ impl Store {
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             // A row of a previous holder of the id is never loaded: the replacement starts with no windows.
-            windows: tx.prepare("SELECT w.account_id, w.incarnation, w.observed_at, w.reset, w.utilization, w.window \
+            windows: tx.prepare("SELECT w.account_id, w.incarnation, w.observed_at, w.reset, w.utilization, w.window, w.plan, w.tier \
                  FROM usage_windows w JOIN accounts ON accounts.id = w.account_id AND accounts.incarnation = w.incarnation \
                  ORDER BY w.account_id, w.window")?
-                .query_map([], |r| Ok(WindowRow { account_id: r.get(0)?, incarnation: r.get::<_, i64>(1)? as u64, observed_at: r.get(2)?, reset: r.get(3)?, utilization: r.get(4)?, window: r.get(5)? }))?
+                .query_map([], |r| Ok(WindowRow { account_id: r.get(0)?, incarnation: r.get::<_, i64>(1)? as u64, observed_at: r.get(2)?, plan: r.get(6)?, reset: r.get(3)?, tier: r.get(7)?, utilization: r.get(4)?, window: r.get(5)? }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         };
         tx.commit()?;
@@ -384,6 +410,20 @@ impl Store {
     /// One transaction, as `upsert_pin` takes.
     pub fn delete_pin(&self, key: &PinKey) -> Result<bool, StoreError> {
         self.routing_commit(|conn| in_transaction(conn, |tx| delete_pin_on(tx, key)))
+    }
+
+    /// `INSERT OR REPLACE`: the router writes a record's row only when it creates the record, so a second write under
+    /// a key, session and agent follows a terminal removal whose cascade a deferred write's fold may have dropped,
+    /// and the new instant wins.
+    pub fn insert_first_seen(&self, row: &FirstSeenRow) -> Result<(), StoreError> {
+        self.routing_commit(|conn| in_transaction(conn, |tx| insert_first_seen_on(tx, row)))
+    }
+
+    /// Every agent's row of the session, answering how many left.
+    pub fn delete_first_seen(&self, key_id: &str, session_id: &str) -> Result<usize, StoreError> {
+        self.routing_commit(|conn| {
+            in_transaction(conn, |tx| delete_first_seen_on(tx, key_id, session_id))
+        })
     }
 
     /// Every row lands or none does; a row under an existing (model, hash) replaces it.
@@ -496,8 +536,20 @@ impl RoutingTx<'_> {
         delete_cooldown_on(self.tx, account_id, scope)
     }
 
+    pub fn delete_first_seen(
+        &mut self,
+        key_id: &str,
+        session_id: &str,
+    ) -> Result<usize, StoreError> {
+        delete_first_seen_on(self.tx, key_id, session_id)
+    }
+
     pub fn delete_pin(&mut self, key: &PinKey) -> Result<bool, StoreError> {
         delete_pin_on(self.tx, key)
+    }
+
+    pub fn insert_first_seen(&mut self, row: &FirstSeenRow) -> Result<(), StoreError> {
+        insert_first_seen_on(self.tx, row)
     }
 
     pub fn purge_shed_rounds_before(&mut self, before: i64) -> Result<usize, StoreError> {
@@ -598,8 +650,8 @@ fn burn_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<PinBurn> {
 fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
     conn.execute(
         &format!(
-            "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}, marked_at, marked_on, marked_window, entrypoint, last_classifier, shed_reason) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45) \
+            "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}, marked_at, marked_on, marked_window, entrypoint, last_classifier, shed_reason, auxiliary_only, effort) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47) \
              ON CONFLICT(key_id, session_id, agent_id, model) DO UPDATE SET \
                account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, \
                last_used_at = excluded.last_used_at, key_generation = excluded.key_generation, \
@@ -622,7 +674,8 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
                burn_unmetered_write_5m = excluded.burn_unmetered_write_5m, marked_at = excluded.marked_at, \
                marked_on = excluded.marked_on, marked_window = excluded.marked_window, \
                entrypoint = excluded.entrypoint, last_classifier = excluded.last_classifier, \
-               shed_reason = excluded.shed_reason"
+               shed_reason = excluded.shed_reason, auxiliary_only = excluded.auxiliary_only, \
+               effort = excluded.effort"
         ),
         params![
             pin.key_id,
@@ -669,7 +722,9 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
             pin.marked_window,
             pin.entrypoint,
             pin.last_classifier,
-            pin.shed_reason
+            pin.shed_reason,
+            pin.auxiliary_only,
+            pin.effort
         ],
     )?;
     Ok(())
@@ -680,6 +735,25 @@ fn delete_pin_on(conn: &Connection, key: &PinKey) -> Result<bool, StoreError> {
         "DELETE FROM pins WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4",
         params![key.key_id, key.session_id, key.agent_id, key.model],
     )? > 0)
+}
+
+fn insert_first_seen_on(conn: &Connection, row: &FirstSeenRow) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT OR REPLACE INTO session_first_seen (key_id, session_id, agent_id, first_seen_at) VALUES (?1, ?2, ?3, ?4)",
+        params![row.key_id, row.session_id, row.agent_id, row.first_seen_at],
+    )?;
+    Ok(())
+}
+
+fn delete_first_seen_on(
+    conn: &Connection,
+    key_id: &str,
+    session_id: &str,
+) -> Result<usize, StoreError> {
+    Ok(conn.execute(
+        "DELETE FROM session_first_seen WHERE key_id = ?1 AND session_id = ?2",
+        params![key_id, session_id],
+    )?)
 }
 
 fn upsert_cooldown_on(conn: &Connection, row: &CooldownRow) -> Result<(), StoreError> {
@@ -758,10 +832,11 @@ fn upsert_window_on(conn: &Connection, row: &WindowRow) -> Result<bool, StoreErr
     // The `WHERE` on the select is what lets SQLite parse the `ON CONFLICT` of an insert-select, and it is
     // the incarnation check too: a deleted and re-paired id answers no row, so nothing is inserted.
     let written = conn.execute(
-        "INSERT INTO usage_windows (account_id, window, utilization, reset, observed_at, incarnation) \
-         SELECT ?1, ?2, ?3, ?4, ?5, ?6 FROM accounts WHERE id = ?1 AND incarnation = ?6 \
+        "INSERT INTO usage_windows (account_id, window, utilization, reset, observed_at, incarnation, plan, tier) \
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8 FROM accounts WHERE id = ?1 AND incarnation = ?6 \
          ON CONFLICT(account_id, window) DO UPDATE SET utilization = excluded.utilization, \
-           reset = excluded.reset, observed_at = excluded.observed_at, incarnation = excluded.incarnation \
+           reset = excluded.reset, observed_at = excluded.observed_at, incarnation = excluded.incarnation, \
+           plan = excluded.plan, tier = excluded.tier \
          WHERE excluded.observed_at > usage_windows.observed_at \
            OR excluded.incarnation <> usage_windows.incarnation",
         params![
@@ -770,7 +845,9 @@ fn upsert_window_on(conn: &Connection, row: &WindowRow) -> Result<bool, StoreErr
             row.utilization,
             row.reset,
             row.observed_at,
-            row.incarnation as i64
+            row.incarnation as i64,
+            row.plan,
+            row.tier
         ],
     )?;
     Ok(written > 0)

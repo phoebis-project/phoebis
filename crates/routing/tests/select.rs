@@ -8283,6 +8283,8 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         marked_at: None,
         marked_on: None,
         marked_window: None,
+        auxiliary_only: false,
+        effort: String::new(),
     };
     st.record_overage("a", overage(true, 1_000, Some(1_999)));
     let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
@@ -11393,6 +11395,8 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
         marked_at: None,
         marked_on: None,
         marked_window: None,
+        auxiliary_only: false,
+        effort: String::new(),
     }
 }
 

@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LEASE_MS};
 use crate::engine::{
-    kind_of_word, kind_word, Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket,
-    Inner, Kept, Observation, ParkKind, PriorCoverage, Reason, SavingsUnit, Session, SessionKey,
-    Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
+    kind_of_word, kind_word, utc_day, Agent, AgentState, Engine, Guard, IdleEpisode,
+    IdleReturnBucket, Inner, Kept, Observation, ParkKind, PriorCoverage, Reason, SavingsUnit,
+    Session, SessionKey, Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::usage::ProbeUsage;
@@ -906,6 +906,7 @@ impl Inner {
                 for (bucket, counter) in counters.buckets.iter().enumerate() {
                     snapshot.batch.counters.push(IdleReturnsRow {
                         pool_id: pool_id.clone(),
+                        day: utc_day(now),
                         bucket: bucket as u32,
                         reached: counter.reached,
                         returned: counter.returned,

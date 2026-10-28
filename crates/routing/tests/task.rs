@@ -3151,7 +3151,9 @@ fn window_row(account: &str, window: &str, utilization: f64, reset: Option<i64>)
         account_id: account.into(),
         incarnation: 1,
         observed_at: 500,
+        plan: None,
         reset,
+        tier: None,
         utilization,
         window: window.into(),
     }
@@ -8584,6 +8586,8 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         marked_at: None,
         marked_on: None,
         marked_window: None,
+        auxiliary_only: false,
+        effort: String::new(),
     }
 }
 

@@ -80,7 +80,7 @@ fn sorted(
         ))
     });
     rows.2
-        .sort_by(|a, b| (&a.pool_id, a.bucket).cmp(&(&b.pool_id, b.bucket)));
+        .sort_by(|a, b| (&a.pool_id, a.day, a.bucket).cmp(&(&b.pool_id, b.day, b.bucket)));
     rows
 }
 
@@ -159,17 +159,20 @@ fn the_keepalive_rows_round_trip_and_the_body_is_sealed_at_rest() {
         counters: vec![
             IdleReturnsRow {
                 pool_id: "main".into(),
+                day: 0,
                 bucket: 0,
                 reached: 3,
                 returned: 1,
             },
             IdleReturnsRow {
                 pool_id: "main".into(),
+                day: 0,
                 bucket: 1,
                 reached: 2,
                 returned: 0,
             },
         ],
+        purge_counters_before: None,
     };
     store.save_keepalive(&batch).unwrap();
     assert_eq!(
@@ -233,6 +236,7 @@ fn the_keepalive_rows_round_trip_and_the_body_is_sealed_at_rest() {
             removed_agents: vec![("k".into(), 1, "s".into(), "x:y".into())],
             counters: vec![IdleReturnsRow {
                 pool_id: "main".into(),
+                day: 0,
                 bucket: 1,
                 reached: 5,
                 returned: 2,
@@ -262,6 +266,100 @@ fn the_keepalive_rows_round_trip_and_the_body_is_sealed_at_rest() {
             .map(|c| (c.bucket, c.reached, c.returned))
             .collect::<Vec<_>>(),
         vec![(0, 3, 1), (1, 5, 2)]
+    );
+}
+
+fn counter(pool_id: &str, day: i64, bucket: u32, reached: u64, returned: u64) -> IdleReturnsRow {
+    IdleReturnsRow {
+        pool_id: pool_id.into(),
+        day,
+        bucket,
+        reached,
+        returned,
+    }
+}
+
+#[test]
+fn the_idle_return_counters_keep_a_row_per_pool_day_and_bucket_and_load_in_that_order() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .save_keepalive(&KeepaliveBatch {
+            counters: vec![
+                counter("main", 11, 2, 5, 2),
+                counter("main", 10, 2, 3, 1),
+                counter("main", 12, 0, 1, 0),
+                counter("aux", 10, 1, 4, 4),
+            ],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    assert_eq!(
+        store.load_keepalive().unwrap().2,
+        [
+            counter("aux", 10, 1, 4, 4),
+            counter("main", 10, 2, 3, 1),
+            counter("main", 11, 2, 5, 2),
+            counter("main", 12, 0, 1, 0)
+        ],
+        "one bucket of one pool on two days is two rows, read by pool, day and bucket"
+    );
+    store
+        .save_keepalive(&KeepaliveBatch {
+            counters: vec![counter("main", 11, 2, 6, 3)],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    assert_eq!(
+        store.load_keepalive().unwrap().2,
+        [
+            counter("aux", 10, 1, 4, 4),
+            counter("main", 10, 2, 3, 1),
+            counter("main", 11, 2, 6, 3),
+            counter("main", 12, 0, 1, 0)
+        ],
+        "a save replaces its own day's row and leaves the other day's"
+    );
+}
+
+#[test]
+fn a_save_carrying_a_purge_drops_the_counters_of_the_days_before_its_day_and_keeps_that_day() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .save_keepalive(&KeepaliveBatch {
+            counters: vec![
+                counter("aux", 10, 1, 4, 4),
+                counter("main", 10, 2, 3, 1),
+                counter("main", 11, 2, 5, 2),
+                counter("main", 12, 0, 1, 0),
+            ],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    store
+        .save_keepalive(&KeepaliveBatch {
+            counters: vec![counter("main", 11, 2, 6, 3)],
+            purge_counters_before: Some(11),
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    assert_eq!(
+        store.load_keepalive().unwrap().2,
+        [counter("main", 11, 2, 6, 3), counter("main", 12, 0, 1, 0)],
+        "every pool's rows before the day leave, and the day itself stays with the batch's own row"
+    );
+    let purge = KeepaliveBatch {
+        purge_counters_before: Some(12),
+        ..KeepaliveBatch::default()
+    };
+    assert!(
+        !purge.is_empty(),
+        "a batch carrying the purge alone still has a write to make"
+    );
+    store.save_keepalive(&purge).unwrap();
+    assert_eq!(
+        store.load_keepalive().unwrap().2,
+        [counter("main", 12, 0, 1, 0)],
+        "the purge alone drops the days before its own"
     );
 }
 

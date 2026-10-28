@@ -49,8 +49,8 @@ pub use registry::{
     WarmSessions, GUARDRAIL_BOUND, ROTATION_GRACE_MS,
 };
 pub use routing::{
-    AffinityChain, AffinityRow, CooldownRow, CreditsRow, OverageRow, PinBurn, PinKey, PinRow,
-    RekeyWrite, ResolutionRow, RoutingLoad, RoutingTx, ShedRoundRow, WindowRow,
+    AffinityChain, AffinityRow, CooldownRow, CreditsRow, FirstSeenRow, OverageRow, PinBurn, PinKey,
+    PinRow, RekeyWrite, ResolutionRow, RoutingLoad, RoutingTx, ShedRoundRow, WindowRow,
 };
 pub use schema::SCHEMA_VERSION;
 

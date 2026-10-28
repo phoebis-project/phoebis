@@ -1282,6 +1282,8 @@ async fn a_session_row_on_a_usage_based_seat_reads_its_burn_in_dollars() {
             marked_at: None,
             marked_on: None,
             marked_window: None,
+            auxiliary_only: false,
+            effort: String::new(),
         })
         .unwrap();
     let parts = common::admin_parts_full_on(seed.store.clone()).await;
@@ -1334,6 +1336,8 @@ fn spelling_pin(session: &str, key_generation: i64) -> phoebis_store::PinRow {
         marked_at: None,
         marked_on: None,
         marked_window: None,
+        auxiliary_only: false,
+        effort: String::new(),
     }
 }
 

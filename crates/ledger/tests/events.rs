@@ -3129,7 +3129,9 @@ async fn a_clock_reset_that_passed_while_the_router_was_down_lands_once_at_the_s
             account_id: "a".into(),
             incarnation: 1,
             observed_at: down_since - 1_000,
+            plan: None,
             reset: Some(reset_at),
+            tier: None,
             utilization: 0.9,
             window: "five_hour".into(),
         })
