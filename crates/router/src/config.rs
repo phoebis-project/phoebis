@@ -191,8 +191,8 @@ pub struct RoutingConfig {
 pub struct SessionsConfig {
     #[serde(default = "default_session_expiry")]
     pub expire_after_seconds: u64,
-    /// How long a session no companion reports stays listed past its last use or request, and how long a line's
-    /// pin stays listed on such a row past its last use. Bounded by `expire_after_seconds`.
+    /// How long a session no companion reports stays listed past its last use, its last request or its companion's end,
+    /// and how long a line's pin stays listed on such a row past its last use. Bounded by `expire_after_seconds`.
     #[serde(default = "default_non_companion_idle")]
     pub non_companion_idle_seconds: u64,
     /// Entries the in-process session memory holds at most; past it the least recently seen entry goes to
