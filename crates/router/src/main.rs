@@ -234,18 +234,6 @@ fn main() -> anyhow::Result<()> {
                     phoebis_store::SCHEMA_VERSION
                 );
             }
-            // The start refuses to migrate a registry that holds an account in two pools, naming each account.
-            let overlaps = phoebis_store::Store::read_overlapping_memberships(registry)
-                .with_context(|| format!("reading the registry at {}", registry.display()))?;
-            if !overlaps.is_empty() {
-                for overlap in &overlaps {
-                    println!("{overlap}");
-                }
-                bail!(
-                    "the registry at {} holds an account in more than one pool, and an account belongs to one",
-                    registry.display()
-                );
-            }
             let ledger = &config.stats.ledger_path;
             let found = phoebis_ledger::LedgerDb::read_schema_version(ledger)
                 .with_context(|| format!("reading the ledger at {}", ledger.display()))?;

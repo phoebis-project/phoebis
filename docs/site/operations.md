@@ -99,9 +99,9 @@ from a one-off container that mounts the volume, as the [storage key](#the-stora
 are `docker compose run --rm phoebis check-config` and `docker compose exec phoebis phoebis status` there.
 
 The binary that restores is the manifest's `phoebis_version` or newer. An older binary refuses a copy a newer build
-wrote with `the registry's schema version {found} is newer than this build supports ({supported}), so restore the
-backup taken before the upgrade`, and the ledger's line reads the same after `the ledger's schema version`. A newer
-binary migrates the copies as it opens them.
+wrote with `the registry's schema version {found} is newer than the {supported} this build opens: restore the backup
+taken before the upgrade, or recreate a registry a pre-release build wrote with phoebis init`, and the ledger's line
+reads the same with `ledger` in place of `registry`. A newer binary migrates the copies as it opens them.
 
 A registry restored alone brings back the accounts, their sealed credentials, the keys and the pools, and the ledger
 starts empty, so the keepalive ledger, the parked records, the request log, the rollups, the statistics and the usage
@@ -404,13 +404,14 @@ until a reload lands and `certificate_expiring` from 30 days before a loaded lea
 
 Schema migrations run when the new binary opens each database, every migration above the stored version in order, each
 inside its own transaction, so a crash leaves the last version that landed. The registry's migrations may drop or
-rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 62 and the
-ledger at schema 43. Both refuse to open a file a newer build wrote: the registry with `the registry's schema version
-{found} is newer than this build supports ({supported}), so restore the backup taken before the upgrade`, and the ledger
-with the same words after `the ledger's schema version`. `phoebis check-config` reads both versions read-only, taking no
-lock, and refuses first with `the registry at {path} is at schema {found}, newer than the {supported} this build reads`
-or `the ledger at {path} is at schema {found}, newer than the {supported} this build reads`. Returning to an older
-binary after an upgrade therefore means restoring from the backup, not downgrading the binary in place.
+rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 1 and the
+ledger at schema 1. Both refuse to open a file a newer build wrote: the registry with `the registry's schema version
+{found} is newer than the {supported} this build opens: restore the backup taken before the upgrade, or recreate a
+registry a pre-release build wrote with phoebis init`, and the ledger with the same words, `ledger` in place of
+`registry`. `phoebis check-config` reads both versions read-only, taking no lock, and refuses first with `the registry
+at {path} is at schema {found}, newer than the {supported} this build reads` or `the ledger at {path} is at schema
+{found}, newer than the {supported} this build reads`. Returning to an older binary after an upgrade therefore means
+restoring from the backup, not downgrading the binary in place.
 
 Every configuration block denies unknown keys, so a key the new build does not recognize refuses startup, and running
 `check-config` first catches that before the restart does.

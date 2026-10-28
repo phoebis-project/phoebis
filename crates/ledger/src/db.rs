@@ -846,8 +846,8 @@ pub(crate) fn row_to_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptR
     })
 }
 
-/// The store's rule: a file a newer build wrote is refused before the schema or a migration runs over it; then the
-/// v1 schema, then every migration above the stored version, each in its own transaction.
+/// The store's rule: a file a newer build wrote is refused before the schema or a migration runs over it. Then
+/// `SCHEMA`, the baseline at version 1, and `migrate` over the steps above the stored version.
 fn prepare(conn: &mut Connection, path: &Path) -> Result<(), LedgerError> {
     let current = read_version(conn)?;
     let supported = latest_version();
@@ -865,8 +865,18 @@ fn prepare(conn: &mut Connection, path: &Path) -> Result<(), LedgerError> {
             [],
         )?;
     }
-    for (version, sql) in schema::MIGRATIONS {
-        if *version <= current.max(1) {
+    migrate(conn, current.max(1), schema::MIGRATIONS)
+}
+
+/// Applies every step above `current` in order, each inside its own transaction with the version it reaches, so a
+/// crash or a failing step leaves the version at the last step that committed.
+fn migrate(
+    conn: &mut Connection,
+    current: u32,
+    migrations: &[(u32, &str)],
+) -> Result<(), LedgerError> {
+    for (version, sql) in migrations {
+        if *version <= current {
             continue;
         }
         let tx = conn.transaction()?;
@@ -1006,7 +1016,7 @@ mod tests {
     async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
-        assert_eq!(db.read_blocking(read_version).unwrap(), 43);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 1);
         let mode: String = db
             .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
@@ -1097,7 +1107,7 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
-        assert_eq!(version, 43, "and answered what the connection holds");
+        assert_eq!(version, 1, "and answered what the connection holds");
     }
 
     #[tokio::test]
@@ -1111,7 +1121,7 @@ mod tests {
         assert!(matches!(panicked, Err(LedgerError::ReadCanceled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
-            43,
+            1,
             "the poisoned guard recovered rather than turning every later read into ReadCanceled too"
         );
     }
@@ -1152,7 +1162,7 @@ mod tests {
                 refused,
                 LedgerError::SchemaTooNew {
                     found: 99,
-                    supported: 43,
+                    supported: 1,
                     ..
                 }
             ),
@@ -1161,8 +1171,9 @@ mod tests {
         let message = refused.to_string();
         assert!(
             message.contains("99")
-                && message.contains("restore the backup taken before the upgrade"),
-            "the refusal names the version it found and the remedy: {message}"
+                && message.contains("restore the backup taken before the upgrade")
+                && message.contains("phoebis init"),
+            "the refusal names the version it found and both remedies: {message}"
         );
         assert!(
             !message.contains(&path.display().to_string()),
@@ -1177,6 +1188,82 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored, "99", "no migration ran over the newer file");
+    }
+
+    #[test]
+    fn the_schema_refusal_names_the_version_this_build_opens_and_the_init_cure() {
+        assert_eq!(
+            LedgerError::SchemaTooNew {
+                path: "ledger.sqlite".into(),
+                found: 43,
+                supported: 1
+            }
+            .to_string(),
+            "the ledger's schema version 43 is newer than the 1 this build opens: restore the backup taken before \
+             the upgrade, or recreate a ledger a pre-release build wrote with phoebis init"
+        );
+    }
+
+    /// A step that creates a table and one that alters it, so a step applied twice or out of order fails.
+    const CHAIN: &[(u32, &str)] = &[
+        (2, "CREATE TABLE chain_probe (id INTEGER PRIMARY KEY);"),
+        (
+            3,
+            "ALTER TABLE chain_probe ADD COLUMN word TEXT NOT NULL DEFAULT 'x';",
+        ),
+    ];
+
+    fn prepared_in_memory() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        prepare(&mut conn, Path::new(":memory:")).unwrap();
+        conn
+    }
+
+    fn word_columns(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('chain_probe') WHERE name = 'word'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_chain_of_two_steps_applies_in_order_and_records_the_last_version() {
+        let mut conn = prepared_in_memory();
+        assert_eq!(read_version(&conn).unwrap(), 1);
+        migrate(&mut conn, 1, CHAIN).unwrap();
+        assert_eq!(read_version(&conn).unwrap(), 3);
+        assert_eq!(word_columns(&conn), 1);
+    }
+
+    #[test]
+    fn a_chain_resumes_above_the_stored_version_and_repeats_nothing() {
+        let mut conn = prepared_in_memory();
+        migrate(&mut conn, 1, &CHAIN[..1]).unwrap();
+        assert_eq!(read_version(&conn).unwrap(), 2);
+        migrate(&mut conn, 2, CHAIN).unwrap();
+        assert_eq!(read_version(&conn).unwrap(), 3);
+        assert_eq!(word_columns(&conn), 1);
+        migrate(&mut conn, 3, CHAIN).unwrap();
+        assert_eq!(read_version(&conn).unwrap(), 3);
+        assert_eq!(word_columns(&conn), 1);
+    }
+
+    #[test]
+    fn a_failing_step_leaves_the_version_at_the_last_step_that_landed() {
+        let mut conn = prepared_in_memory();
+        let error = migrate(&mut conn, 1, &[(2, CHAIN[0].1), (3, "THIS IS NOT SQL;")]).unwrap_err();
+        assert!(matches!(error, LedgerError::Sqlite(_)), "{error:?}");
+        assert_eq!(read_version(&conn).unwrap(), 2);
+        let probes: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'chain_probe'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(probes, 1, "the step that landed keeps its table");
     }
 
     #[tokio::test]

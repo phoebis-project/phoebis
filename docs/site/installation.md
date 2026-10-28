@@ -269,11 +269,6 @@ A registry or a ledger whose schema is newer than the binary reads fails the che
 {config.storage.path} is at schema {n}, newer than the {m} this build reads`, or the same line naming `the ledger at
 {config.stats.ledger_path}`, since the start refuses either file the same way.
 
-A registry that holds an account in more than one pool fails the check with exit 1 and the start's line for each such
-account, `account {id} is a member of pools {pools}, and an account belongs to one pool`, then
-`the registry at {config.storage.path} holds an account in more than one pool, and an account belongs to one`, since
-the start refuses to migrate it.
-
 A secret variable set to a value the start refuses fails the check with exit 1 and the start's line: `environment
 variable {name} holds a secret shorter than 16 characters`, `environment variable {name} still holds the example
 placeholder`, or `environment variable {name} holds a secret outside the allowed shape (printable ASCII, no surrounding

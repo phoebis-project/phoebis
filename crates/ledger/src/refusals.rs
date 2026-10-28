@@ -28,21 +28,10 @@ pub const REFUSALS_BACKFILL_KEY: &str = "refusals_backfill";
 /// last committed page moved, written by every page's transaction and deleted by the last page's.
 pub const REFUSALS_BACKFILL_CURSOR_KEY: &str = "refusals_backfill_cursor";
 
-/// One token list feeds the slice and the step's `IN (..)` text, so `is_refusal` and the step's backfill cannot
-/// name different codes.
 macro_rules! refusal_codes {
     ($first:literal $(, $rest:literal)* $(,)?) => {
-        /// The codes that flag a rejected request with no attempt as refused, alphabetical, the same list the step's
-        /// backfill SQL is generated from.
+        /// The codes that flag a rejected request with no attempt as refused, alphabetical.
         pub const REFUSAL_CODES: &[&str] = &[$first $(, $rest)*];
-        pub(crate) const REFUSED_STEP_SQL: &str = concat!(
-            "ALTER TABLE requests ADD COLUMN refused INTEGER NOT NULL DEFAULT 0;\n",
-            "ALTER TABLE rollups_hourly ADD COLUMN refusals_json TEXT NOT NULL DEFAULT '{}';\n",
-            "UPDATE requests SET refused = 1 WHERE kind <> 'probe' AND outcome = 'rejected' AND error_code IN (",
-            "'", $first, "'" $(, ", '", $rest, "'")*,
-            ") AND requests.attempts = 0",
-            " AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id);"
-        );
     };
 }
 refusal_codes!(
@@ -302,51 +291,6 @@ mod tests {
                 is_refusal(kind, outcome, code, attempts),
                 want,
                 "a {kind} request {outcome} with {code:?} after {attempts} attempts"
-            );
-        }
-    }
-
-    #[test]
-    fn the_steps_backfill_names_every_refusal_code_and_no_other() {
-        for code in REFUSAL_CODES {
-            assert!(
-                REFUSED_STEP_SQL.contains(&format!("'{code}'")),
-                "the backfill names {code}: {REFUSED_STEP_SQL}"
-            );
-        }
-        let (_, after) = REFUSED_STEP_SQL
-            .split_once("IN (")
-            .expect("the backfill lists its codes");
-        let (list, _) = after.split_once(')').expect("the list closes");
-        let quoted = list
-            .split(", ")
-            .filter(|item| item.len() > 2 && item.starts_with('\'') && item.ends_with('\''))
-            .count();
-        assert_eq!(
-            (quoted, list.split(", ").count()),
-            (REFUSAL_CODES.len(), REFUSAL_CODES.len()),
-            "one quoted item per code and nothing else: {list}"
-        );
-        assert!(
-            REFUSAL_CODES.windows(2).all(|pair| pair[0] < pair[1]),
-            "the list is strictly ascending: {REFUSAL_CODES:?}"
-        );
-        assert_eq!(REFUSAL_CODES.len(), 19, "the rule names nineteen codes");
-        assert!(
-            REFUSED_STEP_SQL.starts_with(
-                "ALTER TABLE requests ADD COLUMN refused INTEGER NOT NULL DEFAULT 0;\n\
-                 ALTER TABLE rollups_hourly ADD COLUMN refusals_json TEXT NOT NULL DEFAULT '{}';\n"
-            ),
-            "the step adds both columns first: {REFUSED_STEP_SQL}"
-        );
-        for clause in [
-            "kind <> 'probe'",
-            "requests.attempts = 0",
-            "NOT EXISTS (SELECT 1 FROM attempts",
-        ] {
-            assert!(
-                REFUSED_STEP_SQL.contains(clause),
-                "the backfill carries {clause}: {REFUSED_STEP_SQL}"
             );
         }
     }

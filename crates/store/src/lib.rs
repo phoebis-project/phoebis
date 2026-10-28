@@ -13,7 +13,6 @@ pub mod crypto;
 pub mod keepalive;
 pub mod permissions;
 
-use std::fmt;
 use std::path::{Path, PathBuf};
 #[cfg(any(test, feature = "debug-hooks"))]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -114,36 +113,12 @@ thread_local! {
     static ROUTING_COMMIT_SAW: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
 }
 
-/// An account the registry holds in more than one pool, found before the one-pool migration runs.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Overlap {
-    pub account_id: String,
-    pub pool_ids: Vec<String>,
-}
-
-impl fmt::Display for Overlap {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let pools = match self.pool_ids.split_last() {
-            Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
-            _ => self.pool_ids.join(", "),
-        };
-        write!(
-            f,
-            "account {} is a member of pools {pools}, and an account belongs to one pool",
-            self.account_id
-        )
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("account {account_id} is a member of pool {pool_id}")]
     AccountInPool { account_id: String, pool_id: String },
     #[error("account {0} not found")]
     AccountNotFound(String),
-    /// One line per account; the router does not start until the operator removes the extra memberships.
-    #[error("{}", .0.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))]
-    AccountsInPools(Vec<Overlap>),
     #[error("refresh attempt {0} not found")]
     AttemptNotFound(u64),
     #[error("a refresh attempt is already pending for this account")]
@@ -181,8 +156,8 @@ pub enum StoreError {
     #[error("pool {0} not found")]
     PoolNotFound(String),
     #[error(
-        "the registry's schema version {found} is newer than this build supports ({supported}), \
-         so restore the backup taken before the upgrade"
+        "the registry's schema version {found} is newer than the {supported} this build opens: restore the backup \
+         taken before the upgrade, or recreate a registry a pre-release build wrote with phoebis init"
     )]
     SchemaTooNew { found: u32, supported: u32 },
     #[error(transparent)]
@@ -400,7 +375,7 @@ impl Store {
         }
 
         let mut conn = Connection::open(db_path)?;
-        prepare(&mut conn, true)?;
+        prepare(&mut conn, true, schema::MIGRATIONS)?;
         check_or_seal_canary(&mut conn, key, db_path)?;
         Ok(Store {
             clock: Mutex::new(Arc::new(|| jiff::Timestamp::now().as_millisecond())),
@@ -439,7 +414,7 @@ impl Store {
     /// Opens an in-memory registry for tests: no directory, no lock, no on-disk file.
     pub fn open_in_memory(key: &StorageKey) -> Result<Store, StoreError> {
         let mut conn = Connection::open_in_memory()?;
-        prepare(&mut conn, false)?;
+        prepare(&mut conn, false, schema::MIGRATIONS)?;
         check_or_seal_canary(&mut conn, key, Path::new(":memory:"))?;
         Ok(Store {
             clock: Mutex::new(Arc::new(|| jiff::Timestamp::now().as_millisecond())),
@@ -597,23 +572,6 @@ impl Store {
         )?;
         conn.busy_timeout(BUSY_TIMEOUT)?;
         Ok(Some(read_version(&conn)?).filter(|version| *version != 0))
-    }
-
-    /// The overlaps of a registry file read without a lock or a migration: empty for a missing file or one at or
-    /// past `ONE_POOL_VERSION`, whose index forbids them.
-    pub fn read_overlapping_memberships(db_path: &Path) -> Result<Vec<Overlap>, StoreError> {
-        if !db_path.try_exists()? {
-            return Ok(Vec::new());
-        }
-        let conn = Connection::open_with_flags(
-            db_path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        conn.busy_timeout(BUSY_TIMEOUT)?;
-        if read_version(&conn)? >= schema::ONE_POOL_VERSION || !has_table(&conn, "pool_members")? {
-            return Ok(Vec::new());
-        }
-        overlapping_memberships(&conn)
     }
 
     /// Resolved refresh attempts and registry changes older than `before_ms`, but for the rows their readers need
@@ -1037,7 +995,14 @@ impl RecoveryStore {
     /// statements meet the columns they name. A failure here moved nothing the discard would, so the caller says
     /// nothing was discarded.
     pub fn prepare_recovery(&mut self) -> Result<(), StoreError> {
-        prepare(&mut self.conn, true)
+        prepare(&mut self.conn, true, schema::MIGRATIONS)
+    }
+
+    /// `prepare_recovery` over a chain the test names, so a failing step can be driven while the build's own chain
+    /// holds none.
+    #[cfg(test)]
+    fn prepare_recovery_with(&mut self, migrations: &[(u32, &str)]) -> Result<(), StoreError> {
+        prepare(&mut self.conn, true, migrations)
     }
 
     /// One transaction over a schema `prepare_recovery` moved: the canary, the credentials, the API-key secrets and
@@ -1320,9 +1285,12 @@ fn open_canary(key: &StorageKey, value: &str) -> Result<Vec<u8>, StoreError> {
     crypto::open(key, CANARY_AAD, nonce, sealed)
 }
 
-/// Runs the v1 `SCHEMA`, then every migration above the stored `schema_version`, each inside its own
-/// transaction, so a crash mid-migration leaves the version at the last one that actually committed.
-fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
+/// Runs `SCHEMA`, the baseline at version 1, then `migrate` over the steps above the stored `schema_version`.
+fn prepare(
+    conn: &mut Connection,
+    on_disk: bool,
+    migrations: &[(u32, &str)],
+) -> Result<(), StoreError> {
     conn.busy_timeout(BUSY_TIMEOUT)?;
     // A per-connection setting, never written to the database file, so it costs nothing to set before the
     // version is even known.
@@ -1339,7 +1307,24 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
         conn.pragma_update(None, "synchronous", "FULL")?;
     }
     conn.execute_batch(schema::SCHEMA)?;
-    for (version, sql) in schema::MIGRATIONS {
+    // A fresh file carries its version row as a stepped one does, so an `UPDATE` of the marker finds a row to change.
+    if current == 0 {
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', '1')",
+            [],
+        )?;
+    }
+    migrate(conn, current.max(1), migrations)
+}
+
+/// Applies every step above `current` in order, each inside its own transaction with the version it reaches, so a
+/// crash or a failing step leaves the version at the last step that committed.
+fn migrate(
+    conn: &mut Connection,
+    current: u32,
+    migrations: &[(u32, &str)],
+) -> Result<(), StoreError> {
+    for (version, sql) in migrations {
         if *version <= current {
             continue;
         }
@@ -1354,7 +1339,7 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
     Ok(())
 }
 
-/// The refusals `prepare` makes before it writes anything, answering the stored version.
+/// The refusal `prepare` makes before it writes anything, answering the stored version.
 fn check_schema(conn: &Connection) -> Result<u32, StoreError> {
     let current = read_version(conn)?;
     if current > schema::SCHEMA_VERSION {
@@ -1363,42 +1348,12 @@ fn check_schema(conn: &Connection) -> Result<u32, StoreError> {
             supported: schema::SCHEMA_VERSION,
         });
     }
-    // The index behind the one-pool rule cannot be created over an overlap, and a failed migration would leave the
-    // operator a SQLite line, so the registry is read first and the refusal names what to remove.
-    if current < schema::ONE_POOL_VERSION && has_table(conn, "pool_members")? {
-        let overlaps = overlapping_memberships(conn)?;
-        if !overlaps.is_empty() {
-            return Err(StoreError::AccountsInPools(overlaps));
-        }
-    }
     Ok(current)
 }
 
-/// Every account `pool_members` names under more than one pool, in account order, its pools sorted.
-fn overlapping_memberships(conn: &Connection) -> Result<Vec<Overlap>, StoreError> {
-    let mut statement = conn.prepare(
-        "SELECT account_id, GROUP_CONCAT(pool_id) FROM pool_members GROUP BY account_id HAVING COUNT(*) > 1 \
-         ORDER BY account_id",
-    )?;
-    let rows = statement.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
-    rows.map(|row| {
-        let (account_id, pools) = row?;
-        // A pool id is a slug, so the comma `GROUP_CONCAT` joins with never sits inside one.
-        let mut pool_ids: Vec<String> = pools.split(',').map(str::to_owned).collect();
-        pool_ids.sort();
-        Ok(Overlap {
-            account_id,
-            pool_ids,
-        })
-    })
-    .collect()
-}
-
 /// A connection that has never run `prepare` has no `meta` table yet, which reads as version 0 so the check
-/// above runs before `schema::SCHEMA` creates it. A database from before `meta.schema_version` existed is
-/// schema version 1: the v1 `SCHEMA` created every table it needs, just none of the migrations above it.
+/// above runs before `schema::SCHEMA` creates it. A `meta` without a `schema_version` row reads as
+/// version 1, the baseline `schema::SCHEMA` creates.
 fn read_version(conn: &Connection) -> Result<u32, StoreError> {
     let has_meta: bool = conn
         .query_row(
@@ -2033,9 +1988,104 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_the_last_entry_of_migrations() {
-        let last = schema::MIGRATIONS.last().expect("at least one migration").0;
-        assert_eq!(schema::SCHEMA_VERSION, last);
+    fn schema_version_is_one_with_no_migration_and_the_last_entry_otherwise() {
+        assert_eq!(
+            schema::SCHEMA_VERSION,
+            schema::MIGRATIONS.last().map_or(1, |(version, _)| *version)
+        );
+    }
+
+    #[test]
+    fn the_schema_refusal_names_the_version_this_build_opens_and_the_init_cure() {
+        assert_eq!(
+            StoreError::SchemaTooNew {
+                found: 62,
+                supported: 1
+            }
+            .to_string(),
+            "the registry's schema version 62 is newer than the 1 this build opens: restore the backup taken \
+             before the upgrade, or recreate a registry a pre-release build wrote with phoebis init"
+        );
+    }
+
+    /// A step that creates a table and one that alters it, so a step applied twice or out of order fails.
+    const CHAIN: &[(u32, &str)] = &[
+        (2, "CREATE TABLE chain_probe (id INTEGER PRIMARY KEY);"),
+        (
+            3,
+            "ALTER TABLE chain_probe ADD COLUMN word TEXT NOT NULL DEFAULT 'x';",
+        ),
+    ];
+
+    /// The baseline with no step above it, so the chain tests start at version 1 whatever the build's own chain holds.
+    fn prepared_in_memory() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        prepare(&mut conn, false, &[]).unwrap();
+        conn
+    }
+
+    fn word_columns(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('chain_probe') WHERE name = 'word'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_chain_of_two_steps_applies_in_order_and_records_the_last_version() {
+        let mut conn = prepared_in_memory();
+        assert_eq!(read_version(&conn).unwrap(), 1);
+        migrate(&mut conn, 1, CHAIN).unwrap();
+        assert_eq!(read_version(&conn).unwrap(), 3);
+        assert_eq!(word_columns(&conn), 1);
+    }
+
+    #[test]
+    fn a_chain_resumes_above_the_stored_version_and_repeats_nothing() {
+        let mut conn = prepared_in_memory();
+        migrate(&mut conn, 1, &CHAIN[..1]).unwrap();
+        assert_eq!(read_version(&conn).unwrap(), 2);
+        migrate(&mut conn, 2, CHAIN).unwrap();
+        assert_eq!(read_version(&conn).unwrap(), 3);
+        assert_eq!(word_columns(&conn), 1);
+        migrate(&mut conn, 3, CHAIN).unwrap();
+        assert_eq!(read_version(&conn).unwrap(), 3);
+        assert_eq!(word_columns(&conn), 1);
+    }
+
+    #[test]
+    fn a_failing_step_leaves_the_version_at_the_last_step_that_landed() {
+        let mut conn = prepared_in_memory();
+        let error = migrate(&mut conn, 1, &[(2, CHAIN[0].1), (3, "THIS IS NOT SQL;")]).unwrap_err();
+        assert!(matches!(error, StoreError::Sqlite(_)), "{error:?}");
+        assert_eq!(read_version(&conn).unwrap(), 2);
+        assert!(has_table(&conn, "chain_probe").unwrap());
+    }
+
+    #[test]
+    fn a_failing_recovery_preparation_leaves_the_sealed_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("router.sqlite");
+        let key = StorageKey::generate();
+        let store = Store::open(&db, &key).unwrap();
+        with_a_credential(&store);
+        // Dropped first, since the recovery's open takes the process lock the store holds.
+        drop(store);
+        let mut recovery = Store::open_for_recovery(&db).unwrap();
+        let error = recovery
+            .prepare_recovery_with(&[(schema::SCHEMA_VERSION + 1, "THIS IS NOT SQL;")])
+            .unwrap_err();
+        assert!(matches!(error, StoreError::Sqlite(_)), "{error:?}");
+        assert_eq!(recovery.sealed_counts().unwrap().credentials, 1);
+        drop(recovery);
+        let store = Store::open(&db, &key).unwrap();
+        assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION);
+        assert!(
+            store.credentials("a").unwrap().is_some(),
+            "the bundle still opens under the key"
+        );
     }
 
     #[test]
@@ -2097,7 +2147,7 @@ mod tests {
             params![(schema::SCHEMA_VERSION + 1).to_string()],
         )
         .unwrap();
-        let error = prepare(&mut conn, false).unwrap_err();
+        let error = prepare(&mut conn, false, schema::MIGRATIONS).unwrap_err();
         assert!(
             matches!(
                 error,

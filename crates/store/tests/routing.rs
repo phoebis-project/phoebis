@@ -321,7 +321,7 @@ fn a_pins_lane_and_an_affinity_entrys_lane_survive_a_reopen() {
 }
 
 #[test]
-fn a_pins_entrypoint_survives_a_reopen_and_a_row_from_before_reads_empty() {
+fn a_pins_entrypoint_survives_a_reopen_and_the_next_request_replaces_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let storage_key = StorageKey::generate();
@@ -353,7 +353,7 @@ fn a_pins_entrypoint_survives_a_reopen_and_a_row_from_before_reads_empty() {
         .unwrap()
         .upsert_pin(&PinRow {
             entrypoint: "claude-vscode".into(),
-            ..interactive.clone()
+            ..interactive
         })
         .unwrap();
     assert_eq!(
@@ -361,53 +361,10 @@ fn a_pins_entrypoint_survives_a_reopen_and_a_row_from_before_reads_empty() {
         [("s".to_string(), "claude-vscode".to_string())],
         "the next request's entrypoint replaces it"
     );
-    // A registry stamped at the version before the column, holding a pin that version wrote.
-    let before = pin("k", "before", "claude-opus-5-5", "a");
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch(&format!(
-        "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V56} UPDATE meta SET value = '55' WHERE key = 'schema_version';"
-    ))
-    .unwrap();
-    conn.execute(
-        "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, \
-         key_generation, incarnation, last_refresh_at, lane) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        rusqlite::params![
-            before.key_id,
-            before.session_id,
-            before.agent_id,
-            before.model,
-            before.account_id,
-            before.epoch as i64,
-            before.created_at,
-            before.last_used_at,
-            before.key_generation,
-            before.incarnation as i64,
-            before.last_refresh_at,
-            before.lane
-        ],
-    )
-    .unwrap();
-    drop(conn);
-    let migrated =
-        Store::open(&path, &storage_key).expect("the migration completes and the store opens");
-    assert_eq!(migrated.schema_version().unwrap(), 62);
-    let pins = migrated.load_routing().unwrap().pins;
-    assert_eq!(
-        pins.iter().find(|p| p.session_id == "before"),
-        Some(&before),
-        "the row from before the column reads no entrypoint, the base regime, and every field it was written with"
-    );
-    assert_eq!(
-        pins.iter()
-            .find(|p| p.session_id == "s")
-            .map(|p| p.entrypoint.as_str()),
-        Some(""),
-        "a pin the step reaches reads no entrypoint until its next request stamps one"
-    );
 }
 
 #[test]
-fn a_pins_shed_reason_survives_a_reopen_and_a_stamped_row_from_before_reads_none() {
+fn a_pins_shed_reason_survives_a_reopen_and_a_rounds_move_stamps_its_own() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let storage_key = StorageKey::generate();
@@ -442,64 +399,13 @@ fn a_pins_shed_reason_survives_a_reopen_and_a_stamped_row_from_before_reads_none
         .upsert_pin(&PinRow {
             shed_at: Some(5),
             shed_reason: Some("round".into()),
-            ..landed.clone()
+            ..landed
         })
         .unwrap();
     assert_eq!(
         reasons(),
         [("s".to_string(), Some("round".to_string()))],
         "a round's move stamps its own word over it"
-    );
-    // A registry stamped at the version before the column, holding a stamped pin that version wrote.
-    let before = PinRow {
-        shed_from: Some("b".into()),
-        shed_at: Some(4),
-        ..pin("k", "before", "claude-opus-5-5", "a")
-    };
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch(&format!(
-        "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} UPDATE meta SET value = '58' WHERE key = 'schema_version';"
-    ))
-    .unwrap();
-    conn.execute(
-        "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, \
-         key_generation, incarnation, last_refresh_at, lane, shed_from, shed_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-        rusqlite::params![
-            before.key_id,
-            before.session_id,
-            before.agent_id,
-            before.model,
-            before.account_id,
-            before.epoch as i64,
-            before.created_at,
-            before.last_used_at,
-            before.key_generation,
-            before.incarnation as i64,
-            before.last_refresh_at,
-            before.lane,
-            before.shed_from,
-            before.shed_at
-        ],
-    )
-    .unwrap();
-    drop(conn);
-    let migrated =
-        Store::open(&path, &storage_key).expect("the migration completes and the store opens");
-    assert_eq!(migrated.schema_version().unwrap(), 62);
-    let pins = migrated.load_routing().unwrap().pins;
-    assert_eq!(
-        pins.iter().find(|p| p.session_id == "before"),
-        Some(&before),
-        "the stamped row from before the column reads no reason, which its readers take as shed, and every field it \
-         was written with"
-    );
-    assert_eq!(
-        pins.iter()
-            .find(|p| p.session_id == "s")
-            .map(|p| p.shed_reason.clone()),
-        Some(None),
-        "a pin the step reaches reads no reason until its next stamp writes one"
     );
 }
 
@@ -1036,43 +942,8 @@ fn affinity_rows_land_together_replace_by_model_and_hash_and_delete_by_key() {
     );
 }
 
-const UNDO_V62: &str = "";
-// The reverse of the registry's version 61: the accounts lose `plan_ended_at`. One line with the marker last. The
-// trailing `\n` ends the marker's comment.
-const UNDO_V61: &str = "ALTER TABLE accounts DROP COLUMN plan_ended_at; -- rollback\n";
-// The reverse of the registry's version 60: the flag's column takes its old name back. One line with the marker
-// last, since it restores an old name. The trailing `\n` ends the marker's comment.
-const UNDO_V60: &str = "ALTER TABLE accounts RENAME COLUMN canceled TO cancelled; -- rollback\n";
-// The reverse of the registry's version 59: the pins lose `shed_reason`. One line with the marker last. The
-// trailing `\n` ends the marker's comment.
-const UNDO_V59: &str = "ALTER TABLE pins DROP COLUMN shed_reason; -- rollback\n";
-// The reverse of the registry's version 58: the five unmetered burn columns and `last_classifier`. One line with the
-// marker last. The trailing `\n` ends the marker's comment.
-const UNDO_V58: &str = "ALTER TABLE pins DROP COLUMN burn_unmetered_cache_read; ALTER TABLE pins DROP COLUMN burn_unmetered_input; ALTER TABLE pins DROP COLUMN burn_unmetered_output; ALTER TABLE pins DROP COLUMN burn_unmetered_write_1h; ALTER TABLE pins DROP COLUMN burn_unmetered_write_5m; ALTER TABLE pins DROP COLUMN last_classifier; -- rollback\n";
-// The reverse of the registry's version 56: the pins lose `entrypoint`. One line with the marker last. The trailing
-// `\n` ends the marker's comment.
-const UNDO_V56: &str = "ALTER TABLE pins DROP COLUMN entrypoint; -- rollback\n";
-// The reverse of the registry's version 55: the pools lose `slow_down`, `slow_down_stretch_seconds`,
-// `slow_down_hold_seconds`, `return_to_plan` and `return_to_plan_dwell_seconds`. One line with the marker last. The
-// trailing `\n` ends the marker's comment.
-const UNDO_V55: &str = "ALTER TABLE pools DROP COLUMN slow_down; ALTER TABLE pools DROP COLUMN slow_down_stretch_seconds; ALTER TABLE pools DROP COLUMN slow_down_hold_seconds; ALTER TABLE pools DROP COLUMN return_to_plan; ALTER TABLE pools DROP COLUMN return_to_plan_dwell_seconds; -- rollback\n";
-// The reverse of the registry's version 54: the pools' three renamed columns take their old names back, the three
-// dropped ones return with their old types and defaults, and the ceiling and the switch leave, so the chains below
-// replay the older undos over the old names. One line with the marker last. The trailing `\n` ends the marker's
-// comment.
-const UNDO_V54: &str = "ALTER TABLE pools DROP COLUMN window_ceiling; ALTER TABLE pools DROP COLUMN load_shedding; ALTER TABLE pools ADD COLUMN shed_ahead_of_pace REAL; ALTER TABLE pools ADD COLUMN select_below_utilization REAL; ALTER TABLE pools ADD COLUMN pace_floor REAL NOT NULL DEFAULT 0.05; ALTER TABLE pools RENAME COLUMN shed_cap TO shed_share; ALTER TABLE pools RENAME COLUMN burn_average_seconds TO burn_window_seconds; ALTER TABLE pools RENAME COLUMN shed_dwell_seconds TO source_dwell_seconds; -- rollback\n";
-// The reverse of the registry's version 53: the three mark columns leave the pins and the rounds table is rebuilt as
-// version 46 left it, so the chains below replay `UNDO_V46` over it unchanged. One line with the marker last. The
-// trailing `\n` ends the marker's comment.
-const UNDO_V53: &str = "ALTER TABLE pins DROP COLUMN marked_at; ALTER TABLE pins DROP COLUMN marked_on; ALTER TABLE pins DROP COLUMN marked_window; DROP TABLE shed_rounds; CREATE TABLE shed_rounds (pool_id TEXT NOT NULL, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, incarnation INTEGER NOT NULL, key_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, model TEXT NOT NULL, epoch INTEGER NOT NULL, round_at INTEGER NOT NULL, marked INTEGER NOT NULL, PRIMARY KEY (pool_id, account_id, key_id, session_id, agent_id, model)); -- rollback\n";
-// The reverse of the registry's version 52: the five fast burn columns. One line with the marker last. The trailing
-// `\n` ends the marker's comment.
-const UNDO_V52: &str = "ALTER TABLE pins DROP COLUMN burn_fast_input; ALTER TABLE pins DROP COLUMN burn_fast_cache_read; ALTER TABLE pins DROP COLUMN burn_fast_write_5m; ALTER TABLE pins DROP COLUMN burn_fast_write_1h; ALTER TABLE pins DROP COLUMN burn_fast_output; -- rollback\n";
-// The reverse of the registry's version 51, so a store stamped back below it migrates again.
-const UNDO_V51: &str = "ALTER TABLE affinity DROP COLUMN message_id;";
-
 #[test]
-fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_reads_none() {
+fn an_affinity_rows_message_id_round_trips_and_a_row_without_one_replaces_it() {
     let store = store_with(&["a"]);
     store
         .upsert_affinity(&[
@@ -1107,53 +978,6 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_read
         message_ids(&store)[0],
         ("hash-1".to_string(), None),
         "the store files the row it is handed, so a row without an id replaces the one with it"
-    );
-
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("router.sqlite");
-    let storage_key = StorageKey::generate();
-    {
-        let store = Store::open(&path, &storage_key).unwrap();
-        seed_accounts(&store, &["a"]);
-    }
-    // A registry stamped at the version before the column, holding a row that version wrote.
-    let before = affinity_row("claude-sonnet-5", "hash-1", "a");
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch(&format!(
-        "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
-    ))
-    .unwrap();
-    conn.execute(
-        "INSERT INTO affinity (model, hash, chain, account_id, incarnation, written_at, ttl_ms, prefix_tokens, \
-         key_id, key_generation, root, lane, depth) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        rusqlite::params![
-            before.model,
-            before.hash,
-            before.chain,
-            before.account_id,
-            before.incarnation as i64,
-            before.written_at,
-            before.ttl_ms,
-            before.prefix_tokens as i64,
-            before.key_id,
-            before.key_generation,
-            before.root,
-            before.lane,
-            before.depth
-        ],
-    )
-    .unwrap();
-    drop(conn);
-    let migrated =
-        Store::open(&path, &storage_key).expect("the migration completes and the store opens");
-    assert_eq!(migrated.schema_version().unwrap(), 62);
-    assert_eq!(
-        migrated.load_routing().unwrap().affinity,
-        vec![AffinityRow {
-            message_id: None,
-            ..before
-        }],
-        "the row from before the column reads no id and keeps every field it was written with"
     );
 }
 

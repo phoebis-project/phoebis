@@ -134,8 +134,8 @@ pub enum LedgerError {
     /// A file a newer build wrote: opening it would run no migration and read columns this build does not know. The
     /// message leaves `path` to the caller, whose context names the file.
     #[error(
-        "the ledger's schema version {found} is newer than this build supports ({supported}), \
-         so restore the backup taken before the upgrade"
+        "the ledger's schema version {found} is newer than the {supported} this build opens: restore the backup \
+         taken before the upgrade, or recreate a ledger a pre-release build wrote with phoebis init"
     )]
     SchemaTooNew {
         path: std::path::PathBuf,

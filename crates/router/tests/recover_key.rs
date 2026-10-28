@@ -512,9 +512,13 @@ fn a_preparation_that_fails_says_nothing_was_discarded_and_leaves_the_sealed_row
     let old = key(OLD_KEY);
     seed(&registry(dir.path()), &old);
     std::fs::write(key_file(dir.path()), NEW_KEY).unwrap();
-    // The marker one step behind a registry that ran every step: the open admits it, and the last step drops a
-    // column that is already gone, which the preparation's migration refuses.
-    set_schema_marker(&registry(dir.path()), phoebis_store::SCHEMA_VERSION - 1);
+    // A table under the name of the baseline's `session_memory_seen` index: the open admits the registry, and the
+    // preparation's `CREATE INDEX IF NOT EXISTS` refuses the name, since SQLite checks the table namespace before the
+    // index's `IF NOT EXISTS`.
+    rusqlite::Connection::open(registry(dir.path()))
+        .unwrap()
+        .execute_batch("DROP INDEX session_memory_seen; CREATE TABLE session_memory_seen (x);")
+        .unwrap();
     let out = recover_key(&config, &["--yes"], b"");
     assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
     let lines = stdout_lines(&out);
@@ -528,13 +532,22 @@ fn a_preparation_that_fails_says_nothing_was_discarded_and_leaves_the_sealed_row
         "{}",
         printed(&out)
     );
+    assert!(
+        lines[summary.len()].contains("there is already a table named session_memory_seen"),
+        "the preparation failed on the planted name: {}",
+        printed(&out)
+    );
     assert_no_key(&out, &[OLD_KEY, NEW_KEY]);
     assert_eq!(
         std::fs::read_to_string(key_file(dir.path())).unwrap(),
         NEW_KEY,
         "the operator's key file stays"
     );
-    set_schema_marker(&registry(dir.path()), phoebis_store::SCHEMA_VERSION);
+    // The open in `assert_untouched` creates the index again once the planted table is gone.
+    rusqlite::Connection::open(registry(dir.path()))
+        .unwrap()
+        .execute_batch("DROP TABLE session_memory_seen;")
+        .unwrap();
     assert_untouched(&registry(dir.path()), &old);
 }
 
@@ -1016,84 +1029,4 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
     let store = Store::open(&registry(dir.path()), &key(NEW_KEY)).unwrap();
     let (_, agents, _) = store.load_keepalive().unwrap();
     assert!(agents.iter().all(|agent| agent.body.is_none()));
-}
-
-const UNDO_V62: &str = "";
-
-/// The reverse of the step before it, the plan-ended column gone.
-const UNDO_V61: &str = "ALTER TABLE accounts DROP COLUMN plan_ended_at; \
-     UPDATE meta SET value = '60' WHERE key = 'schema_version';";
-
-/// The reverse of the step before it, the flag's column back under its old name. The marker last, since it restores an
-/// old name, and the trailing `\n` ends the marker's comment.
-const UNDO_V60: &str = "ALTER TABLE accounts RENAME COLUMN canceled TO cancelled; \
-     UPDATE meta SET value = '59' WHERE key = 'schema_version'; -- rollback\n";
-
-/// The reverse of the step before it, the pin's shed reason column gone.
-const UNDO_V59: &str =
-    "ALTER TABLE pins DROP COLUMN shed_reason; UPDATE meta SET value = '58' WHERE key = 'schema_version';";
-
-/// The reverse of the step before it, the pin's five unmetered burn columns and its `last_classifier` gone.
-const UNDO_V58: &str = "ALTER TABLE pins DROP COLUMN burn_unmetered_cache_read; \
-     ALTER TABLE pins DROP COLUMN burn_unmetered_input; \
-     ALTER TABLE pins DROP COLUMN burn_unmetered_output; \
-     ALTER TABLE pins DROP COLUMN burn_unmetered_write_1h; \
-     ALTER TABLE pins DROP COLUMN burn_unmetered_write_5m; \
-     ALTER TABLE pins DROP COLUMN last_classifier; \
-     UPDATE meta SET value = '57' WHERE key = 'schema_version';";
-
-/// The reverse of the step before it, the guardrail tables gone.
-const UNDO_V57: &str = "DROP TABLE IF EXISTS guardrail_attachments; \
-     DROP TABLE IF EXISTS guardrail_tombstones; \
-     DROP TABLE IF EXISTS guardrails; \
-     UPDATE meta SET value = '56' WHERE key = 'schema_version';";
-
-/// The reverse of the step before it, the pin's entrypoint column gone.
-const UNDO_V56: &str =
-    "ALTER TABLE pins DROP COLUMN entrypoint; UPDATE meta SET value = '55' WHERE key = 'schema_version';";
-
-/// The reverse of the step before it, the slow-down's three columns and the return-to-plan mode and dwell gone.
-const UNDO_V55: &str = "ALTER TABLE pools DROP COLUMN slow_down; \
-     ALTER TABLE pools DROP COLUMN slow_down_stretch_seconds; \
-     ALTER TABLE pools DROP COLUMN slow_down_hold_seconds; \
-     ALTER TABLE pools DROP COLUMN return_to_plan; \
-     ALTER TABLE pools DROP COLUMN return_to_plan_dwell_seconds; \
-     UPDATE meta SET value = '54' WHERE key = 'schema_version';";
-
-#[test]
-fn a_run_that_stops_short_of_the_discard_leaves_the_registry_at_the_version_it_found() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = config_file(dir.path());
-    let old = key(OLD_KEY);
-    seed(&registry(dir.path()), &old);
-    rusqlite::Connection::open(registry(dir.path()))
-        .unwrap()
-        .execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55}"
-        ))
-        .unwrap();
-    std::fs::write(key_file(dir.path()), OLD_KEY).unwrap();
-    let out = recover_key(&config, &["--yes"], b"");
-    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
-    assert_eq!(stdout_lines(&out), [MATCH_LINE], "{}", printed(&out));
-    assert_eq!(
-        Store::read_schema_version(&registry(dir.path())).unwrap(),
-        Some(54),
-        "a matching key migrates nothing"
-    );
-    std::fs::write(key_file(dir.path()), NEW_KEY).unwrap();
-    let out = recover_key(&config, &[], b"no\n");
-    assert_eq!(out.status.code(), Some(2), "{}", printed(&out));
-    assert_eq!(
-        Store::read_schema_version(&registry(dir.path())).unwrap(),
-        Some(54),
-        "a declined run migrates nothing, so the build that wrote the registry still opens it"
-    );
-    let out = recover_key(&config, &[], b"yes\n");
-    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
-    assert_eq!(
-        Store::read_schema_version(&registry(dir.path())).unwrap(),
-        Some(phoebis_store::SCHEMA_VERSION),
-        "the recovery that proceeds prepares the schema"
-    );
 }
