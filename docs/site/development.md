@@ -165,16 +165,18 @@ own copy of BoringSSL under `deps/boringssl/` rather than linking a system build
 revision id of the BoringSSL project: no commit file exists anywhere under it. `include/openssl/base.h` in it declares
 `BORINGSSL_API_VERSION 41`, the only revision marker the vendored source carries.
 
-Every fixture under `crates/profile/fixtures/` comes from one capture of 2026-10-27 of the pinned 2.1.310 binary
-running against loopback receivers with dummy credentials, never against `api.anthropic.com`, the count fixtures
-included. The inference plane (the TLS ClientHello, the `HEAD /api/hello` probe and the `/v1/messages` request head and
-body) came from `-p` print-mode runs pointed at loopback receivers over `ANTHROPIC_BASE_URL`, once per credential mode:
-an API key, an OAuth token, and an OAuth token with the first-party override. The count path (the
-`/v1/messages/count_tokens` head of each mode and the one body the three send) came from three more print-mode runs past
-a receiver that answers with a canned tool call. The control plane (the OAuth code and refresh grants and the profile,
-roles and usage reads) came from a scripted `/login`, `/status` and `/usage` session driven in a pseudo-terminal and a
-print-mode run started on an expired token, every control call tunneled through `HTTPS_PROXY` to a TLS-terminating
-receiver that answered with canned responses while recording what it received.
+Every fixture under `crates/profile/fixtures/` is from one capture of 2026-10-27 of the pinned 2.1.310 binary running
+against loopback receivers with dummy credentials, never against `api.anthropic.com`: `scripts/build-fixtures.py` wrote
+the 19 captured fixtures from it, the count fixtures included, and the four files under `responses/` are the canned
+answers the control receiver read during the capture, kept by hand. The inference plane (the TLS ClientHello, the
+`HEAD /api/hello` probe and the `/v1/messages` request head and body) came from `-p` print-mode runs pointed at
+loopback receivers over `ANTHROPIC_BASE_URL`, once per credential mode: an API key, an OAuth token, and an OAuth token
+with the first-party override. The count path (the `/v1/messages/count_tokens` head of each mode and the one body the
+three send) came from three more print-mode runs past a receiver that answers with a canned tool call. The control
+plane (the OAuth code and refresh grants and the profile, roles and usage reads) came from a scripted `/login`,
+`/status` and `/usage` session driven in a pseudo-terminal and a print-mode run started on an expired token, every
+control call tunneled through `HTTPS_PROXY` to a TLS-terminating receiver that answered with canned responses while
+recording what it received.
 
 `scripts/capture-baseline.sh` reproduces the inference-plane half of this recipe in one command. It re-executes itself
 under `unshare -rn`, so the client runs with loopback as its only route, then drives seven runs: the three credential
@@ -182,7 +184,7 @@ modes, the first-party override a second time as a second hash vector, a gzip-fo
 `scripts/capture/http_raw.py`, and one more run past `scripts/capture/connect_capture.py` over `HTTPS_PROXY` for the
 ClientHello. The probe run alone leaves `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` unset, since the client sends
 `HEAD /api/hello` only without that variable, and the builder keeps that run's inference post out of the written
-bodies. Into the output directory the script writes `clean_modes.json` with one entry per compared request, one
+bodies. Into the output directory the script writes `clean_modes.json` with one entry per recorded request, one
 `clean_body_<i>.json` per request holding that body's raw bytes, `gzip_modes.json` for the gzip-forced run,
 `probe_modes.json` for the probe run, and `connect.json` for the hello. It finishes by running
 `python3 scripts/build-fixtures.py --check <output-dir>` and exits with that status, so capturing and comparing are the
@@ -204,16 +206,16 @@ Console account and a print-mode run whose stored token has expired so it starts
 into `<variant>/<phase>.json`. The usage read appears in the second variant alone: with the switch set the client's
 `/usage` dialog opens on an error row and sends nothing, so the control fixtures are written from `control-unflagged/`.
 With `CAPTURE_BASELINE` naming a baseline capture directory the script ends with
-`python3 scripts/build-fixtures.py --check --control <variant-dir> <baseline-dir>` for each variant, writes each output
-to `<variant>/check.txt` and exits with the first non-zero status of the two, and without it prints the two commands to
-run later. A baseline check without control recordings still compares: `--check` lists the control-plane fixtures under
-`not captured (control plane):` and grades everything it could reach.
+`python3 -I scripts/build-fixtures.py --check --control <variant-dir> <baseline-dir>` for each variant, writes each
+output to `<variant>/check.txt` and exits with the first non-zero status of the two, and without it prints the two
+commands to run later. A baseline check without control recordings still compares: `--check` lists the control-plane
+fixtures under `not captured (control plane):` and grades everything it could reach.
 
 The written fixtures are redacted. `scripts/build-fixtures.py` puts a placeholder in for the device id, the session id
 (one value in the session header and in `metadata.user_id`), the prompt id (one value in the prompt id header and in
 the billing line's `cc_prompt_id`), the request id header, the tokens and the code grant's `code`, `code_verifier` and
-`state`, empties `account_uuid`, rewrites the receiver's loopback `Host` to `api.anthropic.com`, and re-signs each
-body's `cch` over the redacted bytes. Everything else is the client's bytes.
+`state`, empties `account_uuid`, rewrites the receiver's loopback `Host` to `api.anthropic.com`, and re-signs the `cch`
+of each body that carries one over the redacted bytes. Everything else is the client's bytes.
 
 ### The fixture manifest
 
@@ -254,10 +256,11 @@ the table after any accepted re-pin.
 
 ### What remains unmeasured
 
-- Interactive (`cli`) and background (`cli-bg`) entrypoints, `x-cc-atis`, `anthropic-usage-limit: slow`, fallback
-  headers, `x-anthropic-additional-protection`, and the `x-stainless-helper` markers.
+- Inference requests from the interactive (`cli`) and background (`cli-bg`) entrypoints, `x-cc-atis`,
+  `anthropic-usage-limit: slow`, fallback headers, `x-anthropic-additional-protection`, and the `x-stainless-helper`
+  markers.
 - Live acceptance by Anthropic of any request the relay emits, and any account-restriction consequence.
-- Outbound gzip on the wire (gated by the live rollout flag and the first-party host check).
+- Outbound gzip on the wire (gated by the exact first-party host).
 - Session resumption over longer sessions. None was observed within the capture windows.
 - The Console login's client id and scopes. The 2.1.310 Console authorize URL carries the client id
   `41077d10-94b8-4194-be48-d251e9eb21b4` with the scopes `user:profile user:inference`, where the router's Console
@@ -302,13 +305,13 @@ profile against a new build:
    grants and the profile, roles and usage reads) in its two variants, with and without
    `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, as [The pinned client build](#the-pinned-client-build) describes. With
    `CAPTURE_BASELINE=<baseline-dir>` it ends with
-   `python3 scripts/build-fixtures.py --check --control <variant-dir> <baseline-dir>` for each variant and writes each
-   output to `<variant>/check.txt`. Without control recordings `--check` lists those fixtures under
+   `python3 -I scripts/build-fixtures.py --check --control <variant-dir> <baseline-dir>` for each variant and writes
+   each output to `<variant>/check.txt`. Without control recordings `--check` lists those fixtures under
    `not captured (control plane):` rather than failing on them.
 4. Land the re-pin as a change to the repository.
-   `python3 scripts/build-fixtures.py --control <variant-dir> <baseline-dir>` writes the inference and control
+   `python3 -I scripts/build-fixtures.py --control <variant-dir> <baseline-dir>` writes the inference and control
    fixtures from the variant that recorded the usage read, and
-   `python3 scripts/build-fixtures.py --count <count-dir>` writes the count fixtures. A new `Profile` value in
+   `python3 -I scripts/build-fixtures.py --count <count-dir>` writes the count fixtures. A new `Profile` value in
    `crates/profile/src/lib.rs` carries the new constants, and `by_name` learns its name. The fixture manifest is the
    table under [The fixture manifest](#the-fixture-manifest), which the profile crate's test
    `every_fixture_matches_the_development_page_manifest` reads, so the re-pin regenerates it with the command shown

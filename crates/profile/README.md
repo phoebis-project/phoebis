@@ -4,12 +4,14 @@ Pinned wire constants of Claude Code 2.1.310 on Linux x64, and the fixture files
 
 ## Fixtures
 
-The 23 files under `fixtures/` come from one capture of 2026-10-27 of the pinned 2.1.310 binary running against
+The 23 files under `fixtures/` belong to one capture of 2026-10-27 of the pinned 2.1.310 binary running against
 loopback receivers with dummy credentials: the inference plane and the count path from print-mode runs, and the control
-plane from a scripted `/login`, `/status` and `/usage` session in a pseudo-terminal, every control call tunneled through
-`HTTPS_PROXY` to a receiver that answered with canned responses. `scripts/build-fixtures.py` wrote every file from that
-capture, and nothing else writes one. [The pinned client build](../../docs/site/development.md#the-pinned-client-build)
-records the binary, the capture and the manifest.
+plane from a scripted `/login`, `/status` and `/usage` session in a pseudo-terminal and a print-mode run started on an
+expired token, every control call tunneled through `HTTPS_PROXY` to a receiver that answered with canned responses.
+`scripts/build-fixtures.py` wrote the 19 captured fixtures from that capture, and nothing else writes one. The four
+files under `responses/` are the canned answers the control receiver read during the capture, kept by hand.
+[The pinned client build](../../docs/site/development.md#the-pinned-client-build) records the binary, the capture and
+the manifest.
 
 - `body_apikey.json`, `body_fp.json`, `body_fp_again.json`, `body_oauth.json`: the four captured `/v1/messages`
   request bodies, one per inference run (an API key, an OAuth token with the first-party override, the override a
@@ -44,9 +46,9 @@ value and the manifest a re-pin changes are on [Re-pinning](../../docs/site/deve
 
 ## Redaction
 
-Every fixture is what `scripts/build-fixtures.py` wrote from the capture and is never edited by hand. The builder puts
-a placeholder in for the device id, the session id (one value in the session header and in `metadata.user_id`), the
-prompt id (one value in the prompt id header and in the billing line's `cc_prompt_id`), the request id header, the
-tokens and the code grant's `code`, `code_verifier` and `state`, empties `account_uuid`, rewrites the receiver's
-loopback `Host` to `api.anthropic.com`, and re-signs each body's `cch` over the redacted bytes. Everything else is the
-client's bytes.
+The 19 captured fixtures are what `scripts/build-fixtures.py` wrote from the capture and are never edited by hand. The
+builder puts a placeholder in for the device id, the session id (one value in the session header and in
+`metadata.user_id`), the prompt id (one value in the prompt id header and in the billing line's `cc_prompt_id`), the
+request id header, the tokens and the code grant's `code`, `code_verifier` and `state`, empties `account_uuid`,
+rewrites the receiver's loopback `Host` to `api.anthropic.com`, and re-signs the `cch` of each body that carries one
+over the redacted bytes. Everything else is the client's bytes.
