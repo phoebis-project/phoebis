@@ -53,7 +53,7 @@ fn the_fable_window_comes_from_limits_regardless_of_the_named_key() {
 }
 
 #[test]
-fn the_captured_usage_based_seat_body_parses_into_no_window_and_a_spend_reading() {
+fn the_seat_fixture_parses_into_no_window_and_a_spend_reading() {
     let (windows, fable, extra, spend, raw) =
         parse_usage(include_bytes!("fixtures/usage_based_seat.json")).unwrap();
     assert!(windows.is_empty(), "every window key is null");
@@ -899,7 +899,7 @@ mod service {
         let service = service_for(&up, store_with_bundle_until(1_000_000 + 86_400_000), &now);
 
         let clean = service.poll("a").await.unwrap();
-        let reading = clean.spend.expect("the captured body gives a reading");
+        let reading = clean.spend.expect("the seat fixture gives a reading");
         assert_eq!(clean.fetched_at, 1_000_000);
 
         up.set_rule_after(0, "/api/oauth/usage", rate_limited_bare().respond);

@@ -6372,18 +6372,19 @@ async fn a_share_at_one_persisted_in_october_lapses_after_a_restart_on_the_first
     }
 }
 
-/// The usage body a usage-based Enterprise seat answered, as captured, its extra usage on the percent scale.
-const CAPTURED_SEAT_USAGE: &[u8] = include_bytes!("../../oauth/tests/fixtures/usage_based_seat.json");
+/// The usage body of an invented usage-based Enterprise seat, the oauth crate's fixture, its extra usage on the
+/// percent scale.
+const SEAT_USAGE: &[u8] = include_bytes!("../../oauth/tests/fixtures/usage_based_seat.json");
 
 #[tokio::test]
-async fn the_captured_seats_poll_moves_the_spend_share_to_its_extra_usage_utilization_over_a_hundred(
+async fn the_seat_fixtures_poll_moves_the_spend_share_to_its_extra_usage_utilization_over_a_hundred(
 ) {
     let store = seeded_oauth(&["a"]);
     usage_based_seat(&store, "a");
     let now = Arc::new(AtomicI64::new(OCT_10));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let (windows, fable_window, extra_usage, spend, raw_keys) =
-        phoebis_oauth::parse_usage(CAPTURED_SEAT_USAGE).unwrap();
+        phoebis_oauth::parse_usage(SEAT_USAGE).unwrap();
     let snapshot = UsageSnapshot {
         account_id: "a".into(),
         identity_generation: 1,
@@ -6398,7 +6399,7 @@ async fn the_captured_seats_poll_moves_the_spend_share_to_its_extra_usage_utiliz
     handle
         .report(Report::Credits {
             account_id: "a".into(),
-            state: credits_from_usage(&snapshot, 1).expect("the capture carries extra usage"),
+            state: credits_from_usage(&snapshot, 1).expect("the fixture carries extra usage"),
             incarnation: 1,
         })
         .await;
@@ -6409,6 +6410,47 @@ async fn the_captured_seats_poll_moves_the_spend_share_to_its_extra_usage_utiliz
     // The body's 41.0 percent, which its `spend.percent` carries as 41.
     assert!(
         (share - 0.41).abs() < 1e-9,
+        "the share is extra usage's utilization over a hundred, the one figure the view reads too: {share}"
+    );
+}
+
+/// A seat body whose `spend.percent` rounds its extra usage's utilization, so the two fields answer different shares.
+const UNEQUAL_SEAT_USAGE: &[u8] = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":250000,"used_credits":103125.0,"utilization":41.25,"currency":"USD","decimal_places":2},"spend":{"used":{"amount_minor":103125,"currency":"USD","exponent":2},"limit":{"amount_minor":250000,"currency":"USD","exponent":2},"percent":41}}"#;
+
+#[tokio::test]
+async fn a_seats_poll_reads_the_share_from_extra_usage_utilization_and_not_from_the_rounded_spend_percent(
+) {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(OCT_10));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let (windows, fable_window, extra_usage, spend, raw_keys) =
+        phoebis_oauth::parse_usage(UNEQUAL_SEAT_USAGE).unwrap();
+    let snapshot = UsageSnapshot {
+        account_id: "a".into(),
+        identity_generation: 1,
+        fetched_at: OCT_10,
+        windows,
+        fable_window,
+        extra_usage,
+        raw_keys,
+        error: None,
+        spend,
+    };
+    handle
+        .report(Report::Credits {
+            account_id: "a".into(),
+            state: credits_from_usage(&snapshot, 1).expect("the body carries extra usage"),
+            incarnation: 1,
+        })
+        .await;
+    let share = spend_window_of(&handle)
+        .await
+        .utilization
+        .expect("the poll set a share");
+    // `spend.percent` rounds the 41.25 percent to 41, so a reading of it would answer 0.41.
+    assert!(
+        (share - 0.4125).abs() < 1e-9,
         "the share is extra usage's utilization over a hundred, the one figure the view reads too: {share}"
     );
 }
