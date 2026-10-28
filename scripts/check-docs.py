@@ -621,9 +621,9 @@ FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 CODE_SPAN = re.compile(r"(`+)(.+?)\1")
 HTML_COMMENT = re.compile(r"<!--.*?-->")
 DASHES = ("—", "–")
-# The planning words a page never carries. "plan", "commit", "review" and "lane" have a product sense (the plan
-# meter, a committed stream, auto mode's review, the fast lane) and are the reviewer's. "shape" with a capital
-# letter is case-sensitive, since "the shape a client sends" is prose.
+# The words of a working document that a reference page does not use. "commit", "lane", "plan" and "review" have a
+# product sense (a committed stream, the fast lane, the plan meter, auto mode's review) and stay off the list. "shape"
+# with a capital letter is case-sensitive, since "the shape a client sends" is prose.
 VOCABULARY = re.compile(
     r"\b(sub-projects?|subprojects?|rulings?|tasks?|findings?|worktrees?|workstreams?|item [0-9]+|option [0-9])\b",
     re.IGNORECASE,

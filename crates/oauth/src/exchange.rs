@@ -246,9 +246,8 @@ pub fn parse_profile(body: &[u8]) -> Result<ProfileResponse, OauthError> {
     })
 }
 
-/// The upstream reads these bodies by key, but the pinned client's byte-for-byte order is what keeps a
-/// fingerprint from standing out, so the keys are inserted in the measured order and `serde_json`'s
-/// `preserve_order` feature keeps them there.
+/// The upstream reads these bodies by key. The keys are inserted in the order measured from one Claude Code release,
+/// so the body matches its fixture byte for byte, and `serde_json`'s `preserve_order` feature keeps them there.
 fn json_body(pairs: &[(&str, &str)]) -> Vec<u8> {
     let mut map = Map::with_capacity(pairs.len());
     for (key, value) in pairs {

@@ -1,4 +1,5 @@
-//! The two TLS profiles: the SDK inference plane and the Axios control plane of the pinned client.
+//! The two TLS profiles, the Axios control plane and the SDK inference plane, with the TLS settings measured from one
+//! Claude Code release.
 
 use boring::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVerifyMode, SslVersion};
 use phoebis_profile::Profile;

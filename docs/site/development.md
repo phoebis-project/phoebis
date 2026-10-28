@@ -153,8 +153,8 @@ The exception is the four files under `responses/`, the control receiver's canne
 
 ## The pinned client build
 
-The router is measured against one Claude Code release, the profile `claude-code-2.1.310-linux-x64` compiled into the build, and reproduces the client's own billing stamp after its edits. The
-binary the profile was measured from:
+The router is measured against one Claude Code release, the profile `claude-code-2.1.310-linux-x64` compiled into the
+build, and reproduces the client's own billing stamp after its edits. The binary the profile was measured from:
 
 | Field | Value |
 | --- | --- |

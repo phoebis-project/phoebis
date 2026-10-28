@@ -378,8 +378,8 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             status: StatusCode::FORBIDDEN,
             error_type: "permission_error",
             code: "client_drift",
-            message: Cow::Borrowed("the client's billing hash does not match the pinned profile. \
-                      Re-pin the router to this client version"),
+            message: Cow::Borrowed("the client's billing hash does not reproduce under the Claude Code release this \
+                      build is measured against. Re-pin the router to this client version"),
             retry_after: None,
             no_retry: true,
         },

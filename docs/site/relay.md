@@ -198,7 +198,7 @@ codes](client.md#refusal-codes)):
 
 | Drift kind | Message |
 | --- | --- |
-| `hash` | `the client's billing hash does not match the pinned profile. Re-pin the router to this client version` |
+| `hash` | `the client's billing hash does not reproduce under the Claude Code release this build is measured against. Re-pin the router to this client version` |
 | `version_suffix` | `the client's version suffix does not reproduce from the prompt and the user agent. Re-pin the router to this client version` |
 | `version_suffix`, resumed conversation | `the conversation was resumed, and the client's version suffix does not reproduce from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this client version` |
 
@@ -385,11 +385,12 @@ alone never reaches the endpoint's per-account limit. No key or field turns the 
 tier moves rarely, and the profile endpoint shares the usage endpoint's per-account limit. It rides on the poll and has
 no switch of its own.
 
-**The catalog fetch.** The router reads each enabled account's model listing with `GET /v1/models?limit=1000` as the
-pinned client sends it, every `routing.catalog_refresh_seconds` (default 21600, 60 to 604800, the bootstrap file refused
-at start with `routing.catalog_refresh_seconds must be between 60 and 604800, not {value}`), on demand when the account
-has none, and holds a failed read for sixty seconds before the account is read again
-([routing](installation.md#routing)). No switch: the key sets the interval alone.
+**The catalog fetch.** The router reads each enabled account's model listing with `GET /v1/models?limit=1000`, its head
+measured from the one Claude Code release the profile records, every `routing.catalog_refresh_seconds` (default 21600,
+60 to 604800, the bootstrap file refused at start with
+`routing.catalog_refresh_seconds must be between 60 and 604800, not {value}`), on demand when the account has none, and
+holds a failed read for sixty seconds before the account is read again ([routing](installation.md#routing)). No switch:
+the key sets the interval alone.
 
 **The startup fetch.** Before the proxy listener binds, the router fetches every enabled account's catalog and samples
 every polled account's usage, each bounded by `routing.startup_fetch_seconds` (default 30, 1 to 60, the bootstrap file

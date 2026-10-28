@@ -2359,7 +2359,8 @@ async fn a_resumed_conversations_drifted_hash_keeps_the_hash_words_and_warns_the
     let (message, warning) = drift_refusal(&native, "hash").await;
     assert_eq!(
         message,
-        "the client's billing hash does not match the pinned profile. Re-pin the router to this client version"
+        "the client's billing hash does not reproduce under the Claude Code release this build is measured against. \
+         Re-pin the router to this client version"
     );
     assert!(warning.contains(" resume=true"), "{warning}");
 }
