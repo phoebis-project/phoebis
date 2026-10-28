@@ -182,11 +182,13 @@ test('an amount in minor units reads in dollars at its exponent, two digits wher
   assert.equal(fmtCredits(102_500, 2), '$1,025.00');
   assert.equal(fmtCredits(102_500), '$1,025.00', 'cents unless the reading says otherwise');
   assert.equal(fmtCredits(102_500, 0), '$102,500.00', 'an exponent of 0 counts whole dollars');
+  assert.equal(fmtCredits(102_537, 2), '$1,025.37', 'cents print as they are');
 });
 
 test('a spend amount in minor units reads in its own currency at its exponent', () => {
   assert.equal(fmtMinor(12_500, 'EUR', 2), '€125.00', 'a euro amount reads in euros');
   assert.equal(fmtMinor(102_500, 'USD', 2), '$1,025.00');
+  assert.equal(fmtMinor(102_537, 'USD', 2), '$1,025.37');
   assert.equal(fmtMinor(1_250, 'EUR', 1), '€125.00', 'the exponent places the point');
 });
 

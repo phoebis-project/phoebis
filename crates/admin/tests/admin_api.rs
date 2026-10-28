@@ -1906,8 +1906,8 @@ async fn a_usage_based_accounts_spend_falls_back_to_the_polls_amounts_reads_no_l
         polled_row(
             "object",
             at,
-            (250_001, 102_501),
-            0.41,
+            (250_001, 103_125),
+            0.4125,
             Some((Some(250_000), 102_500, Some(41.0))),
         ),
         polled_row(
@@ -1941,7 +1941,7 @@ async fn a_usage_based_accounts_spend_falls_back_to_the_polls_amounts_reads_no_l
         (
             &serde_json::json!(102_500),
             &serde_json::json!(250_000),
-            &serde_json::json!(0.41)
+            &serde_json::json!(0.4125)
         ),
         "the object's amounts win over the extra-usage ones, and the share is the row's stored one, which the \
          router's hold reads too, never the object's rounded percent: {object}"

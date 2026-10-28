@@ -2565,7 +2565,9 @@ fn seat_poll(body: &[u8], fetched_at: i64) -> phoebis_oauth::UsageSnapshot {
 async fn a_polls_extra_usage_row_stores_the_share_as_a_fraction_and_the_spend_objects_figures_alone(
 ) {
     // The amounts beside the object are a minor unit apart from it, so each column says which object it came from.
-    let with_object = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":250001,"used_credits":102501.0,"utilization":41.0,"currency":"USD","decimal_places":2},"spend":{"used":{"amount_minor":102500,"currency":"USD","exponent":2},"limit":{"amount_minor":250000,"currency":"USD","exponent":2},"percent":41}}"#;
+    // The share column is the body's declared utilization, read and never computed, so 41.25 against the object's
+    // rounded 41 tells the two columns apart.
+    let with_object = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":250001,"used_credits":102501.0,"utilization":41.25,"currency":"USD","decimal_places":2},"spend":{"used":{"amount_minor":102500,"currency":"USD","exponent":2},"limit":{"amount_minor":250000,"currency":"USD","exponent":2},"percent":41}}"#;
     let amounts_alone = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":250000,"used_credits":102500.0,"utilization":41.0,"currency":"USD","decimal_places":2}}"#;
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     for (body, at) in [(&with_object[..], NOW), (&amounts_alone[..], NOW + 300_000)] {
@@ -2588,7 +2590,7 @@ async fn a_polls_extra_usage_row_stores_the_share_as_a_fraction_and_the_spend_ob
             .collect::<Vec<_>>(),
         [
             (
-                Some(0.41),
+                Some(0.4125),
                 Some(250_001),
                 Some(102_501),
                 Some(250_000),

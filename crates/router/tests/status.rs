@@ -598,6 +598,15 @@ fn a_usage_based_seats_row_prints_its_spend_share_its_amounts_and_its_reset_mark
                 "estimated",
             ),
         ),
+        (
+            "seat-r",
+            spend(
+                amounts("USD", 102_550, Some(250_000)),
+                0.41,
+                NOV_1,
+                "estimated",
+            ),
+        ),
     ];
     let mut accounts: Vec<serde_json::Value> = seats
         .iter()
@@ -649,6 +658,11 @@ fn a_usage_based_seats_row_prints_its_spend_share_its_amounts_and_its_reset_mark
             "seat-x",
             ["spend 41%", "EUR 1025 of EUR 2500", "resets 11-01 est"],
             "another currency prints its code",
+        ),
+        (
+            "seat-r",
+            ["spend 41%", "$1026 of $2500", "resets 11-01 est"],
+            "a half dollar rounds up to the next whole dollar",
         ),
         (
             "plan",
