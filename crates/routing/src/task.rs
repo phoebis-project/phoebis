@@ -302,6 +302,10 @@ pub enum RouterEvent {
         /// have announced it already, which the ledger decides from its own newest row.
         restored: bool,
         at: i64,
+        /// The plan and the tier of the stored reading whose reset passed, never the account's pair at the emission, so
+        /// a profile read between the reading and the reset leaves the old week under the pair it ran under.
+        plan: Option<String>,
+        tier: Option<String>,
     },
     /// The entries the purge removed for one root on one account, with the largest among them. `deepest.depth` is
     /// the ordinal the entry was written at, never the count removed.
@@ -4109,12 +4113,24 @@ impl Task {
             }
             Report::Sample {
                 account_id,
-                sample,
+                mut sample,
                 incarnation,
                 source_request_id,
             } => {
                 if self.moved_past(&account_id, incarnation) {
                     return;
+                }
+                // Neither the poll nor a head knows the account's plan, and the pair is the one the account holds as
+                // the reading lands: a later profile read moves the readings after it and leaves this week's alone.
+                let snapshot = self
+                    .snapshot
+                    .read()
+                    .expect("snapshot lock poisoned")
+                    .clone();
+                let (plan, tier) = (snapshot.plan(&account_id), snapshot.tier(&account_id));
+                for reading in sample.windows.values_mut() {
+                    reading.plan = plan.map(String::from);
+                    reading.tier = tier.map(String::from);
                 }
                 // The edges compare each plan window's stored reading with the one that replaces it, so the stored
                 // ones are read before the fold.
@@ -4157,7 +4173,7 @@ impl Task {
                         self.window_edges(
                             &account_id,
                             window,
-                            stored.get(window).copied(),
+                            stored.get(window).cloned(),
                             predicted.get(window).copied(),
                             reading,
                             source_request_id.as_deref(),
@@ -4679,7 +4695,7 @@ impl Task {
         source_request_id: Option<&str>,
         now: i64,
     ) {
-        let passed = stored.and_then(|stored| {
+        let passed = stored.as_ref().and_then(|stored| {
             let reset_at = stored.reset?;
             let next_reset = match reading.reset {
                 Some(next) => {
@@ -4702,6 +4718,8 @@ impl Task {
                     observed: "sample",
                     restored: false,
                     at: now,
+                    plan: stored.as_ref().and_then(|stored| stored.plan.clone()),
+                    tier: stored.as_ref().and_then(|stored| stored.tier.clone()),
                 });
             }
             // A wall announced under the passed reset that goes on into the window open past it is the same wall: its
@@ -4727,7 +4745,7 @@ impl Task {
         // The clear leaves the reset to the next sample or the clock walk, and the wall's announcement, the
         // prediction's or a sample's, leaves with it, so a reading back at the limit under the same reset is spent
         // again.
-        if let Some(stored) = stored.filter(|stored| stored.utilization >= 1.0) {
+        if let Some(stored) = stored.as_ref().filter(|stored| stored.utilization >= 1.0) {
             if reading.utilization < 1.0 && passed.is_none() {
                 self.spent_announced
                     .remove(&(account_id.to_string(), window.to_string()));
@@ -4777,7 +4795,10 @@ impl Task {
         // A reading at the wall that names the reset after a passed one is a new wall, over a stored reading at the
         // wall too.
         let next_cycle = matches!(passed, Some((_, _, Some(_))));
-        if (next_cycle || stored.is_none_or(|stored| stored.utilization < 1.0))
+        if (next_cycle
+            || stored
+                .as_ref()
+                .is_none_or(|stored| stored.utilization < 1.0))
             && reading.utilization >= 1.0
             && !announced
         {
@@ -4923,6 +4944,8 @@ impl Task {
                     observed: "clock",
                     restored,
                     at: now,
+                    plan: reading.plan,
+                    tier: reading.tier,
                 });
             }
         }
@@ -5390,6 +5413,8 @@ pub fn sample_from_usage(
                     reset: window.resets_at,
                     observed_at: snapshot.fetched_at,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             );
         }
@@ -6060,6 +6085,8 @@ mod tests {
             reset: Some(reset),
             observed_at: T,
             source: WindowSource::Poll,
+            plan: None,
+            tier: None,
         };
         state.record_sample(
             "a",

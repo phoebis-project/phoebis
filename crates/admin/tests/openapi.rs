@@ -1250,6 +1250,30 @@ async fn the_account_subscription_declares_the_resolved_plan_and_its_example_rea
 }
 
 #[tokio::test]
+async fn an_unused_allowance_reset_declares_the_plan_and_the_tier_its_reading_carried_nullable() {
+    let (_app, _up, document) = document().await;
+    let reset = &document["components"]["schemas"]["UnusedAllowanceReset"];
+    for member in ["plan", "tier"] {
+        let property = &reset["properties"][member];
+        assert!(
+            admits_null(property),
+            "UnusedAllowanceReset.{member}: {reset}"
+        );
+        let description = property["description"]
+            .as_str()
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+        assert!(
+            description.as_deref().is_some_and(|text| {
+                text.contains("carried when the reset was observed")
+                    && text.contains("`sample` or `clock` reset")
+                    && text.contains("`term_ended` row")
+            }),
+            "UnusedAllowanceReset.{member} names whose pair it answers and where it reads null: {property}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn the_account_and_its_edit_declare_the_canceled_flag_and_the_edit_its_three_refusals() {
     let (_app, _up, document) = document().await;
     let schemas = &document["components"]["schemas"];

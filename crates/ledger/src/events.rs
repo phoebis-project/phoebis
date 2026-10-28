@@ -398,6 +398,8 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             observed,
             restored: _,
             at,
+            plan,
+            tier,
         } => EventRecord {
             at: *at,
             kind: "window_reset".into(),
@@ -406,6 +408,8 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                 json!({
                     "window": window,
                     "utilization_before": utilization_before,
+                    "plan": plan,
+                    "tier": tier,
                     "reset_at": reset_at,
                     "next_reset": next_reset,
                     "observed": observed,
@@ -1526,6 +1530,8 @@ mod tests {
             observed: "clock",
             restored: false,
             at: 2_050,
+            plan: None,
+            tier: None,
         })
         .expect("a reset row");
         assert_eq!(
@@ -1545,7 +1551,7 @@ mod tests {
             detail_of(&row),
             json!({
                 "window": "five_hour", "utilization_before": 0.7, "reset_at": 2_000, "next_reset": null,
-                "observed": "clock"
+                "observed": "clock", "plan": null, "tier": null
             })
         );
 

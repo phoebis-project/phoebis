@@ -2176,6 +2176,8 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             observed: "clock",
             restored: false,
             at: 1,
+            plan: None,
+            tier: None,
         },
         RouterEvent::WindowSpent {
             account_id: "a".into(),
@@ -2587,6 +2589,8 @@ async fn a_clock_reset_the_previous_run_announced_is_not_written_again() {
         observed,
         restored: observed == "clock",
         at: NOW,
+        plan: None,
+        tier: None,
     };
     // The first purge after a start walks every restored reading: a reset that passed before the previous run's
     // last row was that run's to announce, one that passed while the router was down is this run's.
@@ -2635,6 +2639,18 @@ fn window_reset(
     at: i64,
     observed: &'static str,
 ) -> EventRecord {
+    window_reset_under(account_id, window, utilization_before, at, observed, None)
+}
+
+/// `window_reset` over a reading that carried `pair`, its plan word and its tier.
+fn window_reset_under(
+    account_id: &str,
+    window: &str,
+    utilization_before: f64,
+    at: i64,
+    observed: &'static str,
+    pair: Option<(&str, &str)>,
+) -> EventRecord {
     event_of(&RouterEvent::WindowReset {
         account_id: account_id.into(),
         window: window.into(),
@@ -2644,8 +2660,48 @@ fn window_reset(
         observed,
         restored: false,
         at,
+        plan: pair.map(|(plan, _)| plan.into()),
+        tier: pair.map(|(_, tier)| tier.into()),
     })
     .expect("a reset row")
+}
+
+fn detail_of(row: &EventRecord) -> serde_json::Value {
+    serde_json::from_str(row.detail.as_deref().expect("a detail")).expect("a JSON detail")
+}
+
+#[test]
+fn a_window_reset_s_detail_names_the_plan_and_the_tier_the_replaced_reading_carried() {
+    let detail = detail_of(&window_reset_under(
+        "a",
+        "seven_day",
+        0.62,
+        10 * DAY,
+        "sample",
+        Some(("max_20x", "default_claude_max_20x")),
+    ));
+    assert_eq!(
+        (
+            &detail["utilization_before"],
+            &detail["plan"],
+            &detail["tier"]
+        ),
+        (
+            &serde_json::json!(0.62),
+            &serde_json::json!("max_20x"),
+            &serde_json::json!("default_claude_max_20x")
+        ),
+        "{detail}"
+    );
+}
+
+#[test]
+fn a_window_reset_s_detail_names_no_pair_where_the_reading_carried_none() {
+    let detail = detail_of(&window_reset("a", "seven_day", 0.62, 10 * DAY, "clock"));
+    assert!(
+        detail["plan"].is_null() && detail["tier"].is_null(),
+        "{detail}"
+    );
 }
 
 fn weekly_sample(
@@ -2681,6 +2737,8 @@ fn reset_row(
         share_left,
         observed_at,
         source: source.into(),
+        plan: None,
+        tier: None,
     }
 }
 
@@ -2909,6 +2967,8 @@ fn a_term_end_leaves_out_an_ended_accounts_resets_by_the_resets_own_instant() {
                 observed,
                 restored: false,
                 at,
+                plan: None,
+                tier: None,
             })
             .expect("a reset row")
         };
@@ -2995,6 +3055,8 @@ fn a_term_end_before_the_range_drops_the_resets_after_it_and_lists_no_row_of_its
             observed: "clock",
             restored: false,
             at: week_reset,
+            plan: None,
+            tier: None,
         })
         .expect("a reset row"),
     )
@@ -3019,6 +3081,119 @@ fn a_term_end_before_the_range_drops_the_resets_after_it_and_lists_no_row_of_its
             "term_ended"
         )],
         "a range that holds the end lists its row in place of the reset"
+    );
+}
+
+#[test]
+fn the_unused_allowance_answers_each_resets_pair_from_its_event_and_none_where_the_event_carries_none(
+) {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = 100 * DAY;
+    for row in [
+        window_reset_under(
+            "a",
+            "seven_day",
+            0.62,
+            now - DAY,
+            "sample",
+            Some(("max_20x", "default_claude_max_20x")),
+        ),
+        // The week before ran under the plan the account moved up from.
+        window_reset_under(
+            "a",
+            "seven_day",
+            0.4,
+            now - 8 * DAY,
+            "clock",
+            Some(("max_5x", "default_claude_max_5x")),
+        ),
+        window_reset("a", "seven_day", 0.3, now - 15 * DAY, "sample"),
+    ] {
+        db.insert_event(&row).unwrap();
+    }
+    let rows = db
+        .read_blocking(|c| unused_allowance(c, &["a".into()], now - 30 * DAY, now, &[]))
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            AllowanceReset {
+                plan: Some("max_20x".into()),
+                tier: Some("default_claude_max_20x".into()),
+                ..reset_row(
+                    "a",
+                    "seven_day",
+                    now - DAY - 60_000,
+                    1.0 - 0.62,
+                    now - DAY,
+                    "sample",
+                )
+            },
+            AllowanceReset {
+                plan: Some("max_5x".into()),
+                tier: Some("default_claude_max_5x".into()),
+                ..reset_row(
+                    "a",
+                    "seven_day",
+                    now - 8 * DAY - 60_000,
+                    1.0 - 0.4,
+                    now - 8 * DAY,
+                    "clock",
+                )
+            },
+            reset_row(
+                "a",
+                "seven_day",
+                now - 15 * DAY - 60_000,
+                1.0 - 0.3,
+                now - 15 * DAY,
+                "sample",
+            ),
+        ],
+        "each reset answers the pair its own event names, so a week keeps the plan it ran under"
+    );
+}
+
+/// The term end's row is the plan's end, and the reading before it already carries the pair, so the row names none
+/// while the account's resets name theirs.
+#[test]
+fn a_term_end_s_row_names_no_pair() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = 100 * DAY;
+    let end = now - 5 * DAY;
+    db.insert_event(&window_reset_under(
+        "h",
+        "seven_day",
+        0.5,
+        end - 3 * DAY,
+        "sample",
+        Some(("max_20x", "default_claude_max_20x")),
+    ))
+    .unwrap();
+    db.insert_samples(
+        &[weekly_sample(
+            "h",
+            "seven_day",
+            Some(0.45),
+            end - DAY,
+            end + 2 * DAY,
+        )],
+        None,
+    )
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| {
+            unused_allowance(c, &["h".into()], now - 30 * DAY, now, &[("h".into(), end)])
+        })
+        .unwrap();
+    let ended = rows
+        .iter()
+        .find(|row| row.source == "term_ended")
+        .expect("the term end's row");
+    assert_eq!(
+        (ended.plan.as_deref(), ended.tier.as_deref()),
+        (None, None),
+        "{rows:?}"
     );
 }
 

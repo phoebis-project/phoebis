@@ -2752,6 +2752,8 @@ async fn the_unused_allowance_route_groups_each_subscription_accounts_weekly_res
             "share_left": share_left,
             "observed_at": observed_at,
             "source": source,
+            "plan": null,
+            "tier": null,
         })
     };
     let business = serde_json::json!({
@@ -2843,6 +2845,137 @@ async fn the_unused_allowance_route_groups_each_subscription_accounts_weekly_res
 }
 
 #[tokio::test]
+async fn the_unused_allowance_route_answers_each_resets_plan_and_tier_and_null_on_a_term_end() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    const DAY: i64 = 24 * HOUR;
+    // The account holds Max 20x now, and the week before last ran under Max 5x.
+    set_max_20x(&parts).await;
+    let end = now - DAY;
+    parts
+        .store
+        .set_canceled("business", true, Some(end))
+        .unwrap();
+    parts.router.reload().await.unwrap();
+    for (utilization_before, at, observed, pair) in [
+        (
+            0.62,
+            now - 3 * DAY,
+            "sample",
+            Some(("max_20x", "default_claude_max_20x")),
+        ),
+        (
+            0.4,
+            now - 10 * DAY,
+            "clock",
+            Some(("max_5x", "default_claude_max_5x")),
+        ),
+        (0.3, now - 17 * DAY, "sample", None),
+    ] {
+        let mut detail = serde_json::json!({
+            "window": "seven_day",
+            "utilization_before": utilization_before,
+            "reset_at": at,
+            "next_reset": at + 7 * DAY,
+            "observed": observed,
+        });
+        if let Some((plan, tier)) = pair {
+            detail["plan"] = plan.into();
+            detail["tier"] = tier.into();
+        }
+        parts
+            .db
+            .insert_event(&EventRecord {
+                at,
+                kind: "window_reset".into(),
+                account_id: Some("business".into()),
+                detail: Some(detail.to_string()),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    parts
+        .db
+        .insert_samples(
+            &[phoebis_ledger::QuotaSampleRecord {
+                account_id: "business".into(),
+                bucket: phoebis_ledger::bucket_of(end - DAY),
+                window: "seven_day".into(),
+                utilization: Some(0.8),
+                reset_at: Some(end + 2 * DAY),
+                source: "poll".into(),
+                observed_at: Some(end - DAY),
+            }],
+            None,
+        )
+        .unwrap();
+    let answer = json(
+        get(
+            &parts.app,
+            "/admin/analytics/unused_allowance?accounts=business",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let resets = &answer["accounts"][0]["windows"][0]["resets"];
+    let pairs: Vec<_> = resets
+        .as_array()
+        .expect("the week's resets")
+        .iter()
+        .map(|reset| {
+            (
+                reset["source"].as_str().unwrap_or_default(),
+                reset["plan"].clone(),
+                reset["tier"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            ("term_ended", serde_json::Value::Null, serde_json::Value::Null),
+            (
+                "sample",
+                serde_json::json!("max_20x"),
+                serde_json::json!("default_claude_max_20x")
+            ),
+            (
+                "clock",
+                serde_json::json!("max_5x"),
+                serde_json::json!("default_claude_max_5x")
+            ),
+            ("sample", serde_json::Value::Null, serde_json::Value::Null),
+        ],
+        "each reset answers its event's pair, null where the event names none and on the term end: {answer}"
+    );
+    assert_eq!(
+        keys_in_order(&resets[1]),
+        [
+            "reset_at",
+            "share_left",
+            "observed_at",
+            "source",
+            "plan",
+            "tier"
+        ],
+        "{answer}"
+    );
+    assert_eq!(
+        (
+            &answer["accounts"][0]["plan"],
+            &answer["accounts"][0]["tier"]
+        ),
+        (
+            &serde_json::json!("max_20x"),
+            &serde_json::json!("default_claude_max_20x")
+        ),
+        "the account entry keeps the account's current pair"
+    );
+}
+
+#[tokio::test]
 async fn a_trial_end_that_passed_in_range_ends_a_week_only_where_the_plan_ended_flag_followed_it() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -2923,6 +3056,8 @@ async fn a_trial_end_that_passed_in_range_ends_a_week_only_where_the_plan_ended_
             "share_left": share_left,
             "observed_at": observed_at,
             "source": source,
+            "plan": null,
+            "tier": null,
         })
     };
     let carried_on = read().await;
@@ -3045,6 +3180,8 @@ async fn a_term_end_before_the_range_still_drops_the_resets_after_it() {
                     "share_left": 1.0 - 0.8,
                     "observed_at": end - DAY,
                     "source": "term_ended",
+                    "plan": null,
+                    "tier": null,
                 }],
                 "total_share_left": 1.0 - 0.8,
                 "resets_counted": 1,
@@ -3129,6 +3266,8 @@ async fn a_canceled_end_still_ahead_of_now_ends_no_week_in_a_range_that_reaches_
                     "share_left": 1.0 - 0.5,
                     "observed_at": reset_at,
                     "source": "sample",
+                    "plan": null,
+                    "tier": null,
                 }],
                 "total_share_left": 1.0 - 0.5,
                 "resets_counted": 1,

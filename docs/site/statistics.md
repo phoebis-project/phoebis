@@ -166,12 +166,16 @@ five-minute slot when the hold is shorter. Each 429 is logged as a warning namin
 answered it, `the {endpoint} endpoint rate-limited the account`, and the next clean answer returns the account to the
 five minutes. A transport failure or another error keeps the cadence. The other accounts keep theirs throughout.
 
-The router announces a plan window's reset as a `window_reset` event with the utilization the window held before it and
-whether a sample showed the reset or the clock walk found it, and `GET /admin/analytics/unused_allowance` reads those
-events for the weekly windows, `seven_day` and each model week, as the share of the allowance each subscription account
-left unused at its resets in range (the default range 30 days), with an account's term end inside a week read as a reset
-of that week from its last reading before the end. The history reaches as far as the events the hourly purge still
-holds, which `stats.retention_days` bounds, so a longer retention shows more weeks.
+Each reading the router keeps carries the plan and the rate-limit tier the account held when the reading was taken. The
+router announces a plan window's reset as a `window_reset` event with the utilization the window held before it, whether
+a sample showed the reset or the clock walk found it, and the plan and the tier of the reading whose reset passed. A
+profile read that moves the account between a reading and its reset therefore leaves the old week under the plan it ran
+under. `GET /admin/analytics/unused_allowance` reads those events for the weekly windows, `seven_day` and each model
+week, as the share of the allowance each subscription account left unused at its resets in range (the default range 30
+days). Each reset answers the plan and the tier its event names, null where the event names none. An account's term end
+inside a week reads as a reset of that week from its last reading before the end, with the plan and the tier null. The
+history reaches as far as the events the hourly purge still holds, which `stats.retention_days` bounds, so a longer
+retention shows more weeks.
 
 ## Pricing
 

@@ -3446,12 +3446,14 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
             reset: Some(10 * HOUR),
             observed_at: 1_000,
             source: WindowSource::Poll,
+            plan: None,
+            tier: None,
         };
         Report::Sample {
             account_id: "a".into(),
             sample: sample(1_000)
-                .with(FIVE_HOUR, reading)
-                .with(SEVEN_DAY, reading)
+                .with(FIVE_HOUR, reading.clone())
+                .with(SEVEN_DAY, reading.clone())
                 .with(SEVEN_DAY_FABLE, reading),
             incarnation,
             source_request_id: None,
@@ -3553,6 +3555,8 @@ async fn a_head_writes_the_windows_it_moved_and_a_restart_reads_them() {
         reset: Some(100 * HOUR),
         observed_at: 1_000,
         source: WindowSource::Head,
+        plan: None,
+        tier: None,
     };
     handle
         .report(observed(
@@ -4246,6 +4250,8 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
                     reset: None,
                     observed_at: 1_500,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             ),
             incarnation: 1,
@@ -4294,6 +4300,8 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
                 reset: Some(at + 7 * 86_400_000),
                 observed_at: at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         )
     };
@@ -4359,6 +4367,8 @@ async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_w
                 reset: Some(at + 7 * 86_400_000),
                 observed_at: at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         )
     };
@@ -4463,6 +4473,8 @@ fn sample_with(
             reset,
             observed_at,
             source: WindowSource::Poll,
+            plan: None,
+            tier: None,
         },
     )
 }
@@ -4663,6 +4675,8 @@ async fn a_claim_that_names_neither_shared_window_waits_for_both() {
                     reset: None,
                     observed_at: 2_000,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             ),
         ))
@@ -4690,6 +4704,8 @@ async fn a_claim_that_names_neither_shared_window_waits_for_both() {
                     reset: None,
                     observed_at: 2_002,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             ),
         ))
@@ -4745,6 +4761,8 @@ async fn a_row_no_usage_window_answers_for_is_left_alone() {
                         reset: None,
                         observed_at: 2_000,
                         source: WindowSource::Poll,
+                        plan: None,
+                        tier: None,
                     },
                 )
                 .with(
@@ -4754,6 +4772,8 @@ async fn a_row_no_usage_window_answers_for_is_left_alone() {
                         reset: None,
                         observed_at: 2_000,
                         source: WindowSource::Poll,
+                        plan: None,
+                        tier: None,
                     },
                 ),
         ))
@@ -4868,6 +4888,8 @@ async fn a_model_scoped_row_reads_the_model_window_and_nothing_else() {
                     reset: None,
                     observed_at: 2_000,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             ),
         ))
@@ -5469,6 +5491,8 @@ async fn an_enabled_credits_state_with_room_lifts_a_fast_credits_row_and_a_plan_
                     reset: None,
                     observed_at: 2_000,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             ),
         ))
@@ -8376,6 +8400,8 @@ fn head_reading(at: i64, utilization: f64, reset: Option<i64>, request_id: &str)
                 reset,
                 observed_at: at,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         ),
         incarnation: 1,
@@ -8725,6 +8751,8 @@ fn windows(account: &str, five_hour: f64, seven_day: f64, at: i64) -> Report {
                 reset: None,
                 observed_at: at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     )
@@ -9626,6 +9654,228 @@ async fn a_sample_with_a_later_reset_emits_window_reset_by_sample() {
     no_further_event(&mut events).await;
 }
 
+/// The pair `with_tier` stores, as the snapshot resolves it.
+const WITH_TIER_PAIR: (Option<&str>, Option<&str>) = (Some("max_5x"), Some(TIER));
+
+/// The pair after `upgraded`, as the snapshot resolves it.
+const UPGRADED_PAIR: (Option<&str>, Option<&str>) =
+    (Some("max_20x"), Some("default_claude_max_20x"));
+
+/// A profile read that found `account` on Max 20x, stored as the quota poll stores it.
+fn upgraded(store: &Store, account: &str) {
+    store
+        .set_profile(
+            account,
+            "{}",
+            &SubscriptionRow {
+                tier: Some("default_claude_max_20x".into()),
+                ..SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+}
+
+/// The plan and the tier of the reading the router stores for `account`'s `window`.
+async fn stored_pair(
+    handle: &RouterHandle,
+    account: &str,
+    window: &str,
+) -> (Option<String>, Option<String>) {
+    let reading = handle
+        .reported_samples()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|(id, _)| id == account)
+        .and_then(|(_, sample)| sample.reading(window))
+        .expect("a stored reading");
+    (reading.plan, reading.tier)
+}
+
+/// A reset's pair as the event names it.
+fn reset_pair(event: &phoebis_routing::RouterEvent) -> (Option<&str>, Option<&str>, &'static str) {
+    match event {
+        phoebis_routing::RouterEvent::WindowReset {
+            plan,
+            tier,
+            observed,
+            ..
+        } => (plan.as_deref(), tier.as_deref(), *observed),
+        other => panic!("a window reset, not {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_poll_s_and_a_head_s_reading_carry_the_plan_and_the_tier_the_account_held_when_each_was_taken(
+) {
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, SEVEN_DAY, 0.3, Some(100 * HOUR)),
+        ))
+        .await;
+    handle
+        .report(head_reading(2_000, 0.4, Some(5 * HOUR), "r-1"))
+        .await;
+    for window in [SEVEN_DAY, FIVE_HOUR] {
+        let (plan, tier) = stored_pair(&handle, "a", window).await;
+        assert_eq!(
+            (plan.as_deref(), tier.as_deref()),
+            WITH_TIER_PAIR,
+            "the {window} reading carries the account's pair"
+        );
+    }
+    upgraded(&store, "a");
+    handle.reload().await.unwrap();
+    handle
+        .report(head_reading(3_000, 0.5, Some(5 * HOUR), "r-2"))
+        .await;
+    let (plan, tier) = stored_pair(&handle, "a", FIVE_HOUR).await;
+    assert_eq!(
+        (plan.as_deref(), tier.as_deref()),
+        UPGRADED_PAIR,
+        "a reading taken after the profile read carries the new pair"
+    );
+    let (plan, tier) = stored_pair(&handle, "a", SEVEN_DAY).await;
+    assert_eq!(
+        (plan.as_deref(), tier.as_deref()),
+        WITH_TIER_PAIR,
+        "a reading taken before it keeps the pair it was taken under"
+    );
+}
+
+#[tokio::test]
+async fn a_profile_read_between_a_reading_and_the_sample_past_its_reset_leaves_the_reading_s_pair_on_the_reset(
+) {
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.6, Some(5 * HOUR)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    upgraded(&store, "a");
+    handle.reload().await.unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 0.1, Some(10 * HOUR)),
+        ))
+        .await;
+    let event = next_window_edge(&mut events).await;
+    let (plan, tier, observed) = reset_pair(&event);
+    assert_eq!(
+        ((plan, tier), observed),
+        (WITH_TIER_PAIR, "sample"),
+        "the reset names the pair of the reading it replaces, never the account's at the emission"
+    );
+}
+
+#[tokio::test]
+async fn a_profile_read_between_a_reading_and_the_clock_passing_its_reset_leaves_the_reading_s_pair_on_the_reset(
+) {
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.7, Some(2_000)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    upgraded(&store, "a");
+    handle.reload().await.unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    let event = next_window_edge(&mut events).await;
+    let (plan, tier, observed) = reset_pair(&event);
+    assert_eq!(
+        ((plan, tier), observed),
+        (WITH_TIER_PAIR, "clock"),
+        "the clock walk names the pair of the reading whose reset passed, never the account's at the emission"
+    );
+}
+
+#[tokio::test]
+async fn a_reading_s_pair_is_written_with_its_row_and_names_the_reset_a_restart_restores() {
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.7, Some(2_000)),
+        ))
+        .await;
+    let rows = wait_for(WRITTEN, || {
+        let windows = store.load_routing().unwrap().windows;
+        (windows.len() == 1).then_some(windows)
+    })
+    .await;
+    assert_eq!(
+        (rows[0].plan.as_deref(), rows[0].tier.as_deref()),
+        WITH_TIER_PAIR,
+        "the row carries the reading's pair"
+    );
+    handle.shutdown().await.unwrap();
+    // The account moved while the router was down, and its reset passed.
+    upgraded(&store, "a");
+    now.store(3_000, Ordering::SeqCst);
+    let again = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = again.subscribe_events();
+    let event = next_window_edge(&mut events).await;
+    assert!(
+        matches!(
+            event,
+            phoebis_routing::RouterEvent::WindowReset { restored: true, .. }
+        ),
+        "{event:?}"
+    );
+    let (plan, tier, observed) = reset_pair(&event);
+    assert_eq!(
+        ((plan, tier), observed),
+        (WITH_TIER_PAIR, "clock"),
+        "the restored reading names the pair its row carried"
+    );
+}
+
+/// The pair comes from the reading alone: a reading restored from a row that carries none names none on its reset,
+/// whatever pair the account holds at the start.
+#[tokio::test]
+async fn a_row_loaded_without_the_pair_names_no_pair_on_its_reset() {
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    assert!(store
+        .upsert_window(&window_row("a", FIVE_HOUR, 0.7, Some(2_000)))
+        .unwrap());
+    let now = Arc::new(AtomicI64::new(3_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let event = next_window_edge(&mut events).await;
+    let (plan, tier, observed) = reset_pair(&event);
+    assert_eq!(((plan, tier), observed), ((None, None), "clock"));
+}
+
 #[tokio::test]
 async fn a_poll_naming_a_head_s_reset_to_the_millisecond_names_the_same_reset() {
     let store = seeded_oauth(&["a"]);
@@ -9683,6 +9933,8 @@ async fn the_purge_tick_emits_a_clock_reset_once_per_window() {
             observed,
             restored,
             at,
+            plan,
+            tier,
         } => assert_eq!(
             (
                 account_id.as_str(),
@@ -9692,9 +9944,12 @@ async fn the_purge_tick_emits_a_clock_reset_once_per_window() {
                 next_reset,
                 observed,
                 restored,
-                at
+                at,
+                plan,
+                tier
             ),
-            ("a", FIVE_HOUR, 0.7, 2_000, None, "clock", false, 2_000)
+            // The account holds no stored profile, so its reading carries no pair.
+            ("a", FIVE_HOUR, 0.7, 2_000, None, "clock", false, 2_000, None, None)
         ),
         other => panic!("the tick's reset, not {other:?}"),
     }
@@ -9911,6 +10166,8 @@ async fn a_sample_whose_every_window_falls_under_its_limit_under_the_same_reset_
                     reset: Some(*reset),
                     observed_at: at,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             )
         })
@@ -9961,6 +10218,8 @@ async fn a_head_whose_one_window_falls_under_its_limit_emits_window_cleared_for_
                     reset: five_hour,
                     observed_at: at,
                     source: WindowSource::Head,
+                    plan: None,
+                    tier: None,
                 },
             )
             .with(
@@ -9970,6 +10229,8 @@ async fn a_head_whose_one_window_falls_under_its_limit_emits_window_cleared_for_
                     reset: week,
                     observed_at: at,
                     source: WindowSource::Head,
+                    plan: None,
+                    tier: None,
                 },
             ),
         incarnation: 1,
@@ -11360,6 +11621,8 @@ async fn the_window_inside_its_reset_binds_the_standing_runway_where_a_shorter_o
                     reset: None,
                     observed_at: AT,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             ),
         ))
@@ -11569,6 +11832,8 @@ fn head_of(
                 reset,
                 observed_at: at,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         ),
         incarnation: 1,
@@ -13787,6 +14052,8 @@ async fn a_move_keeps_a_one_pin_sessions_creation_time_and_a_restart_reads_it() 
                 reset: Some(at + 7 * 24 * HOUR),
                 observed_at: at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         )
     };

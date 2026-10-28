@@ -2907,7 +2907,7 @@ fn held_windows(
             } else {
                 name.as_str()
             };
-            (key.to_string(), *reading, lead)
+            (key.to_string(), reading.clone(), lead)
         })
         .collect()
 }

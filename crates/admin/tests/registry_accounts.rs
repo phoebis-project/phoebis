@@ -941,6 +941,8 @@ async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_a
         reset: Some(common::NOW + reset),
         observed_at: common::NOW,
         source: WindowSource::Head,
+        plan: None,
+        tier: None,
     };
     let sample = |windows: &[(&str, WindowReading)]| {
         windows.iter().fold(
@@ -948,7 +950,7 @@ async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_a
                 observed_at: common::NOW,
                 ..UtilizationSample::default()
             },
-            |sample, (window, r)| sample.with(window, *r),
+            |sample, (window, r)| sample.with(window, r.clone()),
         )
     };
     router

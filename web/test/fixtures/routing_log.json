@@ -1604,6 +1604,8 @@
         "detail": {
           "window": "seven_day",
           "utilization_before": 0.83,
+          "plan": "max_20x",
+          "tier": "default_claude_max_20x",
           "reset_at": 1791717700000,
           "next_reset": 1792322500000,
           "observed": "sample"

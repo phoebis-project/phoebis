@@ -9605,13 +9605,17 @@ export const FIXTURES: Record<string, Fixture> = {
                   "reset_at": 1791116200000,
                   "share_left": 0.38,
                   "observed_at": 1791116200000,
-                  "source": "sample"
+                  "source": "sample",
+                  "plan": "max_20x",
+                  "tier": "default_claude_max_20x"
                 },
                 {
                   "reset_at": 1790511400000,
                   "share_left": 0.15000000000000002,
                   "observed_at": 1790511400000,
-                  "source": "clock"
+                  "source": "clock",
+                  "plan": "max_20x",
+                  "tier": "default_claude_max_20x"
                 }
               ],
               "total_share_left": 0.53,
@@ -9624,7 +9628,9 @@ export const FIXTURES: Record<string, Fixture> = {
                   "reset_at": 1790857000000,
                   "share_left": 0.6,
                   "observed_at": 1790857000000,
-                  "source": "sample"
+                  "source": "sample",
+                  "plan": "max_20x",
+                  "tier": "default_claude_max_20x"
                 }
               ],
               "total_share_left": 0.6,
@@ -9644,7 +9650,9 @@ export const FIXTURES: Record<string, Fixture> = {
                   "reset_at": 1791029800000,
                   "share_left": 0.7,
                   "observed_at": 1790770600000,
-                  "source": "term_ended"
+                  "source": "term_ended",
+                  "plan": null,
+                  "tier": null
                 }
               ],
               "total_share_left": 0.7,
@@ -17100,6 +17108,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "detail": {
             "window": "seven_day",
             "utilization_before": 0.83,
+            "plan": "max_20x",
+            "tier": "default_claude_max_20x",
             "reset_at": 1791717700000,
             "next_reset": 1792322500000,
             "observed": "sample"

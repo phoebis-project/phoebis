@@ -2183,6 +2183,8 @@ async fn the_account_view_answers_the_fable_week_under_one_id_from_a_head_row_a_
                 reset: Some(NOW + 86_400_000),
                 observed_at: at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
         incarnation: 1,
@@ -3279,6 +3281,8 @@ async fn an_account_the_router_holds_no_plan_window_of_lists_the_ledger_rows_at_
                     reset: Some(NOW + 60_000),
                     observed_at: NOW - 30_000,
                     source: WindowSource::Head,
+                    plan: None,
+                    tier: None,
                 },
             ),
             incarnation: 1,
@@ -3653,6 +3657,8 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
                         reset: Some(NOW + 3_600_000),
                         observed_at: NOW - 120_000,
                         source: WindowSource::Stored,
+                        plan: None,
+                        tier: None,
                     },
                 )
                 .with(
@@ -3662,6 +3668,8 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
                         reset: Some(NOW + 86_400_000),
                         observed_at: NOW - 60_000,
                         source: WindowSource::Stored,
+                        plan: None,
+                        tier: None,
                     },
                 ),
             incarnation: 1,
@@ -3733,6 +3741,8 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
         reset,
         observed_at: read_at,
         source: WindowSource::Stored,
+        plan: None,
+        tier: None,
     };
     h.router
         .report(Report::Sample {
@@ -3822,6 +3832,8 @@ async fn business_with_both_windows_paths() -> (common::Polled, String, serde_js
         reset: Some(reset),
         observed_at,
         source: WindowSource::Head,
+        plan: None,
+        tier: None,
     };
     h.router
         .report(Report::Sample {
@@ -5647,6 +5659,8 @@ async fn read_windows_at(
                     reset: *reset,
                     observed_at,
                     source: phoebis_routing::WindowSource::Head,
+                    plan: None,
+                    tier: None,
                 },
             )
         },

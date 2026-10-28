@@ -1256,6 +1256,12 @@ pub(crate) struct UnusedAllowanceReset {
     /// interval old), `term_ended` for the account's term ending inside the week.
     #[schema(example = "sample")]
     pub source: String,
+    /// The resolved plan word the reading carried when the reset was observed: the event's for a `sample` or `clock`
+    /// reset, null for a reset whose event carries none and for a `term_ended` row.
+    pub plan: Option<String>,
+    /// The stored rate-limit tier the reading carried when the reset was observed: the event's for a `sample` or
+    /// `clock` reset, null for a reset whose event carries none and for a `term_ended` row.
+    pub tier: Option<String>,
 }
 
 /// Read the weekly allowance each subscription account left unused.
@@ -1331,6 +1337,8 @@ pub(crate) async fn unused_allowance(
                 share_left: row.share_left,
                 observed_at: row.observed_at,
                 source: row.source,
+                plan: row.plan,
+                tier: row.tier,
             });
     }
     let accounts = by_account

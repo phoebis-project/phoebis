@@ -7692,6 +7692,8 @@ mod banded_tests {
                     reset: Some(T + HOUR),
                     observed_at: T,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             ),
         );
@@ -7842,6 +7844,8 @@ mod banded_tests {
                         reset: Some(T + HOUR),
                         observed_at: T,
                         source: WindowSource::Poll,
+                        plan: None,
+                        tier: None,
                     },
                 ),
             );

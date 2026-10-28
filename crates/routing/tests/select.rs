@@ -482,6 +482,8 @@ fn sample(five_hour: f64, seven_day: f64, observed_at: i64) -> UtilizationSample
             reset: None,
             observed_at,
             source: WindowSource::Poll,
+            plan: None,
+            tier: None,
         },
     )
     .with(
@@ -491,6 +493,8 @@ fn sample(five_hour: f64, seven_day: f64, observed_at: i64) -> UtilizationSample
             reset: None,
             observed_at,
             source: WindowSource::Poll,
+            plan: None,
+            tier: None,
         },
     )
 }
@@ -510,6 +514,8 @@ fn refreshing(
                 reset: Some(five_hour_reset),
                 observed_at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         )
         .with(
@@ -519,6 +525,8 @@ fn refreshing(
                 reset: Some(seven_day_reset),
                 observed_at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         )
 }
@@ -533,6 +541,8 @@ fn with_fable(base: UtilizationSample, fable: f64, fable_reset: Option<i64>) -> 
             reset: fable_reset,
             observed_at,
             source: WindowSource::Poll,
+            plan: None,
+            tier: None,
         },
     )
 }
@@ -707,6 +717,8 @@ fn pace_ranks_remaining_weekly_allowance_over_hours_to_reset_and_scores_an_unsam
                 reset: Some(reset_at),
                 observed_at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         )
     };
@@ -3994,6 +4006,8 @@ fn an_unknown_seven_day_reading_drops_nothing() {
                 reset: Some(9 * HOUR),
                 observed_at: 1_000,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -5897,6 +5911,8 @@ fn the_blocker_passes_an_api_key_candidate_while_its_bucket_holds_room() {
                 reset: Some(1_000 + MINUTE),
                 observed_at: 1_000,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         )
     };
@@ -7682,6 +7698,8 @@ fn a_spent_seven_day_window_moves_the_pin_as_a_spent_five_hour_one_does() {
                 reset: Some(9 * HOUR),
                 observed_at: 1_500,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8414,6 +8432,8 @@ fn pace_reads_the_window_map_and_ranks_an_api_key_account_by_its_worst_bucket() 
                 reset,
                 observed_at,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         )
     };
@@ -8463,6 +8483,8 @@ fn a_subscription_window_past_its_reset_scores_as_untouched_not_by_a_minutes_cla
                 reset: Some(999),
                 observed_at: 999,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8480,6 +8502,8 @@ fn a_subscription_window_past_its_reset_scores_as_untouched_not_by_a_minutes_cla
                 reset: Some(1_000 + HOUR),
                 observed_at: 1_000,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8679,6 +8703,8 @@ fn an_unread_window_is_skipped_for_a_placement_and_reads_least_bad_for_a_move() 
                     reset: Some(T + 3 * HOUR),
                     observed_at: T - 500,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             ),
         );
@@ -8799,6 +8825,8 @@ fn the_exhaustion_deadline_takes_each_spent_accounts_latest_dated_reset_past_an_
                 reset: Some(5 * HOUR),
                 observed_at: 1,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8835,6 +8863,8 @@ fn a_spent_pin_waits_only_when_every_spent_window_names_its_reset() {
                 reset: Some(T + 30_000),
                 observed_at: T - 500,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8877,6 +8907,8 @@ fn an_exhausted_bucket_of_one_model_is_refunded_at_its_reset_and_a_siblings_free
                 reset: Some(1_030),
                 observed_at: 1_000,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8893,6 +8925,8 @@ fn an_exhausted_bucket_of_one_model_is_refunded_at_its_reset_and_a_siblings_free
                 reset: None,
                 observed_at: 1_031,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8909,6 +8943,8 @@ fn an_exhausted_bucket_of_one_model_is_refunded_at_its_reset_and_a_siblings_free
                 reset: None,
                 observed_at: 1_000,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8950,6 +8986,8 @@ fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
                 reset: Some(1_000 + 96 * HOUR),
                 observed_at: 1_000,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8962,6 +9000,8 @@ fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
                 reset: Some(1_000 + 24 * HOUR),
                 observed_at: 1_000,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -9491,6 +9531,8 @@ fn a_fable_spent_candidate_is_skipped_as_spent_whether_or_not_it_names_a_reset()
                 reset: Some(2_000),
                 observed_at: 1_000,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -9508,6 +9550,8 @@ fn a_fable_spent_candidate_is_skipped_as_spent_whether_or_not_it_names_a_reset()
                 reset: None,
                 observed_at: 1_000,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -12596,6 +12640,8 @@ fn an_api_key_sibling_with_a_full_bucket_reads_least_bad_and_a_fitting_one_takes
                 reset: Some(T + MINUTE),
                 observed_at: T + 500,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -12650,6 +12696,8 @@ fn an_api_key_sibling_fits_while_its_bucket_holds_room() {
                     reset: Some(T + MINUTE),
                     observed_at: T + 500,
                     source: WindowSource::Head,
+                    plan: None,
+                    tier: None,
                 },
             ),
         );
@@ -13087,6 +13135,8 @@ fn a_usage_based_seats_plan_week_read_before_the_class_holds_no_request_and_refu
             reset: Some(T + 5 * 24 * HOUR),
             observed_at: T - 500,
             source: WindowSource::Poll,
+            plan: None,
+            tier: None,
         },
     );
     let lone = snapshot_with_terms(
@@ -13627,6 +13677,8 @@ fn weekly(
             reset: Some(T + WEEK_MS * remaining_tenths / 10),
             observed_at,
             source: WindowSource::Poll,
+            plan: None,
+            tier: None,
         },
     )
 }
@@ -13646,6 +13698,8 @@ fn a_five_hour_window_whose_projection_stays_under_the_ceiling_at_its_reset_does
                 reset: Some(T + HOUR),
                 observed_at: T - 500,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -15055,6 +15109,8 @@ fn the_fit_table_reads_an_api_key_member_by_its_worst_bucket_alone() {
                 reset: Some(T + MINUTE),
                 observed_at: T + 500,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -19905,6 +19961,8 @@ fn an_api_key_candidate_fits_with_no_runway_under_a_full_bucket_and_reads_least_
                     reset: Some(T + MINUTE),
                     observed_at: T - 500,
                     source: WindowSource::Head,
+                    plan: None,
+                    tier: None,
                 },
             ),
         );
@@ -19979,6 +20037,8 @@ fn a_candidate_without_a_reading_on_a_drawn_window_or_without_a_tier_reads_least
                 reset: Some(T + 3 * HOUR),
                 observed_at: T - 500,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -20524,6 +20584,8 @@ fn windows_with_resets(
                 reset: Some(five_hour.1),
                 observed_at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         )
         .with(
@@ -20533,6 +20595,8 @@ fn windows_with_resets(
                 reset: Some(seven_day.1),
                 observed_at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         )
 }
@@ -21856,6 +21920,8 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
         reset: Some(reset),
         observed_at: T,
         source: WindowSource::Poll,
+        plan: None,
+        tier: None,
     };
     let alder_fable_reset = T + 6 * DAY + 272 * MINUTE;
     st.record_sample(
@@ -23923,6 +23989,8 @@ fn over_the_week_on_a(st: &mut RoutingState, at: i64) {
                     reset: Some(at + 2 * HOUR),
                     observed_at: at,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             )
             .with(
@@ -23932,6 +24000,8 @@ fn over_the_week_on_a(st: &mut RoutingState, at: i64) {
                     reset: Some(at + 72 * HOUR),
                     observed_at: at,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             )
     };
@@ -25597,6 +25667,8 @@ fn the_weekly_trigger_fires_on_the_achieved_burn_under_the_slow_down() {
                     reset: Some(T + 2 * HOUR),
                     observed_at: T - 500,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             )
             .with(
@@ -25606,6 +25678,8 @@ fn the_weekly_trigger_fires_on_the_achieved_burn_under_the_slow_down() {
                     reset: Some(T + 72 * HOUR),
                     observed_at: T - 500,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             )
     };
@@ -26654,6 +26728,8 @@ fn the_cedar_window_replay_ends_at_a_zero_factor_with_the_subagent_held_and_no_r
         reset: Some(reset),
         observed_at: T,
         source: WindowSource::Poll,
+        plan: None,
+        tier: None,
     };
     let cedar_reset = T + 5 * HOUR;
     let alder_fable_reset = T + 6 * DAY + 272 * MINUTE;
@@ -26867,6 +26943,8 @@ fn three_pins_over_the_week(five_hour: f64) -> RoutingState {
                 reset: Some(T + 72 * HOUR),
                 observed_at: T,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -27461,6 +27539,8 @@ fn a_weekly_window_fires_in_the_place_of_a_five_hour_window_inside_the_hold() {
                 reset: Some(T + 72 * HOUR),
                 observed_at: T,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );

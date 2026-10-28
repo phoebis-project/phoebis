@@ -977,6 +977,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
         reset: Some(now + 30_000),
         observed_at: now - 5_000,
         source: phoebis_routing::WindowSource::Head,
+        plan: None,
+        tier: None,
     };
     parts
         .router
@@ -1034,8 +1036,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
         request_id: Some("r-failover".into()),
     }));
     // Two weeks of `business`'s 7-day window, one reset the clock walk found, and one Fable week, so the unused
-    // allowance capture carries both `observed` words. Days back, so the routing log's hour and the failover's window
-    // hold none of them.
+    // allowance capture carries both `observed` words and each reset's pair, the seeded profile's. Days back, so the
+    // routing log's hour and the failover's window hold none of them.
     for (window, utilization_before, at, observed) in [
         ("seven_day", 0.62, now - 7 * DAY, "sample"),
         ("seven_day", 0.85, now - 14 * DAY, "clock"),
@@ -1045,7 +1047,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             at,
             kind: "window_reset".into(),
             account_id: Some("business".into()),
-            detail: Some(j!({ "window": window, "utilization_before": utilization_before, "reset_at": at, "next_reset": at + 7 * DAY, "observed": observed }).to_string()),
+            detail: Some(j!({ "window": window, "utilization_before": utilization_before, "plan": "max_20x", "tier": "default_claude_max_20x", "reset_at": at, "next_reset": at + 7 * DAY, "observed": observed }).to_string()),
             ..Default::default()
         }));
     }
@@ -2542,6 +2544,8 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
                     reset: Some(now + 3_600_000),
                     observed_at: now,
                     source: phoebis_routing::WindowSource::Head,
+                    plan: None,
+                    tier: None,
                 },
             ),
             incarnation: 1,
@@ -2805,6 +2809,8 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             observed: "sample",
             restored: false,
             at: at(5),
+            plan: Some("max_20x".into()),
+            tier: Some("default_claude_max_20x".into()),
         },
         RouterEvent::SlowDownStarted {
             account_id: "business".into(),

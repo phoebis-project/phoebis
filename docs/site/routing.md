@@ -416,12 +416,13 @@ reset to stand under. An API-key account's rate-limit buckets stand until their 
 share is priced through the account's stored tier: a tier change is read at the next profile refresh, within the hour,
 and applied when the router reloads, and a tier changed while the router was down is read at start. The newest reading
 per account and window is kept in the registry and loaded at startup, so a restart, and an account whose first poll the
-endpoint refuses, route from the last known windows. The router never fetches usage at a selection: use of an account
-outside the router shows in the next head or poll, so a decision can lag it by up to five minutes plus any backoff, and
-by up to one more interval after a failed poll or a restart. The [Quota view](console.md#quota) shows when the poll last
-asked the endpoint for each OAuth account and how it answered, and while an account backs off, since when and when its
-next attempt comes. The `poll_backoff` condition of the [`phoebis_attention` gauge](statistics.md#conditions-and-gauges)
-holds once an account has backed off for thirty minutes.
+endpoint refuses, route from the last known windows. A reading carries the plan and the tier the account held when it
+was taken, which the `window_reset` event names when its reset passes. The router never fetches usage at a selection:
+use of an account outside the router shows in the next head or poll, so a decision can lag it by up to five minutes plus
+any backoff, and by up to one more interval after a failed poll or a restart. The [Quota view](console.md#quota) shows
+when the poll last asked the endpoint for each OAuth account and how it answered, and while an account backs off, since
+when and when its next attempt comes. The `poll_backoff` condition of the [`phoebis_attention`
+gauge](statistics.md#conditions-and-gauges) holds once an account has backed off for thirty minutes.
 
 **Spent and cleared** A plan window read at 1.0 or above emits `window_spent` once per reset cycle, whether a head, a
 poll or the router's own prediction took it there. A window read under its limit again in the same reset cycle emits

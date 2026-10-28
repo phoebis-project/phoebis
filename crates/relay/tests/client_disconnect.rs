@@ -112,6 +112,8 @@ async fn priced_harness(up: &FakeUpstream, accounts: &[TestAccount]) -> Harness 
                         reset: None,
                         observed_at: NOW - 1_000,
                         source: WindowSource::Poll,
+                        plan: None,
+                        tier: None,
                     },
                 ),
                 incarnation: 1,

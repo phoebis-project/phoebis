@@ -263,12 +263,16 @@ pub fn cooldown_holds(scope: &str, window: &str, canonical_model: &str, fast: bo
 
 /// One window's reading: utilization as a fraction, the reset that refunds it when the source named one, and
 /// when it was read; a reading is replaced only by a newer one for the same window.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WindowReading {
     pub utilization: f64,
     pub reset: Option<i64>,
     pub observed_at: i64,
     pub source: WindowSource,
+    /// The account's resolved plan word and stored rate-limit tier at the instant the reading was taken, which a
+    /// reset's event and the allowance route answer. None on a reading loaded from a row written before the pair.
+    pub plan: Option<String>,
+    pub tier: Option<String>,
 }
 
 /// The fast lane's two buckets, per organization and shared by every fast-capable model, so the names carry no
@@ -300,7 +304,7 @@ pub struct UtilizationSample {
 impl UtilizationSample {
     /// The stored reading as it arrived.
     pub fn reading(&self, window: &str) -> Option<WindowReading> {
-        self.windows.get(window).copied()
+        self.windows.get(window).cloned()
     }
 
     /// The worst api_key bucket still standing at `now`: its reset ahead, or read within `BUCKET_LIFE_MS` when it
@@ -313,8 +317,9 @@ impl UtilizationSample {
                 Some(reset) => reset > now,
                 None => now - reading.observed_at < BUCKET_LIFE_MS,
             })
-            .map(|(_, reading)| *reading)
+            .map(|(_, reading)| reading)
             .max_by(|a, b| a.utilization.total_cmp(&b.utilization))
+            .cloned()
     }
 
     /// A builder for tests.
@@ -1349,6 +1354,8 @@ impl RoutingState {
                     reset: row.reset,
                     observed_at: row.observed_at,
                     source: WindowSource::Stored,
+                    plan: row.plan,
+                    tier: row.tier,
                 },
             );
         }
@@ -2260,6 +2267,8 @@ impl RoutingState {
                         reset: Some(next),
                         observed_at: reading.observed_at,
                         source: WindowSource::Predicted,
+                        plan: reading.plan,
+                        tier: reading.tier,
                     })
                 }
                 _ => Some(WindowReading {
@@ -2267,6 +2276,8 @@ impl RoutingState {
                     reset: None,
                     observed_at: reading.observed_at,
                     source: WindowSource::Predicted,
+                    plan: reading.plan,
+                    tier: reading.tier,
                 }),
             },
             _ => {
@@ -2344,9 +2355,9 @@ impl RoutingState {
                     account_id: account_id.to_string(),
                     incarnation,
                     observed_at: reading.observed_at,
-                    plan: None,
+                    plan: reading.plan,
                     reset: reading.reset,
-                    tier: None,
+                    tier: reading.tier,
                     utilization: reading.utilization,
                     window: window.clone(),
                 })
@@ -4551,6 +4562,8 @@ mod tests {
             reset: None,
             observed_at,
             source: WindowSource::Head,
+            plan: None,
+            tier: None,
         };
         state.record_sample(
             "a",
@@ -4623,6 +4636,8 @@ mod tests {
             reset: None,
             observed_at,
             source: WindowSource::Head,
+            plan: None,
+            tier: None,
         };
         // The account is present, so only the bucket cut can empty its map.
         let snapshot = RegistrySnapshot::from_load(
@@ -4710,6 +4725,8 @@ mod tests {
                 reset: Some(1_400),
                 observed_at: 1_000,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         )
         .with(
@@ -4719,6 +4736,8 @@ mod tests {
                 reset: None,
                 observed_at: 1_000,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         );
         assert_eq!(
@@ -4761,6 +4780,8 @@ mod tests {
                     reset,
                     observed_at: at,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             ),
         );
@@ -4793,6 +4814,8 @@ mod tests {
                         reset: Some(reset + (weeks + 1) * WEEK_MS),
                         observed_at,
                         source: WindowSource::Predicted,
+                        plan: None,
+                        tier: None,
                     }),
                     "{window} past its reset by {weeks} whole weeks"
                 );
@@ -4813,6 +4836,8 @@ mod tests {
                 reset: None,
                 observed_at: 1_000,
                 source: WindowSource::Predicted,
+                plan: None,
+                tier: None,
             }),
             "at the reset the window reads zero, and the next reading names the reset after it"
         );
@@ -4843,6 +4868,8 @@ mod tests {
                     reset: Some(HOUR_MS),
                     observed_at: 2_500,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             ),
         );
@@ -4873,6 +4900,8 @@ mod tests {
                 reset: None,
                 observed_at: 1_000,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             }),
             "no reset named: the reading stands however old it is"
         );
@@ -4902,6 +4931,8 @@ mod tests {
                 reset: Some(HOUR_MS),
                 observed_at: 1_000,
                 source: WindowSource::Stored,
+                plan: None,
+                tier: None,
             }),
             "the registry keeps no origin, and nothing has moved the restored reading"
         );
@@ -4933,6 +4964,8 @@ mod tests {
                 reset: None,
                 observed_at: 1_000,
                 source: WindowSource::Predicted,
+                plan: None,
+                tier: None,
             }),
             "at the reset the window reads zero, the router's own figure"
         );
@@ -4944,6 +4977,8 @@ mod tests {
                 reset: None,
                 observed_at: 1_000,
                 source: WindowSource::Predicted,
+                plan: None,
+                tier: None,
             }),
             "past the reset the window reads the share completed since it"
         );
@@ -5055,6 +5090,8 @@ mod tests {
                             reset: None,
                             observed_at: 2_000,
                             source: WindowSource::Poll,
+                            plan: None,
+                            tier: None,
                         },
                     )
                 },
@@ -5128,6 +5165,8 @@ mod tests {
                 reset: None,
                 observed_at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         )
     }
