@@ -1472,8 +1472,8 @@ usage:
     );
 }
 
-/// A unified 429 on one seat fails the client's
-/// request over to its sibling inside a single call, and the log, the cooldown, and the session all show it.
+/// A unified 429 on one seat fails the client's request over to its sibling inside a single call, and the cooldown, the
+/// log and the session all show it.
 #[tokio::test]
 async fn a_forced_429_on_one_seat_migrates_the_session_through_the_binary() {
     let up = FakeUpstream::start(vec![
@@ -1967,8 +1967,8 @@ async fn a_fast_session_is_served_fast_walked_on_a_fast_429_and_refused_locally_
     up.shutdown().await;
 }
 
-/// The plan-quota sibling takes a session once its
-/// current account reports overage, under the pool's default `prefer_plan` policy.
+/// The plan-quota sibling takes a session once its current account reports overage, under the pool's default
+/// `prefer_plan` policy.
 #[tokio::test]
 async fn a_session_crossing_into_overage_migrates_under_prefer_plan_through_the_binary() {
     use phoebis_profile::fixtures::{control_response, ControlFixture};
