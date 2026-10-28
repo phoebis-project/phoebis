@@ -302,7 +302,7 @@ CREATE TABLE IF NOT EXISTS "rollups_hourly" (
 );
 -- A key holder reads its own usage, one key's hours, without walking every key's entries.
 CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_generation, hour);
--- A budgeted member's spend read.
+-- Speeds a budgeted member's spend read.
 CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, account_id, hour);
 -- wall_early_ms is the longest time a wall on the account arrived before its window's reset under a stretch round, so
 -- the figure outlives the trailing day the wall_reached condition covers.

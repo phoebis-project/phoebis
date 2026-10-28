@@ -201,8 +201,7 @@ pub struct RollupRow {
     pub band: String,
     /// The serving attempt's account tier, `UNATTRIBUTED` for none. A dimension, so it sits in the key.
     pub tier: String,
-    /// `client` for the client's own classifier call, `-` otherwise and on a row from before the step. A dimension,
-    /// so it sits in the key.
+    /// `client` for the client's own classifier call, `-` otherwise. A dimension, so it sits in the key.
     pub classifier: String,
     pub requests: u64,
     pub succeeded: u64,

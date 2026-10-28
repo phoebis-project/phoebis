@@ -875,8 +875,7 @@ async fn a_registry_read_that_fails_keeps_the_schedule_and_logs() {
     step_to(&h, &up, &paused, secs(452)).await;
     assert_eq!((usage_asked(&up, A), usage_asked(&up, OAUTH_C)), (1, 1));
 
-    // A second connection on the store's file takes the table away, as the migration tests open the file
-    // beside the store.
+    // A second connection on the store's file takes the table away.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.busy_timeout(Duration::from_secs(5)).unwrap();
     conn.execute_batch("ALTER TABLE accounts RENAME TO accounts_gone")

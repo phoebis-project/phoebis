@@ -998,8 +998,8 @@ impl RecoveryStore {
         prepare(&mut self.conn, true, schema::MIGRATIONS)
     }
 
-    /// `prepare_recovery` over a chain the test names, so a failing step can be driven while the build's own chain
-    /// holds none.
+    /// `prepare_recovery` over a chain the test names, so a failing step can be driven whatever the build's own chain
+    /// holds.
     #[cfg(test)]
     fn prepare_recovery_with(&mut self, migrations: &[(u32, &str)]) -> Result<(), StoreError> {
         prepare(&mut self.conn, true, migrations)

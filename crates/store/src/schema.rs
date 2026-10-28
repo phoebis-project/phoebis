@@ -80,7 +80,6 @@ CREATE TABLE IF NOT EXISTS pools (
 );
 -- Outlives the pool it names, as the accounts' tombstones do.
 CREATE TABLE IF NOT EXISTS pool_tombstones (id TEXT PRIMARY KEY, incarnation INTEGER NOT NULL);
--- A member's daily and monthly budgets stand side by side.
 CREATE TABLE IF NOT EXISTS pool_members (
   pool_id TEXT NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,

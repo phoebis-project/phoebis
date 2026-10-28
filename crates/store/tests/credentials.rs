@@ -613,7 +613,7 @@ fn the_newest_settled_attempt_is_the_mirrors_starting_watermark() {
 fn the_resolved_cursor_query_reads_through_its_index() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
-    // Opened and dropped so the migrations run and the process lock is free for the plain reader below.
+    // Opened and dropped so the schema is prepared and the process lock is free for the plain reader below.
     drop(Store::open(&path, &StorageKey::generate()).unwrap());
     let conn = rusqlite::Connection::open(&path).unwrap();
     let mut stmt = conn
@@ -720,7 +720,7 @@ fn a_failed_holder_read_answers_an_error_once() {
 fn the_holders_newest_attempts_read_through_their_own_index() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
-    // Opened and dropped so the migrations run and the process lock is free for the plain reader below.
+    // Opened and dropped so the schema is prepared and the process lock is free for the plain reader below.
     drop(Store::open(&path, &StorageKey::generate()).unwrap());
     let conn = rusqlite::Connection::open(&path).unwrap();
     let mut stmt = conn
