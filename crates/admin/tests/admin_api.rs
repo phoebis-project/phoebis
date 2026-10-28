@@ -2419,6 +2419,75 @@ async fn the_request_list_filters_on_the_serving_attempts_stop_reason_and_refusa
     );
 }
 
+/// Every session's main agent is `main`, so the session narrows the agent's requests to one conversation.
+#[tokio::test]
+async fn the_request_list_keeps_one_agents_requests_under_agent_id_beside_the_session() {
+    use common::{get, json, login, wait_json};
+    use phoebis_ledger::{Record, RequestRecord};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    for (id, at, session, agent) in [
+        ("r-main-s1", now - 4_000, "s1", Some("main")),
+        ("r-agent", now - 3_000, "s1", Some("agent-7")),
+        ("r-main-s2", now - 2_000, "s2", Some("main")),
+        ("r-none", now - 1_000, "s1", None),
+    ] {
+        parts.ledger.record(Record::Request {
+            request: RequestRecord {
+                id: id.into(),
+                received_at: at,
+                finished_at: Some(at + 500),
+                pool_id: Some("main".into()),
+                session_id: Some(session.into()),
+                agent_id: agent.map(String::from),
+                model: "claude-sonnet-5".into(),
+                canonical_model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                status: Some(503),
+                outcome: "exhausted".into(),
+                ..Default::default()
+            },
+            attempts: Vec::new(),
+            bodies: None,
+        });
+    }
+    wait_json(&parts.app, "/admin/requests", &cookie, |v| {
+        v["requests"].as_array().is_some_and(|rows| rows.len() == 4)
+    })
+    .await;
+    let ids = |query: &'static str| {
+        let app = parts.app.clone();
+        let cookie = cookie.clone();
+        async move {
+            let page =
+                json(get(&app, &format!("/admin/requests?{query}"), Some(&cookie)).await).await;
+            page["requests"]
+                .as_array()
+                .unwrap_or_else(|| panic!("a page of rows: {page}"))
+                .iter()
+                .map(|r| r["id"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        ids("agent_id=agent-7").await,
+        ["r-agent"],
+        "the agent's request, the main agent's and the one that names no agent left out"
+    );
+    assert_eq!(
+        ids("agent_id=main").await,
+        ["r-main-s2", "r-main-s1"],
+        "the main agent's requests of both sessions, newest first"
+    );
+    assert_eq!(
+        ids("agent_id=main&session=s1").await,
+        ["r-main-s1"],
+        "the session narrows the agent to one conversation"
+    );
+}
+
 /// The writer stamps a row from the rig's clock, so the clock set past `to` before the write lands a row received
 /// inside the range after the range's end.
 #[tokio::test]

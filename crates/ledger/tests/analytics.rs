@@ -7,14 +7,14 @@ use phoebis_ledger::{
     apply_filter, breakdown, breakdown_paged, bucket_index, bucket_seconds, burn_groups_paged,
     burn_rows, burn_series, burn_series_over, deltas_of, fold_account, fold_event, fold_keepalive,
     held_series, hour_ceil, hour_of, key_request_totals, list_requests, member_spends,
-    moves_by_reason, placements, price_equivalent, price_shares, read_account_rollups,
-    read_rollups, refusal_categories, request_totals, rewrite_series, run_retention_blocking,
-    series, series_paged, session_identities, AttemptRecord, BudgetedMember, CostRevisions,
-    EventRecord, FundingFilter, GroupRow, Histogram, KeepaliveDelta, LedgerConfig, LedgerDb,
-    LiveKeys, ModelPrice, ModelRow, PlanTables, PriceRevisions, PriceTable, RequestFilter,
-    RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter, SharePricing, Speed,
-    WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS,
-    PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
+    moves_by_reason, pattern_matches, placements, price_equivalent, price_shares,
+    read_account_rollups, read_rollups, refusal_categories, request_totals, rewrite_series,
+    run_retention_blocking, series, series_paged, session_identities, AttemptRecord,
+    BudgetedMember, CostRevisions, EventRecord, FundingFilter, GroupRow, Histogram, KeepaliveDelta,
+    LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables, PriceRevisions, PriceTable,
+    RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter,
+    SharePricing, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING,
+    PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 use phoebis_routing::{
     PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
@@ -1339,6 +1339,171 @@ fn the_refusal_count_reads_each_served_refusal_in_range_under_its_category_the_l
         count(&[]),
         pairs(&[("harmful_request", 2), ("restricted_topic", 2), ("-", 1)]),
         "without the account filter the other account's refusal joins its category"
+    );
+}
+
+const CLI_310: &str = "claude-cli/2.1.310 (external, cli)";
+const SDK_310: &str = "claude-cli/2.1.310 (external, sdk-cli)";
+const CLI_311: &str = "claude-cli/2.1.311 (external, cli)";
+
+/// A refusal under `category`, its request row keeping the caller's client label and `User-Agent` header as sent,
+/// `None` where the caller sent none.
+fn plant_caller_refusal(
+    db: &LedgerDb,
+    id: &str,
+    client: Option<&str>,
+    user_agent: Option<&str>,
+    category: Option<&str>,
+) {
+    let request = RequestRecord {
+        id: id.into(),
+        received_at: 1_000,
+        finished_at: Some(1_500),
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        status: Some(200),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        client: client.map(String::from),
+        user_agent: user_agent.map(String::from),
+        ..Default::default()
+    };
+    let attempt = AttemptRecord {
+        request_id: id.into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: "oauth".into(),
+        upstream_status: Some(200),
+        outcome: "succeeded".into(),
+        stop_reason: Some("refusal".into()),
+        refusal_category: category.map(String::from),
+        ..Default::default()
+    };
+    db.insert_request(&request, &[attempt], None).unwrap();
+}
+
+/// Four refusals: version 2.1.310 under the `cli` and the `sdk-cli` entrypoint, 2.1.311 under `cli`, and a caller
+/// that sent neither a client label nor a user agent.
+fn plant_callers(db: &LedgerDb) {
+    plant_caller_refusal(
+        db,
+        "cli-310",
+        Some("claude-code/cli"),
+        Some(CLI_310),
+        Some("harmful_request"),
+    );
+    plant_caller_refusal(
+        db,
+        "sdk-310",
+        Some("claude-code/sdk-cli"),
+        Some(SDK_310),
+        Some("harmful_request"),
+    );
+    plant_caller_refusal(
+        db,
+        "cli-311",
+        Some("claude-code/cli"),
+        Some(CLI_311),
+        Some("restricted_topic"),
+    );
+    plant_caller_refusal(db, "bare", None, None, None);
+}
+
+/// The count over the planted range under the two pattern lists.
+fn count_under(db: &LedgerDb, clients: &[&str], user_agents: &[&str]) -> Vec<(String, u64)> {
+    let words = |list: &[&str]| list.iter().map(|w| w.to_string()).collect();
+    let filter = RequestFilter {
+        clients: words(clients),
+        user_agents: words(user_agents),
+        ..Default::default()
+    };
+    db.read_blocking(|c| refusal_categories(c, &filter, &LiveKeys::default(), 0, 10_000))
+        .unwrap()
+}
+
+fn category_counts(rows: &[(&str, u64)]) -> Vec<(String, u64)> {
+    rows.iter().map(|(c, n)| (c.to_string(), *n)).collect()
+}
+
+#[test]
+fn the_refusal_count_narrows_by_a_client_pattern_on_the_label_the_rollups_fold() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_callers(&db);
+    assert_eq!(
+        count_under(&db, &["claude-code/cli"], &[]),
+        category_counts(&[("harmful_request", 1), ("restricted_topic", 1)]),
+        "a label spelled in full counts that label's refusals alone"
+    );
+    assert_eq!(
+        count_under(&db, &["claude-code/*"], &[]),
+        category_counts(&[("harmful_request", 2), ("restricted_topic", 1)]),
+        "a wildcard counts every label it matches, the caller with none left out"
+    );
+    assert_eq!(
+        count_under(&db, &["-"], &[]),
+        category_counts(&[("-", 1)]),
+        "a row with no client reads `-`, as the rollups file it"
+    );
+}
+
+#[test]
+fn the_refusal_count_matches_a_user_agent_pattern_against_the_agents_first_product_token() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_callers(&db);
+    assert_eq!(
+        count_under(&db, &[], &["claude-cli/2.1.310"]),
+        category_counts(&[("harmful_request", 2)]),
+        "the token spelled in full counts the version's refusals under both entrypoints and none of 2.1.311's"
+    );
+    assert_eq!(
+        count_under(&db, &[], &["claude-cli/2.1.*"]),
+        category_counts(&[("harmful_request", 2), ("restricted_topic", 1)]),
+        "a wildcard over the token counts every version it matches"
+    );
+    assert_eq!(
+        count_under(&db, &[], &[CLI_310]),
+        Vec::new(),
+        "the header with its comment is no token, so it counts nothing, as it names no group of the series"
+    );
+}
+
+#[test]
+fn the_refusal_count_counts_the_rows_either_pattern_of_a_list_matches() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_callers(&db);
+    assert_eq!(
+        count_under(&db, &[], &["claude-cli/2.1.311", "-"]),
+        category_counts(&[("-", 1), ("restricted_topic", 1)]),
+        "two user agent patterns count the rows of either, the 2.1.310 rows left out"
+    );
+    assert_eq!(
+        count_under(&db, &["claude-code/sdk-cli", "-"], &[]),
+        category_counts(&[("-", 1), ("harmful_request", 1)]),
+        "two client patterns count the rows of either, the `cli` rows left out"
+    );
+}
+
+#[test]
+fn the_refusal_count_counts_a_row_only_where_the_client_and_the_user_agent_lists_both_match() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_callers(&db);
+    assert_eq!(
+        count_under(&db, &["claude-code/cli"], &["claude-cli/2.1.310"]),
+        category_counts(&[("harmful_request", 1)]),
+        "one row holds both: the sdk-cli row fails the client list and the 2.1.311 row the user agent list"
+    );
+}
+
+/// The grammar reads a user agent's parentheses, comma and spaces literally, with `*` and `?` its only wildcards, so a
+/// label spelled in full with its comment names itself alone.
+#[test]
+fn a_user_agent_label_spelled_in_full_matches_itself_and_not_its_sdk_cli_sibling() {
+    assert!(pattern_matches(CLI_310, CLI_310));
+    assert!(
+        !pattern_matches(CLI_310, SDK_310),
+        "the comment's entrypoint is part of the label"
     );
 }
 

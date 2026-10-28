@@ -1853,8 +1853,8 @@ async fn the_burn_operation_declares_the_account_filter_and_the_agent_groups_it_
     );
 }
 
-/// The query check compares names per module, and the breakdown's query declares the same seven names, so it would pass
-/// a refusal count operation that left its own query out of the document.
+/// The query check compares names per module, and the breakdown's query declares the same ten names, so it would pass a
+/// refusal count operation that left its own query out of the document.
 #[tokio::test]
 async fn the_refusal_count_operation_declares_the_range_and_the_filters_it_reads() {
     let (_app, _up, document) = document().await;
@@ -1869,15 +1869,48 @@ async fn the_refusal_count_operation_declares_the_range_and_the_filters_it_reads
         names,
         BTreeSet::from([
             "accounts",
+            "clients",
             "include_probes",
             "keys",
             "kinds",
             "models",
             "pools",
-            "range"
+            "range",
+            "user_agent_groups",
+            "user_agents"
         ]),
         "the refusal count operation's query"
     );
+}
+
+/// The query check proves each name is declared, and the console reads what the filter keeps from the document alone.
+#[tokio::test]
+async fn the_request_log_and_the_routing_log_declare_the_agent_id_filter() {
+    let (_app, _up, document) = document().await;
+    for (path, text) in [
+        (
+            "/admin/requests",
+            "The requests whose agent id equals the value, literally. Combines with `session` and every other filter.",
+        ),
+        (
+            "/admin/routing-log",
+            "The decisions and the events whose agent id equals the value, literally, so an event that names no agent \
+             is left out. Combines with `session` and every other filter.",
+        ),
+    ] {
+        let parameters = document["paths"][path]["get"]["parameters"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{path}'s parameters"));
+        let agent_id = parameters
+            .iter()
+            .find(|parameter| parameter["name"] == "agent_id")
+            .unwrap_or_else(|| panic!("{path} declares agent_id: {parameters:?}"));
+        assert_eq!(agent_id["in"], "query", "{agent_id}");
+        let description = agent_id["description"]
+            .as_str()
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+        assert_eq!(description.as_deref(), Some(text), "{path}");
+    }
 }
 
 /// The query check compares names per module, and the other analytics queries declare `range` and `accounts`, so it

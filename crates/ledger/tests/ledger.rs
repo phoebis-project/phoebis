@@ -2414,6 +2414,96 @@ fn the_stop_reason_and_refusal_category_filters_read_the_serving_attempt_and_das
     );
 }
 
+/// Writes request `id` of session `s1` at `received_at` from agent `agent_id`, the caller's `User-Agent` header kept as
+/// sent, `None` where the request names none.
+fn plant_agent_request(
+    db: &LedgerDb,
+    id: &str,
+    received_at: i64,
+    agent_id: Option<&str>,
+    user_agent: Option<&str>,
+) {
+    let request = RequestRecord {
+        id: id.into(),
+        received_at,
+        session_id: Some("s1".into()),
+        agent_id: agent_id.map(String::from),
+        user_agent: user_agent.map(String::from),
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "exhausted".into(),
+        ..Default::default()
+    };
+    db.insert_request(&request, &[], None).unwrap();
+}
+
+#[test]
+fn the_request_log_keeps_one_agents_requests_under_agent_id() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_agent_request(&db, "from-main", 3, Some("main"), None);
+    plant_agent_request(&db, "from-agent", 2, Some("agent-7"), None);
+    plant_agent_request(&db, "from-none", 1, None, None);
+    let listed = |agent_id: &str| {
+        listed_ids(
+            &db,
+            &RequestFilter {
+                agent_id: Some(agent_id.into()),
+                ..Default::default()
+            },
+        )
+    };
+    assert_eq!(
+        listed("agent-7"),
+        ["from-agent"],
+        "the agent's own request, the main agent's and the one that names no agent left out"
+    );
+    assert_eq!(listed("main"), ["from-main"]);
+    assert_eq!(
+        listed("agent"),
+        Vec::<String>::new(),
+        "the value matches in full, never as a prefix"
+    );
+    assert_eq!(
+        listed(""),
+        ["from-main", "from-agent", "from-none"],
+        "an empty value narrows nothing, as an absent one"
+    );
+}
+
+/// The request log reads its singular `user_agent` against the header as sent, so a label spelled in full with its
+/// parentheses, comma and spaces names that label and not its sibling under another entrypoint.
+#[test]
+fn the_request_logs_user_agent_spelled_in_full_lists_that_label_and_not_its_sdk_cli_sibling() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_agent_request(
+        &db,
+        "cli",
+        2,
+        Some("main"),
+        Some("claude-cli/2.1.310 (external, cli)"),
+    );
+    plant_agent_request(
+        &db,
+        "sdk",
+        1,
+        Some("main"),
+        Some("claude-cli/2.1.310 (external, sdk-cli)"),
+    );
+    let listed = |agent: &str| {
+        listed_ids(
+            &db,
+            &RequestFilter {
+                user_agent: Some(agent.into()),
+                ..Default::default()
+            },
+        )
+    };
+    assert_eq!(listed("claude-cli/2.1.310 (external, cli)"), ["cli"]);
+    assert_eq!(listed("claude-cli/2.1.310 (external, sdk-cli)"), ["sdk"]);
+}
+
 /// A row's own `landed_at`, as the ledger wrote it.
 fn landed_at(db: &LedgerDb, id: &str) -> Option<i64> {
     db.read_blocking(|c| {
@@ -7435,6 +7525,48 @@ fn a_session_prefix_matches() {
         ["e:pin_created@300", "d:r1/1"]
     );
     assert_eq!(log_ids(&db, &session("abc-1")), ["d:r1/1"]);
+}
+
+#[test]
+fn an_agent_id_keeps_the_agents_decisions_and_events_and_leaves_a_session_level_event_out() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (n, agent) in [(1, "agent-7"), (2, "main")] {
+        let mut row = logged(&format!("r{n}"), 1, 1, 100 * n as i64, "placed");
+        row.agent_id = Some(agent.into());
+        put_decision(&db, &row);
+    }
+    db.insert_event(&EventRecord {
+        session_id: Some("s1".into()),
+        agent_id: Some("agent-7".into()),
+        ..logged_event(300, "pin_created")
+    })
+    .unwrap();
+    // A prefix expiry names the conversation and no agent.
+    db.insert_event(&EventRecord {
+        session_id: Some("s1".into()),
+        ..logged_event(400, "warm_prefix_expired")
+    })
+    .unwrap();
+    let agent = |a: &str| phoebis_ledger::RoutingLogFilter {
+        agent_id: Some(a.into()),
+        ..log_filter()
+    };
+    assert_eq!(
+        log_ids(&db, &log_filter()),
+        [
+            "e:warm_prefix_expired@400",
+            "e:pin_created@300",
+            "d:r2/1",
+            "d:r1/1"
+        ],
+        "without the filter, every row"
+    );
+    assert_eq!(
+        log_ids(&db, &agent("agent-7")),
+        ["e:pin_created@300", "d:r1/1"],
+        "the agent's decision and its own event, the main agent's decision and the session-level event left out"
+    );
+    assert_eq!(log_ids(&db, &agent("main")), ["d:r2/1"]);
 }
 
 #[test]

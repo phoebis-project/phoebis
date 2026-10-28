@@ -120,8 +120,12 @@ An upstream's refusal is a served request: the serving attempt records the answe
 `refusal_category` and the recommended model its `stop_details` named, the request's outcome stays `succeeded`, and the
 figures count it as any served request. `GET /admin/requests` filters on `stop_reasons` and `refusal_categories`, each
 read off the serving attempt with `-` for a request whose serving attempt carries none or that no attempt served, and
-`GET /admin/analytics/refusal_categories` counts the refused requests in range per category, `-` for a refusal with
-none, read off the attempts at the request.
+on `agent_id`, which keeps one agent's requests, as `GET /admin/routing-log` keeps one agent's decisions and events and
+leaves out a session-level event, which names no agent. `GET /admin/analytics/refusal_categories` counts the refused
+requests in range per category, `-` for a refusal with none, read off the attempts at the request. It narrows by
+`clients` and `user_agents` as the analytics series do, over the client label and the agent's first product token, so a
+version picked from a breakdown counts that version's refusals, and it holds `user_agent_groups` to the two lists' bound
+and narrows nothing by them.
 
 ## Quota samples
 

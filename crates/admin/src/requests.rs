@@ -838,6 +838,8 @@ pub(crate) struct RequestsQuery {
     pub request: Option<String>,
     /// The requests whose session id equals the value, literally. Combines with `text` and every other filter.
     pub session: Option<String>,
+    /// The requests whose agent id equals the value, literally. Combines with `session` and every other filter.
+    pub agent_id: Option<String>,
     /// Unix milliseconds. Only the rows the ledger wrote after this instant, for a poll that passes back the
     /// `landed_through` of its last answer, beside the other filters.
     pub landed_after: Option<i64>,
@@ -938,6 +940,7 @@ pub(crate) async fn list(
         // An empty value narrows nothing, as an absent one, since the ledger drops it as it drops an empty `text`.
         request: q.get("request").cloned(),
         session: q.get("session").cloned(),
+        agent_id: q.get("agent_id").cloned(),
         landed_after,
         keys: list_param(&q, "keys"),
         pools: list_param(&q, "pools"),
@@ -948,6 +951,8 @@ pub(crate) async fn list(
         outcomes: list_param(&q, "outcomes"),
         user_agent: q.get("user_agent").cloned(),
         client: q.get("client").cloned(),
+        clients: Vec::new(),
+        user_agents: Vec::new(),
         agent_types: list_param(&q, "agent_types"),
         turn_origins: list_param(&q, "turn_origins"),
         speeds: list_param(&q, "speeds"),

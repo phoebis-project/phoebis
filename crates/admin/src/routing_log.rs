@@ -28,8 +28,8 @@ const HOUR_MS: i64 = 3_600_000;
 /// The view's URL keys, alphabetical. A key outside them is refused rather than ignored, so a link built for another
 /// view never reads as a filter that took.
 const KEYS: &[&str] = &[
-    "accounts", "cursor", "from", "keys", "kinds", "limit", "models", "pools", "request",
-    "session", "to",
+    "accounts", "agent_id", "cursor", "from", "keys", "kinds", "limit", "models", "pools",
+    "request", "session", "to",
 ];
 
 /// A value that parses as an integer is Unix milliseconds, else an RFC 3339 instant.
@@ -448,6 +448,9 @@ pub(crate) struct DecisionRecord {
 pub(crate) struct RoutingLogQuery {
     /// A comma list of ids. Matches a move's source as well as the account a decision placed on.
     pub accounts: Option<String>,
+    /// The decisions and the events whose agent id equals the value, literally, so an event that names no agent is
+    /// left out. Combines with `session` and every other filter.
+    pub agent_id: Option<String>,
     /// The `next_cursor` of the page before, `<at>:<rank>:<id>`.
     pub cursor: Option<String>,
     /// An RFC 3339 instant such as `2026-09-16T14:15:00.000Z` or Unix milliseconds, a value that reads as an
@@ -537,6 +540,7 @@ pub(crate) async fn list(
         // An emptied field in the view's bar narrows nothing, as an absent one.
         request: q.get("request").filter(|r| !r.is_empty()).cloned(),
         session: q.get("session").filter(|s| !s.is_empty()).cloned(),
+        agent_id: q.get("agent_id").filter(|a| !a.is_empty()).cloned(),
         keys: list_param(&q, "keys"),
         pools: list_param(&q, "pools"),
         accounts: list_param(&q, "accounts"),
