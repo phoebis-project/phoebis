@@ -1,9 +1,10 @@
 //! The keepalive views: every retained recipe, and the overview tiles the sessions page shows.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_keepalive::{IdleReturns, Wasted, IDLE_AGE_BOUNDS_SECONDS};
@@ -11,7 +12,8 @@ use phoebis_ledger::{hour_of, read_rollups, Funding, RollupSelect, UNATTRIBUTED}
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
-use crate::openapi::LedgerFailure;
+use crate::openapi::{ErrorBody, LedgerFailure};
+use crate::routes::failure;
 use crate::AdminState;
 
 /// The overview tiles the sessions page shows: the agents, the engine's limits, one row per pool with keepalive
@@ -57,8 +59,8 @@ pub(crate) struct Limit {
 pub(crate) struct PoolKeepalive {
     /// The requests a probe kept warm.
     pub credited_24h: u64,
-    /// The ten buckets of the return rate by idle age (the keepalive page's section of that name), each
-    /// `from_seconds`, `reached`, `returned` and `to_seconds`.
+    /// The ten buckets of the return rate by idle age (the keepalive page's section of that name), summed over the
+    /// UTC days of `range`, each `from_seconds`, `reached`, `returned` and `to_seconds`.
     pub idle_returns: Vec<IdleReturn>,
     pub pool_id: String,
     /// The probes the upstream served.
@@ -102,6 +104,17 @@ pub(crate) async fn recipes(State(state): State<Arc<AdminState>>) -> Response {
     .into_response()
 }
 
+/// `GET /admin/keepalive/overview`'s query.
+// Declared for the document alone, since the handler reads the request by hand.
+#[allow(dead_code)]
+#[derive(utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct OverviewQuery {
+    /// `7d` (the default) or `30d`: the UTC days the idle-return counters sum over, the current day and the 6 or 29
+    /// before it. Another word answers 400.
+    pub range: Option<String>,
+}
+
 #[derive(Default)]
 struct PoolDay {
     credited: u64,
@@ -116,12 +129,22 @@ struct PoolDay {
     path = "/admin/keepalive/overview",
     operation_id = "keepalive_overview",
     tag = "Keepalive",
+    params(OverviewQuery),
     responses(
         (status = 200, description = "The overview.", body = KeepaliveOverview),
+        (status = 400, description = "`range is 7d or 30d`", body = ErrorBody, example = json!({"error": "range is 7d or 30d"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
-pub(crate) async fn overview(State(state): State<Arc<AdminState>>) -> Response {
+pub(crate) async fn overview(
+    State(state): State<Arc<AdminState>>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let days = match q.get("range").map(String::as_str).unwrap_or("7d") {
+        "7d" => 7,
+        "30d" => 30,
+        _ => return failure(StatusCode::BAD_REQUEST, "range is 7d or 30d"),
+    };
     let now = (state.clock)();
     let day = hour_of(now) - 24 * 3_600;
     let to = crate::analytics::hour_end(hour_of(now));
@@ -174,7 +197,7 @@ pub(crate) async fn overview(State(state): State<Arc<AdminState>>) -> Response {
             *entry.wasted_reasons.entry(reason.clone()).or_default() += count;
         }
     }
-    let returns = state.keepalive.idle_returns();
+    let returns = state.keepalive.idle_returns_over(now, days);
     for pool in returns.keys() {
         pools.entry(pool.clone()).or_default();
     }

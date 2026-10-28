@@ -336,6 +336,9 @@ pub(crate) struct IdleEpisode {
     pub anchor: Option<PrefixAnchor>,
     pub prompt_at: Option<i64>,
     pub pool_key: String,
+    /// The UTC day the episode's highest counted bucket was reached, where its return counts, so a day never
+    /// answers a return without its reach. `None` until a bucket is counted.
+    pub bucket_day: Option<i64>,
 }
 
 /// The prefix an idle window judges a return against: the request's static hash, its last message boundary and
@@ -410,6 +413,7 @@ pub(crate) fn open_idle_episode(main: &mut Agent, snapshot: &RegistrySnapshot) -
         anchor: main.last_prefix.clone(),
         prompt_at: None,
         pool_key,
+        bucket_day: None,
     });
     true
 }
@@ -1374,9 +1378,15 @@ pub(crate) struct Inner {
     pub next_incarnation: u64,
     /// The engine's timing, copied onto every agent it creates.
     pub timing: KeepaliveTiming,
-    /// The idle-age counters by pool id. Never pruned while the engine runs, so a pool that leaves keeps the counts
-    /// it already took until the restart.
-    pub idle_returns: BTreeMap<String, IdleReturns>,
+    /// The idle-age counters by pool id and UTC day. A day older than the timing's `idle_return_retention_days` leaves
+    /// at the day roll. Nothing prunes by pool: a pool that leaves keeps its days until they age out, since a range the
+    /// overview reads may still cover them.
+    pub idle_returns: BTreeMap<String, BTreeMap<i64, IdleReturns>>,
+    /// The UTC day the idle-age counters last counted under, `i64::MIN` until the first count, which rolls.
+    pub idle_returns_day: i64,
+    /// The cutoff of the days the last roll dropped, for the next save to purge from the registry, cleared once a save
+    /// that carried it lands.
+    pub purge_counters_before: Option<i64>,
     /// The rows changed or removed since their last acknowledged save, each under the revision of its latest change.
     pub dirty: Dirty,
     /// Bumped by every touch, so a save that lands after a newer change still knows which change it carried.
@@ -1460,9 +1470,30 @@ impl Engine {
         self.lock().reasons.clone()
     }
 
-    /// The counters per pool id, for the overview and the flush.
-    pub fn idle_returns(&self) -> BTreeMap<String, IdleReturns> {
+    /// The counters per pool id and UTC day, for the flush and the tests.
+    pub fn idle_returns(&self) -> BTreeMap<String, BTreeMap<i64, IdleReturns>> {
         self.lock().idle_returns.clone()
+    }
+
+    /// The counters per pool id summed over the UTC day of `now` and the `days - 1` before it, for the overview, so
+    /// the day fold stays the engine's.
+    pub fn idle_returns_over(&self, now: i64, days: u32) -> BTreeMap<String, IdleReturns> {
+        let last = utc_day(now);
+        let first = last - i64::from(days) + 1;
+        self.lock()
+            .idle_returns
+            .iter()
+            .map(|(pool, by_day)| {
+                let mut sum = IdleReturns::default();
+                for counters in by_day.range(first..last + 1).map(|(_, counters)| counters) {
+                    for (total, bucket) in sum.buckets.iter_mut().zip(&counters.buckets) {
+                        total.reached += bucket.reached;
+                        total.returned += bucket.returned;
+                    }
+                }
+                (pool.clone(), sum)
+            })
+            .collect()
     }
 
     pub fn stats(&self) -> EngineStats {
@@ -1583,6 +1614,8 @@ impl Inner {
             next_incarnation: 0,
             timing,
             idle_returns: BTreeMap::new(),
+            idle_returns_day: i64::MIN,
+            purge_counters_before: None,
             dirty: Dirty::default(),
             revision: 0,
             persist_failing: false,
@@ -2153,11 +2186,40 @@ impl Inner {
         self.touch_agent(key, agent_id);
     }
 
+    /// Drops the days the retention no longer keeps once `now` falls past the UTC day the counters last counted under,
+    /// and records the cutoff for the next save, which takes the registry's rows of those days. The two sites that
+    /// count call it, as `Agent::roll_counters_day` is called, and the tick is one of them, so a day leaves within a
+    /// tick of the midnight that ages it out.
+    fn roll_idle_returns_day(&mut self, now: i64) {
+        let day = utc_day(now);
+        if day <= self.idle_returns_day {
+            return;
+        }
+        self.idle_returns_day = day;
+        let retention = self.timing.idle_return_retention_days;
+        if retention == 0 {
+            return;
+        }
+        let cutoff = day - (i64::from(retention) - 1);
+        let mut dropped = false;
+        for days in self.idle_returns.values_mut() {
+            let kept = days.split_off(&cutoff);
+            dropped |= !days.is_empty();
+            *days = kept;
+        }
+        self.idle_returns.retain(|_, days| !days.is_empty());
+        if dropped {
+            self.purge_counters_before = Some(cutoff);
+        }
+    }
+
     /// Advances main's idle window on every attended session: opens one where none is counted and raises `reached`
     /// up to the window's current bucket. It reads the sessions, never the retained recipes, so a session whose
     /// recipe a ceiling discarded, or that never sent a request, still reaches the later buckets. A busy main keeps
     /// its window and counts nothing, and a window whose return a prompt announced waits for the request.
     pub(crate) fn advance_idle_episodes(&mut self, snapshot: &RegistrySnapshot, now: i64) {
+        self.roll_idle_returns_day(now);
+        let day = utc_day(now);
         let mut opened: Vec<SessionKey> = Vec::new();
         let mut raised: Vec<(SessionKey, String)> = Vec::new();
         for (key, session) in self.sessions.iter_mut() {
@@ -2183,18 +2245,23 @@ impl Inner {
                 continue;
             }
             let bucket = idle_age_bucket(now - episode.started);
-            // Only a window that crossed into a new bucket is written, so an idle session costs no save per tick.
-            if episode.bucket.is_none_or(|counted| bucket > counted) {
-                raised.push((key.clone(), episode.pool_key.clone()));
+            // Only a window that crossed into a new bucket is counted and written, so an idle session costs no save
+            // per tick and a day holds no empty counters.
+            if episode.bucket.is_some_and(|counted| bucket <= counted) {
+                continue;
             }
+            raised.push((key.clone(), episode.pool_key.clone()));
             raise_reached(
                 self.idle_returns
                     .entry(episode.pool_key.clone())
+                    .or_default()
+                    .entry(day)
                     .or_default(),
                 episode.bucket,
                 bucket,
             );
-            episode.bucket = Some(episode.bucket.map_or(bucket, |counted| counted.max(bucket)));
+            episode.bucket = Some(bucket);
+            episode.bucket_day = Some(day);
         }
         for key in opened {
             self.touch_agent(&key, MAIN_AGENT);
@@ -2210,6 +2277,7 @@ impl Inner {
     /// runs to the prompt that announced the request, when one did, since the user came back then however many ticks
     /// pass before the request arrives.
     pub(crate) fn end_idle_episode(&mut self, key: &SessionKey, boundaries: &[String], now: i64) {
+        self.roll_idle_returns_day(now);
         let Some(main) = self
             .sessions
             .get_mut(key)
@@ -2223,15 +2291,28 @@ impl Inner {
         // Never below the fence: the window already counted as reaching it, so its return is read there.
         let bucket = idle_age_bucket(episode.prompt_at.unwrap_or(now) - episode.started)
             .max(episode.bucket.unwrap_or(0));
-        let counters = self
-            .idle_returns
-            .entry(episode.pool_key.clone())
-            .or_default();
+        let today = utc_day(now);
         let raised = episode.bucket.is_none_or(|counted| bucket > counted);
-        raise_reached(counters, episode.bucket, bucket);
         let returned = continues_prefix(episode.anchor.as_ref(), boundaries);
-        if returned {
-            counters.buckets[bucket].returned += 1;
+        if raised || returned {
+            let days = self
+                .idle_returns
+                .entry(episode.pool_key.clone())
+                .or_default();
+            if raised {
+                raise_reached(days.entry(today).or_default(), episode.bucket, bucket);
+            }
+            if returned {
+                // The return's bucket is the highest the window counted, so the return counts on the day that bucket
+                // was reached (today where this request raised it), and no day answers a return without its reach. A
+                // window restored from a row saved without the day counts today.
+                let day = if raised {
+                    today
+                } else {
+                    episode.bucket_day.unwrap_or(today)
+                };
+                days.entry(day).or_default().buckets[bucket].returned += 1;
+            }
         }
         self.touch_agent(key, MAIN_AGENT);
         if raised || returned {

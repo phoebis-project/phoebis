@@ -4,16 +4,19 @@
 //! a refreshing request whose chain holds neither boundary of that prefix while its answer reads the cache.
 mod common;
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use common::*;
 use phoebis_bus::{ClientFacts, Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
     continues_prefix, idle_age_bucket, AgentState, Event, Guard, IdleReturns, KeepalivePolicy,
-    PrefixAnchor, Reason, IDLE_AGE_BOUNDS_SECONDS,
+    KeepaliveTiming, PrefixAnchor, Reason, IDLE_AGE_BOUNDS_SECONDS,
 };
 
 const OAUTH: &str = "sk-ant-oat01-OOOO";
 const TIER: &str = "default_claude_max_20x";
 const LAPTOP_SECRET: &str = "phoebis-laptop-key";
+const DAY: i64 = 86_400_000;
 
 /// Main's next turn on the rig's conversation: the first prompt, its answer and a new prompt, so the request's message
 /// boundaries begin with the boundary the rig's first request ended on.
@@ -77,12 +80,63 @@ fn plan_row(policy: KeepalivePolicy) -> RigSpec {
     }
 }
 
+/// One pool's days summed bucket by bucket.
+fn summed(days: &BTreeMap<i64, IdleReturns>) -> IdleReturns {
+    let mut total = IdleReturns::default();
+    for counters in days.values() {
+        for (sum, bucket) in total.buckets.iter_mut().zip(&counters.buckets) {
+            sum.reached += bucket.reached;
+            sum.returned += bucket.returned;
+        }
+    }
+    total
+}
+
+/// The pool's counters over every day the engine holds.
 fn counters(r: &Rig, pool: &str) -> IdleReturns {
     r.engine
         .idle_returns()
         .get(pool)
-        .cloned()
+        .map(summed)
         .unwrap_or_default()
+}
+
+/// Each `reached` and `returned` of `pool` by the UTC day the engine keys them under.
+fn by_day(r: &Rig, pool: &str) -> BTreeMap<i64, ([u64; 10], [u64; 10])> {
+    r.engine
+        .idle_returns()
+        .get(pool)
+        .map(|days| {
+            days.iter()
+                .map(|(day, counters)| {
+                    (
+                        *day,
+                        (
+                            counters.buckets.map(|bucket| bucket.reached),
+                            counters.buckets.map(|bucket| bucket.returned),
+                        ),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The rig's timing with the idle-return retention set to `days`.
+fn retained_for(days: u32) -> RigSpec {
+    RigSpec {
+        timing: KeepaliveTiming {
+            idle_return_retention_days: days,
+            ..RigSpec::default().timing
+        },
+        ..RigSpec::default()
+    }
+}
+
+/// The clock to `at` with the lease renewed on the way and no tick between, so the next tick or request counts at `at`.
+fn attend_to(r: &mut Rig, at: i64) {
+    let now = r.now();
+    r.advance_attended(at - now);
 }
 
 fn reached_in(r: &Rig, pool: &str) -> [u64; 10] {
@@ -261,6 +315,185 @@ async fn a_return_on_the_same_prefix_raises_returned_in_its_bucket() {
             [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
         ),
         "a new window a minute old"
+    );
+}
+
+/// A window returns on the rig's first UTC day, and the next, open from that return, ticks into its ninth bucket and
+/// returns on the day after: each day holds its own buckets, and the save writes a row per pool, day and bucket.
+#[tokio::test]
+async fn two_windows_closing_on_two_utc_days_write_two_rows_per_bucket() {
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 12).await;
+    r.observe_with("main", &next_turn()).await;
+    r.state("main", "idle");
+    attend_to(&mut r, DAY + 12 * MINUTE);
+    r.step().await;
+    r.observe_with("main", &next_turn()).await;
+    let first = (
+        [1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+    );
+    let second = (
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+    );
+    assert_eq!(
+        by_day(&r, "main"),
+        BTreeMap::from([(0, first), (1, second)])
+    );
+    r.engine.flush_persisted().await;
+    let rows: Vec<(i64, u32, u64, u64)> =
+        r.h.store
+            .load_keepalive()
+            .unwrap()
+            .2
+            .into_iter()
+            .map(|row| (row.day, row.bucket, row.reached, row.returned))
+            .collect();
+    let expected: Vec<(i64, u32, u64, u64)> = [(0, first), (1, second)]
+        .into_iter()
+        .flat_map(|(day, (reached, returned))| {
+            (0..10).map(move |bucket| (day, bucket as u32, reached[bucket], returned[bucket]))
+        })
+        .collect();
+    assert_eq!(rows, expected, "one row per pool, day and bucket");
+}
+
+/// The ticks count a window's first two buckets on the rig's first UTC day, and the request that ends it on the next
+/// raises the rest: the buckets it raised and its return count on the closing day.
+#[tokio::test]
+async fn a_window_whose_closing_request_raised_its_bucket_the_next_day_counts_that_reach_and_its_return_there(
+) {
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 12).await;
+    attend_to(&mut r, DAY + MINUTE);
+    r.observe_with("main", &next_turn()).await;
+    assert_eq!(
+        by_day(&r, "main"),
+        BTreeMap::from([
+            (0, ([1, 1, 0, 0, 0, 0, 0, 0, 0, 0], [0; 10])),
+            (
+                1,
+                (
+                    [0, 0, 1, 1, 1, 1, 1, 1, 1, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 1, 0]
+                )
+            ),
+        ])
+    );
+}
+
+/// A tick a minute before midnight counts the window's ninth bucket, and the return a minute after midnight lands in
+/// it: the return counts on the reach's day, so no day answers a return without its reach.
+#[tokio::test]
+async fn a_return_after_midnight_in_a_bucket_a_tick_reached_before_it_counts_on_the_reachs_day() {
+    let mut r = rig(RigSpec::default()).await;
+    idle_after_request(&mut r).await;
+    attend_to(&mut r, DAY - MINUTE);
+    r.step().await;
+    attend_to(&mut r, DAY + MINUTE);
+    r.observe_with("main", &next_turn()).await;
+    let days = by_day(&r, "main");
+    assert_eq!(
+        days.get(&0),
+        Some(&(
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 1, 0]
+        )),
+        "the reach's day"
+    );
+    assert_eq!(
+        days.get(&1).map_or([0; 10], |(_, returned)| *returned),
+        [0; 10],
+        "the closing day"
+    );
+}
+
+/// Under a retention of two days, the tick on the third day drops the first day's counters from the engine and,
+/// through the next save, from the registry: a range over the days kept answers none of the first, and a load reads
+/// the two days kept.
+#[tokio::test]
+async fn a_day_past_the_retention_leaves_at_the_roll_and_stays_gone_after_a_save_and_a_load() {
+    let mut r = rig(retained_for(2)).await;
+    let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 12).await;
+    r.observe_with("main", &next_turn()).await;
+    r.state("main", "idle");
+    attend_to(&mut r, DAY + 12 * MINUTE);
+    r.step().await;
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        by_day(&r, "main").into_keys().collect::<Vec<_>>(),
+        vec![0, 1],
+        "both days before the roll"
+    );
+    attend_to(&mut r, 2 * DAY + 12 * MINUTE);
+    r.step().await;
+    assert_eq!(
+        by_day(&r, "main").into_keys().collect::<Vec<_>>(),
+        vec![1, 2],
+        "the first day leaves at the roll"
+    );
+    let over = &r.engine.idle_returns_over(r.now(), 30)["main"];
+    assert_eq!(
+        (
+            over.buckets.map(|bucket| bucket.reached),
+            over.buckets.map(|bucket| bucket.returned)
+        ),
+        ([1; 10], [0; 10]),
+        "the second window alone, its last bucket on the third day"
+    );
+    r.engine.flush_persisted().await;
+    let saved: BTreeSet<i64> =
+        r.h.store
+            .load_keepalive()
+            .unwrap()
+            .2
+            .into_iter()
+            .map(|row| row.day)
+            .collect();
+    assert_eq!(
+        saved,
+        BTreeSet::from([1, 2]),
+        "the save took the first day's rows"
+    );
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!(
+        second.idle_returns(),
+        r.engine.idle_returns(),
+        "the load reads the days kept"
+    );
+}
+
+/// A guard, which holds on any code without a roll: under a retention of 0 the tick on the third day drops nothing,
+/// and the save and the load keep the first day's counts.
+#[tokio::test]
+async fn a_retention_of_0_keeps_every_day() {
+    let mut r = rig(retained_for(0)).await;
+    let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 12).await;
+    r.observe_with("main", &next_turn()).await;
+    attend_to(&mut r, 2 * DAY + 12 * MINUTE);
+    r.step().await;
+    let counted = (
+        [1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+    );
+    assert_eq!((reached(&r), returned(&r)), counted, "the roll");
+    r.engine.flush_persisted().await;
+    let second = r.restart().await;
+    second.load_persisted().await;
+    let loaded = summed(&second.idle_returns()["main"]);
+    assert_eq!(
+        (
+            loaded.buckets.map(|bucket| bucket.reached),
+            loaded.buckets.map(|bucket| bucket.returned)
+        ),
+        counted,
+        "the save and the load"
     );
 }
 

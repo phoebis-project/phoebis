@@ -983,6 +983,312 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
     );
 }
 
+const DAY: i64 = 86_400_000;
+const MINUTE: i64 = 60_000;
+
+/// The ten idle-age buckets as the overview answers them, each bucket's `reached` and `returned` as named.
+fn idle_returns_counted(reached: [u64; 10], returned: [u64; 10]) -> serde_json::Value {
+    let bounds = phoebis_keepalive::IDLE_AGE_BOUNDS_SECONDS;
+    serde_json::Value::Array(
+        bounds
+            .iter()
+            .enumerate()
+            .map(|(i, from)| {
+                serde_json::json!({
+                    "from_seconds": from,
+                    "reached": reached[i],
+                    "returned": returned[i],
+                    "to_seconds": bounds.get(i + 1),
+                })
+            })
+            .collect(),
+    )
+}
+
+/// One companion session of key `desktop` on the overview's harness, its reports numbered in order.
+struct Companion<'a> {
+    parts: &'a common::Full,
+    generation: i64,
+    session: &'static str,
+    sequence: u64,
+}
+
+impl<'a> Companion<'a> {
+    fn start(parts: &'a common::Full, session: &'static str) -> Companion<'a> {
+        let mut companion = Companion {
+            parts,
+            generation: common::generation(&parts.store, "desktop"),
+            session,
+            sequence: 0,
+        };
+        companion.report("session_start", None);
+        companion
+    }
+
+    fn report(&mut self, event: &str, state: Option<&str>) {
+        self.sequence += 1;
+        let request_generation = state.map(|_| {
+            self.parts
+                .keepalive
+                .agent_status("desktop", self.session, "main")
+                .unwrap()
+                .request_generation
+        });
+        self.parts
+            .keepalive
+            .apply_event(
+                "desktop",
+                self.generation,
+                Event {
+                    event: event.into(),
+                    session_id: self.session.into(),
+                    instance_id: self.session.into(),
+                    sequence: self.sequence,
+                    agent_id: state.map(|_| "main".into()),
+                    state: state.map(String::from),
+                    request_generation,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+
+    /// Main's request at the harness clock's instant on the chain `boundaries` names, answered.
+    fn main_request(&self, id: &str, boundaries: &[&str]) {
+        let now = (self.parts.clock_cell).load(std::sync::atomic::Ordering::SeqCst);
+        self.parts
+            .keepalive
+            .observe(phoebis_bus::Event::RequestObserved(
+                phoebis_bus::RequestObserved {
+                    request_id: id.into(),
+                    origin: phoebis_bus::Origin::Client,
+                    kind: phoebis_bus::Kind::Inference,
+                    key_id: Some("desktop".into()),
+                    key_generation: self.generation,
+                    pool_id: Some("main".into()),
+                    session_id: Some(self.session.into()),
+                    agent_id: Some("main".into()),
+                    parent_agent_id: None,
+                    owner_id: None,
+                    model: "claude-sonnet-5".into(),
+                    canonical_model: "claude-sonnet-5".into(),
+                    wire_model: "claude-sonnet-5".into(),
+                    stream: false,
+                    headers: vec![],
+                    body: bytes::Bytes::from(
+                        r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#,
+                    ),
+                    body_capture_hours: 0,
+                    shape: phoebis_bus::RequestShape::default(),
+                    static_hash: Some("static".into()),
+                    boundaries: boundaries.iter().map(|b| b.to_string()).collect(),
+                    client: phoebis_bus::ClientFacts::default(),
+                    auto_mode: None,
+                    fork: phoebis_bus::Fork::default(),
+                    presented_retired: false,
+                    rotation_at: None,
+                    guardrail_id: None,
+                    guardrails: Vec::new(),
+                    received_at: now,
+                },
+            ));
+        self.parts
+            .keepalive
+            .observe(phoebis_bus::Event::AccountSelected(
+                phoebis_bus::AccountSelected {
+                    request_id: id.into(),
+                    attempt: 1,
+                    account_id: "direct".into(),
+                    account_kind: "api_key".into(),
+                    usage_based: false,
+                    pin_epoch: Some(1),
+                    started_at: now,
+                    cache_ttl_ms: None,
+                    selection: None,
+                },
+            ));
+        self.parts
+            .keepalive
+            .observe(phoebis_bus::Event::RequestComplete(
+                phoebis_bus::RequestComplete {
+                    request_id: id.into(),
+                    attempt: 1,
+                    account_id: Some("direct".into()),
+                    outcome: phoebis_bus::Outcome::Succeeded,
+                    status: 200,
+                    usage: None,
+                    response: phoebis_bus::ResponseFacts::default(),
+                    ttfb_ms: None,
+                    ttfc_ms: None,
+                    error_code: None,
+                    client_drift: None,
+                    client_contract: None,
+                    client_version: None,
+                    response_bytes: None,
+                    response_chunks: None,
+                    held: None,
+                    diagnostics: None,
+                    message_id: None,
+                    skipped_events: 0,
+                    interruption: None,
+                    finished_at: now,
+                },
+            ));
+    }
+
+    /// The harness clock moved to `until` in steps inside the companion's lease, each followed by a heartbeat, as an
+    /// attending companion renews it.
+    fn attend_to(&mut self, until: i64) {
+        let cell = &self.parts.clock_cell;
+        while cell.load(std::sync::atomic::Ordering::SeqCst) < until {
+            let now = cell.load(std::sync::atomic::Ordering::SeqCst);
+            let next = (now + phoebis_keepalive::LEASE_MS / 2).min(until);
+            cell.store(next, std::sync::atomic::Ordering::SeqCst);
+            self.report("heartbeat", None);
+        }
+    }
+}
+
+/// A pool `main` over `direct` with keepalive off, so no probe runs whatever the clock does, and the key `desktop` in
+/// it: main's idle windows count under `main` all the same.
+async fn idle_returns_harness() -> common::Full {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    parts
+}
+
+/// The pool `main`'s idle returns as the overview answers them under `query`, read under a login of its own, since an
+/// admin session ends 12 hours after its login and the cases move the clock days ahead.
+async fn main_idle_returns(parts: &common::Full, query: &str) -> serde_json::Value {
+    let cookie = login(&parts.app, "admin-secret").await;
+    let overview = json(
+        get(
+            &parts.app,
+            &format!("/admin/keepalive/overview{query}"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    overview["pools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no pools: {overview}"))
+        .iter()
+        .find(|pool| pool["pool_id"] == "main")
+        .map(|pool| pool["idle_returns"].clone())
+        .unwrap_or_else(|| panic!("no pool main: {overview}"))
+}
+
+/// A window on the harness's day reaches the first two buckets and returns in the second, and one ten days later
+/// reaches the first alone: the overview sums the current UTC day and the 6 before it unless `range` asks for 30.
+#[tokio::test]
+async fn the_overview_sums_the_idle_returns_of_the_last_7_utc_days_and_of_30_under_range_30d() {
+    let parts = idle_returns_harness().await;
+    let mut first = Companion::start(&parts, "s1");
+    first.main_request("r1", &["b1"]);
+    first.report("state", Some("idle"));
+    parts.keepalive.step().await;
+    first.attend_to(common::NOW + 6 * MINUTE);
+    first.main_request("r2", &["b1", "b2"]);
+    parts
+        .clock_cell
+        .store(common::NOW + 10 * DAY, std::sync::atomic::Ordering::SeqCst);
+    let mut later = Companion::start(&parts, "s2");
+    later.main_request("r3", &["d1"]);
+    later.report("state", Some("idle"));
+    parts.keepalive.step().await;
+    let last_seven = idle_returns_counted([1, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0; 10]);
+    assert_eq!(
+        main_idle_returns(&parts, "").await,
+        last_seven,
+        "the default range is the last 7 days"
+    );
+    assert_eq!(main_idle_returns(&parts, "?range=7d").await, last_seven);
+    assert_eq!(
+        main_idle_returns(&parts, "?range=30d").await,
+        idle_returns_counted(
+            [2, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+        ),
+        "the last 30 days hold both windows"
+    );
+}
+
+/// A window reaches its eighth bucket before midnight and returns in it after: the return counts on the reach's day,
+/// so a range that starts on the day after answers neither, and no bucket answers a return without its reach.
+#[tokio::test]
+async fn a_return_after_midnight_counts_on_its_reachs_day_so_a_range_from_the_next_day_answers_neither(
+) {
+    let parts = idle_returns_harness().await;
+    let midnight = (common::NOW / DAY + 1) * DAY;
+    let mut companion = Companion::start(&parts, "s1");
+    companion.main_request("r1", &["b1"]);
+    companion.report("state", Some("idle"));
+    parts.keepalive.step().await;
+    companion.attend_to(midnight - MINUTE);
+    parts.keepalive.step().await;
+    companion.attend_to(midnight + MINUTE);
+    companion.main_request("r2", &["b1", "b2"]);
+    let both = idle_returns_counted(
+        [1, 1, 1, 1, 1, 1, 1, 1, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+    );
+    // Six days after the return's day, the last 7 days still start on the reach's day.
+    parts.clock_cell.store(
+        midnight + 5 * DAY + MINUTE,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    assert_eq!(
+        main_idle_returns(&parts, "?range=7d").await,
+        both,
+        "the reach's day inside the range"
+    );
+    parts.clock_cell.store(
+        midnight + 6 * DAY + MINUTE,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    assert_eq!(
+        main_idle_returns(&parts, "?range=7d").await,
+        idle_returns_counted([0; 10], [0; 10]),
+        "the range starts on the return's day, after the reach's"
+    );
+    assert_eq!(main_idle_returns(&parts, "?range=30d").await, both);
+}
+
+#[tokio::test]
+async fn the_overview_refuses_a_range_other_than_7d_or_30d() {
+    let parts = idle_returns_harness().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for range in ["24h", "7D", "", "7d,30d"] {
+        let refused = get(
+            &parts.app,
+            &format!("/admin/keepalive/overview?range={range}"),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(refused.status(), 400, "{range:?}");
+        assert_eq!(
+            json(refused).await,
+            serde_json::json!({ "error": "range is 7d or 30d" }),
+            "{range:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn the_overview_counts_the_plan_funded_answered_probes_apart_from_the_billed_ones() {
     let parts = common::admin_parts_full().await;

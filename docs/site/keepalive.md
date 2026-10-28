@@ -260,6 +260,12 @@ opens none.
 No rule reads the counters: the idle window is the pool's `max_idle_seconds`, taken as set. The pool dialog shows them
 by bucket.
 
+The counters are kept per pool and UTC day. A bucket counts as reached on the day a tick or the request that ends the
+window reached it. A return counts on the day its bucket was reached, so a window that returns after midnight in a
+bucket it reached before midnight counts the return on the earlier day, and no day shows a bucket with more returns than
+windows that reached it. The pool dialog reads the counters over its range of 7 or 30 days, the current UTC day and the
+6 or 29 before it, and the router drops a day older than 30 days.
+
 ## The five states
 
 The Sessions view reads each agent's recipe as one of five states, with the engine's own reason beside it as the cause.

@@ -85,7 +85,7 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("guardrail_show", &[404, 500]),
     ("guardrail_patch", &[400, 404, 409, 500, 503]),
     ("guardrail_delete", &[404, 500, 503]),
-    ("keepalive_overview", &[500]),
+    ("keepalive_overview", &[400, 500]),
     ("keepalive_recipes", &[]),
     ("keys_list", &[500]),
     ("keys_create", &[400, 404, 409, 500, 503]),
@@ -251,6 +251,7 @@ const CORPUS: &[(&str, Option<(&str, u16)>)] = &[
 const QUERY_MODULES: &[(&str, &str)] = &[
     ("accounts", include_str!("../src/accounts.rs")),
     ("analytics", include_str!("../src/analytics.rs")),
+    ("keepalive", include_str!("../src/keepalive.rs")),
     ("pools", include_str!("../src/pools.rs")),
     ("requests", include_str!("../src/requests.rs")),
     ("routing_log", include_str!("../src/routing_log.rs")),
@@ -1907,6 +1908,35 @@ async fn the_unused_allowance_operation_declares_the_account_filter_and_the_rang
             .as_str()
             .is_some_and(|text| text.contains("Default `30d`")),
         "{range}"
+    );
+}
+
+/// The query check compares names per module, so it would pass an overview operation that left `range` out of the
+/// document, and the console reads the two words and the refusal from the document alone.
+#[tokio::test]
+async fn the_keepalive_overview_declares_its_range_and_the_refusal_of_another_word() {
+    let (_app, _up, document) = document().await;
+    let operation = &document["paths"]["/admin/keepalive/overview"]["get"];
+    let parameters = operation["parameters"]
+        .as_array()
+        .expect("the overview's parameters");
+    let names: BTreeSet<&str> = parameters
+        .iter()
+        .filter_map(|parameter| parameter["name"].as_str())
+        .collect();
+    assert_eq!(names, BTreeSet::from(["range"]), "the overview's query");
+    let range = &parameters[0];
+    assert_eq!(range["in"], "query", "{range}");
+    assert!(
+        range["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("`7d`") && text.contains("`30d`")),
+        "{range}"
+    );
+    assert_eq!(
+        operation["responses"]["400"]["content"]["application/json"]["example"],
+        serde_json::json!({ "error": "range is 7d or 30d" }),
+        "{operation}"
     );
 }
 

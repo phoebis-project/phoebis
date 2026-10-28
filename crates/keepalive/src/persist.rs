@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LEASE_MS};
 use crate::engine::{
-    kind_of_word, kind_word, utc_day, Agent, AgentState, Engine, Guard, IdleEpisode,
-    IdleReturnBucket, Inner, Kept, Observation, ParkKind, PrefixAnchor, PriorCoverage, Reason,
-    SavingsUnit, Session, SessionKey, Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
+    kind_of_word, kind_word, Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket,
+    Inner, Kept, Observation, ParkKind, PrefixAnchor, PriorCoverage, Reason, SavingsUnit, Session,
+    SessionKey, Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::usage::ProbeUsage;
@@ -136,6 +136,10 @@ pub(crate) struct PersistedEpisode {
     pub anchor: Option<PersistedAnchor>,
     pub prompt_at: Option<i64>,
     pub pool_key: String,
+    /// Absent from a row saved before windows carried one, which loads as `None`, so that window's return counts on
+    /// the day of the request that ends it.
+    #[serde(default)]
+    pub bucket_day: Option<i64>,
 }
 
 /// Saved as `[static_hash, last, before_last]`, read from that or from the saved `[static_hash, last]` pair, so a row
@@ -427,6 +431,7 @@ impl PersistedAgent {
                 anchor: episode.anchor.as_ref().map(PersistedAnchor::of),
                 prompt_at: episode.prompt_at,
                 pool_key: episode.pool_key.clone(),
+                bucket_day: episode.bucket_day,
             }),
             idle_window_floor: agent.idle_window_floor,
             last_prefix: agent.last_prefix.as_ref().map(PersistedAnchor::of),
@@ -562,6 +567,7 @@ impl PersistedAgent {
             anchor: episode.anchor.map(PersistedAnchor::restore),
             prompt_at: episode.prompt_at,
             pool_key: episode.pool_key,
+            bucket_day: episode.bucket_day,
         });
         agent.idle_window_floor = self.idle_window_floor;
         agent.last_prefix = self.last_prefix.map(PersistedAnchor::restore);
@@ -755,6 +761,9 @@ pub(crate) struct Snapshot {
     removed_sessions: Vec<(PersistKey, u64)>,
     removed_agents: Vec<((PersistKey, String), u64)>,
     pools: Vec<(String, u64)>,
+    /// The engine's recorded cutoff as this snapshot read it, content of its own: a roll that dropped a day while no
+    /// pool was dirty still has the registry's rows of that day to delete.
+    purge_counters_before: Option<i64>,
 }
 
 impl Snapshot {
@@ -764,6 +773,7 @@ impl Snapshot {
             && self.removed_sessions.is_empty()
             && self.removed_agents.is_empty()
             && self.pools.is_empty()
+            && self.purge_counters_before.is_none()
     }
 }
 
@@ -942,11 +952,11 @@ impl Inner {
                 .push(((row.clone(), agent_id.clone()), *revision));
         }
         for (pool_id, revision) in &self.dirty.pools {
-            if let Some(counters) = self.idle_returns.get(pool_id) {
+            for (day, counters) in self.idle_returns.get(pool_id).into_iter().flatten() {
                 for (bucket, counter) in counters.buckets.iter().enumerate() {
                     snapshot.batch.counters.push(IdleReturnsRow {
                         pool_id: pool_id.clone(),
-                        day: utc_day(now),
+                        day: *day,
                         bucket: bucket as u32,
                         reached: counter.reached,
                         returned: counter.returned,
@@ -955,6 +965,8 @@ impl Inner {
             }
             snapshot.pools.push((pool_id.clone(), *revision));
         }
+        snapshot.purge_counters_before = self.purge_counters_before;
+        snapshot.batch.purge_counters_before = self.purge_counters_before;
         snapshot
     }
 
@@ -996,6 +1008,11 @@ impl Inner {
         retire(&mut self.dirty.removed_sessions, &snapshot.removed_sessions);
         retire(&mut self.dirty.removed_agents, &snapshot.removed_agents);
         retire(&mut self.dirty.pools, &snapshot.pools);
+        // Cleared only while unchanged since the snapshot: a roll in between recorded a later cutoff, which the next
+        // save still owes.
+        if self.purge_counters_before == snapshot.purge_counters_before {
+            self.purge_counters_before = None;
+        }
     }
 
     /// An agent row a limit leaves out of the load. Its recipe counts as evicted, and the probes it left unanswered and
@@ -1058,7 +1075,12 @@ impl Inner {
         timing: KeepaliveTiming,
     ) {
         for row in counters {
-            let counters = self.idle_returns.entry(row.pool_id).or_default();
+            let counters = self
+                .idle_returns
+                .entry(row.pool_id)
+                .or_default()
+                .entry(row.day)
+                .or_default();
             if let Some(bucket) = counters.buckets.get_mut(row.bucket as usize) {
                 *bucket = IdleReturnBucket {
                     reached: row.reached,

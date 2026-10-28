@@ -225,6 +225,15 @@ pub struct KeepaliveTiming {
     pub retry_ms: i64,
     /// Caps the doubling and an upstream `Retry-After` so one wait stays inside a one-hour entry's six-minute lead.
     pub retry_max_ms: i64,
+    /// The UTC days of idle-return counters the engine keeps, the current day among them, 0 keeping every day. The
+    /// overview's longest range is 30 days, so the default covers it. Defaulted on a read, since each saved agent's
+    /// payload carries the timing and one saved before the member must still load.
+    #[serde(default = "default_idle_return_retention_days")]
+    pub idle_return_retention_days: u32,
+}
+
+fn default_idle_return_retention_days() -> u32 {
+    KeepaliveTiming::default().idle_return_retention_days
 }
 
 impl Default for KeepaliveTiming {
@@ -237,6 +246,7 @@ impl Default for KeepaliveTiming {
             cold_probe_limit: 2,
             retry_ms: 30_000,
             retry_max_ms: 300_000,
+            idle_return_retention_days: 30,
         }
     }
 }
