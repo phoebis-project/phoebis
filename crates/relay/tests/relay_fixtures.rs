@@ -44,10 +44,15 @@ async fn oauth_first_party_request_is_byte_identical_except_the_two_edits() {
     let mut expected = expected_head.into_bytes();
     expected.extend_from_slice(&expected_body);
     assert_eq!(got, expected);
+    let stamp = |bytes: &[u8]| {
+        let at = phoebis_cch::find_cch(bytes)
+            .expect("a stamped body")
+            .digits_start;
+        bytes[at..at + 5].to_vec()
+    };
     assert_ne!(
-        phoebis_cch::find_cch(&expected_body)
-            .map(|l| expected_body[l.digits_start..l.digits_start + 5].to_vec()),
-        Some(b"91984".to_vec()),
+        stamp(&expected_body),
+        stamp(native),
         "the uuid edit changes the hash"
     );
     up.shutdown().await;

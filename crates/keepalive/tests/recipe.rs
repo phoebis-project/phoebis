@@ -110,10 +110,15 @@ fn a_body_without_a_stream_flag_gains_one_and_a_stamped_body_is_resigned() {
         phoebis_cch::sign(&recipe.body).unwrap(),
         "the stamp matches the edited body"
     );
+    let stamp = |bytes: &[u8]| {
+        let at = phoebis_cch::find_cch(bytes)
+            .expect("a stamped body")
+            .digits_start;
+        bytes[at..at + 5].to_vec()
+    };
     assert_ne!(
-        phoebis_cch::find_cch(&recipe.body)
-            .map(|l| recipe.body[l.digits_start..l.digits_start + 5].to_vec()),
-        Some(b"91984".to_vec()),
+        stamp(&recipe.body),
+        stamp(adaptive.as_bytes()),
         "and differs from the client's stamp over the unedited body"
     );
 }
