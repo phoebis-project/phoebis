@@ -9870,6 +9870,37 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   page.unmount();
 }
 {
+  // The key routes refuse a body member outside the key input with 400, so the dialog's own save is read against the
+  // members the routes take.
+  const KEY_INPUT_MEMBERS = new Set(['autoModeServer', 'bodyCaptureHours', 'enabled', 'expiresAt', 'guardrails', 'keepaliveOptOut', 'longContextTwins', 'modelRules', 'modelRulesMode', 'name', 'notes', 'poolId']);
+  const page = await mount('/keys');
+  const rows = () => [...page.container.querySelectorAll('.card--table tbody tr')];
+  const listed = (name) => rows().some((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === name);
+  rows().find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop')?.querySelector('.menu__trigger')?.click();
+  await page.settle(120);
+  [...page.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+  await page.settle(400);
+  const dlg = [...page.container.querySelectorAll('dialog[open]')].pop();
+  const save = [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save');
+  const recorded = recordedCalls('updateKey');
+  try {
+    save?.click();
+    await page.settle(600);
+  } finally {
+    recorded.restore();
+  }
+  const [id, sent] = recorded.calls[0]?.args ?? [];
+  const outside = Object.keys(sent ?? {}).filter((k) => !KEY_INPUT_MEMBERS.has(k));
+  const closed = !!dlg && page.container.querySelector('dialog[open]') === null;
+  const toast = page.container.querySelector('.toast')?.textContent ?? '';
+  results.push({
+    name: '/keys an unchanged save from the edit dialog sends no member outside the key input and lands',
+    ok: recorded.calls.length === 1 && id === 'laptop' && sent !== undefined && outside.length === 0 && recorded.calls[0].answer?.id === 'laptop' && closed && toast === 'Key saved' && listed('laptop'),
+    missing: [`calls ${recorded.calls.length}`, `id ${id}`, `outside [${outside.join()}]`, `answer ${recorded.calls[0]?.answer?.id ?? 'none'}`, `closed ${closed}`, `toast ${toast}`, `listed ${listed('laptop')}`],
+  });
+  page.unmount();
+}
+{
   const rows = () => [...m.container.querySelectorAll('.card--table tbody tr')];
   const laptop = rows().find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop');
   laptop?.querySelector('.menu__trigger')?.click();

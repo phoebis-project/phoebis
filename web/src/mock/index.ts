@@ -128,6 +128,13 @@ const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRule
 };
 
 /**
+ * The key routes refuse a body with a member outside `KeyInput` before they read any member, so the mock answers the
+ * pool routes' sentence first.
+ */
+const KEY_INPUT_MEMBERS: ReadonlySet<string> = new Set(['autoModeServer', 'bodyCaptureHours', 'enabled', 'expiresAt', 'guardrails', 'keepaliveOptOut', 'longContextTwins', 'modelRules', 'modelRulesMode', 'name', 'notes', 'poolId']);
+const unknownKeyMember = (input: object, also: readonly string[] = []): string | null => (Object.keys(input).some((k) => !KEY_INPUT_MEMBERS.has(k) && !also.includes(k)) ? 'body must be a JSON object' : null);
+
+/**
  * The ceiling, shedding, failover, slow-down and return-to-plan refusals, in the order and words of the pool routes.
  */
 const engineRefusal = (input: PoolInput): string | null => {
@@ -864,7 +871,10 @@ export class MockApi implements Api {
   }
 
   async createKey(input: CreateKeyInput): Promise<CreatedApiKey> {
-    // A new key starts with none of its own, so the route refuses the member before it reads anything else.
+    const shape = unknownKeyMember(input, ['expiresInDays']);
+    if (shape) throw new ApiError(400, shape, null);
+    // A new key starts with none of its own, so once the body's shape passes, the route refuses the member before it
+    // reads anything else.
     if (input.guardrails !== undefined) throw new ApiError(400, 'guardrails applies on edit', null);
     // The client sends the id it derives from the name, so a name already taken is an id already taken.
     const id = slug(input.name);
@@ -1464,17 +1474,24 @@ export class MockApi implements Api {
     return latency(this.guardrailView(next), 250);
   }
 
+  /**
+   * The refusals in the route's order: the unknown member, then after the mock's key lookup the pool 404, the rules
+   * refusal, the doubled guardrail, the stale stamp, the bound refusal, the unknown guardrail.
+   */
   async updateKey(id: string, input: KeyInput, revision?: number): Promise<ApiKey> {
+    const shape = unknownKeyMember(input);
+    if (shape) return Promise.reject(new ApiError(400, shape, null));
     const idx = this.keys.findIndex((k) => k.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown key ${id}`));
+    const { expiresAt: expiry, guardrails: ownIds, ...rest } = input;
+    const current = this.keys[idx];
+    // The route reads the pool before the rule list, the guardrail list and the edit's stamp, so an edit onto a missing
+    // pool answers 404 ahead of their refusals.
+    if (!this.pools.some((p) => p.id === rest.poolId)) return Promise.reject(new ApiError(404, 'pool not found', null));
     const refusal = keyRulesRefusal(input);
     if (refusal) return Promise.reject(new ApiError(400, refusal, null));
-    const { expiresAt: expiry, guardrails: ownIds, ...rest } = input;
     const twice = repeatedId(ownIds);
     if (twice !== null) return Promise.reject(new ApiError(400, `guardrails lists ${twice} twice`, null));
-    const current = this.keys[idx];
-    // The route reads the pool before it compares the edit's stamp, so a stale edit onto a missing pool answers 404.
-    if (!this.pools.some((p) => p.id === rest.poolId)) return Promise.reject(new ApiError(404, 'pool not found', null));
     if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the key changed while it was being edited, so reload and try again', 'stale_edit'));
     // The pool the key lands in, a new one on a move, with the key's own list as the edit leaves it.
     const own = ownIds ?? this.guardrailRefs('keys', id).map((r) => r.id);
