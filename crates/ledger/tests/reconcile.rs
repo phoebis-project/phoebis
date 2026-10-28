@@ -426,6 +426,231 @@ fn a_part_with_no_priced_attempt_adds_nothing_and_the_other_part_writes_the_row(
     assert!(close(row.predicted_share, 0.84), "{}", row.predicted_share);
 }
 
+/// Polls of account `a`'s 5-hour window ten minutes apart from Saturday noon, each naming `reset`.
+fn polls(db: &LedgerDb, reset: i64, utilizations: &[f64]) {
+    let readings: Vec<QuotaSampleRecord> = utilizations
+        .iter()
+        .zip(0i64..)
+        .map(|(utilization, i)| reading(FIVE_HOUR, SATURDAY + i * 10 * MINUTE, *utilization, reset))
+        .collect();
+    db.insert_samples(&readings, None).unwrap();
+}
+
+/// `units` Sonnet units, `units / 100` of the 5-hour window, completed between the poll `after` of `polls` and the
+/// next.
+fn served_after_poll(db: &LedgerDb, after: i64, units: u64) {
+    let completed = SATURDAY + after * 10 * MINUTE + 5 * MINUTE;
+    served(
+        db,
+        &format!("after-{after}"),
+        SONNET,
+        completed,
+        units,
+        None,
+    );
+}
+
+/// The one row a fold an hour past `reset` writes.
+fn the_row(db: &LedgerDb, reset: i64) -> ReconciliationRow {
+    let now = reset + HOUR;
+    fold(db, now);
+    let rows = rows(db, now);
+    assert_eq!(rows.len(), 1, "one row for the window: {rows:?}");
+    rows[0].clone()
+}
+
+/// A failed poll's zero between two readings at 0.54, with no attempt between the zero and the next reading: 0.04 to
+/// 0.54 from fifty Sonnet units, then 0.54 to 0.67 from fourteen.
+fn a_run_with_a_reversed_zero(db: &LedgerDb, reset: i64) {
+    polls(db, reset, &[0.04, 0.54, 0.0, 0.54, 0.67]);
+    served_after_poll(db, 0, 50);
+    served_after_poll(db, 3, 14);
+}
+
+#[test]
+fn a_zero_the_next_reading_reverses_leaves_the_run_and_the_row_sums_one_rise() {
+    let reset = SATURDAY + 2 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    a_run_with_a_reversed_zero(&db, reset);
+    let row = the_row(&db, reset);
+    assert_eq!(
+        (row.first_reading_at, row.last_reading_at, row.requests),
+        (SATURDAY, SATURDAY + 40 * MINUTE, 2),
+        "{row:?}"
+    );
+    assert!(
+        close(row.observed_rise, 0.63),
+        "0.04 to 0.67, the climb back from the zero counted no second time: {}",
+        row.observed_rise
+    );
+    assert!(close(row.predicted_share, 0.64), "{}", row.predicted_share);
+}
+
+#[test]
+fn the_fold_holds_no_meter_drift_from_a_zero_the_next_reading_reverses() {
+    let reset = SATURDAY + 2 * HOUR;
+    let now = reset + HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    a_run_with_a_reversed_zero(&db, reset);
+    fold(&db, now);
+    let tables = subscription_costs();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_routing_conditions(&tx, &tables, now)?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let held = db.read_blocking(routing_conditions).unwrap();
+    assert_eq!(
+        held.iter()
+            .filter(|r| r.kind == "meter_drift")
+            .map(|r| r.subject_id.as_str())
+            .collect::<Vec<_>>(),
+        Vec::<&str>::new(),
+        "the window's one rise reads inside the band against its priced share: {held:?}"
+    );
+}
+
+#[test]
+fn a_dip_of_three_low_readings_reversed_past_the_prediction_leaves_the_run() {
+    let reset = SATURDAY + 2 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    // Three failed polls read zero while two Sonnet units complete, and the next reading climbs 0.42 from the first.
+    polls(&db, reset, &[0.10, 0.40, 0.0, 0.0, 0.0, 0.42, 0.50]);
+    served_after_poll(&db, 0, 30);
+    served_after_poll(&db, 3, 2);
+    served_after_poll(&db, 5, 8);
+    let row = the_row(&db, reset);
+    assert_eq!(
+        (row.first_reading_at, row.last_reading_at, row.requests),
+        (SATURDAY, SATURDAY + 60 * MINUTE, 3),
+        "{row:?}"
+    );
+    assert!(
+        close(row.observed_rise, 0.40),
+        "0.10 to 0.50 with the three zeros gone: {}",
+        row.observed_rise
+    );
+    assert!(close(row.predicted_share, 0.40), "{}", row.predicted_share);
+}
+
+#[test]
+fn a_dip_of_several_failed_polls_across_parts_leaves_the_run_and_the_row_sums_one_rise() {
+    // The failed polls fall twice before a reading climbs back to 0.54, so they span parts, and the one Sonnet unit
+    // completed inside the dip predicts far less than its climb.
+    let sequences: [&[f64]; 2] = [
+        &[0.04, 0.54, 0.10, 0.20, 0.05, 0.54, 0.67],
+        &[0.04, 0.54, 0.20, 0.10, 0.54, 0.67],
+    ];
+    let read: Vec<_> = sequences
+        .iter()
+        .map(|utilizations| {
+            let reset = SATURDAY + 2 * HOUR;
+            let last = utilizations.len() as i64 - 1;
+            let db = LedgerDb::open_in_memory().unwrap();
+            seed_request(&db, "seed", SATURDAY - MINUTE);
+            polls(&db, reset, utilizations);
+            served_after_poll(&db, 0, 50);
+            served_after_poll(&db, 2, 1);
+            served_after_poll(&db, last - 1, 13);
+            let row = the_row(&db, reset);
+            (
+                row.last_reading_at,
+                row.requests,
+                row.observed_rise,
+                close(row.predicted_share, 0.64),
+            )
+        })
+        .collect();
+    assert_eq!(
+        read,
+        [
+            (SATURDAY + 60 * MINUTE, 3, 0.63, true),
+            (SATURDAY + 50 * MINUTE, 3, 0.63, true)
+        ],
+        "each sequence reads 0.04 to 0.67 once over the three attempts' 0.64: {sequences:?}"
+    );
+}
+
+#[test]
+fn a_dip_whose_climb_the_attempts_between_its_ends_predict_keeps_its_split() {
+    let reset = SATURDAY + 2 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    // A grant empties the window at 0.60, and seventy Sonnet units refill it past that level to 0.70.
+    polls(&db, reset, &[0.05, 0.60, 0.0, 0.30, 0.70]);
+    served_after_poll(&db, 0, 55);
+    served_after_poll(&db, 2, 30);
+    served_after_poll(&db, 3, 40);
+    let row = the_row(&db, reset);
+    assert!(
+        close(row.observed_rise, 1.25),
+        "0.55 before the grant and 0.70 after it: {}",
+        row.observed_rise
+    );
+    assert!(close(row.predicted_share, 1.25), "{}", row.predicted_share);
+}
+
+#[test]
+fn a_dip_that_never_closes_keeps_its_split() {
+    let reset = SATURDAY + 2 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    // A free reset reads the window at zero and the readings stay low to the run's end.
+    polls(&db, reset, &[0.20, 0.70, 0.0, 0.0, 0.0, 0.10]);
+    served_after_poll(&db, 0, 50);
+    served_after_poll(&db, 4, 10);
+    let row = the_row(&db, reset);
+    assert!(
+        close(row.observed_rise, 0.60),
+        "0.50 before the reset and 0.10 after it: {}",
+        row.observed_rise
+    );
+    assert!(close(row.predicted_share, 0.60), "{}", row.predicted_share);
+}
+
+#[test]
+fn a_fall_inside_a_dip_that_never_closes_is_judged_on_its_own() {
+    let reset = SATURDAY + 2 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    // A grant empties the window at 0.89 and the readings never climb back to it. Inside that dip a failed poll reads
+    // zero between two readings at 0.10, with no attempt between the zero and the next reading.
+    polls(&db, reset, &[0.05, 0.89, 0.0, 0.10, 0.0, 0.10, 0.20]);
+    served_after_poll(&db, 0, 84);
+    served_after_poll(&db, 2, 10);
+    served_after_poll(&db, 5, 10);
+    let row = the_row(&db, reset);
+    assert!(
+        close(row.observed_rise, 1.04),
+        "0.84 before the grant and 0.20 after it, the failed poll's climb counted no second time: {}",
+        row.observed_rise
+    );
+    assert!(close(row.predicted_share, 1.04), "{}", row.predicted_share);
+}
+
+#[test]
+fn a_dip_whose_climb_stays_under_the_least_rise_keeps_its_split() {
+    let reset = SATURDAY + 2 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    // One poll reads a point under the one before it, with no attempt between it and the next.
+    polls(&db, reset, &[0.10, 0.50, 0.49, 0.50, 0.70]);
+    served_after_poll(&db, 0, 40);
+    served_after_poll(&db, 3, 20);
+    let row = the_row(&db, reset);
+    assert!(
+        close(row.observed_rise, 0.61),
+        "0.40 before the point and 0.21 from it, a climb of one point being a meter's quantum: {}",
+        row.observed_rise
+    );
+    assert!(close(row.predicted_share, 0.60), "{}", row.predicted_share);
+}
+
 /// A run its own reset closed reads as one that slid only where its key lies past the closing reading's instant by
 /// more than the reset tolerance: the key rounds a fractional reset up by up to half a second, and a router clock that
 /// lags moves the closing instant earlier, while a live slide moves the reset by whole 10-minute steps.

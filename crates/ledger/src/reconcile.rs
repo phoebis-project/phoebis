@@ -209,6 +209,119 @@ fn rounded(value: f64) -> f64 {
     (value * 1e6).round() / 1e6
 }
 
+/// Drops from the run every closed dip whose climb the attempts between its two ends cannot explain, joining the
+/// readings around it into one part, so a transient zero never counts a rise twice. A dip that never closes or whose
+/// climb the prediction matches keeps its split.
+///
+/// A failed poll reads like a free reset: the window falls to near zero, for one poll or several, at whatever value
+/// the failure left. Neither the dip's length nor its depth tells the two apart, so the attempts between its ends do.
+/// A reset climbs back only as far as they draw, while a failed poll's dip returns to where the readings stood with
+/// nothing served to explain it. A climb under `MIN_RISE`, a few of the meter's quanta, keeps its split, and so does a
+/// dip the fold cannot price or whose ends carry no instant, since nothing judges it.
+fn drop_faulty_dips(
+    tx: &Transaction<'_>,
+    prices: &PriceRevisions,
+    tables: &PlanTables,
+    account: &str,
+    window: &str,
+    run: &mut Run,
+) -> Result<(), LedgerError> {
+    /// Indices into the run's readings: the reading before the dip, whose level a later reading must reach to close
+    /// it, and the dip's first reading.
+    struct Dip {
+        level: usize,
+        first: usize,
+    }
+    // Each reading with the label of the part it sits in. Labels rise along the run, so relabeling every reading
+    // between two ends with the first end's label joins the parts between them.
+    let mut readings: Vec<(usize, Reading)> = run
+        .parts
+        .iter()
+        .enumerate()
+        .flat_map(|(label, part)| part.readings.iter().map(move |r| (label, *r)))
+        .collect();
+    let polls = readings
+        .iter()
+        .filter(|(_, r)| r.source == Source::Poll)
+        .count();
+    let source = if polls >= 2 {
+        Source::Poll
+    } else {
+        Source::Head
+    };
+    let chosen: Vec<usize> = readings
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, r))| r.source == source)
+        .map(|(i, _)| i)
+        .collect();
+    let mut dropped = vec![false; readings.len()];
+    let mut open: Vec<Dip> = Vec::new();
+    for pair in chosen.windows(2) {
+        let (before, at) = (pair[0], pair[1]);
+        let close = readings[at].1;
+        // A dip opens below every open dip's level, so the levels fall from the outermost to the innermost and the
+        // dips a reading closes are the innermost ones, judged from the outermost of them.
+        let outermost = open
+            .iter()
+            .position(|dip| rounded(close.utilization - readings[dip.level].1.utilization) >= 0.0);
+        let Some(outermost) = outermost else {
+            if rounded(readings[before].1.utilization - close.utilization) > 0.0 {
+                open.push(Dip {
+                    level: before,
+                    first: at,
+                });
+            }
+            continue;
+        };
+        for dip in open.drain(outermost..) {
+            let first = readings[dip.first].1;
+            let climb = rounded(close.utilization - first.utilization);
+            if climb < MIN_RISE {
+                continue;
+            }
+            let (Some(from), Some(to)) = (first.at, close.at) else {
+                continue;
+            };
+            let share = match predicted(tx, prices, tables, account, window, from, to)? {
+                Prediction::Unpriced => continue,
+                Prediction::Empty => 0.0,
+                Prediction::Priced { share, .. } => share,
+            };
+            if climb <= rounded(share * RATIO_HIGH) {
+                continue;
+            }
+            for &i in chosen.iter().filter(|&&i| (dip.first..at).contains(&i)) {
+                dropped[i] = true;
+            }
+            let (level_part, close_part) = (readings[dip.level].0, readings[at].0);
+            for (label, _) in readings.iter_mut() {
+                if (level_part..=close_part).contains(label) {
+                    *label = level_part;
+                }
+            }
+            // The dips inside this one lie among the readings that left, so the drain drops them unjudged.
+            break;
+        }
+    }
+    let mut parts: Vec<Part> = Vec::new();
+    let mut last_label = None;
+    for ((label, reading), dropped) in readings.into_iter().zip(dropped) {
+        if dropped {
+            continue;
+        }
+        match parts.last_mut() {
+            Some(part) if last_label == Some(label) => part.readings.push(reading),
+            _ => parts.push(Part {
+                readings: vec![reading],
+            }),
+        }
+        last_label = Some(label);
+    }
+    run.parts = parts;
+    Ok(())
+}
+
 /// Closes the complete runs since the newest row of each account and window, prices their plan-funded attempts
 /// through `price_usage` under each attempt's client, writes the rows with `INSERT OR IGNORE` and drops the rows whose
 /// window ended more than 30 days before `now`, all on the caller's transaction. The hourly fold calls it before it
@@ -216,12 +329,13 @@ fn rounded(value: f64) -> f64 {
 ///
 /// A run is complete once a later reset appears or its reset lies behind `now`, and one a later reset closed while its
 /// own lay ahead by more than the reset tolerance slid rather than ended, so it writes no row. A run splits into parts
-/// at each fall, and the row sums each part's rise between its two ends of one source against the attempts priced
-/// between them, a part without two such ends or without a priced attempt adding nothing. The row is skipped when no
-/// part adds, when its first end is older than the oldest retained request, whose rise the router's own requests would
-/// explain only in part, or when a part holds a plan-funded attempt carrying tokens that the tables price to no share
-/// on the window, whose draw the rise holds and the sum would miss. The ledger reads no registry: every account with a
-/// reading is read, and an account whose attempts draw no plan window writes no row.
+/// at each fall except a reversed dip the attempts between its ends cannot explain, which leaves the run. The row sums
+/// each part's rise between its two ends of one source against the attempts priced between them, a part without two
+/// such ends or without a priced attempt adding nothing. The row is skipped when no part adds, when its first end is
+/// older than the oldest retained request, whose rise the router's own requests would explain only in part, or when a
+/// part holds a plan-funded attempt carrying tokens that the tables price to no share on the window, whose draw the
+/// rise holds and the sum would miss. The ledger reads no registry: every account with a reading is read, and an
+/// account whose attempts draw no plan window writes no row.
 pub fn reconcile(
     tx: &Transaction<'_>,
     prices: &PriceRevisions,
@@ -250,7 +364,7 @@ pub fn reconcile(
             // before the cutoff would leave with the next purge, while every reading of a run past both names a reset
             // past them less the tolerance, so older readings need not be read at all.
             let floor = newest.unwrap_or(i64::MIN).max(cutoff) - RESET_TOLERANCE_MS;
-            'runs: for run in runs(&readings_of(tx, account, window, floor)?) {
+            'runs: for mut run in runs(&readings_of(tx, account, window, floor)?) {
                 let key = run.key();
                 let complete = run.closed || key < now;
                 if !complete || key < cutoff || newest.is_some_and(|n| key <= n) {
@@ -267,6 +381,7 @@ pub fn reconcile(
                 {
                     continue;
                 }
+                drop_faulty_dips(tx, prices, tables, account, window, &mut run)?;
                 let (mut first_at, mut last_at) = (None, 0);
                 let (mut rise, mut share, mut requests, mut estimated) = (0.0, 0.0, 0u32, 0u32);
                 for part in &run.parts {
