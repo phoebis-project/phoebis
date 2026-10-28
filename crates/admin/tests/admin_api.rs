@@ -6787,7 +6787,7 @@ fn context_of(row: &serde_json::Value) -> [Option<serde_json::Value>; 3] {
     ["last_input_tokens", "effort", "agent_contexts"].map(|member| row.get(member).cloned())
 }
 
-/// The context window members a row or one of its lines still answers, none since the window left the route.
+/// The context window members a row or one of its lines answers, which the route leaves out.
 fn dropped_members(row: &serde_json::Value) -> Vec<String> {
     let lines = row["agent_contexts"]
         .as_array()
@@ -7454,6 +7454,146 @@ async fn a_session_no_companion_reports_leaves_after_the_timeout_and_its_old_lin
             false
         )])),
         "a companion row stays past the timeout within the session expiry, its line kept by the engine's own lifecycle"
+    );
+}
+
+/// The session ids `GET /admin/sessions` lists once every one of `requests` is counted, under a ten-minute timeout.
+async fn listed_under_a_ten_minute_timeout(
+    pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
+    requests: &[(&str, &str, i64)],
+) -> Vec<String> {
+    use common::{login, wait_json};
+    let parts = sessions_harness_bounded(
+        std::time::Duration::from_secs(86_400),
+        std::time::Duration::from_secs(600),
+        pins,
+    )
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let generation = common::generation(&parts.store, "desktop");
+    for (id, session, at) in requests {
+        parts.ledger.record(spelled_request(
+            id,
+            session,
+            "main",
+            "claude-opus-5",
+            *at,
+            generation,
+        ));
+    }
+    wait_json(&parts.app, "/admin/requests", &cookie, |v| {
+        v["requests"].as_array().unwrap().len() == requests.len()
+    })
+    .await;
+    let sessions =
+        common::json(common::get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["session_id"].as_str().map(String::from))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_session_no_companion_reports_and_holding_no_pin_leaves_once_its_last_request_is_older_than_the_timeout(
+) {
+    use common::NOW;
+    let listed = listed_under_a_ten_minute_timeout(
+        |_| Vec::new(),
+        &[
+            ("r-idle", "s-idle", NOW - 601_000),
+            ("r-recent", "s-recent", NOW - 1_000),
+        ],
+    )
+    .await;
+    assert_eq!(
+        listed,
+        ["s-recent"],
+        "the row's one instant is its last request, which leaves it past the timeout and keeps it inside"
+    );
+}
+
+#[tokio::test]
+async fn a_session_no_companion_reports_stays_while_its_last_request_is_inside_the_timeout_though_its_pin_is_older(
+) {
+    use common::NOW;
+    let listed = listed_under_a_ten_minute_timeout(
+        |generation| {
+            vec![context_pin(
+                "s-auxiliary-traffic",
+                "main",
+                "claude-opus-5",
+                "business",
+                generation,
+                10_000,
+                NOW - 601_000,
+            )]
+        },
+        &[("r-title", "s-auxiliary-traffic", NOW - 1_000)],
+    )
+    .await;
+    assert_eq!(
+        listed,
+        ["s-auxiliary-traffic"],
+        "the later of the pin's last use and the last request decides, and the request is inside the timeout"
+    );
+}
+
+#[tokio::test]
+async fn an_ended_session_with_no_pin_and_no_request_leaves_once_its_end_is_older_than_the_timeout()
+{
+    use common::{get, json, login, NOW};
+    use std::sync::atomic::Ordering;
+    let parts = sessions_harness_bounded(
+        std::time::Duration::from_secs(86_400),
+        std::time::Duration::from_secs(600),
+        |_| Vec::new(),
+    )
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let generation = common::generation(&parts.store, "desktop");
+    // Each session registers and ends at `at`, sending no request, as a client opened and closed at once does.
+    for (session, at) in [
+        ("s-ended-long-ago", NOW - 601_000),
+        ("s-ended-now", NOW - 1_000),
+    ] {
+        parts.clock_cell.store(at, Ordering::SeqCst);
+        for (sequence, event) in [(1, "session_start"), (2, "session_end")] {
+            parts
+                .keepalive
+                .apply_event(
+                    "desktop",
+                    generation,
+                    phoebis_keepalive::Event {
+                        event: event.into(),
+                        session_id: session.into(),
+                        instance_id: "i1".into(),
+                        sequence,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+    }
+    parts.clock_cell.store(NOW, Ordering::SeqCst);
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let listed: Vec<(&str, &str, Option<i64>)> = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["session_id"].as_str().unwrap(),
+                r["companion"].as_str().unwrap(),
+                r["companion_since"].as_i64(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [("s-ended-now", "none", Some(NOW - 1_000))],
+        "an ended session with neither a pin nor a request is measured by its end, which the timeout bounds"
     );
 }
 

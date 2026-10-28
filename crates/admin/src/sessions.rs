@@ -118,6 +118,7 @@ pub(crate) struct Session {
 pub(crate) struct AgentContext {
     pub agent_id: String,
     pub model: String,
+    /// The account the pin sits on.
     pub account_id: String,
     /// The pin's effort, as the row's `effort` reads it.
     pub effort: Option<String>,
@@ -125,6 +126,7 @@ pub(crate) struct AgentContext {
     pub last_input_tokens: u64,
     /// The cache TTL in force at the pin's last refresh.
     pub cache_ttl_ms: i64,
+    /// When a request last used the pin, the instant `warm` and the non-companion timeout read.
     pub last_used_at: i64,
     /// Whether `now - last_used_at < cache_ttl_ms` at the read: the cache entry the pin warms is still alive.
     pub warm: bool,
@@ -416,8 +418,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         }
     }
     // Once the historical pass has settled `companion`: a session no companion reports leaves the list once the later
-    // of its last use and its last request is older than the non-companion timeout, the session expiry bounding it.
-    // A row with neither, an ended session the engine still holds, stays as long as the engine keeps it.
+    // of its last use and its last request is older than the non-companion timeout, the session expiry bounding it. An
+    // ended session the engine still holds is measured by its end as well, its `companion_since`, so one that sent no
+    // request leaves after the timeout too.
     let idle_bound = now
         - state
             .non_companion_idle
@@ -428,6 +431,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             || entry["last_used_at"]
                 .as_i64()
                 .max(entry["last_request_at"].as_i64())
+                .max(entry["companion_since"].as_i64())
                 .is_none_or(|latest| latest >= idle_bound)
     });
     // The agent lines: on a companion row one per conversation pin of every agent the companion carries a recipe for
