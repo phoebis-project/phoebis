@@ -1456,8 +1456,10 @@ async function diagnosticsNav(theme, path) {
  * plain one, and the height of one open group, nightly's 5-hour line with its first page of windows, goes to the
  * measurements. That group's nested rows alternate two tones, each row read by the ground its first cell shows (the
  * cell's own fill, else the nearest one behind it), since nightly's line is its card's second and the stripe paints
- * the detail row the nested table sits in. The tones go to the measurements. The viewport is the pass's again after,
- * every group shut. The mock pass's alone, since the router's seed reconciles no window.
+ * the detail row the nested table sits in. The tones go to the measurements. With that group open, the group table's
+ * fill column reads a 132 px min-width and the nested windows table's empty one 0 px, each width recorded, since the
+ * floor is the group column's alone. The viewport is the pass's again after, every group shut. The mock pass's alone,
+ * since the router's seed reconciles no window.
  */
 async function meterColumns(theme) {
   const say = (what) => failures.push(`${theme} /meter: ${what}`);
@@ -1539,10 +1541,20 @@ async function meterColumns(theme) {
         rows: [...(detail?.querySelectorAll('.meter-detail__table > tbody > tr') ?? [])].map((r) => ground(r.querySelector(':scope > td'))),
       };
     }, CLEAR);
+    const fills = await nightly.evaluate((tr) => {
+      const detail = tr.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+      const fill = (th) => (th ? { minWidth: getComputedStyle(th).minWidth, width: Math.round(th.getBoundingClientRect().width) } : null);
+      return {
+        group: fill(tr.closest('.meter-table--five-hour')?.querySelector(':scope > thead > tr > th.col-fill') ?? null),
+        nested: fill(detail?.querySelector('.meter-detail__table > thead > tr > th.col-fill') ?? null),
+      };
+    });
     await nightly.locator('.srow__chevron').click();
     await settle();
     measurements.push(`${theme} /meter lines at 1280 by 800 ${JSON.stringify({ ...lines, open })}`);
     measurements.push(`${theme} /meter nested rows at 1280 by 800 ${JSON.stringify(nested)}`);
+    measurements.push(`${theme} /meter fills at 1280 by 800 ${JSON.stringify(fills)}`);
+    if (fills.group?.minWidth !== '132px' || fills.nested?.minWidth !== '0px') say(`with nightly's 5-hour group open, the group's fill column reads ${JSON.stringify(fills.group)} and the nested windows table's ${JSON.stringify(fills.nested)}, not a 132px min-width over a 0px one`);
     const alternating = nested.rows.length >= 4 && nested.rows.every((fill, i) => (i < 1 || fill !== nested.rows[i - 1]) && (i < 2 || fill === nested.rows[i - 2]));
     // The stripe paints an even line's detail row, the ground the read is for, so the group must sit on an even line.
     if (!alternating || nested.line % 2 !== 0) say(`nightly's open 5-hour group, line ${nested.line} of its card, reads its nested rows on ${JSON.stringify(nested.rows)}, not two tones alternating over four rows or more on an even line`);
@@ -4952,6 +4964,56 @@ async function burnGridFour(theme) {
 }
 
 /**
+ * The story account serving Sonnet 4.6 alone (the mock's `UNPRICED_ACCOUNT`), so none of its lines has a model week and
+ * its Burn tab draws three cards.
+ */
+const BURN_THREE_ACCOUNT = 'secondary';
+
+/**
+ * The Burn tab's three cards at 1440 by 900 under the Accounts filter naming the story account with no model week
+ * (BURN_THREE_ACCOUNT, the seed named in its comment), where the grid holds three columns: the three cards share one
+ * top edge, each as wide as a third of the grid's row less two thirds of its gap within 1 px, and none spans the row.
+ * Each card's left edge and width go to the measurements, and the viewport, the filter and the Traffic tab are the
+ * pass's again after. The mock pass's alone.
+ */
+async function burnGridThree(theme) {
+  const say = (what) => failures.push(`${theme} /analytics burn grid of three at 1440 by 900: ${what}`);
+  try {
+    await page.setViewportSize({ height: 900, width: 1440 });
+    await settle();
+    await loadAtOrigin(`/analytics?accounts=${BURN_THREE_ACCOUNT}`, '.analytics-section#traffic');
+    if (!(await tabTo(theme, 'Burn'))) return;
+    const read = await page.evaluate(() => {
+      const grid = document.querySelector('.burn-grid');
+      if (!grid) return null;
+      const box = (c) => ({ left: Math.round(c.getBoundingClientRect().left), title: c.querySelector('.card__title')?.textContent?.trim() ?? '', top: Math.round(c.getBoundingClientRect().top), width: Math.round(c.getBoundingClientRect().width) });
+      return { cards: [...grid.children].map(box), gap: parseFloat(getComputedStyle(grid).columnGap), row: Math.round(grid.getBoundingClientRect().width) };
+    });
+    measurements.push(`${theme} /analytics burn grid of three at 1440 by 900 ${JSON.stringify(read)}`);
+    if (read === null) {
+      say('no grid to measure');
+      return;
+    }
+    if (read.cards.length !== 3) {
+      say(`the grid draws ${read.cards.length} cards under ${BURN_THREE_ACCOUNT}, not three`);
+      return;
+    }
+    const tops = Object.keys(Object.groupBy(read.cards, (c) => c.top));
+    if (tops.length !== 1) say(`the three cards sit on ${tops.length} top edges (${tops.join(', ')}), not one`);
+    const third = (read.row - 2 * read.gap) / 3;
+    for (const c of read.cards) {
+      if (Math.abs(c.width - third) > 1) say(`${c.title} is ${c.width}px wide, not a third of the ${read.row}px row less two thirds of the gap (${third}px) within 1 px`);
+      if (Math.abs(c.width - read.row) <= 1) say(`${c.title} spans the ${read.row}px row`);
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    await atRest();
+  }
+}
+
+/**
  * The 5-hour plan card's muted legend entries against their neighbors. The estimated entry draws its swatch hollow: a
  * transparent box with a border in its color, taller than the 2 px line swatch, the type its neighbor's. The model
  * unlisted entry reads against the entry before it, a planned line's, on type and swatch size, and, where an account
@@ -6731,6 +6793,32 @@ async function topBarFits(theme, path) {
       if (width === 1280 && (read.logout.label !== 'Log out' || read.logout.icon)) say(`Log out is not a text button: label ${JSON.stringify(read.logout.label)}, icon drawn ${read.logout.icon}`);
       if (width === 400 && (read.logout.label !== '' || !read.logout.icon || read.logout.width !== 28)) say(`Log out is not its icon alone: label ${JSON.stringify(read.logout.label)}, icon drawn ${read.logout.icon}, ${read.logout.width} px wide`);
     }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+  }
+}
+
+/**
+ * The view at 360 by 800: the document as wide as the window, with the element of the greatest right edge among those
+ * drawn (its tag, its classes and that edge) recorded, so a view that runs past the window names a candidate. The
+ * viewport is the pass's again after.
+ */
+async function phoneFit(theme, path) {
+  try {
+    await page.setViewportSize({ height: 800, width: 360 });
+    await settle();
+    const read = await page.evaluate(() => {
+      let widest = null;
+      for (const el of document.body.querySelectorAll('*')) {
+        if (el.getClientRects().length === 0) continue;
+        const right = Math.round(el.getBoundingClientRect().right);
+        if (widest === null || right > widest.right) widest = { classes: typeof el.className === 'string' ? el.className : '', right, tag: el.tagName.toLowerCase() };
+      }
+      return { scroll: document.documentElement.scrollWidth, widest, window: window.innerWidth };
+    });
+    measurements.push(`${theme} ${path} at 360 px ${JSON.stringify(read)}`);
+    if (read.scroll !== read.window) failures.push(`${theme} ${path}: at 360 px the document is ${read.scroll} px wide in a ${read.window} px window, the widest element ${JSON.stringify(read.widest)}`);
   } finally {
     await page.setViewportSize({ height: 800, width: 1280 });
     await settle();
@@ -11076,6 +11164,7 @@ try {
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
       // After the shot, since it resizes the page and back, and before the measures that reload or leave the view.
       await topBarFits(theme, view.path);
+      await phoneFit(theme, view.path);
       if (view.path === '/guardrails') await barRow(theme, view.path);
       if (view.path === '/pools') await utilizationCeiling(theme);
       if (view.path === '/pools' && mock) await anchoredRowUnderBanner(theme, view.path);
@@ -11085,6 +11174,7 @@ try {
       if (view.path === '/keys') await dialogControls(theme);
       if (view.path === '/analytics') await burnLoneCard(theme);
       if (view.path === '/analytics' && mock) await burnGridFour(theme);
+      if (view.path === '/analytics' && mock) await burnGridThree(theme);
       if (view.path === '/analytics') await warmingLoneCard(theme);
       if (view.path === '/analytics') await analyticsTiles(theme);
       if (view.path === '/analytics') await accountsRangeColumn(theme);

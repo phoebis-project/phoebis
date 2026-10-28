@@ -2283,3 +2283,20 @@ textarea.input {
     max-width: none;
   }
 }
+
+/* Under 375 px a one-word title as long as Dashboard leaves the controls beside it 14 px past the window, so the bar
+   and its right group close up further and the switch's text and padding shrink. */
+@media (max-width: 374px) {
+  .topbar {
+    gap: 4px;
+  }
+
+  .topbar__right {
+    gap: 3px;
+  }
+
+  .topbar .unit-switch {
+    padding: 4px 18px 4px 4px;
+    font-size: 11px;
+  }
+}

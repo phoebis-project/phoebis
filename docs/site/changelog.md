@@ -165,7 +165,9 @@ The admin API is documented by an OpenAPI document the router serves, with an in
 reference page on the admin listener ([API reference](api-reference.md)). The account's `has_extra_usage_enabled` reads
 the stored profile's `organization` member, as its rate-limit tier does ([API reference](api-reference.md)). The account
 create and edit refuse a body that is not a JSON object with `body must be a JSON object`, and the pool members route
-answers `body must carry a members list` to an object without one ([API reference](api-reference.md)). The Dashboard's
+answers `body must carry a members list` to an object without one ([API reference](api-reference.md)). The Dashboard,
+Guardrails, Pools and Settings views fit a 360 px window with no horizontal scroll ([Dashboard](console.md#dashboard),
+[Guardrails](console.md#guardrails), [Pools](console.md#pools), [Settings](console.md#settings)). The Dashboard's
 attention line keeps one row and folds the items past it behind a "+N more" badge, and a pool card's attention rows end
 with their age ([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The Dashboard's Estimated cost tile reads
 the day's subscription traffic against the 7-day window under Native ([Dashboard](console.md#dashboard)). The
@@ -272,7 +274,8 @@ its per-group table read as No divergence and Pending ([Analytics](console.md#an
 Refusals by category card counts the answers the upstream refused by category, each bar opening the Requests view on
 them ([Analytics](console.md#analytics)). The Traffic table's Error rate reads a dash for a group with no requests
 ([Analytics](console.md#analytics)). Under the Analytics classifier grouping the requests with no classifier call are
-labeled `none`, as the Requests facet names them ([Analytics](console.md#analytics)). On the Sessions view a released
+labeled `none`, as the Requests facet names them ([Analytics](console.md#analytics)). Without the Model week card the
+Burn tab's three cards share one row from 1344 px ([Analytics](console.md#analytics)). On the Sessions view a released
 subagent's record keeps its slot of the agent cap for one cache TTL after the release and then leaves the engine
 ([Sessions](console.md#sessions)). The Sessions view offers Companion only, Finished sessions (Show finished sessions),
 Non-companion age and Released agents (Show released agents) as filters in its address, hides a finished session and a

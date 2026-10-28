@@ -897,7 +897,8 @@ capacity for on that window, prices no share there and draws no point, under a "
 shares an account whose tier the cost model does not size reads "tier unknown". Spend per minute charts the dollars
 alone, a subscription account's among them for its fast-mode and overage answers. With the Model week card drawn, the
 four cards sit two by two in the window widths where three would otherwise share a row with the fourth alone (1344 px to
-1701 px). The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends, one row per budget a
+1701 px), and without it the three cards share one row from 1344 px, an odd last card spanning its row in the narrower
+widths alone. The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends, one row per budget a
 member carries, a member at its budget marked and one the ledger has not reported on reading "not reported".
 
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-light.png#only-light)
