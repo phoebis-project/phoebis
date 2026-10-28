@@ -862,13 +862,27 @@ fn prepare(
             supported,
         });
     }
-    conn.execute_batch(schema::SCHEMA)?;
-    if current == 0 {
-        conn.execute(
+    // A fresh file carries its version row as the registry's does, so an `UPDATE` of the marker finds a row to
+    // change. The baseline and the row share one transaction, so a first open that dies midway leaves no table behind
+    // rather than tables without their marker. A row already there is kept, and an open that finds it writes nothing,
+    // so it lands beside a connection holding the write lock.
+    let tx = conn.transaction()?;
+    tx.execute_batch(schema::SCHEMA)?;
+    let marked = tx
+        .query_row(
+            "SELECT 1 FROM meta WHERE key = 'schema_version'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !marked {
+        tx.execute(
             "INSERT INTO meta (key, value) VALUES ('schema_version', '1')",
             [],
         )?;
     }
+    tx.commit()?;
     migrate(conn, current.max(1), migrations)
 }
 
@@ -1206,6 +1220,61 @@ mod tests {
             "the ledger's schema version 43 is newer than the 1 this build opens: restore the backup taken before \
              the upgrade, or recreate a ledger a pre-release build wrote with phoebis init"
         );
+    }
+
+    /// `meta` alone, from the baseline's own `CREATE TABLE` for it.
+    fn meta_alone() -> Connection {
+        let ddl = schema::SCHEMA
+            .lines()
+            .find(|line| line.starts_with("CREATE TABLE IF NOT EXISTS meta "))
+            .expect("the baseline creates meta");
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(ddl).unwrap();
+        conn
+    }
+
+    fn raw_markers(conn: &Connection) -> Vec<String> {
+        conn.prepare("SELECT value FROM meta WHERE key = 'schema_version'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn an_open_that_finds_meta_without_its_marker_writes_the_version_row() {
+        // What a first open that died between the baseline and its marker left behind.
+        let mut conn = meta_alone();
+        prepare(&mut conn, Path::new(":memory:"), &[]).unwrap();
+        assert_eq!(raw_markers(&conn), vec!["1".to_string()]);
+    }
+
+    #[test]
+    fn an_open_that_finds_its_marker_keeps_it_and_adds_no_second_row() {
+        let mut conn = meta_alone();
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', '1')",
+            [],
+        )
+        .unwrap();
+        prepare(&mut conn, Path::new(":memory:"), &[]).unwrap();
+        assert_eq!(raw_markers(&conn), vec!["1".to_string()]);
+
+        // A marker above this build's version is refused before the baseline's transaction begins.
+        let mut conn = meta_alone();
+        let newer = (latest_version() + 1).to_string();
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
+            params![newer],
+        )
+        .unwrap();
+        let error = prepare(&mut conn, Path::new(":memory:"), &[]).unwrap_err();
+        assert!(
+            matches!(error, LedgerError::SchemaTooNew { .. }),
+            "{error:?}"
+        );
+        assert_eq!(raw_markers(&conn), vec![newer]);
     }
 
     /// A step that creates a table and one that alters it, so a step applied twice or out of order fails.

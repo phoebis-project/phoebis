@@ -1306,14 +1306,28 @@ fn prepare(
         // cooldown clear or session release again.
         conn.pragma_update(None, "synchronous", "FULL")?;
     }
-    conn.execute_batch(schema::SCHEMA)?;
     // A fresh file carries its version row as a stepped one does, so an `UPDATE` of the marker finds a row to change.
-    if current == 0 {
-        conn.execute(
+    // The version read takes a `meta` without its row for version 1, so a file a crash left between the baseline and
+    // the row would read as prepared and never get its row: the two share one transaction, and any open that finds
+    // the row absent writes it. A row already there is kept, and an open that finds it writes nothing, so it lands
+    // beside a connection holding the write lock.
+    let tx = conn.transaction()?;
+    tx.execute_batch(schema::SCHEMA)?;
+    let marked = tx
+        .query_row(
+            "SELECT 1 FROM meta WHERE key = 'schema_version'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !marked {
+        tx.execute(
             "INSERT INTO meta (key, value) VALUES ('schema_version', '1')",
             [],
         )?;
     }
+    tx.commit()?;
     migrate(conn, current.max(1), migrations)
 }
 
@@ -2168,5 +2182,60 @@ mod tests {
             vec!["meta".to_string()],
             "no statement of schema::SCHEMA or a migration ran before the refusal"
         );
+    }
+
+    /// `meta` alone, from the baseline's own `CREATE TABLE` for it.
+    fn meta_alone() -> Connection {
+        let ddl = schema::SCHEMA
+            .lines()
+            .find(|line| line.starts_with("CREATE TABLE IF NOT EXISTS meta "))
+            .expect("the baseline creates meta");
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(ddl).unwrap();
+        conn
+    }
+
+    fn raw_markers(conn: &Connection) -> Vec<String> {
+        conn.prepare("SELECT value FROM meta WHERE key = 'schema_version'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn an_open_that_finds_meta_without_its_marker_writes_the_version_row() {
+        // What a first open that died between the baseline and its marker left behind.
+        let mut conn = meta_alone();
+        prepare(&mut conn, false, &[]).unwrap();
+        assert_eq!(raw_markers(&conn), vec!["1".to_string()]);
+    }
+
+    #[test]
+    fn an_open_that_finds_its_marker_keeps_it_and_adds_no_second_row() {
+        let mut conn = meta_alone();
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', '1')",
+            [],
+        )
+        .unwrap();
+        prepare(&mut conn, false, &[]).unwrap();
+        assert_eq!(raw_markers(&conn), vec!["1".to_string()]);
+
+        // A marker above this build's version is refused before the baseline's transaction begins.
+        let mut conn = meta_alone();
+        let newer = (schema::SCHEMA_VERSION + 1).to_string();
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
+            params![newer],
+        )
+        .unwrap();
+        let error = prepare(&mut conn, false, &[]).unwrap_err();
+        assert!(
+            matches!(error, StoreError::SchemaTooNew { .. }),
+            "{error:?}"
+        );
+        assert_eq!(raw_markers(&conn), vec![newer]);
     }
 }
