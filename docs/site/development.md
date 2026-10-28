@@ -149,6 +149,7 @@ stale copy from a fresh one byte for byte.
 
 The profile fixtures under `crates/profile/fixtures/` are the pinned client build's wire shape.
 `scripts/build-fixtures.py` writes them from a capture, as [Re-pinning](#re-pinning) describes, and nothing else does.
+The exception is the four files under `responses/`, the control receiver's canned answers, kept by hand.
 
 ## The pinned client build
 
@@ -165,7 +166,7 @@ own copy of BoringSSL under `deps/boringssl/` rather than linking a system build
 revision id of the BoringSSL project: no commit file exists anywhere under it. `include/openssl/base.h` in it declares
 `BORINGSSL_API_VERSION 41`, the only revision marker the vendored source carries.
 
-Every fixture under `crates/profile/fixtures/` is from one capture of 2026-10-27 of the pinned 2.1.310 binary running
+Every fixture under `crates/profile/fixtures/` belongs to one capture of 2026-10-27 of the pinned 2.1.310 binary running
 against loopback receivers with dummy credentials, never against `api.anthropic.com`: `scripts/build-fixtures.py` wrote
 the 19 captured fixtures from it, the count fixtures included, and the four files under `responses/` are the canned
 answers the control receiver read during the capture, kept by hand. The inference plane (the TLS ClientHello, the
