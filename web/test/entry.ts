@@ -11,6 +11,7 @@ export * from '@/lib/autoMode';
 export * from '@/lib/bodies';
 export * from '@/lib/buckets';
 export * from '@/lib/cache';
+export * from '@/lib/capture';
 export * from '@/lib/chunks';
 export * from '@/lib/costs';
 export * from '@/lib/decisionStrip';

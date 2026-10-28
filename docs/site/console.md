@@ -1164,7 +1164,7 @@ filtered view is a link and Back returns to the view before it. A `kinds` value 
 `kinds=probe` lists probe decisions alone. An empty range reads "No decisions or events in this range." with "Widen the
 range or clear a filter."
 
-Auto reload is off when the view opens and reads as on the Requests view. The split Refresh button's dropdown sets it to
+Auto reload is off when the view opens, and its poll is the log's own: the split Refresh button's dropdown sets it to
 Off, 5 s, 10 s, 30 s or 1 min, out of the page's address, and each read takes every row that arrived since the read
 before, up to eight pages, a new row landing at the top in the accent tint. Past eight pages a line reads "More rows
 arrived than auto reload could fetch. Reload to read them.", and Next reads on from the last row the poll fetched. The

@@ -10,12 +10,12 @@ import { Popover } from '@/components/ui/Popover';
 import { IconChevron, IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC } from '@/lib/address';
+import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtInt } from '@/lib/format';
 import { derivedId, sortKeys } from '@/lib/forms';
 import { guardrailRefusals, presetBadges, verdictWords } from '@/lib/guardrails';
 import { useAsync } from '@/lib/hooks';
-import { effectiveCaptureHours } from '@/pages/KeysPage';
 
 const LEAD = 'A guardrail checks each request against its conditions before any account is selected. Observe records the matches, enforce refuses them with a 403.';
 const NAME_HINT = "The guardrail's id is made from this name when the guardrail is created.";
