@@ -1,8 +1,8 @@
 # Writes a capture instance's configuration from the deployment's own: the three listeners move to loopback
 # ports the capture owns, the two public ones over plain HTTP with whatever `tls` the deployment names removed, and
-# the two upstream overrides point the resolver at the TLS receiver. A key that is absent is inserted, because the
-# host template carries no `upstream` section at all and both overrides default; a key or section that appears twice
-# is refused, because which line governs is then a guess.
+# the two upstream overrides point the resolver at the TLS receiver. A key that is absent is inserted, because a
+# deployment's file may carry no `upstream` section at all and both overrides default. A key or section that appears
+# twice is refused, because which line governs is then a guess.
 # Usage: rewrite_config.py <in.yaml> <out.yaml> <tls-port> <ca-pem>
 #        rewrite_config.py --self-test
 import re
@@ -60,9 +60,11 @@ def self_test() -> None:
     for expected in ("  listen: 127.0.0.1:48081", "  listen: 127.0.0.1:48317", "  metrics_listen: 127.0.0.1:49464",
                      "upstream:", "  extra_ca_pem: /tmp/ca.pem", "  resolve_override: 127.0.0.1:49443"):
         assert expected in out, f"the example's rewrite lacks {expected!r}"
-    assert "0.0.0.0:8317" not in out, "the deployment's own listener survived the rewrite"
-    assert "tls:" not in out, "the capture's two loopback listeners serve plain HTTP"
+    assert "127.0.0.1:8317" not in out, "the deployment's own listener survived the rewrite"
     import yaml
+    loaded = yaml.safe_load(out)
+    assert "tls" not in loaded["admin"] and "tls" not in loaded["proxy"], (
+        "the capture's two loopback listeners serve plain HTTP")
     paired = rewrite("proxy:\n  listen: 0.0.0.0:8317\n  tls:\n    cert_file: /a\n    key_file: /b\nstats:\n"
                      "  retention_days: 90\n", 49443, "/tmp/ca.pem")
     assert "cert_file" not in paired and "key_file" not in paired, f"a pair's children survived: {paired!r}"

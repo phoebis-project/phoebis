@@ -887,10 +887,7 @@ fn every_shipped_deploy_config_passes_check_config() {
     let dir = tempfile::tempdir().unwrap();
     let key = dir.path().join("storage.key");
     std::fs::write(&key, HEX_KEY).unwrap();
-    for name in [
-        "config.container.yaml",
-        "config.example.yaml",
-    ] {
+    for name in ["config.container.yaml", "config.example.yaml"] {
         let registry = dir.path().join(format!("{name}.sqlite"));
         let shipped = std::fs::read_to_string(deploy.join(name)).unwrap();
         let mut in_storage = false;
