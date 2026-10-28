@@ -8,5 +8,5 @@ version.workspace = true
 [dependencies]
 
 [dev-dependencies]
-# The fixture manifest test digests each fixture the way the release evidence table does.
+# The fixture manifest test digests each fixture the way the manifest table on the Development page does.
 sha2 = { workspace = true }
