@@ -446,9 +446,10 @@ and a model's own week's, is the earliest of five hours from now, its reset and 
 five hours ahead at most. A 5-hour reading past its reset with no new reset looks five hours ahead too, since the window
 opens with the next request. `burn_average_seconds` (default 1800) is the time constant of each session's burn average,
 the figure the projection carries forward (see **Burn**, below). A burn the cost model cannot price adds nothing, so an
-account whose plan the cost model does not price (a free, Team or Enterprise organization, or a tier the profile has not
-named) projects its prediction alone. An API-key account has no plan window and no projection, and neither has a
-usage-based seat, so the plan readings a seat kept from before it converted project nothing.
+account whose plan the cost model does not price (a free organization, a Team or Enterprise organization whose tier the
+cost model does not hold, or a tier the profile has not named) projects its prediction alone. An API-key account has no
+plan window and no projection, and neither has a usage-based seat, so the plan readings a seat kept from before it
+converted project nothing.
 
 **The demand** What the slow-down holds back is still wanted: a session held before each request burns less than it asks
 to, and the moment the hold lifts it burns at its own pace again, so the router keeps two readings of a session's burn.

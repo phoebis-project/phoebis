@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use phoebis_oauth::{
-    BackoffEdge, LandedMark, PollFault, PollIssue, UsageError, UsageService, UsageSnapshot,
+    BackoffEdge, LandedMark, PollFault, PollIssue, ProfileResponse, UsageError, UsageService,
+    UsageSnapshot,
 };
 use phoebis_relay::UnifiedHeaders;
 use phoebis_routing::{
@@ -21,6 +22,7 @@ use tokio::time::Instant;
 
 use crate::assemble::Record;
 use crate::events::{plan_ended, plan_restored, poll_backoff, poll_failed};
+use crate::plan::PlanTables;
 use crate::record::{ExtraUsageSampleRecord, QuotaSampleRecord};
 use crate::rollup::bucket_of;
 use crate::task::Ledger;
@@ -46,6 +48,12 @@ pub(crate) const SEVEN_DAY_OVERAGE_INCLUDED: &str = "seven_day_overage_included"
 
 const OPEN_RUNS_POISONED: &str = "the poll backoff's open-run set poisoned by a prior panic";
 
+const WARNED_TIERS_POISONED: &str = "the warned tiers set poisoned by a prior panic";
+
+/// The accounts and tier words a Team or Enterprise warn already named, so each pair logs once. The process's, since
+/// the reads that consult it run on the poll's tasks and on the admin's refresh, and a restart clears it.
+static WARNED_TIERS: Mutex<BTreeSet<(String, String)>> = Mutex::new(BTreeSet::new());
+
 /// The `source` of a plan event a profile read wrote, the third poll's, the startup's or the Refresh button's.
 const PROFILE_SOURCE: &str = "profile";
 
@@ -63,6 +71,32 @@ enum ProfileRead {
 /// Whether the profile document names an organization with no plan, the type an ended subscription's profile reads.
 fn reports_no_plan(profile: &serde_json::Value) -> bool {
     profile["organization"]["organization_type"] == "claude_free"
+}
+
+/// One warning per account and tier word for a stored Team or Enterprise document whose tier the cost model in force
+/// holds no capacity row for, so an operator pairing such a seat sees why it reads unpriced.
+fn warn_unpriced_tier(tables: &PlanTables, at: i64, account_id: &str, plan: &str, tier: &str) {
+    if !matches!(plan, "team" | "enterprise")
+        || tables
+            .revisions
+            .in_force(at)
+            .capacity_of(None, tier)
+            .is_some()
+    {
+        return;
+    }
+    let first = WARNED_TIERS
+        .lock()
+        .expect(WARNED_TIERS_POISONED)
+        .insert((account_id.to_string(), tier.to_string()));
+    if first {
+        tracing::warn!(
+            account = %account_id,
+            plan = %plan,
+            rate_limit_tier = %tier,
+            "the cost model holds no capacity row for the seat's tier, so the seat reads unpriced"
+        );
+    }
 }
 
 pub fn samples_from_head(
@@ -369,6 +403,7 @@ impl QuotaPoll {
         usage: Arc<UsageService>,
         ledger: Ledger,
         router: RouterHandle,
+        tables: Arc<PlanTables>,
     ) -> tokio::task::JoinHandle<()> {
         usage.set_on_backoff(Arc::new({
             let ledger = ledger.clone();
@@ -424,8 +459,13 @@ impl QuotaPoll {
                     slot.polls = slot.polls.wrapping_add(1);
                     slot.last_read = Some(now);
                     let (account, incarnation) = (slot.account.clone(), slot.incarnation);
-                    let (store, usage, ledger, router) =
-                        (store.clone(), usage.clone(), ledger.clone(), router.clone());
+                    let (store, usage, tables, ledger, router) = (
+                        store.clone(),
+                        usage.clone(),
+                        tables.clone(),
+                        ledger.clone(),
+                        router.clone(),
+                    );
                     let handle = attempts.spawn(async move {
                         // A slot of an account whose plan ended keeps its cadence for the third poll's profile read.
                         let mut profile_read = false;
@@ -433,6 +473,7 @@ impl QuotaPoll {
                             (_, profile_read) = Self::poll_reading(
                                 &store,
                                 &usage,
+                                &tables,
                                 &ledger,
                                 Some(&router),
                                 &account,
@@ -442,7 +483,10 @@ impl QuotaPoll {
                         // The profile endpoint shares the usage endpoint's limit, so a read the poll made serves the
                         // slot's.
                         if profile_due && !profile_read {
-                            Self::refresh_profile(&store, &usage, &ledger, &router, &account).await;
+                            Self::refresh_profile(
+                                &store, &usage, &tables, &ledger, &router, &account,
+                            )
+                            .await;
                         }
                         Completion {
                             held: usage.held_for(&account.id),
@@ -503,11 +547,12 @@ impl QuotaPoll {
     pub async fn poll_account(
         store: &Store,
         usage: &UsageService,
+        tables: &PlanTables,
         ledger: &Ledger,
         router: Option<&RouterHandle>,
         account: &AccountRow,
     ) -> Result<UsageSnapshot, UsageError> {
-        Self::poll_reading(store, usage, ledger, router, account)
+        Self::poll_reading(store, usage, tables, ledger, router, account)
             .await
             .0
     }
@@ -517,6 +562,7 @@ impl QuotaPoll {
     async fn poll_reading(
         store: &Store,
         usage: &UsageService,
+        tables: &PlanTables,
         ledger: &Ledger,
         router: Option<&RouterHandle>,
         account: &AccountRow,
@@ -526,7 +572,8 @@ impl QuotaPoll {
             Ok((snapshot, issue)) => {
                 if let Some(issue) = issue {
                     profile_read =
-                        Self::report_issue(store, usage, ledger, router, account, issue).await;
+                        Self::report_issue(store, usage, tables, ledger, router, account, issue)
+                            .await;
                 }
                 Ok(snapshot)
             }
@@ -587,16 +634,27 @@ impl QuotaPoll {
     /// row beside its warning, and a reauth mark its acquisition landed reaches the router as `poll_account` reports
     /// one. A stored tier or class the profile changes asks the router to reload, since the snapshot's tier prices the
     /// router's own use of the account's windows and the class places the account among the paid sources. A profile
-    /// that reports no plan flags the account plan ended, storing nothing of the document, and one that reports a plan
-    /// clears a flag that stands.
+    /// that reports no plan is stored and flags the account plan ended, and one that reports a plan clears a flag that
+    /// stands. A stored Team or Enterprise document whose tier `tables` holds no capacity row for logs one warning per
+    /// account and tier.
     pub async fn refresh_profile(
         store: &Store,
         usage: &UsageService,
+        tables: &PlanTables,
         ledger: &Ledger,
         router: &RouterHandle,
         account: &AccountRow,
     ) {
-        Self::read_profile(store, usage, ledger, router, account, PROFILE_SOURCE).await;
+        Self::read_profile(
+            store,
+            usage,
+            tables,
+            ledger,
+            router,
+            account,
+            PROFILE_SOURCE,
+        )
+        .await;
     }
 
     /// Whether the account's plan-ended flag stands, so the poll sends it no usage request.
@@ -612,6 +670,7 @@ impl QuotaPoll {
     async fn read_profile(
         store: &Store,
         usage: &UsageService,
+        tables: &PlanTables,
         ledger: &Ledger,
         router: &RouterHandle,
         account: &AccountRow,
@@ -623,7 +682,7 @@ impl QuotaPoll {
         // admin views show what it says.
         match answer {
             Ok(profile) if reports_no_plan(&profile.raw) => {
-                Self::flag_plan_ended(store, usage, ledger, router, account, &profile.raw, source)
+                Self::flag_plan_ended(store, usage, ledger, router, account, &profile, source)
                     .await;
                 ProfileRead::NoPlan
             }
@@ -642,9 +701,17 @@ impl QuotaPoll {
                     store.set_profile(&account.id, &profile.raw.to_string(), &profile.subscription)
                 {
                     tracing::warn!(account = %account.id, %error, "the profile could not be stored");
-                } else if before != term() {
-                    if let Err(error) = router.reload().await {
-                        tracing::debug!(account = %account.id, %error, "the router did not reload for a new tier, class or plan");
+                } else {
+                    let after = term();
+                    // The store's resolution decides the plan, so a usage-based Enterprise seat, which resolves
+                    // `usage_based` first, never warns.
+                    if let Some((Some(tier), _, Some(plan))) = &after {
+                        warn_unpriced_tier(tables, usage.now(), &account.id, plan, tier);
+                    }
+                    if before != after {
+                        if let Err(error) = router.reload().await {
+                            tracing::debug!(account = %account.id, %error, "the router did not reload for a new tier, class or plan");
+                        }
                     }
                 }
                 Self::restore_plan(store, usage, ledger, router, account, &profile.raw).await;
@@ -661,23 +728,30 @@ impl QuotaPoll {
         }
     }
 
-    /// Flags the account plan ended at the read's instant unless a flag stands, so the routing reads it as past its
-    /// end. The stored document and tier stay the last plan's, which keeps pricing the account's windows while the
-    /// flag stands, and the state stays as it is, since a renewed plan lifts the flag without a re-pair.
+    /// Stores the document the read found and flags the account plan ended at the read's instant unless a flag stands,
+    /// so the routing reads it as past its end. While the flag stands the account answers the found document's plan
+    /// and tier, the readings taken before the end keeping the plan and the tier they were priced under, and the state
+    /// stays as it is, since a renewed plan lifts the flag without a re-pair.
     async fn flag_plan_ended(
         store: &Store,
         usage: &UsageService,
         ledger: &Ledger,
         router: &RouterHandle,
         account: &AccountRow,
-        profile: &serde_json::Value,
+        profile: &ProfileResponse,
         source: &'static str,
     ) {
         usage.plan_ended(&account.id);
+        // Stored before the flag, so the flag's reload brings the found plan and tier to the routing with it.
+        if let Err(error) =
+            store.set_profile(&account.id, &profile.raw.to_string(), &profile.subscription)
+        {
+            tracing::warn!(account = %account.id, %error, "the profile could not be stored");
+        }
         let at = usage.now();
         match store.set_plan_ended(&account.id, at) {
             Ok(true) => {
-                let organization = &profile["organization"];
+                let organization = &profile.raw["organization"];
                 let word = |key: &str| organization[key].as_str().unwrap_or("-").to_string();
                 tracing::warn!(
                     account = %account.id,
@@ -686,7 +760,7 @@ impl QuotaPoll {
                     subscription_status = %word("subscription_status"),
                     "the account's profile reports no plan, so the poll stops reading its usage"
                 );
-                ledger.record(plan_ended(&account.id, at, source, profile));
+                ledger.record(plan_ended(&account.id, at, source, &profile.raw));
                 if let Err(error) = router.reload().await {
                     tracing::debug!(account = %account.id, %error, "the router did not reload for an ended plan");
                 }
@@ -738,6 +812,7 @@ impl QuotaPoll {
     async fn report_issue(
         store: &Store,
         usage: &UsageService,
+        tables: &PlanTables,
         ledger: &Ledger,
         router: Option<&RouterHandle>,
         account: &AccountRow,
@@ -752,8 +827,16 @@ impl QuotaPoll {
             PollIssue::PlanRefused { fault, .. } => {
                 let read = match router {
                     Some(router) => {
-                        Self::read_profile(store, usage, ledger, router, account, USAGE_403_SOURCE)
-                            .await
+                        Self::read_profile(
+                            store,
+                            usage,
+                            tables,
+                            ledger,
+                            router,
+                            account,
+                            USAGE_403_SOURCE,
+                        )
+                        .await
                     }
                     None => ProfileRead::Unread,
                 };
@@ -825,6 +908,7 @@ impl QuotaPoll {
         usage: Arc<UsageService>,
         ledger: Ledger,
         router: RouterHandle,
+        tables: Arc<PlanTables>,
         bound: Duration,
     ) -> Sampled {
         let accounts: Vec<AccountRow> = store
@@ -840,18 +924,25 @@ impl QuotaPoll {
         // profile read is the start's as every account's is.
         let paused_count = paused.len();
         for account in paused {
-            let (store, usage, task_ledger, router) =
-                (store.clone(), usage.clone(), ledger.clone(), router.clone());
+            let (store, usage, tables, task_ledger, router) = (
+                store.clone(),
+                usage.clone(),
+                tables.clone(),
+                ledger.clone(),
+                router.clone(),
+            );
             ledger.track(tokio::spawn(async move {
-                Self::refresh_profile(&store, &usage, &task_ledger, &router, &account).await;
+                Self::refresh_profile(&store, &usage, &tables, &task_ledger, &router, &account)
+                    .await;
             }));
         }
         let total = accounts.len();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<bool>();
         for account in accounts {
-            let (store, usage, task_ledger, router, tx) = (
+            let (store, usage, tables, task_ledger, router, tx) = (
                 store.clone(),
                 usage.clone(),
+                tables.clone(),
                 ledger.clone(),
                 router.clone(),
                 tx.clone(),
@@ -859,11 +950,19 @@ impl QuotaPoll {
             // Tracked so a fetch still stalled when `ledger.shutdown` runs is aborted with it, rather than
             // outliving the process holding its `Arc<Store>`.
             let handle = tokio::spawn(async move {
-                let (answer, profile_read) =
-                    Self::poll_reading(&store, &usage, &task_ledger, Some(&router), &account).await;
+                let (answer, profile_read) = Self::poll_reading(
+                    &store,
+                    &usage,
+                    &tables,
+                    &task_ledger,
+                    Some(&router),
+                    &account,
+                )
+                .await;
                 let _ = tx.send(matches!(answer, Ok(ref s) if s.error.is_none()));
                 if !profile_read {
-                    Self::refresh_profile(&store, &usage, &task_ledger, &router, &account).await;
+                    Self::refresh_profile(&store, &usage, &tables, &task_ledger, &router, &account)
+                        .await;
                 }
             });
             ledger.track(handle);

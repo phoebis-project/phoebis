@@ -478,7 +478,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "label": "Free",
           "enabled": true,
           "canceled": true,
-          "plan_ended_at": null,
+          "plan_ended_at": 1791030700000,
           "state": "ready",
           "funding_retry_at": null,
           "identity": {
@@ -495,7 +495,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "quarantined": false
           },
           "lifecycle_generation": 1,
-          "revision": 4294967298,
+          "revision": 4294967299,
           "cooldowns": [],
           "overage": null,
           "profile": {
@@ -3098,9 +3098,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "wasted_probes": 0,
           "wasted_probe_usd": 0,
           "wasted_probe_reasons": {},
-          "cost_shares": {},
-          "cache_shares": {},
-          "probe_shares": {},
+          "cost_shares": null,
+          "cache_shares": null,
+          "probe_shares": null,
           "plan_requests": 0,
           "plan_output_tokens": 0,
           "cost_equivalent": {},
@@ -3115,7 +3115,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": false
           },
           "saving_usd": 0,
-          "saving_shares": {},
+          "saving_shares": null,
           "saving_equivalent": {},
           "billed_usd": 0.00355,
           "billed": {
@@ -8753,9 +8753,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "wasted_probes": 0,
               "wasted_probe_usd": 0,
               "wasted_probe_reasons": {},
-              "cost_shares": {},
-              "cache_shares": {},
-              "probe_shares": {},
+              "cost_shares": null,
+              "cache_shares": null,
+              "probe_shares": null,
               "plan_requests": 0,
               "plan_output_tokens": 0,
               "cost_equivalent": {},
@@ -8770,7 +8770,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 "seven_day": false
               },
               "saving_usd": 0,
-              "saving_shares": {},
+              "saving_shares": null,
               "saving_equivalent": {},
               "billed_usd": 0.00355,
               "billed": {
@@ -15041,7 +15041,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_equivalent": null,
           "share_reason": null,
           "estimated": false,
-          "tier": "default_claude_zero",
+          "tier": null,
           "phases": {
             "received_at": 1791717397600,
             "selected_at": 1791717397600,
@@ -15083,7 +15083,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 "stop_reason": "end_turn",
                 "stop_sequence": null
               },
-              "tier": "default_claude_zero"
+              "tier": null
             }
           ],
           "held": null,

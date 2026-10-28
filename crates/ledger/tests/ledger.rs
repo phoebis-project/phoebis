@@ -4279,7 +4279,8 @@ fn set_tier(store: &Store, account: &str, tier: &str) {
 }
 
 /// The landing writes the serving account's tier as the registry snapshot holds it on every attempt: the profile's
-/// tier for an oauth account, none for an api_key account, and a tier that changes later lands on the new rows alone.
+/// tier for an oauth account on a plan the router prices, none for an api_key account, and a tier that changes later
+/// lands on the new rows alone.
 #[tokio::test]
 async fn the_landing_records_the_serving_accounts_tier_as_the_registry_holds_it() {
     let up = FakeUpstream::start(vec![]).await;
@@ -4322,6 +4323,148 @@ async fn the_landing_records_the_serving_accounts_tier_as_the_registry_holds_it(
             Some("default_claude_max_20x".to_string())
         ),
         "the new tier lands on the new row and the earlier row keeps the tier it was written with"
+    );
+    up.shutdown().await;
+}
+
+/// The price-key case's subscription cost model: a capacity row for every tier word its documents name, so a row
+/// that keeps its tier prices a share and only a tier the landing leaves off keeps a row unpriced.
+const PRICE_KEY_COSTS: &str = "\
+revisions:
+  - effective: 1970-01-01
+    unit:
+      defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
+      units_per_window: 100
+    capacity:
+      default_claude_ai:      {five_hour: 100, seven_day: 1000}
+      default_claude_max_20x: {five_hour: 100, seven_day: 1000}
+      default_claude_zero:    {five_hour: 100, seven_day: 1000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 1, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-sonnet-5: 1
+    model_windows: {}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-sonnet-5: sonnet
+";
+
+/// Stores `organization` as the account's profile document with its tier, as the quota poll stores a read.
+fn set_document(store: &Store, account: &str, organization: &str, tier: &str) {
+    store
+        .set_profile(
+            account,
+            &format!(r#"{{"organization":{organization}}}"#),
+            &phoebis_store::SubscriptionRow {
+                tier: Some(tier.into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+/// The landing records the tier the router prices the serving account by: none for a free organization and for a
+/// usage-based seat, whatever tier their documents name, so neither row prices a share of a plan window, while a Max
+/// account's attempt records its tier and prices as before.
+#[tokio::test]
+async fn the_landing_records_no_tier_for_a_free_organization_or_a_usage_based_seat_and_neither_prices_a_share(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(
+        &up,
+        &[
+            oauth("max", A, 0),
+            oauth("free", B, 1),
+            oauth("seat", "sk-ant-oat01-SEAT", 2),
+        ],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    set_document(
+        &h.store,
+        "max",
+        r#"{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}"#,
+        "default_claude_max_20x",
+    );
+    set_document(
+        &h.store,
+        "free",
+        r#"{"organization_type":"claude_free","rate_limit_tier":"default_claude_ai"}"#,
+        "default_claude_ai",
+    );
+    set_document(
+        &h.store,
+        "seat",
+        r#"{"organization_type":"claude_enterprise","rate_limit_tier":"default_claude_zero","seat_tier":"enterprise_usage_based"}"#,
+        "default_claude_zero",
+    );
+    h.router.reload().await.unwrap();
+    for (id, account) in [("r-max", "max"), ("r-free", "free"), ("r-seat", "seat")] {
+        h.ledger
+            .record_request(Record::Request {
+                request: finished_row(id),
+                attempts: vec![AttemptRecord {
+                    account_id: account.into(),
+                    account_kind: "oauth".into(),
+                    // The selection stamps the seat's class, as it does on a request the relay serves.
+                    usage_based: account == "seat",
+                    ..serving_attempt(id, true)
+                }],
+                bodies: None,
+            })
+            .await;
+    }
+    let mut tiers = Vec::new();
+    for id in ["r-max", "r-free", "r-seat"] {
+        tiers.push(ledgered(&h, id).await.1[0].tier.clone());
+    }
+    assert_eq!(
+        tiers,
+        [Some("default_claude_max_20x".to_string()), None, None],
+        "the Max attempt records its tier, and the free organization's and the seat's record none"
+    );
+    let tables = PlanTables {
+        revisions: phoebis_ledger::CostRevisions::from_yaml(PRICE_KEY_COSTS)
+            .expect("the price-key cost model parses"),
+        path: None,
+        source: "test".into(),
+    };
+    let rows =
+        h.db.read(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+            .await
+            .unwrap();
+    let shares = |account: &str| {
+        let row = rows
+            .iter()
+            .find(|r| r.account_id == account)
+            .unwrap_or_else(|| panic!("no rollup row of {account}"));
+        let key = phoebis_ledger::RowKey {
+            model: &row.canonical_model,
+            speed: Speed::of(Some(row.speed.as_str())),
+            band: phoebis_ledger::Band::of_rollup(&row.band),
+            funding: phoebis_ledger::Funding::of_rollup(&row.funding),
+            kind: &row.kind,
+            tier: (row.tier != UNATTRIBUTED).then_some(row.tier.as_str()),
+            entrypoint: None,
+            classifier: false,
+            at: row.hour * 1_000,
+            band_at: None,
+        };
+        phoebis_ledger::price_row(&PriceRevisions::shipped(), &tables, &key, row.usage())
+            .shares
+            .is_some()
+    };
+    assert_eq!(
+        (shares("max"), shares("free"), shares("seat")),
+        (true, false, false),
+        "the Max row prices a share of its windows, and the free organization's and the seat's price none"
     );
     up.shutdown().await;
 }

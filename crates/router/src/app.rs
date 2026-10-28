@@ -464,6 +464,7 @@ pub async fn run_until(
             admin.usage.clone(),
             ledger.clone(),
             router_task.clone(),
+            tables.clone(),
             startup,
         ),
     );
@@ -485,6 +486,7 @@ pub async fn run_until(
         admin.usage.clone(),
         ledger.clone(),
         router_task.clone(),
+        tables.clone(),
     ));
     let refresh = catalog.spawn_refresh(
         Duration::from_secs(config.routing.catalog_refresh_seconds),

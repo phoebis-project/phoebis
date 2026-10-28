@@ -114,7 +114,8 @@ fn term_answers_the_account_it_was_loaded_for_and_none_for_any_other() {
 
 #[test]
 fn priced_tier_answers_the_stored_tier_for_a_plan_the_cost_model_prices_and_none_for_any_other() {
-    // One tier the cost table holds on every term, so the plan word alone decides each reading.
+    // One tier the cost table holds on every term, so the plan word alone decides each reading. The table judges a
+    // Team or Enterprise word itself, so those plans answer the word.
     const TIER: &str = "default_claude_max_20x";
     let expected = [
         ("free", None),
@@ -122,8 +123,8 @@ fn priced_tier_answers_the_stored_tier_for_a_plan_the_cost_model_prices_and_none
         ("max_5x", Some(TIER)),
         ("max_20x", Some(TIER)),
         ("max", Some(TIER)),
-        ("team", None),
-        ("enterprise", None),
+        ("team", Some(TIER)),
+        ("enterprise", Some(TIER)),
         ("usage_based", None),
     ];
     let term = |id: &str, plan: Option<&str>| SubscriptionTerm {

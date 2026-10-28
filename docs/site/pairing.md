@@ -170,14 +170,18 @@ endpoint, or a read that fails in transport, leaves the state as it is: the poll
 the next paragraph describes.
 
 An OAuth account whose subscription ended keeps its credential and its state, and its profile reports the organization
-holding no plan. A profile read that finds no plan, the third poll's or the start's, flags the account plan ended, and a
-usage `403` whose error code is `oauth_not_allowed_for_organization` makes that read due at once. While the flag stands
-the state stays as it was, the usage poll sends the account no usage request and reads its profile every quarter hour,
-the stored tier stays the last plan's, the router places nothing on the account, reading it as past its end, the account
-view answers no quota window, since the last reading would draw as live, and Refresh reads the profile before any usage
-request. A profile read that finds a plan again, or a pairing confirmed on the account, clears the flag, and the usage
-poll reads the account from its next slot. A disconnect leaves the flag standing until the pairing after it.
-`GET /admin/accounts` answers the flag as `plan_ended_at`, and the routing log records `plan_ended` and `plan_restored`.
+holding no plan. A profile read that finds no plan, the third poll's or the start's, stores the document it found and
+flags the account plan ended, and a usage `403` whose error code is `oauth_not_allowed_for_organization` makes that read
+due at once. While the flag stands the state stays as it was, the usage poll sends the account no usage request and
+reads its profile every quarter hour, the account answers the plan `free` and the tier the document names, the router
+places nothing on the account, reading it as past its end, the account view answers no quota window, since the last
+reading would draw as live, and Refresh reads the profile before any usage request. The readings taken before the end
+keep the plan and the tier they were priced under. A profile read that finds a plan again, or a pairing confirmed on the
+account, clears the flag, and the usage poll reads the account from its next slot. A disconnect leaves the flag standing
+until the pairing after it. `GET /admin/accounts` answers the flag as `plan_ended_at`, and the routing log records
+`plan_ended` and `plan_restored`. A profile read that finds a Team or Enterprise plan whose tier the cost model holds no
+capacity row for logs one warning naming the account and the tier, once per account and tier until a restart, and the
+seat reads unpriced until the cost model holds the tier.
 
 The Accounts view offers these actions, each through a control that [The console](console.md#accounts) describes, and
 each calls its own route:

@@ -301,9 +301,11 @@ alphabet (ASCII lowercase letters, digits, hyphens and underscores). `sdk-cli` a
 price at the base rows, as does a request from a client other than Claude Code, which carries no entrypoint. An
 unmeasured entrypoint prices at the base rows because they charge more, so the router sheds early rather than late.
 
-The account's tier is recorded on each attempt when it lands, as the router held it, and carried into the hourly
-rollups, so a share reads under the tier the account had when it served the request, and a tier change lands on new rows
-only.
+The tier the router prices the account by is recorded on each attempt when it lands and carried into the hourly rollups,
+so a share reads under the tier the account had when it served the request, and a tier change lands on new rows only. A
+plan the router does not price records no tier, so the requests of a free organization, a usage-based seat or an account
+with no plan take no share of a plan window, while a Team or Enterprise seat records its tier word whether or not the
+cost model holds it and prices no share until it does.
 
 The weights of the same file, in units per plain input token, each with the date the plan meter measured it, and the
 share of a Max 20x window one million input tokens spend outside the band, derived from the weight over the capacity:

@@ -557,6 +557,12 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .store
         .set_canceled("free-org", true, Some(free_end))
         .unwrap();
+    // The profile read a quarter hour after the end found the free document stored above and flagged the account, as
+    // the poll does. No event is recorded, so the routing log's ids stand.
+    assert!(parts
+        .store
+        .set_plan_ended("free-org", free_end + 900_000)
+        .unwrap());
     // A cap under a quarter, so the pool answers one warning and the console draws a non-empty list.
     post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"shed_cap":0.2,"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0},{"account_id":"usage-seat","priority":2}],"keepalive":{"enabled":true},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
     let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","model_rules":[{"pattern":"claude-opus-*","not":true}],"model_rules_mode":"extend"}"#, Some(&cookie)).await).await;

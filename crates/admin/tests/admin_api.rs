@@ -1312,6 +1312,61 @@ async fn the_refresh_reads_the_profile_first_while_the_plan_ended_flag_stands() 
     );
 }
 
+/// A profile read that finds no plan stores the document it found, so a flagged account answers the free plan and
+/// the found tier beside the flag's instant, where the last plan's document stood before the read.
+#[tokio::test]
+async fn a_plan_ended_account_answers_the_free_plan_and_the_found_tier_beside_its_flag() {
+    use common::{get, json, login, post};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    h.store
+        .set_profile(
+            "business",
+            r#"{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_max_20x".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(h
+        .store
+        .set_plan_ended("business", common::NOW - 60_000)
+        .unwrap());
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/profile",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"account":{"uuid":"00000000-0000-4000-8000-000000000100","email":"a@example.invalid","has_claude_max":false,"has_claude_pro":false},"organization":{"uuid":"o","organization_type":"claude_free","rate_limit_tier":"default_claude_ai","subscription_status":"canceled","billing_type":"none"}}"#
+                .to_vec(),
+        },
+    );
+    let refreshed = post(
+        &h.app,
+        "/admin/accounts/business/usage/refresh",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refreshed.status(), 200);
+    let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            &account["subscription"]["plan"],
+            &account["subscription"]["tier"],
+            &account["plan_ended_at"]
+        ),
+        (
+            &serde_json::json!("free"),
+            &serde_json::json!("default_claude_ai"),
+            &serde_json::json!(common::NOW - 60_000)
+        ),
+        "the found document's plan and tier beside the flag: {account}"
+    );
+}
+
 #[tokio::test]
 async fn the_account_view_reads_the_extra_usage_flag_from_the_organization_alone() {
     use common::{get, json, login};

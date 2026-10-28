@@ -153,9 +153,10 @@ pub struct AttemptRecord {
     pub ratelimit_7d_oi_reset: Option<i64>,
     pub overage_in_use: Option<bool>,
     pub overage_utilization: Option<f64>,
-    /// The serving account's rate-limit tier as the router's registry snapshot held it when the request landed,
-    /// `None` for an api_key account and for an oauth account whose profile has not been read. Written once, so a
-    /// row reads the tier the account had and a later change moves nothing.
+    /// The serving account's rate-limit tier the router priced by when the request landed, `None` for an api_key
+    /// account, for an oauth account whose profile has not been read, and for a plan the router never prices (a free
+    /// organization, a usage-based seat). Written once, so a row reads the tier the account had and a later change
+    /// moves nothing.
     pub tier: Option<String>,
     pub thinking_tokens: Option<u64>,
     pub web_search_requests: Option<u64>,

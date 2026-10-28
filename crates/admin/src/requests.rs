@@ -163,7 +163,7 @@ pub(crate) struct RequestSummary {
     /// Whether `cost_shares` or `cost_equivalent` priced a window at the weight of the model tier's latest weighted
     /// model, for a model the cost model does not weight.
     pub estimated: bool,
-    /// The serving attempt's account tier as the registry held it when the request landed, null as on the attempt.
+    /// The serving attempt's account tier the router priced by when the request landed, null as on the attempt.
     pub tier: Option<String>,
     pub phases: RequestPhases,
     pub attempts: Vec<Attempt>,
@@ -282,9 +282,9 @@ pub(crate) struct Attempt {
     #[schema(value_type = Option<Object>)]
     pub selection: Option<Value>,
     pub response: AttemptResponse,
-    /// The serving account's rate-limit tier as the registry held it when the request landed, null for an api_key
-    /// account, for an oauth account whose profile had not been read, and for an attempt recorded before the router
-    /// kept it.
+    /// The serving account's rate-limit tier the router priced by when the request landed, null for an api_key
+    /// account, for an oauth account whose profile had not been read, for a plan the router does not price (a free
+    /// organization, a usage-based seat), and for an attempt recorded before the router kept it.
     pub tier: Option<String>,
 }
 
