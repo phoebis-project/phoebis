@@ -32,7 +32,7 @@
 #   7. one run with HTTPS_PROXY pointed at connect_capture.py and no ANTHROPIC_BASE_URL, so the client sends
 #      CONNECT api.anthropic.com:443 and the recorded ClientHello carries the server name api.anthropic.com,
 #      which is what makes it comparable to hello_inference.hex. This step depends on the client honoring
-#      HTTPS_PROXY, measured on 2.1.269; a run that records no ClientHello fails the script.
+#      HTTPS_PROXY, measured on 2.1.269 and 2.1.310. A run that records no ClientHello fails the script.
 #
 # Runs 1 to 6 point ANTHROPIC_BASE_URL at http_raw.py. The client's working directory is fixed at
 # /tmp/cc-capture/cwd and its config directory at /tmp/cc-capture/cfg-<name>, wiped before each run. The system
