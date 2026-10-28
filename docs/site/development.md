@@ -328,7 +328,7 @@ profile against a new build:
    The service must be stopped while it runs, since the capture instance opens the same store and would otherwise race
    the running service's refresh attempts and keepalive leases on the same accounts, and it shares its client state
    root with the baseline capture, so the two scripts never run at the same time. The script ends with
-   `python3 scripts/build-fixtures.py --check --through-router --baseline <baseline-dir> <output-dir>`, which must
+   `python3 -I scripts/build-fixtures.py --check --through-router --baseline <baseline-dir> <output-dir>`, which must
    print `fixtures match`. The `Content-Length` and `account_uuid` masks are the only differences the check allows,
    and it treats the billing fields and the `x-client-request-id` the relay restores on a reduced-shape request as
    absent rather than masking them, since a field moving from absent to present is the restoration at work. The

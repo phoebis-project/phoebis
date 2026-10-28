@@ -41,7 +41,7 @@
 #   HEAD /api/hello itself rather than forwarding it, and the router's own ClientHello toward its upstream is
 #   graded by crates/transport/tests/client_hello.rs, not by this capture.
 #
-# The script ends by running `python3 scripts/build-fixtures.py --check --through-router` (plus --baseline, when
+# The script ends by running `python3 -I scripts/build-fixtures.py --check --through-router` (plus --baseline, when
 # PHOEBIS_CAPTURE_BASELINE is set) against $OUT, and exits with its status; that check re-signs every captured body
 # through `cargo run -p phoebis-cch --example resign` unless --skip-hash-check is added by hand, so cargo must be on
 # this host, or the check must be finished by hand elsewhere.
@@ -266,4 +266,4 @@ baseline_args=()
 if [[ -n "${PHOEBIS_CAPTURE_BASELINE:-}" ]]; then
   baseline_args=(--baseline "$PHOEBIS_CAPTURE_BASELINE")
 fi
-exec python3 scripts/build-fixtures.py --check --through-router "${baseline_args[@]}" "$OUT"
+exec python3 -I scripts/build-fixtures.py --check --through-router "${baseline_args[@]}" "$OUT"
