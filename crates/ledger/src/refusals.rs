@@ -18,7 +18,6 @@ use crate::rollup::{
 };
 use crate::LedgerError;
 
-const DAY_MS: i64 = 86_400_000;
 const DAY_S: i64 = 86_400;
 const HOUR_S: i64 = 3_600;
 
@@ -89,9 +88,11 @@ struct Cursor {
 /// meets no page, since the mark stands by then. The cursor is the refold's rule: a start that fails after a page
 /// committed resumes after that page rather than taking its contribution out a second time.
 ///
-/// `retention_days` 0 keeps the requests for good, so the walk is bounded by the rollup retention instead, the
-/// purge's own cutoff rounded up to the first hour the purge keeps, since it drops whole hours: a request whose hour
-/// the rollup purge removed meets no page and writes no map-only row into that hour. Both 0 walks from the start.
+/// The rollup purge drops whole hours, so the walk starts at an hour boundary. A nonzero `retention_days` starts it at
+/// the first hour boundary at or after the request cutoff, since under an equal rollup retention the purge drops the
+/// hour that cutoff splits. `retention_days` 0 keeps the requests for good, so the walk is bounded by the rollup
+/// retention instead, the purge's own cutoff rounded up to the first hour the purge keeps. Either way a request whose
+/// hour the rollup purge removed meets no page and writes no map-only row into that hour. Both 0 walks from the start.
 pub fn refold_refusals(
     db: &LedgerDb,
     prices: &PriceRevisions,
@@ -109,17 +110,11 @@ pub fn refold_refusals(
         return Ok(0);
     }
     // Each purge's own arithmetic, a zero keeping its rows for good. A nonzero request retention bounds the walk,
-    // since the configuration holds a nonzero rollup retention at least as long as the request one.
+    // since the configuration holds a nonzero rollup retention at least as long as the request one, so the rollup
+    // purge drops at most the hour the request cutoff splits.
     let from = match (retention_days, rollup_retention_days) {
         (0, 0) => i64::MIN,
-        (0, days) => {
-            // The rollup purge cuts in seconds and drops every hour that starts before its cutoff.
-            let cutoff = now / 1_000 - i64::from(days) * DAY_S;
-            let hour = cutoff.div_euclid(HOUR_S) * HOUR_S;
-            let first_kept = if hour < cutoff { hour + HOUR_S } else { hour };
-            first_kept * 1_000
-        }
-        (days, _) => now - i64::from(days) * DAY_MS,
+        (0, days) | (days, _) => first_kept_hour(now, days),
     };
     let page = page_size();
     let mut moved = 0;
@@ -174,6 +169,15 @@ pub fn refold_refusals(
         "moved the stored refusals out of their hours' request figures into the refusals map"
     );
     Ok(moved)
+}
+
+/// The first hour the rollup purge keeps under a retention of `days` at `now`, in milliseconds. The purge cuts in
+/// seconds and drops every hour that starts before its cutoff.
+fn first_kept_hour(now: i64, days: u32) -> i64 {
+    let cutoff = now / 1_000 - i64::from(days) * DAY_S;
+    let hour = cutoff.div_euclid(HOUR_S) * HOUR_S;
+    let first_kept = if hour < cutoff { hour + HOUR_S } else { hour };
+    first_kept * 1_000
 }
 
 /// Takes a stored refusal's old `delta` out of the row that holds it, with `unfold`'s arithmetic. The row is found
@@ -260,6 +264,7 @@ mod tests {
     use crate::rollup::{read_rollups, RollupRow, RollupSelect};
     use crate::test_tables::{api_prices, JANUARY_2026};
 
+    const DAY_MS: i64 = 86_400_000;
     const HAIKU: &str = "claude-haiku-5-5";
 
     #[test]
@@ -509,6 +514,74 @@ mod tests {
                 BTreeMap::from([("guardrail_blocked".to_string(), 1)])
             )],
             "no row in a purged hour, and the kept hour's refusal in the map alone"
+        );
+    }
+
+    /// The hour a seven-day cutoff back from the cases' `now` falls half an hour into.
+    const SPLIT_HOUR: i64 = JANUARY_2026 + 13 * DAY_MS;
+
+    /// A rollup row's hour, rejected count and refusals map.
+    type HourFigures = (i64, u64, BTreeMap<String, u64>);
+
+    /// The ledger under a request retention of seven days and `rollup_retention_days` as the purge at `now` leaves it,
+    /// with a refusal received after the request cutoff inside `SPLIT_HOUR` and one inside the next hour. Answers the
+    /// pass's count and the rows' figures by hour.
+    fn refolded_past_a_seven_day_cutoff(rollup_retention_days: u32) -> (usize, Vec<HourFigures>) {
+        const HOUR_MS: i64 = 3_600_000;
+        let db = LedgerDb::open_in_memory().unwrap();
+        let now = SPLIT_HOUR + 7 * DAY_MS + HOUR_MS / 2;
+        let split = refusal("split", SPLIT_HOUR + 3 * HOUR_MS / 4);
+        let kept = refusal("kept", SPLIT_HOUR + HOUR_MS + 60_000);
+        for request in [&split, &kept] {
+            land(&db, request, &[]);
+        }
+        flag(&db, &["split", "kept"]);
+        let config = crate::LedgerConfig {
+            retention_days: 7,
+            rollup_retention_days,
+            ..crate::LedgerConfig::default()
+        };
+        crate::bodies::run_retention_blocking(&db, &config, now, &[]).unwrap();
+        let moved = refold_refusals(&db, &api_prices(), 7, rollup_retention_days, now).unwrap();
+        let rows = rows(&db)
+            .into_iter()
+            .map(|r| (r.hour, r.rejected, r.refusals))
+            .collect();
+        (moved, rows)
+    }
+
+    /// Under equal request and rollup retentions the rollup purge drops the hour the request cutoff splits while the
+    /// requests received after the cutoff stand, so the pass starts at the first hour boundary after the cutoff: the
+    /// refusal in the dropped hour writes no row into it, and the one in the next hour moves into the map.
+    #[test]
+    fn under_equal_retentions_the_pass_starts_at_the_first_hour_boundary_after_the_request_cutoff()
+    {
+        let split_hour = crate::rollup::hour_of(SPLIT_HOUR);
+        let blocked = BTreeMap::from([("guardrail_blocked".to_string(), 1)]);
+        assert_eq!(
+            refolded_past_a_seven_day_cutoff(7),
+            (1, vec![(split_hour + 3_600, 0, blocked)]),
+            "the refusal in the next hour alone moved, and no row stands in the dropped hour"
+        );
+    }
+
+    /// With the rollups kept for good the hour the request cutoff splits keeps its rows, and the pass still starts at
+    /// the first hour boundary after the cutoff, so the refusal received inside that hour keeps its old counts.
+    #[test]
+    fn under_a_zero_rollup_retention_the_pass_starts_at_the_first_hour_boundary_after_the_request_cutoff(
+    ) {
+        let split_hour = crate::rollup::hour_of(SPLIT_HOUR);
+        let blocked = BTreeMap::from([("guardrail_blocked".to_string(), 1)]);
+        assert_eq!(
+            refolded_past_a_seven_day_cutoff(0),
+            (
+                1,
+                vec![
+                    (split_hour, 1, BTreeMap::new()),
+                    (split_hour + 3_600, 0, blocked)
+                ]
+            ),
+            "the split hour's refusal keeps its rejected count, and the next hour's moved into the map"
         );
     }
 

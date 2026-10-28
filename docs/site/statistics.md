@@ -442,7 +442,10 @@ its own read, so a 400-day range holds one day of rows in memory and the reader 
 A prompt-length threshold that moves re-folds the hours whose attempts the ledger still holds at the next start, and the
 older hours keep their split. Where the request retention is 0 the re-fold reads every request, and a request received
 before the first hour the rollup purge keeps moves only where its hour's rows still stand, so an hour the purge removed
-stays empty and one it kept for a budgeted member moves with the threshold. The re-fold moves the request rows alone. A
+stays empty and one it kept for a budgeted member moves with the threshold. Under a request retention of some days the
+same guard holds for a request received before the first hour boundary at or after the retention's cutoff, since under
+an equal rollup retention the purge drops the hour that cutoff splits: that hour stays empty, and one the purge kept for
+a budgeted member moves. The re-fold moves the request rows alone. A
 wasted probe's counts and a probe the keepalive still holds keep the band they settled or were recorded in, so the waste
 of a probe whose prompt falls between the old and the new threshold inside the retained window stays priced at that
 band.

@@ -13342,6 +13342,33 @@ fn a_usage_based_seats_candidate_facts_list_its_spend_entry_and_no_plan_window_w
 }
 
 #[test]
+fn a_usage_based_seats_weekly_reading_from_before_the_class_projects_nothing_so_no_shed_round_fires_on_it(
+) {
+    // The pool's lone member, so no plan sibling draws the cold pin off the seat before the shed rule reads it.
+    let s = spend_pool(vec![("b", 0)]);
+    let mut st = loaded(vec![burning("s1", "b", 4.0, false, T)]);
+    // The week the seat read past the ceiling before it converted, which the routing state keeps until its reset.
+    st.record_sample("b", weekly(0.1, 0.99, 4, T - 500));
+    past_the_wait(&mut st, &s, "p", "b", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), None),
+        "the pin renews on the seat"
+    );
+    assert_eq!(d.shed_round, None, "no round ran on the seat");
+    assert_eq!(st.last_shed("p", "b"), None);
+    let shed = line(&d.record, "move:shed");
+    assert!(
+        shed.facts
+            .iter()
+            .all(|f| !f.key.starts_with("projection_") && f.key != "trigger" && f.key != "round"),
+        "the shed line reads no projection and no round: {:?}",
+        shed.facts
+    );
+}
+
+#[test]
 fn a_fast_request_on_a_usage_based_seat_at_its_cap_reads_the_credits_obstacle_until_the_reset_and_places_past_it(
 ) {
     let s = spend_pool(vec![("b", 0)]);

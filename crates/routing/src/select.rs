@@ -2629,8 +2629,9 @@ pub(crate) enum BurnRead {
 }
 
 /// The projections of `account_id` on the plan windows it holds a reading of, from one read of its burn as `read`
-/// names it: empty for an api_key account, which has no plan window. An unknown tier prices no burn, so an untiered
-/// account projects its prediction alone. The burn leaves the row under `own` out (`in_pool_without`).
+/// names it: empty for an api_key account or a usage-based seat, neither of which has a plan window. An unknown tier
+/// prices no burn, so an untiered account projects its prediction alone. The burn leaves the row under `own` out
+/// (`in_pool_without`).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn projections_of(
     state: &RoutingState,
@@ -2642,7 +2643,11 @@ pub(crate) fn projections_of(
     read: BurnRead,
     own: Option<&PinKey>,
 ) -> BTreeMap<String, Projection> {
-    if snapshot.account(account_id).map(|a| a.kind) == Some(AccountKind::ApiKey) {
+    // A usage-based seat holds no plan quota. The plan readings it kept from before it converted stand until their
+    // reset, and a projection on them would fire a shedding round on a window the seat no longer draws.
+    if snapshot.account(account_id).map(|a| a.kind) == Some(AccountKind::ApiKey)
+        || snapshot.usage_based(account_id)
+    {
         return BTreeMap::new();
     }
     let keep = in_pool_without(snapshot, pool, own);
@@ -2819,7 +2824,7 @@ impl Banded {
 }
 
 /// The projection of `account_id` on `window` at its horizon on the burn `read` names: `None` for an account with no
-/// reading of the window or an api_key account.
+/// reading of the window, an api_key account or a usage-based seat.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn projection_of(
     state: &RoutingState,

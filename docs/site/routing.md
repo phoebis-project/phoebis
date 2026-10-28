@@ -447,7 +447,8 @@ five hours ahead at most. A 5-hour reading past its reset with no new reset look
 opens with the next request. `burn_average_seconds` (default 1800) is the time constant of each session's burn average,
 the figure the projection carries forward (see **Burn**, below). A burn the cost model cannot price adds nothing, so an
 account whose plan the cost model does not price (a free, Team or Enterprise organization, or a tier the profile has not
-named) projects its prediction alone, and an API-key account has no plan window and no projection.
+named) projects its prediction alone. An API-key account has no plan window and no projection, and neither has a
+usage-based seat, so the plan readings a seat kept from before it converted project nothing.
 
 **The demand** What the slow-down holds back is still wanted: a session held before each request burns less than it asks
 to, and the moment the hold lifts it burns at its own pace again, so the router keeps two readings of a session's burn.
@@ -549,7 +550,8 @@ onto a usage-based seat, which holds no plan quota.
 winding down. A warm one stays (see **Subscription end**, below).
 
 **Shed** With the pool's `load_shedding` on (the default), a request pinned to an account starts a shedding round there
-when one of the account's plan windows crosses its trigger. The windows are tested in the order `five_hour`,
+when one of the account's plan windows crosses its trigger. No round fires on a usage-based seat, whose old plan
+readings project nothing (see **The projection**, above). The windows are tested in the order `five_hour`,
 `seven_day`, then each model week a pin of the pool on the account draws, and the first that crosses fires and is the
 round's window. A weekly window, and the 5-hour window of a pool whose `slow_down` is off, crosses when the account's
 projection on it reads over `window_ceiling` at the window's horizon (see **The projection**, above) at a pinned
