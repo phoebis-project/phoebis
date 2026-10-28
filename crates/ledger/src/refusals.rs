@@ -263,6 +263,22 @@ mod tests {
     const HAIKU: &str = "claude-haiku-5-5";
 
     #[test]
+    fn the_refusal_codes_are_alphabetical_distinct_and_nineteen() {
+        // `is_refusal` scans with `contains`, so the order serves a reader, who finds a code or its place by name.
+        assert!(
+            REFUSAL_CODES.windows(2).all(|pair| pair[0] < pair[1]),
+            "the list is strictly ascending: {REFUSAL_CODES:?}"
+        );
+        let distinct: std::collections::BTreeSet<&str> = REFUSAL_CODES.iter().copied().collect();
+        assert_eq!(
+            distinct.len(),
+            REFUSAL_CODES.len(),
+            "no code is listed twice: {REFUSAL_CODES:?}"
+        );
+        assert_eq!(REFUSAL_CODES.len(), 19, "the rule names nineteen codes");
+    }
+
+    #[test]
     fn is_refusal_flags_a_rejected_client_request_with_a_listed_code_and_no_attempt_and_nothing_else(
     ) {
         let cases: [(&str, &str, Option<&str>, u32, bool); 7] = [

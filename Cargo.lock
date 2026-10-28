@@ -2093,7 +2093,6 @@ dependencies = [
  "jiff",
  "libc",
  "phoebis-guardrails",
- "phoebis-relay",
  "phoebis-routing",
  "phoebis-store",
  "rand",
