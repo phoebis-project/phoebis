@@ -794,7 +794,7 @@ mod tests {
                 shape.service_tier
             ),
             (None, None, None, None),
-            "the 2.1.269 client sends none of these"
+            "the recorded client sends none of these"
         );
     }
 
