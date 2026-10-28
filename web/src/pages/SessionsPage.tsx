@@ -70,7 +70,7 @@ const STATE_TONE: Record<RecipeState, BadgeTone> = { ended: 'neutral', held: 'ne
 const STATE_LABEL: Record<RecipeState, string> = { ended: 'ended', held: 'held', not_retained: 'not retained', paused: 'paused', retained: 'retained' };
 const STATE_HINT: Record<RecipeState, string> = {
   ended: 'The recipe ended. The next real request starts a new one.',
-  held: 'The prompt is kept and no probe is sent while the cause holds.',
+  held: 'The prompt is kept and no probe is sent while the cause holds, and a cause that schedules the next attempt sends it when the hold ends.',
   not_retained: 'The last request was not kept. The cause says why.',
   paused: 'The engine paused this recipe until the next real request. The cause says why.',
   retained: "The prompt is kept and its probe is scheduled or waiting for the request's first stream event.",

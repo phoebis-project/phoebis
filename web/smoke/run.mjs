@@ -24075,7 +24075,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     // for a reader that never hovers.
     const STATE_SENTENCE = {
       ended: 'The recipe ended. The next real request starts a new one.',
-      held: 'The prompt is kept and no probe is sent while the cause holds.',
+      held: 'The prompt is kept and no probe is sent while the cause holds, and a cause that schedules the next attempt sends it when the hold ends.',
       'not retained': 'The last request was not kept. The cause says why.',
       paused: 'The engine paused this recipe until the next real request. The cause says why.',
       retained: "The prompt is kept and its probe is scheduled or waiting for the request's first stream event.",
@@ -24153,7 +24153,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
         background.lifeHint === PARKED &&
         scheduled.state === 'held' &&
         scheduled.cause === 'wake too far' &&
-        scheduled.sentence === `The prompt is kept and no probe is sent while the cause holds. ${scheduled.hint}` &&
+        scheduled.sentence === `The prompt is kept and no probe is sent while the cause holds, and a cause that schedules the next attempt sends it when the hold ends. ${scheduled.hint}` &&
         (scheduled.hint ?? '').startsWith('The session is parked on a scheduled wakeup further away'),
       missing: [JSON.stringify(background), JSON.stringify(scheduled)],
     });
