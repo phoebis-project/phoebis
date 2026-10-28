@@ -16837,7 +16837,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 "to": 1
               },
               "keepalive.max_idle_seconds": {
-                "from": 43200,
+                "from": 3600,
                 "to": 86400
               }
             }

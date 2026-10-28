@@ -4694,7 +4694,7 @@ async fn a_pool_save_naming_the_keepalive_policy_an_empty_stored_policy_reads_as
 }
 
 #[tokio::test]
-async fn a_pool_policy_edit_through_the_route_reads_on_the_routing_log_as_the_dotted_member_it_moved_and_over_an_empty_stored_policy_as_the_four_members_from_null(
+async fn a_pool_policy_edit_through_the_route_reads_on_the_routing_log_as_the_dotted_member_it_moved_and_over_an_empty_stored_policy_as_each_member_with_a_value_from_null(
 ) {
     // The mirror reads the change log every `event_poll`, so a short one lands each edit's row inside the wait.
     let parts = common::admin_parts_full_retained(phoebis_ledger::LedgerConfig {
@@ -4748,18 +4748,24 @@ async fn a_pool_policy_edit_through_the_route_reads_on_the_routing_log_as_the_do
         ..phoebis_keepalive::KeepalivePolicy::default()
     })
     .unwrap();
+    let valued: serde_json::Map<String, serde_json::Value> = written
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(_, value)| !value.is_null())
+        .map(|(member, value)| {
+            (
+                format!("keepalive.{member}"),
+                serde_json::json!({ "from": null, "to": value }),
+            )
+        })
+        .collect();
+    assert!(valued.contains_key("keepalive.max_idle_seconds"));
     assert_eq!(
         landed_diff(&parts.app, &cookie, "pool_updated", "legacy").await,
-        serde_json::json!({
-            "keepalive.enabled": { "from": null, "to": written["enabled"] },
-            "keepalive.max_idle_seconds": { "from": null, "to": 86400 },
-            "keepalive.max_parked_seconds": { "from": null, "to": written["max_parked_seconds"] },
-            "keepalive.scheduled_horizon_seconds": {
-                "from": null,
-                "to": written["scheduled_horizon_seconds"]
-            },
-        }),
-        "the first edit over an empty stored policy writes it whole and names each member from null"
+        serde_json::Value::Object(valued),
+        "the first edit over an empty stored policy names each member it gave a value, from null, and no null beside \
+         a missing member"
     );
 }
 

@@ -1115,7 +1115,7 @@ impl Store {
         };
         let pairs_changed = diff != "{}";
         // The policy's members ride the pairs. The compare reads both texts parsed, so a key order or a whitespace
-        // alone writes nothing, and a text that is no object, which names no member, still counts as a change.
+        // alone writes nothing. Two texts that both fail to parse count as no change, and no route writes such a text.
         let policy_changed = parsed(&before.keepalive_json) != parsed(&row.keepalive_json);
         let members_changed = match members {
             Some(members) => stored_members(&tx, &row.id)? != members,
@@ -2566,8 +2566,8 @@ fn account_pairs(before: &AccountRow, u: &AccountUpdate<'_>, term: &Subscription
 }
 
 /// Each member whose value differs between two snapshots of one row, as `{"from": old, "to": new}`: `before`'s
-/// members, then the members of `after` that `before` lacks. A member one side lacks reads null there and counts as
-/// changed even beside a null, so a save that writes a policy member the row did not hold names it.
+/// members, then the members of `after` that `before` lacks, so a save that gives a policy member the row did not
+/// hold a value names it. A member one side lacks reads null there, so a null beside a missing member is no change.
 fn changed(
     before: &serde_json::Value,
     after: &serde_json::Value,
@@ -2575,20 +2575,17 @@ fn changed(
     let (Some(before), Some(after)) = (before.as_object(), after.as_object()) else {
         return serde_json::Map::new();
     };
+    let null = &serde_json::Value::Null;
     let added = after
         .iter()
         .filter(|(field, _)| !before.contains_key(*field))
-        .map(|(field, to)| (field, None, Some(to)));
-    let null = &serde_json::Value::Null;
+        .map(|(field, to)| (field, null, to));
     before
         .iter()
-        .map(|(field, from)| (field, Some(from), after.get(field)))
+        .map(|(field, from)| (field, from, after.get(field).unwrap_or(null)))
         .chain(added)
         .filter(|(_, from, to)| from != to)
-        .map(|(field, from, to)| {
-            let (from, to) = (from.unwrap_or(null), to.unwrap_or(null));
-            (field.clone(), serde_json::json!({ "from": from, "to": to }))
-        })
+        .map(|(field, from, to)| (field.clone(), serde_json::json!({ "from": from, "to": to })))
         .collect()
 }
 

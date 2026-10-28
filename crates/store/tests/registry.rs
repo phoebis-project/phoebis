@@ -2145,7 +2145,7 @@ fn a_pool_created_with_a_keepalive_policy_lists_each_member_under_its_dotted_nam
 }
 
 #[test]
-fn a_first_save_over_a_pool_stored_with_an_empty_policy_names_each_member_of_the_whole_policy_from_null(
+fn a_first_save_over_a_pool_stored_with_an_empty_policy_names_each_member_it_gave_a_value_from_null(
 ) {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
@@ -2170,11 +2170,9 @@ fn a_first_save_over_a_pool_stored_with_an_empty_policy_names_each_member_of_the
             serde_json::json!({
                 "keepalive.enabled": { "from": null, "to": false },
                 "keepalive.max_idle_seconds": { "from": null, "to": 86400 },
-                "keepalive.max_parked_seconds": { "from": null, "to": null },
-                "keepalive.scheduled_horizon_seconds": { "from": null, "to": null },
             })
         ),
-        "every member the stored text gained, each read as null on the side that lacked it"
+        "each member the save gave a value, from null, and no pair for a null beside a missing member"
     );
 }
 
