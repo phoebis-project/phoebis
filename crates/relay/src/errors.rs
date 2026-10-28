@@ -330,10 +330,10 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             retry_after: None,
             no_retry: false,
         },
-        // The client refusals answer the 403 `permission_error` Claude Code reads as final. From 2.1.310 on, the
-        // client heals a 400 whose message it does not recognize: it sends the request again without one feature
-        // after another and keeps each feature off for the rest of the conversation, so one refusal cost the
-        // captured client four posts. The gateway protocol the client embeds gives 403 to a caller that is
+        // The client refusals answer the 403 `permission_error` Claude Code reads as final. The 2.1.310 client
+        // heals a 400 whose message it does not recognize: it sends the request again without one feature after
+        // another and keeps each feature off for the rest of the conversation, so one refusal cost the captured
+        // client four posts. The gateway protocol the client embeds gives 403 to a caller that is
         // authenticated but not allowed, and 400 to a malformed body, which the body refusals keep.
         RelayError::ClientContract { item } => Failure {
             status: StatusCode::FORBIDDEN,
