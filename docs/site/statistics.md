@@ -62,9 +62,9 @@ id and message id, the outcome, the cooldown the attempt set, the stop reason, t
 differs from the one the router resolved, the speed, the region inference ran in, the tokens a context edit cleared, and
 a refusal's category and recommended model. It carries the five token counts, with the thinking share of the output and
 the web search and fetch calls the answer made, the cache miss reason the diagnostics beta reports, the unified
-rate-limit window readings, overage, and the serving account's rate-limit tier as the router held it when the request
-landed. No dollar is stored: every price is computed when it is read, from these counts, at the price revision in force
-when the request arrived.
+rate-limit window readings, overage, and the serving account's rate-limit tier where the router prices by it (none for a
+free organization, a usage-based seat or an account with no plan). No dollar is stored: every price is computed when it
+is read, from these counts, at the price revision in force when the request arrived.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens. A `content`
 placement, by the conversation's own messages, is a hit when the response read the prefix the entry promised. A

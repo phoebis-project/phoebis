@@ -4439,11 +4439,11 @@ async fn probe_on_the_pro_tier_of(organization_type: &str) -> (Option<String>, O
     )
 }
 
-/// A free organization reports the Pro tier and its plan prices no capacity, so its probe settles in dollars as an
-/// untiered account's does while a Pro organization's settles in the window share, and both records keep the raw tier
-/// their rows file under.
+/// A free organization reports the Pro tier and its plan prices no capacity, so its probe settles in dollars and files
+/// under no tier, as its request row does, while a Pro organization's settles in the window share under the stored
+/// tier.
 #[tokio::test]
-async fn a_free_organizations_probe_settles_in_dollars_and_keeps_the_raw_tier_beside_a_pro_ones_window_share(
+async fn a_free_organizations_probe_settles_in_dollars_under_no_tier_beside_a_pro_ones_window_share(
 ) {
     assert_eq!(
         (
@@ -4451,10 +4451,51 @@ async fn a_free_organizations_probe_settles_in_dollars_and_keeps_the_raw_tier_be
             probe_on_the_pro_tier_of("claude_pro").await,
         ),
         (
-            (Some("usd".into()), Some("default_claude_ai".into())),
+            (Some("usd".into()), None),
             (Some("window_share".into()), Some("default_claude_ai".into())),
         ),
-        "the free organization's probe settles in dollars, the Pro one's in the window share, both on the stored tier"
+        "the free organization's probe settles in dollars under no tier, the Pro one's in the share under its tier"
+    );
+}
+
+/// A usage-based seat's kept-warm credit files under no tier, as the seat's request rows do, so the seat's rows open no
+/// share map.
+#[tokio::test]
+async fn a_usage_based_seats_kept_warm_credit_files_under_no_tier_as_its_request_rows_do() {
+    let mut r = rig(RigSpec {
+        tier: Some("default_claude_zero"),
+        ..plan_funded_spec()
+    })
+    .await;
+    let body = opus_body();
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    r.advance(60_000);
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
+    let kept = r.observe_with("main", &body).await;
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    assert!(row(&r, &kept).await.kept_warm);
+    let credit = rows
+        .iter()
+        .find(|row| row.kept_warm_requests > 0)
+        .expect("the credit's row");
+    assert_eq!(
+        (credit.funding.as_str(), credit.tier.as_str()),
+        (phoebis_ledger::USAGE_BASED_FUNDING, UNATTRIBUTED),
+        "the seat's credit files under its own funding and no tier"
+    );
+    let tiers: BTreeSet<&str> = rows
+        .iter()
+        .filter(|row| row.kind == "inference")
+        .map(|row| row.tier.as_str())
+        .collect();
+    assert_eq!(
+        tiers,
+        BTreeSet::from([UNATTRIBUTED]),
+        "the credit sits beside the seat's request rows under no tier"
     );
 }
 

@@ -2147,6 +2147,49 @@ async fn a_profile_reporting_no_plan_is_stored_before_the_flag_so_the_reload_rea
     up.shutdown().await;
 }
 
+/// Under a flag that already stands, a read whose found document moves the stored plan and tier reloads the router, so
+/// the snapshot reads what the account view answers, and a read that repeats the stored document reloads nothing.
+#[tokio::test]
+async fn under_a_standing_flag_a_read_that_moves_the_stored_term_reloads_the_router_and_a_repeat_does_not(
+) {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/profile", no_plan_profile());
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    store_max_20x(&h.store, "a");
+    assert!(h.store.set_plan_ended("a", NOW - 60_000).unwrap());
+    h.router.reload().await.unwrap();
+    let row = h.store.account("a").unwrap().unwrap();
+    let tables = PlanTables::shipped();
+    let read = || {
+        QuotaPoll::refresh_profile(
+            &h.store,
+            h.usage.as_ref().unwrap(),
+            &tables,
+            &h.ledger,
+            &h.router,
+            &row,
+        )
+    };
+    read().await;
+    let moved = h.router.snapshot();
+    assert_eq!(
+        (moved.plan("a"), moved.tier("a")),
+        (Some("free"), Some("default_claude_ai")),
+        "the read that moved the stored term reloads the router"
+    );
+    read().await;
+    assert!(
+        Arc::ptr_eq(&moved, &h.router.snapshot()),
+        "a read that repeats the stored document reloads nothing"
+    );
+    assert_eq!(
+        plan_ended_at(&h, "a"),
+        Some(NOW - 60_000),
+        "the flag keeps its instant"
+    );
+    up.shutdown().await;
+}
+
 /// The warn case's subscription cost model: `default_claude_max_20x` holds a capacity row and no other word does.
 const ONE_TIER_COSTS: &str = "\
 revisions:

@@ -687,15 +687,7 @@ impl QuotaPoll {
                 ProfileRead::NoPlan
             }
             Ok(profile) => {
-                // The term carries the class and the plan beside the tier, so a document whose seat tier or
-                // organization type alone moved reloads too.
-                let term = || {
-                    store
-                        .subscription_term(&account.id)
-                        .ok()
-                        .flatten()
-                        .map(|t| (t.tier, t.usage_based, t.plan))
-                };
+                let term = || Self::stored_term(store, &account.id);
                 let before = term();
                 if let Err(error) =
                     store.set_profile(&account.id, &profile.raw.to_string(), &profile.subscription)
@@ -742,6 +734,7 @@ impl QuotaPoll {
         source: &'static str,
     ) {
         usage.plan_ended(&account.id);
+        let before = Self::stored_term(store, &account.id);
         // Stored before the flag, so the flag's reload brings the found plan and tier to the routing with it.
         if let Err(error) =
             store.set_profile(&account.id, &profile.raw.to_string(), &profile.subscription)
@@ -765,11 +758,33 @@ impl QuotaPoll {
                     tracing::debug!(account = %account.id, %error, "the router did not reload for an ended plan");
                 }
             }
-            Ok(false) => {}
+            // Neither a flag that stands nor the document's store bumps the revision, so a document that moved the
+            // stored term reloads the router here, as a read that finds a plan does.
+            Ok(false) => {
+                if before != Self::stored_term(store, &account.id) {
+                    if let Err(error) = router.reload().await {
+                        tracing::debug!(account = %account.id, %error, "the router did not reload for a new tier, class or plan");
+                    }
+                }
+            }
             Err(error) => {
                 tracing::warn!(account = %account.id, %error, "the ended plan could not be stored")
             }
         }
+    }
+
+    /// The stored term's tier, class and plan, which a profile read compares across its store to decide whether the
+    /// router reloads. The class and the plan sit beside the tier, so a document whose seat tier or organization type
+    /// alone moved reloads too.
+    fn stored_term(
+        store: &Store,
+        account_id: &str,
+    ) -> Option<(Option<String>, bool, Option<String>)> {
+        store
+            .subscription_term(account_id)
+            .ok()
+            .flatten()
+            .map(|t| (t.tier, t.usage_based, t.plan))
     }
 
     /// Clears a plan-ended flag that stands, for a profile that reports a plan: the usage poll reads the account again

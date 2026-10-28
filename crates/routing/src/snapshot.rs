@@ -249,12 +249,10 @@ impl RegistrySnapshot {
     }
     /// The stored tier where the resolved plan is one the cost table may price (`pro`, `max_5x`, `max_20x`, `max`,
     /// `team` or `enterprise`), the table's capacity rows judging the word, `None` for `free`, `usage_based` and an
-    /// account with no plan: what every pricing read keys its capacity by.
+    /// account with no plan: what every pricing read keys its capacity by. The term's own rule, which the keepalive's
+    /// rows read from the store too.
     pub fn priced_tier(&self, account_id: &str) -> Option<&str> {
-        match self.plan(account_id)? {
-            "pro" | "max_5x" | "max_20x" | "max" | "team" | "enterprise" => self.tier(account_id),
-            _ => None,
-        }
+        self.terms.get(account_id)?.priced_tier()
     }
     /// The term row's class flag, false for an account with no term row.
     pub fn usage_based(&self, account_id: &str) -> bool {

@@ -3617,15 +3617,16 @@ impl Engine {
         credit: Option<Credit>,
         complete: &RequestComplete,
     ) {
-        // The serving account's tier as the store names it, as a settlement reads it, so the credit keys the tier its
-        // request row does. Read under the lock the once-only warning keeps its set behind.
+        // The tier the router prices the serving account by, as the store's term resolves it and a settlement reads it,
+        // so the credit files under the tier its request row does, none for a free organization or a usage-based
+        // seat. Read under the lock the once-only warning keeps its set behind.
         let tier = credit
             .as_ref()
             .and_then(|credit| credit.account.as_deref())
-            .and_then(|account| match self.parts.store.subscription(account) {
-                Ok(row) => {
+            .and_then(|account| match self.parts.store.subscription_term(account) {
+                Ok(term) => {
                     inner.unreadable_tiers.remove(account);
-                    row.and_then(|s| s.tier)
+                    term.and_then(|t| t.priced_tier().map(String::from))
                 }
                 Err(error) => {
                     if inner.unreadable_tiers.insert(account.to_string()) {

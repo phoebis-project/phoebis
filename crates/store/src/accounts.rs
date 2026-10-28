@@ -692,6 +692,20 @@ pub(crate) fn subscription_term_in(
     .map_err(StoreError::from)
 }
 
+// Beside the read that resolves the term's plan, since the rule reads that word: `SubscriptionRow.plan` holds the
+// document's own `max` or `pro` flag word and cannot tell a free, Team or usage-based organization apart.
+impl SubscriptionTerm {
+    /// The stored tier where the resolved plan is one the cost table may price (`pro`, `max_5x`, `max_20x`, `max`,
+    /// `team` or `enterprise`), the table's capacity rows judging the word, `None` for `free`, `usage_based` and an
+    /// account with no plan: what every pricing read keys its capacity by, and the tier every priced row files under.
+    pub fn priced_tier(&self) -> Option<&str> {
+        match self.plan.as_deref()? {
+            "pro" | "max_5x" | "max_20x" | "max" | "team" | "enterprise" => self.tier.as_deref(),
+            _ => None,
+        }
+    }
+}
+
 /// What the profile document says about the subscription, stored beside the raw document; each field `None`
 /// where the document lacks it. The dates are epoch milliseconds parsed from the RFC 3339 strings it sends.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

@@ -1020,10 +1020,11 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         } else {
             STANDARD_SPEED
         },
-        // A credit files beside its probe's request row, in the order `funding_of` reads an attempt: `billed` on an
-        // api_key account, `usage_based` on a usage-based seat, `fast` for a fast delta (a fast answer's request row
-        // `deltas_of` keys `fast` whatever the overage flag), else the overage fact the probe's answer reported, else
-        // `plan`.
+        // A credit files beside its probe's request row, under the tier the router prices by as that row does (none
+        // for a free organization or a usage-based seat), and in the order `funding_of` reads an attempt: `billed` on
+        // an api_key account, `usage_based` on a usage-based seat, `fast` for a fast delta (a fast answer's request
+        // row `deltas_of` keys `fast` whatever the overage flag), else the overage fact the probe's answer reported,
+        // else `plan`.
         if delta.account_kind == Some(AccountKind::ApiKey) {
             BILLED_FUNDING
         } else if delta.usage_based {

@@ -4327,8 +4327,10 @@ async fn the_landing_records_the_serving_accounts_tier_as_the_registry_holds_it(
     up.shutdown().await;
 }
 
-/// The price-key case's subscription cost model: a capacity row for every tier word its documents name, so a row
-/// that keeps its tier prices a share and only a tier the landing leaves off keeps a row unpriced.
+/// The price-key case's subscription cost model: a capacity row for every tier word its documents name, so a
+/// plan-funded row that keeps its tier prices a share and only a tier the landing leaves off keeps it unpriced. The
+/// seat's row files under its own funding, which prices no share whatever its tier, so its half of the shares
+/// assertion is a guard and the tier assertion carries its rule.
 const PRICE_KEY_COSTS: &str = "\
 revisions:
   - effective: 1970-01-01
@@ -4464,7 +4466,7 @@ async fn the_landing_records_no_tier_for_a_free_organization_or_a_usage_based_se
     assert_eq!(
         (shares("max"), shares("free"), shares("seat")),
         (true, false, false),
-        "the Max row prices a share of its windows, and the free organization's and the seat's price none"
+        "the Max row prices a share of its windows and the free organization's prices none, the seat's none as a guard"
     );
     up.shutdown().await;
 }

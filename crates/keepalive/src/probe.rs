@@ -374,15 +374,15 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         } else {
             funding.map(Funding::unit).unwrap_or(SavingsUnit::Usd)
         };
-        // The tier the store names now: a share is of the window the account has at this settlement, and the record
-        // keeps that raw tier as the key its rows file under, as the request row keeps its own. The unit reads the
-        // store's tier where the snapshot's plan is one the cost model prices, so a plan the cost model does not price
-        // (a free organization) settles in dollars as an untiered account does.
+        // The tier the router prices the account by, as the store's term resolves it now: a share is of the window the
+        // account has at this settlement, and the record keeps that tier as the key its rows file under, as the
+        // request row keeps its own, none for a free organization. The unit reads it where the snapshot prices the
+        // account too, so a plan the cost model does not price settles in dollars as an untiered account does.
         let tier = (default_unit == SavingsUnit::WindowShare)
-            .then(|| match engine.parts.store.subscription(&record.account) {
-                Ok(row) => {
+            .then(|| match engine.parts.store.subscription_term(&record.account) {
+                Ok(term) => {
                     inner.unreadable_tiers.remove(&record.account);
-                    row
+                    term
                 }
                 Err(error) => {
                     if inner.unreadable_tiers.insert(record.account.clone()) {
@@ -396,7 +396,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                 }
             })
             .flatten()
-            .and_then(|s| s.tier);
+            .and_then(|t| t.priced_tier().map(String::from));
         record.tier = tier.clone();
         let snapshot = engine.parts.router.snapshot();
         let priced_tier = snapshot.priced_tier(&record.account).and(tier.as_deref());
