@@ -7913,6 +7913,85 @@ async fn a_session_no_companion_reports_stays_while_its_last_request_is_inside_t
 }
 
 #[tokio::test]
+async fn a_session_no_companion_reports_stays_while_a_subagents_pin_is_inside_the_timeout_though_mains_is_older(
+) {
+    use common::{get, json, login, NOW};
+    use std::sync::atomic::Ordering;
+    // A ten-minute timeout, so every pin below stays inside the pool's one-hour idle TTL.
+    const IDLE_MS: i64 = 600_000;
+    let parts = sessions_harness_bounded(
+        std::time::Duration::from_secs(86_400),
+        std::time::Duration::from_millis(IDLE_MS as u64),
+        |generation| {
+            let pin = |agent, account, used| {
+                context_pin(
+                    "s-in-flight",
+                    agent,
+                    "claude-opus-5",
+                    account,
+                    generation,
+                    10_000,
+                    used,
+                )
+            };
+            vec![
+                pin("main", "business", NOW - IDLE_MS - 1),
+                pin("worker-1", "direct", NOW - 5),
+            ]
+        },
+    )
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // The subagent's request is still in flight, so the ledger holds no row of the session.
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["session_id"] == "s-in-flight")
+        .map(|r| {
+            (
+                r["agent_id"].clone(),
+                r["last_used_at"].clone(),
+                r["last_request_at"].clone(),
+                r["agent_contexts"].clone(),
+            )
+        });
+    assert_eq!(
+        row,
+        Some((
+            serde_json::json!("main"),
+            serde_json::json!(NOW - IDLE_MS - 1),
+            serde_json::Value::Null,
+            serde_json::json!([agent_line(
+                "worker-1",
+                "claude-opus-5",
+                "direct",
+                None,
+                10_000,
+                NOW - 5,
+                true
+            )]),
+        )),
+        "the subagent's use inside the timeout keeps the row, which still reads main's pin, and main's older line \
+         leaves: {sessions}"
+    );
+    // Past the timeout from the subagent's last use, still inside the session expiry and the pool's idle TTL.
+    parts
+        .clock_cell
+        .store(NOW - 5 + IDLE_MS + 1, Ordering::SeqCst);
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    assert!(
+        sessions["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["session_id"] != "s-in-flight"),
+        "the row leaves once the session's newest pin use is older than the timeout: {sessions}"
+    );
+}
+
+#[tokio::test]
 async fn an_ended_session_with_no_pin_and_no_request_leaves_once_its_end_is_older_than_the_timeout()
 {
     use common::{get, json, login, NOW};
