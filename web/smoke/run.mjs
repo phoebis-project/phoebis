@@ -3887,11 +3887,12 @@ expect('/accounts/secondary', m.text(), [
       missing: [sentence, JSON.stringify(row ?? null), badge, JSON.stringify(plan ?? null), JSON.stringify(tier ?? null), `${count} of ${story.length} accounts`],
     });
     // The seed's stored document is the one the profile read found, claude_free under default_claude_ai, which resolves
-    // free.
+    // free, and a free organization's billing type reads none.
+    const billing = identityRows(page).find((r) => r.label === 'Billing type');
     results.push({
-      name: '/accounts/sunset the Plan row reads Free with its start and the tier on hover, and the Rate-limit tier row the found tier as sent',
-      ok: /^Free since \S/.test(plan?.value ?? '') && plan?.title === 'default_claude_ai' && tier?.value === 'default_claude_ai',
-      missing: [JSON.stringify(plan ?? null), JSON.stringify(tier ?? null)],
+      name: '/accounts/sunset the Plan row reads Free with its start and the tier on hover, the Rate-limit tier row the found tier as sent and the Billing type row none',
+      ok: /^Free since \S/.test(plan?.value ?? '') && plan?.title === 'default_claude_ai' && tier?.value === 'default_claude_ai' && billing?.value === 'none',
+      missing: [JSON.stringify(plan ?? null), JSON.stringify(tier ?? null), JSON.stringify(billing ?? null)],
     });
     // The list's row draws the compact bars, so it reads the compact form of the Usage card's sentence, muted.
     const none = page.container.querySelector('a.account-row[href="/accounts/sunset"] .wbar__none');
