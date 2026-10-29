@@ -298,26 +298,27 @@ it." The actions, with the dialog each opens:
 | "Delete account" | "Delete account" | `Removes {label} from its pool and deletes it. Request history stays in the ledger.` |
 
 "Identity" lists, for a subscription account, Type ("OAuth login"), Plan, the plan the router resolved, with its start
-(`Max 20x since {date}`), Rate-limit tier (`{tier}, usage-based` on a usage-based seat), Ends where known, Plan ended
-where set, Trial ends where known, Organization and Billing type, and "Edit end" opens the end editor: the checkbox
-"Canceled", the field `Ends ({zone})`, whose label names the browser's time zone, with the hint "The date the plan's
-billing settings show as its end. An annual plan is marked canceled in its final month only. The time is in this
-browser's zone.", Save and Cancel, and "Reload" where the row changed under the editor. Beside the saved end the row
-answers `plan_ended_at`, the instant a profile read found the account's organization holding no plan, which the router
-reads as an end that has passed until a profile read or a pairing finds a plan again, and the Quota view leaves the
-account out while the flag stands ([Account states](pairing.md#account-states)). The card closes on "Renewal date is not
-reported by the provider." For an API-key account it lists Type ("API key") and Windows ("None reported, billed per
-token"). "Usage" ("Remaining share of each window") draws the three windows as the Quota view does, or a usage-based
-seat's spend bar, "Spend limit" with `{used} of {limit}` over its meter and its reset line, the speed chip beside the
-5-hour bar's label on a slowed account, "Extra usage this month" on every account but a usage-based seat, with an "in
-use" badge and its amounts and spend meter where the reading carries them, the reason the provider gave for disabling
-extra usage, and a "Fast mode" line with the share of the fast lane's input and output buckets used and a chip while the
-fast lane cools, or reads "This account does not report quota windows." ("No spend reading yet" on a usage-based seat,
-or "No quota window is read since the plan ended {ago}." on an account whose plan ended), or "The first quota reading is
-in flight." from a pairing's confirm until the account's first reading lands, where a usage-based seat reads "No spend
-reading yet". "7-day trend" ("Utilization of each window, sampled every 5 minutes") draws the 5-hour, 7-day and Fable
-7-day windows of a subscription account, or "No samples yet" with "Quota samples appear after the first successful quota
-fetch."
+(`Max 20x since {date}`, and `Free since {date}` on an account whose plan ended, the plan the router resolved once the
+organization held none), Rate-limit tier (`{tier}, usage-based` on a usage-based seat, and on an account whose plan
+ended the tier the profile read found), Ends where known, Plan ended where set, with its instant, Trial ends where
+known, Organization and Billing type, and "Edit end" opens the end editor: the checkbox "Canceled", the field `Ends
+({zone})`, whose label names the browser's time zone, with the hint "The date the plan's billing settings show as its
+end. An annual plan is marked canceled in its final month only. The time is in this browser's zone.", Save and Cancel,
+and "Reload" where the row changed under the editor. Beside the saved end the row answers `plan_ended_at`, the instant a
+profile read found the account's organization holding no plan, which the router reads as an end that has passed until a
+profile read or a pairing finds a plan again, and the Quota view leaves the account out while the flag stands ([Account
+states](pairing.md#account-states)). The card closes on "Renewal date is not reported by the provider." For an API-key
+account it lists Type ("API key") and Windows ("None reported, billed per token"). "Usage" ("Remaining share of each
+window") draws the three windows as the Quota view does, or a usage-based seat's spend bar, "Spend limit" with `{used}
+of {limit}` over its meter and its reset line, the speed chip beside the 5-hour bar's label on a slowed account, "Extra
+usage this month" on every account but a usage-based seat, with an "in use" badge and its amounts and spend meter where
+the reading carries them, the reason the provider gave for disabling extra usage, and a "Fast mode" line with the share
+of the fast lane's input and output buckets used and a chip while the fast lane cools, or reads "This account does not
+report quota windows." ("No spend reading yet" on a usage-based seat, or "No quota window is read since the plan ended
+{ago}." on an account whose plan ended), or "The first quota reading is in flight." from a pairing's confirm until the
+account's first reading lands, where a usage-based seat reads "No spend reading yet". "7-day trend" ("Utilization of
+each window, sampled every 5 minutes") draws the 5-hour, 7-day and Fable 7-day windows of a subscription account, or "No
+samples yet" with "Quota samples appear after the first successful quota fetch."
 
 "Allowance left at reset" draws, for a subscription account that is not a usage-based seat, one column per weekly window
 (the 7-day window, then each model week): the share left unused at the latest reset with "left at the reset of {date}"

@@ -1704,6 +1704,22 @@ test("a usage-based candidate's Pace cell reads its remaining allowance, and the
   assert.equal(d.paceHeader(record({ candidates: [seat, plan] })), 'Spare rate, 7-day per hour', 'the seat listed first names no window, so the next subscription candidate heads the column');
 });
 
+test("a Pace title reads a paid source by its pace's shape whether or not the record carries the spend window, and its cell keeps the record's unit", () => {
+  // A seat whose share lapsed at its reset, or was not yet read, carries no spend entry while the engine still writes
+  // the paid source's pace: no hours, no deadline and no window.
+  const paid = { burn: 0, deadline: null, end: null, hours: null, remaining: 1, reset: null, score: 1, window: null };
+  const bare = d.candidateCells(candidate({ accountId: 'seat', pace: paid, planTier: 'default_claude_zero', priority: 1, tier: [0, 1, 0], windows: {} }), record(), NOW);
+  assert.deepEqual(
+    [bare.windows, bare.pace, bare.paceTitle],
+    [[['not reported'], ['not reported'], ['not reported']], '100%', '100% of its allowance left. Scored by the remaining share alone, with no division by hours.'],
+    "the spend sentence by the shape, the windows cells without the entry and the score in the record's unit",
+  );
+  const key = d.candidateCells(candidate({ accountId: 'overflow', kind: 'api_key', pace: paid, planTier: null, tier: [2, 0, 0], windows: {} }), record(), NOW);
+  assert.equal(key.paceTitle, '100% of its worst live bucket left. Scored by the remaining share alone, with no division by hours.', 'an API key keeps its own sentence');
+  const plan = d.candidateCells(candidate({ pace: { ...paid, hours: 66 }, windows: {} }), record(), NOW);
+  assert.equal(plan.paceTitle, '100% of its window left over 66 h with no reset read, less 0.00 %/h of burn: 100.00 %/h. Inside its tier, the highest spare rate wins.', 'a pace with its hours is a plan pace');
+});
+
 test('the Pace header passes over a subscription candidate whose pace names no window to the first one whose pace names one', () => {
   const pace = { burn: 0.004, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.006 };
   const lapsed = candidate({ accountId: 'lapsed', pace: { ...pace, window: null } });
@@ -1713,19 +1729,20 @@ test('the Pace header passes over a subscription candidate whose pace names no w
 });
 
 test("a Pace cell and its title read the score in the unit the record's pick step gives it, else the unit its pace's shape names", () => {
-  // A seat whose share lapsed carries no spend entry, so it reads by the plan arm, while the engine scores it as a paid
-  // source: a percent with a burn of 0, and a pace with neither hours nor window.
+  // A seat whose share lapsed carries no spend entry, so its cells read by the plan arm, while the engine scores it as a
+  // paid source: a percent with a burn of 0, and a pace with no hours, no deadline and no window, which its title reads.
   const lapsed = candidate({ accountId: 'seat', pace: { burn: 0, deadline: null, end: null, hours: null, remaining: 0.9, reset: null, score: 0.42, window: null }, planTier: 'default_claude_zero', priority: 1, tier: [0, 1, 0], windows: {} });
+  const allowance = '90% of its allowance left. Scored by the remaining share alone, with no division by hours.';
   const plan = candidate({ pace: { burn: 0.004, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.006, window: 'seven_day' } });
   const picked = (c, facts, candidates = [c]) => d.candidateCells(c, record({ candidates, walk: [wstep('pick', 'chosen', facts)] }), NOW);
   const seat = picked(lapsed, [wfact('score', 0.42, 'percent', 'seat')]);
-  assert.ok(seat.paceTitle.includes(': 42%.') && !seat.paceTitle.includes('42.00 %/h'), `the seat's title reads its score as a percent: ${seat.paceTitle}`);
-  assert.equal(seat.pace, '42%', 'the cell reads the unit its title reads');
+  assert.equal(seat.paceTitle, allowance, "the seat's title reads its allowance by its pace's shape");
+  assert.equal(seat.pace, '42%', "the cell reads the score in the pick step's unit");
   // The engine writes score facts for the members of the pick's first tier alone, so a seat ranked behind a plan
   // member finds none about itself.
   const lower = { ...lapsed, tier: [2, 1, 0] };
   const below = picked(lower, [wfact('score', 0.006, 'percent_per_hour', 'primary')], [plan, lower]);
-  assert.deepEqual([below.pace, below.paceTitle.includes(': 42%.')], ['42%', true], `a seat below the pick's tier reads the percent its pace names, not another member's unit: ${below.paceTitle}`);
+  assert.deepEqual([below.pace, below.paceTitle], ['42%', allowance], `a seat below the pick's tier reads the percent its pace names, not another member's unit: ${below.paceTitle}`);
   const later = { ...plan, priority: 2, tier: [0, 2, 0] };
   const behind = picked(later, [wfact('score', 0.42, 'percent', 'seat')], [lapsed, later]);
   assert.deepEqual([behind.pace, behind.paceTitle.includes(': 0.60 %/h.')], ['0.60 %/h', true], "a plan member below a seat's tier reads the plan unit its pace names");
@@ -1738,7 +1755,7 @@ test("a Pace cell and its title read the score in the unit the record's pick ste
   const planBare = d.candidateCells(plan, record({ candidates: [plan] }), NOW);
   assert.deepEqual([planBare.pace, planBare.paceTitle.includes(': 0.60 %/h.')], ['0.60 %/h', true], 'a plan member on a record with no pick step reads the plan unit off its hours and window');
   const bare = d.candidateCells(lapsed, record({ candidates: [lapsed] }), NOW);
-  assert.deepEqual([bare.pace, bare.paceTitle.includes(': 42%.')], ['42%', true], 'a lapsed seat on a record with no pick step reads the percent its pace names');
+  assert.deepEqual([bare.pace, bare.paceTitle], ['42%', allowance], 'a lapsed seat on a record with no pick step reads the percent its pace names');
   // A version 1 record as the decoder gives one: no burn, the pace's hours always written, and no window on a record
   // from before the engine named it.
   const old = candidate({ pace: { burn: null, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.01, window: null } });

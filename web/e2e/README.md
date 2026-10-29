@@ -50,7 +50,9 @@ panels (mock pass, under the 24-hour range on their kinds: the pool edit's `keep
 the settings row above it, sunset's backoff close reading Ended by the plan's end with no Resumed row against its Backed
 off row in the label and its Attempts row in the value, the window reset's Read from row against its Before the reset
 row, each in the label's type and left edge and the value's type, and the guardrail record's two chips on its Answer row
-against the `key` chip on their line in height, top edge and font size, every text recorded), the Diagnostics group
+against the `key` chip on their line in height, top edge and font size, every text recorded), the usage-based seat's
+Pace hover in the decision card (mock pass: on the seat's record that carries no spend window, the spend sentence its
+pace's shape names, equal to the hover on its record that carries the window, both recorded), the Diagnostics group
 (neither its heading nor a link of it on the dashboard with the expert view off, and with the Routing log or the Meter
 view open the heading over the two links in that order and the open view's link active), the Meter view's group tables
 at 1280 by 800, 1440 by 900, 1920 by 1080 and 375 by 800 (mock pass: each fit column as wide as its widest cell past the
@@ -100,6 +102,8 @@ detail's allowance grid at 1280 by 800, 1440 by 900 and 375 by 800 (mock pass: "
 drift" stacked across the pane's content box at 1280 and 375 px, each as wide as the Usage and Requests cards and in
 their title's type, and at 1440 px side by side on one top, as wide as each other and as the Usage card and each under
 half the pane, the grid inside the pane with nothing in it scrolling sideways and every card's right edge inside it),
+the plan-ended account's Identity list (mock pass: its Plan value `Free since {date}`, the plan resolved from the
+document its profile read found, against its Plan ended value in type, left edge and row height, both texts recorded),
 the account lines, the Quota cards' poll lines (short of the Refresh pill and inside the card, the backoff line in the
 serious ink, none wrapping, a failed poll's reason cut inside its line and whole in its title where a listed card draws
 one), the Quota cards' chips and reset cells (each chip and each reset cell without a projection on one line inside its

@@ -1208,6 +1208,46 @@ async function routingLogColumns(theme) {
 }
 
 /**
+ * The usage-based seat's Pace hover in the decision card: on the seat's first record, which carries no spend window,
+ * the spend sentence its pace's shape names, equal to the hover on its second record, which carries the window, both
+ * sentences recorded. Each record opens on its request's page a quarter hour either side of its decision, which the
+ * mock dates back from its load, and the bare log loads again after. The router's seed holds no usage-based seat, so
+ * only the story's pass reads it.
+ */
+async function routingLogPaceHover(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const quarter = 15 * 60_000;
+  const hoverOf = async (id, ago) => {
+    const at = clockOrigin - ago;
+    const rowAt = `.routing-log__table tbody tr[data-row="${id}/1"]`;
+    await loadAtOrigin(`/routing-log?request=${id}&from=${new Date(at - quarter).toISOString()}&to=${new Date(at + quarter).toISOString()}`, rowAt);
+    const row = page.locator(rowAt);
+    if ((await row.count()) === 0 || !(await openDecision(row))) return null;
+    return page.evaluate(() => {
+      const seat = [...document.querySelectorAll('.routing-log__panel .decision-card .decision-card__candidates tbody tr')].find((tr) => tr.querySelector('td a')?.textContent === 'contract');
+      // Pace sits third from the end whatever a spend window's merged cell spans.
+      const cell = seat?.children[seat.children.length - 3];
+      return cell ? { text: cell.textContent?.trim() ?? '', title: cell.getAttribute('title'), windows: seat.querySelector('td[colspan="3"]') ? 'spend' : 'three' } : null;
+    });
+  };
+  try {
+    const bare = await hoverOf('req_c94d1e07-b35', (21 * 60 + 40) * 1_000);
+    const spend = await hoverOf('req_7b2e5d93-a16', (10 * 60 + 30) * 1_000);
+    measurements.push(`${theme} /routing-log the seat's Pace hover ${JSON.stringify({ bare, spend })}`);
+    if (bare === null || spend === null) {
+      say(`the seat's records drew no Pace cell to read (${JSON.stringify({ bare, spend })})`);
+      return;
+    }
+    if (bare.windows !== 'three' || spend.windows !== 'spend') say(`the seat's first record draws ${bare.windows} window cells and its second ${spend.windows}, not three without the spend window and the spend cell with it`);
+    if (!(spend.title ?? '').endsWith(' of its allowance left. Scored by the remaining share alone, with no division by hours.')) say(`the seat's hover with the spend window reads ${JSON.stringify(spend.title)}, not the spend sentence`);
+    for (const what of compare(bare, spend, ['title'], "the seat's Pace hover without the spend window against the one with it")) say(what);
+  } finally {
+    await atRest();
+    await loadAtOrigin('/routing-log', '.routing-log__table');
+  }
+}
+
+/**
  * `path` loaded as the view loop loads a view, from the pass's origin, so a measure that leaves the bare view and
  * loads it again hands the shot and the measures after it the view as it first drew.
  */
@@ -7468,9 +7508,10 @@ async function accountsMeterCards(theme) {
 
 /**
  * The plan badges' words on the Accounts list: the usage-based seat's row reads "Usage-based" and the plan-ended
- * account's row its last plan's "Pro", each badge in the type and height of the first other row's at the same place in
- * its row. The list sorts by label, so the seat's row comes first and the neighbor is the first row of neither account.
- * The router's seed holds neither account, so only the story's pass reads them.
+ * account's row "Free", the plan the router resolves from the document its profile read found, each badge in the type
+ * and height of the first other row's at the same place in its row. The list sorts by label, so the seat's row comes
+ * first and the neighbor is the first row of neither account. The router's seed holds neither account, so only the
+ * story's pass reads them.
  */
 async function accountBadges(theme) {
   const say = (what) => failures.push(`${theme} /accounts: ${what}`);
@@ -7492,13 +7533,41 @@ async function accountBadges(theme) {
   });
   measurements.push(`${theme} /accounts plan badges ${JSON.stringify(read)}`);
   if (read.seat?.text !== 'Usage-based') say(`the usage-based seat's row badges ${JSON.stringify(read.seat?.text ?? null)} where its plan reads Usage-based`);
-  if (read.sunset?.text !== 'Pro') say(`the plan-ended account's row badges ${JSON.stringify(read.sunset?.text ?? null)} where its last plan reads Pro`);
+  if (read.sunset?.text !== 'Free') say(`the plan-ended account's row badges ${JSON.stringify(read.sunset?.text ?? null)} where its found plan reads Free`);
   for (const [name, badge] of [
     ['seat', read.seat],
     ['plan-ended account', read.sunset],
   ]) {
     for (const what of compare(badge, read.first, ['fontSize', 'height', 'top'], `the ${name}'s plan badge against the first other row's`)) say(what);
   }
+}
+
+/**
+ * The plan-ended account's Identity list: its Plan value reads "Free since {date}", the plan the router resolves from
+ * the document its profile read found, in the type, from the left edge and on a row of the height of its Plan ended
+ * value, both texts recorded. The router's seed holds no such account, so only the story's pass reads it.
+ */
+async function accountFreeBadge(theme) {
+  const say = (what) => failures.push(`${theme} /accounts/sunset: ${what}`);
+  await loadAtOrigin('/accounts/sunset', '.detail .kv__row');
+  const read = await page.evaluate(() => {
+    const identity = [...document.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+    const valueOf = (label) => {
+      const row = [...(identity?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === label);
+      const dt = row?.querySelector('dt');
+      const dd = row?.querySelector('dd');
+      if (!dt || !dd) return null;
+      const s = getComputedStyle(dd);
+      // A row draws no box of its own (`display: contents`), so its height is the taller of its two cells'.
+      const height = Math.max(dt.getBoundingClientRect().height, dd.getBoundingClientRect().height);
+      return { font: `${s.fontFamily} ${s.fontSize} ${s.fontWeight}`, height: Math.round(height * 10) / 10, left: Math.round(dd.getBoundingClientRect().left), text: dd.textContent?.trim() ?? '' };
+    };
+    return { ended: valueOf('Plan ended'), plan: valueOf('Plan') };
+  });
+  measurements.push(`${theme} /accounts/sunset Identity Plan and Plan ended ${JSON.stringify(read)}`);
+  if (!/^Free since \S/.test(read.plan?.text ?? '')) say(`the Plan row reads ${JSON.stringify(read.plan?.text ?? null)}, not Free with its start`);
+  if (!read.ended?.text) say('the Identity list draws no Plan ended value');
+  for (const what of compare(read.plan, read.ended, ['font', 'height', 'left'], 'the Plan value against the Plan ended value')) say(what);
 }
 
 /**
@@ -11633,12 +11702,14 @@ try {
       if (view.path === '/routing-log') await kindsPopoverInside(theme);
       if (view.path === '/routing-log') await freshRowTint(theme, view.path);
       if (view.path === '/routing-log' && mock) await routingLogPickLine(theme);
+      if (view.path === '/routing-log' && mock) await routingLogPaceHover(theme);
       if (view.path === '/sessions') await forkLink(theme);
       if (view.path === '/sessions' && mock) await sessionsReleasedLine(theme);
       if (view.path === '/settings') await copyFallback(theme);
       // The pool chip's measure and the bar's load their addresses themselves and leave the bare view.
       if (view.path === '/keys') await keysPoolSelect(theme);
       if (view.path === '/keys' && mock) await keysBars(theme);
+      if (view.path === '/accounts' && mock) await accountFreeBadge(theme);
       if (view.path === '/accounts' && mock) await firstReadingHint(theme);
       if (view.path === '/accounts' && mock) await slowedUsageBar(theme);
       if (CARD_VIEWS.includes(view.path)) await barRow(theme, view.path);

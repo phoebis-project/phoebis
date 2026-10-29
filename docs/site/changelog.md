@@ -198,12 +198,13 @@ the account to `reauth_required`, and any other failed poll, except a 429 or the
 one warning and writes a `poll_failed` event ([Pairing](pairing.md#account-states)). A usage-based seat, the rate-limit
 tier `default_claude_zero` or the seat tier `enterprise_usage_based`, reads no overage word on the Accounts view, and
 its Identity list reads "usage-based" beside its rate-limit tier ([Accounts](console.md#accounts)). An account whose
-plan ended reads the instant in its Identity list until a profile read or a pairing finds a plan again
-([Accounts](console.md#accounts)). An account whose profile reports no plan is flagged plan ended, which pauses its
-usage poll and places nothing on it until a profile read or a re-pair finds a plan again
-([Pairing](pairing.md#account-states)). While an account's plan-ended flag stands, `GET /admin/accounts` and `/{id}`
-answer its `windows` empty, as they do for a disconnected account ([Pairing](pairing.md#account-states)). Flagging the
-plan ended closes an open usage-poll backoff run, so `poll_backoff` clears with the pause
+plan ended reads Free beside its Plan ended row, the plan the router resolved after the end
+([Accounts](console.md#accounts)). An account whose plan ended reads the instant in its Identity list until a profile
+read or a pairing finds a plan again ([Accounts](console.md#accounts)). An account whose profile reports no plan is
+flagged plan ended, which pauses its usage poll and places nothing on it until a profile read or a re-pair finds a plan
+again ([Pairing](pairing.md#account-states)). While an account's plan-ended flag stands, `GET /admin/accounts` and
+`/{id}` answer its `windows` empty, as they do for a disconnected account ([Pairing](pairing.md#account-states)).
+Flagging the plan ended closes an open usage-poll backoff run, so `poll_backoff` clears with the pause
 ([Statistics](statistics.md#conditions-and-gauges)). An account's plan reads as one word resolved from its profile's
 organization type first and its rate-limit tier second (`free`, `pro`, `max_5x`, `max_20x`, `max`, `team`, `enterprise`
 or `usage_based`), and a free organization or a usage-based seat prices no capacity, so the router reads it as an

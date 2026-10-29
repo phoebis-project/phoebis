@@ -1379,10 +1379,17 @@ const PACE_WINDOW_WORD: Record<string, string> = { seven_day: '7-day', seven_day
 const PACE_WINDOW_PHRASE: Record<string, string> = { seven_day: 'the 7-day window', seven_day_fable: 'the 7-day Fable window' };
 
 /**
- * A usage-based seat: the engine writes the spend entry for a paid source whatever its tier, and files it in group 2
- * only while the pool prefers subscriptions, so the entry marks the class and the tier does not.
+ * A usage-based seat: the engine writes a paid source's pace with no hours, no deadline and no window whatever its tier,
+ * and keeps it where a share that lapsed at its reset or was not yet read leaves no spend entry, so the shape marks the
+ * class and neither the entry nor the tier does.
  */
-const isSpendSeat = (c: RecordCandidate): boolean => c.kind === 'oauth' && own(c.windows, 'spend');
+const isSpendSeat = (c: RecordCandidate): boolean => c.kind === 'oauth' && c.pace !== null && c.pace.hours === null && c.pace.deadline === null && (c.pace.window ?? null) === null;
+
+/**
+ * A seat whose record carries the spend entry: the cells draw the reading the entry holds, while the title and the
+ * header read the source's shape.
+ */
+const hasSpendEntry = (c: RecordCandidate): boolean => c.kind === 'oauth' && own(c.windows, 'spend');
 
 /**
  * The Pace column's header: the window the score read of the first subscription candidate that is no spend seat and
@@ -1476,7 +1483,7 @@ export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: 
   const atCap = c.verdict === 'out' && (c.partition === 'at_cap' || c.obstacle?.name === 'at_cap');
   const badge = c.verdict === 'ranked' && c.rank !== null ? `ranked ${ordinal(c.rank)}` : atCap ? 'at cap' : wordOf(VERDICT_BADGE, c.verdict);
   // A seat whose share lapsed carries no spend entry, so it reads as an OAuth candidate with no window at any tier.
-  const spend = isSpendSeat(c);
+  const spend = hasSpendEntry(c);
   const windows =
     c.kind === 'api_key'
       ? [[own(c.windows, 'worst_bucket') ? `worst bucket ${fmtPct(c.windows.worst_bucket.utilization)}` : 'not reported']]

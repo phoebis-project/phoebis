@@ -3815,12 +3815,14 @@ expect('/accounts/secondary', m.text(), [
   results.push({ name: '/accounts one story account carries an ended plan, and its Identity list alone draws a Plan ended row', ok: JSON.stringify(flagged) === JSON.stringify(['sunset']) && JSON.stringify(drawn) === JSON.stringify(['sunset']), missing: [`flagged ${JSON.stringify(flagged)}`, `drawn ${JSON.stringify(drawn)}`] });
   {
     // The sunset seed's profile read found no plan four hours before the mock's load, after its saved end three days
-    // back, so the route answers no window for it: its Usage card names the ended plan, its row's badge reads the last
-    // plan its stored document keeps, and the list counts it with every other account. The smoke runs under TZ=UTC, so
-    // the Plan ended hover reads 10:30, where a viewer's zone would move its hour.
+    // back, so the route answers no window for it: its Usage card names the ended plan, its row's badge and its Plan row
+    // read Free, the plan the router resolves from the document that read found, and the list counts it with every
+    // other account. The smoke runs under TZ=UTC, so the Plan ended hover reads 10:30 and the Plan row's start its UTC
+    // day, where a viewer's zone would move them.
     const sunset = story.find((a) => a.id === 'sunset');
     const page = await mount('/accounts/sunset', { now: CLOCK_ORIGIN });
     const ago = sunset ? fmtRelative(sunset.planEndedAt, CLOCK_ORIGIN) : 'no sunset';
+    const since = sunset ? new Date(sunset.subscription.since).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : 'no sunset';
     const usage = [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
     const sentence = usage?.querySelector('p.muted')?.textContent?.trim() ?? 'no sentence';
     const row = identityRows(page).find((r) => r.label === 'Plan ended');
@@ -3829,20 +3831,23 @@ expect('/accounts/secondary', m.text(), [
     const badge = page.container.querySelector('a.account-row[href="/accounts/sunset"] .account-row__head .badge')?.textContent?.trim() ?? 'no badge';
     const count = page.container.querySelector('.filter-bar__count')?.textContent?.trim() ?? 'no count';
     results.push({
-      name: '/accounts/sunset an account whose plan ended names it on its Usage card beside its Plan ended row, its row badged with the last plan',
+      name: '/accounts/sunset an account whose plan ended names it on its Usage card beside its Plan ended row, its row badged Free and its Identity list reading Free with its start and the found tier',
       ok:
         sentence.startsWith('No quota window is read since the plan ended') &&
         sentence === `No quota window is read since the plan ended ${ago}.` &&
         row?.value === ago &&
         row?.title === 'Sep 16, 2026, 10:30:00' &&
-        badge === 'Pro' &&
+        badge === 'Free' &&
+        plan?.value === `Free since ${since}` &&
+        tier?.value === 'default_claude_ai' &&
         count === `${story.length} accounts`,
-      missing: [sentence, JSON.stringify(row ?? null), badge, `${count} of ${story.length} accounts`],
+      missing: [sentence, JSON.stringify(row ?? null), badge, JSON.stringify(plan ?? null), JSON.stringify(tier ?? null), `${count} of ${story.length} accounts`],
     });
-    // The seed's stored document is its last plan's, claude_pro under default_claude_ai, which resolves pro.
+    // The seed's stored document is the one the profile read found, claude_free under default_claude_ai, which resolves
+    // free.
     results.push({
-      name: '/accounts/sunset the Plan row reads the last plan with its start and the tier on hover, and the Rate-limit tier row the tier as sent',
-      ok: /^Pro since \S/.test(plan?.value ?? '') && plan?.title === 'default_claude_ai' && tier?.value === 'default_claude_ai',
+      name: '/accounts/sunset the Plan row reads Free with its start and the tier on hover, and the Rate-limit tier row the found tier as sent',
+      ok: /^Free since \S/.test(plan?.value ?? '') && plan?.title === 'default_claude_ai' && tier?.value === 'default_claude_ai',
       missing: [JSON.stringify(plan ?? null), JSON.stringify(tier ?? null)],
     });
     page.unmount();
@@ -4732,18 +4737,20 @@ m.unmount();
   localStorage.removeItem('phoebis.unit');
 
   // Sunset's saved end passed three days back inside its week, so its latest reset is the term's end, read off the last
-  // sample of its 7-day series before the end, its seed's reading 0.46: 0.54 of a Pro week, priced at the account's
-  // stored tier against the anchor's. Its three weeks before left 0.52, 0.48 and 0.57.
+  // sample of its 7-day series before the end, its seed's reading 0.46: 0.54 of its week. Its three weeks before left
+  // 0.52, 0.48 and 0.57. Its plan reads free, which the router prices no capacity for, so under Native each figure and
+  // the total read a dash and the card reads the Free note.
   const sunset = story.get('sunset');
   const end = Date.parse(sunset.subscription.endsAt);
   const sunsetResets = [end, ...resetsBack(new Date(end + 4 * 24 * 3_600_000).toISOString(), 3)];
   const ended = await mount('/accounts/sunset', { now: CLOCK_ORIGIN });
   const term = blockOf(ended);
-  const termWant = [columnOf('7-day', 'seven_day', [1 - 0.46, 0.52, 0.48, 0.57], sunsetResets, nativeOf(sunset.subscription.rateLimitTier), { line: `left at ${instantOf(end)} term ended`, badge: 'term ended', title: hoverOf(end, "the term's end") })];
+  const termWant = [columnOf('7-day', 'seven_day', [1 - 0.46, 0.52, 0.48, 0.57], sunsetResets, () => '-', { line: `left at ${instantOf(end)} term ended`, badge: 'term ended', title: hoverOf(end, "the term's end") })];
+  const freeNote = 'Free has no priced capacity in the cost model, so the equivalents read a dash. Window shares reads the shares.';
   results.push({
-    name: "/accounts/sunset the week its term ended inside reads as its latest reset, \"left at\" its end with the neutral \"term ended\" badge, priced at its Pro tier and counted in the total",
-    ok: JSON.stringify(term?.columns) === JSON.stringify(termWant),
-    missing: [JSON.stringify(term?.columns ?? null), JSON.stringify(termWant)],
+    name: "/accounts/sunset the week its term ended inside reads as its latest reset, \"left at\" its end with the neutral \"term ended\" badge, and under Native a dash for each figure with the Free note while its plan reads free",
+    ok: sunset.subscription.plan === 'free' && JSON.stringify(term?.columns) === JSON.stringify(termWant) && term?.note === freeNote,
+    missing: [sunset.subscription.plan, JSON.stringify(term?.columns ?? null), JSON.stringify(termWant), term?.note ?? 'no note'],
   });
   ended.unmount();
 

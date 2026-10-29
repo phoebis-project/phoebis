@@ -445,8 +445,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.ok(a.subscription === null ? plan === null : s.lib.PLAN_WORDS.includes(plan), `${a.id}'s word ${plan}`);
     }
     const word = Object.fromEntries(s.accounts.map((a) => [a.id, a.subscription?.plan ?? null]));
-    // The seat's usage-based class resolves above its Enterprise type, and sunset keeps its last plan's stored document.
-    assert.deepEqual([word.contract, word.sunset], ['usage_based', 'pro']);
+    // The seat's usage-based class resolves above its Enterprise type, and sunset's stored document is the free
+    // organization the profile read found before it flagged the plan ended.
+    assert.deepEqual([word.contract, word.sunset], ['usage_based', 'free']);
     const typed = (type) => oauth.filter((a) => a.subscription?.organizationType === type && !a.usageBased);
     const sized = { default_claude_max_20x: 'max_20x', default_claude_max_5x: 'max_5x' };
     assert.ok(typed('claude_pro').length > 0 && typed('claude_pro').every((a) => a.subscription.plan === 'pro'), 'the Pro organizations read pro');
@@ -455,6 +456,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const wrong = candidates.filter(({ c }) => c.planTier !== (c.kind === 'api_key' ? null : word[c.accountId])).map(({ c, r }) => `${r.requestId}/${r.seq} ${c.accountId} ${c.planTier}`);
     assert.ok(candidates.length > 0, 'the story records candidates');
     assert.deepEqual(wrong, [], "a candidate's plan word is its account's");
+  });
+
+  test(`the story's plan-ended account reads Free on the tier its found profile reports, beside its flag, at ${at}`, async () => {
+    const s = await story;
+    const sunset = s.accounts.find((a) => a.id === 'sunset');
+    assert.deepEqual(
+      [sunset?.subscription?.plan, sunset?.subscription?.rateLimitTier, sunset?.plan, sunset?.planEndedAt !== null],
+      ['free', 'default_claude_ai', 'Free', true],
+      'the plan the found document resolves, its tier word, and the flag',
+    );
   });
 
   test(`the story's usage-based seat reads its class and its spend window with no plan window, the one member of its pool behind the key fleet, at ${at}`, async () => {
@@ -487,8 +498,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const fleetIds = new Set(rows.map((r) => r.id));
     const records = (await decisionsOf(s)).filter((r) => fleetIds.has(r.requestId));
     assert.deepEqual([...new Set(records.map((r) => r.requestId))].sort(), [...fleetIds].sort(), "each of the key's rows has its decision record");
-    const filed = records.map((r) => r.candidates.find((c) => c.accountId === 'contract')).map((c) => [c?.tier[0], c?.windows.spend?.utilization, c?.windows.spend?.source]);
-    assert.ok(filed.every(([tier, utilization, source]) => tier === 2 && utilization === 0.41 && source === 'estimated'), `the records file the seat in the metered tier with its spend window: ${JSON.stringify(filed)}`);
+    // The seat's first record reads no spend window, so the Pace hover's sentence rests on the pace's shape alone.
+    const unread = 'req_c94d1e07-b35';
+    const filed = records.filter((r) => r.requestId !== unread).map((r) => r.candidates.find((c) => c.accountId === 'contract')).map((c) => [c?.tier[0], c?.windows.spend?.utilization, c?.windows.spend?.source]);
+    assert.ok(filed.length > 0 && filed.every(([tier, utilization, source]) => tier === 2 && utilization === 0.41 && source === 'estimated'), `the records file the seat in the metered tier with its spend window: ${JSON.stringify(filed)}`);
+    const bare = records.filter((r) => r.requestId === unread).map((r) => r.candidates.find((c) => c.accountId === 'contract')).map((c) => [c?.tier[0], Object.keys(c?.windows ?? {})]);
+    assert.deepEqual(bare, [[2, []]], `${unread} files the seat in the metered tier with no window`);
     assert.ok(s.accounts.filter((a) => a.id !== 'contract').every((a) => !a.usageBased && a.spend === null), 'no other account reads the class');
     const headed = s.accounts.filter((a) => a.extraUsage?.enabled && a.extraUsage.usedCredits === null);
     assert.deepEqual(headed.map((a) => [a.id, a.extraUsage.monthlyLimitCredits, a.extraUsage.inUse]), [['nightly', null, true]], "the plan account whose newest reading a head wrote carries no amounts");
@@ -533,6 +548,20 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       // A source with no plan capacity books nothing, so its placement reaches the reserve station with no booking.
       assert.deepEqual([r.outcome.reservation, r.walk.find((w) => w.step === 'reserve')?.verdict], [null, 'none'], `${r.requestId}/${r.seq}'s reservation`);
     }
+  });
+
+  test(`every paid pace carries the whole shape the Pace hover reads, with or without the spend window, at ${at}`, async () => {
+    const s = await story;
+    const shaped = (pace) => pace !== null && pace.hours === null && pace.deadline === null && (pace.window ?? null) === null;
+    const named = ({ c, r }) => `${r.requestId}/${r.seq} ${c.accountId}`;
+    const members = (await decisionsOf(s)).flatMap((r) => r.candidates.map((c) => ({ c, r })));
+    const oauth = members.filter(({ c }) => c.kind === 'oauth');
+    assert.deepEqual(oauth.filter(({ c }) => c.pace !== null && c.pace.hours === null && !shaped(c.pace)).map(named), [], 'a pace with no hours names no deadline and no window');
+    const spends = members.filter(({ c }) => c.windows.spend !== undefined);
+    assert.ok(spends.length > 0 && spends.every(({ c }) => c.kind === 'oauth' && shaped(c.pace)), `every spend window sits on a paid pace: ${spends.filter(({ c }) => !shaped(c.pace)).map(named).join(', ')}`);
+    // The seat's first record carries no spend window (`SPEND_UNREAD` in mock/routingLog.ts), so a hover that read the
+    // entry rather than the shape would give that record the plan sentence.
+    assert.deepEqual(oauth.filter(({ c }) => shaped(c.pace) && c.windows.spend === undefined).map(named), ['req_c94d1e07-b35/1 contract'], 'the one paid candidate without the spend window');
   });
 
   test(`the story's usage-based seat knows its allowance as an API key does, and its plan windows are absent, so holdsAllowance reads true for it at the walk's two sites, at ${at}`, async () => {
@@ -2613,9 +2642,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const flag = Date.parse(a.planEndedAt);
     assert.equal(end, s.now - 3 * DAY, 'the saved end three days back');
     assert.ok(end < flag && flag < s.now, `the flag at ${a.planEndedAt} after the end at ${a.subscription.endsAt} and before now`);
-    // The router keeps the last plan's stored document when a profile read finds no plan, so the word it resolves and the
-    // badge read that plan.
-    assert.deepEqual([a.subscription.organizationType, a.subscription.rateLimitTier, a.subscription.plan, a.plan], ['claude_pro', 'default_claude_ai', 'pro', 'Pro']);
+    // The router stores the document a profile read found before it flags the account, the free organization the
+    // canceled plan left on Pro's tier word, so the word it resolves and the badge read Free.
+    assert.deepEqual([a.subscription.organizationType, a.subscription.rateLimitTier, a.subscription.plan, a.plan], ['claude_free', 'default_claude_ai', 'free', 'Free']);
     assert.deepEqual([a.windows, a.fableWindow], [[], null], 'the route answers no window for a flagged account');
     // The poll pauses at the flag, so the read that set it is the last attempt, and the last clean poll came one poll
     // interval before the end.

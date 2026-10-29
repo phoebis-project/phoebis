@@ -468,6 +468,12 @@ function rampAt(accountId: string, pool: PoolSeed, at: number): number {
   return since === null ? 0 : round3(Math.min(1, (at - since) / (pool.burnAverageSeconds * 1_000)));
 }
 
+/**
+ * The seat's first record, which carries no spend entry, as a record does where the seat's share lapsed at its reset or
+ * was not yet read, so the Pace hover's sentence rests on the paid pace's shape alone.
+ */
+const SPEND_UNREAD: ReadonlySet<string> = new Set(['req_c94d1e07-b35']);
+
 /** Every pool member's standing at the decision's time, eligible or not. */
 function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
   const r = spec.request;
@@ -500,7 +506,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       }
       // The engine writes a usage-based seat's spend window while a share is held, its source the reset's.
       const spend = a.usageBased ? a.spend : null;
-      if (spend !== null && spend.utilization !== null) {
+      if (spend !== null && spend.utilization !== null && !SPEND_UNREAD.has(r.id)) {
         windows.spend = { ageMs, ahead: null, demand: null, horizon: null, observedAt: iso(at - ageMs), projection: null, reserved: 0, reset: spend.resetsAt, source: spend.resetSource, utilization: spend.utilization };
       }
     } else {
