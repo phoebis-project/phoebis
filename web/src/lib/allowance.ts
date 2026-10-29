@@ -1,7 +1,7 @@
 import type { AllowanceAccount, AllowanceReset, AllowanceWindow, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
 import { anchorTier, pricedWindow, tierCapacity } from '@/lib/costs';
 import { equivalentShort, fmtAbsolute, fmtShare, fmtShortTime } from '@/lib/format';
-import { routerPricesPlan } from '@/lib/quota';
+import { pricedTier } from '@/lib/quota';
 import type { UnitPosition } from '@/lib/unit';
 import { WINDOW_LABEL, WINDOW_ORDER, windowKeyId } from '@/lib/windows';
 
@@ -39,19 +39,23 @@ export const FREE_NOTE = 'Free has no priced capacity in the cost model, so the 
 /**
  * What one share of the account's own window weighs in the anchor's: the tier's capacity over the anchor's on the
  * shared window the week prices on. A model week's capacity divides by one factor for every tier, so its weight is its
- * shared window's. Null for a plan the router prices no capacity for, whose stored tier the cost model may still size
- * (a Free plan stores Pro's), and where the cost model sizes neither side.
+ * shared window's. Null with no cost model, for a plan the router prices no tier for, a null tier, an unpriced window,
+ * and where the cost model sizes either side at nothing.
  */
-function capacityWeight(account: Pick<AllowanceAccount, 'plan' | 'tier'>, window: string, costs: SubscriptionCosts): number | null {
-  if (!routerPricesPlan(account.plan) || account.tier === null) return null;
+function capacityWeight(account: Pick<AllowanceAccount, 'plan' | 'tier'>, window: string, costs: SubscriptionCosts | null): number | null {
+  if (costs === null) return null;
+  const gate = pricedTier(account.plan, account.tier, costs);
+  if (gate.tier === null) return null;
   const priced = pricedWindow(costs, window);
   if (priced === null) return null;
-  const own = tierCapacity(costs, account.tier, priced.priced);
+  const own = tierCapacity(costs, gate.tier, priced.priced);
   const anchor = tierCapacity(costs, anchorTier(costs), priced.priced);
   return own === null || anchor === null || anchor === 0 ? null : own / anchor;
 }
 
-export function allowanceFigure(share: number | null, window: string, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts, unit: UnitPosition): AllowanceFigure {
+/** With no cost model an equivalent reads the unpriced dash, an arm the pages never draw, since they hold the skeleton
+ *  under an equivalent unit while the model loads. */
+export function allowanceFigure(share: number | null, window: string, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts | null, unit: UnitPosition): AllowanceFigure {
   if (share === null) return { kind: 'none', text: '-', title: NO_READING_TITLE };
   if (unit === 'share') return { kind: 'share', share, text: fmtShare(share) };
   const weight = capacityWeight(account, window, costs);
@@ -121,7 +125,7 @@ const valueOf = (figure: AllowanceFigure | undefined): number | null => (figure 
 /** One row of the Analytics card per account: its resets count, each weekly window's last and four weeks' figures, the
  *  term-ended mark of its latest reset where one is, sorted most left first on the four weeks' 7-day figure in the unit
  *  shown, then the Fable figure, then the id, an unpriced account last under the equivalent units. */
-export function allowanceRows(answer: UnusedAllowanceAnswer, costs: SubscriptionCosts, unit: UnitPosition): AllowanceRow[] {
+export function allowanceRows(answer: UnusedAllowanceAnswer, costs: SubscriptionCosts | null, unit: UnitPosition): AllowanceRow[] {
   const rows = answer.accounts.map((account): AllowanceRow => {
     const figures: AllowanceRow['figures'] = {};
     let termEndedAt: string | null = null;
@@ -131,7 +135,9 @@ export function allowanceRows(answer: UnusedAllowanceAnswer, costs: Subscription
       figures[w.window] = { counted, last: allowanceFigure(resets[0].shareLeft, w.window, account, costs, unit), weeks: allowanceFigure(total, w.window, account, costs, unit) };
       if (termEndedAt === null && resets[0].source === 'term_ended') termEndedAt = resets[0].resetAt;
     }
-    return { accountId: account.accountId, figures, resets: figures.seven_day?.counted ?? 0, termEndedAt, unpriced: capacityWeight(account, 'seven_day', costs) === null };
+    // Without the model the shares price nothing, so the plan word alone marks an account the router prices no tier for.
+    const unpriced = costs === null ? pricedTier(account.plan, account.tier, null).tier === null : capacityWeight(account, 'seven_day', costs) === null;
+    return { accountId: account.accountId, figures, resets: figures.seven_day?.counted ?? 0, termEndedAt, unpriced };
   });
   const lead = (r: AllowanceRow, window: string) => valueOf(r.figures[window]?.weeks) ?? Number.NEGATIVE_INFINITY;
   // A dash ranks under every figure, so an equal pair of dashes compares as a tie rather than as NaN.

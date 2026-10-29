@@ -168,9 +168,14 @@ create and edit refuse a body that is not a JSON object with `body must be a JSO
 answers `body must carry a members list` to an object without one ([API reference](api-reference.md)). The Dashboard,
 Guardrails, Pools and Settings views fit a 360 px window with no horizontal scroll ([Dashboard](console.md#dashboard),
 [Guardrails](console.md#guardrails), [Pools](console.md#pools), [Settings](console.md#settings)). The Dashboard's
+account cards and the Accounts list read `No window since the plan ended {ago}` on an account whose plan ended
+([Dashboard](console.md#dashboard), [Accounts](console.md#accounts)). The Dashboard's
 attention line keeps one row and folds the items past it behind a "+N more" badge, and a pool card's attention rows end
 with their age ([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The Dashboard's Estimated cost tile reads
 the day's subscription traffic against the 7-day window under Native ([Dashboard](console.md#dashboard)). The
+Dashboard's remaining cards and the Burn cards price a Team or Enterprise seat at its tier where the cost model holds
+the row, and the remaining cards name a free plan, a usage-based seat or an unheld tier under the ring with the reason
+([Dashboard](console.md#dashboard), [Analytics](console.md#analytics)). The
 Dashboard's remaining cards list each account with the most of its own window left first
 ([Dashboard](console.md#dashboard)). A Quota card's Refresh draws its reading the moment it answers, at the reading's
 instant ([Quota](console.md#quota)). A usage-based seat draws one spend bar wherever the window bars are drawn, with its
@@ -280,8 +285,10 @@ reason and its per-group table read as No divergence and Pending ([Analytics](co
 category card narrows under the Client and User agent filters and its links carry the client pattern
 ([Analytics](console.md#analytics)). The Traffic section's Refusals by category card counts the answers the upstream
 refused by category, each bar opening the Requests view on them ([Analytics](console.md#analytics)). The Traffic table's
-Error rate reads a dash for a group with no requests ([Analytics](console.md#analytics)). Under the Analytics classifier
-grouping the requests with no classifier call are labeled `none`, as the Requests facet names them
+Error rate reads a dash for a group with no requests ([Analytics](console.md#analytics)). The unused allowance card and
+the Accounts detail's allowance block draw their shares under Window shares without the cost model, so a failed settings
+read leaves them in place ([Analytics](console.md#analytics), [Accounts](console.md#accounts)). Under the Analytics
+classifier grouping the requests with no classifier call are labeled `none`, as the Requests facet names them
 ([Analytics](console.md#analytics)). Without the Model week card the Burn tab's three cards share one row from 1344 px
 ([Analytics](console.md#analytics)). On the Sessions view a released subagent's record keeps its slot of the agent cap
 for one cache TTL after the release and then leaves the engine ([Sessions](console.md#sessions)). The Sessions view

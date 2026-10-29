@@ -1,6 +1,6 @@
 import type { Account, AccountSlowDown, RateLimitWindow, Spend } from '@/api/types';
 import { fmtAbsolute, fmtMinor, fmtPct, fmtRelative } from '@/lib/format';
-import { hasSpendReading, isExpired, meterTone, projectionParts, remainingOf, slowedOf, spendResetTitle } from '@/lib/quota';
+import { hasSpendReading, isExpired, meterTone, planEndedSentence, projectionParts, remainingOf, slowedOf, spendResetTitle } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 import { WINDOW_ORDER } from '@/lib/windows';
 import { Meter } from './primitives';
@@ -111,7 +111,7 @@ export function WindowTriple({ account, now, compact = false, others = false }: 
   const w7 = account.windows.find((w) => w.id === '7d');
   const known: readonly string[] = WINDOW_ORDER;
   const rest = others ? account.windows.filter((w) => !known.includes(w.id)) : [];
-  if (!w5 && !w7 && !account.fableWindow && rest.length === 0) return <div className="wbar__none muted">No quota windows</div>;
+  if (!w5 && !w7 && !account.fableWindow && rest.length === 0) return <div className="wbar__none muted">{account.planEndedAt === null ? 'No quota windows' : planEndedSentence(account.planEndedAt, now, compact)}</div>;
   // One word each: "Fable 7d" wraps in the narrow compact columns, which drops
   // that meter a line below its two neighbors. Those columns have no room for a
   // speed chip beside the 5-hour label either, so a compact card draws it in its head.

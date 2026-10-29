@@ -328,20 +328,27 @@ test('a rollup counts an undecodable stream inside the upstream errors it is par
   for (const h of hours) assert.ok(h.requests.undecodable <= h.requests.upstream_error, `${h.hour} reads ${h.requests.undecodable} undecodable of ${h.requests.upstream_error} upstream errors`);
 });
 
-const sizedAccount = (id, rateLimitTier) => ({ id, kind: rateLimitTier === null ? 'api_key' : 'oauth', subscription: rateLimitTier === null ? null : { rateLimitTier } });
+// The plan word each tier resolves to on its own, so an account reads the plan the router would resolve for it and the
+// gate prices it by its tier. A case that needs another word passes it.
+const PLAN_OF_TIER = { claude_max_20x: 'max_20x', claude_team: 'team', default_claude_ai: 'pro', default_claude_max_20x: 'max_20x', default_claude_max_5x: 'max_5x', default_claude_zero: 'usage_based' };
+const sizedAccount = (id, rateLimitTier, plan = PLAN_OF_TIER[rateLimitTier] ?? null) => ({ id, kind: rateLimitTier === null ? 'api_key' : 'oauth', subscription: rateLimitTier === null ? null : { plan, rateLimitTier } });
 const SIZED_ACCOUNTS = [sizedAccount('stored', 'default_claude_max_20x'), sizedAccount('bare', 'claude_max_20x'), sizedAccount('team', 'claude_team'), sizedAccount('key', null)];
 const SIZED_COSTS = { ...EMPTY, capacity: { default_claude_max_20x: { fiveHour: 1, sevenDay: 1 } } };
 // Pro listed with a 7-day capacity alone, Max 5x with a 5-hour capacity alone.
 const ONE_WINDOW = { ...SIZED_COSTS, capacity: { ...SIZED_COSTS.capacity, default_claude_ai: { fiveHour: null, sevenDay: 1 }, default_claude_max_5x: { fiveHour: 1, sevenDay: null } } };
 const ONE_WINDOW_ACCOUNTS = [...SIZED_ACCOUNTS, sizedAccount('pro', 'default_claude_ai'), sizedAccount('max5', 'default_claude_max_5x')];
 
-test('an account is sized for the plan chart when the cost model lists its stored tier, whatever windows it has a capacity on', () => {
+test('an account is sized for the plan chart when the router prices its stored tier and the cost model lists it, whatever windows it has a capacity on', () => {
   assert.deepEqual([...d.sizedAccounts(SIZED_ACCOUNTS, SIZED_COSTS)].sort(), ['bare', 'stored']);
   assert.deepEqual(
     [...d.sizedAccounts(ONE_WINDOW_ACCOUNTS, ONE_WINDOW)].sort(),
     ['bare', 'max5', 'pro', 'stored'],
     'a listed tier with no capacity on a window draws that window as model unlisted, never as tier unknown',
   );
+  // Each tier is one the cost model lists, so the plan word alone leaves a free plan and a usage-based seat out and
+  // keeps a Team seat.
+  const gated = [sizedAccount('free', 'default_claude_ai', 'free'), sizedAccount('seat', 'default_claude_max_5x', 'usage_based'), sizedAccount('teamseat', 'default_claude_ai', 'team')];
+  assert.deepEqual([...d.sizedAccounts([...ONE_WINDOW_ACCOUNTS, ...gated], ONE_WINDOW)].sort(), ['bare', 'max5', 'pro', 'stored', 'teamseat']);
 });
 
 test('an account is sized on a window only when its listed tier has a capacity there, as the shed preview reads the 5-hour one', () => {
@@ -460,7 +467,7 @@ test('every burn read reads the accounts again, so a tier a profile refresh supp
     getAnalyticsBurn: async () => ({ bucketSeconds: 3_600, points: [] }),
     listAccounts: async () => {
       const rateLimitTier = reads.shift();
-      return [{ id: 'primary', kind: 'oauth', subscription: rateLimitTier === null ? null : { rateLimitTier } }];
+      return [{ id: 'primary', kind: 'oauth', subscription: rateLimitTier === null ? null : { plan: 'max_20x', rateLimitTier } }];
     },
   };
   const range = { from: new Date(0).toISOString(), to: new Date(HOUR).toISOString() };

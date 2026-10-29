@@ -1,7 +1,8 @@
 import type { Api } from '@/api/client';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, HeldPoint, PinMigrationReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
-import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
+import { tierCapacity, type CostWindow } from '@/lib/costs';
 import { earlierHolderLabel, equivalentShort, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtShare, fmtUsd, withEstimate } from '@/lib/format';
+import { pricedTier } from '@/lib/quota';
 import { ageWord } from '@/lib/time';
 import type { UnitPosition } from '@/lib/unit';
 import { WINDOW_LABEL, windowKeyId } from '@/lib/windows';
@@ -225,15 +226,19 @@ function burnLabelOf(groupBy: BurnGroup, key: string): string {
 }
 
 /**
- * The accounts whose stored tier the cost model sizes, matched as the ledger matches it: as stored, then with the
- * `default_` prefix taken off or put on, since only one spelling has been seen on the wire. The plan chart reads a
- * listed tier as sized and draws a window it has no capacity on as model unlisted. With `window`, a tier sizes an
- * account only where it has a capacity on that window, as the shed preview needs for the 5-hour window: the sessions
- * route reads no burn for a pin of a tier without one.
+ * The accounts the router prices a tier for (`pricedTier`), whose stored tier the cost model lists, matched as the
+ * ledger matches it: as stored, then with the `default_` prefix taken off or put on, since only one spelling has been
+ * seen on the wire. The plan chart reads a listed tier as sized and draws a window it has no capacity on as model
+ * unlisted. With `window`, a tier sizes an account only where it has a capacity on that window, as the shed preview
+ * needs for the 5-hour window: the sessions route reads no burn for a pin of a tier without one.
  */
 export function sizedAccounts(accounts: Account[], costs: SubscriptionCosts, window?: CostWindow): Set<string> {
-  const sizes = (tier: string) => (window === undefined ? tierRow(costs, tier) !== undefined : tierCapacity(costs, tier, window) !== null);
-  return new Set(accounts.filter((a) => a.subscription !== null && sizes(a.subscription.rateLimitTier)).map((a) => a.id));
+  const sizes = (a: Account) => {
+    if (a.subscription === null) return false;
+    const priced = pricedTier(a.subscription.plan, a.subscription.rateLimitTier, costs);
+    return priced.tier !== null && (window === undefined || tierCapacity(costs, priced.tier, window) !== null);
+  };
+  return new Set(accounts.filter(sizes).map((a) => a.id));
 }
 
 export const SHARE_NOTE = "Shares read under the account grouping alone, since shares of different accounts' windows do not add.";

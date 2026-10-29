@@ -25,7 +25,7 @@ import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, f
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { latestPerWindow, meterGroups, meterWindowWord } from '@/lib/meter';
-import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
+import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope, planEndedSentence, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { speedHover } from '@/lib/selection';
 import { joinTrend } from '@/lib/trend';
@@ -678,7 +678,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
             awaitingReading ? (
               <p className="muted">The first quota reading is in flight.</p>
             ) : account.planEndedAt !== null ? (
-              <p className="muted">{`No quota window is read since the plan ended ${fmtRelative(account.planEndedAt, now)}.`}</p>
+              <p className="muted">{planEndedSentence(account.planEndedAt, now)}</p>
             ) : (
               <p className="muted">This account does not report quota windows.</p>
             )
@@ -732,7 +732,8 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
           <AllowanceCard
             answer={allowance.data === null ? undefined : (allowance.data.accounts.find((a) => a.accountId === account.id) ?? null)}
             costs={settings.data?.subscriptionCosts ?? null}
-            error={allowance.error ?? settings.error}
+            // The shares price nothing, so under Window shares a failed settings read leaves the block standing.
+            error={allowance.error ?? (unit === 'share' ? null : settings.error)}
             onRetry={() => {
               allowance.reload();
               settings.reload();
@@ -843,7 +844,8 @@ function AllowanceCard({ answer, costs, error, onRetry, unit }: { answer: Allowa
             </Button>
           }
         />
-      ) : answer === undefined || costs === null ? (
+      ) : answer === undefined || (costs === null && unit !== 'share') ? (
+        // Window shares price nothing, so the shares draw without waiting on the cost model.
         <Skeleton height={120} />
       ) : answer === null ? (
         <p className="muted">{"No weekly reset recorded yet. The first shows once this account's week ends."}</p>
@@ -912,7 +914,7 @@ function DriftCard({ accountId, answer, error, onRetry }: { accountId: string; a
   );
 }
 
-function AllowanceColumn({ account, costs, unit, window: w }: { account: AllowanceAccount; costs: SubscriptionCosts; unit: UnitPosition; window: AllowanceWindow }) {
+function AllowanceColumn({ account, costs, unit, window: w }: { account: AllowanceAccount; costs: SubscriptionCosts | null; unit: UnitPosition; window: AllowanceWindow }) {
   const { counted, resets, total } = newestResets(w);
   const [latest, ...before] = resets;
   const figure = (share: number | null) => allowanceFigure(share, w.window, account, costs, unit);

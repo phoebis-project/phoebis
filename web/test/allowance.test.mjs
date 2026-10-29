@@ -91,28 +91,35 @@ test('a figure reads a dash where the plan is Free, the cost model sizes no capa
   assert.deepEqual(texts.filter((t) => t.includes('~')), [], 'no model is priced here, so no figure is estimated');
 });
 
-test('a Team or Enterprise plan reads the dash on a tier the cost model sizes', () => {
-  // Each tier is one the file's costs size, so only the plan word keeps these accounts unpriced, as the router's does.
-  const plans = [
-    { plan: 'team', tier: 'default_claude_ai' },
-    { plan: 'team', tier: 'default_claude_max_20x' },
-    { plan: 'enterprise', tier: 'default_claude_max_5x' },
+test('a Team or Enterprise seat prices through its tier where the cost model holds the row and reads the dash where it lacks it', () => {
+  // Each held tier prices as the plan it resolves to on its own would, at that tier's weight.
+  const held = [
+    [{ plan: 'team', tier: 'default_claude_ai' }, PRO],
+    [{ plan: 'team', tier: 'default_claude_max_20x' }, MAX_20X],
+    [{ plan: 'enterprise', tier: 'default_claude_max_5x' }, MAX_5X],
   ];
-  for (const plan of plans) {
+  for (const [seat, same] of held) {
     for (const window of ['seven_day', 'seven_day_fable']) {
-      for (const unit of EQUIVALENT_UNITS) assert.deepEqual(d.allowanceFigure(0.5, window, plan, COSTS, unit), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${plan.plan} on ${plan.tier}, ${window}, ${unit}`);
-      assert.deepEqual(d.allowanceFigure(0.5, window, plan, COSTS, 'share'), { kind: 'share', share: 0.5, text: '50%' }, `${plan.plan} on ${plan.tier}, ${window}: Window shares reads the share`);
+      for (const unit of EQUIVALENT_UNITS) {
+        const figure = d.allowanceFigure(0.5, window, seat, COSTS, unit);
+        assert.equal(figure.kind, 'equivalent', `${seat.plan} on ${seat.tier}, ${window}, ${unit}`);
+        assert.deepEqual(figure, d.allowanceFigure(0.5, window, same, COSTS, unit), `${seat.plan} on ${seat.tier}, ${window}, ${unit}: the tier's weight`);
+      }
+      assert.deepEqual(d.allowanceFigure(0.5, window, seat, COSTS, 'share'), { kind: 'share', share: 0.5, text: '50%' }, `${seat.plan} on ${seat.tier}, ${window}: Window shares reads the share`);
     }
   }
-  // The Team account leaves more than the Max 20x one, so only its plan ranks it last.
+  // The file's costs hold no Team row, so an Enterprise seat on that tier prices nothing, as the router's does.
+  const unheld = { plan: 'enterprise', tier: 'default_claude_team' };
+  for (const unit of EQUIVALENT_UNITS) assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', unheld, COSTS, unit), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${unit}: a tier the cost model lacks`);
+  // The Team account leaves three of its Max 20x weeks against the Max 20x account's one, so it ranks first.
   const answer = {
     accounts: [accountOf('max', MAX_20X, [windowOf('seven_day', [0.25, 0.25, 0.25, 0.25])]), accountOf('team', { plan: 'team', tier: 'default_claude_max_20x' }, [windowOf('seven_day', [0.75, 0.75, 0.75, 0.75])])],
     from: iso(NOW - 29 * DAY),
     to: iso(NOW),
   };
   const rows = d.allowanceRows(answer, COSTS, 'native');
-  assert.deepEqual(rows.map((r) => [r.accountId, r.unpriced]), [['max', false], ['team', true]]);
-  assert.equal(d.fleetFigures(rows, 'native').note, '1 account priced, team left out unpriced');
+  assert.deepEqual(rows.map((r) => [r.accountId, r.unpriced]), [['team', false], ['max', false]]);
+  assert.equal(d.fleetFigures(rows, 'native').note, '2 accounts priced');
 });
 
 test('the subtitle names the unit the figures read in', () => {
@@ -181,6 +188,16 @@ test('the rows sort most left first on the four weeks\' 7-day figure, then the F
   assert.deepEqual(shares.map((r) => [r.accountId, r.termEndedAt]).filter(([, at]) => at !== null), [['foxtrot', iso(NOW - 3 * DAY)]]);
   const charlie = d.allowanceRows(RANKED, COSTS, 'native').find((r) => r.accountId === 'charlie');
   assert.deepEqual([charlie.figures.seven_day.last.kind, charlie.figures.seven_day.weeks.kind], ['unpriced', 'unpriced']);
+});
+
+test('under Window shares the rows read the shares with no cost model, the unpriced mark read off the plan word', () => {
+  // The shares price nothing, so the card draws them before the cost model lands or after its read failed.
+  const bare = d.allowanceRows(RANKED, null, 'share');
+  assert.deepEqual(bare, d.allowanceRows(RANKED, COSTS, 'share'));
+  assert.deepEqual(bare.map((r) => [r.accountId, r.unpriced]), [['charlie', true], ['alpha', false], ['delta', false], ['echo', false], ['bravo', false], ['foxtrot', false]]);
+  assert.deepEqual(d.fleetFigures(bare, 'share'), d.fleetFigures(d.allowanceRows(RANKED, COSTS, 'share'), 'share'));
+  // An equivalent with no cost model reads the dash, an arm the pages never draw, since they wait on the model there.
+  for (const unit of EQUIVALENT_UNITS) assert.deepEqual(d.allowanceFigure(0.33, 'seven_day', PRO, null, unit), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, unit);
 });
 
 /** Nine accounts with 17 resets of the 7-day window and three of the Fable week, the ninth on a Free plan. */

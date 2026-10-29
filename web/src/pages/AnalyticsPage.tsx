@@ -1166,7 +1166,8 @@ export function AnalyticsPage() {
         <Section id="accounts" shown={shown} title="Accounts" meta="Peak utilization, window usage, pace, ineligible time, and pin churn per account">
           <AccountsSection
             accountIds={filters.accountId}
-            allowance={{ answer: unusedAllowance.stale ? null : unusedAllowance.data, costs: costSettings.data?.subscriptionCosts ?? null, error: unusedAllowance.error ?? costSettings.error }}
+            // The shares price nothing, so under Window shares a failed settings read leaves the card standing.
+            allowance={{ answer: unusedAllowance.stale ? null : unusedAllowance.data, costs: costSettings.data?.subscriptionCosts ?? null, error: unusedAllowance.error ?? (unit === 'share' ? null : costSettings.error) }}
             bucketMs={bucketMs}
             error={accountRollups.error}
             loading={accountRollups.data === null || accountRollups.stale}
@@ -2455,7 +2456,7 @@ const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription acco
  *  and overage answers, and its own label names the plan unit, which the dollars axis does not chart. */
 const SPEND_REST = 'Other (fast mode or overage)';
 const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown: 'Other (fast mode or overage, tier unknown)', window_share: SPEND_REST };
-const TIER_UNKNOWN_HINT = 'No tier on file, or one the cost model does not size, so no share of its windows is priced';
+const TIER_UNKNOWN_HINT = 'A free plan, a usage-based seat, no tier on file or one the cost model does not hold, so no share of its windows is priced';
 const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model of no known tier, or on a tier the cost model has no capacity for on that window, prices no share there and draws no point';
 // "Model tier", since the tier unknown entries beside it name the account tier.
 const ESTIMATED_HINT = 'A bucket whose model has no measured weight and reads the latest weighed model of its model tier';
@@ -2681,7 +2682,7 @@ function BurnCharts({
               ? undefined
               : unpriced.length > 0
                 ? byAccount
-                  ? `No subscription account in range has a tier the cost model sizes: ${unpriced.map(nameOf).join(', ')}.`
+                  ? `No subscription account in range has a tier the router prices: ${unpriced.map(nameOf).join(', ')}.`
                   : `The named account has ${TIER_UNKNOWN_HINT.charAt(0).toLowerCase()}${TIER_UNKNOWN_HINT.slice(1)}.`
                 : figure === 'share'
                   ? 'No subscription account burned in this range.'
@@ -3058,11 +3059,13 @@ const allowanceCell = (key: string, figure: AllowanceFigure | undefined) => (
 
 /**
  * "Unused allowance by account": each subscription account's weekly windows over the last four weeks under the
- * Accounts filter, ranked most left first, with the fleet's two figures over the table. A failed read, its own or the
- * cost model's, draws in place of the rows and the figures, so no figure stands without the read it prices.
+ * Accounts filter, ranked most left first, with the fleet's two figures over the table. A failed read, its own or under
+ * an equivalent unit the cost model's, draws in place of the rows and the figures, so no figure stands without the read
+ * it prices.
  */
 function AllowanceTable({ answer, costs, error, unit }: { answer: UnusedAllowanceAnswer | null; costs: SubscriptionCosts | null; error: string | null; unit: UnitPosition }) {
-  const rows = useMemo(() => (answer === null || costs === null ? null : allowanceRows(answer, costs, unit)), [answer, costs, unit]);
+  // Window shares price nothing, so the rows draw without waiting on the cost model.
+  const rows = useMemo(() => (answer === null || (costs === null && unit !== 'share') ? null : allowanceRows(answer, costs, unit)), [answer, costs, unit]);
   const windows = useMemo(() => weeklyKeys(answer?.accounts ?? []), [answer]);
   const fleet = rows === null ? null : fleetFigures(rows, unit);
   const shares = unit === 'share';

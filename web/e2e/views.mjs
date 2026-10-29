@@ -7676,6 +7676,58 @@ async function accountFreeBadge(theme) {
 }
 
 /**
+ * The sentence an account whose plan ended reads in its window bars' place. On `/` and `/accounts` the plan-ended
+ * account's card or row reads the compact form, from the left edge inside its card of the nearest neighbor's window
+ * bars and in the ink of their first label, the two types recorded, and on `/` both quota rings name the usage-based
+ * seat with its reason. On `/accounts/sunset` the Usage card's long form reads in the ink of the Identity card's note,
+ * the two types recorded. Each text is recorded. The router's seed holds no such account, so only the story's pass
+ * reads it.
+ */
+async function planEndedLines(theme, path) {
+  if (!mock) return;
+  const say = (what) => failures.push(`${theme} ${path}: ${what}`);
+  if (path === '/accounts/sunset') await loadAtOrigin(path, '.detail .card');
+  const read = await page.evaluate((where) => {
+    const type = (el) => ({ fontSize: getComputedStyle(el).fontSize, ink: getComputedStyle(el).color });
+    if (where === '/accounts/sunset') {
+      const card = (title) => [...document.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+      const sentence = card('Usage')?.querySelector('p.muted');
+      const note = card('Identity')?.querySelector('p.muted.detail__note');
+      return { note: note ? { ...type(note), text: note.textContent?.trim() ?? '' } : null, sentence: sentence ? { ...type(sentence), text: sentence.textContent?.trim() ?? '' } : null };
+    }
+    const items = [...document.querySelectorAll(where === '/' ? 'a.account-mini' : 'a.account-row')];
+    const at = items.findIndex((a) => a.getAttribute('href') === '/accounts/sunset');
+    const own = at === -1 ? null : items[at];
+    const none = own?.querySelector(':scope > .wbar__none') ?? null;
+    // The nearest card or row drawing the window triple, the one before it first.
+    const neighbor = at === -1 ? null : ([...items.slice(0, at).reverse(), ...items.slice(at + 1)].find((a) => a.querySelector(':scope > .wbars--3')) ?? null);
+    const bars = neighbor?.querySelector(':scope > .wbars--3') ?? null;
+    const label = bars?.querySelector('.wbar__label') ?? null;
+    const leftIn = (el, box) => Math.round((el.getBoundingClientRect().left - box.getBoundingClientRect().left) * 10) / 10;
+    const ringCards = where === '/' ? [...document.querySelectorAll('.card')].filter((c) => /remaining$/.test(c.querySelector('.card__title')?.textContent ?? '')) : [];
+    return {
+      neighbor: neighbor && bars && label ? { href: neighbor.getAttribute('href'), ink: type(label).ink, labelFontSize: type(label).fontSize, left: leftIn(bars, neighbor) } : null,
+      rings: ringCards.map((c) => ({ names: [...c.querySelectorAll('.remaining__left-out li')].map((li) => li.textContent?.trim() ?? ''), title: c.querySelector('.card__title')?.textContent ?? '' })),
+      sentence: own && none ? { ...type(none), left: leftIn(none, own), muted: none.classList.contains('muted'), text: none.textContent?.trim() ?? '' } : null,
+    };
+  }, path);
+  measurements.push(`${theme} ${path} plan-ended sentence ${JSON.stringify(read)}`);
+  if (path === '/accounts/sunset') {
+    if (!/^No quota window is read since the plan ended .+ ago\.$/.test(read.sentence?.text ?? '')) say(`the Usage card reads ${JSON.stringify(read.sentence?.text ?? null)}, not the long plan-ended sentence with its age`);
+    for (const what of compare(read.sentence, read.note, ['ink'], "the Usage card's plan-ended sentence against the Identity card's note")) say(what);
+    return;
+  }
+  const kind = path === '/' ? 'card' : 'row';
+  if (!read.sentence?.muted || !/^No window since the plan ended .+ ago$/.test(read.sentence.text)) say(`the plan-ended account's ${kind} reads ${JSON.stringify(read.sentence ?? null)} in its window bars' place, not the compact plan-ended sentence with its age, muted`);
+  for (const what of compare(read.sentence, read.neighbor, ['ink', 'left'], `the plan-ended account's ${kind} sentence against the neighboring ${kind}'s window bars and their first label`)) say(what);
+  if (path === '/') {
+    const want = JSON.stringify(['contract: a usage-based seat']);
+    for (const ring of read.rings) if (JSON.stringify(ring.names) !== want) say(`the "${ring.title}" card names ${JSON.stringify(ring.names)} under its ring, not the usage-based seat alone with its reason`);
+    if (read.rings.length !== 2) say(`${read.rings.length} remaining cards, expected 5h and 7d`);
+  }
+}
+
+/**
  * The Accounts bar's sort control: its button in the height, top edge, type size and weight of the Add filter button
  * beside it, recorded with its text and title, then opened: the popover inside the window under the button, its six
  * radio rows (the four keys, then Ascending and Descending) one height, the checked key's and direction's marks drawn
@@ -11607,6 +11659,7 @@ try {
         if (mock) await recentDollarCosts(theme);
         await remainingCards(theme);
         await ringLinesSpan(theme);
+        await planEndedLines(theme, view.path);
         // Its loads end on the bare dashboard, so the measures after it read the view as it first drew.
         if (mock) await dashboardUnpricedTile(theme);
       }
@@ -11686,6 +11739,7 @@ try {
       }
       if (view.path === '/accounts') {
         if (mock) await accountBadges(theme);
+        await planEndedLines(theme, view.path);
         await accountsSortControl(theme);
         if (mock) await accountsMeterCards(theme);
         await tableColumns(theme, 'accounts', '.cooling-down table', ['Reason']);
@@ -11817,6 +11871,7 @@ try {
       if (view.path === '/keys') await keysPoolSelect(theme);
       if (view.path === '/keys' && mock) await keysBars(theme);
       if (view.path === '/accounts' && mock) await accountFreeBadge(theme);
+      if (view.path === '/accounts') await planEndedLines(theme, '/accounts/sunset');
       if (view.path === '/accounts' && mock) await firstReadingHint(theme);
       if (view.path === '/accounts' && mock) await slowedUsageBar(theme);
       if (CARD_VIEWS.includes(view.path)) await barRow(theme, view.path);

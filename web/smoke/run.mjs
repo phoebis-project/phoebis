@@ -1064,10 +1064,13 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   });
   const named = (id) => [...(rings[id]?.querySelectorAll('.remaining__left-out li') ?? [])].map((li) => li.textContent ?? '');
   const onRing = (id) => [...(rings[id]?.querySelectorAll('.remaining__list a, .remaining__left-out li') ?? [])].map((e) => (e.textContent ?? '').split(':')[0]);
-  const strays = ['5h', '7d'].flatMap((id) => onRing(id).filter((n) => n === 'legacy' || n === 'spare').map((n) => `${n} on the ${id} ring`));
+  const strays = ['5h', '7d'].flatMap((id) => onRing(id).filter((n) => n === 'legacy' || n === 'spare' || n === 'sunset').map((n) => `${n} on the ${id} ring`));
+  // The contract seed is a usage-based seat, which the router prices no tier for and which reports no plan window, so
+  // both rings name it with the gate's word.
+  const seat = JSON.stringify(['contract: a usage-based seat']);
   results.push({
-    name: '/ every listed tier is sized on both windows, so neither ring names an account',
-    ok: lineOf('5h') !== '' && lineOf('7d') !== '' && named('7d').length === 0 && named('5h').length === 0 && strays.length === 0,
+    name: '/ every listed tier is sized on both windows, so each ring names the usage-based seat alone, with its reason',
+    ok: lineOf('5h') !== '' && lineOf('7d') !== '' && JSON.stringify(named('7d')) === seat && JSON.stringify(named('5h')) === seat && JSON.stringify(f5.leftOut.map((o) => `${o.label}: ${o.reason}`)) === seat && strays.length === 0,
     missing: [`7-day ${JSON.stringify(named('7d'))}`, `5-hour ${JSON.stringify(named('5h'))}`, ...strays],
   });
   const titled = (id) => {
@@ -1119,6 +1122,21 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     name: '/ each remaining list reads the account with the most of its own window left first, the shares it prints running down the list',
     ok: lists.every((l) => l.rows.length === 5 && l.rows.every(([label, share]) => label !== '' && /^\d+%$/.test(share)) && descending(l.rows)),
     missing: lists.map((l) => `${l.title}: ${JSON.stringify(l.rows)}`),
+  });
+}
+{
+  // The sunset seed's plan ended about four hours before the anchor and the route answers it no window, so its card
+  // reads the compact plan-ended sentence with that age in its window bars' place, in the muted ink.
+  const page = await mount('/', { now: CLOCK_ORIGIN });
+  const sunset = (await api.listAccounts()).find((a) => a.id === 'sunset');
+  const card = page.container.querySelector('a.account-mini[href="/accounts/sunset"]');
+  const none = card?.querySelector('.wbar__none');
+  const read = { bars: card?.querySelectorAll('.wbar').length ?? null, muted: none?.classList.contains('muted') ?? null, text: none?.textContent?.trim() ?? null };
+  page.unmount();
+  results.push({
+    name: "/ the plan-ended account's card reads the compact plan-ended sentence with its age in its window bars' place, muted",
+    ok: sunset !== undefined && read.text === `No window since the plan ended ${fmtRelative(sunset.planEndedAt, CLOCK_ORIGIN)}` && read.muted === true && read.bars === 0,
+    missing: [JSON.stringify(read)],
   });
 }
 {
@@ -3873,6 +3891,14 @@ expect('/accounts/secondary', m.text(), [
       ok: /^Free since \S/.test(plan?.value ?? '') && plan?.title === 'default_claude_ai' && tier?.value === 'default_claude_ai',
       missing: [JSON.stringify(plan ?? null), JSON.stringify(tier ?? null)],
     });
+    // The list's row draws the compact bars, so it reads the compact form of the Usage card's sentence, muted.
+    const none = page.container.querySelector('a.account-row[href="/accounts/sunset"] .wbar__none');
+    const listed = { muted: none?.classList.contains('muted') ?? null, text: none?.textContent?.trim() ?? null };
+    results.push({
+      name: "/accounts the plan-ended account's row reads the compact plan-ended sentence with its age in its window bars' place, muted",
+      ok: listed.text === `No window since the plan ended ${ago}` && listed.muted === true,
+      missing: [JSON.stringify(listed), ago],
+    });
     page.unmount();
   }
   // Three hours before the anchor, which the smoke's UTC zone prints as 11:30 on the hover.
@@ -4825,6 +4851,22 @@ m.unmount();
     missing: [JSON.stringify(down), JSON.stringify(back?.columns ?? null)],
   });
   failed.unmount();
+
+  // Window shares price nothing, so with every settings read failing the block draws its shares with no skeleton and
+  // no error. The detail mounts once the list answers, after the shell's own read, so every read fails, not the next.
+  localStorage.setItem('phoebis.unit', 'share');
+  const outage = failCalls({ getSettings: '/admin/settings' }, 'the configuration store is unavailable');
+  const unmodeled = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  const bare = blockOf(unmodeled);
+  const skeleton = [...unmodeled.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Allowance left at reset')?.querySelector('.skeleton') ?? null;
+  unmodeled.unmount();
+  outage.restore();
+  localStorage.removeItem('phoebis.unit');
+  results.push({
+    name: '/accounts/primary under Window shares with the settings read failing the block draws its shares, with no skeleton and no error',
+    ok: bare !== null && bare.error === null && skeleton === null && JSON.stringify(bare.columns) === JSON.stringify(sharesWant),
+    missing: [JSON.stringify(bare), skeleton === null ? 'no skeleton' : 'a skeleton', JSON.stringify(sharesWant)],
+  });
 
   // The block reads once per account, again on the bar's Refresh and once the list's poll answers a weekly window past
   // its reset, and not at the list's 5 s cadence, since a weekly row changes once a week.
@@ -18387,6 +18429,26 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   failed.unmount();
   delete api.getAnalyticsUnusedAllowance;
   results.push({ name: '/analytics a failed unused allowance read draws the error state in the card', ok: down?.error === 'Could not load the unused allowance' && down.ids.length === 0, missing: [JSON.stringify(down)] });
+  // Window shares price nothing, so with the settings read failing the card draws its rows with their shares and no
+  // error, while under Native, which prices through the cost model, the same failure draws the card's error state.
+  localStorage.setItem('phoebis.unit', 'share');
+  failNextCall('getSettings', '/admin/settings', 'the configuration store is unavailable');
+  const unmodeled = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
+  const bare = read(unmodeled);
+  unmodeled.unmount();
+  delete api.getSettings;
+  localStorage.removeItem('phoebis.unit');
+  results.push({
+    name: '/analytics under Window shares with the settings read failing the unused allowance card draws its rows with their shares and no error',
+    ok: bare !== null && bare.error === null && JSON.stringify(bare.ids) === '["secondary","sunset","studio","primary","nightly"]' && JSON.stringify(bare.rows) === JSON.stringify(shares?.rows) && JSON.stringify(bare.totals) === JSON.stringify(shares?.totals),
+    missing: [JSON.stringify(bare && { error: bare.error, ids: bare.ids, rows: bare.rows, totals: bare.totals })],
+  });
+  failNextCall('getSettings', '/admin/settings', 'the configuration store is unavailable');
+  const unpriced = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
+  const refused = read(unpriced);
+  unpriced.unmount();
+  delete api.getSettings;
+  results.push({ name: '/analytics under Native with the settings read failing the unused allowance card draws its error state', ok: refused?.error === 'Could not load the unused allowance' && refused.ids.length === 0, missing: [JSON.stringify(refused)] });
 
   // A weekly row changes once a week, so the card reads once per Accounts filter and again once the registry's poll
   // answers a weekly window past its reset, never at the list's 5 s cadence, under a custom range whose end is still
@@ -20685,17 +20747,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         sizedId !== undefined &&
         tierless.length === 1 &&
         valueOf(tierless[0]) === 'tier unknown' &&
-        tierless[0].getAttribute('title') === 'No tier on file, or one the cost model does not size, so no share of its windows is priced',
+        tierless[0].getAttribute('title') === 'A free plan, a usage-based seat, no tier on file or one the cost model does not hold, so no share of its windows is priced',
       missing: [`sized ${sizedId}`, ...items.map((li) => `${labelOf(li)}=${valueOf(li)}`)],
     });
     results.push({
       name: '/analytics under Window shares the plan cards with no sized subscription account name the unsized ones in their empty state',
-      ok: emptied.every((e) => e === 'No subscription account in range has a tier the cost model sizes: tierless.'),
+      ok: emptied.every((e) => e === 'No subscription account in range has a tier the router prices: tierless.'),
       missing: emptied,
     });
     results.push({
       name: "/analytics under Window shares grouped by model with an unsized account named the plan cards' empty state names the account's tier",
-      ok: namedEmpty.every((e) => e === 'The named account has no tier on file, or one the cost model does not size, so no share of its windows is priced.'),
+      ok: namedEmpty.every((e) => e === 'The named account has a free plan, a usage-based seat, no tier on file or one the cost model does not hold, so no share of its windows is priced.'),
       missing: namedEmpty,
     });
   }
@@ -27548,7 +27610,8 @@ m.unmount();
 
 {
   // With no tier's 7-day capacity in the cost model no account of the story is sized for that window, so that ring
-  // weighs nobody and names each of the five, while the 5-hour ring still weighs all five and names none.
+  // weighs nobody and names each of the five, while the 5-hour ring still weighs all five. Both name the contract seed,
+  // a usage-based seat the router prices no tier for, with the gate's word.
   const { getSettings } = api;
   api.getSettings = async () => {
     const settings = await getSettings.call(api);
@@ -27573,9 +27636,9 @@ m.unmount();
       !drawn.week.ring &&
       drawn.week.sentence === "No listed account's tier is sized for the 7-day window." &&
       drawn.week.listAfter &&
-      JSON.stringify(drawn.week.names) === JSON.stringify(['primary: Max 20x 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 5x 7-day capacity not measured', 'studio: Max 5x 7-day capacity not measured', 'reserve: Pro 7-day capacity not measured']) &&
+      JSON.stringify(drawn.week.names) === JSON.stringify(['primary: Max 20x 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 5x 7-day capacity not measured', 'studio: Max 5x 7-day capacity not measured', 'reserve: Pro 7-day capacity not measured', 'contract: a usage-based seat']) &&
       drawn.fiveHour.ring &&
-      drawn.fiveHour.names.length === 0,
+      JSON.stringify(drawn.fiveHour.names) === JSON.stringify(['contract: a usage-based seat']),
     missing: [JSON.stringify(drawn)],
   });
 }
