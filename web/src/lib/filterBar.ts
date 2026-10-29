@@ -28,6 +28,8 @@ export interface Dimension {
   searchable?: true;
   /** The chip's text, title and values for a value, in place of chipText's forms. The chip draws `values` as given, whatever `text` reads. */
   text?: (value: unknown, options: Option[]) => ChipText;
+  /** A list that also takes a typed value through the field under its rows, a chip's value cut after 32 characters. */
+  typed?: true;
   /** The word before the colon: the label in lower case unless named ("kinds", "client"). */
   word: string;
 }
@@ -57,6 +59,8 @@ const LISTED = 3;
 const SHOWN = 5;
 /** The cut an id chip prints, enough to tell two sessions or requests apart. */
 const ID_SHOWN = 8;
+/** The cut a typed list's chip prints, since a user agent pattern can run past the line's room. */
+const TYPED_SHOWN = 32;
 
 const labelOf = (value: string, options: Option[]) => options.find((o) => o.value === value)?.label ?? value;
 const listed = (words: string[]) => `${words.slice(0, LISTED).join(', ')}${words.length > LISTED ? ` +${words.length - LISTED}` : ''}`;
@@ -101,6 +105,9 @@ export function withoutValue(dimension: Dimension, filters: Record<string, unkno
   return value === undefined || !Array.isArray(current) ? emptyValue(dimension) : current.filter((v) => v !== value);
 }
 
+/** A value as a pattern that matches itself in full: `*`, `?` and `\` quoted, the rest verbatim. */
+export const escapePattern = (value: string): string => value.replace(/[*?\\]/g, '\\$&');
+
 /** A list as up to three option labels then "+N" with every label in the title, a pattern as itself, an id as its first eight characters and an ellipsis with the whole id in the title, a choice as its option's label, a flag as the word alone with no colon. */
 export function chipText(dimension: Dimension, value: unknown, options: Option[] = []): ChipText {
   const { word } = dimension;
@@ -117,7 +124,8 @@ export function chipText(dimension: Dimension, value: unknown, options: Option[]
       // A value no option names prints itself, so an earlier key holder or a status code only a loaded row carries
       // still reads.
       const labels = (value as string[]).map((v) => labelOf(v, options));
-      return worded(word, listed(labels), labels.join(', '));
+      const shown = dimension.typed ? labels.map((l) => (l.length > TYPED_SHOWN ? `${l.slice(0, TYPED_SHOWN)}…` : l)) : labels;
+      return worded(word, listed(shown), labels.join(', '));
     }
     case 'pattern':
       return worded(word, value as string);
@@ -235,15 +243,18 @@ export const ROUTING_LOG_DIMENSIONS: Dimension[] = [
 /** Account alone: the route answers the trailing 30 days whatever the range, so the view offers none. */
 export const METER_DIMENSIONS: Dimension[] = [ACCOUNT];
 
-/** Routing, Request, Subject. The client pattern travels as `class` and reads "client", as on Requests. */
+/**
+ * Routing, Request, Subject. The client and user agent patterns travel as the `clients` and `user_agents` lists, each
+ * value a chip reading "client" or "user agent", as on Requests.
+ */
 export const ANALYTICS_DIMENSIONS: Dimension[] = [
   { ...ACCOUNT, mono: true },
   KEY,
   MODEL,
   POOL,
-  { field: 'class', group: 'Request', kind: 'pattern', label: 'Client', mono: true, word: 'client' },
+  { field: 'clients', group: 'Request', kind: 'list', label: 'Client', mono: true, perValue: true, typed: true, word: 'client' },
   { field: 'probes', group: 'Request', kind: 'flag', label: 'Include probes', word: 'include probes' },
-  USER_AGENT,
+  { field: 'userAgents', group: 'Request', kind: 'list', label: 'User agent', mono: true, perValue: true, typed: true, word: 'user agent' },
   { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' },
 ];
 

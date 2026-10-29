@@ -271,12 +271,13 @@ Analytics view's model grouping lists a request refused before it resolved a mod
 ([Analytics](console.md#analytics)). The Burn section closes on Member budgets, its reconciliation rows listed on the
 Meter view ([Analytics](console.md#analytics), [Meter](console.md#meter)). The Cache warming tab shows what the probes
 saved and the net saving after their cost, as tiles, a chart and a Saved column per pool
-([Analytics](console.md#analytics)). The Cost by chart's note names the unpriced groups it draws as gaps
-([Analytics](console.md#analytics)). The Cost split's subscription rows and the Plan per hour legend figures name their
-window in full on hover ([Analytics](console.md#analytics)). The ledger records a null diagnostics member on a request
-that named a message as `none` and a comparison the upstream was still running as `pending`, which Misses by reason and
-its per-group table read as No divergence and Pending ([Analytics](console.md#analytics)). The Refusals by category card
-narrows under the Client and User agent filters and its links carry the client pattern
+([Analytics](console.md#analytics)). The Client and User agent filters list the range's values and take a typed pattern,
+each value a chip ([Analytics](console.md#analytics)). The Cost by chart's note names the unpriced groups it draws as
+gaps ([Analytics](console.md#analytics)). The Cost split's subscription rows and the Plan per hour legend figures name
+their window in full on hover ([Analytics](console.md#analytics)). The ledger records a null diagnostics member on a
+request that named a message as `none` and a comparison the upstream was still running as `pending`, which Misses by
+reason and its per-group table read as No divergence and Pending ([Analytics](console.md#analytics)). The Refusals by
+category card narrows under the Client and User agent filters and its links carry the client pattern
 ([Analytics](console.md#analytics)). The Traffic section's Refusals by category card counts the answers the upstream
 refused by category, each bar opening the Requests view on them ([Analytics](console.md#analytics)). The Traffic table's
 Error rate reads a dash for a group with no requests ([Analytics](console.md#analytics)). Under the Analytics classifier

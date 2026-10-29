@@ -206,7 +206,10 @@ Failovers beside Migration rewrites and Effort levels beside Requests by speed, 
 it reads and returns to Traffic), the Refusals by category card under a client pattern (mock pass, on loads of its own:
 under `claude-code/cli` the first row's count against the next row's in font size, weight and right edge with its link
 carrying the pattern as `client`, and under `claude-code/sdk*` a count below the bare page's, each read recorded beside
-the bare page's), the tab strip docked under the filter bar at the end of the Latency tab (the bar 49 px at rest and 83
+the bare page's), the Client filter's typed field and a picked value's chip (mock pass, on an address with the Account
+filter: the field under the list's rows in their left edge and width with its top below the last row's bottom, and the
+picked `claude-code/cli` chip against the account chip in height, top edge and its values' font family, its text
+recorded), the tab strip docked under the filter bar at the end of the Latency tab (the bar 49 px at rest and 83
 px with a chip line, read on an address of its own), the unit legend's lines in the top bar's popover at 1280 by 800
 (Native's and Billed dollars' sentences naming the four billed fundings, each in the face, size and ink of the line
 after it, its label at that label's weight), the Unit select and the legend's button in the top bar (inside the bar,

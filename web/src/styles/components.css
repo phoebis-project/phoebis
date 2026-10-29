@@ -963,6 +963,10 @@ textarea.input {
   margin-bottom: 4px;
 }
 
+.add-filter__typed {
+  margin-top: 6px;
+}
+
 .add-filter__row {
   display: flex;
   gap: 12px;

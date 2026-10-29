@@ -5409,7 +5409,7 @@ async function refusalCardPattern(theme) {
         total: rows.reduce((n, li) => n + Number((countOf(li)?.textContent ?? '0').replace(/,/g, '')), 0),
       };
     });
-  const under = (pattern) => `/analytics?class=${encodeURIComponent(pattern)}`;
+  const under = (pattern) => `/analytics?clients=${encodeURIComponent(pattern)}`;
   try {
     await loadAtOrigin('/analytics', '.analytics-section#traffic');
     const bare = await read();
@@ -5426,6 +5426,57 @@ async function refusalCardPattern(theme) {
     const client = matched.first?.href ? new URL(matched.first.href, 'http://console.test').searchParams.get('client') : null;
     if (client !== 'claude-code/cli') say(`under claude-code/cli the first row's link carries the client ${JSON.stringify(client)}, not the pattern`);
     if (!(missed.total < bare.total)) say(`under claude-code/sdk* the card counts ${missed.total}, not below the bare page's ${bare.total}`);
+  } finally {
+    await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    await atRest();
+  }
+}
+
+/**
+ * The Client filter's typed field and a picked value's chip, on an address with the Account filter set so the picked
+ * chip has a mono neighbor. With Add filter open on Client, the typed field reads against the list's last row in left
+ * edge and width with its top below that row's bottom. Then `claude-code/cli` checked, its chip reads against the
+ * account chip in height, top edge and its values' font family, its text recorded. The bare page loads again after.
+ * The mock pass's alone, since the client classes are the mock story's.
+ */
+async function analyticsTypedPicker(theme) {
+  const say = (what) => failures.push(`${theme} /analytics the Client filter: ${what}`);
+  try {
+    await loadAtOrigin('/analytics?accounts=primary', '.analytics-section#traffic');
+    await page.locator('.filter-bar__row > button', { hasText: /^Add filter$/ }).click();
+    await advance(CLOCK_STEP_MS);
+    await page.locator('.popover .add-filter__row').filter({ has: page.locator('.add-filter__label', { hasText: /^Client$/ }) }).click();
+    await advance(CLOCK_STEP_MS);
+    const field = await page.evaluate(() => {
+      const box = document.querySelector('.popover .add-filter');
+      const rows = [...(box?.querySelectorAll('.option-list [role="option"]') ?? [])];
+      const edges = (el) => {
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { bottom: Math.round(r.bottom * 10) / 10, left: Math.round(r.left * 10) / 10, top: Math.round(r.top * 10) / 10, width: Math.round(r.width * 10) / 10 };
+      };
+      return { field: edges(box?.querySelector('input.add-filter__typed') ?? null), lastRow: edges(rows.at(-1) ?? null), rows: rows.length };
+    });
+    measurements.push(`${theme} /analytics Client typed field ${JSON.stringify(field)}`);
+    failures.push(...compare(field.field, field.lastRow, ['left', 'width'], `${theme} /analytics: the Client typed field against the list's last row`));
+    if (field.field && field.lastRow && !(field.field.top >= field.lastRow.bottom)) say(`the typed field's top ${field.field.top}px is above the last row's bottom ${field.lastRow.bottom}px`);
+    await page.locator('.popover .option-list [role="option"]', { hasText: /^claude-code\/cli$/ }).click();
+    await advance(CLOCK_STEP_MS);
+    await page.keyboard.press('Escape');
+    await advance(CLOCK_STEP_MS);
+    const chips = await page.evaluate(() => {
+      const all = [...document.querySelectorAll('.chip--filter')];
+      const box = (word) => {
+        const chip = all.find((c) => c.textContent?.trim().startsWith(`${word}:`));
+        if (!chip) return null;
+        const at = chip.getBoundingClientRect();
+        return { fontFamily: getComputedStyle(chip.querySelector('.chip__values') ?? chip).fontFamily, height: Math.round(at.height * 10) / 10, text: chip.textContent?.trim() ?? '', title: chip.getAttribute('title'), top: Math.round(at.top * 10) / 10 };
+      };
+      return { account: box('account'), client: box('client') };
+    });
+    measurements.push(`${theme} /analytics Client picked chip ${JSON.stringify(chips)}`);
+    failures.push(...compare(chips.client, chips.account, ['fontFamily', 'height', 'top'], `${theme} /analytics: the picked client chip against the account chip`));
+    if (chips.client && chips.client.text !== 'client: claude-code/cli') say(`the picked chip reads ${JSON.stringify(chips.client.text)}`);
   } finally {
     await loadAtOrigin('/analytics', '.analytics-section#traffic');
     await atRest();
@@ -11729,6 +11780,7 @@ try {
       if (view.path === '/analytics' && mock) await burnGridFour(theme);
       if (view.path === '/analytics' && mock) await burnGridThree(theme);
       if (view.path === '/analytics' && mock) await refusalCardPattern(theme);
+      if (view.path === '/analytics' && mock) await analyticsTypedPicker(theme);
       if (view.path === '/analytics') await warmingLoneCard(theme);
       if (view.path === '/analytics') await analyticsTiles(theme);
       if (view.path === '/analytics') await accountsRangeColumn(theme);

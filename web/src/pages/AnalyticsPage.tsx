@@ -25,13 +25,13 @@ import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
 import { bandRuns } from '@/lib/costs';
-import { ANALYTICS_DIMENSIONS, chipText } from '@/lib/filterBar';
+import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, readEnd, spanEnded } from '@/lib/follow';
 import { ESTIMATED_TITLE, equivalentShort, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtEquivalent, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, pct, shareLabel, shortId, upperFirst, usdTickDigits, withEstimate } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
 import { REFUSED_TITLE } from '@/lib/requests';
-import { linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
+import { CLIENT_PATTERNS_PLAIN, linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { words } from '@/lib/routingLog';
 import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition } from '@/lib/unit';
 import { WINDOW_HOURS, WINDOW_LABEL } from '@/lib/windows';
@@ -40,6 +40,8 @@ import { WINDOW_HOURS, WINDOW_LABEL } from '@/lib/windows';
 type GroupBy = Exclude<AnalyticsGroupBy, 'all'>;
 /** The four dimensions both the analytics query and the request log filter on. */
 type QueryDim = 'accountId' | 'keyId' | 'model' | 'poolId';
+/** The two pattern lists, which the analytics query reads whole and the request log as one client pattern at most. */
+type PatternDim = 'clients' | 'userAgents';
 /** No route groups on a session, so it filters the page from the side rather than joining the group-by. */
 type Dim = QueryDim | 'sessionId';
 
@@ -56,7 +58,7 @@ const SESSION_OPTION_HINT = 'The Burn section groups by session, and every other
 /** The page's one group-by control: the breakdown's eleven groupings, then the Burn section's own session grouping. */
 const GROUP_OPTIONS: readonly { label: string; title?: string; value: BurnGroup }[] = [...(Object.keys(GROUP_LABEL) as GroupBy[]).map((value) => ({ label: GROUP_LABEL[value], value })), { label: SESSION_OPTION, title: SESSION_OPTION_HINT, value: 'session' }];
 /** Filter choices come from a breakdown on that dimension, so every value the range holds is offered. */
-const DIM_GROUP: Record<QueryDim, GroupBy> = { accountId: 'account', keyId: 'key', model: 'model', poolId: 'pool' };
+const DIM_GROUP: Record<QueryDim | PatternDim, GroupBy> = { accountId: 'account', clients: 'client', keyId: 'key', model: 'model', poolId: 'pool', userAgents: 'user_agent' };
 /** A session view pages through the session's rows, and both bounds together are the note's figure. */
 const SESSION_PAGE_SIZE = 500;
 const SESSION_PAGE_LIMIT = 20;
@@ -237,6 +239,9 @@ function useDimensionKeys(from: string, to: string, groupBy: GroupBy, generation
 // Two lifetimes of one key id can share a label, so the older lists first.
 const optionsOf = (rows: AnalyticsGroup[] | null): Option[] =>
   [...(rows ?? [])].sort((a, b) => a.label.localeCompare(b.label) || (a.keyCreatedAt ?? 0) - (b.keyCreatedAt ?? 0)).map((g) => ({ label: g.label, value: g.key }));
+// A pick travels as a pattern, so a key holding the grammar's characters matches itself alone. The empty key is left
+// out, as the model list leaves it out.
+const patternOptionsOf = (rows: AnalyticsGroup[] | null): Option[] => optionsOf(rows?.filter((g) => g.key !== '') ?? null).map((o) => ({ ...o, value: escapePattern(o.value) }));
 
 export function AnalyticsPage() {
   const [now, setNow] = useState(() => clock.now());
@@ -248,8 +253,6 @@ export function AnalyticsPage() {
   // Every section but the Burn reads the default grouping under the Burn's own session grouping.
   const pageBy = a.by as BurnGroup;
   const groupBy: GroupBy = pageBy === 'session' ? 'key' : pageBy;
-  const userAgentPattern = a.agent;
-  const classPattern = a.class;
   const clientGroups = a.groups;
   const includeProbes = a.probes;
   const filtersRef = useRef<HTMLDivElement>(null);
@@ -299,6 +302,15 @@ export function AnalyticsPage() {
     const split = (joined: string) => (joined ? joined.split(',') : []);
     return { accountId: split(accountList), keyId: split(keyList), model: split(modelList), poolId: split(poolList), sessionId: a.session ? [a.session] : [] };
   }, [accountList, keyList, modelList, poolList, a.session]);
+  // A pattern may hold a comma, so the two pattern lists key on a newline, as the address joins them.
+  const clientList = a.clients.join('\n');
+  const userAgentList = a.userAgents.join('\n');
+  const patterns = useMemo<Record<PatternDim, string[]>>(() => {
+    const split = (joined: string) => (joined ? joined.split('\n') : []);
+    return { clients: split(clientList), userAgents: split(userAgentList) };
+  }, [clientList, userAgentList]);
+  // The request log reads one client pattern, so a session view's log read carries the one where exactly one stands.
+  const logClient = patterns.clients.length === 1 ? patterns.clients[0] : undefined;
   const ink = useChartInk();
   // A committed filter reads the window up to the instant it changed, as a range change does. The end and the address
   // change in one render, so each read goes out once: the hook writes the address at once, and a pattern commits from
@@ -335,13 +347,14 @@ export function AnalyticsPage() {
 
   const agentGroups = useMemo(() => (groupBy === 'user_agent' && clientGroups.trim() ? clientGroups.split('\n').map((s) => s.trim()).filter(Boolean) : undefined), [clientGroups, groupBy]);
   const query = useMemo<AnalyticsQuery>(
-    () => ({ accountIds: filters.accountId, clients: classPattern.trim() ? [classPattern.trim()] : undefined, from: fromIso, groupBy, includeProbes, keyIds: filters.keyId, models: filters.model, poolIds: filters.poolId, to: toIso, userAgentGroups: agentGroups, userAgents: userAgentPattern.trim() ? [userAgentPattern.trim()] : undefined }),
-    [agentGroups, classPattern, userAgentPattern, filters, fromIso, groupBy, includeProbes, toIso],
+    () => ({ accountIds: filters.accountId, clients: patterns.clients.length ? patterns.clients : undefined, from: fromIso, groupBy, includeProbes, keyIds: filters.keyId, models: filters.model, poolIds: filters.poolId, to: toIso, userAgentGroups: agentGroups, userAgents: patterns.userAgents.length ? patterns.userAgents : undefined }),
+    [agentGroups, patterns, filters, fromIso, groupBy, includeProbes, toIso],
   );
-  // The route narrows the rows a session view folds by the class pattern alone, and the fold applies both pattern
-  // controls over what it holds: a cursor page that crossed a filter change may be wider than the pattern, and the
-  // user agent matches its folded token, as the unscoped page's rollups do, where the route matches the raw header.
-  const foldOptions = useMemo(() => ({ agentGroups, agentPatterns: userAgentPattern.trim() ? [userAgentPattern.trim()] : undefined, clientPatterns: classPattern.trim() ? [classPattern.trim()] : undefined }), [agentGroups, classPattern, userAgentPattern]);
+  // The route narrows the rows a session view folds by one client pattern at most, and the fold applies both pattern
+  // lists over what it holds: several client patterns narrow here alone, a cursor page that crossed a filter change
+  // may be wider than the patterns, and the user agent matches its folded token, as the unscoped page's rollups do,
+  // where the route matches the raw header.
+  const foldOptions = useMemo(() => ({ agentGroups, agentPatterns: patterns.userAgents.length ? patterns.userAgents : undefined, clientPatterns: patterns.clients.length ? patterns.clients : undefined }), [agentGroups, patterns]);
   // A custom span holds its end, so no dependency moves at the interval: its window's reads poll at it instead, and the
   // figures stay drawn until the new answer lands, where a request that finished late shows, in the session log when it
   // falls on the first page. A preset's end moves to now at a boundary, and that change reads again.
@@ -356,7 +369,7 @@ export function AnalyticsPage() {
   // the later pages stand as the walk loaded them. Other deps walk the pages again. The ref names the current deps from
   // the moment a read starts, so a read under earlier deps that settles later keeps nothing.
   const heldLog = useRef<{ answer: SessionRequests | null; deps: string } | null>(null);
-  const logDeps = JSON.stringify([classPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation]);
+  const logDeps = JSON.stringify([logClient, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation]);
   const log = useAsync(
     () => {
       if (heldLog.current?.deps !== logDeps) heldLog.current = { answer: null, deps: logDeps };
@@ -365,7 +378,7 @@ export function AnalyticsPage() {
       return loadSessionRequests(
         (cursor) =>
           api
-            .listRequests({ accountIds: filters.accountId, client: classPattern.trim() || undefined, cursor, from: fromIso, includeProbes, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, session: sessionId, to: toIso })
+            .listRequests({ accountIds: filters.accountId, client: logClient, cursor, from: fromIso, includeProbes, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, session: sessionId, to: toIso })
             // The route reads one key list, so a lifetime beside a key filter is applied here as well.
             .then((page) => ({ ...page, requests: page.requests.filter((r) => sessionKey === null || `${r.keyId}@${r.keyGeneration}` === sessionKey) })),
         SESSION_PAGE_LIMIT,
@@ -375,7 +388,7 @@ export function AnalyticsPage() {
         return answer;
       });
     },
-    [classPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation],
+    [logClient, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation],
     reload,
   );
   const accountRollups = useAsync(() => (tab === 'accounts' ? api.listAccountRollups(fromIso, toIso) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
@@ -469,17 +482,26 @@ export function AnalyticsPage() {
   );
   const budgets = useAsync(() => (tab === 'burn' ? api.analyticsBudgets() : Promise.resolve(null)), [tab]);
   // With no filter and no session the page's breakdown is the range's whole key list on its grouping.
-  const plain = sessionId === null && filters.accountId.length === 0 && filters.keyId.length === 0 && filters.model.length === 0 && filters.poolId.length === 0 && classPattern.trim() === '' && userAgentPattern.trim() === '' && !includeProbes && agentGroups === undefined;
+  const plain = sessionId === null && filters.accountId.length === 0 && filters.keyId.length === 0 && filters.model.length === 0 && filters.poolId.length === 0 && patterns.clients.length === 0 && patterns.userAgents.length === 0 && !includeProbes && agentGroups === undefined;
   const accountKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.accountId, generation, plain && groupBy === DIM_GROUP.accountId ? breakdown : undefined);
   const keyKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.keyId, generation, plain && groupBy === DIM_GROUP.keyId ? breakdown : undefined);
   const modelKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.model, generation, plain && groupBy === DIM_GROUP.model ? breakdown : undefined);
   const poolKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.poolId, generation, plain && groupBy === DIM_GROUP.poolId ? breakdown : undefined);
-  const options = useMemo<Record<QueryDim, Option[]>>(
+  const clientKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.clients, generation, plain && groupBy === DIM_GROUP.clients ? breakdown : undefined);
+  const userAgentKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.userAgents, generation, plain && groupBy === DIM_GROUP.userAgents ? breakdown : undefined);
+  const options = useMemo<Record<QueryDim | PatternDim, Option[]>>(
     // The group without a model has no model id to filter on, and a blank option would read as an error.
-    () => ({ accountId: optionsOf(accountKeys.data), keyId: optionsOf(keyKeys.data), model: optionsOf(modelKeys.data?.filter((g) => g.key !== '') ?? null), poolId: optionsOf(poolKeys.data) }),
-    [accountKeys.data, keyKeys.data, modelKeys.data, poolKeys.data],
+    () => ({
+      accountId: optionsOf(accountKeys.data),
+      clients: patternOptionsOf(clientKeys.data),
+      keyId: optionsOf(keyKeys.data),
+      model: optionsOf(modelKeys.data?.filter((g) => g.key !== '') ?? null),
+      poolId: optionsOf(poolKeys.data),
+      userAgents: patternOptionsOf(userAgentKeys.data),
+    }),
+    [accountKeys.data, clientKeys.data, keyKeys.data, modelKeys.data, poolKeys.data, userAgentKeys.data],
   );
-  const barOptions = useMemo(() => ({ accounts: options.accountId, keys: options.keyId, models: options.model, pools: options.poolId }), [options]);
+  const barOptions = useMemo(() => ({ accounts: options.accountId, clients: options.clients, keys: options.keyId, models: options.model, pools: options.poolId, userAgents: options.userAgents }), [options]);
   // The session chip keeps its id form, and its title names the key lifetime the session arrived with, which draws no
   // chip of its own.
   const dimensions = useMemo(
@@ -554,7 +576,7 @@ export function AnalyticsPage() {
   const cacheShareRows = useMemo(() => (unit === 'share' && namedAccount !== null ? cacheShareRowsOf(costPoints) : []), [unit, namedAccount, costPoints]);
   // The cache chart's week rows are keyed off the one account's map, so its legend names that map's week.
   const cacheWeek = weekLabelOf(oneGroup === null || oneGroup.cacheShares === null ? undefined : weekKeyOf(oneGroup.cacheShares));
-  const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || userAgentPattern.trim() !== '' || classPattern.trim() !== '' || sessionId !== null || includeProbes;
+  const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || patterns.userAgents.length > 0 || patterns.clients.length > 0 || sessionId !== null || includeProbes;
   // The rewrite and fit routes read the range alone, so every filter of the bar passes them by. The burn route reads
   // the Accounts filter and the user agent groups beside it.
   const unfiltered = otherFilters || filters.accountId.length > 0;
@@ -612,11 +634,14 @@ export function AnalyticsPage() {
   const fastSpend = speedPoints.reduce((n, p) => n + (p.groups.find((g) => g.key === 'fast')?.costUsd ?? 0), 0);
   const groupLabel = GROUP_LABEL[groupBy];
   // The reasons panel's counts link under one window and the page's filters. A session view's log read keeps the
-  // session's key lifetime alone, so its links carry that lifetime.
+  // session's key lifetime alone, so its links carry that lifetime. The request log takes one client pattern, so
+  // several draw every count plain. The user agent patterns ride joined, so any of them keeps a count plain, since the
+  // request log matches the raw header.
   const linkInput: ReasonLink = {
-    filters: { accountIds: filters.accountId, clientPattern: classPattern.trim(), includeProbes, keyIds: linkedKeyIds(filters.keyId, sessionId === null ? null : sessionKey), models: filters.model, poolIds: filters.poolId, sessionId, userAgentPattern: userAgentPattern.trim() },
+    filters: { accountIds: filters.accountId, clientPattern: patterns.clients.length === 1 ? patterns.clients[0] : '', includeProbes, keyIds: linkedKeyIds(filters.keyId, sessionId === null ? null : sessionKey), models: filters.model, poolIds: filters.poolId, sessionId, userAgentPattern: patterns.userAgents.join('\n') },
     window: { exact: sessionId !== null, fromMs: span.fromMs, nowMs: now, toMs: span.toMs },
   };
+  const plainLinks = patterns.clients.length > 1;
   // The refusal route reads the page's own key selection, never a session view's key lifetime, and `refusalLink` sets
   // the exact window and leaves the session out.
   const refusalInput: ReasonLink = { ...linkInput, filters: { ...linkInput.filters, keyIds: filters.keyId } };
@@ -709,7 +734,7 @@ export function AnalyticsPage() {
               ) : refusalCategories.data === null || refusalCategories.stale ? (
                 <Skeleton height={90} />
               ) : (
-                <CountBars color={ink.series[7]} empty="No answer was refused in this range." rows={refusalRows(refusalCategories.data, refusalInput)} />
+                <CountBars color={ink.series[7]} empty="No answer was refused in this range." rows={refusalRows(refusalCategories.data, refusalInput, plainLinks)} />
               )}
             </Card>
 
@@ -933,10 +958,10 @@ export function AnalyticsPage() {
             </ChartCard>
 
             <Card title="Misses by reason" subtitle={MISS_REASON_BLURB}>
-              {loading ? <Skeleton height={190} /> : <ReasonBars link={linkInput} totals={totals} />}
+              {loading ? <Skeleton height={190} /> : <ReasonBars link={linkInput} plainLinks={plainLinks} totals={totals} />}
             </Card>
           </div>
-          <MissReasonsByGroup groupBy={groupBy} groups={groups} groupLabel={groupLabel} link={linkInput} loading={loading} />
+          <MissReasonsByGroup groupBy={groupBy} groups={groups} groupLabel={groupLabel} link={linkInput} loading={loading} plainLinks={plainLinks} />
           {sessionId === null && (
             <CacheByModel
               groups={byModel.stale ? [] : (byModel.data ?? [])}
@@ -952,7 +977,7 @@ export function AnalyticsPage() {
             <PlacementTable
               error={placements.error}
               rows={placements.stale ? null : placements.data}
-              unfiltered={filters.accountId.length > 0 || filters.model.length > 0 || userAgentPattern.trim() !== '' || classPattern.trim() !== ''}
+              unfiltered={filters.accountId.length > 0 || filters.model.length > 0 || patterns.userAgents.length > 0 || patterns.clients.length > 0}
             />
           )}
         </Section>
@@ -1548,8 +1573,12 @@ function ErrorBars({ errors, color, empty = 'No errors in range.' }: { color: st
   return <CountBars color={color} empty={empty} rows={rows} />;
 }
 
+/** A count under several client patterns stays plain, since a link could carry one of them alone. */
+const SEVERAL_CLIENTS: RequestsLinkTarget = { href: null, title: CLIENT_PATTERNS_PLAIN };
+
 /** One bar per category in the route's order, `-` read `none`, each count linking its category's refused answers. */
-const refusalRows = (answer: RefusalCategoriesAnswer, input: ReasonLink) => answer.rows.map((r) => ({ count: r.requests, label: r.category === '-' ? 'none' : r.category, target: refusalLink(input, r.category, r.requests) }));
+const refusalRows = (answer: RefusalCategoriesAnswer, input: ReasonLink, plainLinks: boolean) =>
+  answer.rows.map((r) => ({ count: r.requests, label: r.category === '-' ? 'none' : r.category, target: plainLinks ? SEVERAL_CLIENTS : refusalLink(input, r.category, r.requests) }));
 
 /** Requests per effort level, each named as the rollups file it; `none`, the requests that asked for no level, last. */
 function EffortBars({ groups, color }: { color: string; groups: AnalyticsGroup[] }) {
@@ -1594,7 +1623,7 @@ function CountLink({ children, target }: { children: ReactNode; target: Requests
   );
 }
 
-function ReasonBars({ link, totals }: { link: ReasonLink; totals: AnalyticsGroup }) {
+function ReasonBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks: boolean; totals: AnalyticsGroup }) {
   const ink = useChartInk();
   const rows = missReasonOrder([totals])
     .map((reason) => ({ count: missCount(totals.cacheMissReasons, reason), reason }))
@@ -1610,7 +1639,7 @@ function ReasonBars({ link, totals }: { link: ReasonLink; totals: AnalyticsGroup
             <span className="hbars__fill" style={{ width: `${(r.count / max) * 100}%`, background: reasonColor(ink, r.reason) }} />
           </div>
           <span className="num">
-            <CountLink target={requestsLink({ ...link, count: r.count, reason: r.reason })}>{fmtInt(r.count)}</CountLink>{' '}
+            <CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count: r.count, reason: r.reason })}>{fmtInt(r.count)}</CountLink>{' '}
             <span className="muted">{fmtPct(totals.requests ? r.count / totals.requests : 0, 1)}</span>
           </span>
         </li>
@@ -1779,11 +1808,11 @@ function SavingChart({ axis, billed, error, loading, points, session, unit }: { 
 /** A raw reason name with a break opportunity after each underscore, so a header holding one wraps at its words. */
 const breakable = (name: string): ReactNode => name.split(/(?<=_)/).flatMap((part, i) => (i === 0 ? [part] : [<wbr key={i} />, part]));
 
-function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading }: { groupBy: GroupBy; groupLabel: string; groups: AnalyticsGroup[]; link: ReasonLink; loading: boolean }) {
+function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading, plainLinks }: { groupBy: GroupBy; groupLabel: string; groups: AnalyticsGroup[]; link: ReasonLink; loading: boolean; plainLinks: boolean }) {
   const order = missReasonOrder(groups);
   const cell = (g: AnalyticsGroup, reason: CacheMissReason) => {
     const count = missCount(g.cacheMissReasons, reason);
-    return <CountLink target={requestsLink({ ...link, count, group: { by: groupBy, key: g.key }, reason })}>{fmtInt(count)}</CountLink>;
+    return <CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count, group: { by: groupBy, key: g.key }, reason })}>{fmtInt(count)}</CountLink>;
   };
   return (
     <BreakdownTable

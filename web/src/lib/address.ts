@@ -36,6 +36,8 @@ export type KeySpec =
   | { kind: 'flag'; name: string }
   /** Comma-joined ids. */
   | { kind: 'list'; name: string }
+  /** Patterns joined by a newline, as the wire joins them, so a comma inside one rides. */
+  | { kind: 'patterns'; name: string }
   /** The keys `range`, `from` and `to`. */
   | { kind: 'range'; default: string; presets: readonly RangePreset[] }
   | { kind: 'text'; name: string };
@@ -91,6 +93,8 @@ function readKey(key: KeySpec, params: URLSearchParams, now: number): unknown {
       return params.get(key.name) === '1';
     case 'list':
       return (params.get(key.name) ?? '').split(',').filter(Boolean);
+    case 'patterns':
+      return (params.get(key.name) ?? '').split('\n').filter(Boolean);
     case 'range': {
       const from = instantOf(params.get('from'));
       const asked = instantOf(params.get('to'));
@@ -117,6 +121,9 @@ function writeKey(key: KeySpec, value: unknown, params: URLSearchParams): void {
       return;
     case 'list':
       if ((value as string[]).length > 0) params.set(key.name, (value as string[]).join(','));
+      return;
+    case 'patterns':
+      if ((value as string[]).length > 0) params.set(key.name, (value as string[]).join('\n'));
       return;
     case 'range': {
       const range = value as RangeValue;
@@ -234,12 +241,10 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
 
 export interface AnalyticsAddress {
   accounts: string[];
-  /** The user agent pattern. */
-  agent: string;
   /** The group-by, the Burn section's own `session` among its values. */
   by: string;
-  /** The client pattern. */
-  class: string;
+  /** The client patterns, any of which a request's client matches. */
+  clients: string[];
   /** The user agent groups, one pattern per line. */
   groups: string;
   /** A session's key lifetime, `<key id>@<generation>`. */
@@ -252,6 +257,8 @@ export interface AnalyticsAddress {
   session: string;
   /** A shared link's unit position, which the page reads once into the console-wide setting and drops. */
   unit: string;
+  /** The user agent patterns, any of which a request's user agent matches. */
+  userAgents: string[];
 }
 
 // A key table rather than a list, so a grouping the burn route gains fails to compile until it is listed here. The
@@ -263,15 +270,15 @@ export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({
   session: text('session'),
   key: text('key'),
   accounts: list('accounts'),
-  agent: text('agent'),
   by: { default: 'key', kind: 'choice', name: 'by', values: GROUP_BYS },
-  class: text('class'),
+  clients: { kind: 'patterns', name: 'clients' },
   groups: text('groups'),
   keys: list('keys'),
   models: list('models'),
   pools: list('pools'),
   probes: { kind: 'flag', name: 'probes' },
   unit: text('unit'),
+  userAgents: { kind: 'patterns', name: 'user_agents' },
   range: { default: '24h', kind: 'range', presets: RANGE_PRESETS },
 });
 

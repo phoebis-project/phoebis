@@ -144,7 +144,7 @@ test("the lists are alphabetical inside each group, the groups in the view's ord
     }
   }
   const words = Object.fromEntries(d.ANALYTICS_DIMENSIONS.map((x) => [x.field, x.word]));
-  assert.deepEqual([words.class, words.probes, words.agent], ['client', 'include probes', 'user agent'], 'the Analytics client pattern reads client over its class key');
+  assert.deepEqual([words.clients, words.probes, words.userAgents], ['client', 'include probes', 'user agent'], 'the Analytics client patterns read client over their clients key');
   assert.equal(d.ROUTING_LOG_DIMENSIONS[0].word, 'kinds');
 });
 

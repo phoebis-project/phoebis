@@ -12,7 +12,7 @@ const write = (codec, filters) => codec.toParams(filters).toString();
 /** Each view's codec over a filled address: every list with two ids, every text set, every flag on, every choice off its default. */
 const FILLED = {
   ACCOUNTS_CODEC: { dir: 'asc', search: 'git', sort: 'usage', status: 'paused' },
-  ANALYTICS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', by: 'session', class: 'claude-code/*', groups: 'claude-cli/2.1.*\nclaude-cli/2.0.*', key: 'desktop@1000', keys: ['desktop', 'laptop'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], probes: true, range: preset('7d'), session: '407dd39b-dd60', unit: 'share' },
+  ANALYTICS_CODEC: { accounts: ['primary', 'secondary'], by: 'session', clients: ['claude-code/cli', 'claude-code/sdk*'], groups: 'claude-cli/2.1.*\nclaude-cli/2.0.*', key: 'desktop@1000', keys: ['desktop', 'laptop'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], probes: true, range: preset('7d'), session: '407dd39b-dd60', unit: 'share', userAgents: ['claude-cli/2.1.3 (external, cli)', 'claude-cli/2.0.*'] },
   KEYS_CODEC: { pools: ['all', 'jobs'], search: 'lap', status: 'active' },
   METER_CODEC: { accounts: ['primary', 'secondary'] },
   POOLS_CODEC: {},
@@ -110,6 +110,26 @@ test('every filter at its default leaves a bare address', () => {
 test('a list splits on commas and joins back, empty entries dropped', () => {
   assert.deepEqual(read(d.ROUTING_LOG_CODEC, 'accounts=primary,,secondary').accounts, ['primary', 'secondary']);
   assert.equal(d.ROUTING_LOG_CODEC.toParams({ ...read(d.ROUTING_LOG_CODEC, ''), pools: ['all', 'jobs'] }).get('pools'), 'all,jobs');
+});
+
+test('the Analytics client and user agent patterns ride the address joined by a newline, a comma and a space kept whole', () => {
+  const bare = read(d.ANALYTICS_CODEC, '');
+  assert.deepEqual([bare.clients, bare.userAgents], [[], []]);
+  const agents = ['claude-cli/2.1.3 (external, cli)', 'claude-cli/2.0.*'];
+  const written = write(d.ANALYTICS_CODEC, { ...bare, userAgents: agents });
+  assert.equal(written, 'user_agents=claude-cli%2F2.1.3+%28external%2C+cli%29%0Aclaude-cli%2F2.0.*');
+  assert.deepEqual(read(d.ANALYTICS_CODEC, written).userAgents, agents, 'both patterns read back whole');
+  assert.equal(write(d.ANALYTICS_CODEC, { ...bare, clients: ['claude-code/cli'] }), 'clients=claude-code%2Fcli');
+  assert.deepEqual(read(d.ANALYTICS_CODEC, 'clients=claude-code%2Fcli%0A%0Aclaude-code%2Fsdk*').clients, ['claude-code/cli', 'claude-code/sdk*'], 'an empty line is dropped');
+  assert.equal(write(d.ANALYTICS_CODEC, { ...bare, clients: [], userAgents: [] }), '', 'an empty list writes nothing');
+  assert.equal(write(d.ANALYTICS_CODEC, read(d.ANALYTICS_CODEC, 'agent=claude-cli%2F*&class=claude-code%2F*')), '', 'the single pattern keys read nothing');
+});
+
+test('a picked value travels as a pattern that matches itself in full, the grammar characters quoted', () => {
+  assert.equal(d.escapePattern('claude-cli/2.1.3 (external, cli)'), 'claude-cli/2.1.3 (external, cli)');
+  assert.equal(d.escapePattern('a*b?c\\d'), 'a\\*b\\?c\\\\d');
+  assert.ok(d.matchesPattern(d.escapePattern('a*b?c\\d'), 'a*b?c\\d'), 'the escaped value matches the value itself');
+  assert.ok(!d.matchesPattern(d.escapePattern('a*b'), 'axxb'), 'and a star in it matches a star alone');
 });
 
 test('a preset travels by its name, nothing for the default, and a custom span as its two instants after every filter', () => {

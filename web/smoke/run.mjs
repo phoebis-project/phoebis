@@ -372,6 +372,29 @@ const applyText = async (page, label, text) => {
   await page.settle(700);
   return true;
 };
+/** The open values step's typed field under a list's rows, which takes a pattern no option carries. */
+const typedField = () => filterBox()?.querySelector('input.add-filter__typed') ?? null;
+/**
+ * Adds a pattern to `label`'s list through the typed field under its rows with Enter, as a reader adds one: false where
+ * no field stands. The box stays open on the list, as a row's check leaves it.
+ */
+const addPattern = async (page, label, text) => {
+  await addFilter(page, label);
+  const input = typedField();
+  if (!input) return false;
+  setInput(input, text);
+  pressKey('Enter', input);
+  await page.settle(700);
+  return true;
+};
+/** Unchecks the checked row reading `value` in `label`'s list, which drops that value alone: false where none stands. */
+const uncheck = async (page, label, value) => {
+  await addFilter(page, label);
+  const row = boxOptions().find((o) => o.textContent?.trim() === value && o.getAttribute('aria-selected') === 'true');
+  row?.click();
+  await page.settle(700);
+  return row !== undefined;
+};
 /** A chip by its dimension's word: a value's chip reads "word: values", a flag's the word alone. */
 const chipOf = (page, word) =>
   [...page.container.querySelectorAll('.chip--filter')].find((c) => {
@@ -17549,7 +17572,7 @@ m.unmount();
   const page = await mount('/analytics');
   const choices = async () => {
     const counts = [];
-    for (const label of ['Account', 'Key', 'Model', 'Pool']) {
+    for (const label of ['Account', 'Key', 'Model', 'Pool', 'Client', 'User agent']) {
       counts.push(`${label} ${(await addFilter(page, label)) === null ? 'no list' : boxOptions().length}`);
       await closeBoxes(page);
     }
@@ -17576,16 +17599,16 @@ m.unmount();
     name: '/analytics Try again after a page-wide outage reads the shown section and every filter choice again',
     ok:
       downText.includes('Could not load the analytics for these filters') &&
-      downChoices.length === 4 &&
+      downChoices.length === 6 &&
       downChoices.every((c) => c.endsWith(' 0')) &&
       !t.includes('Could not load the analytics for these filters') &&
       !t.includes('Could not load this breakdown') &&
       traffic &&
       others.length === 0 &&
       trafficRows > 0 &&
-      upChoices.length === 4 &&
+      upChoices.length === 6 &&
       upChoices.every((c) => !c.endsWith(' 0')) &&
-      reads.breakdown === 'account,effort,key,model,pool' &&
+      reads.breakdown === 'account,client,effort,key,model,pool,user_agent' &&
       reads.rollups === 0 &&
       reads.series === 2 &&
       rollupsOnAccounts === 1 &&
@@ -18094,14 +18117,14 @@ m.unmount();
   // under `claude-code/cli`, whose links carry the pattern. The subtitle names no client filter under either.
   const clientCheck = '/analytics under a client pattern the Refusals by category card counts the matching clients alone, its subtitle naming no client filter, its links carrying the pattern and no session';
   const sent = recordedCalls('getAnalyticsRefusalCategories');
-  const missed = await mount('/analytics?class=claude-code%2Fsdk*', { now: CLOCK_ORIGIN });
+  const missed = await mount('/analytics?clients=claude-code%2Fsdk*', { now: CLOCK_ORIGIN });
   sent.restore();
   const missedRead = { counts: countsOf(missed), empty: cardOf(missed, TITLE)?.querySelector('p.muted')?.textContent?.trim() ?? null, subtitle: subtitleOf(missed) };
   missed.unmount();
   // The page hands the route its query whole, so the narrowing above rests on the pattern travelling as the list.
   const lastSent = sent.calls.at(-1)?.args?.[0] ?? null;
   results.push({ name: "/analytics the refusal count's read carries the page's client pattern as its clients list", ok: JSON.stringify(lastSent?.clients) === JSON.stringify(['claude-code/sdk*']), missing: [JSON.stringify(lastSent)] });
-  const matched = await mount('/analytics?class=claude-code%2Fcli', { now: CLOCK_ORIGIN });
+  const matched = await mount('/analytics?clients=claude-code%2Fcli', { now: CLOCK_ORIGIN });
   const matchedLinks = barsOf(matched).map((b) => (b.href === null ? null : paramsOf(b.href)));
   const onCli = ranked(refused.filter((r) => r.client === 'claude-code/cli'));
   results.push({
@@ -21499,9 +21522,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       return [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? ''));
     };
     const num = (cell) => Number((cell ?? '').replace(/,/g, ''));
-    // A pattern applies through Add filter's step, and an empty one leaves its chip.
+    // A pattern adds through the typed field under the list's rows, and unchecking its row drops it.
     const typeInto = async (check, label, value) => {
-      if (!(await applyText(m, label, value))) controlMissing(check, label);
+      if (!(await addPattern(m, label, value))) controlMissing(check, label);
+      await closeBoxes(m);
+      await m.settle(200);
+    };
+    const dropFrom = async (check, label, value) => {
+      if (!(await uncheck(m, label, value))) controlMissing(check, `${label} ${value}`);
+      await closeBoxes(m);
       await m.settle(200);
     };
     const typeUserAgent = (check, value) => typeInto(check, 'User agent', value);
@@ -21540,13 +21569,13 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await typeUserAgent(agentFold, 'nomatch/*');
     const emptied = trafficRows('model');
     results.push({ name: agentFold, ok: emptied.length === 1 && emptied[0][0] === 'No rows.', missing: emptied.map((row) => row.join(' ')) });
-    await typeUserAgent(agentFold, '');
+    await dropFrom(agentFold, 'User agent', 'nomatch/*');
 
     const classFold = '/analytics a client pattern nothing matches empties the session fold';
     await typeClass(classFold, 'sdk/*');
     const classless = trafficRows('model');
     results.push({ name: classFold, ok: classless.length === 1 && classless[0][0] === 'No rows.', missing: classless.map((row) => row.join(' ')) });
-    await typeClass(classFold, '');
+    await dropFrom(classFold, 'Client', 'sdk/*');
 
     const sessionGroups = '/analytics a session groups its user agents under the patterns that name them';
     await groupBy('User agent');
@@ -21585,8 +21614,14 @@ m.unmount();
   // the way it reaches the rollup reads.
   const seed = requests.find((r) => r.keyId === 'desktop' && r.sessionId !== null && r.kind !== 'probe');
   const view = `/analytics?session=${seed?.sessionId}&key=${seed?.keyId}@${seed?.keyGeneration}`;
+  // A pattern adds through the typed field under the Client list's rows, and unchecking its row drops it.
   const typeClass = async (check, page, value) => {
-    if (!(await applyText(page, 'Client', value))) controlMissing(check, 'Client');
+    if (!(await addPattern(page, 'Client', value))) controlMissing(check, 'Client');
+    await closeBoxes(page);
+  };
+  const dropClass = async (check, page, value) => {
+    if (!(await uncheck(page, 'Client', value))) controlMissing(check, `Client ${value}`);
+    await closeBoxes(page);
   };
   const total = (page) => Number(/^([\d,]+) requests/.exec(page.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? '')?.[1].replace(/,/g, '') ?? -1);
   const trafficRows = (page) => {
@@ -21601,6 +21636,8 @@ m.unmount();
   await typeClass(narrows, page, 'claude-code/*');
   await page.settle(200);
   const matching = total(page);
+  // Two patterns match any, so the first leaves before the second stands alone.
+  await dropClass(narrows, page, 'claude-code/*');
   await typeClass(narrows, page, 'sdk/*');
   await page.settle(200);
   const none = total(page);
@@ -21625,15 +21662,155 @@ m.unmount();
   await typeClass(restarts, page, 'sdk/*');
   await page.settle(3_500);
   const restarted = total(page);
-  await typeClass(restarts, page, '');
+  await dropClass(restarts, page, 'sdk/*');
   await page.settle(3_500);
   const cleared = total(page);
   api.listRequests = listRequests;
+  // The log's read takes one client pattern, and the one standing rides it.
   const typed = reads.filter((q) => q.client === 'sdk/*');
   results.push({
     name: restarts,
     ok: pending === -1 && typed.length === 1 && typed[0].cursor === undefined && restarted === 0 && cleared === whole,
     missing: [`while loading ${pending}`, `reads ${reads.map((q) => q.client ?? '-').join(',')}`, `after sdk/* ${restarted}`, `cleared ${cleared} of ${whole}`],
+  });
+  page.unmount();
+}
+
+// The Client and User agent filters list the values the range holds and take a typed pattern under their rows. A pick
+// travels as a pattern that matches itself in full, each value draws a chip of its own in the mono face, and the counts
+// that link into the request log carry one client pattern and read plain under several, since that log takes one.
+{
+  const PLAIN = 'Several client patterns are set, and the request log takes one.';
+  const sent = recordedCalls('getAnalyticsBreakdown');
+  const page = await mount('/analytics#cache', { now: CLOCK_ORIGIN });
+  sent.restore();
+  // The page's own read of a grouping's keys carries the window alone, so the check asks the same read for the labels.
+  const rangeLabels = async (groupBy) => {
+    const asked = sent.calls.find((c) => c.args[0]?.groupBy === groupBy && !('accountIds' in c.args[0]))?.args[0];
+    return asked === undefined ? null : (await api.getAnalyticsBreakdown(asked)).filter((g) => g.key !== '').map((g) => g.label).sort((a, b) => a.localeCompare(b));
+  };
+  const listRead = () => ({
+    heads: [...(filterBox()?.querySelectorAll('.mselect__group') ?? [])].map((g) => g.textContent?.trim()),
+    rows: boxOptions().map((o) => `${o.textContent?.trim()}${o.getAttribute('aria-selected') === 'true' ? ' on' : ''}`),
+  });
+  const chips = () => [...page.container.querySelectorAll('.chip--filter')].map((c) => ({ mono: c.querySelector('.chip__values')?.classList.contains('mono') ?? false, text: c.textContent?.trim() ?? '', title: c.getAttribute('title') }));
+  const cardOf = (title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+  // Each count of a card's bars: its link's address, or its plain figure's hover.
+  const counts = (title) =>
+    [...(cardOf(title)?.querySelectorAll('.hbars li .num') ?? [])].map((n) => {
+      const el = n.firstElementChild;
+      return { count: Number((el?.textContent ?? '').replace(/,/g, '')), href: el?.getAttribute('href') ?? null, title: el?.getAttribute('title') ?? null };
+    });
+  const tableLinks = () => page.container.querySelectorAll('.misses-table tbody a').length;
+
+  const clientLabels = await rangeLabels('client');
+  await addFilter(page, 'Client');
+  const opened = listRead();
+  const field = typedField();
+  const fieldRead = field === null ? null : { aria: field.getAttribute('aria-label'), below: field.previousElementSibling?.classList.contains('option-list') ?? false, classes: field.className, placeholder: field.getAttribute('placeholder'), title: field.getAttribute('title') };
+  results.push({
+    name: "/analytics the Client filter lists the range's client classes under In range, each a checkbox, with the Pattern field under the rows",
+    ok:
+      clientLabels !== null &&
+      clientLabels.includes('claude-code/cli') &&
+      clientLabels.includes('claude-code/sdk-cli') &&
+      JSON.stringify(opened) === JSON.stringify({ heads: ['In range'], rows: clientLabels }) &&
+      JSON.stringify(fieldRead) === JSON.stringify({ aria: 'Client pattern', below: true, classes: 'input add-filter__typed mono', placeholder: 'Pattern', title: '* matches any run of characters, ? one, and a backslash quotes either' }),
+    missing: [JSON.stringify(clientLabels), JSON.stringify(opened), JSON.stringify(fieldRead)],
+  });
+
+  boxOptions().find((o) => o.textContent?.trim() === 'claude-code/cli')?.click();
+  await page.settle(700);
+  const checked = { address: page.location().search, chips: chips() };
+  results.push({
+    name: '/analytics a checked client class writes clients to the address and draws its chip in the mono face',
+    ok: JSON.stringify(checked) === JSON.stringify({ address: '?clients=claude-code%2Fcli', chips: [{ mono: true, text: 'client: claude-code/cli', title: 'claude-code/cli' }] }),
+    missing: [JSON.stringify(checked)],
+  });
+
+  const reads = countCalls('getAnalyticsBreakdown');
+  const input = typedField();
+  if (input) {
+    setInput(input, 'claude-code/sdk*');
+    pressKey('Enter', input);
+  }
+  await page.settle(700);
+  reads.restore();
+  // The page's own breakdown carries its filters, where a list's read of its keys carries the window alone.
+  const lastRead = reads.calls.filter(([q]) => q?.groupBy === 'key' && 'accountIds' in q).at(-1)?.[0] ?? null;
+  const typed = { chips: chips().map((c) => c.text), cleared: typedField()?.value ?? null, list: listRead(), sent: lastRead?.clients ?? null };
+  results.push({
+    name: "/analytics a typed client pattern added on Enter stands as a checked row under Patterns with a chip of its own, and the page's read carries both patterns",
+    ok:
+      clientLabels !== null &&
+      JSON.stringify(typed) ===
+        JSON.stringify({
+          chips: ['client: claude-code/cli', 'client: claude-code/sdk*'],
+          cleared: '',
+          list: { heads: ['Patterns', 'In range'], rows: ['claude-code/sdk* on', ...clientLabels.map((l) => (l === 'claude-code/cli' ? `${l} on` : l))] },
+          sent: ['claude-code/cli', 'claude-code/sdk*'],
+        }),
+    missing: [JSON.stringify(typed)],
+  });
+
+  await closeBoxes(page);
+  const plainReasons = counts('Misses by reason');
+  const plainTable = tableLinks();
+  await tab(page, 'Traffic');
+  const plainRefusals = counts('Refusals by category');
+  results.push({
+    name: "/analytics under two client patterns every count of the reasons panel and the refusal card reads plain, its hover saying the request log takes one",
+    ok: plainReasons.some((c) => c.count > 0) && plainRefusals.length > 0 && [...plainReasons, ...plainRefusals].every((c) => c.href === null && c.title === PLAIN) && plainTable === 0,
+    missing: [JSON.stringify(plainReasons), JSON.stringify(plainRefusals), `${plainTable} table links`],
+  });
+
+  if (!(await uncheck(page, 'Client', 'claude-code/sdk*'))) controlMissing('/analytics unchecking a typed client pattern', 'claude-code/sdk*');
+  await closeBoxes(page);
+  const clientOf = (c) => (c.href === null ? null : logTarget(c.href).client);
+  const linkedRefusals = counts('Refusals by category');
+  await tab(page, 'Cache');
+  const linkedReasons = counts('Misses by reason').filter((c) => c.count > 0);
+  const one = { address: page.location().search, chips: chips().map((c) => c.text) };
+  results.push({
+    name: '/analytics unchecking the typed client row leaves one chip, and the counts link again under the one pattern',
+    ok:
+      JSON.stringify(one) === JSON.stringify({ address: '?clients=claude-code%2Fcli', chips: ['client: claude-code/cli'] }) &&
+      linkedReasons.length > 0 &&
+      linkedRefusals.length > 0 &&
+      [...linkedReasons, ...linkedRefusals].every((c) => clientOf(c) === 'claude-code/cli'),
+    missing: [JSON.stringify(one), JSON.stringify(linkedReasons), JSON.stringify(linkedRefusals)],
+  });
+
+  await removeChip(page, 'client');
+  const agentLabels = await rangeLabels('user_agent');
+  await addFilter(page, 'User agent');
+  const agentList = listRead();
+  const token = agentLabels?.find((l) => l.startsWith('claude-cli/')) ?? null;
+  boxOptions().find((o) => o.textContent?.trim() === token)?.click();
+  await page.settle(700);
+  const picked = { address: page.location().search, chips: chips() };
+  results.push({
+    name: "/analytics the User agent filter lists the range's product tokens, and a picked token writes user_agents with its chip whole",
+    ok:
+      token !== null &&
+      JSON.stringify(agentList) === JSON.stringify({ heads: ['In range'], rows: agentLabels }) &&
+      JSON.stringify(picked) === JSON.stringify({ address: `?${new URLSearchParams({ user_agents: token })}`, chips: [{ mono: true, text: `user agent: ${token}`, title: token }] }),
+    missing: [JSON.stringify(agentLabels), JSON.stringify(agentList), JSON.stringify(picked)],
+  });
+
+  // The rollups fold a user agent to its first product token, so a typed header with its comment matches none of them.
+  const LONG = 'claude-cli/2.1.302 (external, sdk-cli)';
+  if (token !== null) await uncheck(page, 'User agent', token);
+  if (!(await addPattern(page, 'User agent', LONG))) controlMissing('/analytics a typed user agent pattern', 'User agent');
+  await closeBoxes(page);
+  const long = { address: page.location().search, chips: chips(), empty: page.container.querySelector('.empty')?.textContent?.trim() ?? null };
+  results.push({
+    name: '/analytics a typed user agent pattern rides user_agents percent-encoded with its parenthesis and comma, its chip cut after 32 characters and whole on hover, and no folded token matches it',
+    ok:
+      LONG.length === 38 &&
+      JSON.stringify(long) ===
+        JSON.stringify({ address: '?user_agents=claude-cli%2F2.1.302+%28external%2C+sdk-cli%29', chips: [{ mono: true, text: 'user agent: claude-cli/2.1.302 (external, sd…', title: LONG }], empty: 'No traffic in this range.' }),
+    missing: [JSON.stringify(long)],
   });
   page.unmount();
 }
@@ -22534,9 +22711,9 @@ const seedSessions = (listSessions) => async () => {
   const total = (page) => Number(/^([\d,]+) requests/.exec(page.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? '')?.[1].replace(/,/g, '') ?? -1);
 
   {
-    const name = '/analytics reads the group-by, range, probes, agent pattern and Account chips from the address, and a unit change on the top bar keeps every key and the tab and writes no unit';
+    const name = '/analytics reads the group-by, range, probes, user agent pattern and Account chips from the address, and a unit change on the top bar keeps every key and the tab and writes no unit';
     localStorage.removeItem('phoebis.unit');
-    const page = await mount(`/analytics?by=account&range=7d&probes=1&agent=${encodeURIComponent('claude-cli/2.1.*')}&accounts=primary#cost`, { now: CLOCK_ORIGIN });
+    const page = await mount(`/analytics?by=account&range=7d&probes=1&user_agents=${encodeURIComponent('claude-cli/2.1.*')}&accounts=primary#cost`, { now: CLOCK_ORIGIN });
     const read = {
       account: chipRead(page, 'account'),
       agent: chipRead(page, 'user agent'),
@@ -22552,7 +22729,7 @@ const seedSessions = (listSessions) => async () => {
       const after = { hash: page.location().hash, query: query(page), unit: unit.value };
       results.push({
         name,
-        ok: JSON.stringify(read) === JSON.stringify({ account: 'account: primary', agent: 'user agent: claude-cli/2.1.*', agentMono: true, groupBy: 'account', probes: 'include probes', range: '7d' }) && after.hash === '#cost' && after.unit === 'usd' && JSON.stringify(Object.entries(after.query).sort()) === JSON.stringify(Object.entries({ accounts: 'primary', agent: 'claude-cli/2.1.*', by: 'account', probes: '1', range: '7d' }).sort()),
+        ok: JSON.stringify(read) === JSON.stringify({ account: 'account: primary', agent: 'user agent: claude-cli/2.1.*', agentMono: true, groupBy: 'account', probes: 'include probes', range: '7d' }) && after.hash === '#cost' && after.unit === 'usd' && JSON.stringify(Object.entries(after.query).sort()) === JSON.stringify(Object.entries({ accounts: 'primary', by: 'account', probes: '1', range: '7d', user_agents: 'claude-cli/2.1.*' }).sort()),
         missing: [JSON.stringify(read), JSON.stringify(after)],
       });
     }
@@ -22686,7 +22863,7 @@ const seedSessions = (listSessions) => async () => {
     const sorted = (page) => JSON.stringify(Object.entries(query(page)).sort());
     if (first === undefined || second === undefined) results.push({ name, ok: false, missing: ['no two sessions under two keys in the default range'] });
     else {
-      let page = await mount(`/analytics?accounts=primary&agent=${encodeURIComponent('claude-cli/*')}&by=model&class=${encodeURIComponent('claude-code/*')}&keys=laptop&probes=1&range=7d`, { now: CLOCK_ORIGIN });
+      let page = await mount(`/analytics?accounts=primary&by=model&clients=${encodeURIComponent('claude-code/*')}&keys=laptop&probes=1&range=7d&user_agents=${encodeURIComponent('claude-cli/*')}`, { now: CLOCK_ORIGIN });
       const five = chips(page);
       await clearAll(page);
       const plain = { chips: chips(page), query: sorted(page) };
@@ -24706,6 +24883,16 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   (await jump('View in analytics'))?.click();
   await m.settle(900);
   results.push({ name: '/sessions View in analytics pre-filters the session', ok: chipText().some((c) => c.startsWith('session: ')) && m.text().includes('Cache warming'), missing: chipText() });
+  {
+    // The link writes the key lifetime and the session alone, so no client or user agent pattern rides it, and the
+    // lifetime draws no chip of its own.
+    const keys = [...new URLSearchParams(m.location().search).keys()];
+    results.push({
+      name: '/sessions View in analytics carries the session and its key lifetime alone, the session chip the one chip',
+      ok: JSON.stringify(keys) === JSON.stringify(['session', 'key']) && chipText().length === 1 && chipText()[0].startsWith('session: '),
+      missing: [m.location().search, ...chipText()],
+    });
+  }
   await tab(m, 'Cache warming');
   results.push({ name: '/analytics a session view says it reads the request log', ok: m.text().includes('From the request log'), missing: [] });
   {
