@@ -83,9 +83,9 @@ pub struct AdminState {
     pub body_capture_max_hours: u32,
     /// How long ago a pin's `last_used_at` may be and still count as live for `GET /admin/sessions`.
     pub session_expiry: Duration,
-    /// How long ago the latest of a non-companion session's last use, its last request and its companion's end may be
-    /// and still list the row, bounded above by `session_expiry`, and how long ago a line's pin may have been used on
-    /// such a row.
+    /// How long ago the latest of a non-companion session's newest pin use, its last request and its companion's end
+    /// may be and still list the row, bounded above by `session_expiry`, and how long ago a line's pin may have been
+    /// used on such a row.
     pub non_companion_idle: Duration,
     pub bus: Bus,
     pub ledger: Ledger,

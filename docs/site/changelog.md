@@ -124,11 +124,11 @@ holder's lease is live and lets such a request take the session over once the le
 after its release, freeing its slot of the agent cap ([The five states](keepalive.md#the-five-states)). A failed or
 canceled request leaves the last answered recipe armed, and a probe's transient failure retries on a ladder bounded by
 the entry's expiry ([The five states](keepalive.md#the-five-states)).
-A text-only block array hashes as its blocks up to the last one carrying the cache marker, a single block as its text,
-an idle window counts a return on either of the last two message boundaries of the request before it, and a refreshing
-request whose chain holds neither boundary while its answer read the cache is logged and counted per client version,
-every chain hash of such a body moving once at the deploy, so the cache map and the anchors of running sessions start
-cold ([Keepalive](keepalive.md#the-return-rate-by-idle-age), [Relay](relay.md#the-boundary-chains)).
+A message's text-only content array hashes as its blocks up to the last one carrying the cache marker, a single block as
+its text, an idle window counts a return on either of the last two message boundaries of the request before it, and a
+refreshing request whose chain holds neither boundary while its answer read the cache is logged and counted per client
+version, every chain hash of such a body moving once at the deploy, so the cache map and the anchors of running sessions
+start cold ([Keepalive](keepalive.md#the-return-rate-by-idle-age), [Relay](relay.md#the-boundary-chains)).
 The idle-return counters are kept by pool and UTC day, so the keepalive overview answers the return rate over the last 7
 or 30 days, the counters starting afresh at the deploy ([Keepalive](keepalive.md#the-return-rate-by-idle-age)).
 The keepalive mod keeps a subagent the router named released unannounced when a later answer omits it, until its next
