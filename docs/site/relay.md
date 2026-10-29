@@ -383,9 +383,9 @@ carries `anthropic-beta: oauth-2025-04-20`. The interval is often enough that a 
 outside the router by about that long, longer while the endpoint rate-limits the poll, and rare enough that the poll
 alone never reaches the endpoint's per-account limit. No key or field turns the poll off.
 
-**The profile.** On every third poll of an account, a quarter hour apart, the router reads the account's profile again,
-since the profile endpoint shares the usage endpoint's per-account limit and a profile 429 pauses the account's usage
-poll for up to fifteen minutes. It rides on the poll and has no switch of its own.
+**The profile.** On every third poll of an account, a quarter hour apart, the router reads the account's profile again.
+The reads are that far apart because the profile endpoint shares the usage endpoint's per-account limit and a profile
+429 pauses the account's usage poll for up to fifteen minutes. It rides on the poll and has no switch of its own.
 
 **The catalog fetch.** The router reads each enabled account's model listing with `GET /v1/models?limit=1000`, its head
 measured from the one Claude Code release the profile records, every `routing.catalog_refresh_seconds` (default 21600,

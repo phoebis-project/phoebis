@@ -129,7 +129,7 @@ leaves out a session-level event, which names no agent. `GET /admin/analytics/re
 requests in range per category, `-` for a refusal with none, read off the attempts at the request. It narrows by
 `clients` and `user_agents` as the analytics series do, over the client label and the agent's first product token, so a
 version picked from a breakdown counts that version's refusals, and it holds `user_agent_groups` to the two lists' bound
-and narrows nothing by them.
+and narrows nothing by its patterns.
 
 ## Quota samples
 
