@@ -78,17 +78,34 @@ impl Chains {
 }
 
 /// `value` as canonical JSON: members in key order, no whitespace, every `cache_control` member removed, and a
-/// protocol content array (the value of a `content` member, a message's or a `tool_result` block's) whose blocks
-/// are all text blocks with no member beyond `type`, `text` and `cache_control` cut to the blocks up to the last one
-/// carrying `cache_control`, a single remaining block as the string of its text, so the two shapes the client sends
-/// for one message hash alike and a message's hash names what the upstream cached. Every other array keeps its
-/// shape, so a tool input holding text blocks never hashes as one holding their text.
+/// protocol content array whose blocks are all text blocks with no member beyond `type`, `text` and `cache_control`
+/// cut to the blocks up to the last one carrying `cache_control`, a single remaining block as the string of its text,
+/// so the two shapes the client sends for one message hash alike and a message's hash names what the upstream cached.
+/// A protocol content array sits at one of two places alone: the `content` member of `value` itself (a message's) and
+/// the `content` member of a block that is a direct item of that array (a `tool_result` block's). A `content` member
+/// any deeper (inside a tool's input or a tool definition) and every other array keep their shape, so a tool input
+/// holding text blocks never hashes as one holding their text.
 pub fn canonical(value: &Value, out: &mut Vec<u8>) {
-    write_canonical(value, out, false);
+    write_canonical(value, out, Place::Entry);
 }
 
-/// `canonical` over `value`, where `content` says whether `value` is the value of a `content` member.
-fn write_canonical(value: &Value, out: &mut Vec<u8>, content: bool) {
+/// Where a value sits below the hashed entry, in depth order, which bounds where a content array collapses.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// The hashed entry itself.
+    Entry,
+    /// The value of the entry's `content` member.
+    EntryContent,
+    /// A block that is a direct item of the entry's content array.
+    Block,
+    /// The value of such a block's `content` member.
+    BlockContent,
+    /// Anywhere deeper than the places above.
+    Deeper,
+}
+
+/// `canonical` over `value` sitting at `place`.
+fn write_canonical(value: &Value, out: &mut Vec<u8>, place: Place) {
     match value {
         Value::Object(map) => {
             out.push(b'{');
@@ -104,27 +121,36 @@ fn write_canonical(value: &Value, out: &mut Vec<u8>, content: bool) {
                 }
                 serde_json::to_writer(&mut *out, key).expect("a JSON key always encodes");
                 out.push(b':');
-                write_canonical(&map[*key], out, *key == "content");
+                let below = match (place, *key) {
+                    (Place::Entry, "content") => Place::EntryContent,
+                    (Place::Block, "content") => Place::BlockContent,
+                    _ => Place::Deeper,
+                };
+                write_canonical(&map[*key], out, below);
             }
             out.push(b'}');
         }
         Value::Array(items) => {
-            let kept = if content {
-                kept_text_blocks(items)
-            } else {
-                None
+            let kept = match place {
+                Place::EntryContent | Place::BlockContent => kept_text_blocks(items),
+                _ => None,
             };
             let items = match kept {
-                Some([only]) => return write_canonical(&only["text"], out, false),
+                Some([only]) => return write_canonical(&only["text"], out, Place::Deeper),
                 Some(kept) => kept,
                 None => items.as_slice(),
+            };
+            let below = if place == Place::EntryContent {
+                Place::Block
+            } else {
+                Place::Deeper
             };
             out.push(b'[');
             for (i, item) in items.iter().enumerate() {
                 if i > 0 {
                     out.push(b',');
                 }
-                write_canonical(item, out, false);
+                write_canonical(item, out, below);
             }
             out.push(b']');
         }
@@ -132,9 +158,10 @@ fn write_canonical(value: &Value, out: &mut Vec<u8>, content: bool) {
     }
 }
 
-/// The blocks a text-only content array keeps, read for the value of a `content` member alone: those up to the last
-/// one carrying `cache_control`, every block where none does. `None` where a block is not a text block or carries
-/// another member, so the array keeps its shape.
+/// The blocks a text-only content array keeps, read alone for an array at one of the two places `canonical` names,
+/// the entry's `content` or the `content` of a direct item of that array, and never deeper: those up to the last one
+/// carrying `cache_control`, every block where none does. `None` where a block is not a text block or carries another
+/// member, so the array keeps its shape.
 fn kept_text_blocks(items: &[Value]) -> Option<&[Value]> {
     if items.is_empty() {
         return None;
@@ -272,7 +299,7 @@ mod tests {
     /// `value` canonicalized as the value of a message's `content` member.
     fn canon(value: Value) -> Vec<u8> {
         let mut out = Vec::new();
-        write_canonical(&value, &mut out, true);
+        write_canonical(&value, &mut out, Place::EntryContent);
         out
     }
 
@@ -404,6 +431,14 @@ mod tests {
         assert_ne!(
             tool_call(json!({"payload": [marked("x")]})).message_boundaries,
             tool_call(json!({"payload": "x"})).message_boundaries
+        );
+    }
+
+    #[test]
+    fn a_content_member_in_a_tool_input_keeps_its_text_block_array_apart_from_its_text() {
+        assert_ne!(
+            tool_call(json!({"content": [unmarked("x")]})).message_boundaries,
+            tool_call(json!({"content": "x"})).message_boundaries
         );
     }
 
