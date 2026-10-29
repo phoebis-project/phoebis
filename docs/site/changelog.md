@@ -409,7 +409,9 @@ Every price is computed when it is read, from the token counts the ledger stores
 the request arrived. The price table and the subscription cost model are revision lists keyed by effective date, the
 account's tier and the prompt-length band join the hourly rollups, a model the cost model does not weight reads its
 model tier's latest weight as an estimate and raises an attention item, and the cost model names each model's tier
-([statistics](statistics.md#pricing), [installation](installation.md#stats)).
+([statistics](statistics.md#pricing), [installation](installation.md#stats)). The shipped price table carries Claude
+Sonnet 4.6 and reads Claude Fable 5's cache read at $1 per million tokens in every revision
+([statistics](statistics.md#pricing)).
 
 The console prices every figure in the unit the shell's Unit switch names, native by default (a subscription request as
 20x window equivalents, a billed request in dollars), with a legend beside it. The cost reference shows one row per

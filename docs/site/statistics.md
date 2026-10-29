@@ -200,7 +200,7 @@ builds at start for the shedding round take it at the first start after that dat
 wrong edits every entry that carries the row and adds no entry, since the correction says what was always true, while a
 provider's price change, a new model or a moved threshold adds one.
 
-The nine rows of the shipped revision in force, in USD per million tokens, in the file's order (the three Opus models'
+The ten rows of the shipped revision in force, in USD per million tokens, in the file's order (the three Opus models'
 fast cells are twice each figure):
 
 | Model | Input | Cache read | Cache write 5m | Cache write 1h | Output |
@@ -212,13 +212,14 @@ fast cells are twice each figure):
 | `claude-opus-4-8` | 5.00 | 0.50 | 6.25 | 10.00 | 25.00 |
 | `claude-sonnet-5-5` | 2.00 | 0.10 | 2.50 | 4.00 | 10.00 |
 | `claude-sonnet-5` | 2.00 | 0.20 | 2.50 | 4.00 | 10.00 |
+| `claude-sonnet-4-6` | 3.00 | 0.30 | 3.75 | 6.00 | 15.00 |
 | `claude-haiku-5-5` | 0.10 | 0.01 | 0.125 | 0.20 | 0.50 |
 | `claude-haiku-5-5`, prompt over 100,000 tokens | 0.50 | 0.05 | 0.625 | 1.00 | 2.50 |
 | `claude-haiku-4-5` | 1.00 | 0.10 | 1.25 | 2.00 | 5.00 |
 
 `GET /admin/sessions/costs` adds a sixth figure per model, `reads_per_write_5m`, the 5-minute cache write price over
 the cache read price of the standard cells: 50 for `claude-fable-5-1`, 25 for `claude-opus-5-5` and
-`claude-sonnet-5-5`, and 12.5 for the other six.
+`claude-sonnet-5-5`, and 12.5 for the other seven.
 
 A model that serves fast mode carries a second set of five cells at the fast rates under the same date. An attempt
 whose answer reports `speed: fast` is priced at them, in dollars, as spend from usage credits, and one on a model
@@ -326,8 +327,9 @@ share of a Max 20x window one million input tokens spend outside the band, deriv
 `claude-sonnet-5` is not measured: its row takes Sonnet 5.5's weight, the model at the same list price, and stays
 unmeasured since the client sends Sonnet 5 for its classifier alone, so the ledger holds no Sonnet 5 main turn to
 measure against the meter. The priced models the plan meter has not measured and the file leaves out (`claude-fable-5`,
-`claude-opus-5`, `claude-opus-4-8`) have no weight row and read the weight of the latest weighed model of their model
-tier as an estimate, Fable 5 that of Fable 5.1 and the two Opus models that of Opus 5.5.
+`claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-4-6`) have no weight row and read the weight of the latest weighed
+model of their model tier as an estimate, Fable 5 that of Fable 5.1, the two Opus models that of Opus 5.5 and Sonnet 4.6
+that of Sonnet 5.5.
 
 Under the interactive regime a request spends half the table's 5-hour share and 0.8 of its 7-day share, since the regime
 doubles the 5-hour capacity and raises the 7-day by a quarter while the weights stay the same.
