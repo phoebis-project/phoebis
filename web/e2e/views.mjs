@@ -10639,9 +10639,10 @@ async function sessionRowMenu(theme) {
  * the Agent track, and no title but the id), every Account cell holds its link and its speed chip inside its box, and
  * State closes the line's columns. A grid may scroll inside the card at 1280 px, so each line's state badge ends inside
  * its grid's scroll width there and inside its visible box at 1440 px, where no grid scrolls: the widest grid's scroll
- * and client widths are recorded at both. A cause badge wraps inside its own State cell, its edges recorded against the
- * table's visible edge. The plain session's collapsed row, the first row no companion reports whose pin names an
- * effort, draws its Model, Context and Effort cells on the Session cell's top edge and height.
+ * and client widths are recorded at both. At both widths the expanded table stays inside its wrap, whose scroll and
+ * client widths are recorded. A cause badge wraps inside its own State cell, its edges recorded against the table's
+ * visible edge. The plain session's collapsed row, the first row no companion reports whose pin names an effort, draws
+ * the first text line of its Model, Context and Effort cells on the session id's line, its top and its height.
  */
 async function agentLines(theme, width) {
   const where = width === 1280 ? '' : ` at ${width} px`;
@@ -10656,13 +10657,19 @@ async function agentLines(theme, width) {
     const cellOf = (tr, head) => (heads.includes(head) ? tr.children[heads.indexOf(head)] : null);
     const row = [...document.querySelectorAll('.sessions-table tbody tr.srow')].find((tr) => cellOf(tr, 'Companion')?.textContent?.trim() === 'none' && !['', '-'].includes(cellOf(tr, 'Effort')?.textContent?.trim() ?? ''));
     if (!row) return null;
-    const box = (head) => {
-      const cell = cellOf(row, head);
-      if (!cell) return null;
-      const b = cell.getBoundingClientRect();
-      return { height: Math.round(b.height * 100) / 100, text: cell.textContent?.trim() ?? '', top: Math.round(b.top * 100) / 100 };
+    // A cell's first text line, the first box of a range over its first text, which a cell whose content wraps under
+    // the session id's line would set apart from that line, while every cell of the row shares the row's box.
+    const line = (el) => {
+      if (!el) return null;
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP) });
+      const text = walker.nextNode();
+      if (!text) return null;
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const b = range.getClientRects()[0];
+      return b ? { height: Math.round(b.height * 100) / 100, text: el.textContent?.trim() ?? '', top: Math.round(b.top * 100) / 100 } : null;
     };
-    return { context: box('Context'), effort: box('Effort'), model: box('Model'), session: box('Session') };
+    return { context: line(cellOf(row, 'Context')), effort: line(cellOf(row, 'Effort')), model: line(cellOf(row, 'Model')), session: line(cellOf(row, 'Session')?.querySelector('.srow__id')) };
   });
   measurements.push(`${theme} /sessions${where} plain row ${JSON.stringify(plain)}`);
   if (plain === null) {
@@ -10670,7 +10677,8 @@ async function agentLines(theme, width) {
   } else {
     for (const cell of ['Model', 'Context', 'Effort']) {
       const read = plain[cell.toLowerCase()];
-      for (const finding of compare(read, plain.session, ['top', 'height'], `the plain session's ${cell} cell against its Session cell`)) say(finding);
+      const off = read === null || plain.session === null ? ['top', 'height'] : ['top', 'height'].filter((key) => Math.abs(read[key] - plain.session[key]) > 1);
+      if (off.length > 0) say(`the plain session's ${cell} cell's first line differs from its session id's line in ${off.join(' and ')} (${JSON.stringify(read)} against ${JSON.stringify(plain.session)})`);
       if (read !== null && ['', '-'].includes(read.text)) say(`the plain session's ${cell} cell reads ${JSON.stringify(read.text)}, not its pin's`);
     }
   }
@@ -10678,7 +10686,8 @@ async function agentLines(theme, width) {
   await settle();
   const read = await page.evaluate(() => {
     const round = (n) => Math.round(n * 100) / 100;
-    const edge = document.querySelector('.sessions-table')?.closest('.table-wrap')?.getBoundingClientRect().right ?? null;
+    const wrap = document.querySelector('.sessions-table')?.closest('.table-wrap') ?? null;
+    const edge = wrap?.getBoundingClientRect().right ?? null;
     const cellsOf = (row) => [...row.children].filter((c) => !c.classList.contains('agents__more'));
     const grids = [...document.querySelectorAll('.agents')].map((grid) => {
       const box = grid.getBoundingClientRect();
@@ -10719,7 +10728,7 @@ async function agentLines(theme, width) {
         visibleRight: round(left + grid.clientWidth),
       };
     });
-    return { edge: edge === null ? null : Math.round(edge), grids };
+    return { edge: edge === null ? null : Math.round(edge), grids, wrap: wrap === null ? null : { client: wrap.clientWidth, scroll: wrap.scrollWidth } };
   });
   const lines = read.grids.flatMap((g) => g.lines.map((l) => ({ ...l, grid: g })));
   // The companion session with the longest subagent id, whose Agent track is the widest a line sets.
@@ -10738,10 +10747,15 @@ async function agentLines(theme, width) {
       id: longest === null ? null : { agent: longest.agent, cell: longest.id.cell, width: longest.id.width },
       scroll: widest === null ? null : { client: widest.client, scroll: widest.scroll },
       stateRight: lines.reduce((r, l) => (l.stateRight !== null && (r === null || l.stateRight > r) ? l.stateRight : r), null),
+      wrap: read.wrap,
       wrapped: reasons.filter((l) => l.reason.lines > 1).map((l) => [l.agent, l.reason.text, l.cell, l.reason]),
     })}`,
   );
   if (mock && lines.length === 0) say('Expand all opened no agent line');
+  // The table lays out by its cells' content, so a grid whose tracks outgrew the card would widen the table instead of
+  // scrolling inside its own box, and the wrap's scroll width is what shows it.
+  if (read.wrap === null) say('Expand all left no session table to bound');
+  else if (read.wrap.scroll > read.wrap.client + 1) say(`the expanded lines widen the session table to ${read.wrap.scroll}px of its ${read.wrap.client}px wrap at ${width} px, so the table scrolls sideways where a grid should scroll inside the card`);
   for (const g of read.grids.filter((x) => x.head.length !== 11 || x.head[x.head.length - 1] !== 'State')) say(`an agent grid's head reads ${JSON.stringify(g.head)}, not eleven columns closing on State`);
   if (mock && (edges === null || edges.main === null)) say("the story's companion session with the longest subagent id draws no main line to read its column edges against");
   if (edges !== null && edges.main !== null) {

@@ -270,7 +270,8 @@ id's width, the session row menu, the agent lines (at 1280 by 800 and 1440 by 90
 subagent id's cells on one left edge per column within 1 px on the companion session that holds that id, every id whole
 on one line and every Account cell with its speed chip inside its box, each state badge inside its grid's scroll width
 at 1280 px and inside its visible box at 1440 px, where no grid scrolls, the widest grid's scroll and client widths
-recorded, and the plain session's Model, Context and Effort cells on its Session cell's top edge and height), the
+recorded, the expanded table inside its wrap at both widths, the wrap's scroll and client widths recorded, and the first
+text line of the plain session's Model, Context and Effort cells on its session id's line, its top and its height), the
 Sessions bar's sort control and its order (on loads of its own that end on the bare view: the Sort button in the height,
 top edge, type size and weight of the Columns control beside it, reading "Sort: Created" on the bare address and "Sort:
 Last activity" under `?sort=activity`, the first five rows' session ids recorded under each), the fork badge's face

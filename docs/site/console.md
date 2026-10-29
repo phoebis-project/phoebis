@@ -1064,8 +1064,8 @@ TTL as the recipe reads them. A pin no recipe stands on reads its TTL as the tim
 Last request, dashes in the probe cells and a State of `warm` or `cold` by its cache TTL, the word carrying its own
 sentence on hover. On a recipe's line State reads the recipe's state word (`ended`, `held`, `not retained`, `paused` or
 `retained`) with the cause beside it, the state word and the cause each carrying the cause's sentence on hover, and the
-line under them reads the state's sentence with the cause's, then the mod's lifecycle word for the agent with a parked
-agent's park kind and its deadline or wake time (`parked · background · deadline in 1h 12m`). A finished session,
+line under them reads the mod's lifecycle word for the agent with a parked agent's park kind and its deadline or wake
+time (`parked · background · deadline in 1h 12m`), then the state's sentence with the cause's. A finished session,
 listed under Finished sessions, reads "The mod released every agent of this session. Their records keep their slots of
 the cap for one cache TTL after the release and then leave the engine." above its lines, which keep their ended state
 with the TTL, Last request, Last probe, Next probe and Probes / credited the engine last read, and its Agents cell

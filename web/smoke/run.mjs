@@ -23830,8 +23830,9 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const plus = [...m.container.querySelectorAll('tbody tr.srow .badge')].filter((b) => /^\+\d+$/.test(b.textContent?.trim() ?? ''));
     [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all')?.click();
     await m.settle(250);
-    // The default filters' 23 rows draw 30 lines, each on an account, eight of them pins no recipe stands on, and the
-    // registration-only row draws none.
+    // The default filters' 23 rows draw 30 lines, each on an account, and the registration-only row draws none. Eight
+    // are pins no recipe stands on: the written fleet session no mod reports draws two, studio's four slowed notebook
+    // rows five and the fleet row one. The written auxiliary-only session draws its subagent's recipe line.
     results.push({
       name: "/sessions each line's Account cell links to the account with its kind on the title and in its description and its speed chip while slowed, and the +N badges stand on the Model cell",
       ok: !heads().includes('Account') && links.length === 30 && off.length === 0 && kinds.includes('oauth') && kinds.includes('api_key') && links.some((l) => l.chip) && plus.length > 0 && plus.every((b) => b.closest('.srow__pin') !== null),
