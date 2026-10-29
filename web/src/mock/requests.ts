@@ -101,16 +101,16 @@ export const LANES: Lane[] = [
 ];
 
 /**
- * The account that serves Sonnet 4.6 alone, whatever the lane drew: the cost model has no weight of its own for it, so
+ * The account that serves Sonnet 4.5 alone, whatever the lane drew: the cost model has no weight of its own for it, so
  * its buckets price through its model tier's latest weighted model as an estimate. The sessions the story moves off it
- * carry Sonnet 4.6 to primary, whose 11:00 and 14:00 buckets read the estimate too. The story's one unpriced row is a
+ * carry Sonnet 4.5 to primary, whose 11:00 and 14:00 buckets read the estimate too. The story's one unpriced row is a
  * plan request on a model the cost model lists in no tier, `UNPRICED_REQUEST`, which the mock adds behind its unpriced
  * switch.
  */
 const UNPRICED_ACCOUNT = 'secondary';
-const modelOn = (accountId: string, drawn: string) => (accountId === UNPRICED_ACCOUNT ? 'claude-sonnet-4-6' : drawn);
-/** The model a request asked for: Sonnet 4.6 wherever secondary served one of its attempts, else the lane's draw. */
-const modelOf = (attempts: Attempt[], drawn: string) => (attempts.some((a) => a.accountId === UNPRICED_ACCOUNT && a.cooldownSet?.reason !== 'model_rejected') ? 'claude-sonnet-4-6' : drawn);
+const modelOn = (accountId: string, drawn: string) => (accountId === UNPRICED_ACCOUNT ? 'claude-sonnet-4-5' : drawn);
+/** The model a request asked for: Sonnet 4.5 wherever secondary served one of its attempts, else the lane's draw. */
+const modelOf = (attempts: Attempt[], drawn: string) => (attempts.some((a) => a.accountId === UNPRICED_ACCOUNT && a.cooldownSet?.reason !== 'model_rejected') ? 'claude-sonnet-4-5' : drawn);
 
 /**
  * Probes exist only where the pool keeps caches warm and the key has not opted out, and so does anything kept warm by
@@ -328,7 +328,7 @@ export const HAIKU = 'claude-haiku-4-5-20251001';
 
 /**
  * Whether an account could take a request at `atMs` by the story's own account facts, so no attempt lands where the
- * decision card would show the account out: secondary, which serves Sonnet 4.6 alone, reads its 5-hour window spent
+ * decision card would show the account out: secondary, which serves Sonnet 4.5 alone, reads its 5-hour window spent
  * from 14:02:11 and cools on it from 14:07:51 to 14:55. Primary's fast lane cools from 14:27:00 to 14:42 and it
  * rejects Haiku from 14:24:10 to 15:24. Nightly's usage credits take a fast request once its spend cap is raised at
  * 11:30:12. The Overflow workspace needs funding from 11:30:12, and research spends its day's budget at 12:41:07.
@@ -427,8 +427,8 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
     // engine's order puts it among the accounts that could take it.
     const upstreamStatus = last ? finalStatus : rng.weighted([{ value: 429, weight: 6 }, { value: 529, weight: 2 }, { value: 502, weight: 1 }]);
     const outcome: AttemptOutcome = upstreamStatus === 200 ? 'succeeded' : upstreamStatus === 429 ? 'rate_limited' : 'upstream_error';
-    // Secondary serves Sonnet 4.6 alone, so it takes a request only as its last attempt, where the request is the
-    // Sonnet 4.6 turn it serves rather than the model the lane drew.
+    // Secondary serves Sonnet 4.5 alone, so it takes a request only as its last attempt, where the request is the
+    // Sonnet 4.5 turn it serves rather than the model the lane drew.
     const untried = (id: string) => !trail.includes(id) && servable(id, cursor, model, fast) && !(!last && id === UNPRICED_ACCOUNT);
     const handedTo = count ? countOrder(lane.accountIds.filter(untried), lane.poolId, cursor, model, drawnId)[0] : untried(drawnId) ? drawnId : lane.accountIds.find((id) => id !== drawnId && untried(id));
     if (handedTo === undefined) ended = true;
@@ -479,19 +479,19 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
   // A 429 fails over until no member of the pool is left that could serve, so a request that answered one tried each
   // member the draw left, on no draw, in the order the reselect takes them: the pool's tiers, which its order follows
   // (the plan-funded subscriptions, nightly once in overage, the API key), and a token count's by its Pace score
-  // inside a tier. They answer 429 too, but secondary, which serves Sonnet 4.6 alone: it refuses any other model, as
+  // inside a tier. They answer 429 too, but secondary, which serves Sonnet 4.5 alone: it refuses any other model, as
   // the rejection story's account does, and its plan draws no usage credits for a fast request.
   const tail = attempts[attempts.length - 1];
   let added = 0;
   if (tail?.upstreamStatus === 429) {
-    const sonnet46 = attempts.some((a) => a.accountId === UNPRICED_ACCOUNT);
-    // A request secondary took is the Sonnet 4.6 turn it serves, which is no fast one.
-    const stillFast = fast && !sonnet46;
+    const sonnet45 = attempts.some((a) => a.accountId === UNPRICED_ACCOUNT);
+    // A request secondary took is the Sonnet 4.5 turn it serves, which is no fast one.
+    const stillFast = fast && !sonnet45;
     const members = (poolById.get(lane.poolId)?.members ?? []).map((m) => m.accountId);
     for (const accountId of count ? countOrder(members, lane.poolId, cursor, model, '') : members) {
       if (attempts.some((a) => a.accountId === accountId) || !servable(accountId, cursor, model, stillFast) || (stillFast && accountId === UNPRICED_ACCOUNT)) continue;
       const windows = oauthWindows(accountId, cursor, () => SERVED_FACTOR);
-      const refuses = accountId === UNPRICED_ACCOUNT && !sonnet46;
+      const refuses = accountId === UNPRICED_ACCOUNT && !sonnet45;
       const kind = kindOf(accountId);
       attempts.push({
         ...tail,
@@ -939,7 +939,7 @@ export const STORY_IDS = new Set([
   'req_f1c8e3a5-29d',
   'req_f3b6d218-85a', 'req_f6a1d3e8-e47', 'req_f8085653-422',
 ]);
-/** The four-attempt failover whose first account refused the model the client spelled without its date. */
+/** The four-attempt failover whose first account refused a model it does not serve. */
 export const REJECTION_STORY_ID = 'req_7015b657-290';
 /** The failover whose pick ties two tier mates on Pace, which the runway breaks. */
 export const TIE_STORY_ID = 'req_8c41f2d7-a93';
@@ -1151,9 +1151,9 @@ function storyRequests(): RequestLog[] {
     { agentId: 'main', at: t(14, 16, 40), attempts: [], errorCode: 'accounts_exhausted', id: 'req_51d0e2b8-7a0', keyId: 'ci', model: HAIKU, outcome: 'exhausted', requestClass: 'main', session: 'cd9a5904', status: 429 },
     { agentId: null, at: t(14, 15, 48), attempts: [], client: 'other', errorCode: 'client_not_allowed', id: 'req_9b4f1c62-a07', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: null, session: null, status: 403, userAgent: BATCH_AGENT },
     { agentId: null, at: t(14, 15, 12), attempts: [], client: 'other', errorCode: 'client_not_allowed', id: 'req_2d8e5b13-f40', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: null, session: null, status: 403, userAgent: BATCH_AGENT },
-    { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', refused: true, requestClass: 'main', session: '5eeed6ce', status: 403, userAgent: 'claude-cli/2.1.271 (external, cli)' },
+    { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-4-5', outcome: 'rejected', refused: true, requestClass: 'main', session: '5eeed6ce', status: 403, userAgent: 'claude-cli/2.1.271 (external, cli)' },
     // The same client's next request carried no class header, so the contract refused it before any account was chosen.
-    { agentId: 'main', at: t(14, 14, 20), attempts: [], clientContract: 'class_header', errorCode: 'client_contract', id: 'req_f1c8e3a5-29d', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', refused: true, requestClass: null, session: '5eeed6ce', status: 403, userAgent: 'claude-cli/2.1.271 (external, cli)' },
+    { agentId: 'main', at: t(14, 14, 20), attempts: [], clientContract: 'class_header', errorCode: 'client_contract', id: 'req_f1c8e3a5-29d', keyId: 'laptop', model: 'claude-sonnet-4-5', outcome: 'rejected', refused: true, requestClass: null, session: '5eeed6ce', status: 403, userAgent: 'claude-cli/2.1.271 (external, cli)' },
     { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', pending: true, requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
     // The model takes no inference geography parameter, so its answer reports the geography as not available.
     { agentId: 'main', at: t(14, 9, 41), attempts: [{ accountId: 'primary', at: t(14, 9, 41), ms: 4_800, status: 200 }], geo: 'not_available', id: 'req_ef099b34-453', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 31_000, input: 9_800, output: 2_100 } },
@@ -1166,14 +1166,14 @@ function storyRequests(): RequestLog[] {
       id: 'req_3b8e51f4-0a9',
       keyId: 'desktop',
       kind: 'count_tokens',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-4-5',
       requestClass: 'subagent',
       session: '407dd39b',
       usage: { input: 41_000 },
     },
     // The keepalive's probe of a pin on secondary finds its window spent and moves the pin to primary.
-    { agentId: 'main', at: t(14, 6, 30), attempts: [{ accountId: 'primary', at: t(14, 6, 30), ms: 1_400, status: 200 }], id: 'req_c41d0311-200', keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-4-6', requestClass: 'main', session: '229bf72c', usage: { cacheWrite1h: 46_000, output: 1 } },
-    { agentId: 'main', at: t(14, 5, 12), attempts: [{ accountId: 'primary', at: t(14, 5, 12), ms: 7_900, status: 200 }], id: 'req_da52d141-a5a', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'main', session: '0d588de5', usage: { cacheRead: 30_100, cacheWrite1h: 14_800, input: 2_200, output: 1_120 } },
+    { agentId: 'main', at: t(14, 6, 30), attempts: [{ accountId: 'primary', at: t(14, 6, 30), ms: 1_400, status: 200 }], id: 'req_c41d0311-200', keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-4-5', requestClass: 'main', session: '229bf72c', usage: { cacheWrite1h: 46_000, output: 1 } },
+    { agentId: 'main', at: t(14, 5, 12), attempts: [{ accountId: 'primary', at: t(14, 5, 12), ms: 7_900, status: 200 }], id: 'req_da52d141-a5a', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: '0d588de5', usage: { cacheRead: 30_100, cacheWrite1h: 14_800, input: 2_200, output: 1_120 } },
     // Secondary answers a 429 that rejects no plan window while its head reads the 5-hour window spent: the account
     // cools for the retry-after alone and the turn fails over.
     {
@@ -1185,23 +1185,23 @@ function storyRequests(): RequestLog[] {
       ],
       id: 'req_1d9c3e55-0b2',
       keyId: 'desktop',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-4-5',
       requestClass: 'main',
       session: 'bcc805b6',
       usage: { cacheWrite1h: 58_900, input: 4_100, output: 1_310 },
     },
     // The turns that place the hour's sessions on secondary before its spent edge: the pins the beats after them read.
-    { agentId: 'main', at: t(14, 1, 40), attempts: [{ accountId: 'secondary', at: t(14, 1, 40), ms: 6_000, status: 200 }], id: 'req_d4e8a7b2-916', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'main', session: '229bf72c', usage: { cacheWrite1h: 46_000, input: 1_200, output: 520 } },
-    { agentId: 'main', at: t(14, 1, 35), attempts: [{ accountId: 'secondary', at: t(14, 1, 35), ms: 12_000, status: 200 }], id: 'req_c90d3f61-a28', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'main', session: '0d588de5', usage: { cacheWrite1h: 44_600, input: 1_800, output: 870 } },
-    { agentId: 'e90b', at: t(14, 1, 30), attempts: [{ accountId: 'secondary', at: t(14, 1, 30), ms: 4_000, status: 200 }], id: 'req_b72e9d05-c14', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'subagent', session: '407dd39b', usage: { cacheWrite5m: 39_500, input: 1_400, output: 610 } },
-    { agentId: 'main', at: t(14, 0, 10), attempts: [{ accountId: 'secondary', at: t(14, 0, 10), ms: 14_000, status: 200 }], id: 'req_a1f04c2e-7b3', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'main', session: 'bcc805b6', usage: { cacheWrite1h: 58_900, input: 2_300, output: 1_040 } },
-    { agentId: 'e90b', at: t(11, 0), attempts: [{ accountId: 'secondary', at: t(11, 0), ms: 6_200, status: 200 }], id: 'req_1eaa9bc1-a18', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'subagent', session: '407dd39b', usage: { cacheRead: 40_800, cacheWrite5m: 1_200, input: 1_700, output: 900 } },
-    { agentId: 'e90b', at: t(11, 8, 30), attempts: [{ accountId: 'primary', at: t(11, 8, 30), ms: 9_400, status: 200 }], id: 'req_868264bc-611', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'subagent', session: 'c64358b5', usage: { cacheWrite5m: 72_000, input: 3_000, output: 1_600 } },
+    { agentId: 'main', at: t(14, 1, 40), attempts: [{ accountId: 'secondary', at: t(14, 1, 40), ms: 6_000, status: 200 }], id: 'req_d4e8a7b2-916', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: '229bf72c', usage: { cacheWrite1h: 46_000, input: 1_200, output: 520 } },
+    { agentId: 'main', at: t(14, 1, 35), attempts: [{ accountId: 'secondary', at: t(14, 1, 35), ms: 12_000, status: 200 }], id: 'req_c90d3f61-a28', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: '0d588de5', usage: { cacheWrite1h: 44_600, input: 1_800, output: 870 } },
+    { agentId: 'e90b', at: t(14, 1, 30), attempts: [{ accountId: 'secondary', at: t(14, 1, 30), ms: 4_000, status: 200 }], id: 'req_b72e9d05-c14', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheWrite5m: 39_500, input: 1_400, output: 610 } },
+    { agentId: 'main', at: t(14, 0, 10), attempts: [{ accountId: 'secondary', at: t(14, 0, 10), ms: 14_000, status: 200 }], id: 'req_a1f04c2e-7b3', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: 'bcc805b6', usage: { cacheWrite1h: 58_900, input: 2_300, output: 1_040 } },
+    { agentId: 'e90b', at: t(11, 0), attempts: [{ accountId: 'secondary', at: t(11, 0), ms: 6_200, status: 200 }], id: 'req_1eaa9bc1-a18', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheRead: 40_800, cacheWrite5m: 1_200, input: 1_700, output: 900 } },
+    { agentId: 'e90b', at: t(11, 8, 30), attempts: [{ accountId: 'primary', at: t(11, 8, 30), ms: 9_400, status: 200 }], id: 'req_868264bc-611', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: 'c64358b5', usage: { cacheWrite5m: 72_000, input: 3_000, output: 1_600 } },
     // The subagent turns that place two of the round's sessions on secondary just before it, and the keepalive's probe
     // of the first, which renews its pin without walking past a rule.
-    { agentId: 'e90b', at: t(10, 59, 30), attempts: [{ accountId: 'secondary', at: t(10, 59, 30), ms: 900, status: 200 }], id: 'req_0b7c2d94-e61', keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-4-6', requestClass: 'subagent', session: '407dd39b', usage: { cacheRead: 40_800, output: 1 } },
-    { agentId: 'e90b', at: t(10, 59, 10), attempts: [{ accountId: 'secondary', at: t(10, 59, 10), ms: 7_000, status: 200 }], id: 'req_f3b6d218-85a', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'subagent', session: 'c64358b5', usage: { cacheWrite5m: 72_000, input: 2_600, output: 1_300 } },
-    { agentId: 'e90b', at: t(10, 58, 59), attempts: [{ accountId: 'secondary', at: t(10, 58, 59), ms: 3_000, status: 200 }], id: 'req_e5a1c093-4d7', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'subagent', session: '407dd39b', usage: { cacheWrite5m: 40_800, input: 1_500, output: 700 } },
+    { agentId: 'e90b', at: t(10, 59, 30), attempts: [{ accountId: 'secondary', at: t(10, 59, 30), ms: 900, status: 200 }], id: 'req_0b7c2d94-e61', keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheRead: 40_800, output: 1 } },
+    { agentId: 'e90b', at: t(10, 59, 10), attempts: [{ accountId: 'secondary', at: t(10, 59, 10), ms: 7_000, status: 200 }], id: 'req_f3b6d218-85a', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: 'c64358b5', usage: { cacheWrite5m: 72_000, input: 2_600, output: 1_300 } },
+    { agentId: 'e90b', at: t(10, 58, 59), attempts: [{ accountId: 'secondary', at: t(10, 58, 59), ms: 3_000, status: 200 }], id: 'req_e5a1c093-4d7', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheWrite5m: 40_800, input: 1_500, output: 700 } },
     { agentId: 'main', at: t(12, 40, 58), attempts: [{ accountId: 'research', at: t(12, 40, 58), ms: 9_000, status: 200 }], id: BUDGET_CROSSING_ID, keyId: 'ci', model: HAIKU, requestClass: 'main', session: 'cd9a5904', usage: { input: 6_200, output: 2_900 } },
     {
       agentId: 'main',
@@ -1212,10 +1212,10 @@ function storyRequests(): RequestLog[] {
         { accountId: 'nightly', at: t(10, 58, 41), cooldown: retryAfter(t(10, 58, 41) + 800), ms: 800, status: 429 },
         { accountId: 'overflow', at: t(10, 58, 42), ms: 5_200, status: 200 },
       ],
-      canonical: 'claude-sonnet-4-5-20250929',
+      canonical: 'claude-sonnet-4-6',
       id: REJECTION_STORY_ID,
       keyId: 'desktop',
-      model: 'claude-sonnet-4-5',
+      model: 'claude-sonnet-4-6',
       requestClass: 'main',
       session: '0d588de5',
       usage: { cacheRead: 21_400, cacheWrite5m: 3_100, input: 1_500, output: 880 },
@@ -1228,7 +1228,7 @@ function storyRequests(): RequestLog[] {
       errorCode: 'stream_undecodable',
       id: 'req_5e2f7a19-b03',
       keyId: 'laptop',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-4-5',
       outcome: 'failed',
       requestClass: 'main',
       session: CLIENT_SESSION_ID,
@@ -1243,7 +1243,7 @@ function storyRequests(): RequestLog[] {
       errorCode: 'stream_undecodable',
       id: 'req_5e3c8a41-d27',
       keyId: 'laptop',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-4-5',
       outcome: 'incomplete',
       requestClass: 'main',
       session: CLIENT_SESSION_ID,
@@ -1303,7 +1303,7 @@ function storyRequests(): RequestLog[] {
     { agentId: 'main', at: t(14, 12, 30), attempts: [{ accountId: 'primary', at: t(14, 12, 30), ms: 5_600, status: 200 }], id: 'req_6e1f3b98-a24', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 52_300, cacheWrite1h: 900, input: 2_100, output: 870 } },
     // A desktop session placed on secondary before its spent edge, whose next turn secondary answers with a 429 on the
     // spent 5-hour window while primary is full, so the turn fails over to primary.
-    { agentId: 'main', at: t(14, 1, 45), attempts: [{ accountId: 'secondary', at: t(14, 1, 45), ms: 5_000, status: 200 }], id: 'req_d2a8f6c1-d50', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'main', session: FAILED_OVER_SESSION_ID, usage: { cacheWrite1h: 52_000, input: 1_600, output: 700 } },
+    { agentId: 'main', at: t(14, 1, 45), attempts: [{ accountId: 'secondary', at: t(14, 1, 45), ms: 5_000, status: 200 }], id: 'req_d2a8f6c1-d50', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: FAILED_OVER_SESSION_ID, usage: { cacheWrite1h: 52_000, input: 1_600, output: 700 } },
     {
       agentId: 'main',
       at: t(14, 7, 50),
@@ -1313,7 +1313,7 @@ function storyRequests(): RequestLog[] {
       ],
       id: 'req_b8c3e9d4-e61',
       keyId: 'desktop',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-4-5',
       requestClass: 'main',
       session: FAILED_OVER_SESSION_ID,
       usage: { cacheWrite1h: 54_800, input: 1_900, output: 1_020 },
@@ -1383,10 +1383,10 @@ function storyRequests(): RequestLog[] {
     },
     // The shed session's next turn inside all's affinity window, which renews the pin the round's move wrote on primary
     // and reads the source the move left on it.
-    { agentId: 'e90b', at: t(11, 13, 40), attempts: [{ accountId: 'primary', at: t(11, 13, 40), ms: 5_600, status: 200 }], id: 'req_5d1f8c3a-b27', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'subagent', session: 'c64358b5', usage: { cacheRead: 75_000, cacheWrite5m: 1_900, input: 1_400, output: 820 } },
+    { agentId: 'e90b', at: t(11, 13, 40), attempts: [{ accountId: 'primary', at: t(11, 13, 40), ms: 5_600, status: 200 }], id: 'req_5d1f8c3a-b27', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: 'c64358b5', usage: { cacheRead: 75_000, cacheWrite5m: 1_900, input: 1_400, output: 820 } },
     // The failed-over session's next turn inside the window, which renews the pin the failover landed on primary and
     // reads the source the landing left on it.
-    { agentId: 'main', at: t(14, 13, 5), attempts: [{ accountId: 'primary', at: t(14, 13, 5), ms: 6_100, status: 200 }], id: 'req_e2c7a4f9-d13', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'main', session: FAILED_OVER_SESSION_ID, usage: { cacheRead: 56_700, cacheWrite1h: 1_300, input: 1_500, output: 760 } },
+    { agentId: 'main', at: t(14, 13, 5), attempts: [{ accountId: 'primary', at: t(14, 13, 5), ms: 6_100, status: 200 }], id: 'req_e2c7a4f9-d13', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: FAILED_OVER_SESSION_ID, usage: { cacheRead: 56_700, cacheWrite1h: 1_300, input: 1_500, output: 760 } },
     // Two auto-mode classifier calls of the laptop session the summary forks run in, each judging a subagent's tool
     // call on primary's plan. They read no cache, so the rollups' draws for the hour stay where they were.
     { agentId: 'a5e1', at: t(12, 41, 8), attempts: [{ accountId: 'primary', at: t(12, 41, 8), ms: 1_100, status: 200 }], classifier: 'client', id: 'req_4d9a1e6b-c20', keyId: 'laptop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: FORK_SESSION_ID, usage: { input: 3_400, output: 14 } },
@@ -1582,8 +1582,8 @@ const LIVE_PIN: Map<string, { accountId: string; createdAt: number }> = (() => {
   return out;
 })();
 
-/** Whether an account serves the model: secondary serves Sonnet 4.6 alone. */
-const serves = (accountId: string, model: string) => accountId !== UNPRICED_ACCOUNT || model === 'claude-sonnet-4-6';
+/** Whether an account serves the model: secondary serves Sonnet 4.5 alone. */
+const serves = (accountId: string, model: string) => accountId !== UNPRICED_ACCOUNT || model === 'claude-sonnet-4-5';
 
 /**
  * The move rule that takes a pin on `from` to the row's account in the engine's order, or null where none would. The

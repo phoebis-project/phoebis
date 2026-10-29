@@ -1263,7 +1263,7 @@ test('a failed usage poll and a stream cut after its head read their words, thei
   ]);
   // The upstream's own request id keeps its underscores, as the request drawer prints it.
   const cut = { attempt: 2, bytes_relayed: 18_432, code: 'stream_stalled', text: 'no chunk for 30 s', upstream_request_id: 'req_011CUcut_7a' };
-  const own = { model: 'claude-sonnet-4-6', requestId: 'req_5e2f7a19-b03', sessionId: 's1-0000-4000' };
+  const own = { model: 'claude-sonnet-4-5', requestId: 'req_5e2f7a19-b03', sessionId: 's1-0000-4000' };
   assert.deepEqual(pairs('stream_interrupted', cut, own).slice(2), [
     ['Request', ['req_5e2f7a19-b03']],
     ['Code', ['stream_stalled']],

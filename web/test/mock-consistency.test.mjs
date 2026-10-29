@@ -245,7 +245,7 @@ test("the fresh fit's demand prices the 5-hour window as the mock's fit does, wh
   const at = Date.parse('2026-09-16T14:00:00Z');
   const pool = { windDownMinutes: 60, windowCeiling: 0.9 };
   // A drawn placement, so no prior joins the account's burn.
-  const r = { request: { at: iso(at), bodyTokens: 20_000, canonicalModel: 'claude-sonnet-4-6' }, requestId: 'req_drawn' };
+  const r = { request: { at: iso(at), bodyTokens: 20_000, canonicalModel: 'claude-sonnet-4-5' }, requestId: 'req_drawn' };
   const window = (demand) => ({ demand, horizon: iso(at + 2 * HOUR), projection: 0.6, reserved: 0, utilization: 0.5 });
   // A slowed account burns its 5-hour window at 0.02 per hour, a demand of 0.25 at its speed, which carries the window
   // to the ceiling about 1.6 hours out, before the horizon two hours away.
@@ -705,9 +705,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([s.overview.equivalent24h.unpriced, ...s.overview.hourly.map((h) => h.equivalent.unpriced)].filter((u) => u.fiveHour || u.sevenDay), [], 'the dashboard reads no flag');
     for (const k of s.keys) assert.deepEqual([k.lifetime.equivalent.unpriced, k.usage7d.equivalent.unpriced], [shared, shared], `${k.id} reads no flag`);
     for (const p of s.pools) assert.deepEqual([p.equivalent24h.unpriced, ...p.traffic24h.map((b) => b.equivalent.unpriced)].filter((u) => u.fiveHour || u.sevenDay), [], `${p.id} reads no flag`);
-    // The story's Sonnet 4.6 account has no weight of its own and prices through its model tier's fallback.
+    // The story's Sonnet 4.5 account has no weight of its own and prices through its model tier's fallback.
     const secondary = (await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'account' })).find((g) => g.key === 'secondary');
-    assert.ok(secondary && secondary.estimated && secondary.costEquivalent.seven_day > 0, 'the Sonnet 4.6 account prices an estimate');
+    assert.ok(secondary && secondary.estimated && secondary.costEquivalent.seven_day > 0, 'the Sonnet 4.5 account prices an estimate');
     assert.deepEqual(secondary.unpriced, both, 'and is never unpriced');
     // The switch lends the story one plan request on a model the cost model lists in no tier, in a row of its own.
     globalThis.localStorage = { getItem: (key) => (key === 'phoebis.mockUnpriced' ? '1' : null) };
@@ -732,7 +732,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const g of switched.models.filter((x) => x.key !== unlisted.key)) assert.deepEqual(g.unpriced, plain.find((p) => p.key === g.key).unpriced, `${g.key} keeps its flags`);
     const [whole] = switched.all;
     assert.deepEqual([whole.unpriced, Object.keys(whole.costEquivalent).filter((w) => w === 'five_hour' || w === 'seven_day')], [{ ...whole.unpriced, five_hour: true, seven_day: true }, []], "the whole range's group flags both windows and leaves them out, so no partial sum reads as the whole");
-    assert.deepEqual(switched.accounts.find((g) => g.key === 'secondary').unpriced, both, 'the Sonnet 4.6 account stays priced beside it');
+    assert.deepEqual(switched.accounts.find((g) => g.key === 'secondary').unpriced, both, 'the Sonnet 4.5 account stays priced beside it');
     const bucket = switched.series.find((p) => p.groups.some((g) => g.key === unlisted.key));
     assert.deepEqual(bucket?.groups.filter((g) => g.unpriced.seven_day).map((g) => g.key), [unlisted.key], 'one bucket holds it, its group the one flagged');
     const flaggedPoints = switched.burn.points.filter((p) => p.fiveHourUnpriced || p.sevenDayUnpriced);
@@ -3044,10 +3044,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.ok(values.length > 0 && values.every((v) => typeof v === 'number'), `${r.id} on ${r.canonicalModel} reads ${JSON.stringify([r.costShares, r.costEquivalent])}`);
       assert.equal(r.estimated, weight?.estimated, `${r.id} on ${r.canonicalModel} reads estimated ${r.estimated}`);
       priced += 1;
-      if (r.canonicalModel === 'claude-sonnet-4-6') estimated += 1;
+      if (r.canonicalModel === 'claude-sonnet-4-5') estimated += 1;
     }
     assert.ok(priced > 0, 'the story prices a share');
-    assert.ok(estimated > 0, "the story's Sonnet 4.6 rows price an estimate");
+    assert.ok(estimated > 0, "the story's Sonnet 4.5 rows price an estimate");
   });
 
   test(`the story's two classifier calls of one session read zero shares with the reason and book nothing, at ${at}`, async () => {
@@ -3191,7 +3191,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.ok(typeof x.burnEquivalent === 'number' && typeof x.burn === 'number', `${x.sessionId} on ${x.model} burns ${x.burn} and reads ${x.burnEquivalent}`);
       assert.equal(x.estimated, s.lib.weightOrFallback(costs, x.model, 'five_hour')?.estimated, `${x.sessionId} on ${x.model}`);
     }
-    assert.ok(pinned.some((x) => x.estimated), "a pin on the story's Sonnet 4.6 burns an estimate");
+    assert.ok(pinned.some((x) => x.estimated), "a pin on the story's Sonnet 4.5 burns an estimate");
   });
 
   test(`every row's phases are in order and agree with its ttfbMs and durationMs, at ${at}`, async () => {

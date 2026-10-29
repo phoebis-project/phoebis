@@ -5179,7 +5179,7 @@ async function burnGridFour(theme) {
 }
 
 /**
- * The story account serving Sonnet 4.6 alone (the mock's `UNPRICED_ACCOUNT`), so none of its lines has a model week and
+ * The story account serving Sonnet 4.5 alone (the mock's `UNPRICED_ACCOUNT`), so none of its lines has a model week and
  * its Burn tab draws three cards.
  */
 const BURN_THREE_ACCOUNT = 'secondary';
@@ -5233,7 +5233,7 @@ async function burnGridThree(theme) {
  * transparent box with a border in its color, taller than the 2 px line swatch, the type its neighbor's. The model
  * unlisted entry reads against the entry before it, a planned line's, on type and swatch size, and, where an account
  * whose tier the cost model does not size draws a tier unknown entry beside it, that muted entry on type, swatch size
- * and color too. In the mock's story every model has a model tier the cost model weighs, `secondary`'s Sonnet 4.6
+ * and color too. In the mock's story every model has a model tier the cost model weighs, `secondary`'s Sonnet 4.5
  * pricing at its tier's latest weight as an estimate, so the estimated entry must draw there and the model unlisted
  * entry must not. The router's seed bills no subscription traffic, so there the pass records what it reads.
  */
@@ -5271,7 +5271,7 @@ async function planLegend(theme) {
       return;
     }
     if (read.estimated === null) {
-      if (mock) failures.push(`${theme} /analytics: the story prices Sonnet 4.6 as an estimate, yet no estimated entry draws`);
+      if (mock) failures.push(`${theme} /analytics: the story prices Sonnet 4.5 as an estimate, yet no estimated entry draws`);
     } else {
       const e = read.estimated;
       if (e.background !== 'rgba(0, 0, 0, 0)' || !e.border?.startsWith('1px solid') || !(e.height > 2)) failures.push(`${theme} /analytics: the estimated entry's swatch reads ${e.background} under ${e.border}, ${e.height}px tall, not a hollow box`);

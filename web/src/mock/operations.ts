@@ -73,20 +73,20 @@ const sessionSpec: ({
 ))[] = [
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', lastUseFromRows: true, subagents: { model: 'claude-sonnet-5', accountId: 'nightly' } },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting' },
-  { keyId: 'desktop', accountId: 'nightly', model: 'claude-sonnet-4-6', state: 'idle', agents: 2, companion: 'silent' },
+  { keyId: 'desktop', accountId: 'nightly', model: 'claude-sonnet-4-5', state: 'idle', agents: 2, companion: 'silent' },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting' },
   { keyId: 'desktop', accountId: 'nightly', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' } },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'busy', agents: 1, companion: 'reporting' },
   // Idle for longer than the pool's one-hour max idle, so its recipe is held and its retained prompt is gone.
-  { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-4-6', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95 },
-  // The laptop key allows Haiku 4.5 and Sonnet 4.6 only, so its subagents stay inside that list.
-  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-6', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' } },
+  { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-4-5', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95 },
+  // The laptop key allows Haiku 4.5 and Sonnet 4.5 only, so its subagents stay inside that list.
+  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' } },
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting', noEffort: true },
   // Five of its agents are written below, so it holds an agent in each lifecycle word, three of them released.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 7, companion: 'reporting' },
   { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none', lastUseFromRows: true },
   { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 2, companion: 'none', lastUseFromRows: true },
-  { keyId: 'laptop', accountId: 'secondary', model: 'claude-sonnet-4-6', state: null, agents: 1, companion: 'none' },
+  { keyId: 'laptop', accountId: 'secondary', model: 'claude-sonnet-4-5', state: null, agents: 1, companion: 'none' },
   { keyId: 'desktop', accountId: 'overflow', model: 'claude-opus-5', state: null, agents: 1, companion: 'none', idleMinutes: 570 },
   // Seen by the router but with nothing in the ledger, so the per-row jump to
   // analytics has no traffic to land on.
@@ -94,7 +94,7 @@ const sessionSpec: ({
   // A session the mod released whole, whose lines' last uses, minutes back, date the release inside all's one-hour
   // cache TTL, since the router lists a released record for one TTL after its release and then not at all.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'idle', agents: 3, companion: 'reporting', released: true, sessionId: RELEASED_SESSION_ID },
-  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-6', state: 'busy', agents: 1, companion: 'reporting', sessionId: CLIENT_SESSION_ID },
+  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 1, companion: 'reporting', sessionId: CLIENT_SESSION_ID },
   // One session the mod ended, which keeps its lines, its released subagents' last probes dating their release inside
   // all's one-hour cache TTL, and which the Sessions view's default filters hide, and one no companion reports, last
   // used two hours ago, past the one-hour non-companion timeout, so the route's list leaves it out.
@@ -125,7 +125,7 @@ const sessionSpec: ({
   {
     keyId: 'laptop',
     accountId: 'secondary',
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-4-5',
     state: 'idle',
     agents: 1,
     companion: 'none',
@@ -899,7 +899,7 @@ const auxiliaryOnlyRecipe: KeepaliveRecipe = {
   lastGuard: 'rearm',
   lastProbeAt: null,
   lastRequestAt: ago(3 * MINUTE),
-  model: 'claude-sonnet-4-6',
+  model: 'claude-sonnet-4-5',
   nextProbeAt: ahead(75_000),
   parkKind: null,
   poolId: 'all',

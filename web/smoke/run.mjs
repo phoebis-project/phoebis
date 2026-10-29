@@ -658,7 +658,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   const target = (href) => href?.split('?')[0] ?? null;
   const listed = await badges();
   const read = listed.map((b) => [b.text, b.tone, target(b.href), members(b.title)]);
-  // The model's item counts the story's own Sonnet 4.6 plan requests and names its tier's latest weighted model, so
+  // The model's item counts the story's own Sonnet 4.5 plan requests and names its tier's latest weighted model, so
   // its members are read off the mock's answer rather than written here.
   const unweighted = (await api.getAttention()).find((i) => i.kind === 'model_unweighted');
   // The meter drift's windows are read off the answer too, each end the route sends in milliseconds read as a date.
@@ -675,7 +675,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     ['Usage poll backing off: secondary', 'badge--warning', '/accounts/secondary', ['account: secondary', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
     // The model's item ranks after the poll backoff and before the routing conditions, the route's order of the kinds.
     ...(unweighted
-      ? [['Model weight estimated: claude-sonnet-4-6', 'badge--warning', null, [attentionDetail(unweighted, Date.now()), `model: ${unweighted.detail.model}`, `requests: ${unweighted.detail.requests}`, `tier: ${unweighted.detail.tier}`, `weight_of: ${unweighted.detail.weight_of}`]]]
+      ? [['Model weight estimated: claude-sonnet-4-5', 'badge--warning', null, [attentionDetail(unweighted, Date.now()), `model: ${unweighted.detail.model}`, `requests: ${unweighted.detail.requests}`, `tier: ${unweighted.detail.tier}`, `weight_of: ${unweighted.detail.weight_of}`]]]
       : []),
     // Nightly's meter drift ranks after the model's item and before the routing conditions, reads its off window and
     // opens the Meter view on the account.
@@ -8070,7 +8070,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 {
   // A round counts the triggering pool's pins alone: with primary moved from all into work and laptop moved into work,
   // work's two primary pins (the busy laptop sessions) are its slice, so its preview reads them alone, whatever
-  // desktop, still all's key, holds there. Their Sonnet 4.6 burns at its model tier's latest weight, so the round marks
+  // desktop, still all's key, holds there. Their Sonnet 4.5 burns at its model tier's latest weight, so the round marks
   // one of them, and no pin stays unpriced. Studio, whose sessions project it past any ceiling under 95 %, leaves work
   // for the check, and the annex is the sibling with runway.
   const pools = await api.listPools();
@@ -8107,7 +8107,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(120);
   const line = group(dlg, 'Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
   results.push({
-    name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool, marking one of laptop's two Sonnet 4.6 pins priced at their model tier's weight",
+    name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool, marking one of laptop's two Sonnet 4.5 pins priced at their model tier's weight",
     // The marked pin's share of the excess decays with the moving clock, so the figure is read by shape.
     ok: /^1 member projects over the ceiling: primary\. A round there would mark 1 session \(0 warm\), \d+\.\d %\/h of the excess, to move to a sibling with runway\.$/.test(line),
     missing: [line],
@@ -11125,7 +11125,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   }
   // Under native, the shell's default, the Cost cell reads a row in the unit its funding pays in: dollars over the
   // funding word for an answer an API key account served, and 20x equivalents for a subscription request, the story's
-  // Sonnet 4.6 turns among them, which the cost model does not weigh and which read their model tier's latest weighed
+  // Sonnet 4.5 turns among them, which the cost model does not weigh and which read their model tier's latest weighed
   // model, estimated. The share position reads the account's own shares, so the rows are picked by their reading there,
   // and the three dollar positions read what the unit legend names under each.
   const servedBy = (r) => r.attempts[r.attempts.length - 1] ?? null;
@@ -11133,7 +11133,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   // An estimated row with tokens, so the mark is read on figures above zero.
   const fallbackRow = requests.find((r) => {
     const native = costUnitOf(r, 'native');
-    return r.canonicalModel === 'claude-sonnet-4-6' && r.estimated && costUnitOf(r, 'share').kind === 'shares' && native.kind === 'equivalent' && native.equivalents.every((e) => e.share > 0);
+    return r.canonicalModel === 'claude-sonnet-4-5' && r.estimated && costUnitOf(r, 'share').kind === 'shares' && native.kind === 'equivalent' && native.equivalents.every((e) => e.share > 0);
   });
   // A request no account served (a refusal or an exhaustion) is billed in dollars at zero with no funding to name.
   const unservedRow = requests.find((r) => r.attempts.length === 0 && (r.status === 401 || r.status === 429));
@@ -18570,7 +18570,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const BREAKDOWNS = [
     ['Traffic', 'Traffic by key', ['Key']],
     ['Cache', 'Misses by reason by key', ['Key']],
-    // Under native the story's Sonnet 4.6 model prices through its model tier, so its label carries the estimate.
+    // Under native the story's Sonnet 4.5 model prices through its model tier, so its label carries the estimate.
     ['Cache', 'Cache by model', ['Model'], true],
   ];
   let read = 0;
@@ -18817,8 +18817,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const rowsOf = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', [...tr.querySelectorAll('td.num')].map((td) => td.textContent?.trim() ?? '')]);
     const cellsOf = (account) => rowsOf.find(([label]) => label === account)?.[1] ?? [];
     const reads = (cells, want) => cells.length === want.length && cells.every((c, i) => (want[i] === 'share' ? isShare(c) : want[i] === 'count' ? isCount(c) : c === '-'));
-    // nightly's and primary's mornings ran Fable on the plan, so their rows price three windows, primary's Sonnet 4.6
-    // turns among them. The cost model has no weight for Sonnet 4.6, so those turns and secondary's, which serves it
+    // nightly's and primary's mornings ran Fable on the plan, so their rows price three windows, primary's Sonnet 4.5
+    // turns among them. The cost model has no weight for Sonnet 4.5, so those turns and secondary's, which serves it
     // alone, price at their model tier's latest weight on the two shared windows. studio's one row ran a laptop-lane
     // model with no 7-day Fable window. Every other row counts its plan requests, none on an API key account, and
     // prices no share.
@@ -18966,7 +18966,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [`model ${JSON.stringify(modelNamed)}`, `want ${JSON.stringify(modelShares(byModelNamed))}`, `wasted ${JSON.stringify(wastedNamed)} against ${JSON.stringify(wastedWant)}`, `pools ${JSON.stringify(poolNamed)} against ${JSON.stringify(poolWant)}`],
     });
     {
-      // With secondary named, whose Sonnet 4.6 traffic the story prices through its model tier's fallback, that
+      // With secondary named, whose Sonnet 4.5 traffic the story prices through its model tier's fallback, that
       // model's share cells and the by-pool probe share carry the tilde and the estimate's title, as the native cells
       // do, each read off the route's own answer.
       const asked = countCalls('getAnalyticsBreakdown');
@@ -19146,7 +19146,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     }
     {
       // Under native, a fresh browser's position, the Cost section reads one answer in two units: the plan rows' 20x
-      // 7-day equivalent and the billed rows' dollars. The story's day holds Sonnet 4.6 rows, which the cost model does
+      // 7-day equivalent and the billed rows' dollars. The story's day holds Sonnet 4.5 rows, which the cost model does
       // not weigh, so the subscription figures carry the mark. The ratios divide the totals of the page's own read,
       // summed as the page sums them, and the patterns take the mark where the story may or may not set it.
       localStorage.removeItem('phoebis.unit');
@@ -19557,7 +19557,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     {
       // Under native the Cache and Cache warming sections read one answer in two units, as the Cost section does: the
       // plan rows' 20x 7-day equivalent and the billed rows' dollars. Every figure is derived from the page's own
-      // reads, summed as the page sums them, and the mark leads a figure of a group the story's Sonnet 4.6 rows
+      // reads, summed as the page sums them, and the mark leads a figure of a group the story's Sonnet 4.5 rows
       // estimate.
       localStorage.removeItem('phoebis.unit');
       const asked = countCalls('getAnalyticsBreakdown');
@@ -20386,7 +20386,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const subtitleOf = (t) => card(t)?.querySelector('.card__subtitle')?.textContent ?? '';
   {
     // Native reads a subscription request in 20x window equivalents, which no account tier reads, so every subscription
-    // account draws on each window's card, `secondary`'s Sonnet 4.6 traffic through its model tier's latest weighted
+    // account draws on each window's card, `secondary`'s Sonnet 4.5 traffic through its model tier's latest weighted
     // model, and the API-key accounts, whose buckets read a zero equivalent, draw on none.
     const read = PLAN_CARDS.map((t) => ({ items: legendItems(t), lines: lineLabels(t), t }));
     const estimated = read.map((r) => r.items.filter((li) => labelOf(li) === 'estimated'));
@@ -20395,7 +20395,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const shortOf = { '5-hour per hour': '5h', '7-day per hour': '7d' };
     const equivalentValue = (t, value) => new RegExp(`^~?\\d[\\d.e-]*% 20x ${shortOf[t]}$`).test(value);
     results.push({
-      name: "/analytics under native the 5-hour and 7-day cards draw every subscription account in 20x equivalents named by their window, the Sonnet 4.6 account's through its model tier, no API-key account and no model unlisted entry",
+      name: "/analytics under native the 5-hour and 7-day cards draw every subscription account in 20x equivalents named by their window, the Sonnet 4.5 account's through its model tier, no API-key account and no model unlisted entry",
       ok:
         read.every((r) => JSON.stringify([...r.lines].sort()) === JSON.stringify(subscribed)) &&
         read.every((r) => r.items.filter((li) => subscribed.includes(labelOf(li))).every((li) => equivalentValue(r.t, valueOf(li)))) &&
@@ -20540,23 +20540,23 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [`drawn ${week.join(',')}`, `on a week ${onWeek.join(',')}`, subtitleOf('Model week per hour')],
     });
     // The legend's per-hour mean ends in `%` over a single gap too, so the buckets themselves are read: no bucket with
-    // tokens on a subscription account leaves a window unpriced, the ones Sonnet 4.6 ran on among them, and a bucket of
+    // tokens on a subscription account leaves a window unpriced, the ones Sonnet 4.5 ran on among them, and a bucket of
     // an API-key account with tokens reads a zero equivalent rather than none.
     const gaps = [];
-    const sonnet46 = requests.filter((r) => r.model === 'claude-sonnet-4-6' && r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output > 0);
+    const sonnet45 = requests.filter((r) => r.model === 'claude-sonnet-4-5' && r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output > 0);
     let carried = 0;
     let billed = 0;
     for (const days of [1, 7]) {
       const burn = await api.getAnalyticsBurn({ from: new Date(Date.now() - days * 86_400_000).toISOString(), to: new Date().toISOString() }, 'account');
-      const ranSonnet46 = (p) => sonnet46.some((r) => r.accountId === p.group && Date.parse(r.at) >= Date.parse(p.at) && Date.parse(r.at) < Date.parse(p.at) + burn.bucketSeconds * 1_000);
+      const ranSonnet45 = (p) => sonnet45.some((r) => r.accountId === p.group && Date.parse(r.at) >= Date.parse(p.at) && Date.parse(r.at) < Date.parse(p.at) + burn.bucketSeconds * 1_000);
       const busy = burn.points.filter((p) => ['nightly', 'primary', 'secondary'].includes(p.group) && p.tokens > 0);
-      carried += busy.filter(ranSonnet46).length;
+      carried += busy.filter(ranSonnet45).length;
       gaps.push(...busy.filter((p) => p.fiveHourShare === null || p.sevenDayShare === null || p.fiveHourEquivalent === null || p.sevenDayEquivalent === null).map((p) => `${days}d ${p.group} ${p.at}`));
       const keyed = burn.points.filter((p) => p.unit === 'usd' && p.tokens > 0);
       billed += keyed.length;
       gaps.push(...keyed.filter((p) => p.fiveHourEquivalent !== 0 || p.sevenDayEquivalent !== 0).map((p) => `${days}d ${p.group} ${p.at} reads ${p.fiveHourEquivalent}`));
     }
-    results.push({ name: '/analytics every bucket with tokens of a subscription account carries its two shares and equivalents, the buckets Sonnet 4.6 ran on among them, and an API-key bucket a zero equivalent', ok: gaps.length === 0 && carried > 0 && billed > 0, missing: gaps });
+    results.push({ name: '/analytics every bucket with tokens of a subscription account carries its two shares and equivalents, the buckets Sonnet 4.5 ran on among them, and an API-key bucket a zero equivalent', ok: gaps.length === 0 && carried > 0 && billed > 0, missing: gaps });
   }
   {
     // Window shares read each subscription account's own windows under the account grouping, the route's gate.
@@ -20746,7 +20746,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
     }
     {
-      // `secondary` ran three hours on Sonnet 4.6, which the cost model weighs through its model tier: the tooltip of
+      // `secondary` ran three hours on Sonnet 4.5, which the cost model weighs through its model tier: the tooltip of
       // its first hour titles its figure with the estimate and marks it.
       const hours = [11, 12, 13].map((h) => Date.UTC(2026, 8, 16, h));
       api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at) => burnPoint({ at: new Date(at).toISOString(), estimated: true, fiveHourEquivalent: 0.02, group: 'secondary', sevenDayEquivalent: 0.002, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share' })) });
@@ -22324,7 +22324,7 @@ m.unmount();
 m = await mount('/keepalive');
 results.push({ name: '/keepalive redirects to /sessions', ok: m.text().includes('One row per session'), missing: [m.text().slice(0, 120)] });
 m.unmount();
-for (const path of ['/models', '/models#claude-sonnet-4-6']) {
+for (const path of ['/models', '/models#claude-sonnet-4-5']) {
   m = await mount(path);
   results.push({ name: `${path} redirects to /keys`, ok: m.location().pathname === '/keys' && m.container.querySelector('.topbar__title')?.textContent === 'Keys', missing: [JSON.stringify(m.location()), m.container.querySelector('.topbar__title')?.textContent ?? 'no title'] });
   m.unmount();

@@ -1671,15 +1671,15 @@ const sessionId = (prefix: string) => REQUESTS.find((r) => r.sessionId?.startsWi
 
 /**
  * The 11:00 round's four pins on secondary in its order: the cold one, then the warm ones by burn over their prompt.
- * Each holds Sonnet 4.6, the one model secondary serves, and burns its share of the 5-hour window per hour, which sum
+ * Each holds Sonnet 4.5, the one model secondary serves, and burns its share of the 5-hour window per hour, which sum
  * to the account's burn. The first two cover the target under the cap and plan their moves to primary, where they fit,
  * and the walk stops before the current pin.
  */
 const ROUND_PINS: RoundPin[] = [
-  { agentId: 'main', burn: 0.0034, cold: true, keyId: 'desktop', lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('0d588de5'), skip: null },
-  { agentId: 'e90b', burn: 0.0142, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: true, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('c64358b5'), skip: null },
-  { agentId: 'e90b', burn: 0.0052, cold: false, keyId: 'desktop', lastInputTokens: 41_000, marked: false, model: 'claude-sonnet-4-6', note: 'current', sessionId: sessionId('407dd39b'), skip: null },
-  { agentId: 'c21e', burn: 0.0071, cold: false, keyId: 'desktop', lastInputTokens: 64_000, marked: false, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('76ddb35b'), skip: null },
+  { agentId: 'main', burn: 0.0034, cold: true, keyId: 'desktop', lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('0d588de5'), skip: null },
+  { agentId: 'e90b', burn: 0.0142, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: true, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('c64358b5'), skip: null },
+  { agentId: 'e90b', burn: 0.0052, cold: false, keyId: 'desktop', lastInputTokens: 41_000, marked: false, model: 'claude-sonnet-4-5', note: 'current', sessionId: sessionId('407dd39b'), skip: null },
+  { agentId: 'c21e', burn: 0.0071, cold: false, keyId: 'desktop', lastInputTokens: 64_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('76ddb35b'), skip: null },
 ];
 
 /**
@@ -1695,7 +1695,7 @@ const parkedOpus = SESSIONS.find((x) => x.sessionId === SESSION_IDS[3] && x.keyI
  * before the order.
  */
 const NO_RUNWAY_PINS: RoundPin[] = [
-  { agentId: 'main', burn: 0.052, cold: true, keyId: 'desktop', lastInputTokens: 43_000, marked: false, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('bcc805b6'), skip: 'no_runway' },
+  { agentId: 'main', burn: 0.052, cold: true, keyId: 'desktop', lastInputTokens: 43_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('bcc805b6'), skip: 'no_runway' },
   { agentId: 'main', burn: 0.033, cold: false, keyId: 'desktop', lastInputTokens: 52_300, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: sessionId('d7167642'), skip: 'no_runway' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: parkedOpus?.lastInputTokens ?? 0, marked: false, model: parkedOpus?.model ?? 'claude-opus-5', note: null, sessionId: SESSION_IDS[3], skip: 'fast_lane' },
 ];
