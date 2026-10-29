@@ -79,7 +79,7 @@ const CLIENT_PATTERN_PLAIN = 'Not linked: the client pattern matches other here,
  * The hover of a count the Analytics page draws under several client patterns: the request log's client filter takes
  * one pattern, so a link could list fewer rows than the count holds or, with the patterns dropped, more.
  */
-export const CLIENT_PATTERNS_PLAIN = 'Several client patterns are set, and the request log takes one.';
+export const CLIENT_PATTERNS_PLAIN = 'Several client patterns are set, and the request log takes one';
 
 /**
  * The key selectors a link carries: a session view's key lifetime alone while the page reads the session under one,

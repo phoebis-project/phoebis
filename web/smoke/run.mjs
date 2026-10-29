@@ -21821,7 +21821,7 @@ m.unmount();
 // travels as a pattern that matches itself in full, each value draws a chip of its own in the mono face, and the counts
 // that link into the request log carry one client pattern and read plain under several, since that log takes one.
 {
-  const PLAIN = 'Several client patterns are set, and the request log takes one.';
+  const PLAIN = 'Several client patterns are set, and the request log takes one';
   const sent = recordedCalls('getAnalyticsBreakdown');
   const page = await mount('/analytics#cache', { now: CLOCK_ORIGIN });
   sent.restore();
