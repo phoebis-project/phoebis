@@ -360,9 +360,9 @@ const SEEDS = [
   // ago and a profile read four hours ago found its organization holding no plan, so the router answers no window for
   // it, its poll has asked it nothing since the flag, and its 7-day trend ends at its last clean poll. The router
   // stores the document that read found, a free organization on Pro's tier word billed as none, before it flags the
-  // account, so the subscription block reads Free. The windows are that poll's reading, which the final map empties as the route does:
-  // the end lies inside both, the 5-hour one three hours old at the end and resetting two hours after it, the 7-day one
-  // three days old at the end and resetting four days after it.
+  // account, so the subscription block reads Free. The windows are that poll's reading, which the final map empties as
+  // the route does: the end lies inside both, the 5-hour one three hours old at the end and resetting two hours after
+  // it, the 7-day one three days old at the end and resetting four days after it.
   {
     ...ACCOUNT_SAMPLE,
     id: 'sunset',
