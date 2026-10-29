@@ -57,9 +57,10 @@ const listWords = (words: string[]): string => (words.length < 2 ? words.join(''
 export const regimeWord = (name: string | null): string => (name === null ? BASE_WORD : own(REGIME_WORD, name) ? REGIME_WORD[name] : name);
 
 /** The clients a regime prices: its entrypoints' client names in alphabetical order, each named once, a token the map
- *  lacks read raw. The base's fixed list for null. */
+ *  lacks read raw. The base's fixed list for null. The order compares letters, so a raw lowercase token sorts among
+ *  the capitalized names rather than after them all. */
 export const regimeClients = (costs: SubscriptionCosts, name: string | null): string =>
-  name === null ? BASE_CLIENTS : [...new Set((costs.regimes[name]?.entrypoints ?? []).map((t) => (own(CLIENT_NAME, t) ? CLIENT_NAME[t] : t)))].sort().join(', ');
+  name === null ? BASE_CLIENTS : [...new Set((costs.regimes[name]?.entrypoints ?? []).map((t) => (own(CLIENT_NAME, t) ? CLIENT_NAME[t] : t)))].sort((a, b) => a.localeCompare(b, 'en')).join(', ');
 
 /** "Interactive (Claude Code CLI, Claude Desktop, Claude VSCode)": a headline row's and the caption's text. */
 export const regimeTitle = (costs: SubscriptionCosts, name: string | null): string => `${regimeWord(name)} (${regimeClients(costs, name)})`;

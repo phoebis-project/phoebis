@@ -119,8 +119,9 @@ export function WindowsByTier({ costs }: { costs: SubscriptionCosts }) {
       {weekCell(model, tier)}
     </tr>
   );
+  // The base's key names no regime, so a regime the file keys `base` keeps a key of its own.
   const groupRow = (name: string | null) => (alt: string | undefined) => (
-    <tr key={`group ${name ?? 'base'}`} className={['cost-ref__group', alt].filter(Boolean).join(' ')}>
+    <tr key={name === null ? 'group' : `group ${name}`} className={['cost-ref__group', alt].filter(Boolean).join(' ')}>
       <td colSpan={WINDOWS.length + 2}>{regimeTitle(costs, name)}</td>
     </tr>
   );
