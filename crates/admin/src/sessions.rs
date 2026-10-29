@@ -437,10 +437,10 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     }
     // Once the historical pass has settled `companion`: a session no companion reports leaves the list once the later
     // of its newest pin use and its last request is older than the non-companion timeout, the session expiry bounding
-    // it. The newest use across the session's conversation pins, since the row's own `last_used_at` is the display
-    // pin's, main's even where a subagent's request is in flight and has no ledger row yet. An ended session the
-    // engine still holds is measured by its end as well, its `companion_since`, so one that sent no request leaves
-    // after the timeout too.
+    // it. The retention reads the newest use across the session's conversation pins, since the row's own `last_used_at`
+    // is the display pin's, main's even where a subagent's request is in flight and has no ledger row yet. An ended
+    // session the engine still holds is measured by its end as well, its `companion_since`, so one that sent no request
+    // leaves after the timeout too.
     let idle_bound = now
         - state
             .non_companion_idle
