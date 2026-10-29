@@ -413,8 +413,6 @@ export function AnalyticsPage() {
   const costSettings = useAsync(() => (tab === 'burn' || tab === 'accounts' ? api.getSettings() : Promise.resolve(null)), [tab]);
   const sized = useMemo(() => (burn.data && costSettings.data ? sizedAccounts(burn.data.accounts, costSettings.data.subscriptionCosts) : null), [burn.data, costSettings.data]);
   const rewrites = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRewrites({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
-  // The route takes no session selector and reads no client or user agent pattern, so under any of the three the card
-  // counts every session's and every client's refusals.
   const refusalCategories = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRefusalCategories(query) : Promise.resolve(null)), [query, tab, generation], reload);
   // The counts route reads the range alone, which the card's subtitle says, since it carries no filter.
   const guardrailCounts = useAsync(() => (tab === 'traffic' ? api.getAnalyticsGuardrails({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
@@ -620,7 +618,7 @@ export function AnalyticsPage() {
     window: { exact: sessionId !== null, fromMs: span.fromMs, nowMs: now, toMs: span.toMs },
   };
   // The refusal route reads the page's own key selection, never a session view's key lifetime, and `refusalLink` sets
-  // the exact window and leaves the session and the two patterns out.
+  // the exact window and leaves the session out.
   const refusalInput: ReasonLink = { ...linkInput, filters: { ...linkInput.filters, keyIds: filters.keyId } };
 
   return (
@@ -697,7 +695,7 @@ export function AnalyticsPage() {
 
             {/* Its own error with Try again, as a card reading a route of its own draws one, and no count while the
                 answer is stale, so no figure stands under links for filters it was not read for. */}
-            <Card title="Refusals by category" subtitle={`Answers the upstream refused in range, by category, each a request that succeeded${refusalsNote(sessionId !== null, classPattern.trim() !== '', userAgentPattern.trim() !== '')}`}>
+            <Card title="Refusals by category" subtitle={`Answers the upstream refused in range, by category, each a request that succeeded${refusalsNote(sessionId !== null)}`}>
               {refusalCategories.error !== null ? (
                 <ErrorState
                   title="Could not load refusals by category"
@@ -2206,13 +2204,9 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, shared,
 }
 
 const UNFILTERED_NOTE = '. The filters above do not apply here';
-/** The refusals card's note: the page's filters that are set and that the refusal route does not read, in one
- *  sentence. */
-function refusalsNote(session: boolean, client: boolean, userAgent: boolean): string {
-  const names = [...(session ? ['session'] : []), ...(client ? ['client'] : []), ...(userAgent ? ['user agent'] : [])];
-  if (names.length === 0) return '';
-  if (names.length === 1) return `. The ${names[0]} filter does not apply here`;
-  return `. The ${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} filters do not apply here`;
+/** The refusals card's note: the session filter, the one filter of the page the refusal route does not read, if set. */
+function refusalsNote(session: boolean): string {
+  return session ? '. The session filter does not apply here' : '';
 }
 const BURN_UNFILTERED_NOTE = '. Of the filters above, the Accounts filter and the user agent groups alone apply here';
 type TimeAxis = { height?: number; label?: { fill: string; fontSize: number; position: 'insideBottomRight'; value: string }; tickFormatter: (v: number) => string };

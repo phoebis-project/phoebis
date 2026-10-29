@@ -864,10 +864,11 @@ Exhausted), Errors by code ("Failed and incomplete responses in range, the refus
 range." where none was), Refusals by category ("Answers the upstream refused in range, by category, each a request that
 succeeded", one bar per category linking the Requests view on the stop reason `refusal` and the category over the range
 to the millisecond, `none` for a refusal with no category, or "No answer was refused in this range." where none was, and
-under a session, client or user agent filter every session's, client's and user agent's, which its subtitle then names,
-its links carrying none of the three), Failovers, Migration rewrites with its moves (one bar per move reason, stacked by
-the destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each segment titled `{fit} {n}` and the bar
-labeled with the reason's total, and under them "Held by the slow-down", a bar per bucket of the time the slow-down held
+under a client or user agent filter the matching requests' alone, and under a session filter every session's, which its
+subtitle then names, its links carrying the client pattern and no session, plain under a user agent filter as the
+reasons panel's links are), Failovers, Migration rewrites with its moves (one bar per move reason, stacked by the
+destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each segment titled `{fit} {n}` and the bar labeled
+with the reason's total, and under them "Held by the slow-down", a bar per bucket of the time the slow-down held
 requests in the warning tone, its hover `12 requests held 14 min in all`, `no request held` on a bucket that held none,
 and its legend line the range's sum, or `none in range` with no chart), Requests by speed, Effort levels, then at full
 width the card "Guardrails" ("Matches by guardrail in range, every key") with one row per guardrail that matched in the

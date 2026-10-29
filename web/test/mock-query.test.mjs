@@ -56,19 +56,38 @@ test("the mock keeps a request under its serving attempt's stop reason and refus
   assert.deepEqual(await listed({ refusalCategories: ['-'], stopReasons: ['refusal'] }), ids(bare));
 });
 
-test("a refusal bar's link lists the rows its count counted under a client pattern the route does not read", async () => {
+/** The refusal count over the story's last day under `lists`, as the page reads it. */
+const refusalCount = (lists) => api.getAnalyticsRefusalCategories({ accountIds: [], from: new Date(Date.parse(AT) - 24 * 3_600_000).toISOString(), groupBy: 'all', includeProbes: false, keyIds: [], models: [], poolIds: [], to: AT, ...lists });
+const refusalsIn = (answer) => answer.rows.reduce((n, r) => n + r.requests, 0);
+
+test('the mock narrows the refusal count by the client and user agent patterns, the agent folded to its product token, and the user agent groups narrow nothing', async () => {
+  // The story's six refused answers, the laptop's owed turns in `mock/requests.ts`, are all on `claude-code/cli` under
+  // `claude-cli/2.0.44 (external, cli)`.
+  const whole = refusalsIn(await refusalCount({}));
+  assert.equal(whole, 6);
+  assert.equal(refusalsIn(await refusalCount({ clients: ['claude-code/sdk-cli'] })), 0, 'no refused answer came from the sdk-cli client');
+  assert.equal(refusalsIn(await refusalCount({ clients: ['claude-code/cli'] })), whole);
+  assert.equal(refusalsIn(await refusalCount({ userAgents: ['claude-cli/2.0.44'] })), whole, "the laptop agent's token keeps its refusals");
+  assert.equal(refusalsIn(await refusalCount({ userAgents: ['claude-cli/2.1.*'] })), 0, 'no refused answer came from a 2.1 build');
+  assert.equal(refusalsIn(await refusalCount({ userAgentGroups: ['claude-cli/2.1.*'] })), whole, 'the groups partition the rows and keep every one');
+});
+
+test("a refusal bar's link carries the client pattern its count was read under and lists the rows the count counted", async () => {
   const now = Date.parse(AT);
   const from = now - 24 * 3_600_000;
-  const count = await api.getAnalyticsRefusalCategories({ accountIds: [], clients: ['no-such-client'], from: new Date(from).toISOString(), groupBy: 'all', includeProbes: false, keyIds: [], models: [], poolIds: [], to: AT });
+  const pattern = 'claude-code/cli';
+  const count = await refusalCount({ clients: [pattern] });
+  // Three of the laptop's owed turns refused under cyber, every one on the pattern's client.
   const cyber = count.rows.find((r) => r.category === 'cyber');
   assert.equal(cyber?.requests, 3, JSON.stringify(count.rows));
-  const counted = unprobed.filter((r) => Date.parse(r.at) >= from && Date.parse(r.at) <= now && r.attempts.at(-1)?.response?.stopReason === 'refusal' && r.attempts.at(-1).response.refusalCategory === 'cyber');
-  const input = { filters: { accountIds: [], clientPattern: 'no-such-client', includeProbes: false, keyIds: [], models: [], poolIds: [], sessionId: null, userAgentPattern: '' }, window: { exact: false, fromMs: from, nowMs: now, toMs: now } };
+  const counted = unprobed.filter((r) => Date.parse(r.at) >= from && Date.parse(r.at) <= now && d.matchesPattern(pattern, r.client ?? '-') && r.attempts.at(-1)?.response?.stopReason === 'refusal' && r.attempts.at(-1).response.refusalCategory === 'cyber');
+  const input = { filters: { accountIds: [], clientPattern: pattern, includeProbes: false, keyIds: [], models: [], poolIds: [], sessionId: null, userAgentPattern: '' }, window: { exact: false, fromMs: from, nowMs: now, toMs: now } };
   // The address read back as the Requests page reads it into its list query.
   const read = d.REQUESTS_CODEC.fromParams(new URL(d.refusalLink(input, 'cyber', cyber.requests).href, 'http://console.test').searchParams, now);
+  assert.equal(read.client, pattern);
   const linked = await listed({ accountIds: read.accounts, client: read.client, from: read.range.from, includeProbes: read.kind === 'probe', keyIds: read.keys, models: read.models, poolIds: read.pools, refusalCategories: read.refusalCategories, session: read.session || undefined, stopReasons: read.stopReasons, to: read.range.to });
   assert.deepEqual(linked, ids(counted));
-  assert.equal(linked.length, 3);
+  assert.equal(linked.length, cyber.requests);
 });
 
 test('the mock leaves the stamp uncapped under a fixed end, so a row received inside the range and written after it is read once, as the route does', async () => {

@@ -275,29 +275,31 @@ saved and the net saving after their cost, as tiles, a chart and a Saved column 
 ([Analytics](console.md#analytics)). The Cost split's subscription rows and the Plan per hour legend figures name their
 window in full on hover ([Analytics](console.md#analytics)). The ledger records a null diagnostics member on a request
 that named a message as `none` and a comparison the upstream was still running as `pending`, which Misses by reason and
-its per-group table read as No divergence and Pending ([Analytics](console.md#analytics)). The Traffic section's
-Refusals by category card counts the answers the upstream refused by category, each bar opening the Requests view on
-them ([Analytics](console.md#analytics)). The Traffic table's Error rate reads a dash for a group with no requests
-([Analytics](console.md#analytics)). Under the Analytics classifier grouping the requests with no classifier call are
-labeled `none`, as the Requests facet names them ([Analytics](console.md#analytics)). Without the Model week card the
-Burn tab's three cards share one row from 1344 px ([Analytics](console.md#analytics)). On the Sessions view a released
-subagent's record keeps its slot of the agent cap for one cache TTL after the release and then leaves the engine
-([Sessions](console.md#sessions)). The Sessions view offers Companion only, Finished sessions (Show finished sessions)
-and Released agents (Show released agents) as filters in its address, hides a finished session by default, and counts
-the rows the filters keep on its tiles ([Sessions](console.md#sessions)). The Sessions view orders its rows and their
-lines by the session's creation time, newest first, or by its last activity through the filter bar's sort control
-([Sessions](console.md#sessions)). The Sessions view reads each row from main's conversation pin with an Effort column,
-draws a line for every pin of every session, main's among them, with Effort, Context and a warm or cold state on a pin
-no recipe stands on, links each line's agent to the request log and its account to the Accounts view, and lists the
-sessions the router lists within its non-companion timeout ([Sessions](console.md#sessions)). The Sessions view reads
-the context in tokens from main's conversation pin on every row and from each line's own pin, and the Requests column
-shows through the Columns control to make room ([Sessions](console.md#sessions)). The Settings page's About card lists
-the session expiry and the non-companion timeout, the two keys of the `sessions` block, each as a duration with its
-seconds beside it and its hover naming the key ([Settings](console.md#settings)). The Settings page's About card names
-the bootstrap's body capture limit beside its two retention lines ([Settings](console.md#settings)). A decision card's
-cache-map row folds a record of four entries or more to one chip per tier with the count and the depth range and the
-latest three depths, behind a control that lists every entry ([Routing log](console.md#routing-log)). An event panel's
-When reads in the viewer's zone, and a shedding round's Rewrite cell names the window as the cost figures do ([Routing
+its per-group table read as No divergence and Pending ([Analytics](console.md#analytics)). The Refusals by category card
+narrows under the Client and User agent filters and its links carry the client pattern
+([Analytics](console.md#analytics)). The Traffic section's Refusals by category card counts the answers the upstream
+refused by category, each bar opening the Requests view on them ([Analytics](console.md#analytics)). The Traffic table's
+Error rate reads a dash for a group with no requests ([Analytics](console.md#analytics)). Under the Analytics classifier
+grouping the requests with no classifier call are labeled `none`, as the Requests facet names them
+([Analytics](console.md#analytics)). Without the Model week card the Burn tab's three cards share one row from 1344 px
+([Analytics](console.md#analytics)). On the Sessions view a released subagent's record keeps its slot of the agent cap
+for one cache TTL after the release and then leaves the engine ([Sessions](console.md#sessions)). The Sessions view
+offers Companion only, Finished sessions (Show finished sessions) and Released agents (Show released agents) as filters
+in its address, hides a finished session by default, and counts the rows the filters keep on its tiles
+([Sessions](console.md#sessions)). The Sessions view orders its rows and their lines by the session's creation time,
+newest first, or by its last activity through the filter bar's sort control ([Sessions](console.md#sessions)). The
+Sessions view reads each row from main's conversation pin with an Effort column, draws a line for every pin of every
+session, main's among them, with Effort, Context and a warm or cold state on a pin no recipe stands on, links each
+line's agent to the request log and its account to the Accounts view, and lists the sessions the router lists within its
+non-companion timeout ([Sessions](console.md#sessions)). The Sessions view reads the context in tokens from main's
+conversation pin on every row and from each line's own pin, and the Requests column shows through the Columns control to
+make room ([Sessions](console.md#sessions)). The Settings page's About card lists the session expiry and the
+non-companion timeout, the two keys of the `sessions` block, each as a duration with its seconds beside it and its hover
+naming the key ([Settings](console.md#settings)). The Settings page's About card names the bootstrap's body capture
+limit beside its two retention lines ([Settings](console.md#settings)). A decision card's cache-map row folds a record
+of four entries or more to one chip per tier with the count and the depth range and the latest three depths, behind a
+control that lists every entry ([Routing log](console.md#routing-log)). An event panel's When reads in the viewer's
+zone, and a shedding round's Rewrite cell names the window as the cost figures do ([Routing
 log](console.md#routing-log)). A renewal after a hold carries the wait it followed on its card ([Routing
 log](console.md#routing-log)). A guardrail's update records each changed field with its value before and after, as an
 account's, a key's or a pool's update does ([Routing log](console.md#routing-log)). A request refused before it resolved

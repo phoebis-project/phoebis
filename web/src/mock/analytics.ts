@@ -1,3 +1,4 @@
+import { foldUserAgent } from '@/api/fold';
 import type {
   Account, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, QuotaHistory, Reconciliation, ReconciliationsAnswer,
   RefusalCategoriesAnswer, RequestKind, RequestLog, RewritePoint, RewritesAnswer, UnusedAllowanceAnswer, WastedProbeReason,
@@ -734,7 +735,9 @@ export function placementsOf(requests: RequestLog[], q: Pick<AnalyticsQuery, 'fr
  * The refused answers by category off the request rows, as the route counts them: each request in range whose serving
  * attempt the upstream answered with the stop reason `refusal`, `-` for a refusal with no category, the largest count
  * first and then the category in byte order, where the dash sorts first. The route narrows by the range, the accounts,
- * the keys, the pools, the models, the kinds and the probes switch, and by no client pattern.
+ * the keys, the pools, the models, the kinds, the probes switch and the client and user agent patterns. A pattern
+ * matches as the rollups key a row: the client as recorded and the user agent folded to its first product token, each
+ * `-` where the request named none. The user agent groups partition the rows and narrow nothing.
  */
 export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): RefusalCategoriesAnswer {
   const fromMs = Date.parse(q.from);
@@ -751,6 +754,8 @@ export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): 
     if (q.models?.length && !q.models.some((m) => m.toLowerCase() === r.canonicalModel)) continue;
     if (q.kinds?.length && !q.kinds.includes(r.kind)) continue;
     if (r.kind === 'probe' && !q.includeProbes && !q.kinds?.includes('probe')) continue;
+    if (q.userAgents?.length && !q.userAgents.some((p) => matchesPattern(p, r.userAgent === null ? '-' : foldUserAgent(r.userAgent)))) continue;
+    if (q.clients?.length && !q.clients.some((p) => matchesPattern(p, r.client ?? '-'))) continue;
     const answer = r.attempts[r.attempts.length - 1]?.response;
     if (answer?.stopReason !== 'refusal') continue;
     const category = answer.refusalCategory ?? '-';

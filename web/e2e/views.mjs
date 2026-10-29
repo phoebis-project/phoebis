@@ -5379,6 +5379,60 @@ async function analyticsTables(theme) {
 }
 
 /**
+ * The Traffic tab's Refusals by category card under a client pattern in the page's address, on loads of its own. Every
+ * refused answer of the mock's story is the laptop's on `claude-code/cli` (its owed turns in `mock/requests.ts`), so
+ * under that pattern the first row's count reads against the next row's in font size, weight and right edge and its
+ * link carries the pattern as `client`, and under `claude-code/sdk*`, which no refused answer matches, the card counts
+ * below the bare page. Each load's counts, subtitle and first link are recorded beside the bare page's, and the bare
+ * page loads again after. The mock pass's alone.
+ */
+async function refusalCardPattern(theme) {
+  const say = (what) => failures.push(`${theme} /analytics Refusals by category under a client pattern: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const card = [...document.querySelectorAll('#traffic .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by category');
+      if (!card) return null;
+      // A count's link, or its plain figure where the count cannot link, ahead of the muted share.
+      const countOf = (li) => li?.querySelector('.num')?.firstElementChild ?? null;
+      const count = (li) => {
+        const el = countOf(li);
+        if (!el) return null;
+        const s = getComputedStyle(el);
+        return { href: el.getAttribute('href'), right: Math.round(el.getBoundingClientRect().right), size: s.fontSize, text: el.textContent?.trim() ?? '', weight: s.fontWeight };
+      };
+      const rows = [...card.querySelectorAll('.hbars li')];
+      return {
+        empty: card.querySelector('p.muted')?.textContent?.trim() ?? null,
+        first: count(rows[0]),
+        next: count(rows[1]),
+        subtitle: card.querySelector('.card__subtitle')?.textContent?.trim() ?? null,
+        total: rows.reduce((n, li) => n + Number((countOf(li)?.textContent ?? '0').replace(/,/g, '')), 0),
+      };
+    });
+  const under = (pattern) => `/analytics?class=${encodeURIComponent(pattern)}`;
+  try {
+    await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    const bare = await read();
+    await loadAtOrigin(under('claude-code/cli'), '.analytics-section#traffic');
+    const matched = await read();
+    await loadAtOrigin(under('claude-code/sdk*'), '.analytics-section#traffic');
+    const missed = await read();
+    measurements.push(`${theme} /analytics refusal card under a client pattern ${JSON.stringify({ bare, 'claude-code/cli': matched, 'claude-code/sdk*': missed })}`);
+    if (bare === null || matched === null || missed === null) {
+      say('the card is not drawn on every load');
+      return;
+    }
+    for (const what of compare(matched.first, matched.next, ['size', 'weight', 'right'], "under claude-code/cli the first row's count against the next row's")) say(what);
+    const client = matched.first?.href ? new URL(matched.first.href, 'http://console.test').searchParams.get('client') : null;
+    if (client !== 'claude-code/cli') say(`under claude-code/cli the first row's link carries the client ${JSON.stringify(client)}, not the pattern`);
+    if (!(missed.total < bare.total)) say(`under claude-code/sdk* the card counts ${missed.total}, not below the bare page's ${bare.total}`);
+  } finally {
+    await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    await atRest();
+  }
+}
+
+/**
  * The Accounts tab's "Unused allowance by account" card: below Accounts in range, its table's columns under the width
  * rule with Account the fill at 1280 by 800, and at 375 by 800 its Account column at least 132 px under the floor the
  * card's `accounts-range` class reaches, its computed `min-width` 132 px, as wide and as floored as Accounts in range's
@@ -11674,6 +11728,7 @@ try {
       if (view.path === '/analytics') await burnLoneCard(theme);
       if (view.path === '/analytics' && mock) await burnGridFour(theme);
       if (view.path === '/analytics' && mock) await burnGridThree(theme);
+      if (view.path === '/analytics' && mock) await refusalCardPattern(theme);
       if (view.path === '/analytics') await warmingLoneCard(theme);
       if (view.path === '/analytics') await analyticsTiles(theme);
       if (view.path === '/analytics') await accountsRangeColumn(theme);

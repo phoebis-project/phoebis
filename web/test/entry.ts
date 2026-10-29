@@ -40,7 +40,7 @@ export * from '@/lib/trend';
 export * from '@/lib/unit';
 export { MockApi } from '@/mock';
 export { ACCOUNTS, resolvedPlan } from '@/mock/accounts';
-export { burnOf, groupsOf } from '@/mock/analytics';
+export { burnOf, groupsOf, refusalCategoriesOf } from '@/mock/analytics';
 export { slowedLongOf } from '@/mock/attention';
 export { leadOf } from '@/mock/lead';
 export { insideSessionExpiry, lastUseOf, refusalOnlyRows, sessionsListedAt, withinNonCompanionTimeout } from '@/mock/operations';

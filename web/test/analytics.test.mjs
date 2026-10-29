@@ -584,6 +584,33 @@ test('the session fold groups a user agent under its first product token, as the
   assert.deepEqual(named.map((g) => [g.key, g.requests]), [['claude-cli/2.1.310', 2], ['other', 2]], 'a pattern list names its groups by the token, as the breakdown route matches them');
 });
 
+test('the refusal count narrows by the client and user agent patterns, the agent folded to its product token and a request that named neither matched as -', () => {
+  const [row] = d.decodeRequestPage(fixture('requests')).requests;
+  const served = row.attempts.at(-1);
+  // Each row refused under a category of its own, so the categories read back name the rows the count kept.
+  const refused = (category, client, userAgent) => ({ ...row, attempts: [{ ...served, response: { ...served.response, refusalCategory: category, stopReason: 'refusal' } }], client, id: `r-${category}`, kind: 'inference', userAgent });
+  const rows = [refused('cli-new', 'claude-code/cli', 'claude-cli/2.1.3 (external, cli)'), refused('cli-old', 'claude-code/cli', 'claude-cli/2.0.9 (external, cli)'), refused('sdk-new', 'claude-code/sdk-cli', 'claude-cli/2.1.3 (external, sdk-cli)'), refused('unnamed', null, null)];
+  const at = Date.parse(row.at);
+  const kept = (lists) =>
+    d
+      .refusalCategoriesOf(rows, { from: new Date(at - HOUR).toISOString(), groupBy: 'all', to: new Date(at + HOUR).toISOString(), ...lists })
+      .rows.map((r) => r.category)
+      .sort();
+  assert.deepEqual(kept({}), ['cli-new', 'cli-old', 'sdk-new', 'unnamed'], 'no pattern keeps every refusal');
+  assert.deepEqual(kept({ clients: ['claude-code/cli'] }), ['cli-new', 'cli-old']);
+  assert.deepEqual(kept({ userAgents: ['claude-cli/2.1.*'] }), ['cli-new', 'sdk-new']);
+  assert.deepEqual(kept({ userAgents: ['claude-cli/2.1.3'] }), ['cli-new', 'sdk-new'], 'the token names one build under both client labels');
+  assert.deepEqual(kept({ userAgents: ['claude-cli/2.1.3 (external, cli)'] }), [], 'the whole header matches no folded token');
+  assert.deepEqual(kept({ clients: ['claude-code/cli'], userAgents: ['claude-cli/2.1.*'] }), ['cli-new'], 'the two lists narrow together');
+  assert.deepEqual(kept({ clients: ['no-such-client'] }), []);
+  assert.deepEqual(kept({ userAgents: ['no-such-agent/*'] }), []);
+  for (const pattern of ['*', '-']) {
+    assert.ok(kept({ clients: [pattern] }).includes('unnamed'), `the request with no client counts under the client pattern ${pattern}`);
+    assert.ok(kept({ userAgents: [pattern] }).includes('unnamed'), `the request with no user agent counts under the user agent pattern ${pattern}`);
+  }
+  assert.deepEqual(kept({ clients: ['-'], userAgents: ['-'] }), ['unnamed'], 'the dash names the request that named neither, and no other');
+});
+
 test('the session fold keys an effort and a request class as the rollups fold them', () => {
   const [row] = d.decodeRequestPage(fixture('requests')).requests;
   const odd = { ...row, id: 'r-odd', requestClass: 'c'.repeat(65), shape: { ...row.shape, effort: 'ultra' } };

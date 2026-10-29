@@ -18089,21 +18089,36 @@ m.unmount();
     scoped.unmount();
   }
 
-  // Nor does the route read a client pattern, so under one that matches no row the card counts every client's
-  // refusals, says so, and its links list the rows it counted.
-  const clientCheck = '/analytics under a client pattern the Refusals by category card reads every client, its subtitle saying the client filter does not apply, with no client on its links';
-  const patterned = await mount('/analytics?class=no-such-client', { now: CLOCK_ORIGIN });
-  const patternedLinks = barsOf(patterned).map((b) => (b.href === null ? null : paramsOf(b.href)));
+  // The route reads the client pattern, so the card counts the refused answers of the clients it matches alone: none
+  // under `claude-code/sdk*`, since every refused answer of the story is the laptop's on `claude-code/cli`, and all six
+  // under `claude-code/cli`, whose links carry the pattern. The subtitle names no client filter under either.
+  const clientCheck = '/analytics under a client pattern the Refusals by category card counts the matching clients alone, its subtitle naming no client filter, its links carrying the pattern and no session';
+  const sent = recordedCalls('getAnalyticsRefusalCategories');
+  const missed = await mount('/analytics?class=claude-code%2Fsdk*', { now: CLOCK_ORIGIN });
+  sent.restore();
+  const missedRead = { counts: countsOf(missed), empty: cardOf(missed, TITLE)?.querySelector('p.muted')?.textContent?.trim() ?? null, subtitle: subtitleOf(missed) };
+  missed.unmount();
+  // The page hands the route its query whole, so the narrowing above rests on the pattern travelling as the list.
+  const lastSent = sent.calls.at(-1)?.args?.[0] ?? null;
+  results.push({ name: "/analytics the refusal count's read carries the page's client pattern as its clients list", ok: JSON.stringify(lastSent?.clients) === JSON.stringify(['claude-code/sdk*']), missing: [JSON.stringify(lastSent)] });
+  const matched = await mount('/analytics?class=claude-code%2Fcli', { now: CLOCK_ORIGIN });
+  const matchedLinks = barsOf(matched).map((b) => (b.href === null ? null : paramsOf(b.href)));
+  const onCli = ranked(refused.filter((r) => r.client === 'claude-code/cli'));
   results.push({
     name: clientCheck,
     ok:
-      subtitleOf(patterned) === `${SUBTITLE}. The client filter does not apply here` &&
-      JSON.stringify(countsOf(patterned)) === JSON.stringify([['cyber', '3'], ['harmful', '2'], ['none', '1']]) &&
-      patternedLinks.length === 3 &&
-      patternedLinks.every((l) => l !== null && !('client' in l)),
-    missing: [subtitleOf(patterned) ?? 'no subtitle', JSON.stringify(countsOf(patterned)), JSON.stringify(patternedLinks)],
+      ranked(refused.filter((r) => r.client?.startsWith('claude-code/sdk'))).length === 0 &&
+      missedRead.empty === 'No answer was refused in this range.' &&
+      missedRead.counts.length === 0 &&
+      missedRead.subtitle === SUBTITLE &&
+      subtitleOf(matched) === SUBTITLE &&
+      JSON.stringify(countsOf(matched)) === JSON.stringify([['cyber', '3'], ['harmful', '2'], ['none', '1']]) &&
+      JSON.stringify(countsOf(matched)) === JSON.stringify(onCli) &&
+      matchedLinks.length === 3 &&
+      matchedLinks.every((l) => l !== null && l.client === 'claude-code/cli' && !('session' in l)),
+    missing: [JSON.stringify(missedRead), subtitleOf(matched) ?? 'no subtitle', JSON.stringify(countsOf(matched)), JSON.stringify(matchedLinks)],
   });
-  patterned.unmount();
+  matched.unmount();
 }
 
 m = await mount('/analytics');
