@@ -1114,23 +1114,28 @@ factor. Plan rates draws the share of a tier's 5-hour and 7-day window that a to
 model, for a request completing outside or inside the band, with a tier chooser (the anchor tier Max 20x first), the
 band control and a token field in millions with quick picks for 100k, 1M and 10M, a weight column per model, a Fable
 week row under a Fable model's 7-day group, and a warning tint on a cell past a full window. Under a regime of the cost
-model ([Plan meter](statistics.md#plan-meter)), Windows by tier adds a group row naming the regime and its entrypoints
-and a row per tier the regime names, the multiples against the base regime's smallest tier, the Peak band card a factor
-row per regime that holds a window differently inside the band, and Plan rates a Regime control beside Tier offering
-each regime and `Other` for the base rows, opening on `interactive` where the model names it, with the regime's
-entrypoints in the caption. A model the cost model does not weigh, on a model tier with a weighed model, reads that
-tier's latest weighed model, each of its cells marked with a `~` and its weight cell reading `estimated, as {model}`,
-and the caption adds "A ~ marks an estimate: the model reads the latest weighed model of its model tier." A model of no
-model tier, or of one with no weighed model, keeps its dashes and reads "not weighed". API prices draws the dollar list
-prices per million tokens, input, cache read, cache write 5m, cache write 1h and output, with a fast-mode row under each
-model that serves fast mode and a row under each model priced by prompt length, under the caption "USD per million
-tokens at list price" and its note "An API-key account pays these. A subscription account pays them in overage and for
-fast-mode answers." Both tables show one row per model tier, its newest model, in the cost model's `tier_order` with
-`model_tier` naming each model's tier and a model of no tier last, and fold the older models under one row at the
-table's foot that names their count, "1 older model" or `{n} older models`, and expands to them in the same order. The
-fold is shared by both tables and starts closed at each opening. The price rows, the weights and how a probe is priced
-are on [Pricing](statistics.md#pricing), which lists the shipped revision in force, and the dialog shows an earlier
-entry under the Revision select.
+model ([Plan meter](statistics.md#plan-meter)), Windows by tier draws the regime's part first, a headline row naming the
+regime and the clients it prices, "Interactive (Claude Code CLI, Claude Desktop, Claude VSCode)" for the shipped model,
+then a row per tier the regime names, and the base rows under their own headline, "Headless (Claude Code CLI headless
+mode, the Agent SDK, Claude in Slack, etc.)", the multiples against the base's smallest tier. The Peak band card's
+subtitle names the traffic the band applies to and the sessions that hold the full window at every hour ("The band
+applies to Headless traffic only: a request completing inside it spends more of its 5-hour window. Interactive sessions
+hold the full window at every hour."), and its factor rows add one per regime that holds a window differently inside the
+band, named by its headline word. Plan rates adds a Regime control beside Tier offering each regime's headline word and
+Headless for the base rows, opening on Interactive where the model names it, the caption naming the shown headline and
+its clients. A model the cost model does not weigh, on a model tier with a weighed model, reads that tier's latest
+weighed model, each of its cells marked with a `~` and its weight cell reading `estimated, as {model}`, and the caption
+adds "A ~ marks an estimate: the model reads the latest weighed model of its model tier." A model of no model tier, or
+of one with no weighed model, keeps its dashes and reads "not weighed". API prices draws the dollar list prices per
+million tokens, input, cache read, cache write 5m, cache write 1h and output, with a fast-mode row under each model that
+serves fast mode and a row under each model priced by prompt length, under the caption "USD per million tokens at list
+price" and its note "An API-key account pays these. A subscription account pays them in overage and for fast-mode
+answers." Both tables show one row per model tier, its newest model, in the cost model's `tier_order` with `model_tier`
+naming each model's tier and a model of no tier last, and fold the older models under one row at the table's foot that
+names their count, "1 older model" or `{n} older models`, and expands to them in the same order. The fold is shared by
+both tables and starts closed at each opening. The price rows, the weights and how a probe is priced are on
+[Pricing](statistics.md#pricing), which lists the shipped revision in force, and the dialog shows an earlier entry under
+the Revision select.
 
 ## Settings
 

@@ -2,7 +2,7 @@ import { Fragment, useMemo } from 'react';
 import type { SubscriptionCosts } from '@/api/types';
 import { useFormatVersion } from '@/app/settings';
 import { Card } from '@/components/ui/primitives';
-import { bandCaption, bandNow, bandWeek, nextLocalChange, regimeNames, zoneCity } from '@/lib/costs';
+import { bandCaption, bandNow, bandSentence, bandWeek, nextLocalChange, regimeNames, regimeWord, zoneCity } from '@/lib/costs';
 import { fmtShortTime, getTimeFormat } from '@/lib/format';
 
 /** The browser's zone, the one every time the console shows reads in. */
@@ -74,17 +74,16 @@ export function PeakBand({ costs, now }: { costs: SubscriptionCosts; now: number
   const factors = [
     ...FACTOR_WINDOWS.map(({ key, label }) => ({ factor: costs.peak.capacityFactor[key], label })),
     ...regimeNames(costs).flatMap((name) =>
-      FACTOR_WINDOWS.filter(({ key }) => costs.regimes[name].peakCapacityFactor[key] !== costs.peak.capacityFactor[key]).map(({ key, label }) => ({ factor: costs.regimes[name].peakCapacityFactor[key], label: `${label}, ${name}` })),
+      FACTOR_WINDOWS.filter(({ key }) => costs.regimes[name].peakCapacityFactor[key] !== costs.peak.capacityFactor[key]).map(({ key, label }) => ({ factor: costs.regimes[name].peakCapacityFactor[key], label: `${label}, ${regimeWord(name)}` })),
     ),
   ];
-  const holdsWhole = regimeNames(costs).some((name) => costs.regimes[name].peakCapacityFactor.fiveHour === 1 && fiveHour !== 1);
   const state = bandNow(costs, now);
   // A zone this browser cannot read gives no hours here, so the card draws no grid, no swatch and no change.
   const unresolved = 'unresolved' in state;
   return (
     <Card
       title="Peak band"
-      subtitle={`${week.some((day) => day.today) ? 'This week.' : 'Next week.'} A request completing inside the band spends more of its 5-hour window${holdsWhole ? ', except under a regime that holds 100% inside it' : ''}.`}
+      subtitle={`${week.some((day) => day.today) ? 'This week.' : 'Next week.'} ${bandSentence(costs)}`}
     >
       <div className="cost-ref__band-side">
         <div>

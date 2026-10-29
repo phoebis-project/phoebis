@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, recordedCalls, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, bandSentence, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, recordedCalls, regimeNames, regimeTitle, regimeWord, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 /** The dash's title where a window priced nothing, the words a tile and its hover carry. */
 const UNPRICED_TITLE = 'No subscription request priced on this window: its model has no tier the cost model weighs';
@@ -25253,10 +25253,14 @@ m.unmount();
   const anchor = anchorTier(costs);
   const tiers = Object.keys(costs.capacity);
   // Plan rates open on the interactive regime where the cost model names it, every cell priced through its overlay,
-  // and the caption names its entrypoints.
+  // and the caption names the shown regime, or the base, by its headline word and the clients it prices.
   const regime = regimeNames(costs).includes('interactive') ? 'interactive' : null;
   const regimeCosts = withRegime(costs, regime);
-  const regimeClause = regime === null ? '' : ` under ${regime} (${costs.regimes[regime].entrypoints.join(', ')})`;
+  const regimeClause = ` under ${regimeTitle(costs, regime)}`;
+  // The console's words for the shipped regime's key and tokens and for the base, pinned where the fixture's model
+  // names the interactive regime.
+  const INTERACTIVE_TITLE = 'Interactive (Claude Code CLI, Claude Desktop, Claude VSCode)';
+  const HEADLESS_TITLE = 'Headless (Claude Code CLI headless mode, the Agent SDK, Claude in Slack, etc.)';
   // A Sunday evening in Los Angeles, outside the peak band, and the pinned clock, inside it.
   const OUT = Date.UTC(2026, 8, 13, 20, 0);
   const TYPES = ['input', 'cacheRead', 'cacheWrite5m', 'cacheWrite1h', 'output'];
@@ -25330,7 +25334,7 @@ m.unmount();
   const lightest = models.filter((model) => fiveHourWeight(model) !== null).reduce((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
   const shareText = (model, window, share) => (share === null ? '-' : `${estimatedOn(model, window) ? '~' : ''}${fmtShare(share)}`);
   const expected = (model, tier, tokens, at, under) => WINDOWS.flatMap((w) => TYPES.map((t) => shareText(model, w, shareOf(under, w, tier, model, usage(t, tokens), at))));
-  // `under` is the model the cells price through: the regime's overlay, or the base once Other is pressed.
+  // `under` is the model the cells price through: the regime's overlay, or the base once Headless is pressed.
   const wrongCells = (tier, tokens, at, under) => models.filter((model) => JSON.stringify(cellsOf(rowOf(model))) !== JSON.stringify(expected(model, tier, tokens, at, under))).map((model) => `${model}: ${JSON.stringify(cellsOf(rowOf(model)))} against ${JSON.stringify(expected(model, tier, tokens, at, under))}`);
   const regimeButtons = () => [...(rates()?.querySelectorAll('[aria-label="Regime"] button') ?? [])];
   const pressRegime = async (label) => {
@@ -25379,24 +25383,24 @@ m.unmount();
     const labels = [...(rates()?.querySelectorAll('.cost-ref__controls > .cost-ref__control') ?? [])].map((c) => c.firstElementChild?.textContent ?? '');
     const options = regimeButtons().map((b) => b.textContent?.trim());
     const opening = { caption: caption(), cells: wrongCells(anchor, 1_000_000, OUT, regimeCosts), pressed: pressed('Regime') };
-    await pressRegime('Other');
+    await pressRegime('Headless');
     const other = { caption: caption(), cells: wrongCells(anchor, 1_000_000, OUT, costs), pressed: pressed('Regime') };
     // The checks after this one read the regime the dialog opened on.
-    await pressRegime(regime ?? 'Other');
+    await pressRegime(regimeWord(regime));
     results.push({
-      name: '/sessions plan rates open on interactive with its entrypoints in the caption and the Regime control beside Tier',
+      name: '/sessions plan rates open on Interactive with its clients in the caption and the Regime control beside Tier',
       ok:
         regime === 'interactive' &&
         JSON.stringify(labels.slice(0, 3)) === JSON.stringify(['Tier', 'Regime', 'Peak band']) &&
-        JSON.stringify(options) === JSON.stringify([...regimeNames(costs), 'Other']) &&
-        JSON.stringify(opening.pressed) === JSON.stringify([regime]) &&
-        opening.caption === `Share of a ${planLabel(anchor)} window per 1M tokens under ${regime} (${costs.regimes[regime].entrypoints.join(', ')})` &&
+        JSON.stringify(options) === JSON.stringify(['Interactive', 'Headless']) &&
+        JSON.stringify(opening.pressed) === JSON.stringify([regimeWord(regime)]) &&
+        opening.caption === `Share of a ${planLabel(anchor)} window per 1M tokens under ${INTERACTIVE_TITLE}` &&
         opening.cells.length === 0 &&
         JSON.stringify(expected('claude-opus-5-5', anchor, 1_000_000, OUT, regimeCosts)) !== JSON.stringify(expected('claude-opus-5-5', anchor, 1_000_000, OUT, costs)) &&
-        JSON.stringify(other.pressed) === JSON.stringify(['Other']) &&
-        other.caption === `Share of a ${planLabel(anchor)} window per 1M tokens` &&
+        JSON.stringify(other.pressed) === JSON.stringify(['Headless']) &&
+        other.caption === `Share of a ${planLabel(anchor)} window per 1M tokens under ${HEADLESS_TITLE}` &&
         other.cells.length === 0 &&
-        JSON.stringify(pressed('Regime')) === JSON.stringify([regime]),
+        JSON.stringify(pressed('Regime')) === JSON.stringify([regimeWord(regime)]),
       missing: [String(regime), JSON.stringify(labels), JSON.stringify(options), JSON.stringify(opening), JSON.stringify(other), JSON.stringify(pressed('Regime'))],
     });
   }
@@ -25487,7 +25491,7 @@ m.unmount();
     missing: [JSON.stringify(pressed('Token count')), spinner()?.value ?? 'no spinner'],
   });
   // The interactive regime holds its windows whole inside the band, so the band's rule and the tier's read on the base.
-  await pressRegime('Other');
+  await pressRegime('Headless');
   [...(rates()?.querySelectorAll('[aria-label="Peak band"] button') ?? [])].find((b) => b.textContent?.trim() === 'Inside')?.click();
   await page.settle(200);
   {
@@ -25507,12 +25511,12 @@ m.unmount();
     const over = models.flatMap((model) => windowsOf(model).flatMap((w) => TYPES.map((t) => shareOf(costs, w, anchor, model, usage(t, 10_000_000), CLOCK_ORIGIN)))).filter((s) => s !== null && s >= 1).length;
     results.push({
       name: '/sessions plan rates inside the band weigh the 5-hour cells by the band factor, name the band in the caption, and tint every cell past a full window',
-      ok: factor > 1 && scaled.length === 0 && wrongCells(anchor, 10_000_000, CLOCK_ORIGIN, costs).length === 0 && caption() === `Share of a ${planLabel(anchor)} window per 10M tokens, a request completing inside the peak band` && full === over && over > 0,
+      ok: factor > 1 && scaled.length === 0 && wrongCells(anchor, 10_000_000, CLOCK_ORIGIN, costs).length === 0 && caption() === `Share of a ${planLabel(anchor)} window per 10M tokens under ${HEADLESS_TITLE}, a request completing inside the peak band` && full === over && over > 0,
       missing: [...scaled, caption(), `${full} tinted against ${over}`],
     });
   }
   const pro = tiers.find((tier) => planLabel(tier) === 'Pro');
-  await pressRegime('Other');
+  await pressRegime('Headless');
   [...(rates()?.querySelectorAll('[aria-label="Tier"] button') ?? [])].find((b) => b.textContent?.trim() === 'Pro')?.click();
   await page.settle(200);
   results.push({
@@ -25608,9 +25612,10 @@ m.unmount();
     const card = (title) => [...(panel?.querySelectorAll('.card') ?? [])].find((c) => c.querySelector('.card__title')?.textContent === title);
     const tierCard = card('Windows by tier');
     const allRows = [...(tierCard?.querySelectorAll('tbody tr') ?? [])];
-    // The base regime's rows come first, before the first regime's group row.
+    // The regimes' parts come first, and the base's rows last, after the Headless group row.
     const firstGroup = allRows.findIndex((r) => r.classList.contains('cost-ref__group'));
-    const rows = firstGroup === -1 ? allRows : allRows.slice(0, firstGroup);
+    const lastGroup = allRows.findLastIndex((r) => r.classList.contains('cost-ref__group'));
+    const rows = allRows.slice(lastGroup + 1);
     const heads = [...(tierCard?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
     // A bar's label is its multiple; the week's figure leads its cell, the share each window takes after it.
     const vals = (col) => rows.map((r) => (col === 3 ? r.children[col]?.querySelector('.cost-ref__val')?.firstChild?.textContent?.trim() : r.children[col]?.querySelector('.cost-ref__val')?.textContent?.trim()));
@@ -25618,7 +25623,8 @@ m.unmount();
     const smallest = tiers.find((tier) => windowMultiple(costs, tier, 'five_hour') === 1);
     const wantMultiples = (w) => tiers.map((tier) => `${figure(windowMultiple(costs, tier, w))}x`);
     const wantWeeks = (inside) => tiers.map((tier) => figure(fullWindowsAWeek(costs, tier, inside)));
-    const stripes = rows.filter((r, n) => r.classList.contains('is-alt') !== (n % 2 === 1)).length;
+    // Counted over the whole body, since the stripes run on through the group rows above the base's.
+    const stripes = allRows.filter((r, n) => r.classList.contains('is-alt') !== (n % 2 === 1)).length;
     const before = { five: vals(1), seven: vals(2), weeks: vals(3), segs: segs() };
     results.push({
       name: "/sessions Windows by tier names each tier with its key, sizes both windows against the smallest tier's, and counts the full 5-hour windows a week outside the band",
@@ -25643,27 +25649,31 @@ m.unmount();
       const namedBy = (name) => Object.keys(costs.regimes[name].capacity);
       const largest = (w) => Math.max(0, ...tiers.map((tier) => tierCapacity(costs, tier, w) ?? 0), ...regimeNames(costs).flatMap((name) => namedBy(name).map((tier) => tierCapacity(withRegime(costs, name), tier, w) ?? 0)));
       const multipleText = (over, tier, w) => `${figure(tierCapacity(over, tier, w) / tierCapacity(costs, smallestTier(costs, w), w))}x`;
+      // A base row's hover names no regime and carries no one-percent sentence.
       const titleOf = (name, tier, w) => {
         const over = withRegime(costs, name);
-        const units = `One percent of the ${planLabel(anchor)} ${SHORT[w]} window is ${fmtInt(tierCapacity(over, anchor, w) / 100)} units for a request under ${name} and ${fmtInt(tierCapacity(costs, anchor, w) / 100)} for any other.`;
-        return `${planLabel(tier)} ${SHORT[w]} window under ${name}: ${multipleText(over, tier, w)} a ${planLabel(smallestTier(costs, w))} one, ${fmtShare(tierCapacity(over, tier, w) / largest(w))} of the largest. ${units}`;
+        const read = `${planLabel(tier)} ${SHORT[w]} window${name === null ? '' : ` under ${regimeWord(name)}`}: ${multipleText(over, tier, w)} a ${planLabel(smallestTier(costs, w))} one, ${fmtShare(tierCapacity(over, tier, w) / largest(w))} of the largest`;
+        if (name === null) return read;
+        return `${read}. One percent of the ${planLabel(anchor)} ${SHORT[w]} window is ${fmtInt(tierCapacity(over, anchor, w) / 100)} units for a request under ${regimeWord(name)} and ${fmtInt(tierCapacity(costs, anchor, w) / 100)} under Headless.`;
       };
-      const want = regimeNames(costs).flatMap((name) => [
-        { group: `${name}: ${costs.regimes[name].entrypoints.join(', ')}` },
-        ...namedBy(name).map((tier) => {
-          // A window the regime leaves unsized reads "not sized" with no bar, and its week a dash.
-          const over = withRegime(costs, name);
-          const sized = (w) => tierCapacity(over, tier, w) !== null;
-          const week = fullWindowsAWeek(over, tier, false);
-          return {
-            key: tier,
-            multiples: WINDOWS.map((w) => (sized(w) ? multipleText(over, tier, w) : 'not sized')),
-            name: planLabel(tier),
-            titles: WINDOWS.map((w) => (sized(w) ? titleOf(name, tier, w) : null)),
-            week: week === null ? '-' : figure(week),
-          };
-        }),
-      ]);
+      const tierRowOf = (name, tier) => {
+        // A window the regime leaves unsized reads "not sized" with no bar, and its week a dash.
+        const over = withRegime(costs, name);
+        const sized = (w) => tierCapacity(over, tier, w) !== null;
+        const week = fullWindowsAWeek(over, tier, false);
+        return {
+          key: tier,
+          multiples: WINDOWS.map((w) => (sized(w) ? multipleText(over, tier, w) : 'not sized')),
+          name: planLabel(tier),
+          titles: WINDOWS.map((w) => (sized(w) ? titleOf(name, tier, w) : null)),
+          week: week === null ? '-' : figure(week),
+        };
+      };
+      const want = [
+        ...regimeNames(costs).flatMap((name) => [{ group: regimeTitle(costs, name) }, ...namedBy(name).map((tier) => tierRowOf(name, tier))]),
+        { group: regimeTitle(costs, null) },
+        ...tiers.map((tier) => tierRowOf(null, tier)),
+      ];
       const drawn = allRows.slice(firstGroup === -1 ? allRows.length : firstGroup).map((r) =>
         r.classList.contains('cost-ref__group')
           ? { group: r.textContent }
@@ -25683,7 +25693,9 @@ m.unmount();
         ok:
           regimeNames(costs).length > 0 &&
           JSON.stringify(drawn) === JSON.stringify(want) &&
-          groups.length === regimeNames(costs).length &&
+          groups.length === regimeNames(costs).length + 1 &&
+          regime === 'interactive' &&
+          JSON.stringify(groups.map((r) => r.textContent)) === JSON.stringify([INTERACTIVE_TITLE, HEADLESS_TITLE]) &&
           groups.every((r) => r.children.length === 1 && r.children[0].colSpan === 4) &&
           stripes === 0 &&
           widths.length > 0 &&
@@ -25731,7 +25743,7 @@ m.unmount();
       ['sevenDay', '7-day window'],
     ];
     const regimeFactors = regimeNames(costs).flatMap((name) =>
-      FACTOR_WINDOWS.filter(([w]) => costs.regimes[name].peakCapacityFactor[w] !== costs.peak.capacityFactor[w]).map(([w, label]) => ({ label: `${label}, ${name}`, text: factorText(costs.regimes[name].peakCapacityFactor[w]) })),
+      FACTOR_WINDOWS.filter(([w]) => costs.regimes[name].peakCapacityFactor[w] !== costs.peak.capacityFactor[w]).map(([w, label]) => ({ label: `${label}, ${regimeWord(name)}`, text: factorText(costs.regimes[name].peakCapacityFactor[w]) })),
     );
     results.push({
       name: "/sessions the peak band draws this week's seven days in the browser's zone, a run on each banded day, now on today's track, the caption, the now line and each window's factor",
@@ -25751,15 +25763,18 @@ m.unmount();
     {
       const cells = [...(band?.querySelector('.cost-ref__factor')?.children ?? [])];
       const rowsOf = cells.filter((_, i) => i % 3 === 0).map((label, i) => ({ label: label.textContent, text: cells[i * 3 + 2]?.textContent }));
-      const holdsWhole = regimeNames(costs).some((name) => costs.regimes[name].peakCapacityFactor.fiveHour === 1 && costs.peak.capacityFactor.fiveHour !== 1);
-      const sentence = holdsWhole ? 'A request completing inside the band spends more of its 5-hour window, except under a regime that holds 100% inside it.' : 'A request completing inside the band spends more of its 5-hour window.';
+      // In the fixture's model the interactive regime holds its 5-hour window whole inside the band and the base does
+      // not, so the band applies to the headless traffic alone.
+      const sentence = bandSentence(costs);
       const subtitle = band?.querySelector('.card__subtitle')?.textContent ?? 'no subtitle';
       results.push({
         name: '/sessions the peak band card lists a factor row per regime that holds its windows differently',
         ok:
           regimeFactors.length > 0 &&
           JSON.stringify(rowsOf) === JSON.stringify([{ label: '5-hour window', text: factorText(factor.five_hour) }, { label: '7-day window', text: factorText(factor.seven_day) }, ...regimeFactors]) &&
-          holdsWhole &&
+          regime === 'interactive' &&
+          JSON.stringify(regimeFactors.map((f) => f.label)) === JSON.stringify(['5-hour window, Interactive']) &&
+          sentence === 'The band applies to Headless traffic only: a request completing inside it spends more of its 5-hour window. Interactive sessions hold the full window at every hour.' &&
           ['This week. ', 'Next week. '].some((week) => subtitle === `${week}${sentence}`),
         missing: [JSON.stringify(rowsOf), JSON.stringify(regimeFactors), subtitle],
       });
@@ -26253,7 +26268,8 @@ m.unmount();
     results.push({ name: "/sessions the peak band names a change of its local hours that lasts past 26 weeks once the cost model's zone changes its clocks", ok: note === 'From Mon 15 Mar the band runs 12:00 to 18:00 here, once Los Angeles changes its clocks.', missing: [note] });
 
     // Saturday 19 September 2026 at 05:00 in Los Angeles, a day the weekday band is off: the card draws the week of
-    // Monday 21 September, which does not hold now; on the pinned Wednesday it draws the week that does.
+    // Monday 21 September, which does not hold now. On the pinned Wednesday it draws the week that does. The test
+    // tables' regime is a key the console's map lacks, so the sentence names it raw.
     const weekOf = async (at) => {
       const shown = await mountNode(React.createElement(PeakBand, { costs: tested, now: at }));
       const read = { first: shown.container.querySelector('.cost-ref__band-day')?.textContent ?? 'no day', marks: shown.container.querySelectorAll('.cost-ref__band-now').length, subtitle: shown.container.querySelector('.card__subtitle')?.textContent ?? 'no subtitle' };
@@ -26265,10 +26281,10 @@ m.unmount();
     results.push({
       name: '/sessions the peak band names the week it draws: next week, unmarked, on a day the band is off, and this week with now marked on a band day',
       ok:
-        weekend.subtitle === 'Next week. A request completing inside the band spends more of its 5-hour window, except under a regime that holds 100% inside it.' &&
+        weekend.subtitle === 'Next week. The band applies to Headless traffic only: a request completing inside it spends more of its 5-hour window. desk sessions hold the full window at every hour.' &&
         weekend.first === 'Mon 21 Sep' &&
         weekend.marks === 0 &&
-        weekday.subtitle === 'This week. A request completing inside the band spends more of its 5-hour window, except under a regime that holds 100% inside it.' &&
+        weekday.subtitle === 'This week. The band applies to Headless traffic only: a request completing inside it spends more of its 5-hour window. desk sessions hold the full window at every hour.' &&
         weekday.first === 'Mon 14 Sep' &&
         weekday.marks === 1,
       missing: [JSON.stringify(weekend), JSON.stringify(weekday)],
@@ -26306,9 +26322,12 @@ m.unmount();
       const unsized = { ...tested, regimes: { ...tested.regimes, desk: { ...desk, capacity: { ...desk.capacity, default_claude_team: { fiveHour: null, sevenDay: null } } } } };
       const shown = await mountNode(React.createElement(WindowsByTier, { costs: unsized }));
       const rows = [...shown.container.querySelectorAll('tbody tr')];
-      const group = rows.findIndex((r) => r.classList.contains('cost-ref__group'));
+      const isGroup = (r) => r.classList.contains('cost-ref__group');
+      // The regime's rows end at the next group row, the base's Headless one.
+      const group = rows.findIndex((r) => isGroup(r) && r.textContent === regimeTitle(unsized, 'desk'));
+      const next = rows.findIndex((r, i) => i > group && isGroup(r));
       const keyOf = (r) => r.querySelector('.cost-ref__tier-key')?.textContent;
-      const under = group === -1 ? [] : rows.slice(group + 1);
+      const under = group === -1 ? [] : rows.slice(group + 1, next === -1 ? rows.length : next);
       const team = under.find((r) => keyOf(r) === 'default_claude_team');
       const read = { keys: under.map(keyOf), team: team === undefined ? null : [1, 2, 3].map((col) => team.children[col]?.textContent?.trim()), bars: team?.querySelectorAll('.cost-ref__bar').length ?? null };
       shown.unmount();

@@ -13,7 +13,8 @@ export interface Usage { cacheRead: number; cacheWrite1h: number; cacheWrite5m: 
 
 const TOKEN_TYPES: TokenType[] = ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'input', 'output'];
 
-// A local copy rather than `lib/analytics`'s, which reads `tierRow` from this module: the two would import each other.
+// A local copy rather than `lib/analytics`'s, which reads `tierCapacity` from this module: the two would import each
+// other.
 const own = (map: object, key: string): boolean => Object.prototype.hasOwnProperty.call(map, key);
 
 export const anchorTier = (costs: SubscriptionCosts): string => costs.unit.definedBy.tier;
@@ -41,6 +42,37 @@ export const pricedWindow = (costs: SubscriptionCosts, window: string): { diviso
 
 /** The regimes' names in the file's order. */
 export const regimeNames = (costs: SubscriptionCosts): string[] => Object.keys(costs.regimes);
+
+// The map is the console's: the cost model file keeps its keys and tokens, and a key or token the map lacks reads raw,
+// so a regime the file adds later draws with no code change.
+const REGIME_WORD: Readonly<Record<string, string>> = { interactive: 'Interactive' };
+const CLIENT_NAME: Readonly<Record<string, string>> = { 'claude-desktop': 'Claude Desktop', 'claude-desktop-3p': 'Claude Desktop', 'claude-vscode': 'Claude VSCode', cli: 'Claude Code CLI' };
+const BASE_WORD = 'Headless';
+const BASE_CLIENTS = 'Claude Code CLI headless mode, the Agent SDK, Claude in Slack, etc.';
+
+/** "a", "a and b", "a, b and c". */
+const listWords = (words: string[]): string => (words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
+
+/** The headline word of a regime, the raw key for one the map lacks, and "Headless" for the base (null). */
+export const regimeWord = (name: string | null): string => (name === null ? BASE_WORD : own(REGIME_WORD, name) ? REGIME_WORD[name] : name);
+
+/** The clients a regime prices: its entrypoints' client names in alphabetical order, each named once, a token the map
+ *  lacks read raw. The base's fixed list for null. */
+export const regimeClients = (costs: SubscriptionCosts, name: string | null): string =>
+  name === null ? BASE_CLIENTS : [...new Set((costs.regimes[name]?.entrypoints ?? []).map((t) => (own(CLIENT_NAME, t) ? CLIENT_NAME[t] : t)))].sort().join(', ');
+
+/** "Interactive (Claude Code CLI, Claude Desktop, Claude VSCode)": a headline row's and the caption's text. */
+export const regimeTitle = (costs: SubscriptionCosts, name: string | null): string => `${regimeWord(name)} (${regimeClients(costs, name)})`;
+
+/** The Peak band card's sentence after the week word. A regime at a 5-hour factor of 1 while the base's is below 1
+ *  holds its window whole inside the band, so the band applies to the base and to the rest alone. */
+export const bandSentence = (costs: SubscriptionCosts): string => {
+  const base = costs.peak.capacityFactor.fiveHour;
+  const spared = regimeNames(costs).filter((name) => costs.regimes[name].peakCapacityFactor.fiveHour === 1 && base !== 1);
+  if (spared.length === 0) return 'A request completing inside the band spends more of its 5-hour window.';
+  const applies = [BASE_WORD, ...regimeNames(costs).filter((name) => !spared.includes(name)).map(regimeWord)];
+  return `The band applies to ${listWords(applies)} traffic only: a request completing inside it spends more of its 5-hour window. ${listWords(spared.map(regimeWord))} sessions hold the full window at every hour.`;
+};
 
 /** The regime listing the entrypoint, null for null or an entrypoint no regime lists. */
 export const regimeOf = (costs: SubscriptionCosts, entrypoint: string | null): string | null =>

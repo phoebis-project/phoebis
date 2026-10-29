@@ -304,7 +304,10 @@ session, main's among them, with Effort, Context and a warm or cold state on a p
 line's agent to the request log and its account to the Accounts view, and lists the sessions the router lists within its
 non-companion timeout ([Sessions](console.md#sessions)). The Sessions view reads the context in tokens from main's
 conversation pin on every row and from each line's own pin, and the Requests column shows through the Columns control to
-make room ([Sessions](console.md#sessions)). The Settings page's About card lists the session expiry and the
+make room ([Sessions](console.md#sessions)). The cost reference's Windows by tier draws the Interactive regime's rows
+first under a headline naming its clients and the base rows under Headless, its Peak band card says which traffic the
+band applies to, and Plan rates' Regime control reads Interactive and Headless ([The cost
+reference](console.md#the-cost-reference)). The Settings page's About card lists the session expiry and the
 non-companion timeout, the two keys of the `sessions` block, each as a duration with its seconds beside it and its hover
 naming the key ([Settings](console.md#settings)). The Settings page's About card names the bootstrap's body capture
 limit beside its two retention lines ([Settings](console.md#settings)). A decision card's cache-map row folds a record

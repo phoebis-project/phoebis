@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { ModelPrice, SubscriptionCosts } from '@/api/types';
 import { Segmented } from '@/components/ui/primitives';
-import { anchorTier, bandNow, latestWeighted, modelTierOf, modelWeeks, regimeNames, shareIn, tierCapacity, tierGroups, unreachableBand, weightedWindows, weightOf, weightOrFallback, withRegime, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
+import { anchorTier, bandNow, latestWeighted, modelTierOf, modelWeeks, regimeNames, regimeTitle, regimeWord, shareIn, tierCapacity, tierGroups, unreachableBand, weightedWindows, weightOf, weightOrFallback, withRegime, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
 import { ESTIMATED_TITLE, fmtShare, undatedModel, upperFirst, withEstimate } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 import { nowLine } from './PeakBand';
@@ -51,7 +51,7 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
   const [tier, setTier] = useState(() => anchorTier(costs));
   const regimes = regimeNames(costs);
   // The interactive regime first where the model names it, since the interactive client is the traffic an operator
-  // runs. '' is Other, the base regime.
+  // runs. '' is the base, drawn as Headless.
   const [regime, setRegime] = useState(() => (regimes.includes('interactive') ? 'interactive' : ''));
   // A revision without the chosen regime reads the base, so the control and the caption follow it.
   const shownRegime = regimes.includes(regime) ? regime : '';
@@ -200,7 +200,7 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
         {regimes.length > 0 && (
           <span className="cost-ref__control">
             <span>Regime</span>
-            <Segmented ariaLabel="Regime" value={shownRegime} onChange={setRegime} options={[...regimes.map((r) => ({ label: r, value: r })), { label: 'Other', value: '' }]} />
+            <Segmented ariaLabel="Regime" value={shownRegime} onChange={setRegime} options={[...regimes.map((r) => ({ label: regimeWord(r), value: r })), { label: regimeWord(null), value: '' }]} />
           </span>
         )}
         <BandSwitch inside={chosen} onChange={setInside} unreachable={unreachable} />
@@ -234,7 +234,7 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
       </div>
       <div className="cost-ref__caption">
         <b>
-          Share of a {tierName} window per {fmtTokens(tokens)} tokens{shownRegime ? ` under ${shownRegime} (${costs.regimes[shownRegime].entrypoints.join(', ')})` : ''}
+          Share of a {tierName} window per {fmtTokens(tokens)} tokens under {regimeTitle(costs, shownRegime || null)}
           {chosen ? ', a request completing inside the peak band' : ''}
         </b>
         <span className="muted">A shaded cell is more than one full window. A ~ marks an estimate: the model reads the latest weighed model of its model tier.</span>

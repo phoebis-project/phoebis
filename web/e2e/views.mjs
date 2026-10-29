@@ -10718,7 +10718,7 @@ async function costReference(theme) {
       // Both the mock's cost model and the shipped one name the interactive regime, which Plan rates opens on.
       if (slug === 'plan-rates') {
         const regime = (await dialog.locator('.cost-ref__panel:not([hidden]) [aria-label="Regime"] button[aria-pressed="true"]').allTextContents()).map((t) => t.trim());
-        if (JSON.stringify(regime) !== JSON.stringify(['interactive'])) say(`${where}: the Regime control shows ${JSON.stringify(regime)}, not interactive`);
+        if (JSON.stringify(regime) !== JSON.stringify(['Interactive'])) say(`${where}: the Regime control shows ${JSON.stringify(regime)}, not Interactive`);
       }
       if (mock && size.width === 1280) {
         await atRest();
@@ -10741,6 +10741,71 @@ async function costReference(theme) {
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
   await atRest();
+}
+
+/**
+ * The cost reference's headline words from Sessions at 1280 by 800, as the walk reads the dialog. On Tiers and peak band
+ * the Windows by tier group rows read the Interactive title, then the Headless title, the first group row's cell in the
+ * type size of the table's first head and above its weight, and the Peak band card's subtitle reads the shipped band
+ * sentence after "This week.". On Plan rates the Regime control's pressed option reads Interactive. The texts, the
+ * caption and both weights are recorded. The mock pass's alone, since the subtitle's week word reads the pinned clock.
+ */
+async function costReferenceHeadlines(theme) {
+  const say = (what) => failures.push(`${theme} /sessions cost reference headlines: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  const INTERACTIVE = 'Interactive (Claude Code CLI, Claude Desktop, Claude VSCode)';
+  const HEADLESS = 'Headless (Claude Code CLI headless mode, the Agent SDK, Claude in Slack, etc.)';
+  const BAND = 'This week. The band applies to Headless traffic only: a request completing inside it spends more of its 5-hour window. Interactive sessions hold the full window at every hour.';
+  try {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await page.getByRole('button', { name: 'Cost reference', exact: true }).first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await advance(LOAD_MS);
+    await dialog.locator('.cost-ref__panel:not([hidden]) tbody tr td.num').first().waitFor({ timeout: 15_000 });
+    await dialog.getByRole('tab', { name: 'Tiers and peak band', exact: true }).click();
+    await settle();
+    const tiers = await page.evaluate(() => {
+      const panel = [...document.querySelectorAll('dialog[open]')].pop()?.querySelector('.cost-ref__panel:not([hidden])');
+      const card = (title) => [...(panel?.querySelectorAll('.card') ?? [])].find((c) => c.querySelector('.card__title')?.textContent === title);
+      const table = card('Windows by tier')?.querySelector('table.cost-ref__tiers');
+      const type = (el) => {
+        if (!el) return null;
+        const style = getComputedStyle(el);
+        return { fontSize: style.fontSize, fontWeight: style.fontWeight, text: el.textContent?.trim() ?? '' };
+      };
+      return {
+        groups: [...(table?.querySelectorAll('tbody tr.cost-ref__group') ?? [])].map((r) => r.textContent?.trim() ?? ''),
+        head: type(table?.querySelector('thead th') ?? null),
+        headline: type(table?.querySelector('tbody tr.cost-ref__group td') ?? null),
+        subtitle: card('Peak band')?.querySelector('.card__subtitle')?.textContent ?? null,
+      };
+    });
+    measurements.push(`${theme} /sessions cost reference headlines tiers and peak band ${JSON.stringify(tiers)}`);
+    if (JSON.stringify(tiers.groups) !== JSON.stringify([INTERACTIVE, HEADLESS])) say(`the Windows by tier headline rows read ${JSON.stringify(tiers.groups)}, not the Interactive title then the Headless title`);
+    for (const what of compare(tiers.headline, tiers.head, ['fontSize'], "the first headline row's cell against the table's first head")) say(what);
+    if (!(Number(tiers.headline?.fontWeight) > Number(tiers.head?.fontWeight))) say(`the first headline row's cell weighs ${tiers.headline?.fontWeight ?? 'nothing'}, not above the head's ${tiers.head?.fontWeight ?? 'nothing'}`);
+    if (tiers.subtitle !== BAND) say(`the Peak band card's subtitle reads ${JSON.stringify(tiers.subtitle)}, not the band sentence after "This week."`);
+    await dialog.getByRole('tab', { name: 'Plan rates', exact: true }).click();
+    await settle();
+    const rates = await page.evaluate(() => {
+      const panel = [...document.querySelectorAll('dialog[open]')].pop()?.querySelector('.cost-ref__panel:not([hidden])');
+      return {
+        caption: panel?.querySelector('.cost-ref__caption b')?.textContent ?? null,
+        pressed: [...(panel?.querySelectorAll('[aria-label="Regime"] button[aria-pressed="true"]') ?? [])].map((b) => b.textContent?.trim() ?? ''),
+      };
+    });
+    measurements.push(`${theme} /sessions cost reference headlines plan rates ${JSON.stringify(rates)}`);
+    if (JSON.stringify(rates.pressed) !== JSON.stringify(['Interactive'])) say(`the Regime control shows ${JSON.stringify(rates.pressed)}, not Interactive`);
+  } catch (error) {
+    say(`the cost reference never drew its headlines (${error instanceof Error ? error.message : String(error)})`);
+  } finally {
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await atRest();
+  }
 }
 
 /**
@@ -11724,6 +11789,7 @@ try {
         if (mock) await sessionsTilesError(theme);
         await sessionsLead(theme);
         await costReference(theme);
+        if (mock) await costReferenceHeadlines(theme);
         await sessionsTableFits(theme);
         await tableColumns(theme, 'sessions', '.sessions-table', ['Session'], 1);
         await sessionIdWidth(theme);
