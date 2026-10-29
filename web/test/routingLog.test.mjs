@@ -890,6 +890,15 @@ test('a refusal reads its words by code, and an unknown code reads through the f
   assert.deepEqual(answer({ code: 'later', kind: 'key', reason: 'a new reason' }), [['Answer', ['a new reason', 'key laptop']]]);
 });
 
+test("a guardrail's block reads guardrail blocked with the guardrail's name as a second chip, on the row, the Admission line and the Answer row", () => {
+  const refusal = { code: 'guardrail_blocked', kind: 'guardrail', reason: 'no-secrets' };
+  const summary = decision({ accountId: null, by: by('refusal', 'guardrail'), fact: [fact('key', 'laptop', null, { id: 'laptop', kind: 'key' })], kind: 'refused', refusal });
+  assert.equal(read(summary).by, 'guardrail blocked', "the row's By chip reads the block's first chip");
+  const r = record({ outcome: { accountId: null, kind: 'refused', refusal, upstreamModel: null }, pin: null, pinReason: 'not_looked_up', request: { keyId: 'laptop' }, walk: [wstep('admission', 'refused', [wfact('reason', 'no-secrets')]), wstep('selection', 'not_run')] });
+  assert.deepEqual(d.walkLines(r, summary).map((l) => [l.step, texts(l.chips)]), [['Admission', ['guardrail blocked', 'guardrail no-secrets']], ['Rest of the walk', ['moves', 'rungs', 'partitions']]]);
+  assert.deepEqual(d.outcomeRows(r, NOW, summary).map((line) => [line.label, texts(line.chips)]), [['Answer', ['guardrail blocked', 'guardrail no-secrets', 'key laptop']]]);
+});
+
 test('a_contract_refusal_reads_client_contract_with_the_items_word', () => {
   const refusal = { code: 'contract', kind: 'client', reason: 'class_header' };
   const summary = decision({ accountId: null, by: by('refusal', 'client'), fact: [fact('client', '2.1.271', 'text')], kind: 'refused', refusal });
@@ -1096,7 +1105,7 @@ const DETAIL_EVENTS = {
   warm_prefix_expired: [{ cause: 'ttl', deepest: { depth: 1, prefix_tokens: 18_400, tier: 'message', ttl_ms: 300_000, written_at: ms(14, 19, 52) }, entries: 1, root: 's0' }, ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed']],
   wind_down_started: [{ end_source: 'canceled', ends_at: ms(15, 0), wind_down_minutes: 30 }, ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from']],
   window_cleared: [{ reset: ms(15, 42), source: 'poll', source_request_id: null, utilization: 0, utilization_before: 1, window: 'five_hour' }, ['Window', 'Before', 'After', 'Reset', 'Read from']],
-  window_reset: [{ next_reset: ms(19, 0), observed: 'sample', reset_at: ms(14, 0), utilization_before: 0.92, window: 'five_hour' }, ['Window', 'Before the reset', 'Prediction', 'Next reset']],
+  window_reset: [{ next_reset: ms(19, 0), observed: 'sample', reset_at: ms(14, 0), utilization_before: 0.92, window: 'five_hour' }, ['Window', 'Before the reset', 'Read from', 'Prediction', 'Next reset']],
   window_spent: [{ reset: ms(15, 42), source: 'head', source_request_id: 'req_1', utilization: 1, window: 'five_hour' }, ['Window', 'Reading', 'Read from', 'Resets', 'Effect', 'Request']],
 };
 
@@ -1478,6 +1487,24 @@ test('the event detail draws the pairs its event carries: the effect, the meanin
   assert.deepEqual(pairs('poll_backoff_ended', { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) })['Backed off'], ['from 07:50', 'to 08:15']);
 });
 
+test("a backoff's close reads by its cause, and a window reset names where the reset was read from", () => {
+  const pairs = (kind, detail) => d.detailPairs(event(kind, detail), NOW, []).map((p) => [p.label, texts(p.chips)]).slice(2);
+  const by = (detail) => d.byOf(event('poll_backoff_ended', detail), []).value;
+  const close = { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) };
+  const resumed = [['Backed off', ['from 07:50', 'to 08:15']], ['Attempts', ['3']], ['Resumed', ['08:15']]];
+  assert.deepEqual(pairs('poll_backoff_ended', { ...close, cause: 'clean_poll' }), resumed);
+  assert.deepEqual(pairs('poll_backoff_ended', close), resumed, 'a row written before the cause reads as a clean poll');
+  // The plan's end pauses the poll, so the close names the pause's instant in place of a resumption.
+  const ended = { attempts: 1, cause: 'plan_ended', duration_ms: 6 * MINUTE, resumed_at: ms(10, 30) };
+  assert.deepEqual(pairs('poll_backoff_ended', ended), [['Backed off', ['from 10:24', 'to 10:30']], ['Attempts', ['1']], ["Ended by the plan's end", ['10:30']]]);
+  assert.deepEqual([by({ ...close, cause: 'clean_poll' }), by(close), by(ended)], ['clean poll', 'clean poll', 'plan ended']);
+  const reset = (observed) => pairs('window_reset', { next_reset: ms(19, 0), observed, reset_at: ms(14, 0), utilization_before: 0.92, window: 'five_hour' });
+  assert.deepEqual(reset('sample'), [['Window', ['5h']], ['Before the reset', ['92%']], ['Read from', ['the usage sample']], ['Prediction', ['0% until the next head']], ['Next reset', ['19:00']]]);
+  assert.deepEqual(reset('clock')[2], ['Read from', ['the clock walk']]);
+  const spent = (source) => pairs('window_spent', { reset: ms(15, 42), source, utilization: 1, window: 'five_hour' }).find(([label]) => label === 'Read from');
+  assert.deepEqual(['head', 'poll', 'predicted'].map(spent), [['Read from', ['the response head']], ['Read from', ['the poll']], ['Read from', ['the prediction']]], "a spent window's source keeps its three words");
+});
+
 test("an account edit's drawer reads each pair and the replaced secret beside them, with no reading of decisions", () => {
   const pairs = (diff, kind = 'account_updated', target = 'annex') =>
     d.detailPairs(event('registry_changed', { diff, kind, target }, { accountId: null, actor: 'admin', at: iso(ms(9, 8, 30)) }), NOW, []).map((p) => [p.label, texts(p.chips)]);
@@ -1519,6 +1546,28 @@ test('a registry change reads the renamed pool settings by their new word, marks
   const current = pairs({ shed_cap: { from: 0.5, to: 0.2 }, window_ceiling: { from: 0.95, to: 0.9 } });
   assert.deepEqual([current['shed cap'], current['window ceiling']], [['from 50%', 'to 20%'], ['from 95%', 'to 90%']]);
   assert.deepEqual(current['Reading it'], ['decisions before 09:05 carry shed cap 50%', 'decisions before 09:05 carry window ceiling 95%']);
+});
+
+test("a pool save's keepalive policy reads as its dotted fields, each under its label, and no decision reads them", () => {
+  const pool = { accountId: null, actor: 'admin', at: iso(ms(9, 5, 12)), poolId: 'all' };
+  const change = (diff) => event('registry_changed', { diff, kind: 'pool_updated', target: 'all' }, pool);
+  const pairs = (diff) => d.detailPairs(change(diff), NOW, []).map((p) => [p.label, texts(p.chips)]).slice(2);
+  // A decision record carries no keepalive policy, so a policy-only save reads no Reading it row.
+  assert.deepEqual(pairs({ 'keepalive.max_idle_seconds': { from: 43_200, to: 86_400 }, 'keepalive.enabled': { from: null, to: true } }), [
+    ['Change', ['pool edited', 'all']],
+    ['keepalive idle window seconds', ['from 43200', 'to 86400']],
+    ['keepalive', ['from none', 'to on']],
+    ['Actor', ['admin']],
+  ]);
+  const beside = Object.fromEntries(pairs({ 'keepalive.max_idle_seconds': { from: 43_200, to: 3_600 }, min_shared_prefix_tokens: { from: 10_000, to: 20_000 } }));
+  assert.deepEqual(beside['Reading it'], ['decisions before 09:05 carry min shared prefix tokens 10000'], 'a setting beside the policy keeps its reading');
+  const label = (field) => read(change({ [field]: { from: 1, to: 2 } })).facts[0];
+  assert.deepEqual(['keepalive.enabled', 'keepalive.max_idle_seconds', 'keepalive.max_parked_seconds', 'keepalive.scheduled_horizon_seconds'].map(label), [
+    'field keepalive',
+    'field keepalive idle window seconds',
+    'field keepalive parked seconds',
+    'field keepalive scheduled horizon seconds',
+  ]);
 });
 
 test("a model rejection reads its until off the page's cooldown row and has no pair without one", () => {
@@ -1653,6 +1702,14 @@ test("a usage-based candidate's Pace cell reads its remaining allowance, and the
   );
   const plan = candidate({ pace: { burn: 0.004, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.006, window: 'seven_day' } });
   assert.equal(d.paceHeader(record({ candidates: [seat, plan] })), 'Spare rate, 7-day per hour', 'the seat listed first names no window, so the next subscription candidate heads the column');
+});
+
+test('the Pace header passes over a subscription candidate whose pace names no window to the first one whose pace names one', () => {
+  const pace = { burn: 0.004, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.006 };
+  const lapsed = candidate({ accountId: 'lapsed', pace: { ...pace, window: null } });
+  const plan = candidate({ accountId: 'secondary', pace: { ...pace, window: 'seven_day' } });
+  assert.equal(d.paceHeader(record({ candidates: [lapsed, plan] })), 'Spare rate, 7-day per hour', "the second candidate's version 3 pace heads the column");
+  assert.equal(d.paceHeader(record({ candidates: [lapsed] })), 'Pace', 'no subscription candidate names a window');
 });
 
 test("a Pace cell and its title read the score in the unit the record's pick step gives it, else the unit its pace's shape names", () => {

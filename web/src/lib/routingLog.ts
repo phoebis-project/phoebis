@@ -387,6 +387,7 @@ function decisionBy(row: DecisionSummary): Chip {
       return { value: 'no rule fired' };
     case 'refusal':
       if (value === 'client') return { value: row.refusal?.code === 'contract' ? 'client contract' : 'client drift' };
+      if (value === 'guardrail') return { value: 'guardrail blocked' };
       return { value: row.refusal && own(KEY_REFUSAL_WORD, row.refusal.code) ? KEY_REFUSAL_WORD[row.refusal.code] : `${words(value)} refused` };
     case 'rule':
       return { value: `${words(value)} rule` };
@@ -417,11 +418,15 @@ const REGISTRY_VERB: Record<string, string> = { updated: 'edited' };
  */
 const SHARE_FIELDS = new Set(['pace_floor', 'select_below_utilization', 'shed_ahead_of_pace', 'shed_cap', 'shed_share', 'window_ceiling']);
 /**
- * A row written before the rename keeps the old field names: a renamed field reads its new word, a removed one says
- * so.
+ * The fields whose label is not their words: a row written before the rename keeps the old field names, so a renamed
+ * field reads its new word and a removed one says so, and a pool's keepalive policy member reads by its dotted name.
  */
 const FIELD_LABEL: Record<string, string> = {
   burn_window_seconds: 'burn average seconds (then burn_window_seconds)',
+  'keepalive.enabled': 'keepalive',
+  'keepalive.max_idle_seconds': 'keepalive idle window seconds',
+  'keepalive.max_parked_seconds': 'keepalive parked seconds',
+  'keepalive.scheduled_horizon_seconds': 'keepalive scheduled horizon seconds',
   pace_floor: 'pace floor (removed)',
   select_below_utilization: 'select below utilization (removed)',
   shed_ahead_of_pace: 'shed ahead of pace (removed)',
@@ -510,8 +515,9 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
       return { value: moveLabel(str(d.reason) ?? '') };
     case 'pin_released':
       return { value: 'by hand' };
+    // A row written before the cause was a clean poll's.
     case 'poll_backoff_ended':
-      return { value: 'clean poll' };
+      return { value: str(d.cause) === 'plan_ended' ? 'plan ended' : 'clean poll' };
     // The usage service opens a backoff on a rate limit alone, so the kind decides the word.
     case 'poll_backoff_started':
       return { value: POLL_OUTCOME_LABEL.rate_limited };
@@ -1067,9 +1073,11 @@ function clientVersionOf(row: DecisionSummary | undefined): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-/** A refusal's reason: a contract's missing item, a drift's trigger beside the client's version, or a key refusal's
- *  words by its code, its sentence for a code the console has no words for. */
+/** A refusal's reason: a contract's missing item, a drift's trigger beside the client's version, a guardrail's block
+ *  beside the guardrail's name, or a key refusal's words by its code, its sentence for a code the console has no words
+ *  for. */
 function refusalChips(refusal: { code: string; kind: string; reason: string }, version: string | null): Chip[] {
+  if (refusal.kind === 'guardrail') return [plain('guardrail blocked'), plain(refusal.reason, 'guardrail')];
   if (refusal.kind !== 'client') return [plain(own(KEY_REFUSAL_WORD, refusal.code) ? KEY_REFUSAL_WORD[refusal.code] : refusal.reason)];
   if (refusal.code === 'contract') return [plain(words(refusal.reason), 'contract')];
   return [plain(words(refusal.reason || 'client'), 'drift'), ...(version ? [plain(version, 'client')] : [])];
@@ -1377,12 +1385,12 @@ const PACE_WINDOW_PHRASE: Record<string, string> = { seven_day: 'the 7-day windo
 const isSpendSeat = (c: RecordCandidate): boolean => c.kind === 'oauth' && own(c.windows, 'spend');
 
 /**
- * The Pace column's header: the window the first subscription candidate's score read. It reads "Pace" when that
- * candidate names no window or the record holds no subscription candidate. A version 1 record read no burn, so its
- * score was the share left per hour.
+ * The Pace column's header: the window the score read of the first subscription candidate that is no spend seat and
+ * whose pace names a window, so a lapsed seat listed first leaves the header to the next one. It reads "Pace" when no
+ * such candidate stands. A version 1 record read no burn, so its score was the share left per hour.
  */
 export function paceHeader(record: DecisionRecord): string {
-  const pace = record.candidates.find((c) => c.kind === 'oauth' && !isSpendSeat(c))?.pace;
+  const pace = record.candidates.find((c) => c.kind === 'oauth' && !isSpendSeat(c) && (c.pace?.window ?? null) !== null)?.pace;
   const id = pace?.window ?? null;
   if (id === null) return 'Pace';
   return (pace?.burn ?? null) === null ? `Pace, ${wordOf(PACE_WINDOW_WORD, id)} left per hour` : `Spare rate, ${wordOf(PACE_WINDOW_WORD, id)} per hour`;
@@ -1734,7 +1742,7 @@ const GAP_MEANING: Record<string, string> = {
   poison: "a record failed alone after its batch's retries",
 };
 const PLAN_SOURCE_WORD: Record<string, string> = { pairing: 'pairing confirm', profile: 'profile read', usage_403: 'usage 403' };
-const SOURCE_WORD: Record<string, string> = { head: 'the response head', poll: 'the poll', predicted: 'the prediction' };
+const SOURCE_WORD: Record<string, string> = { clock: 'the clock walk', head: 'the response head', poll: 'the poll', predicted: 'the prediction', sample: 'the usage sample' };
 /**
  * A share of a window per hour as an event's detail reads one. A shedding round's rates read so on every account,
  * whichever table the round's order read.
@@ -1919,7 +1927,10 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       const lasted = num(d.duration_ms);
       add('Backed off', lasted === null ? null : plain(formatFact(resumed - lasted, 'time', now), 'from'), plain(formatFact(resumed, 'time', now), 'to'));
       add('Attempts', count(d.attempts));
-      add('Resumed', time(d.resumed_at));
+      // The plan's end leaves the poll paused, so its close names the pause's instant, and a row written before the
+      // cause was a clean poll's.
+      if (str(d.cause) === 'plan_ended') add("Ended by the plan's end", time(d.resumed_at));
+      else add('Resumed', time(d.resumed_at));
       break;
     }
     case 'poll_backoff_started':
@@ -1958,10 +1969,11 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       if (secret) add('Secret', plain('replaced'));
       add('Actor', row.actor === null ? null : plain(row.actor));
       // A record holds the pool's settings it was decided under, so one written before a pool's edit reads each field's
-      // old value.
+      // old value. It holds no keepalive policy, so a policy member's dotted field has no reading.
       if (kind === 'pool_updated' && diff.every(([, change]) => isChange(change))) {
         const before = formatFact(atOf(row), 'time', now);
-        add('Reading it', ...diff.filter(([, change]) => ['boolean', 'number', 'string'].includes(typeof rec(change).from) || rec(change).from === null).map(([field, change]) => plain(`decisions before ${before} carry ${fieldLabel(field)} ${fieldValue(field, rec(change).from, now)}`)));
+        const read = diff.filter(([field, change]) => !field.startsWith('keepalive.') && (['boolean', 'number', 'string'].includes(typeof rec(change).from) || rec(change).from === null));
+        add('Reading it', ...read.map(([field, change]) => plain(`decisions before ${before} carry ${fieldLabel(field)} ${fieldValue(field, rec(change).from, now)}`)));
       }
       break;
     }
@@ -2187,6 +2199,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
     case 'window_reset':
       add('Window', window === null ? null : plain(wordOf(WINDOW_WORD, window)));
       add('Before the reset', pct(d.utilization_before));
+      add('Read from', text(d.observed, SOURCE_WORD));
       add('Prediction', plain('0% until the next head'));
       add('Next reset', time(d.next_reset));
       break;

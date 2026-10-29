@@ -160,6 +160,16 @@ test('listRoutingLog encodes comma lists, ISO instants and kinds, and getDecisio
   assert.equal(await api.getDecision('gone', 1), null, 'a decision the ledger no longer holds answers null');
 });
 
+test('getKeepaliveOverview sends the range it is given, and no query without one', async () => {
+  const body = JSON.parse(readFileSync(new URL('./fixtures/keepalive_overview.json', import.meta.url), 'utf8')).body;
+  const calls = stub(() => answer(200, body));
+  const api = new HttpApi();
+  await api.getKeepaliveOverview({ range: '30d' });
+  await api.getKeepaliveOverview({ range: '7d' });
+  await api.getKeepaliveOverview();
+  assert.deepEqual(calls.map((c) => c.url), ['/admin/keepalive/overview?range=30d', '/admin/keepalive/overview?range=7d', '/admin/keepalive/overview']);
+});
+
 test('createAccount sends the id, kind, label, and secret in snake_case', async () => {
   const body = JSON.parse(readFileSync(new URL('./fixtures/account.json', import.meta.url), 'utf8')).body;
   const calls = stub(() => answer(200, body));

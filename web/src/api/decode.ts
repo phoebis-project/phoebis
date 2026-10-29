@@ -716,7 +716,8 @@ export function decodeDecisionRecord(v: unknown): DecisionRecord {
       keyGeneration: num(q.key_generation), keyId: str(q.key_id), lane: { effort: str(lane.effort), speed: str(lane.speed), thinking: str(lane.thinking) }, parentAgentId: strOrNull(q.parent_agent_id), poolId: str(q.pool_id),
       registryRevision: num(q.registry_revision), requestClass: strOrNull(q.request_class), requestId: str(q.request_id),
       seq: num(q.seq, 1),
-      sessionId: strOrNull(q.session_id),
+      // A record before version 3 wrote the session under `routing_session_id`.
+      sessionId: strOrNull(q.session_id ?? (version !== null && version <= 2 ? q.routing_session_id : null)),
     },
     requestId: str(r.request_id),
     seq: num(r.seq, 1),

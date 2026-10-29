@@ -1306,6 +1306,95 @@ async function routingLogRegistryTarget(theme) {
 }
 
 /**
+ * The story's rows the panels draw by their writers' members, under the 24-hour range on their kinds, each row opened
+ * in turn: the pool edit's `keepalive idle window seconds` row against the settings row above it, sunset's backoff close
+ * with its "Ended by the plan's end" row against the Backed off row in the label and against the Attempts row above it,
+ * the one plain value of the two, in the value, and the window reset's Read from row against its Before the reset row,
+ * each in the label's type and left edge and the value's type with the texts recorded. The guardrail record's two
+ * chips on its Answer row compare against the `key` chip on their line in height, top edge and font size, their texts
+ * recorded. The router's seed holds none of the rows, so the mock pass alone reads them. The bare log loads again after.
+ */
+async function routingLogEventPanels(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const rows = page.locator('.routing-log__table > tbody > tr.routing-log__row');
+  /** The newest row of a kind whose By cell reads `by`, opened by a click on its Kind cell. */
+  const open = async (kind, by) => {
+    const row = rows.filter({ has: page.locator('td.routing-log__kind', { hasText: kind }) }).filter({ has: page.locator('td.routing-log__by', { hasText: by }) }).first();
+    if ((await row.count()) === 0) return null;
+    await row.locator('td.routing-log__kind').click();
+    await advance(LOAD_MS);
+    return row;
+  };
+  /** The open panel's pairs: each label's type and left edge in its list, the value's type and the texts. */
+  const pairsOf = (row) =>
+    row.evaluate((tr) => {
+      const panel = tr.nextElementSibling?.classList.contains('routing-log__panel') ? tr.nextElementSibling : null;
+      const list = panel?.querySelector('.event-detail > .kv') ?? null;
+      const type = (el) => {
+        const s = getComputedStyle(el);
+        return `${s.fontSize} ${s.fontWeight} ${s.fontFamily}`;
+      };
+      return [...(list?.querySelectorAll('.kv__row') ?? [])].map((r) => {
+        const dt = r.querySelector('dt');
+        const dd = r.querySelector('dd');
+        // A value of chips reads in the chip's type, a plain value in the cell's own.
+        const value = dd?.querySelector('.chip') ?? dd;
+        return {
+          label: dt?.textContent ?? '',
+          labelLeft: Math.round(((dt?.getBoundingClientRect().left ?? 0) - (list?.getBoundingClientRect().left ?? 0)) * 10) / 10,
+          labelType: dt ? type(dt) : null,
+          text: dd?.textContent ?? '',
+          valueType: value ? type(value) : null,
+        };
+      });
+    });
+  const pair = (pairs, label) => pairs.find((p) => p.label === label) ?? null;
+  const above = (pairs, label) => pairs[pairs.findIndex((p) => p.label === label) - 1] ?? null;
+  const read = {};
+  try {
+    await loadAtOrigin('/routing-log?range=24h&kinds=poll_backoff_ended,refused,registry_changed,window_reset', '.routing-log__table');
+    const edit = await open('registry changed', 'pool edited');
+    read.edit = edit === null ? null : await pairsOf(edit);
+    const close = await open('poll backoff ended', 'plan ended');
+    read.close = close === null ? null : await pairsOf(close);
+    const reset = await open('window reset', 'reset');
+    read.reset = reset === null ? null : await pairsOf(reset);
+    const block = await open('refused', 'guardrail blocked');
+    read.answer =
+      block === null
+        ? null
+        : await block.evaluate((tr) => {
+            const panel = tr.nextElementSibling?.classList.contains('routing-log__panel') ? tr.nextElementSibling : null;
+            const answer = [...(panel?.querySelectorAll('.decision-card__outcome .kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent === 'Answer');
+            const dd = answer?.querySelector('dd');
+            return [...(dd?.querySelectorAll('.chip') ?? [])].map((chip) => {
+              const at = chip.getBoundingClientRect();
+              return { fontSize: getComputedStyle(chip).fontSize, height: Math.round(at.height * 10) / 10, text: chip.textContent ?? '', top: Math.round((at.top - (dd?.getBoundingClientRect().top ?? 0)) * 10) / 10 };
+            });
+          });
+  } finally {
+    await loadAtOrigin('/routing-log', '.routing-log__table');
+  }
+  measurements.push(`${theme} /routing-log event panels ${JSON.stringify(read)}`);
+  const what = (where) => `${theme} /routing-log: ${where}`;
+  const dotted = read.edit && pair(read.edit, 'keepalive idle window seconds');
+  if (!dotted) say(`the pool edit's panel draws no keepalive idle window seconds row (${JSON.stringify(read.edit)})`);
+  else failures.push(...compare(dotted, above(read.edit, 'keepalive idle window seconds'), ['labelLeft', 'labelType', 'valueType'], what("the pool edit's keepalive idle window seconds row against the settings row above it")));
+  const ended = read.close && pair(read.close, "Ended by the plan's end");
+  if (!ended || pair(read.close, 'Resumed')) say(`sunset's backoff close does not read Ended by the plan's end in place of Resumed (${JSON.stringify(read.close)})`);
+  else {
+    failures.push(...compare(ended, pair(read.close, 'Backed off'), ['labelLeft', 'labelType'], what("sunset's Ended by the plan's end row against its Backed off row")));
+    failures.push(...compare(ended, pair(read.close, 'Attempts'), ['labelLeft', 'labelType', 'valueType'], what("sunset's Ended by the plan's end row against its Attempts row")));
+  }
+  const from = read.reset && pair(read.reset, 'Read from');
+  if (!from) say(`the window reset's panel draws no Read from row (${JSON.stringify(read.reset)})`);
+  else failures.push(...compare(from, pair(read.reset, 'Before the reset'), ['labelLeft', 'labelType', 'valueType'], what("the window reset's Read from row against its Before the reset row")));
+  const [blocked, named, key] = read.answer ?? [];
+  if (blocked?.text !== 'guardrail blocked' || !named?.text.startsWith('guardrail') || !key?.text.startsWith('key')) say(`the guardrail record's Answer row reads ${JSON.stringify(read.answer)}`);
+  else for (const chip of [blocked, named]) failures.push(...compare(chip, key, ['fontSize', 'height', 'top'], what(`the guardrail record's ${chip.text} chip against the key chip on its Answer row`)));
+}
+
+/**
  * A cleared window's By chip against a spent window's, under the 7-day range on the two kinds: each chip's type, ink,
  * height, padding and top in its cell, with its text, its title, the width it draws and the width its text needs, so a
  * chip cut behind its ellipsis is recorded. The page's column read holds the By column to its longest cell, as the bare
@@ -2759,6 +2848,57 @@ async function poolDialogWalk(theme, mode) {
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
+}
+
+/**
+ * The return rate's range on the first pool's dialog in the plain view: the Select, read while the Keepalive group
+ * shows, against the Strategy select of the Selection group in height and font size, and beside the "Return rate by
+ * idle age" label with their vertical centers within 1 px, its value and the hint's text recorded. The dialog closes
+ * after.
+ */
+async function poolReturnRange(theme) {
+  const say = (what) => failures.push(`${theme} /pools dialog, return rate: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  const read = {};
+  try {
+    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await settle();
+    // Each group is read while it shows, so the two selects are read in two passes over the dialog.
+    const readGroup = (group) =>
+      dialog.evaluate((el, label) => {
+        const box = (node) => {
+          if (!node) return null;
+          const at = node.getBoundingClientRect();
+          return { fontSize: getComputedStyle(node).fontSize, height: Math.round(at.height * 10) / 10, middle: Math.round((at.top + at.height / 2) * 10) / 10 };
+        };
+        const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === label);
+        const field = section?.querySelector('.field.return-rate') ?? null;
+        const select = field?.querySelector('select') ?? null;
+        return {
+          hint: field?.querySelector(':scope > .field__hint')?.textContent ?? null,
+          label: field ? { ...box(field.querySelector('.field__label')), text: field.querySelector('.field__label')?.textContent ?? null } : null,
+          range: box(select),
+          strategy: box(section?.querySelector('select[aria-label="Strategy"]') ?? null),
+          value: select?.selectedOptions[0]?.textContent ?? null,
+        };
+      }, group);
+    await railEntry(dialog, 'Selection').click();
+    await settle();
+    read.strategy = (await readGroup('Selection')).strategy;
+    await railEntry(dialog, 'Keepalive').click();
+    await settle();
+    const { hint, label, range, value } = await readGroup('Keepalive');
+    Object.assign(read, { hint, label, range, value });
+    await closeByEscape(dialog, `${theme} /pools return rate dialog`, say);
+  } catch (error) {
+    say(`never measured (${error instanceof Error ? error.message : String(error)})`);
+    await page.keyboard.press('Escape').catch(() => {});
+  }
+  measurements.push(`${theme} /pools return rate range ${JSON.stringify(read)}`);
+  failures.push(...compare(read.range, read.strategy, ['fontSize', 'height'], `${theme} /pools dialog: the return rate's range select against the Strategy select`));
+  if (!read.range || !read.label || Math.abs(read.range.middle - read.label.middle) > 1) say(`the range select does not stand beside its label on one line (${JSON.stringify(read)})`);
+  if (read.value !== '7 days') say(`the range opens on ${JSON.stringify(read.value)}, not 7 days`);
 }
 
 /**
@@ -11339,6 +11479,7 @@ try {
         await servingTierWord(theme);
         await tableColumns(theme, 'pools', '.serving', ['Account']);
         await poolDialogGeometry(theme);
+        if (mock) await poolReturnRange(theme);
         await poolRailFit(theme);
         await poolKeyMenus(theme);
       }
@@ -11416,6 +11557,7 @@ try {
         await routingLogRegistryTarget(theme);
         await routingLogClearedChip(theme);
         if (mock) await pinShedMark(theme);
+        if (mock) await routingLogEventPanels(theme);
         await firstDecisionOpen(theme);
         await pagerControls(theme, view.path);
       }

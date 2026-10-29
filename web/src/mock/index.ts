@@ -1,5 +1,5 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
-import type { GuardrailInput, GuardrailRange, GuardrailTestInput } from '@/api/client';
+import type { GuardrailInput, GuardrailRange, GuardrailTestInput, OverviewRange } from '@/api/client';
 import { AFFINITY_MODE_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeSettings } from '@/api/decode';
 import { GUARDRAIL_MODE_VALUES } from '@/api/decode';
 import { decodeStreamCut } from '@/api/decode';
@@ -21,7 +21,7 @@ import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, 
 import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
-import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins, pinsUnderPool, sessionsListedAt } from './operations';
+import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins, pinsUnderPool, sessionsListedAt } from './operations';
 import { KEYS, POOLS, composedFor, resolvedFor, servedFigures } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRICED_REQUEST, UNPRICED_ROLLUPS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
@@ -1090,8 +1090,9 @@ export class MockApi implements Api {
     return latency(this.guardrailView(row));
   }
 
-  getKeepaliveOverview() {
-    return latency(emptyStore() ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW);
+  getKeepaliveOverview(q: { range?: OverviewRange } = {}) {
+    if (q.range !== undefined && q.range !== '7d' && q.range !== '30d') return Promise.reject(new ApiError(400, 'range is 7d or 30d', null));
+    return latency(emptyStore() ? EMPTY_KEEPALIVE_OVERVIEW : q.range === '30d' ? KEEPALIVE_OVERVIEW_30D : KEEPALIVE_OVERVIEW);
   }
 
   /** Every live model-scoped cooldown across the accounts, folded to the shape the key models route answers. */

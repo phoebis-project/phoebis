@@ -698,6 +698,16 @@ test("every record version decodes its settings, a version 1 record's three remo
   assert.deepEqual(off.settings.legacy, { paceFloor: 0.05, selectBelowUtilization: null, shedAheadOfPace: null }, 'a setting the pool left off reads null');
 });
 
+test("a record before version 3 reads its session under the older member's name, and a version 3 record under session_id alone", () => {
+  const body = fixture('decision');
+  const { session_id: _session, ...request } = body.request;
+  const session = (version, members) => d.decodeDecisionRecord({ ...body, request: { ...request, ...members }, version }).request.sessionId;
+  assert.equal(session(2, { routing_session_id: 's2' }), 's2');
+  assert.equal(session(1, { routing_session_id: 's1' }), 's1');
+  assert.equal(session(3, { routing_session_id: 's2', session_id: 's3' }), 's3', 'a version 3 record reads session_id');
+  assert.equal(session(3, { routing_session_id: 's2' }), null, 'a version 3 record reads no older name');
+});
+
 test("a record decodes the five settings, the hold's figures, the cause, the factor, the demand and the pin's cycle, and a record without them reads null", () => {
   const body = fixture('decision');
   const until = 1_791_724_600_000;

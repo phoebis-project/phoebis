@@ -1,9 +1,10 @@
 import type {
   Account, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordOutcome,
-  RecordPin, RecordRequest, RecordSettings, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
+  PoolKeepalive, RecordPin, RecordRequest, RecordSettings, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
 import { endOf } from '@/lib/quota';
 import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN } from './accounts';
+import { GUARDRAILS } from './guardrails';
 import { leadOf } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
@@ -153,20 +154,23 @@ interface ShedRound {
 }
 
 /**
- * The settings a pool's edit at its `updatedAt` moved, each at its value before the edit, which the edit's registry
- * change carries as each pair's old value, and the instant the settings before it took force. The story's other rows
- * read neither, so no row before the edit contradicts them.
+ * The settings and the keepalive policy a pool's edit at its `updatedAt` moved, each at its value before the edit,
+ * which the edit's registry change carries as each pair's old value, and the instant the settings before it took force.
+ * The story's other rows read neither, so no row before the edit contradicts them, and a record carries no policy.
  */
-const BEFORE_EDIT: Record<string, Partial<RecordSettings>> = { all: { minSharedPrefixTokens: 10_000, poolUpdatedAt: iso(NOW - 9 * DAY), slowDownHoldSeconds: 60 } };
+const BEFORE_EDIT: Record<string, Partial<RecordSettings> & { keepalive: Partial<PoolKeepalive> }> = {
+  all: { keepalive: { maxIdleSeconds: 43_200 }, minSharedPrefixTokens: 10_000, poolUpdatedAt: iso(NOW - 9 * DAY), slowDownHoldSeconds: 60 },
+};
 
 /**
  * The pool's settings as the record decided at `at` names them, by the pool fields they are read from: a record
  * decided before the pool's edit carries the values the edit moved.
  */
 function settingsOf(pool: PoolSeed, at: number): RecordSettings {
+  const { keepalive: _policy, ...before } = BEFORE_EDIT[pool.id] ?? { keepalive: {} };
   return {
     ...settingsNow(pool),
-    ...(at < Date.parse(pool.updatedAt) ? BEFORE_EDIT[pool.id] : {}),
+    ...(at < Date.parse(pool.updatedAt) ? before : {}),
   };
 }
 
@@ -1401,6 +1405,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
       holds: spec.holds ?? [],
       keyGeneration: r.keyGeneration, keyId: r.keyId ?? '', lane: { effort: r.shape.effort ?? '-', speed: fast ? 'fast' : 'standard', thinking: r.shape.thinkingType ?? 'none' }, parentAgentId: r.agentId === 'main' ? null : 'main', poolId: r.poolId ?? '',
       registryRevision: 412, requestClass: r.requestClass, requestId: r.id, seq: spec.seq, sessionId: r.sessionId,
+      ...(spec.refusal?.kind === 'guardrail' ? blockedFacts(r) : {}),
     },
     requestId: r.id,
     seq: spec.seq,
@@ -1720,6 +1725,25 @@ const FABLE_WEEK_PINS: RoundPin[] = [
 const roundOfPins = (pins: RoundPin[]): ShedRound => ({ marks: pins.filter((p) => p.marked).map((p) => ({ agentId: p.agentId, keyId: p.keyId, model: p.model, sessionId: p.sessionId })), pins });
 
 /**
+ * A guardrail's block refuses before any selection, so its record keeps the class and the count flag the block read and
+ * leaves the parent agent, the lane, the chains, the accounts attempted and the holds empty, as a contract refusal's.
+ */
+const blockedFacts = (r: RequestLog): Pick<RecordRequest, 'attempted' | 'chain' | 'flags' | 'holds' | 'lane' | 'parentAgentId'> => ({
+  attempted: [],
+  chain: { boundaries: 0, staticBoundaries: 0, staticHash: false },
+  flags: { contextCompacted: false, count: r.kind === 'count_tokens', fast: false, marker: false, portable: false, probe: r.kind === 'probe' },
+  holds: [],
+  lane: { effort: '', speed: '', thinking: '' },
+  parentAgentId: null,
+});
+
+/** A guardrail's block as the relay answers it: the stored name of the guardrail the request's matches mark blocking. */
+function blockOf(id: string): NonNullable<Spec['refusal']> {
+  const blocking = requestById.get(id)?.guardrails.find((m) => m.blocked)?.id ?? '';
+  return { code: 'guardrail_blocked', kind: 'guardrail', reason: GUARDRAILS.find((g) => g.id === blocking)?.name ?? blocking };
+}
+
+/**
  * The story hour and the morning's round, written by hand so every card the routing log draws is on the page: each
  * decision names its kind, its account and what the engine read where the walk back alone would not tell it.
  */
@@ -1832,6 +1856,8 @@ function storySpecs(): Spec[] {
     at('req_6c3a9e27-5b1', 1, 1, t(14, 18, 5), 'refused', null, { pin: 'not_looked_up', refusal: { code: 'revoked', kind: 'key', reason: 'the key was revoked' } }),
     at('req_e0a4c6f2-118', 1, 1, t(14, 14, 2), 'refused', null, { pin: 'not_looked_up', refusal: { code: 'drift', kind: 'client', reason: 'hash' } }),
     at('req_f1c8e3a5-29d', 1, 1, t(14, 14, 20), 'refused', null, { pin: 'not_looked_up', refusal: { code: 'contract', kind: 'client', reason: 'class_header' } }),
+    // The desktop key's own guardrail refused the day's last auxiliary fork on it.
+    at('req_a8f3c6d0-e17', 1, 1, t(12, 52, 20), 'refused', null, { pin: 'not_looked_up', refusal: blockOf('req_a8f3c6d0-e17') }),
     at('req_51d0e2b8-7a0', 1, 1, t(14, 16, 40), 'exhausted', null, { exhaustion: { deadline: iso(startOfDay(t(14, 16, 40)) + DAY), kind: 'timed', obstacle: null, reason: null, window: 'overage' }, pin: 'pinning_off' }),
     // The compacted conversation renews its pin cold.
     at('req_31f0b7c2-6e1', 1, 1, t(14, 17, 52), 'renewed', 'primary', { pin: live('compacted', 491_000, 'cold') }),
@@ -2085,7 +2111,7 @@ function poolDiff(p: PoolSeed, before: Record<string, unknown>): Record<string, 
   return Object.fromEntries(Object.entries(before).map(([field, from]) => [field, { from, to: row[field] }]));
 }
 
-/** A pool's row as the store's `pool_diff` writes it on a creation, under its column names. */
+/** A pool's row as the store's `pool_diff` writes it on a creation, under its column names, its policy dotted. */
 function poolRow(p: PoolSeed): Record<string, unknown> {
   return {
     affinity_mode: p.affinityMode,
@@ -2097,6 +2123,10 @@ function poolRow(p: PoolSeed): Record<string, unknown> {
     cache_ttl: { enabled: p.cacheTtl.enabled, inject_when_absent: p.cacheTtl.injectWhenAbsent, metered: ttlRulesDiff(p.cacheTtl.metered), plan: ttlRulesDiff(p.cacheTtl.plan) },
     enabled: p.status !== 'disabled',
     in_flight_cap: p.inFlightCap,
+    'keepalive.enabled': p.keepalive.enabled,
+    'keepalive.max_idle_seconds': p.keepalive.maxIdleSeconds,
+    'keepalive.max_parked_seconds': p.keepalive.maxParkedSeconds,
+    'keepalive.scheduled_horizon_seconds': p.keepalive.scheduledHorizonSeconds,
     label: p.name,
     load_shedding: p.loadShedding,
     migrate_when_spent: p.migrateWhenSpent,
@@ -2372,6 +2402,16 @@ function planEndedRow(account: Account): EventSeed[] {
   return [{ accountId: account.id, at: account.planEndedAt, detail: { organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', source: 'profile', subscription_status: 'canceled' }, kind: 'plan_ended' }];
 }
 
+/**
+ * The plan-ended account's backoff close: a run one rate limit opened six minutes earlier stood open when the profile
+ * read paused the poll, and the pause closes it at its own instant, since no clean answer will come.
+ */
+function planEndedClose(account: Account): EventSeed[] {
+  if (account.planEndedAt === null) return [];
+  const at = Date.parse(account.planEndedAt);
+  return [{ accountId: account.id, at: account.planEndedAt, detail: { attempts: 1, cause: 'plan_ended', duration_ms: 6 * MINUTE, resumed_at: at }, kind: 'poll_backoff_ended' }];
+}
+
 const WEEK = 7 * DAY;
 
 /**
@@ -2581,12 +2621,17 @@ function buildEvents(): RoutingEvent[] {
       kind: 'fast_credits_changed',
     },
     { accountId: 'nightly', at: iso(OVERAGE_FROM), detail: {}, kind: 'overage_started' },
-    // The edit that raised the pool's shared prefix floor and its slow-down hold, at the stamp the pool carries.
+    // The edit that raised the pool's shared prefix floor and its slow-down hold and cut its idle window, at the stamp
+    // the pool carries.
     {
       accountId: null,
       actor: 'admin',
       at: pool.updatedAt,
-      detail: { diff: poolDiff(pool, { min_shared_prefix_tokens: BEFORE_EDIT.all.minSharedPrefixTokens, slow_down_hold_seconds: BEFORE_EDIT.all.slowDownHoldSeconds }), kind: 'pool_updated', target: 'all' },
+      detail: {
+        diff: poolDiff(pool, { min_shared_prefix_tokens: BEFORE_EDIT.all.minSharedPrefixTokens, slow_down_hold_seconds: BEFORE_EDIT.all.slowDownHoldSeconds, 'keepalive.max_idle_seconds': BEFORE_EDIT.all.keepalive.maxIdleSeconds }),
+        kind: 'pool_updated',
+        target: 'all',
+      },
       kind: 'registry_changed',
       poolId: 'all',
     },
@@ -2612,12 +2657,13 @@ function buildEvents(): RoutingEvent[] {
     // five minutes found it funded again.
     { accountId: 'overflow', at: iso(NOW - 3 * DAY - 5 * HOUR), detail: { cause: 'funding_refused', detail: 'Your credit balance is too low to access the Anthropic API.', from: 'ready', to: 'funding_required' }, kind: 'account_state_changed' },
     { accountId: 'overflow', at: iso(NOW - 3 * DAY - 5 * HOUR + 5 * MINUTE + 40_000), detail: { cause: 'funding_retry', detail: null, from: 'funding_required', to: 'ready' }, kind: 'account_state_changed' },
-    { accountId: 'primary', at: iso(t(8, 15, 3)), detail: { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: t(8, 15, 3) }, kind: 'poll_backoff_ended' },
+    { accountId: 'primary', at: iso(t(8, 15, 3)), detail: { attempts: 3, cause: 'clean_poll', duration_ms: 25 * MINUTE, resumed_at: t(8, 15, 3) }, kind: 'poll_backoff_ended' },
     { accountId: 'research', at: iso(startOfDay(t(14, 30))), detail: { period: 'day', period_start: startOfDay(t(14, 30)) - DAY, previous_spent_usd: 18.2 }, kind: 'budget_period_ended', poolId: 'jobs' },
     // Drawn at the instant it fires: the subscription's end less the pool's wind-down, which is still ahead.
     { accountId: 'secondary', at: iso(endsAt - pool.windDownMinutes * MINUTE), detail: { end_source: 'canceled', ends_at: endsAt, wind_down_minutes: pool.windDownMinutes }, kind: 'wind_down_started', poolId: 'all' },
     ...planRows(primary),
     ...planEndedRow(accountOf.get('sunset')!),
+    ...planEndedClose(accountOf.get('sunset')!),
   );
   if (oldestCooldown) seeds.push({ accountId: oldestCooldown.accountId, at: iso(oldestCooldown.until), detail: { cause: 'expired', scope: oldestCooldown.scope }, kind: 'cooldown_cleared' });
   if (gap) seeds.push({ accountId: null, at: iso(Date.parse(gap.at) + (gap.durationMs ?? 0)), detail: { reason: 'chunk_skipped', request_id: gap.id }, kind: 'ledger_gap', requestId: gap.id });

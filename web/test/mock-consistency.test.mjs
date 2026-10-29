@@ -142,11 +142,17 @@ async function logOf(s) {
 
 /** The members the store's `pool_diff` names, whose changed ones a pool edit carries as pairs. */
 const POOL_DIFF_MEMBERS = [
-  'affinity_mode', 'affinity_ttl_seconds', 'auto_mode_server', 'body_capture_hours', 'burn_average_seconds', 'cache_diagnostics', 'cache_ttl', 'enabled', 'in_flight_cap', 'label', 'load_shedding',
+  'affinity_mode', 'affinity_ttl_seconds', 'auto_mode_server', 'body_capture_hours', 'burn_average_seconds', 'cache_diagnostics', 'cache_ttl', 'enabled', 'in_flight_cap',
+  'keepalive.enabled', 'keepalive.max_idle_seconds', 'keepalive.max_parked_seconds', 'keepalive.scheduled_horizon_seconds', 'label', 'load_shedding',
   'migrate_when_spent', 'min_shared_prefix_tokens', 'model_rules', 'overage_move_grace_minutes', 'overage_policy', 'prefer_subscription', 'retry_in_place_seconds', 'return_to_plan',
   'return_to_plan_dwell_seconds', 'session_placement', 'shed_cap', 'shed_dwell_seconds', 'slow_down', 'slow_down_hold_seconds', 'slow_down_stretch_seconds', 'strategy', 'subagent_placement',
   'warm_sessions', 'wind_down_minutes', 'window_ceiling',
 ];
+/**
+ * The keepalive policy the story's pool edit moved, at its value before the edit, as the mock's `BEFORE_EDIT` holds it
+ * by pool. No decision record carries a policy, so the pair's old value is read here rather than off the records.
+ */
+const POLICY_BEFORE_EDIT = { all: { maxIdleSeconds: 43_200 } };
 /** The fields an account edit carries as pairs, beside the flag a staged secret sets. */
 const ACCOUNT_DIFF_MEMBERS = ['canceled', 'enabled', 'label', 'state', 'subscription_ends_at'];
 
@@ -1759,11 +1765,59 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const summaries = (await logOf(s)).filter((x) => x.type === 'decision' && x.kind === 'refused');
     const refused = (await decisionsOf(s)).filter((r) => r.outcome.kind === 'refused');
-    assert.deepEqual(refused.map((r) => `${r.outcome.refusal.kind} ${r.outcome.refusal.code}`).sort(), ['client contract', 'client drift', 'key revoked']);
+    assert.deepEqual(refused.map((r) => `${r.outcome.refusal.kind} ${r.outcome.refusal.code}`).sort(), ['client contract', 'client drift', 'guardrail guardrail_blocked', 'key revoked']);
     for (const r of refused) {
       const id = `${r.requestId}/${r.seq}`;
       assert.equal(summaries.find((x) => x.requestId === r.requestId && x.seq === r.seq)?.refusal?.code, r.outcome.refusal.code, `${id}'s row`);
     }
+  });
+
+  test(`a guardrail's block writes one refused record under the name of the guardrail its key enforces, its request facts as the contract's, at ${at}`, async () => {
+    const s = await story;
+    const blocks = (await decisionsOf(s)).filter((r) => r.outcome.refusal?.kind === 'guardrail');
+    assert.equal(blocks.length, 1, 'one block of the story writes its record');
+    const [r] = blocks;
+    const id = `${r.requestId}/${r.seq}`;
+    // The relay answers the stored name of the guardrail the request's matches mark blocking.
+    const row = s.requests.find((x) => x.id === r.requestId);
+    const blocker = (await s.api.listGuardrails()).find((g) => g.id === row?.guardrails.find((m) => m.blocked)?.id);
+    assert.deepEqual([row?.errorCode, blocker?.mode, blocker?.keys.map((k) => k.id)], ['guardrail_blocked', 'enforce', [r.request.keyId]], `${id}: the request row keeps its code under a guardrail its key enforces`);
+    assert.deepEqual(r.outcome.refusal, { code: 'guardrail_blocked', kind: 'guardrail', reason: blocker.name });
+    // The block reads the class and the count flag, and refuses before any selection reads the rest.
+    const { chain, flags, holds, lane, parentAgentId, requestClass } = r.request;
+    assert.deepEqual(
+      { chain, flags, holds, lane, parentAgentId, requestClass, walk: r.walk.map((w) => [w.step, w.verdict, w.facts.map((f) => `${f.key} ${f.value}`)]) },
+      {
+        chain: { boundaries: 0, staticBoundaries: 0, staticHash: false },
+        flags: { contextCompacted: false, count: row.kind === 'count_tokens', fast: false, marker: false, portable: false, probe: row.kind === 'probe' },
+        holds: [],
+        lane: { effort: '', speed: '', thinking: '' },
+        parentAgentId: null,
+        requestClass: row.requestClass,
+        walk: [['admission', 'refused', [`reason ${blocker.name}`]], ['selection', 'not_run', []]],
+      },
+    );
+    assert.deepEqual(r.request.attempted, []);
+    const preset = await s.api.listRoutingLog({ from: iso(Date.parse(r.request.at) - HOUR), kinds: ['refused'], limit: 200, to: iso(s.now) });
+    assert.ok(preset.rows.some((x) => x.type === 'decision' && x.requestId === r.requestId && x.refusal?.kind === 'guardrail'), `${id}: the refused kind lists the record`);
+  });
+
+  test(`the usage poll's two backoff closes read their causes, the plan's end at the pause's instant, at ${at}`, async () => {
+    const s = await story;
+    const log = await logOf(s);
+    const closes = log.filter((x) => x.type === 'event' && x.kind === 'poll_backoff_ended');
+    assert.deepEqual(closes.map((e) => [e.accountId, e.detail.cause]).sort(), [['primary', 'clean_poll'], ['sunset', 'plan_ended']]);
+    const ended = closes.find((e) => e.detail.cause === 'plan_ended');
+    const flag = log.find((x) => x.type === 'event' && x.kind === 'plan_ended' && x.accountId === ended?.accountId);
+    assert.deepEqual([ended?.detail.resumed_at, Date.parse(ended?.at ?? '')], [Date.parse(flag?.at ?? ''), Date.parse(flag?.at ?? '')], "the close stands at the plan_ended row's instant and names it as the pause's");
+    assert.ok(ended?.detail.attempts === 1 && ended.detail.duration_ms > 0, `the run before the plan ended reads its attempt and its span: ${JSON.stringify(ended?.detail)}`);
+  });
+
+  test(`the story's pool edit names the idle window it moved as a dotted field beside its two settings, at ${at}`, async () => {
+    const s = await story;
+    const edit = (await logOf(s)).find((x) => x.type === 'event' && x.kind === 'registry_changed' && x.detail.kind === 'pool_updated');
+    assert.deepEqual(Object.keys(edit?.detail.diff ?? {}).sort(), ['keepalive.max_idle_seconds', 'min_shared_prefix_tokens', 'slow_down_hold_seconds']);
+    assert.deepEqual(edit.detail.diff['keepalive.max_idle_seconds'], { from: POLICY_BEFORE_EDIT.all.maxIdleSeconds, to: s.pools.find((p) => p.id === 'all').keepalive.maxIdleSeconds });
   });
 
   test(`every registry change carries the diff its writer stores, at ${at}`, async () => {
@@ -1793,13 +1847,20 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         assert.ok(pool, `${e.id}: the edit names a pool of the story`);
         const member = (field) => (field === 'label' ? 'name' : field.replace(/_([a-z])/g, (_, c) => c.toUpperCase()));
         for (const [field, change] of Object.entries(pairs)) if (member(field) in pool) assert.deepEqual(change.to, pool[member(field)], `${e.id}: ${field} reads the pool's value`);
+        // A policy member's dotted field names its path under the pool's policy.
+        const policy = Object.entries(pairs).filter(([field]) => field.startsWith('keepalive.'));
+        for (const [field, change] of policy) {
+          const [, name] = member(field).split('.');
+          assert.deepEqual(change, { from: POLICY_BEFORE_EDIT[pool.id]?.[name], to: pool.keepalive[name] }, `${e.id}: ${field} reads the policy before the edit and the pool's`);
+        }
         // A decision record carries the pool's settings it was decided under, so the records before the edit read each
-        // pair's old value and the records after it the new one.
+        // pair's old value and the records after it the new one. No record carries the keepalive policy.
         const records = (await decisionsOf(s)).filter((r) => r.request.poolId === e.detail.target && r.settings !== null);
         const before = records.filter((r) => Date.parse(r.request.at) < Date.parse(e.at));
         const after = records.filter((r) => Date.parse(r.request.at) >= Date.parse(e.at));
         assert.ok(before.length > 0 && after.length > 0, `${e.id}: records stand on both sides of the edit`);
         for (const [field, change] of Object.entries(pairs)) {
+          if (field.startsWith('keepalive.')) continue;
           const setting = member(field);
           assert.ok(setting in before[0].settings, `${e.id}: ${field} is a setting the records carry`);
           assert.deepEqual([...new Set(before.map((r) => r.settings[setting]))], [change.from], `${e.id}: ${field} on the records before the edit`);

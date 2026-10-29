@@ -231,28 +231,29 @@ dialog starts with cache warming off ([Pools](console.md#pools)). A pool card's 
 the pool's keys, as the Dashboard's Sessions card does, and reads how many sit on a former member under the figure
 ([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The pool dialog's idle window set above the break-even
 reads a note that the ceiling lies above it and prices its cost from the set value, while the parked and horizon
-ceilings stay capped at the break-even ([Pools](console.md#pools)). The Pools view names the third selection tier
-`metered` in its serving table and its Selection hint, the tier holding the API-key accounts and the usage-based seats
-([Pools](console.md#pools)). The Keys view's Pool filter draws one chip per pool, and a pool the address names that the
-router does not list shows its chip until the pools load ([Keys](console.md#keys)). A request whose answer the upstream
-refused draws the refusal's category as a warning badge beside its status, and the Outcome group of Add filter offers
-Stop reason and Refusal category ([Requests](console.md#requests)). A request whose stream was cut after its head reads
-what cut it in its drawer's Error row ([Requests](console.md#requests)). An auto reload on a custom range reads once a
-request received inside the range and written after an earlier read, as a preset range does
-([Requests](console.md#requests)). Each captured body block in the request drawer has a find field that counts the lines
-holding a term, opens the wide window on a hit, marks every occurrence on the drawn rows and walks the hits with Enter
-and Shift+Enter ([Requests](console.md#requests)). On the Requests view a custom range's late row that lands below the
-rows shown draws on the next auto reload read ([Requests](console.md#requests)). On the Requests view and the Routing
-log the list's late answer replaces the page an auto reload poll stood in for it, and Next past an overrun under a
-preset reads to the router's clock ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The pressed
-range pill names its range and its end on hover, and when the tab comes back to a read at once the rows it brought keep
-their tint through the read after it ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The
-Requests and Routing log Time cells print the date before the time on a row older than a day, and the Routing log's
-columns fit their content ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and
-Routing log views filter on an agent id through the Agent filter of the Subject group, carried in the address as
-`agent_id` ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests, Sessions and Routing
-log tables lay their columns out by one rule, with a minimum per column kind, one fill column and a set wider than the
-card scrolling inside it, so the Requests table fits 1280 px with its default columns ([Requests](console.md#requests),
+ceilings stay capped at the break-even ([Pools](console.md#pools)). The Pools dialog's return rate reads the last 7 or
+30 days ([Pools](console.md#pools)). The Pools view names the third selection tier `metered` in its serving table and
+its Selection hint, the tier holding the API-key accounts and the usage-based seats ([Pools](console.md#pools)). The
+Keys view's Pool filter draws one chip per pool, and a pool the address names that the router does not list shows its
+chip until the pools load ([Keys](console.md#keys)). A request whose answer the upstream refused draws the refusal's
+category as a warning badge beside its status, and the Outcome group of Add filter offers Stop reason and Refusal
+category ([Requests](console.md#requests)). A request whose stream was cut after its head reads what cut it in its
+drawer's Error row ([Requests](console.md#requests)). An auto reload on a custom range reads once a request received
+inside the range and written after an earlier read, as a preset range does ([Requests](console.md#requests)). Each
+captured body block in the request drawer has a find field that counts the lines holding a term, opens the wide window
+on a hit, marks every occurrence on the drawn rows and walks the hits with Enter and Shift+Enter
+([Requests](console.md#requests)). On the Requests view a custom range's late row that lands below the rows shown draws
+on the next auto reload read ([Requests](console.md#requests)). On the Requests view and the Routing log the list's late
+answer replaces the page an auto reload poll stood in for it, and Next past an overrun under a preset reads to the
+router's clock ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The pressed range pill names
+its range and its end on hover, and when the tab comes back to a read at once the rows it brought keep their tint
+through the read after it ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and
+Routing log Time cells print the date before the time on a row older than a day, and the Routing log's columns fit their
+content ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and Routing log views
+filter on an agent id through the Agent filter of the Subject group, carried in the address as `agent_id`
+([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests, Sessions and Routing log tables
+lay their columns out by one rule, with a minimum per column kind, one fill column and a set wider than the card
+scrolling inside it, so the Requests table fits 1280 px with its default columns ([Requests](console.md#requests),
 [Sessions](console.md#sessions), [Routing log](console.md#routing-log)). The Requests view's empty state reads "Widen
 the range or clear a filter.", as the Routing log's does, and a request the router refused before it resolved a model
 reads a dash for its model ([Requests](console.md#requests)). Unchecking Select all in a filter's list clears every
@@ -306,16 +307,21 @@ accounts, the runway that narrowed them and whether a draw chose among them ([Ro
 registry's change log records an edit of a pool, a key or an account as each changed field's value before and after, an
 account edit that replaced the secret says so without its value, and a registry change's Account cell links the account
 or the key it edited ([Routing log](console.md#routing-log)). A pool save that changes nothing writes no change row and
-no event, so the change log shows real changes alone ([Routing log](console.md#routing-log)). The routing log lists a
-failed usage poll as `poll failed` and a stream cut after its head as `stream interrupted`, and a shedding round that
-walks no pin and leaves one out off the window that fired reads `off window` ([Routing log](console.md#routing-log)).
-The routing log lists an account whose plan ended as `plan ended` and the plan's return as `plan restored`, each with
-the read's source and the profile's organization type, rate-limit tier and subscription status ([Routing
-log](console.md#routing-log)). The Routing log's Pace cell and hover read a lapsed usage-based seat's remaining share as
-a percent ([Routing log](console.md#routing-log)). The Meter view badges a ratio only where the priced share reaches the
-rise's floor ([Meter](console.md#meter)). The Meter view in the Diagnostics group lists every subscription account's
-completed windows of the last 30 days grouped by account and window kind, the weekly windows apart, each group collapsed
-to its latest ratio, its off count and a 30-day ratio spark, and the Meter drift condition opens it on the account
+no event, so the change log shows real changes alone ([Routing log](console.md#routing-log)). The Routing log draws a
+guardrail block's refusal record with the guardrail's name as a second chip ([Routing log](console.md#routing-log)). The
+Routing log draws a pool save's keepalive policy as dotted fields ([Routing log](console.md#routing-log)). The routing
+log lists a failed usage poll as `poll failed` and a stream cut after its head as `stream interrupted`, and a shedding
+round that walks no pin and leaves one out off the window that fired reads `off window` ([Routing
+log](console.md#routing-log)). The routing log lists an account whose plan ended as `plan ended` and the plan's return
+as `plan restored`, each with the read's source and the profile's organization type, rate-limit tier and subscription
+status ([Routing log](console.md#routing-log)). The Routing log reads a backoff's close by its cause, Resumed under a
+clean poll and Ended by the plan's end under the plan's end ([Routing log](console.md#routing-log)). The Routing log's
+Pace cell and hover read a lapsed usage-based seat's remaining share as a percent ([Routing
+log](console.md#routing-log)). The Routing log's window reset panel reads Read from, the usage sample or the clock walk
+([Routing log](console.md#routing-log)). The Meter view badges a ratio only where the priced share reaches the rise's
+floor ([Meter](console.md#meter)). The Meter view in the Diagnostics group lists every subscription account's completed
+windows of the last 30 days grouped by account and window kind, the weekly windows apart, each group collapsed to its
+latest ratio, its off count and a 30-day ratio spark, and the Meter drift condition opens it on the account
 ([Dashboard](console.md#dashboard), [Meter](console.md#meter)). A confirmation toast shows ahead of the failures queued
 behind the one on screen. A whole-day or whole-hour duration drops its zero part, so three whole days read `3d` and an
 hour `1h`. Every data table alternates its row tone, with a hovered or selected row reading over it ([The

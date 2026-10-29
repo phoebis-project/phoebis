@@ -1051,6 +1051,9 @@ const PROBES_24H = { ok: 225, migrated: 18, held: 4, skipped: 45, failed: 3 };
 // Each bucket reaches fewer windows than the one before it left unreturned.
 const IDLE_REACHED = [96, 70, 50, 36, 22, 13, 8, 5, 2, 1];
 const IDLE_RETURNED = [24, 16, 11, 12, 7, 4, 2, 2, 1, 0];
+// The 30 days hold more of each, at rates within a few points of the 7 days' where a bucket counts enough windows.
+const IDLE_REACHED_30D = [430, 315, 230, 170, 105, 64, 40, 26, 14, 7];
+const IDLE_RETURNED_30D = [107, 72, 51, 57, 33, 20, 10, 10, 7, 1];
 
 export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   ...KEEPALIVE_OVERVIEW_SAMPLE,
@@ -1081,6 +1084,12 @@ export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
     },
   ],
   probes24h: PROBES_24H,
+};
+
+/** The overview under the 30-day range, which moves the idle returns alone, as the route's answer keeps its shape. */
+export const KEEPALIVE_OVERVIEW_30D: KeepaliveOverview = {
+  ...KEEPALIVE_OVERVIEW,
+  pools: KEEPALIVE_OVERVIEW.pools.map((p) => ({ ...p, idleReturns: p.idleReturns.map((b, i) => ({ ...b, reached: IDLE_REACHED_30D[i], returned: IDLE_RETURNED_30D[i] })) })),
 };
 
 const settingsFixture = FIXTURES.settings.body as Record<string, Record<string, unknown>>;

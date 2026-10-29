@@ -1,5 +1,5 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from './client';
-import type { GuardrailInput, GuardrailRange, GuardrailTestInput } from './client';
+import type { GuardrailInput, GuardrailRange, GuardrailTestInput, OverviewRange } from './client';
 import * as d from './decode';
 import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingConfirmed, PairingInput, PairingPreview, PairingStart, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
 
@@ -223,7 +223,7 @@ export class HttpApi implements Api {
     }
   };
   getGuardrail = async (id: string) => d.decodeGuardrail(await call('GET', `/admin/guardrails/${enc(id)}`));
-  getKeepaliveOverview = async () => d.decodeKeepaliveOverview(await call('GET', '/admin/keepalive/overview'));
+  getKeepaliveOverview = async (q?: { range?: OverviewRange }) => d.decodeKeepaliveOverview(await call('GET', `/admin/keepalive/overview${qs({ range: q?.range })}`));
   getKeyModels = async (keyId: string) => d.decodeKeyModels(await call('GET', `/admin/keys/${enc(keyId)}/models`));
   getOverview = async () => d.decodeDashboard(await call('GET', '/admin/dashboard'));
   getQuotaHistory = async (accountId: string) => d.decodeQuotaHistory(await call('GET', `/admin/accounts/${enc(accountId)}/quota?range=7d`));

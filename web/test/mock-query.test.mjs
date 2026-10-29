@@ -206,3 +206,20 @@ test('the mock leaves out a session no mod reports once its last use is older th
   assert.deepEqual(later.filter((s) => s.companion === 'none').map(named), unused.map(named), 'two hours on, no row no mod reports with a use on record stays listed');
   assert.deepEqual(later.filter((s) => s.companion !== 'none').map(key), sessions.filter((s) => s.companion !== 'none').map(key), "every companion row of the story's list still stands two hours on");
 });
+
+test('the mock answers the keepalive overview over 7 days by default and over 30 under its range, and refuses any other word, as the route does', async () => {
+  const bare = await api.getKeepaliveOverview();
+  const week = await api.getKeepaliveOverview({ range: '7d' });
+  const month = await api.getKeepaliveOverview({ range: '30d' });
+  assert.deepEqual(week, bare, 'the default range is 7 days');
+  const rest = (o) => ({ ...o, pools: o.pools.map(({ idleReturns: _idle, ...p }) => p) });
+  assert.deepEqual(rest(month), rest(week), 'the range moves the idle returns alone');
+  const total = (o, member) => o.pools.flatMap((p) => p.idleReturns).reduce((n, b) => n + b[member], 0);
+  for (const [i, pool] of month.pools.entries()) {
+    const seven = week.pools[i].idleReturns;
+    const larger = pool.idleReturns.filter((b, j) => b.fromSeconds !== seven[j].fromSeconds || b.reached <= seven[j].reached || b.returned <= seven[j].returned);
+    assert.deepEqual(larger, [], `${pool.poolId}: every bucket reaches and returns more windows over 30 days`);
+  }
+  assert.ok(total(month, 'reached') > total(week, 'reached') && total(month, 'returned') > total(week, 'returned'), 'the 30-day totals are larger');
+  await assert.rejects(api.getKeepaliveOverview({ range: '14d' }), (e) => e instanceof d.ApiError && e.status === 400 && e.message === 'range is 7d or 30d');
+});

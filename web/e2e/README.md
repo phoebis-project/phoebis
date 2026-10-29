@@ -45,7 +45,12 @@ By chip under the 7-day range on the cleared and spent windows (against a spent 
 padding and top, the width its text needs recorded, and the By column as wide as its longest cell), the Shed mark of the
 two pins the story stamps in the mock pass alone (on the next request of the shed session and of the failed-over
 session, the origin chip opening on `shed from` or `failed over from`, against the chip of the instant beside it in box,
-type, ink and top, its label against that chip's label in type and ink, and its text whole), the Diagnostics group
+type, ink and top, its label against that chip's label in type and ink, and its text whole), the routing log's event
+panels (mock pass, under the 24-hour range on their kinds: the pool edit's `keepalive idle window seconds` row against
+the settings row above it, sunset's backoff close reading Ended by the plan's end with no Resumed row against its Backed
+off row in the label and its Attempts row in the value, the window reset's Read from row against its Before the reset
+row, each in the label's type and left edge and the value's type, and the guardrail record's two chips on its Answer row
+against the `key` chip on their line in height, top edge and font size, every text recorded), the Diagnostics group
 (neither its heading nor a link of it on the dashboard with the expert view off, and with the Routing log or the Meter
 view open the heading over the two links in that order and the open view's link active), the Meter view's group tables
 at 1280 by 800, 1440 by 900, 1920 by 1080 and 375 by 800 (mock pass: each fit column as wide as its widest cell past the
@@ -60,7 +65,9 @@ the pool dialog (the Wind down hint naming the canceled subscription against the
 Retention hint naming the limit and the Settings page's About card against the capture switch's hint beside it, each in
 type, ink and left edge), the load groups (the overage grace field against the window ceiling field, the utilization
 bar's ceiling handle and the shedding preview line), the pool dialog's ceiling handle in the plain view (on the track at
-the field's value, centered on the track and taller than it), the Active pins tile's line under its figure (in the mock
+the field's value, centered on the track and taller than it), the pool dialog's return rate range (mock pass: its select
+against the Strategy select in height and font size, beside the "Return rate by idle age" label, their vertical centers
+within 1 px, opening on "7 days", the hint's text recorded), the Active pins tile's line under its figure (in the mock
 pass on the work card alone, "1 on a former member" inside its tile below the figure, in the labels' ink and the type of
 the serving table's sub line at a normal weight), the contract member's Tier cell (mock pass: `metered P1` in the text,
 face, size, weight and ink of the all pool's API-key member's), the pool card's serving table and its seven tiles, its

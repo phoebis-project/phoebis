@@ -6636,6 +6636,60 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
 
   {
+    // The return rate's range is the dialog's own and opens on 7 days each time. The 30-day pick reads the overview
+    // over 30 days, whose rows are the mock's `IDLE_REACHED_30D` and `IDLE_RETURNED_30D` seeds.
+    const recorded = recordedCalls('getKeepaliveOverview');
+    try {
+      const page = await mount('/pools', { now: CLOCK_ORIGIN });
+      const open = async () => {
+        [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+        await page.settle(300);
+      };
+      const readOf = () => {
+        const keepalive = group(page.container.querySelector('dialog[open]'), 'Keepalive');
+        const field = [...(keepalive?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Return rate by idle age');
+        const select = field?.querySelector('label select') ?? null;
+        return {
+          hint: field?.querySelector(':scope > .field__hint')?.textContent?.trim() ?? null,
+          options: [...(select?.options ?? [])].map((o) => o.textContent?.trim()),
+          rows: [...(field?.querySelectorAll('.return-rate__row') ?? [])].map((r) => [...r.children].map((c) => (c.getAttribute('role') === 'meter' ? `meter ${c.getAttribute('aria-valuenow')}` : c.textContent?.trim())).join(' | ')),
+          select,
+          value: select?.selectedOptions[0]?.textContent?.trim() ?? null,
+        };
+      };
+      const hintOf = (days) => `Of the idle windows that reached each age in the last ${days} days, the ones whose next request continued the same prefix within it.`;
+      await open();
+      const opened = readOf();
+      const before = recorded.calls.length;
+      if (opened.select) {
+        opened.select.value = '30d';
+        opened.select.dispatchEvent(new window.Event('change', { bubbles: true }));
+        await page.settle(400);
+      }
+      const picked = readOf();
+      const sent = recorded.calls.slice(before).map((c) => c.args);
+      [...(page.container.querySelectorAll('dialog[open] .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+      await page.settle(300);
+      await open();
+      const reopened = readOf();
+      const shown = (r) => ({ hint: r.hint, options: r.options, rows: [r.rows[0], r.rows[4], r.rows[9]], value: r.value });
+      results.push({
+        name: '/pools the return rate opens on 7 days, its 30-day pick reads the overview over 30 days, and a reopened dialog reads 7 days again',
+        ok:
+          JSON.stringify(opened.options) === '["7 days","30 days"]' && opened.value === '7 days' && opened.hint === hintOf(7) && opened.rows[0] === '0 to 5m | 24 of 96 | meter 25' &&
+          JSON.stringify(sent) === JSON.stringify([[{ range: '30d' }]]) &&
+          picked.value === '30 days' && picked.hint === hintOf(30) && picked.rows.length === 10 &&
+          picked.rows[0] === '0 to 5m | 107 of 430 | meter 24.9' && picked.rows[4] === '1h to 2h | 33 of 105 | meter 31.4' && picked.rows[9] === 'over 32h | 1 of 7 | meter 14.3' &&
+          reopened.value === '7 days' && reopened.hint === hintOf(7) && reopened.rows[0] === '0 to 5m | 24 of 96 | meter 25',
+        missing: [JSON.stringify(shown(opened)), JSON.stringify(sent), JSON.stringify(shown(picked)), JSON.stringify(shown(reopened))],
+      });
+      page.unmount();
+    } finally {
+      recorded.restore();
+    }
+  }
+
+  {
     const memberRows = () => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])];
     const memberLabels = () => memberRows().map((tr) => tr.querySelector('td:first-child span')?.textContent);
     {
@@ -16721,6 +16775,16 @@ m.unmount();
     // the UTC instant with no zone word, then the account and the pool as links, then the kind's own. The wind-down is
     // dated at the instant it fires, five days past the pinned clock, so no range up to the clock lists it: its page is
     // mounted on a clock a minute past the event, its `to` a minute past the event.
+    // A pool's keepalive policy member reads by its label, any other field by its words.
+    const POLICY_LABEL = {
+      'keepalive.enabled': 'keepalive',
+      'keepalive.max_idle_seconds': 'keepalive idle window seconds',
+      'keepalive.max_parked_seconds': 'keepalive parked seconds',
+      'keepalive.scheduled_horizon_seconds': 'keepalive scheduled horizon seconds',
+    };
+    const fieldWord = (field) => POLICY_LABEL[field] ?? field.replace(/_/g, ' ');
+    // A decision record carries no keepalive policy, so the reading of decisions leaves the policy's fields out.
+    const readFields = (e) => Object.keys(e.detail.diff ?? {}).filter((field) => field !== 'secret_replaced' && !(field in POLICY_LABEL));
     const OWN = {
       account_state_changed: ['From', 'To', 'Cause', 'Detail', 'Effect'],
       budget_period_ended: ['Previous period', 'Spent', 'Period start'],
@@ -16741,7 +16805,8 @@ m.unmount();
       pin_released: ['Actor', 'Key', 'Session', 'Agent', 'Model'],
       plan_ended: ['Source', 'Organization type', 'Rate-limit tier', 'Subscription status'],
       plan_restored: ['Source', 'Organization type', 'Rate-limit tier', 'Subscription status'],
-      poll_backoff_ended: ['Backed off', 'Attempts', 'Resumed'],
+      // The plan's end closes a run at the pause's instant in place of a resumption.
+      poll_backoff_ended: (e) => ['Backed off', 'Attempts', e.detail.cause === 'plan_ended' ? "Ended by the plan's end" : 'Resumed'],
       poll_backoff_started: ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect'],
       poll_failed: ['Endpoint', 'Status', 'Error'],
       refresh_failed: ['Error'],
@@ -16750,10 +16815,10 @@ m.unmount();
       // A row per changed field and the replaced secret, and the reading of decisions on a pool's edit alone.
       registry_changed: (e) => [
         'Change',
-        ...Object.keys(e.detail.diff ?? {}).filter((field) => field !== 'secret_replaced').map((field) => field.replace(/_/g, ' ')),
+        ...Object.keys(e.detail.diff ?? {}).filter((field) => field !== 'secret_replaced').map(fieldWord),
         ...(e.detail.diff?.secret_replaced === true ? ['Secret'] : []),
         'Actor',
-        ...(e.detail.kind === 'pool_updated' ? ['Reading it'] : []),
+        ...(e.detail.kind === 'pool_updated' && readFields(e).length > 0 ? ['Reading it'] : []),
       ],
       reservation_expired: ['Request', 'Attempt', 'Cause', 'Reserved', 'Held for', 'Effect'],
       router_started: ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests'],
@@ -16764,7 +16829,7 @@ m.unmount();
       warm_prefix_expired: ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed'],
       wind_down_started: ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from'],
       window_cleared: ['Window', 'Before', 'After', 'Reset', 'Read from'],
-      window_reset: ['Window', 'Before the reset', 'Prediction', 'Next reset'],
+      window_reset: ['Window', 'Before the reset', 'Read from', 'Prediction', 'Next reset'],
       // A spent edge a poll read names no request.
       window_spent: (e) => ['Window', 'Reading', 'Read from', 'Resets', 'Effect', ...(e.requestId === null ? [] : ['Request'])],
     };
@@ -16776,12 +16841,15 @@ m.unmount();
     ];
     const hhmm = (at) => new Date(at).toISOString().slice(11, 16);
     // The pairs the event carries the facts for: the state's effect, the gap's meaning, the spent window's effect, the
-    // backoff's span, the failed poll's answer and the cut's figures, the last two read off nightly's 503 seed and the
-    // undecodable row's seed.
+    // backoff's span and its close by cause, the failed poll's answer and the cut's figures, the last two read off
+    // nightly's 503 seed and the undecodable row's seed, and the reset's source.
     const VALUES = {
       account_state_changed: () => ({ Effect: ['the account leaves every eligible set until funded'] }),
       ledger_gap: () => ({ Meaning: ['an interior chunk of the capture was dropped at the bus'] }),
-      poll_backoff_ended: (e) => ({ 'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`] }),
+      poll_backoff_ended: (e) => ({
+        'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`],
+        [e.detail.cause === 'plan_ended' ? "Ended by the plan's end" : 'Resumed']: [hhmm(e.detail.resumed_at)],
+      }),
       poll_failed: (e) => ({ Endpoint: [e.detail.endpoint], Error: [e.detail.error], Status: [String(e.detail.status)] }),
       mark_cleared: (e) => ({ Marked: [hhmm(e.detail.marked_at), `on ${e.detail.marked_on}`], Reason: [e.detail.reason] }),
       // The newest ended plan, the sunset seed's, and primary's return: the read's source in the console's words and
@@ -16808,6 +16876,7 @@ m.unmount();
         Text: [e.detail.text],
         'Upstream request': [e.detail.upstream_request_id],
       }),
+      window_reset: (e) => ({ 'Read from': [{ clock: 'the clock walk', sample: 'the usage sample' }[e.detail.observed]] }),
       window_spent: () => ({ Effect: ['a pinned session moves by the spent rule at its next request or waits in place for a reset within the retry bound'] }),
     };
     // The pairs whose value prints in the mono face: the cut's code, and the upstream's id where the panel draws it,
@@ -16865,18 +16934,78 @@ m.unmount();
       const panel = e === undefined ? null : await openRow(page, `event/${e.id}`);
       const pairs = kvRows(panel?.querySelector('.event-detail > .kv'));
       const fields = Object.entries(e?.detail.diff ?? {});
-      const said = (field) => field.replace(/_/g, ' ');
+      const read = e === undefined ? [] : readFields(e);
       results.push({
         name: "/routing-log a pool edit's detail reads each changed field before and after and the decisions before it",
         ok:
           e !== undefined &&
           fields.length > 0 &&
           JSON.stringify(pairs.map((p) => p.label)) === JSON.stringify(['When', 'Pool', ...OWN.registry_changed(e)]) &&
-          fields.every(([field, change]) => JSON.stringify(ddWords(pairs.find((p) => p.label === said(field))?.dd)) === JSON.stringify([`from ${change.from}`, `to ${change.to}`])) &&
-          JSON.stringify(ddWords(pairs.find((p) => p.label === 'Reading it')?.dd)) === JSON.stringify(fields.map(([field, change]) => `decisions before ${hhmm(at)} carry ${said(field)} ${change.from}`)),
+          fields.every(([field, change]) => JSON.stringify(ddWords(pairs.find((p) => p.label === fieldWord(field))?.dd)) === JSON.stringify([`from ${change.from}`, `to ${change.to}`])) &&
+          JSON.stringify(ddWords(pairs.find((p) => p.label === 'Reading it')?.dd)) === JSON.stringify(read.map((field) => `decisions before ${hhmm(at)} carry ${fieldWord(field)} ${e.detail.diff[field].from}`)),
+        missing: pairs.map((p) => `${p.label}: ${p.dd?.textContent}`),
+      });
+      // The story's edit moved the pool's idle window from the mock's `BEFORE_EDIT` policy to the pool's own.
+      results.push({
+        name: "/routing-log a pool edit's detail reads the keepalive idle window it moved as its dotted field's row",
+        ok: JSON.stringify(ddWords(pairs.find((p) => p.label === 'keepalive idle window seconds')?.dd)) === JSON.stringify(['from 43200', 'to 3600']) && !read.includes('keepalive.max_idle_seconds'),
         missing: pairs.map((p) => `${p.label}: ${p.dd?.textContent}`),
       });
       page.unmount();
+    }
+    {
+      // The two closes of the story's backoff runs: primary's clean poll resumed its run, and sunset's plan ended its
+      // run at the pause's instant, the instant of sunset's `plan_ended` row.
+      const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - DAY), kinds: ['poll_backoff_ended'], limit: 25, to: iso(CLOCK_ORIGIN) })).rows;
+      const closes = {};
+      for (const e of listed) {
+        const at = Date.parse(e.at);
+        const page = await mount(`/routing-log?kinds=poll_backoff_ended&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: CLOCK_ORIGIN });
+        const panel = await openRow(page, `event/${e.id}`);
+        closes[e.accountId] = {
+          at: hhmm(at),
+          by: rowOf(page, `event/${e.id}`)?.querySelector('td.routing-log__by')?.textContent?.trim() ?? null,
+          pairs: kvRows(panel?.querySelector('.event-detail > .kv')).slice(2).map((p) => [p.label, ddWords(p.dd)]),
+        };
+        page.unmount();
+      }
+      const { primary, sunset } = closes;
+      const labels = (close) => (close?.pairs ?? []).map(([label]) => label);
+      results.push({
+        name: "/routing-log a backoff's close reads by its cause: Resumed after a clean poll, and Ended by the plan's end with no Resumed row at the pause's instant",
+        ok:
+          listed.length === 2 &&
+          primary?.by === 'clean poll' && JSON.stringify(labels(primary)) === JSON.stringify(['Backed off', 'Attempts', 'Resumed']) &&
+          sunset?.by === 'plan ended' && JSON.stringify(labels(sunset)) === JSON.stringify(['Backed off', 'Attempts', "Ended by the plan's end"]) &&
+          JSON.stringify(sunset.pairs[2][1]) === JSON.stringify([sunset.at]) && sunset.pairs[0][1].length === 2,
+        missing: [JSON.stringify(closes)],
+      });
+    }
+    {
+      // The story's one guardrail block, the desktop key's own guardrail refusing an auxiliary fork at 12:52, reads its
+      // name as a second chip on the Admission line and the Answer row, under the refused kind.
+      const id = 'req_a8f3c6d0-e17';
+      const name = "/routing-log a guardrail's block lists under the refused kind and reads guardrail blocked with the guardrail's name as a second chip";
+      const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - DAY), kinds: ['refused'], limit: 200, request: id, to: iso(CLOCK_ORIGIN) })).rows;
+      if (listed.length === 0) {
+        results.push({ name, ok: false, missing: [`the refused kind lists no record of ${id}`] });
+      } else {
+        const { card, page, record } = await story(id, 1, 'refused');
+        scan('guardrail block', card);
+        const by = rowOf(page, `${id}/1`)?.querySelector('td.routing-log__by')?.textContent?.trim() ?? null;
+        const admission = popoverRowOf(await popoverOf(page, stationButton(card, 'admission')), 'reason') ?? [];
+        const answer = outcomeOf(card).Answer ?? [];
+        const guardrail = record?.outcome.refusal?.reason ?? '';
+        results.push({
+          name,
+          ok:
+            record?.outcome.refusal?.kind === 'guardrail' && guardrail === 'Large auxiliary requests' && by === 'guardrail blocked' &&
+            JSON.stringify(admission) === JSON.stringify(['guardrail blocked', `guardrail ${guardrail}`]) &&
+            JSON.stringify(answer) === JSON.stringify(['guardrail blocked', `guardrail ${guardrail}`, `key ${record.request.keyId}`]),
+          missing: [String(by), JSON.stringify(admission), JSON.stringify(answer), JSON.stringify(record?.outcome.refusal ?? null)],
+        });
+        page.unmount();
+      }
     }
     // The re-made drawer check: the account that refused the model and the one that served it, and both of its names.
     const rejected = modelLinks.model_rejected;

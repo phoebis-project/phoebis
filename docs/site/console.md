@@ -556,9 +556,10 @@ idle window reads its cost as a share of one re-write priced from the set value,
 the saved {time}` for an unsaved edit. While the idle field reads 0 the cost line adds the window in effect, `capped at
 the break-even, {time}`, and while the field reads more than the break-even's low end the note `Above the break-even,
 {range}` follows on a line of its own with the break-even's figures, since the window runs as set. Return rate by idle
-age lists the pool's ten buckets with the windows that returned out of those that reached it and a bar of the rate, or
-"No idle windows recorded yet". The ceilings are explained under [The four fields](keepalive.md#the-four-fields) and the
-buckets under [The return rate by idle age](keepalive.md#the-return-rate-by-idle-age).
+age lists the pool's ten buckets over the last 7 days, or 30 under the choice beside its label, which opens on 7 days,
+with the windows that returned out of those that reached it and a bar of the rate, or "No idle windows recorded yet".
+The ceilings are explained under [The four fields](keepalive.md#the-four-fields) and the buckets under [The return rate
+by idle age](keepalive.md#the-return-rate-by-idle-age).
 
 ## Keys
 
@@ -1196,18 +1197,18 @@ the request's drawer. By names what decided the row in one chip: the rule that f
 placed it (`static rung`), the strategy and the tier's priority (`Pace P0`, whose hover is the Pace hint), where a hold
 waited (`cohort`, `session pin`), `slow-down` for a request the slow-down held and for the renewal after its hold,
 `rewrite in flight` for a request that waited for a moved pin's first head and for the renewal after it, what exhausted
-the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client contract`, `client drift`, `key revoked`), `no rule
-fired` for a renewal, or an event's reason (`window spent`, `429 on 5h`, `slow-down` for a slow-down's start and end,
-`5h cleared` for a window read under its limit again, with the whole `5h cleared to 40% under its reset` on hover). Fact
-gives the value that made it so as a muted label with its value, `gap`, `idle`, `prefix`, `until`, a held request's
-`until 18:20` and `speed 0.5x`, the renewal's `held 42 s`, a slow-down start's `speed 0.5x` and an end's `slowest
-0.35x`, a move's `runway` on its destination (a span such as `2 h 10 min`, `none` or `unbounded`) followed by `least
-bad` or `rewrite only` where the destination did not fit, or a renewal's window utilization, such as `5h 96%`, where
-that window's projection reached the ceiling. A verdict reads in one color across the rows, the card and the strip: good
-when it served the request, warning when it changed its course, critical for a refusal or an exhaustion, and neutral for
-none and no. Every account, key, pool, model, session and request a row names is a link. Each column but Time keeps a
-set width and Time takes the rest of the card, so on a wide screen the request id under the time reads whole, and a
-window narrower than the columns' total scrolls the table inside its card.
+the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client contract`, `client drift`, `guardrail blocked`, `key
+revoked`), `no rule fired` for a renewal, or an event's reason (`window spent`, `429 on 5h`, `slow-down` for a
+slow-down's start and end, `5h cleared` for a window read under its limit again, with the whole `5h cleared to 40% under
+its reset` on hover). Fact gives the value that made it so as a muted label with its value, `gap`, `idle`, `prefix`,
+`until`, a held request's `until 18:20` and `speed 0.5x`, the renewal's `held 42 s`, a slow-down start's `speed 0.5x`
+and an end's `slowest 0.35x`, a move's `runway` on its destination (a span such as `2 h 10 min`, `none` or `unbounded`)
+followed by `least bad` or `rewrite only` where the destination did not fit, or a renewal's window utilization, such as
+`5h 96%`, where that window's projection reached the ceiling. A verdict reads in one color across the rows, the card and
+the strip: good when it served the request, warning when it changed its course, critical for a refusal or an exhaustion,
+and neutral for none and no. Every account, key, pool, model, session and request a row names is a link. Each column but
+Time keeps a set width and Time takes the rest of the card, so on a wide screen the request id under the time reads
+whole, and a window narrower than the columns' total scrolls the table inside its card.
 
 Every row opens beneath itself. A decision row loads its record and draws the decision card. Its verdict line names the
 decision with its accounts and its pool as links ("Moved secondary to primary", "Attempt 2 of 2: placed on primary",
@@ -1230,7 +1231,9 @@ pin renewed in place." on a renewal and "Nothing was booked." on any other decis
 placement's partitions draw as the stations Spent, At cap, No fit and Winding down. A click or a hover on a station, a
 candidate or a terminus opens its facts in a popover, and Tab, Enter, Space and Escape walk them from the keyboard. The
 Shed station's Windows group reads the slow-down's `speed`, the share of it the holds apply as `ramp`, and the speed the
-holds `realized`, in the order the engine applies them.
+holds `realized`, in the order the engine applies them. A pin step's `credit issuer` chip names the account that issued
+the fallback credit token the body carries, on which the request is placed ahead of the pin's renewal and the moves,
+under the credit rule of [Routing](routing.md#selection).
 
 "Candidates, by rank" lists every pool member with the chosen or held-on member tinted: Account with its plan beneath
 (the plan the router resolved from the organization type and the tier, "Free" among its words, or the tier word of a
@@ -1260,21 +1263,23 @@ names the account it left, `shed from` after a shedding round and `failed over f
 the instant. The settings fold lists the pool's twenty-four settings in the card's order with Load shedding and
 Slow-down reading `on` or `off`, Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or `at
 once` at 0, or "The key and its pool had left the registry". A refused record, which no pool setting entered, draws no
-settings fold. A record written before a setting existed reads `not recorded` for it, Load shedding and Window ceiling
-on a version 1 record and the five slow-down and return-to-plan settings on an older version 2 record, and a version 1
-record lists after the twenty-four, each marked `(then)`, the three settings it carried that a later record does not.
-"Outcome" lists the pin written, the reservation (the account, the share per window and the expiry), the cache-map
-entries the answer wrote (`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold,
-reading `for the reset at {time}` where the request waited for a reset, or `for the slow-down until {time}` with the
-chips `speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or `for the
-rewrite in flight of {request} until {time}` with `bound 2 min` where it waited for a moved pin's first head, a Cause on
-a failover's landing or a move with a cause (`429 on 5h` or `fast lane 429` for a cooldown, `re-auth required by
-credential refused` for a mark), the answer an exhaustion or a refusal gave, and the spend against a budget. With four
-entries or more, the cache-map row draws one chip per tier with its count and depth range, such as `message ×11 depth 1
-to 11`, then its three deepest message depths, and its control "All {n} entries" lists every entry until "Latest 3"
-folds them again. The foot offers the three widenings after "Widen to", this minute, this session and this account,
-names the record's version as `Record v{n}`, and "Copy as JSON" copies the record route's answer whole. A record the
-retention purged reads "The record left with the retention", and one still loading "Loading the record".
+settings fold, a guardrail block's among them, whose Admission line and Answer row carry `guardrail blocked` and the
+guardrail's name as a second chip. A record written before a setting existed reads `not recorded` for it, Load shedding
+and Window ceiling on a version 1 record and the five slow-down and return-to-plan settings on an older version 2
+record, and a version 1 record lists after the twenty-four, each marked `(then)`, the three settings it carried that a
+later record does not. "Outcome" lists the pin written, the reservation (the account, the share per window and the
+expiry), the cache-map entries the answer wrote (`pending` until it ends), the cache read with the TTL tier of its
+deepest entry, the hold, reading `for the reset at {time}` where the request waited for a reset, or `for the slow-down
+until {time}` with the chips `speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the
+slow-down held it, or `for the rewrite in flight of {request} until {time}` with `bound 2 min` where it waited for a
+moved pin's first head, a Cause on a failover's landing or a move with a cause (`429 on 5h` or `fast lane 429` for a
+cooldown, `re-auth required by credential refused` for a mark), the answer an exhaustion or a refusal gave, and the
+spend against a budget. With four entries or more, the cache-map row draws one chip per tier with its count and depth
+range, such as `message ×11 depth 1 to 11`, then its three deepest message depths, and its control "All {n} entries"
+lists every entry until "Latest 3" folds them again. The foot offers the three widenings after "Widen to", this minute,
+this session and this account, names the record's version as `Record v{n}`, and "Copy as JSON" copies the record route's
+answer whole. A record the retention purged reads "The record left with the retention", and one still loading "Loading
+the record".
 
 An event row opens to a panel of pairs: When to the second, the account and the pool as links, then the kind's own
 pairs. An event that names a request ends with "Source request", which opens the log on that request a quarter hour
@@ -1323,13 +1328,13 @@ Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 | pin released | An operator released a session's pin by hand. |
 | plan ended | A profile read found the account's organization holding no plan, so the account is flagged plan ended, with the read's source (the profile read, or the usage 403 that made it due) and the profile's organization type, rate-limit tier and subscription status. |
 | plan restored | The account's plan-ended flag cleared, with its source (a profile read that found a plan, or a pairing confirm) and the profile's organization type, rate-limit tier and subscription status. |
-| poll backoff ended | The usage poll answered cleanly again after backing off, or the account's plan ended while a run was open. |
+| poll backoff ended | The usage poll answered cleanly again after backing off, or the account's plan ended while a run was open. The panel reads Resumed under `clean_poll` and Ended by the plan's end, with the pause's instant, under `plan_ended`. |
 | poll backoff started | The usage poll was rate limited, so decisions read the account's windows from response heads. |
 | poll failed | The usage or the profile endpoint answered a passing fault, with the endpoint, the status or the transport failure and the text. |
 | refresh failed | An access-token refresh failed. |
 | refresh succeeded | An access-token refresh succeeded. |
 | refresh uncertain | An access-token refresh ended without a clear answer. |
-| registry changed | An operator changed an account, a guardrail, a key or a pool: a creation records the row's snapshot, an account's, a key's or a pool's update each changed field with its value before and after (a list, such as a pool's guardrails, as its items joined by commas, or `none` when empty), a guardrail's update each changed field with its value before and after, its pools and keys among them, a deletion or a revocation nothing more, a change of a pool's members the new member list, and a key's rotation the new secret's prefix with the instant the retired secret stops being accepted. |
+| registry changed | An operator changed an account, a guardrail, a key or a pool: a creation records the row's snapshot, an account's, a key's or a pool's update each changed field with its value before and after (a list, such as a pool's guardrails, as its items joined by commas, or `none` when empty), a pool's keepalive policy as its dotted fields, `keepalive.enabled`, `keepalive.max_idle_seconds`, `keepalive.max_parked_seconds` and `keepalive.scheduled_horizon_seconds`, each with its value before and after, a guardrail's update each changed field with its value before and after, its pools and keys among them, a deletion or a revocation nothing more, a change of a pool's members the new member list, and a key's rotation the new secret's prefix with the instant the retired secret stops being accepted. |
 | reservation expired | A request ended without usage or its booking turned an hour old, so the share it reserved left the destination's prediction. |
 | router started | The router started and loaded its pins, shedding marks, window readings and affinity entries. |
 | shedding round | A round ran on an account whose projection on a plan window read over the ceiling at the window's horizon, or whose stretch stood over the slow-down's threshold for the safety wait, with the pins it marked or why it marked none, and kept its marks across a restart. |
@@ -1339,7 +1344,7 @@ Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 | warm prefix expired | A warm prefix's cache-map entry lapsed past its TTL. |
 | wind-down started | An account's subscription end entered the pool's wind-down, so no fresh session starts on it. |
 | window cleared | A quota window read under its limit again after a reading at the limit, with the readings before and after and the reset unchanged. |
-| window reset | A quota window reset, with the reading before it. |
+| window reset | A quota window reset, with the reading before it and Read from, the usage sample or the clock walk that announced it. |
 | window spent | A response head, the poll or the prediction read a quota window at its limit, once per reset cycle: a newer head or poll reading of the same cycle within two points of 1.0 after it neither clears nor repeats it, a head naming no reset, taken before the announced reset, is of the same cycle, and the cycle runs from the instant the wall was announced or, for a wall restored at a start, from the stored reading's instant. |
 
 Other views open the log on what they show: a Requests row and its drawer on the request a quarter hour either side, the
