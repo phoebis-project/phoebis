@@ -3757,6 +3757,10 @@
   font-size: 12px;
 }
 
+.wbar__none--compact {
+  font-size: 12px;
+}
+
 .wbars--compact .wbar__reset {
   font-size: 11.5px;
 }

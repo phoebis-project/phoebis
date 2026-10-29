@@ -59,9 +59,9 @@ export const MAX_BURN_LINES = 7;
 /** The key the folded rest carries, suffixed by its unit under the account grouping; no group is looked up by it. */
 export const OTHER_KEY = 'other';
 /**
- * The unit a burn line charts in. `unknown` is a subscription account the cost model does not size, its tier missing
- * or one the model has no capacity row for: it has no share to draw, and dollars only for what its fast-mode and
- * overage answers spent.
+ * The unit a burn line charts in. `unknown` is a subscription account whose plan the router prices on no tier the cost
+ * model sizes (`pricedTier`): a free plan, a usage-based seat, an account with no tier or one on a tier the model has
+ * no capacity row for. It has no share to draw, and dollars only for what its fast-mode and overage answers spent.
  */
 export type BurnLineUnit = BurnUnit | 'unknown';
 const OTHER_LABEL: Record<BurnLineUnit, string> = { unknown: 'Other (tier unknown)', usd: 'Other (dollars)', window_share: 'Other (plan)' };
@@ -615,8 +615,9 @@ const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
  * its plan figures stay empty. Under the account grouping the rest folds once per unit, since a subscription account's
  * window share and an API-key account's dollars chart on different axes. Where the shares answer (that grouping, or
  * `account`, the one account the Accounts filter names) a line's unit is its account's. `sized` names the accounts
- * whose tier the cost model sizes, which chart in window share whatever their buckets priced. `figure` picks what the
- * plan rows carry: the shares, or the 20x window equivalents, which add across accounts and tiers.
+ * whose plan the router prices on a tier the cost model sizes (`pricedTier`, so a free plan and a usage-based seat are
+ * out), which chart in window share whatever their buckets priced. `figure` picks what the plan rows carry: the shares,
+ * or the 20x window equivalents, which add across accounts and tiers.
  *
  * `rangeEndMs` is the end of the range the points were read for and `nowMs` the instant of that read, the end when
  * absent. The route reads whole hours through the hour ceiling of the end, so a bucket covers its width up to the hour

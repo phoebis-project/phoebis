@@ -174,8 +174,9 @@ attention line keeps one row and folds the items past it behind a "+N more" badg
 with their age ([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The Dashboard's Estimated cost tile reads
 the day's subscription traffic against the 7-day window under Native ([Dashboard](console.md#dashboard)). The
 Dashboard's remaining cards and the Burn cards price a Team or Enterprise seat at its tier where the cost model holds
-the row, and the remaining cards name a free plan, a usage-based seat or an unheld tier under the ring with the reason
-([Dashboard](console.md#dashboard), [Analytics](console.md#analytics)). The
+the row, and the remaining cards name a free plan, a usage-based seat or an unheld tier under the ring with the reason,
+which the Burn cards read as tier unknown under Window shares ([Dashboard](console.md#dashboard),
+[Analytics](console.md#analytics)). The
 Dashboard's remaining cards list each account with the most of its own window left first
 ([Dashboard](console.md#dashboard)). A Quota card's Refresh draws its reading the moment it answers, at the reading's
 instant ([Quota](console.md#quota)). A usage-based seat draws one spend bar wherever the window bars are drawn, with its

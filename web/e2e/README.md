@@ -106,9 +106,9 @@ the plan-ended account's Identity list (mock pass: its Plan value `Free since {d
 document its profile read found, against its Plan ended value in type, left edge and row height, both texts recorded),
 the plan-ended sentence (mock pass: on the plan-ended account's Dashboard card and Accounts list row the compact `No
 window since the plan ended {ago}`, muted, from the left edge inside its card of the nearest neighbor's window bars and
-in the ink of their first label, the two types recorded, both quota rings naming the usage-based seat with its reason,
-and on its Accounts detail the Usage card's long sentence in the ink of the Identity card's note, the two types
-recorded, each text recorded),
+in the type size and ink of their first label, both quota rings naming the usage-based seat with its reason, and on its
+Accounts detail the Usage card's long sentence in the ink of the Identity card's note, the two sizes recorded, each text
+recorded),
 the account lines, the Quota cards' poll lines (short of the Refresh pill and inside the card, the backoff line in the
 serious ink, none wrapping, a failed poll's reason cut inside its line and whole in its title where a listed card draws
 one), the Quota cards' chips and reset cells (each chip and each reset cell without a projection on one line inside its

@@ -2,7 +2,7 @@ import type { Account, AccountSlowDown, ExtraUsage, PLAN_WORDS, PlanWord, PollOu
 import { tierRow } from '@/lib/costs';
 import { fmtAbsolute, fmtPct, fmtRelative, instant } from '@/lib/format';
 
-// A local copy rather than `lib/analytics`'s, which reads `pricedTier` from this module: the two would import each other.
+// A local copy, since `lib/analytics` reads `pricedTier` from this module and the two would import each other.
 const own = (map: object, key: string): boolean => Object.prototype.hasOwnProperty.call(map, key);
 
 export type MeterTone = 'good' | 'low' | 'warn';
@@ -38,7 +38,8 @@ export const PLAN_WORD_LABEL: Readonly<Record<string, string>> = {
 /** A resolved plan word's label, a word the table lacks shown as sent. */
 export const planWordLabel = (word: PlanWord): string => (own(PLAN_WORD_LABEL, word) ? PLAN_WORD_LABEL[word] : word);
 
-/** The plan words the router's `priced_tier` answers the stored tier for, the cost table deciding whether it holds that tier. */
+/** The plan words the router's `priced_tier` answers the stored tier for, the cost table deciding whether it holds
+ *  that tier. */
 const TIERED_PLANS: ReadonlySet<string> = new Set(['enterprise', 'max', 'max_20x', 'max_5x', 'pro', 'team']);
 
 /** Why the gate prices no tier, the ring's and the sized set's reason word. */

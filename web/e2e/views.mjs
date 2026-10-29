@@ -7731,10 +7731,10 @@ async function accountFreeBadge(theme) {
 /**
  * The sentence an account whose plan ended reads in its window bars' place. On `/` and `/accounts` the plan-ended
  * account's card or row reads the compact form, from the left edge inside its card of the nearest neighbor's window
- * bars and in the ink of their first label, the two types recorded, and on `/` both quota rings name the usage-based
- * seat with its reason. On `/accounts/sunset` the Usage card's long form reads in the ink of the Identity card's note,
- * the two types recorded. Each text is recorded. The router's seed holds no such account, so only the story's pass
- * reads it.
+ * bars and in the type size and ink of their first label, and on `/` both quota rings name the usage-based seat with
+ * its reason. On `/accounts/sunset` the Usage card's long form reads in the ink of the Identity card's note, the two
+ * sizes recorded, since the sentence keeps the body size of the card's other state sentences. Each text is recorded.
+ * The router's seed holds no such account, so only the story's pass reads it.
  */
 async function planEndedLines(theme, path) {
   if (!mock) return;
@@ -7759,7 +7759,7 @@ async function planEndedLines(theme, path) {
     const leftIn = (el, box) => Math.round((el.getBoundingClientRect().left - box.getBoundingClientRect().left) * 10) / 10;
     const ringCards = where === '/' ? [...document.querySelectorAll('.card')].filter((c) => /remaining$/.test(c.querySelector('.card__title')?.textContent ?? '')) : [];
     return {
-      neighbor: neighbor && bars && label ? { href: neighbor.getAttribute('href'), ink: type(label).ink, labelFontSize: type(label).fontSize, left: leftIn(bars, neighbor) } : null,
+      neighbor: neighbor && bars && label ? { href: neighbor.getAttribute('href'), ...type(label), left: leftIn(bars, neighbor) } : null,
       rings: ringCards.map((c) => ({ names: [...c.querySelectorAll('.remaining__left-out li')].map((li) => li.textContent?.trim() ?? ''), title: c.querySelector('.card__title')?.textContent ?? '' })),
       sentence: own && none ? { ...type(none), left: leftIn(none, own), muted: none.classList.contains('muted'), text: none.textContent?.trim() ?? '' } : null,
     };
@@ -7772,7 +7772,7 @@ async function planEndedLines(theme, path) {
   }
   const kind = path === '/' ? 'card' : 'row';
   if (!read.sentence?.muted || !/^No window since the plan ended .+ ago$/.test(read.sentence.text)) say(`the plan-ended account's ${kind} reads ${JSON.stringify(read.sentence ?? null)} in its window bars' place, not the compact plan-ended sentence with its age, muted`);
-  for (const what of compare(read.sentence, read.neighbor, ['ink', 'left'], `the plan-ended account's ${kind} sentence against the neighboring ${kind}'s window bars and their first label`)) say(what);
+  for (const what of compare(read.sentence, read.neighbor, ['fontSize', 'ink', 'left'], `the plan-ended account's ${kind} sentence against the neighboring ${kind}'s window bars and their first label`)) say(what);
   if (path === '/') {
     const want = JSON.stringify(['contract: a usage-based seat']);
     for (const ring of read.rings) if (JSON.stringify(ring.names) !== want) say(`the "${ring.title}" card names ${JSON.stringify(ring.names)} under its ring, not the usage-based seat alone with its reason`);
