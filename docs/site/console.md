@@ -329,13 +329,13 @@ samples yet" with "Quota samples appear after the first successful quota fetch."
 top bar's unit: the share of the account's own window under Window shares, and under every other position the share's
 20x window equivalent, each week priced at the tier the account ran under at that reset, so a week before an upgrade
 reads its equivalent at the earlier tier's weight, and a reset the router recorded no tier for at the account's current
-one, a dash where the cost model holds no capacity for the account's plan (a Free plan among them, the card then noting
-it). Under Window shares the block draws without the cost model, so a failed settings read leaves its shares in place. A
-week the account's term ended inside counts as a reset with the badge "term ended", a clock-walk reset reads the last
-reading before it as the event carries it, and the card reads "No weekly reset recorded yet. The first shows once this
-account's week ends." before the first. The card reads its weeks once per account, again on the bar's Refresh, once a
-weekly window resets and once the account's term end moves (its cancellation flag, saved end or plan-ended flag), and a
-failed read draws its error with Try again.
+one, a dash where the cost model holds no capacity for the tier a week prices at (a Free plan among them, the card then
+noting it), and the total a dash where one of its weeks reads one. Under Window shares the block draws without the cost
+model, so a failed settings read leaves its shares in place. A week the account's term ended inside counts as a reset
+with the badge "term ended", a clock-walk reset reads the last reading before it as the event carries it, and the card
+reads "No weekly reset recorded yet. The first shows once this account's week ends." before the first. The card reads
+its weeks once per account, again on the bar's Refresh, once a weekly window resets and once the account's term end
+moves (its cancellation flag, saved end or plan-ended flag), and a failed read draws its error with Try again.
 
 "Meter drift" draws, beside it, one line per window kind the account's completed windows hold: the newest completed
 window's ratio of the upstream's rise over the router's priced share (a warning badge where the rise and the priced
@@ -837,13 +837,13 @@ Requests view, such as "client: claude-code*" or "include probes", each Client o
 cut after 32 characters with the whole on hover. The Requests links of the reasons panel and the refusal card carry one
 client pattern, and read plain under several. The session chip prints the id's first eight characters, and its hover
 names the whole id with the key lifetime a link from the Sessions view carries ("under the key laptop@3"), which has no
-chip of its own and leaves when the session changes. "Group by"
-offers Account, Classifier, Client, Key, Effort, Kind, Model, Pool, Request class, Speed, User agent or "Session (Burn
-only)", the last the Burn section's own grouping. While it reads User agent, "Groups (N)" opens the "User agent groups"
-box with one pattern per line, N the patterns it holds, where each pattern names a group and every other agent groups
-under `other` (`claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups). The user agent grouping reads the agent's first
-product token, `claude-cli/2.1.310` for `claude-cli/2.1.310 (external, cli)`. The classifier grouping lists the requests
-with no classifier call under `none`, as the Requests view's Classifier filter names them.
+chip of its own and leaves when the session changes. "Group by" offers Account, Classifier, Client, Key, Effort, Kind,
+Model, Pool, Request class, Speed, User agent or "Session (Burn only)", the last the Burn section's own grouping. While
+it reads User agent, "Groups (N)" opens the "User agent groups" box with one pattern per line, N the patterns it holds,
+where each pattern names a group and every other agent groups under `other` (`claude-cli/2.1.*` and `claude-cli/2.0.*`
+as two groups). The user agent grouping reads the agent's first product token, `claude-cli/2.1.310` for
+`claude-cli/2.1.310 (external, cli)`. The classifier grouping lists the requests with no classifier call under `none`,
+as the Requests view's Classifier filter names them.
 
 Auto reload is at 5 s when the view opens, set on the split Refresh button's dropdown as on the Requests view and kept
 out of the page's address. At each interval it reads the account list again and, once a new bucket of the range has
@@ -874,8 +874,8 @@ range." where none was), Refusals by category ("Answers the upstream refused in 
 succeeded", one bar per category linking the Requests view on the stop reason `refusal` and the category over the range
 to the millisecond, `none` for a refusal with no category, or "No answer was refused in this range." where none was, and
 under a client or user agent filter the matching requests' alone, and under a session filter every session's, which its
-subtitle then names, its links carrying the client pattern and no session, plain under a user agent filter as the
-reasons panel's links are), Failovers, Migration rewrites with its moves (one bar per move reason, stacked by the
+subtitle then names, its links carrying the client pattern and no session, plain under a user agent filter as the Misses
+by reason counts are), Failovers, Migration rewrites with its moves (one bar per move reason, stacked by the
 destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each segment titled `{fit} {n}` and the bar labeled
 with the reason's total, and under them "Held by the slow-down", a bar per bucket of the time the slow-down held
 requests in the warning tone, its hover `12 requests held 14 min in all`, `no request held` on a bucket that held none,
@@ -910,13 +910,13 @@ reads the latest weighed model of its model tier, with an "estimated" entry in t
 the tooltip's figures. A bucket whose traffic ran on a model of no known tier, or on a tier the cost model has no
 capacity for on that window, prices no share there and draws no point, under a "model unlisted" entry, and under Window
 shares an account the router prices no tier for (a free plan, no tier on file or one the cost model does not hold) reads
-"tier unknown", while a usage-based seat's dollars chart under Spend per minute alone. Spend per minute charts the
-dollars alone, a subscription account's among them for its fast-mode and overage answers. With the Model week card
-drawn, the four cards sit two by two in the window widths where three would otherwise share a row with the fourth alone
-(1344 px to 1701 px), and without it the three cards share one row from 1344 px, an odd last card spanning its row in
-the narrower widths alone. The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends, one row
-per budget a member carries, a member at its budget marked and one the ledger has not reported on reading "not
-reported".
+"tier unknown", while a usage-based seat draws no line on the Plan per hour cards. Spend per minute charts the dollars
+alone, among them a usage-based seat's whole spend and a subscription account's fast-mode and overage answers. With the
+Model week card drawn, the four cards sit two by two in the window widths where three would otherwise share a row with
+the fourth alone (1344 px to 1701 px), and without it the three cards share one row from 1344 px, an odd last card
+spanning its row in the narrower widths alone. The section closes on Member budgets, Pool, Account, Spent, Budget and
+Period ends, one row per budget a member carries, a member at its budget marked and one the ledger has not reported on
+reading "not reported".
 
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-light.png#only-light)
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-dark.png#only-dark)

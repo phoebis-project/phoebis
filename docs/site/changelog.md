@@ -169,18 +169,17 @@ answers `body must carry a members list` to an object without one ([API referenc
 Guardrails, Pools and Settings views fit a 360 px window with no horizontal scroll ([Dashboard](console.md#dashboard),
 [Guardrails](console.md#guardrails), [Pools](console.md#pools), [Settings](console.md#settings)). The Dashboard's
 account cards and the Accounts list read `No window since the plan ended {ago}` on an account whose plan ended
-([Dashboard](console.md#dashboard), [Accounts](console.md#accounts)). The Dashboard's
-attention line keeps one row and folds the items past it behind a "+N more" badge, and a pool card's attention rows end
-with their age ([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The Dashboard's Estimated cost tile reads
-the day's subscription traffic against the 7-day window under Native ([Dashboard](console.md#dashboard)). The
-Dashboard's remaining cards and the Burn cards price a Team or Enterprise seat at its tier where the cost model holds
-the row, and the remaining cards name a free plan, a usage-based seat or an unheld tier under the ring with the reason,
-the Burn cards reading a free plan or an unheld tier as tier unknown under Window shares
-([Dashboard](console.md#dashboard), [Analytics](console.md#analytics)). The
-Dashboard's remaining cards list each account with the most of its own window left first
-([Dashboard](console.md#dashboard)). A Quota card's Refresh draws its reading the moment it answers, at the reading's
-instant ([Quota](console.md#quota)). A usage-based seat draws one spend bar wherever the window bars are drawn, with its
-amounts, its reset marked estimated until a header names it, and a lane on the Quota windows timeline
+([Dashboard](console.md#dashboard), [Accounts](console.md#accounts)). The Dashboard's attention line keeps one row and
+folds the items past it behind a "+N more" badge, and a pool card's attention rows end with their age
+([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The Dashboard's Estimated cost tile reads the day's
+subscription traffic against the 7-day window under Native ([Dashboard](console.md#dashboard)). The Dashboard's
+remaining cards and the Burn cards price a Team or Enterprise seat at its tier where the cost model holds the row, and
+the remaining cards name a free plan, a usage-based seat or an unheld tier under the ring with the reason, the Burn
+cards reading a free plan or an unheld tier as tier unknown under Window shares ([Dashboard](console.md#dashboard),
+[Analytics](console.md#analytics)). The Dashboard's remaining cards list each account with the most of its own window
+left first ([Dashboard](console.md#dashboard)). A Quota card's Refresh draws its reading the moment it answers, at the
+reading's instant ([Quota](console.md#quota)). A usage-based seat draws one spend bar wherever the window bars are
+drawn, with its amounts, its reset marked estimated until a header names it, and a lane on the Quota windows timeline
 ([Quota](console.md#quota)). An account in the `disconnected` or `reauth_required` state reports no quota window, so
 neither a console view nor the status screen draws its last reading ([Quota](console.md#quota)). Each window the
 accounts route serves carries its lead over pace, which the console's pace words, pace mark and pace orders read
