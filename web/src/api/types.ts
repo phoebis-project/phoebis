@@ -1797,18 +1797,26 @@ export type CompanionState = 'none' | 'reporting' | 'silent';
 export type BurnUnit = 'usd' | 'window_share';
 
 export interface AgentContext {
+  /** The pin's account. */
+  accountId: string;
   agentId: string;
-  cachedPrefixTokens: number | null;
-  contextShare: number | null;
-  contextWindowTokens: number | null;
+  /** The cache TTL in force at the pin's last refresh. */
+  cacheTtlMs: number | null;
+  /** The agent's first-seen time, null where none. */
+  createdAt: string | null;
+  /** The effective effort of the request that placed or last renewed the pin, the word as the client sent it. */
+  effort: string | null;
   lastInputTokens: number | null;
+  lastUsedAt: string | null;
   model: string;
+  /** The route's `now - last_used_at < cache_ttl_ms`: the State cell's warm or cold on a pin-only line. */
+  warm: boolean;
 }
 
 export interface Session {
   accountId: string | null;
-  /** The other pins' figures on a companion session, keyed by the mod's agent id. Null where `companion` is `none`. */
-  agentContexts: AgentContext[] | null;
+  /** One entry per conversation pin that draws a line, main's among them, and empty where none does. */
+  agentContexts: AgentContext[];
   /** The pin's own agent: `main`, or a subagent's id, and `null` for a session with no pin. */
   agentId: string | null;
   agents: number;
@@ -1823,20 +1831,17 @@ export interface Session {
   burnEquivalent: number | null;
   /** Null for a session with no pin, or one whose account left the registry: no kind is left to pick a unit from. */
   burnUnit: BurnUnit | null;
-  /** The deepest cache-map entry of the main pin. Null with no entry standing. */
-  cachedPrefixTokens: number | null;
   /** The cache TTL in force at the pin's last refresh, and `null` for a session with no pin. */
   cacheTtlMs: number | null;
   companion: CompanionState;
   /** When the companion last reported; set only while `companion` is `silent`. */
   companionSince: string | null;
-  /** `lastInputTokens` over the model's window, three decimals. Null with either side unknown. */
-  contextShare: number | null;
-  contextWindowTokens: number | null;
   createdAt: string | null;
   /** The pin's cycle, null until two requests of the pin after its placement have measured a gap under the pool's
    *  burn average, and on a row with no pin. */
   cycleMs: number | null;
+  /** The effective effort of the pin's last turn, the word as the client sent it, and `null` with none or no pin. */
+  effort: string | null;
   epoch: number | null;
   /** True when the pin's burn priced through the model tier's fallback weight. */
   estimated: boolean;

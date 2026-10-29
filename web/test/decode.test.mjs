@@ -2090,33 +2090,65 @@ test('a session row carries the presence age and the cause of its main recipe', 
   assert.equal(d.decodeSession({ ...row, keepalive: { ...row.keepalive, cause: null } }).keepalive.cause, null);
 });
 
-test("a session row carries the main pin's context window, share and cached prefix, and a row without them reads null for each", () => {
-  const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
-  const s = d.decodeSession({ ...row, cached_prefix_tokens: 171_000, context_share: 0.92, context_window_tokens: 200_000, last_input_tokens: 184_000 });
-  assert.deepEqual([s.lastInputTokens, s.contextWindowTokens, s.contextShare, s.cachedPrefixTokens], [184_000, 200_000, 0.92, 171_000]);
-  const { agent_contexts: _a, cached_prefix_tokens: _p, context_share: _s, context_window_tokens: _w, ...bare } = row;
-  const b = d.decodeSession(bare);
-  assert.deepEqual([b.contextWindowTokens, b.contextShare, b.cachedPrefixTokens, b.agentContexts], [null, null, null, null], 'a row that predates the members reads none');
+/** An agent line as the route sends it, every member set, the instants in epoch milliseconds. */
+const agentLine = (agent_id, model, members = {}) => ({
+  account_id: 'business',
+  agent_id,
+  cache_ttl_ms: 300_000,
+  created_at: 1_791_717_340_000,
+  effort: 'medium',
+  last_input_tokens: 12_000,
+  last_used_at: 1_791_721_000_000,
+  model,
+  warm: true,
+  ...members,
 });
 
-test("a companion session's agent lines decode in the order the route sent them, and a row no companion reports reads none", () => {
+test("a session row reads main's effort and every agent line with all its members, in the order the route sent them", () => {
   const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
-  const line = (agent_id, model, tokens) => ({
-    agent_id,
-    cached_prefix_tokens: tokens === null ? null : 9_000,
-    context_share: tokens === null ? null : tokens / 200_000,
-    context_window_tokens: tokens === null ? null : 200_000,
-    last_input_tokens: tokens,
-    model,
-  });
   // Sent out of the alphabet's order, so a decoder that sorted would read the second line first.
-  const s = d.decodeSession({ ...row, agent_contexts: [line('7b2e', 'claude-haiku-4-5', 12_000), line('4f0c', 'claude-sonnet-5', null)], companion: 'reporting' });
+  const sent = [agentLine('7b2e', 'claude-haiku-4-5', { effort: 'low', warm: false }), agentLine('4f0c', 'claude-sonnet-5', { account_id: 'direct', effort: 'high', last_input_tokens: 31_000 })];
+  const s = d.decodeSession({ ...row, agent_contexts: sent, effort: 'high' });
+  assert.equal(s.effort, 'high');
+  const created = new Date(1_791_717_340_000).toISOString();
+  const used = new Date(1_791_721_000_000).toISOString();
   assert.deepEqual(s.agentContexts, [
-    { agentId: '7b2e', cachedPrefixTokens: 9_000, contextShare: 0.06, contextWindowTokens: 200_000, lastInputTokens: 12_000, model: 'claude-haiku-4-5' },
-    { agentId: '4f0c', cachedPrefixTokens: null, contextShare: null, contextWindowTokens: null, lastInputTokens: null, model: 'claude-sonnet-5' },
+    { accountId: 'business', agentId: '7b2e', cacheTtlMs: 300_000, createdAt: created, effort: 'low', lastInputTokens: 12_000, lastUsedAt: used, model: 'claude-haiku-4-5', warm: false },
+    { accountId: 'direct', agentId: '4f0c', cacheTtlMs: 300_000, createdAt: created, effort: 'high', lastInputTokens: 31_000, lastUsedAt: used, model: 'claude-sonnet-5', warm: true },
   ]);
-  assert.deepEqual(d.decodeSession({ ...row, agent_contexts: [], companion: 'reporting' }).agentContexts, [], 'a companion session whose other agents are all released reads an empty list');
-  assert.equal(d.decodeSession({ ...row, agent_contexts: null, companion: 'none' }).agentContexts, null, 'a row no companion reports carries no agent lines');
+});
+
+test('an agent line reads null for each nullable member the route sends as null, cold without warm, and its account as sent', () => {
+  const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
+  const one = (entry) => d.decodeSession({ ...row, agent_contexts: [entry] }).agentContexts[0];
+  const full = agentLine('7b2e', 'claude-haiku-4-5');
+  for (const [wire, member] of [
+    ['cache_ttl_ms', 'cacheTtlMs'],
+    ['created_at', 'createdAt'],
+    ['effort', 'effort'],
+    ['last_input_tokens', 'lastInputTokens'],
+    ['last_used_at', 'lastUsedAt'],
+  ]) {
+    assert.notEqual(one(full)[member], null, `${wire} as sent`);
+    assert.equal(one({ ...full, [wire]: null })[member], null, `${wire} sent as null`);
+  }
+  const { warm: _w, ...withoutWarm } = full;
+  assert.deepEqual([one(full).warm, one(withoutWarm).warm], [true, false], 'an entry without warm reads cold');
+  assert.equal(one(full).accountId, 'business', "the pin's account");
+});
+
+test('a session row reads an empty list where it draws no line or sends none, no effort where it sends none, and none of the three context members', () => {
+  const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
+  assert.deepEqual(d.decodeSession({ ...row, agent_contexts: [] }).agentContexts, [], 'a row that draws no line');
+  const { agent_contexts: _a, effort: _e, ...bare } = row;
+  const b = d.decodeSession(bare);
+  assert.deepEqual([b.agentContexts, b.effort], [[], null], 'a row without the two members');
+  // The fixture's row and its lines still carry the three members, so a decoder that read them would answer them.
+  const names = ['cachedPrefixTokens', 'contextShare', 'contextWindowTokens'];
+  const s = d.decodeSession(row);
+  assert.ok(s.agentContexts.length > 0, "the fixture's row carries agent lines");
+  assert.deepEqual(Object.keys(s).filter((k) => names.includes(k)), [], 'the row');
+  assert.deepEqual(s.agentContexts.flatMap((c) => Object.keys(c).filter((k) => names.includes(k))), [], 'its lines');
 });
 
 test('a recipe and a session row decode the compaction verdict and the compacted cause', () => {

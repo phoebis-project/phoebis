@@ -496,7 +496,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const listed = s.sessions.filter((x) => x.sessionId === session).map((x) => [x.keyId, x.accountId, x.model, x.pinned, x.keepalive.state]);
     assert.deepEqual(listed, [['fleet', 'contract', 'claude-opus-5-5', true, null]], 'the session is listed once, pinned on the seat');
     const pool = s.pools.find((p) => p.id === 'contract');
-    assert.deepEqual([pool.activePins, pool.members.map((m) => [m.accountId, m.activePins])], [1, [['contract', 1]]], 'the pool and its member count the pin');
+    // The seat also holds the two pins of the fleet session no mod reports, which has reached no ledger.
+    assert.deepEqual([pool.activePins, pool.members.map((m) => [m.accountId, m.activePins])], [3, [['contract', 3]]], 'the pool and its member count the pin beside the two');
   });
 
   test(`every record of one request reads the request's one boundary count, at ${at}`, async () => {
@@ -996,48 +997,104 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(Date.parse(row.createdAt) < Date.parse(row.lastUsedAt), 'created before its last use');
   });
 
-  test(`every row with a turn reads its window, its share of it to three decimals and a prefix inside its context, and a row with none reads no figure, at ${at}`, async () => {
+  test(`every row and every agent line drops the window, the share and the prefix, reads its effort as one of the four words or none, and each line reads warm by its TTL at the story's clock, at ${at}`, async () => {
     const s = await story;
-    // No request of the story names a `[1m]` twin, so every window is the 200 000 the route answers without one.
-    const figuresOk = (f) => f.contextWindowTokens === 200_000 && f.contextShare === Math.round((f.lastInputTokens / 200_000) * 1_000) / 1_000 && (f.cachedPrefixTokens === null || (f.cachedPrefixTokens > 0 && f.cachedPrefixTokens <= f.lastInputTokens));
-    const withTurn = s.sessions.filter((x) => !x.historical && x.lastInputTokens !== null && x.lastInputTokens > 0);
-    assert.ok(withTurn.length > 0, 'the story holds rows with a turn');
-    for (const row of withTurn) assert.ok(figuresOk(row), `${row.keyId} ${row.sessionId} reads ${JSON.stringify([row.lastInputTokens, row.contextWindowTokens, row.contextShare, row.cachedPrefixTokens])}`);
-    assert.ok(withTurn.some((x) => x.cachedPrefixTokens !== null), 'a row reads its cached prefix');
-    for (const row of s.sessions.filter((x) => !withTurn.includes(x))) {
-      assert.deepEqual([row.contextWindowTokens, row.contextShare, row.cachedPrefixTokens], [null, null, null], `${row.keyId} ${row.sessionId} has no turn to read`);
+    const gone = ['cachedPrefixTokens', 'contextShare', 'contextWindowTokens'];
+    const words = ['low', 'medium', 'high', 'max', null];
+    // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
+    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds);
+    for (const row of seeded) {
+      assert.ok(Array.isArray(row.agentContexts), `${row.keyId} ${row.sessionId} answers a list`);
+      assert.deepEqual(Object.keys(row).filter((k) => gone.includes(k)), [], `${row.keyId} ${row.sessionId} carries none of the three`);
+      assert.ok(words.includes(row.effort), `${row.keyId} ${row.sessionId} reads the effort ${row.effort}`);
+      if (!row.pinned) assert.equal(row.effort, null, `${row.keyId} ${row.sessionId} holds no pin to read an effort from`);
     }
-    const lines = s.sessions.flatMap((x) => x.agentContexts ?? []);
+    // The laptop's parked Haiku session is the one whose pin named no effort.
+    assert.equal(seeded.filter((x) => x.pinned && x.effort === null).length, 1, 'one pinned row reads no effort');
+    const lines = seeded.flatMap((x) => x.agentContexts);
     assert.ok(lines.length > 0, 'the story holds agent lines');
-    for (const line of lines) assert.ok(figuresOk(line), `${line.agentId} reads ${JSON.stringify(line)}`);
+    for (const line of lines) {
+      assert.deepEqual(Object.keys(line).filter((k) => gone.includes(k)), [], `${line.agentId} carries none of the three`);
+      assert.ok(words.includes(line.effort), `${line.agentId} reads the effort ${line.effort}`);
+      const warm = line.lastUsedAt !== null && line.cacheTtlMs !== null && s.now - Date.parse(line.lastUsedAt) < line.cacheTtlMs;
+      assert.equal(line.warm, warm, `${line.agentId} on ${line.model}, last used ${line.lastUsedAt} on a ${line.cacheTtlMs} ms TTL`);
+    }
+    assert.ok(lines.some((l) => l.warm) && lines.some((l) => !l.warm), 'warm and cold lines both');
   });
 
-  test(`a companion session lists its unreleased subagents' lines in agent id order with their models, one of them two lines, and none where every other agent is released, at ${at}`, async () => {
+  test(`a companion row lists main's line and one per unreleased subagent recipe, main first and then by agent id and model, and none of a released agent, at ${at}`, async () => {
     const s = await story;
     const recipes = await s.api.listKeepaliveRecipes();
     const companions = s.sessions.filter((x) => x.companion !== 'none');
-    const othersOf = (row) => recipes.filter((r) => r.keyId === row.keyId && r.sessionId === row.sessionId && r.agentId !== 'main');
+    const ownOf = (row) => recipes.filter((r) => r.keyId === row.keyId && r.sessionId === row.sessionId);
+    // The route orders the lines by agent id and then model as bytes, main first, which a locale's collation need not.
+    const bytes = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+    const routeOrder = (a, b) => (a.agentId === 'main') !== (b.agentId === 'main') ? (a.agentId === 'main' ? -1 : 1) : bytes(a.agentId, b.agentId) || bytes(a.model, b.model);
     for (const row of companions) {
-      const unreleased = othersOf(row).filter((r) => r.agentState !== 'released');
-      // The route orders the lines by agent id as bytes, which a locale's collation need not.
-      const want = unreleased.map((r) => r.agentId).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-      assert.deepEqual(row.agentContexts?.map((c) => c.agentId), want, `${row.sessionId} lists its unreleased subagents by agent id`);
-      for (const line of row.agentContexts) assert.equal(line.model, unreleased.find((r) => r.agentId === line.agentId).model, `${line.agentId} reads its own model`);
+      const unreleased = ownOf(row).filter((r) => r.agentState !== 'released');
+      const want = [...unreleased].sort(routeOrder).map((r) => [r.agentId, r.model, r.accountId]);
+      assert.deepEqual(row.agentContexts.map((c) => [c.agentId, c.model, c.accountId]), want, `${row.sessionId} lists its unreleased agents' pins`);
+      const main = row.agentContexts.find((c) => c.agentId === 'main');
+      if (main !== undefined) {
+        const read = (f) => [f.model, f.accountId, f.lastInputTokens, f.effort, f.cacheTtlMs, f.lastUsedAt, f.createdAt];
+        assert.deepEqual(read(main), read(row), `${row.sessionId}: main's line reads the row's pin`);
+      }
     }
-    assert.ok(companions.some((x) => x.agentContexts.length === 2), 'one companion session carries two agent lines');
-    // The session the mod released whole and the one it ended hold subagents whose every line is released.
-    const allReleased = companions.filter((x) => othersOf(x).length > 0 && othersOf(x).every((r) => r.agentState === 'released'));
-    assert.equal(allReleased.length, 2, 'two companion sessions whose other agents are all released');
+    assert.ok(companions.some((x) => x.agentContexts[0]?.agentId === 'main' && x.agentContexts.length >= 3), 'a companion session carries main and two subagents');
+    // The two sessions the mod released whole hold every record released, main's among them.
+    const allReleased = companions.filter((x) => ownOf(x).length > 0 && ownOf(x).every((r) => r.agentState === 'released'));
+    assert.equal(allReleased.length, 2, 'two companion sessions whose every agent is released');
     for (const row of allReleased) assert.deepEqual(row.agentContexts, [], `${row.sessionId} carries an empty list`);
   });
 
-  test(`a session no companion reports carries no agent lines, the plain row idle for two hours with the main pin's figures, at ${at}`, async () => {
+  test(`a plain row lists one line per pin within the non-companion timeout, the slowed session two, and a line leaves past the timeout while its row stays, at ${at}`, async () => {
     const s = await story;
-    for (const row of s.sessions.filter((x) => x.companion === 'none')) assert.equal(row.agentContexts, null, `${row.keyId} ${row.sessionId} carries none`);
-    // Written out in the mock's seeds, as the smoke reads it. The row left the route's list under the non-companion
-    // timeout, so the case reads the seed through the session expiry.
-    const row = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds).find((x) => x.sessionId === 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58');
-    assert.deepEqual([row.companion, row.lastInputTokens, row.contextWindowTokens, row.contextShare, row.cachedPrefixTokens, row.agentContexts], ['none', 6_400, 200_000, 0.032, 5_000, null]);
+    const seconds = s.settings.sessions.nonCompanionIdleSeconds;
+    const plain = s.sessions.filter((x) => x.companion === 'none');
+    for (const row of plain) {
+      if (!row.pinned) assert.deepEqual(row.agentContexts, [], `${row.keyId} ${row.sessionId} holds no pin and draws no line`);
+      for (const line of row.agentContexts) assert.ok(s.lib.withinNonCompanionTimeout(line.lastUsedAt, seconds, s.now), `${row.sessionId} ${line.agentId} last used ${line.lastUsedAt}`);
+      const main = row.agentContexts.find((c) => c.agentId === row.agentId && c.model === row.model);
+      if (row.pinned) assert.ok(main !== undefined && main.lastInputTokens === row.lastInputTokens && main.effort === row.effort, `${row.keyId} ${row.sessionId}: the row's pin draws its line`);
+    }
+    // The slowed notebook session holds main's pin and its subagent's on Haiku.
+    const slowed = plain.filter((x) => x.keyId === 'notebook' && x.agents === 2);
+    assert.deepEqual(
+      slowed.map((x) => x.agentContexts.map((c) => [c.agentId, c.model])),
+      [
+        [
+          ['main', 'claude-sonnet-5-5'],
+          ['7b2e', 'claude-haiku-4-5-20251001'],
+        ],
+      ],
+    );
+    // The session no mod reports: its cold line passes the timeout forty minutes on, while its warm one keeps the row.
+    const noMod = plain.find((x) => x.agentContexts.length === 2 && x.agentContexts.some((c) => c.warm) && x.agentContexts.some((c) => !c.warm));
+    assert.ok(noMod !== undefined, 'the session no mod reports is listed');
+    const later = s.lib.sessionsListedAt(s.now + 40 * 60_000).find((x) => x.keyId === noMod.keyId && x.sessionId === noMod.sessionId);
+    assert.deepEqual(later?.agentContexts.map((c) => c.warm), [true], 'the warm line stays and the cold one leaves');
+  });
+
+  test(`the auxiliary-only session reads its subagent's pin on the row with no main line, and the session no mod reports holds two pins on a five-minute TTL, one warm and one cold, at ${at}`, async () => {
+    const s = await story;
+    const recipes = await s.api.listKeepaliveRecipes();
+    const ownOf = (row) => recipes.filter((r) => r.keyId === row.keyId && r.sessionId === row.sessionId);
+    // Main holds an auxiliary pin alone, which draws no line, so the row falls back to the subagent's pin.
+    const aux = s.sessions.filter((x) => x.companion !== 'none' && x.pinned && x.agentId !== 'main');
+    assert.equal(aux.length, 1, 'one companion row reads a subagent pin');
+    const [row] = aux;
+    assert.deepEqual(
+      [ownOf(row).map((r) => r.agentId), row.keepalive.state],
+      [[row.agentId], null],
+      'one subagent recipe and none of main',
+    );
+    const read = (f) => [f.agentId, f.model, f.accountId, f.lastInputTokens, f.effort];
+    assert.deepEqual(row.agentContexts.map(read), [read(row)], "the subagent's line, the one the row reads");
+    const noMod = s.sessions.filter((x) => x.companion === 'none' && ownOf(x).length === 0 && x.agentContexts.length === 2 && x.agentContexts.some((c) => c.warm) && x.agentContexts.some((c) => !c.warm));
+    assert.equal(noMod.length, 1, 'one session no mod reports with a warm and a cold pin');
+    const [plain] = noMod;
+    assert.deepEqual([plain.pinned, plain.keepalive.state, plain.agents], [true, null, 2]);
+    for (const line of plain.agentContexts) assert.equal(line.cacheTtlMs, 5 * 60_000, `${line.agentId}'s TTL`);
   });
 
   test(`one subagent's recipe stands under compacted after its compaction completed: ended, last guarded as a compaction, with no probe scheduled, at ${at}`, async () => {

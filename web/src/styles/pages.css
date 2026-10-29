@@ -4094,7 +4094,7 @@
   background: var(--accent-soft);
 }
 
-.srow__account,
+.agents__account,
 .srow__pin {
   display: inline-flex;
   gap: 8px;
@@ -4112,42 +4112,33 @@
   color: var(--ink-2);
 }
 
-/* The session table keeps its cells on one line, and an agent line's narrow columns, its head and its cause's sentence
-   wrap inside the line instead. */
+/* `.agents` holds the eleven tracks for Agent, Model, Effort, Context, Account, TTL, Last request, Last probe, Next
+   probe, Probes / credited and State, and each line is a subgrid row of them, so a column's edge is one edge for the
+   head and every line. The Agent and Account tracks are as wide as the longest id and account with its chip among the
+   lines, which read whole, and the grid scrolls inside the card where they outgrow it. */
 .agents {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: max-content 76px 56px 56px max-content 44px 76px 68px 96px 64px minmax(130px, 1fr);
+  column-gap: 6px;
+  overflow-x: auto;
   white-space: normal;
   border-left: 2px solid var(--accent);
 }
 
-/* The floor gives a cause badge a cell to wrap in. */
 .agents__row {
   display: grid;
-  /* The first track holds a subagent id of the length Claude Code gives one, seventeen characters, whole in the
-     row's monospace size: the measured width, read in the browser pass. The tracks and gaps stay within the 910px an
-     expanded line has in a 990px card at 1280px. */
-  grid-template-columns: 124px 140px 84px 44px 76px 76px 112px 64px minmax(130px, 1fr);
-  gap: 4px 6px;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  row-gap: 4px;
   align-items: center;
   padding: 6px 12px;
-}
-
-/* A companion session's lines read Context and Prefix after Model, 132px with their gaps, which Model, Account, TTL,
-   Last probe, Next probe and State's floor give up, so the eleven tracks and ten gaps take 894px of the same 910px. */
-.agents--context .agents__row {
-  grid-template-columns: 124px 76px 80px 40px 72px 32px 76px 68px 96px 64px minmax(106px, 1fr);
 }
 
 .agents__row + .agents__row {
   border-top: 1px solid var(--hairline);
 }
 
-/* A longer id cuts with an ellipsis inside its track, and the whole id reads on the cell's title. */
 .agents__id {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

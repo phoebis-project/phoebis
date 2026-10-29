@@ -25,3 +25,14 @@ test("the Agent dimension leads the Subject group on both logs with the word age
   }
   assert.equal(d.REQUESTS_DIMENSIONS.find((x) => x.field === 'agent')?.word, 'user agent');
 });
+
+test("the Sessions view's filters are its three flags in the bar's order", () => {
+  assert.deepEqual(
+    d.SESSIONS_DIMENSIONS.map((x) => [x.field, x.kind, x.label]),
+    [
+      ['companion', 'flag', 'Companion only'],
+      ['finished', 'flag', 'Finished sessions'],
+      ['released', 'flag', 'Released agents'],
+    ],
+  );
+});

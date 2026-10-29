@@ -14,8 +14,8 @@ import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skele
 import { ANALYTICS_CODEC, REQUESTS_CODEC, SESSIONS_CODEC, type SessionsAddress } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
-import { SESSION_CHARS, fmtAbsolute, fmtCompact, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel } from '@/lib/format';
-import { CAUSE_HINT, CAUSE_LABEL, contextCell, firstFailedRead, hiddenByAge, isFinished, isReleasedLine, lineFigures, mainFigures, orderRecipes, type PinFigures, releasedCount, requestsRange, type TileRead, WARNING_CAUSES } from '@/lib/keepalive';
+import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel } from '@/lib/format';
+import { CAUSE_HINT, CAUSE_LABEL, contextCell, firstFailedRead, isFinished, isReleasedLine, orderRecipes, pinTtlMs, releasedCount, requestsRange, sessionLines, type SessionLine, type TileRead, WARNING_CAUSES } from '@/lib/keepalive';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { ageWord, aroundSubject, logHref } from '@/lib/routingLog';
@@ -26,7 +26,7 @@ const SESSION_COLUMNS = [
   { id: 'key', label: 'Key' },
   { id: 'model', label: 'Model' },
   { id: 'context', label: 'Context' },
-  { id: 'account', label: 'Account' },
+  { id: 'effort', label: 'Effort' },
   { id: 'runway', label: 'Runway' },
   { id: 'lastUsed', label: 'Last used' },
   { id: 'requests', label: 'Requests' },
@@ -41,13 +41,6 @@ type SessionColumnId = (typeof SESSION_COLUMNS)[number]['id'];
 // row carry the agents and their next probes, and the request log and analytics carry the request count, whose room the
 // Context column takes.
 const HIDDEN_BY_DEFAULT: readonly SessionColumnId[] = ['agents', 'lastRequest', 'nextProbe', 'requests'];
-// Add filter draws the dimension's "1 h" first as the default hour's row, so the options are the other four presets.
-const AGE_OPTIONS = [
-  { label: '15 min', value: '15m' },
-  { label: '6 h', value: '6h' },
-  { label: '24 h', value: '24h' },
-  { label: 'No limit', value: 'none' },
-];
 
 /**
  * The pin's runway on its account as the route answers it: a span, `none` at zero, `unbounded` where no window binds.
@@ -111,14 +104,15 @@ const rowKey = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>)
 const rowDomId = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>) => `session-${encodeURIComponent(rowKey(session))}`;
 /**
  * The request log on the session the client sent under the row's key lifetime, since a key id created again can hold
- * the same session id, inside the narrowest range that covers its last request, read on the clock at the click: the
- * page's `now` is a sample up to five seconds old, and the request log measures its window from its own load. The
- * session lands as the log's session chip, which matches the id exactly.
+ * the same session id, inside the narrowest range that covers its last request, read on the clock when the link is made
+ * (the menu's click, a line's draw): the page's `now` is a sample up to five seconds old, and the request log measures
+ * its window from its own load. The session lands as the log's session chip, which matches the id exactly, and an agent
+ * line's link adds its agent's.
  */
-const requestsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId' | 'lastRequestAt'>) => {
+const requestsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId' | 'lastRequestAt'>, agentId?: string) => {
   const defaults = REQUESTS_CODEC.fromParams(new URLSearchParams());
   const range = requestsRange(session.lastRequestAt, clock.now());
-  return `/requests?${REQUESTS_CODEC.toParams({ ...defaults, keys: [`${session.keyId}@${session.keyGeneration}`], range: range === null ? defaults.range : { from: '', preset: range, to: '' }, session: trafficSession })}`;
+  return `/requests?${REQUESTS_CODEC.toParams({ ...defaults, agentId: agentId ?? defaults.agentId, keys: [`${session.keyId}@${session.keyGeneration}`], range: range === null ? defaults.range : { from: '', preset: range, to: '' }, session: trafficSession })}`;
 };
 /** The analytics on the session the client sent under the row's key lifetime. */
 const analyticsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId'>) =>
@@ -266,11 +260,8 @@ export function SessionsPage() {
   );
   // The expiry stays the outer bound, and the filters narrow the list inside it.
   const rows = useMemo(
-    () =>
-      listed?.filter(
-        (r) => (!filters.companion || r.session.companion === 'reporting' || r.session.companion === 'silent') && !hiddenByAge(r.session, filters.age, now) && (filters.finished || !r.finished),
-      ) ?? null,
-    [listed, filters.age, filters.companion, filters.finished, now],
+    () => listed?.filter((r) => (!filters.companion || r.session.companion === 'reporting' || r.session.companion === 'silent') && (filters.finished || !r.finished)) ?? null,
+    [listed, filters.companion, filters.finished],
   );
   const hiddenRows = listed !== null && rows !== null ? listed.length - rows.length : 0;
   const hiddenTitle = hiddenRows > 0 ? `${fmtInt(hiddenRows)} ${hiddenRows === 1 ? 'session' : 'sessions'} hidden by the filters` : undefined;
@@ -313,6 +304,8 @@ export function SessionsPage() {
   };
   // The listed rows by element id, so a fork's badge finds its base's row and reads the account the base sits on.
   const listedRows = useMemo(() => new Map((rows ?? []).map((r) => [rowDomId(r.session), r])), [rows]);
+  // A line's account reads its kind and its slow-down off the accounts list, the row's own account being main's pin's.
+  const accountById = useMemo(() => new Map((accounts.data ?? []).map((a) => [a.id, a])), [accounts.data]);
   const followFork = (id: string) => {
     // jsdom leaves scrollIntoView undefined.
     document.getElementById(id)?.scrollIntoView?.({ block: 'center' });
@@ -347,7 +340,6 @@ export function SessionsPage() {
         dimensions={SESSIONS_DIMENSIONS}
         filters={filters}
         onOpenChange={setBarOpen}
-        options={{ age: AGE_OPTIONS }}
         refresh={{
           intervalMs,
           onIntervalChange: setIntervalMs,
@@ -496,7 +488,7 @@ export function SessionsPage() {
                   {visible.has('key') && <th className="col-fit">Key</th>}
                   {visible.has('model') && <th className="col-fit">Model</th>}
                   {visible.has('context') && <th className="col-fit">Context</th>}
-                  {visible.has('account') && <th className="col-fit">Account</th>}
+                  {visible.has('effort') && <th className="col-fit">Effort</th>}
                   {visible.has('runway') && <th className="col-fit">Runway</th>}
                   {visible.has('lastUsed') && <th className="col-fit">Last used</th>}
                   {visible.has('requests') && <th className="col-fit right">Requests</th>}
@@ -512,6 +504,7 @@ export function SessionsPage() {
                 {rows.map((row) => (
                   <SessionRows
                     key={rowKey(row.session)}
+                    accountById={accountById}
                     row={row}
                     open={expanded.has(rowKey(row.session))}
                     onToggle={() => toggle(rowKey(row.session))}
@@ -551,6 +544,7 @@ export function SessionsPage() {
 }
 
 function SessionRows({
+  accountById,
   row,
   open,
   onToggle,
@@ -566,6 +560,7 @@ function SessionRows({
   onRelease,
   visible,
 }: {
+  accountById: ReadonlyMap<string, Account>;
   columns: number;
   /** Whether a fork link last led here. */
   current: boolean;
@@ -584,13 +579,10 @@ function SessionRows({
   visible: ReadonlySet<SessionColumnId>;
 }) {
   const { account, session, shown } = row;
-  // The kind gave its badge's width to the fit; the description keeps it within reach of a reader that never hovers.
-  const kind = useDescription(visible.has('account') && account ? KIND_HINT[account.kind] : undefined);
   const summary = stateSummary(shown);
   // A pin exists only with an account: a request refused before any account served it leaves a row without one.
   const pinned = shown.filter((a) => a.accountId !== null);
   const otherModels = pinned.filter((a) => a.model !== session.model);
-  const otherAccounts = pinned.filter((a) => a.accountId !== session.accountId);
   // A retained agent with no time is waiting on its first stream event, which is
   // a different thing from a session nothing probes.
   const pendingProbe = shown.some((a) => a.state === 'retained' && a.nextProbeAt === null);
@@ -607,10 +599,10 @@ function SessionRows({
   // row.
   const baseRow = forkBase === null ? null : (listedRows.get(forkBase) ?? null);
   const baseAccountId = baseRow !== null && baseRow.session.pinned ? baseRow.session.accountId : null;
-  const main = mainFigures(session);
-  const context = contextCell(main.lastInputTokens, main.contextWindowTokens, main.contextShare, main.cachedPrefixTokens);
-  // The route answers the other pins' figures on a companion session alone, so only its lines draw the two columns.
-  const companion = session.companion !== 'none';
+  // The row's figures are main's conversation pin's, so a row with no pin reads a dash.
+  const context = contextCell(session.pinned ? session.lastInputTokens : null);
+  // Every session draws its lines: the recipes the filters keep and the pins no recipe stands on.
+  const lines = sessionLines(session, shown);
   return (
     <>
       <tr
@@ -648,6 +640,8 @@ function SessionRows({
               epoch {session.epoch}
             </span>
           )}
+          {/* An unpinned row on a slowed account carries no speed, so the row's own speed gates main's chip. */}
+          {session.speed !== null && <SpeedChip {...memberSpeed(session, account, now)} />}
         </td>
         {visible.has('key') && (
           <td className="mono col-fit">
@@ -668,28 +662,11 @@ function SessionRows({
           </td>
         )}
         {visible.has('context') && (
-          <td className="col-fit" title={context.share ?? undefined}>
-            <span className={main.lastInputTokens === null ? 'muted' : 'num'}>{context.main}</span>
-            {context.share !== null && <span className="sub">{context.share}</span>}
-            {context.prefix !== null && <span className="sub">{context.prefix}</span>}
+          <td className="col-fit">
+            <span className={context === '-' ? 'muted' : 'num'}>{context}</span>
           </td>
         )}
-        {visible.has('account') && (
-          <td className="col-fit" title={account ? KIND_HINT[account.kind] : undefined} aria-describedby={kind && !kind.sibling ? kind.id : undefined}>
-            <span className="srow__account">
-              {session.accountId === null ? (
-                <span className="muted">-</span>
-              ) : (
-                <Link to={`/accounts/${session.accountId}`} onClick={(e) => e.stopPropagation()}>
-                  {session.accountId}
-                </Link>
-              )}
-              {/* An unpinned row on a slowed account carries no speed, so the row's own speed gates the account's chip. */}
-              {session.speed !== null && <SpeedChip {...memberSpeed(session, account, now)} />}
-              <OtherPins agents={otherAccounts} />
-            </span>
-          </td>
-        )}
+        {visible.has('effort') && <td className="col-fit">{session.effort ?? <span className="muted">-</span>}</td>}
         {visible.has('runway') && (
           <td className="col-fit" title={session.pinned && session.cycleMs !== null ? `cycle ${ageWord(session.cycleMs)}` : undefined}>
             {runwayWord(session) ?? <span className="muted">-</span>}
@@ -804,17 +781,14 @@ function SessionRows({
             {row.finished && shown.length > 0 && (
               <p className="agents__released">The mod released every agent of this session. Their records keep their slots of the cap for one cache TTL after the release and then leave the engine.</p>
             )}
-            {shown.length > 0 && (
-              <div className={companion ? 'agents agents--context' : 'agents'}>
+            {/* The union's length, so a session no mod reports draws its pins' lines. */}
+            {lines.length > 0 && (
+              <div className="agents">
                 <div className="agents__row agents__row--head">
                   <span>Agent</span>
                   <span>Model</span>
-                  {companion && (
-                    <>
-                      <span>Context</span>
-                      <span>Prefix</span>
-                    </>
-                  )}
+                  <span>Effort</span>
+                  <span>Context</span>
                   <span>Account</span>
                   <span>TTL</span>
                   <span>Last request</span>
@@ -823,46 +797,14 @@ function SessionRows({
                   <span title={COUNTS_HINT}>Probes / credited</span>
                   <span>State</span>
                 </div>
-                {shown.map((a) => (
-                  <div className="agents__row" key={a.agentId}>
-                    <span className="mono agents__id" title={a.agentId}>{a.agentId}</span>
-                    <span className="mono nowrap" title={modelTitle(a.model, shortModel(a.model))}>
-                      {shortModel(a.model)}
-                    </span>
-                    {companion && <LineContext figures={lineFigures(session, a.agentId, a.model)} />}
-                    {a.accountId === null ? <span className="muted">none</span> : <span className="mono">{a.accountId}</span>}
-                    <span className="num">{fmtDuration(a.ttlSeconds * 1000)}</span>
-                    <span title={a.lastRequestAt ? fmtAbsolute(a.lastRequestAt) : undefined}>{a.lastRequestAt ? <span className="num">{fmtRelative(a.lastRequestAt, now)}</span> : <span className="muted">none</span>}</span>
-                    <span className="agents__probe" title={a.lastProbeAt ? fmtAbsolute(a.lastProbeAt) : undefined}>
-                      {a.lastProbeAt ? <span className="num">{fmtRelative(a.lastProbeAt, now)}</span> : <span className="muted">none</span>}
-                    </span>
-                    <span title={a.nextProbeAt ? fmtAbsolute(a.nextProbeAt) : undefined}>
-                      {a.nextProbeAt ? <span className="num">{fmtRelative(a.nextProbeAt, now)}</span> : <span className="muted">{a.state === 'retained' ? 'on first stream event' : 'not scheduled'}</span>}
-                    </span>
-                    <span className="agents__counts num" title={COUNTS_HINT}>
-                      {a.probesToday} / {a.creditedToday}
-                    </span>
-                    {/* The state word carries its cause's sentence on hover, and the line below repeats it for a reader that never hovers. */}
-                    <span className="agents__state row" style={{ gap: 6 }}>
-                      <Badge tone={STATE_TONE[a.state]} dot title={CAUSE_HINT[a.cause]}>
-                        {STATE_LABEL[a.state]}
-                      </Badge>
-                      <Badge tone={WARNING_CAUSES.includes(a.cause) ? 'warning' : 'neutral'} title={CAUSE_HINT[a.cause]}>
-                        {CAUSE_LABEL[a.cause]}
-                      </Badge>
-                    </span>
-                    <div className="agents__more">
-                      <span className="agents__life">
-                        <Badge tone={PIN_TONE[a.agentState]} dot title={PIN_HINT[a.agentState]}>
-                          {a.agentState}
-                        </Badge>
-                        {parkDetail(a, now)}
-                      </span>
-                      <p className="agents__cause">
-                        {STATE_HINT[a.state]} {CAUSE_HINT[a.cause]}
-                      </p>
-                    </div>
-                  </div>
+                {lines.map((line) => (
+                  <AgentLine
+                    key={`${line.agentId}|${line.model}`}
+                    accountById={accountById}
+                    line={line}
+                    now={now}
+                    requestsTo={hasTraffic ? requestsHref(trafficSession, session, line.agentId) : null}
+                  />
                 ))}
               </div>
             )}
@@ -936,20 +878,101 @@ function ForkBadge({
   );
 }
 
-/** An agent line's Context and Prefix cells: the tokens with the share as a sub line and on hover, a dash for none. */
-function LineContext({ figures }: { figures: PinFigures | null }) {
-  // A pin before its first turn has no context to read, as on the row.
-  const tokens = figures?.lastInputTokens || null;
-  const cell = contextCell(tokens, figures?.contextWindowTokens ?? null, figures?.contextShare ?? null, null);
-  const prefix = figures?.cachedPrefixTokens ?? null;
+/** A pin no recipe stands on reads its prompt cache's state by its own TTL, each word with its sentence. */
+const PIN_CACHE_HINT = {
+  cold: "The pin's prompt cache has passed its TTL, and the next request pays a cold read.",
+  warm: "The pin's prompt cache is within its TTL.",
+};
+
+/**
+ * One line of an expanded row. A recipe's line reads its own model, account, TTL, probes and state as the mod reports
+ * them, and its pin's Effort and Context, dashes where it stands on none. A pin no recipe stands on reads its own
+ * figures, its TTL as the time left on its cache, its last use as its last request, a dash in each probe cell and a
+ * warm or cold state, with no lifecycle line under it.
+ */
+function AgentLine({ accountById, line, now, requestsTo }: { accountById: ReadonlyMap<string, Account>; line: SessionLine; now: number; requestsTo: string | null }) {
+  const { pin, recipe: a } = line;
+  const context = contextCell(pin?.lastInputTokens ?? null);
+  const accountId = a !== null ? a.accountId : (pin?.accountId ?? null);
+  const ttlMs = a !== null ? a.ttlSeconds * 1000 : pin === null ? null : pinTtlMs(pin, now);
+  const lastRequestAt = a !== null ? a.lastRequestAt : (pin?.lastUsedAt ?? null);
+  const cache = pin?.warm ? 'warm' : 'cold';
   return (
-    <>
-      <span title={cell.share ?? undefined}>
-        <span className={tokens === null ? 'muted' : 'num'}>{cell.main}</span>
-        {cell.share !== null && <span className="sub">{cell.share}</span>}
+    <div className="agents__row">
+      <span className="mono agents__id" title={line.agentId}>
+        {requestsTo === null ? line.agentId : <Link to={requestsTo}>{line.agentId}</Link>}
       </span>
-      <span>{prefix === null ? <span className="muted">-</span> : <span className="num">{fmtCompact(prefix)}</span>}</span>
-    </>
+      <span className="mono nowrap" title={modelTitle(line.model, shortModel(line.model))}>
+        {shortModel(line.model)}
+      </span>
+      <span>{pin?.effort ?? <span className="muted">-</span>}</span>
+      <span className={context === '-' ? 'muted' : 'num'}>{context}</span>
+      {accountId === null ? <span className="muted">none</span> : <LineAccount account={accountById.get(accountId) ?? null} id={accountId} now={now} />}
+      {ttlMs === null ? <span className="muted">-</span> : <span className="num">{fmtDuration(ttlMs)}</span>}
+      <span title={lastRequestAt ? fmtAbsolute(lastRequestAt) : undefined}>{lastRequestAt ? <span className="num">{fmtRelative(lastRequestAt, now)}</span> : <span className="muted">none</span>}</span>
+      {a === null ? (
+        <>
+          <span className="muted">-</span>
+          <span className="muted">-</span>
+          <span className="muted">-</span>
+          <span className="agents__state row" style={{ gap: 6 }}>
+            <Badge tone={cache === 'warm' ? 'good' : 'neutral'} dot title={PIN_CACHE_HINT[cache]}>
+              {cache}
+            </Badge>
+          </span>
+        </>
+      ) : (
+        <>
+          <span className="agents__probe" title={a.lastProbeAt ? fmtAbsolute(a.lastProbeAt) : undefined}>
+            {a.lastProbeAt ? <span className="num">{fmtRelative(a.lastProbeAt, now)}</span> : <span className="muted">none</span>}
+          </span>
+          <span title={a.nextProbeAt ? fmtAbsolute(a.nextProbeAt) : undefined}>
+            {a.nextProbeAt ? <span className="num">{fmtRelative(a.nextProbeAt, now)}</span> : <span className="muted">{a.state === 'retained' ? 'on first stream event' : 'not scheduled'}</span>}
+          </span>
+          <span className="agents__counts num" title={COUNTS_HINT}>
+            {a.probesToday} / {a.creditedToday}
+          </span>
+          {/* The state word carries its cause's sentence on hover, and the line below repeats it for a reader that never
+              hovers. */}
+          <span className="agents__state row" style={{ gap: 6 }}>
+            <Badge tone={STATE_TONE[a.state]} dot title={CAUSE_HINT[a.cause]}>
+              {STATE_LABEL[a.state]}
+            </Badge>
+            <Badge tone={WARNING_CAUSES.includes(a.cause) ? 'warning' : 'neutral'} title={CAUSE_HINT[a.cause]}>
+              {CAUSE_LABEL[a.cause]}
+            </Badge>
+          </span>
+          <div className="agents__more">
+            <span className="agents__life">
+              <Badge tone={PIN_TONE[a.agentState]} dot title={PIN_HINT[a.agentState]}>
+                {a.agentState}
+              </Badge>
+              {parkDetail(a, now)}
+            </span>
+            <p className="agents__cause">
+              {STATE_HINT[a.state]} {CAUSE_HINT[a.cause]}
+            </p>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A line's account: a link to its page with the kind on its title, described to a reader that never hovers, and its
+ * slow-down chip while the slow-down holds. An account the list lacks reads its id alone.
+ */
+function LineAccount({ account, id, now }: { account: Account | null; id: string; now: number }) {
+  const title = account ? KIND_HINT[account.kind] : undefined;
+  const kind = useDescription(title);
+  return (
+    <span className="agents__account">
+      <Link to={`/accounts/${id}`} title={title} aria-describedby={kind && !kind.sibling ? kind.id : undefined}>
+        {id}
+      </Link>
+      <SpeedChip {...memberSpeed({ speed: null }, account, now)} />
+    </span>
   );
 }
 

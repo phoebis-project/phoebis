@@ -1,6 +1,6 @@
 import type { AgentContext, KeepaliveRecipe, KeepaliveState, RecipeCause, Session } from '@/api/types';
 import { RANGE_PRESETS } from '@/lib/address';
-import { fmtCompact, fmtShare } from '@/lib/format';
+import { fmtCompact } from '@/lib/format';
 
 export const CAUSE_LABEL: Record<RecipeCause, string> = {
   affinity_too_short: 'affinity too short',
@@ -199,9 +199,6 @@ export function releasedCount(agents: readonly Pick<KeepaliveRecipe, 'agentState
   return agents.filter(isReleasedLine).length;
 }
 
-/** The age preset's span in milliseconds, null for `none`. */
-export const SESSION_AGE_MS: Record<string, number | null> = { '15m': 15 * 60_000, '1h': 3_600_000, '6h': 6 * 3_600_000, '24h': 24 * 3_600_000, none: null };
-
 /**
  * A session the engine is done with: main's recipe reads the cause `session_ended` or `released`, or every line it
  * holds is a released one. Such a session keeps its lines, so its probe facts stay in view once it is shown.
@@ -211,46 +208,48 @@ export function isFinished(session: Pick<Session, 'keepalive'>, agents: readonly
   return cause === 'session_ended' || cause === 'released' || (agents.length > 0 && agents.every(isReleasedLine));
 }
 
-/** The Context cell's three texts, a dash where the tokens are null. */
-export function contextCell(tokens: number | null, window: number | null, share: number | null, prefix: number | null): { main: string; share: string | null; prefix: string | null } {
-  if (tokens === null) return { main: '-', share: null, prefix: null };
-  // The route rounds the share to three decimals, a tenth of a percent, which `fmtShare` keeps and a whole percent
-  // would round away.
-  return { main: fmtCompact(tokens), share: window === null || share === null ? null : `${fmtShare(share)} of ${fmtCompact(window)}`, prefix: prefix === null ? null : `prefix ${fmtCompact(prefix)}` };
-}
-
-export type PinFigures = Pick<AgentContext, 'cachedPrefixTokens' | 'contextShare' | 'contextWindowTokens' | 'lastInputTokens'>;
-
-/** The main pin's figures off the row. A row with no pin, or a pin before its first turn, has no context to read. */
-export const mainFigures = (s: Session): PinFigures => ({
-  cachedPrefixTokens: s.cachedPrefixTokens,
-  contextShare: s.contextShare,
-  contextWindowTokens: s.contextWindowTokens,
-  lastInputTokens: s.pinned && s.lastInputTokens ? s.lastInputTokens : null,
-});
+/** The Context cell's text: the tokens compact, a dash with none or before the first turn. */
+export const contextCell = (tokens: number | null): string => (tokens === null || tokens === 0 ? '-' : fmtCompact(tokens));
 
 /** A model as the route keys a pin: the relay folds the long-context suffix out case-blind before it pins. */
 const pinModel = (model: string): string => model.toLowerCase().replace(/\[1m\]$/, '');
 
 /**
- * An agent line's pin figures, keyed by the agent id and the recipe's model, since the route answers one entry per pin
- * and an agent can hold pins on two models. The row's own figures are its agent's pin on the row's model, so they fill
- * that line alone. Every other line reads the route's entry for its agent and model, and none where the route answers
- * none: a released agent's, or the main agent's on another model, which the route never lists among its entries.
+ * The route's entry for an agent's pin on a model, none where it lists none (a released agent's among them). The route
+ * answers one entry per pin and an agent can hold pins on two models, so the key is the agent id and the model.
  */
-export const lineFigures = (s: Session, agentId: string, model: string): PinFigures | null => {
-  const key = pinModel(model);
-  if (agentId === s.agentId && s.model !== null && pinModel(s.model) === key) return mainFigures(s);
-  return s.agentContexts?.find((c) => c.agentId === agentId && pinModel(c.model) === key) ?? null;
-};
+export const lineFigures = (s: Pick<Session, 'agentContexts'>, agentId: string, model: string): AgentContext | null =>
+  s.agentContexts.find((c) => c.agentId === agentId && pinModel(c.model) === pinModel(model)) ?? null;
 
-/** Whether the Non-companion age hides the row: never a companion row, else its last use older than the preset. */
-export function hiddenByAge(session: Pick<Session, 'companion' | 'lastRequestAt' | 'lastUsedAt'>, age: string, now: number): boolean {
-  const span = SESSION_AGE_MS[age] ?? null;
-  const lastUse = session.lastUsedAt ?? session.lastRequestAt;
-  // A row with no use on record keeps its place, as the expiry keeps it.
-  return session.companion === 'none' && span !== null && lastUse !== null && now - Date.parse(lastUse) > span;
+/** One drawn line: a recipe with its pin, a recipe without one, or a pin without a recipe. */
+export interface SessionLine {
+  agentId: string;
+  model: string;
+  pin: AgentContext | null;
+  recipe: KeepaliveRecipe | null;
 }
+
+/**
+ * The union of a session's entries and its recipes, keyed by agent id and pin model, in the order handed: the
+ * recipes first as `orderRecipes` ordered them, then the pins no recipe claims as the route ordered them.
+ */
+export function sessionLines(s: Pick<Session, 'agentContexts'>, recipes: readonly KeepaliveRecipe[]): SessionLine[] {
+  const claimed = new Set<AgentContext>();
+  const lines: SessionLine[] = recipes.map((recipe) => {
+    const pin = lineFigures(s, recipe.agentId, recipe.model);
+    if (pin !== null) claimed.add(pin);
+    return { agentId: recipe.agentId, model: recipe.model, pin, recipe };
+  });
+  for (const pin of s.agentContexts) if (!claimed.has(pin)) lines.push({ agentId: pin.agentId, model: pin.model, pin, recipe: null });
+  return lines;
+}
+
+/** A pin-only line's TTL: the time left to the pin's last use plus its cache TTL, null once passed or unknown. */
+export const pinTtlMs = (pin: Pick<AgentContext, 'cacheTtlMs' | 'lastUsedAt'>, now: number): number | null => {
+  if (pin.cacheTtlMs === null || pin.lastUsedAt === null) return null;
+  const left = Date.parse(pin.lastUsedAt) + pin.cacheTtlMs - now;
+  return left > 0 ? left : null;
+};
 
 /** A read a tile's figure needs: the word the notice names it by, its error, and whether it has ever answered. */
 export interface TileRead {
