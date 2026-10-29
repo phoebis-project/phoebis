@@ -245,7 +245,7 @@ export function PoolsPage() {
   const catalog = useAsync(() => api.listCatalog(), []);
   const sessions = useAsync(() => api.listSessions(), [], reread);
   // The dialog's return rate over the range the dialog picks, each answer carrying the range it was read for.
-  const overview = useAsync(() => api.getKeepaliveOverview({ range: returnRange }).then((overview) => ({ overview, range: returnRange })), [returnRange], reread);
+  const overview = useAsync(() => api.getKeepaliveOverview({ range: returnRange }).then((read) => ({ overview: read, range: returnRange })), [returnRange], reread);
   const answer = overview.data?.range === returnRange ? overview.data.overview : null;
   const attention = useAttention();
   const now = useNow();
