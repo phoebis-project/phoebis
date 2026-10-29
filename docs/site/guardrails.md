@@ -178,14 +178,14 @@ the key, which answers for each sampled request whether the definition matches a
 the mode: the row's menu offers "Switch to enforce", and the dialog's Mode field does the same. From the next request
 on, a match is refused before any account is selected.
 
-A block is a refusal the router issued before any account was asked, and the ledger flags every such refusal on its
-row, a guardrail's beside the client's drift, a key's refusal and a malformed body. A block also writes a `refused`
-decision row beside its request row, with the kind `guardrail`, the code `guardrail_blocked` and the guardrail's name,
-so the routing log shows it ([Routing log](console.md#routing-log)). The hourly figures file a flagged request under a
-refusals map by code and under nothing else, so no request count, outcome, cache figure, latency or error rate carries
-it. The refused requests show where they are asked for: the Dashboard's "Refused, 24h" tile, the Analytics Traffic
-table's "Refused" column and its "Refusals by code" card, the Guardrails card by guardrail, and the Requests view, which
-lists every request the router answered ([Statistics](statistics.md#refused-requests)).
+A block is a refusal the router issued before any account was asked, and the ledger flags every such refusal on its row,
+a guardrail's beside the client's drift, a key's refusal and a malformed body. A block also writes a `refused` decision
+row beside its request row, with the kind `guardrail`, the code `guardrail_blocked` and the guardrail's name, so the
+routing log shows it ([Routing log](console.md#routing-log)). The hourly figures file a flagged request under a refusals
+map by code and under nothing else, so no request count, outcome, cache figure, latency or error rate carries it. The
+refused requests show where they are asked for: the Dashboard's "Refused, 24h" tile, the Analytics Traffic table's
+"Refused" column and its "Refusals by code" card, the Guardrails card by guardrail, and the Requests view, which lists
+every request the router answered ([Statistics](statistics.md#refused-requests)).
 
 ## Testing a guardrail
 

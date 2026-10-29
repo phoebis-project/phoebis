@@ -220,16 +220,16 @@ for the ledger and never judged: every version is relayed the same way.
 
 ## The boundary chains
 
-The router reads two cumulative boundary-hash chains off every request body: a static chain over the tools array and
-the system blocks, and a message chain with one boundary per entry of `messages`. Both are computed on the client's own
+The router reads two cumulative boundary-hash chains off every request body: a static chain over the tools array and the
+system blocks, and a message chain with one boundary per entry of `messages`. Both are computed on the client's own
 bytes as canonical JSON with every `cache_control` member removed at every level, so a marker that moves changes no
 boundary, and the two chains start from different seeds so they never collide: an MCP server joining mid-session changes
 every static boundary and leaves every message boundary equal. A content array of text blocks with no member beyond
 `type`, `text` and `cache_control` hashes as its blocks up to the last one carrying `cache_control`, a single remaining
-block as its text. Neither chain gates the request. Both ride with the
-observation and the selection, so a warm pin's continuation and a keepalive's guard read the same hashes: the session's
-pin compares its own hashes against a later request's to tell a continuation from a restart, and the keepalive engine
-reads them as its guard ([The guard field](keepalive.md#the-guard-field)).
+block as its text. Neither chain gates the request. Both ride with the observation and the selection, so a warm pin's
+continuation and a keepalive's guard read the same hashes: the session's pin compares its own hashes against a later
+request's to tell a continuation from a restart, and the keepalive engine reads them as its guard ([The guard
+field](keepalive.md#the-guard-field)).
 
 ## Auto mode behind the router
 

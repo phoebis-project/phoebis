@@ -114,17 +114,17 @@ block, the Requests view and a session's request list, and in `phoebis_refusals_
 guardrail block (kind `guardrail`, code `guardrail_blocked`), a client drift, a missing contract item, and a key or
 model refusal the router makes at selection, for a request admitted under an older registry, each also write a `refused`
 decision row beside the request row, which the routing log lists ([Routing log](console.md#routing-log)), and every
-other refusal above stays on the request row alone, the relay's own `model_not_allowed` among them. The first
-start after the upgrade sets the flag on the stored rows and moves each one's share out of its hour's counts into the
-map, in pages, resumed after a stopped start, and an hour whose rows the retention purge already removed keeps its old
-counts. With `stats.retention_days` at 0, which keeps the requests for good, the move starts at the first hour
+other refusal above stays on the request row alone, the relay's own `model_not_allowed` among them. The first start
+after the upgrade sets the flag on the stored rows and moves each one's share out of its hour's counts into the map, in
+pages, resumed after a stopped start, and an hour whose rows the retention purge already removed keeps its old counts.
+With `stats.retention_days` at 0, which keeps the requests for good, the move starts at the first hour
 `stats.rollup_retention_days` keeps, so a refusal in an hour the rollup purge removed writes no row into it.
 
 An upstream's refusal is a served request: the serving attempt records the answer's `stop_reason` `refusal` with the
 `refusal_category` and the recommended model its `stop_details` named, the request's outcome stays `succeeded`, and the
 figures count it as any served request. `GET /admin/requests` filters on `stop_reasons` and `refusal_categories`, each
-read off the serving attempt with `-` for a request whose serving attempt carries none or that no attempt served, and
-on `agent_id`, which keeps one agent's requests, as `GET /admin/routing-log` keeps one agent's decisions and events and
+read off the serving attempt with `-` for a request whose serving attempt carries none or that no attempt served, and on
+`agent_id`, which keeps one agent's requests, as `GET /admin/routing-log` keeps one agent's decisions and events and
 leaves out a session-level event, which names no agent. `GET /admin/analytics/refusal_categories` counts the refused
 requests in range per category, `-` for a refusal with none, read off the attempts at the request. It narrows by
 `clients` and `user_agents` as the analytics series do, over the client label and the agent's first product token, so a
@@ -451,10 +451,9 @@ before the first hour the rollup purge keeps moves only where its hour's rows st
 stays empty and one it kept for a budgeted member moves with the threshold. Under a request retention of some days the
 same guard holds for a request received before the first hour boundary at or after the retention's cutoff, since under
 an equal rollup retention the purge drops the hour that cutoff splits: that hour stays empty, and one the purge kept for
-a budgeted member moves. The re-fold moves the request rows alone. A
-wasted probe's counts and a probe the keepalive still holds keep the band they settled or were recorded in, so the waste
-of a probe whose prompt falls between the old and the new threshold inside the retained window stays priced at that
-band.
+a budgeted member moves. The re-fold moves the request rows alone. A wasted probe's counts and a probe the keepalive
+still holds keep the band they settled or were recorded in, so the waste of a probe whose prompt falls between the old
+and the new threshold inside the retained window stays priced at that band.
 
 ## Metrics
 
@@ -697,18 +696,17 @@ smaller priced share reads far off. The ledger reconciles each account's complet
 hour, prices the plan-funded attempts inside them under each attempt's regime, and keeps the rows for 30 days, which the
 [Meter](console.md#meter) view lists. The condition reads only a window that ended inside the last eight days while the
 view keeps its rows for 30, so an account that serves nothing leaves the condition within eight days of its newest
-window's end. A window's rise is read between two readings of one source, the
-poll's where the window saw two or more polls and the head's otherwise, since the head truncates the percent the poll
-rounds, and the attempts priced are those completed between the two. A fall inside a window splits its run, except a
-head at most one percent under the poll before it, and the parts' rises and priced shares sum into the window's one row.
-A dip the next readings reverse past what the attempts between its ends predict, a climb that reaches 5% and exceeds
-1.25 times their priced share, leaves the run as a fault of the readings, while a dip that never closes or whose climb
-the attempts predict is a free reset and keeps its split.
-A window whose reset slid, a later reading naming a later reset while its own still lay ahead, writes no row. The
-subject is the account, and the item dates from the oldest off window's end. The detail names the off windows with their
-ratios, the cost model's source and the revision in force, since the fix is the cost model file. The dashboard's line
-reads it under the label "Meter drift against the table" as `acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`,
-and it opens the Meter view on the account.
+window's end. A window's rise is read between two readings of one source, the poll's where the window saw two or more
+polls and the head's otherwise, since the head truncates the percent the poll rounds, and the attempts priced are those
+completed between the two. A fall inside a window splits its run, except a head at most one percent under the poll
+before it, and the parts' rises and priced shares sum into the window's one row. A dip the next readings reverse past
+what the attempts between its ends predict, a climb that reaches 5% and exceeds 1.25 times their priced share, leaves
+the run as a fault of the readings, while a dip that never closes or whose climb the attempts predict is a free reset
+and keeps its split. A window whose reset slid, a later reading naming a later reset while its own still lay ahead,
+writes no row. The subject is the account, and the item dates from the oldest off window's end. The detail names the off
+windows with their ratios, the cost model's source and the revision in force, since the fix is the cost model file. The
+dashboard's line reads it under the label "Meter drift against the table" as `acct-a: 5h charged 2.0x the table, 7d
+1.3x, since 14:20`, and it opens the Meter view on the account.
 
 **`wall_reached`** holds while a window of the account read spent in the last 24 hours: a `window_spent` event of any
 source, the prediction's among them, so a wall the router predicted counts before a head or the poll reads it. A wall is

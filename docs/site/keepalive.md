@@ -236,13 +236,13 @@ reports idle or parked, from the idle window's start above, and two counters per
   one of the request's message boundaries is either of the last two of the request before the window opened.
 
 The router hashes a content array of text blocks as its blocks up to the last one carrying the cache marker, a single
-remaining block as its text, so the last message the client sends again in the next request holds its boundary (see
-[The boundary chains](relay.md#the-boundary-chains)). A main conversation's request of class `main` or `subagent`,
-neither a compaction nor the first request after one, whose chain holds neither of the last two boundaries of main's
-previous admitted request while its answer read at least nine tenths of that request's prompt from the cache contradicts
-the router's chain model. The router logs it at warn once per client version per hour, naming the version, the session
-and the two token counts, counts each one in `phoebis_keepalive_chain_contradictions_total` by client version, and
-changes no return counter and no recipe for it.
+remaining block as its text, so the last message the client sends again in the next request holds its boundary (see [The
+boundary chains](relay.md#the-boundary-chains)). A main conversation's request of class `main` or `subagent`, neither a
+compaction nor the first request after one, whose chain holds neither of the last two boundaries of main's previous
+admitted request while its answer read at least nine tenths of that request's prompt from the cache contradicts the
+router's chain model. The router logs it at warn once per client version per hour, naming the version, the session and
+the two token counts, counts each one in `phoebis_keepalive_chain_contradictions_total` by client version, and changes
+no return counter and no recipe for it.
 
 The ten buckets run 0 to 5, 5 to 15, 15 to 30 and 30 to 60 minutes, then 1 to 2, 2 to 4, 4 to 8, 8 to 16 and 16 to 32
 hours, and above. Windows are counted whether or not a recipe is retained, so one that outlives the idle window still
