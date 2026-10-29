@@ -15620,9 +15620,12 @@ m.unmount();
   const sentenceOf = (card) => [...(card?.querySelectorAll('.decision-card__sentence > span') ?? [])].map((s) => (s.querySelector('a') ? `[${s.textContent}]` : s.textContent)).join(' ');
   const verdictChipsOf = (card) => [...(card?.querySelectorAll('.decision-card__verdict > .chips > .chip') ?? [])].map(chipWords);
   const candidateRows = (card) => [...(card?.querySelectorAll('.decision-card__candidates tbody tr') ?? [])];
-  /** The Pace column's header as the card words it, from the window the first subscription member's score read. */
+  /**
+   * The Pace column's header as the card words it, from the window of the first subscription member whose pace names
+   * one, so a spend seat, whose pace names none, leaves the header to the next member.
+   */
   const paceWord = (record) => {
-    const id = record.candidates.find((c) => c.kind === 'oauth')?.pace?.window ?? null;
+    const id = record.candidates.find((c) => c.kind === 'oauth' && (c.pace?.window ?? null) !== null)?.pace?.window ?? null;
     return id === null ? 'Pace' : `Spare rate, ${{ seven_day: '7-day', seven_day_fable: '7-day Fable' }[id] ?? id.replace(/_/g, ' ')} per hour`;
   };
   /** The story's own decision: its row's page, a quarter hour either side of the request, its record and its card. */
@@ -17720,7 +17723,8 @@ m.unmount();
 
   const tenCheck = '/analytics typing in the pattern step reads nothing until Enter, and Enter reads once per grouping';
   const typing = await mount('/analytics', { now: CLOCK_ORIGIN });
-  const typed = (await addFilter(typing, 'Client'))?.querySelector('input');
+  await addFilter(typing, 'Client');
+  const typed = typedField();
   if (!typed) controlMissing(tenCheck, 'Client');
   else {
     const spy = countCalls('getAnalyticsSeries');
@@ -17746,7 +17750,8 @@ m.unmount();
 
   const enterCheck = '/analytics Enter commits a pattern at once';
   const pressing = await mount('/analytics', { now: CLOCK_ORIGIN });
-  const pressed = (await addFilter(pressing, 'Client'))?.querySelector('input');
+  await addFilter(pressing, 'Client');
+  const pressed = typedField();
   if (!pressed) controlMissing(enterCheck, 'Client');
   else {
     const spy = countCalls('getAnalyticsSeries');
@@ -23306,12 +23311,11 @@ const CARD_VIEWS = [
 }
 {
   const name = 'the five card views mount the bar first with their slots in order and no empty slot';
-  // A slot by what it shows: the search by its placeholder, a labeled select by its label, a control by its name, and
-  // the right edge by the split Refresh button and the count it holds.
+  // A slot by what it shows: the search by its placeholder, a control by its name, and the right edge by the split
+  // Refresh button and the count it holds.
   const slotOf = (el) => {
     if (el.classList.contains('search')) return `search: ${el.querySelector('input')?.getAttribute('placeholder') ?? 'no placeholder'}`;
     if (el.classList.contains('filter-bar__edge')) return `edge: ${[...el.children].map((c) => (c.classList.contains('refresh-control') ? 'Refresh' : c.classList.contains('filter-bar__count') && (c.textContent ?? '') !== '' ? 'count' : c.className)).join(', ')}`;
-    if (el.tagName === 'LABEL') return `${el.querySelector('.muted')?.textContent?.trim() ?? 'no label'} ${el.querySelector('select') ? 'select' : 'no select'}`;
     return el.getAttribute('aria-label') ?? (el.textContent?.trim() || 'an empty slot');
   };
   const SLOTS = {

@@ -50,15 +50,11 @@ const mounted = (value, calls) => {
 };
 const read = (button) => ({ expanded: button.getAttribute('aria-expanded'), label: button.getAttribute('aria-label'), text: button.textContent, title: button.getAttribute('title') });
 
-test('the button reads the key, names itself Sort and holds the direction in its title, with nothing open at rest', () => {
+test('at rest the button reads the key, names itself Sort and holds the direction in its title, and a click opens the keys as radios with the picked one checked, a rule, then Ascending and Descending', () => {
   const { button } = mounted({ dir: 'asc', sort: 'name' }, []);
   assert.deepEqual(read(button), { expanded: 'false', label: 'Sort', text: 'Sort: Name', title: 'Sorted by Name, ascending' });
   assert.equal(button.getAttribute('aria-haspopup'), 'dialog');
-  assert.equal(box(), null);
-});
-
-test('a click opens the keys as radios with the picked one checked, a rule, then Ascending and Descending', () => {
-  const { button } = mounted({ dir: 'asc', sort: 'name' }, []);
+  assert.equal(box(), null, 'nothing is open at rest');
   click(button);
   assert.equal(button.getAttribute('aria-expanded'), 'true');
   const groups = [...(box()?.querySelectorAll('[role="radiogroup"]') ?? [])];
