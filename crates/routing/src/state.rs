@@ -354,6 +354,14 @@ pub enum StateWrite {
     DeleteAffinity(Vec<(String, String)>),
     DeleteCooldown(String, String),
     DeletePin(PinKey),
+    /// A session's end alone: its first-seen rows written at or before `ended`, the pins untouched. The deferred fold
+    /// holds one beside each `EndPin` that carries an end, so a pin upsert that replaces the pin's deletion leaves
+    /// the cascade standing.
+    EndFirstSeen {
+        key_id: String,
+        session_id: String,
+        ended: i64,
+    },
     /// A pin that leaves for good (an expiry, a release, the purge): its row, and where memory dropped the session's
     /// records with this pin (the session's last), the end's instant, under which the store deletes the session's
     /// first-seen rows written at or before it, whatever a backlog's write order. A replacement's removal writes

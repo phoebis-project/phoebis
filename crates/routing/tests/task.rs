@@ -1631,8 +1631,8 @@ async fn a_sessions_end_in_the_backlog_drops_the_first_seen_record_it_holds_so_n
     assert_eq!(handle.release_session("k", "s1").await.unwrap(), 1);
     assert_eq!(
         handle.writer_status().deferred,
-        1,
-        "the end replaces the pin's upsert and drops the record its cascade takes"
+        2,
+        "the end replaces the pin's upsert, drops the record its cascade takes and holds that cascade under the session"
     );
     hold.release();
     wait_for(DRAINED, || {
@@ -14488,8 +14488,8 @@ async fn a_backlog_holding_a_sessions_end_and_its_return_lands_the_new_instant_a
         .unwrap();
     assert_eq!(
         handle.writer_status().deferred,
-        7,
-        "the filler, then per session its ends, its return's pin and its return's record, s2's return folding its main pin's end away"
+        9,
+        "the filler, then per session its ends, its end's cascade, its return's pin and its return's record, s2's return folding its main pin's end away"
     );
     hold.release();
     wait_for(DRAINED, || {
@@ -14511,6 +14511,84 @@ async fn a_backlog_holding_a_sessions_end_and_its_return_lands_the_new_instant_a
             standing("s2", "main", "claude-sonnet-5", Some(3_000), Some(3_000)),
         ],
         "a restart reads each return's instant"
+    );
+}
+
+#[tokio::test]
+async fn a_sessions_end_takes_an_earlier_subagents_record_though_a_same_key_return_replaces_the_end_in_the_backlog(
+) {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (handle, hold) = parked_writer(&store, &now).await;
+    // These land ahead of the backlog: both placements, then the subagent's pin leaving while main's stands, so its
+    // end carries no cascade.
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_000))
+        .await
+        .unwrap();
+    let worker = selected_pin(
+        handle
+            .select(turn_of(&handle, "s1", "worker-1", "claude-sonnet-5", 1_100))
+            .await
+            .unwrap(),
+    );
+    now.store(1_500, Ordering::SeqCst);
+    handle
+        .report(Report::PinReleased {
+            pin: worker,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
+    for index in 0..WRITER_DEPTH - 2 {
+        fill(&handle, index).await;
+    }
+    // Asked behind the fillers, so the loop has handled every one of them.
+    handle.pins().await.unwrap();
+    assert_eq!(
+        handle.writer_status().deferred,
+        1,
+        "the last filler finds the channel full"
+    );
+    now.store(2_000, Ordering::SeqCst);
+    assert_eq!(handle.release_session("k", "s1").await.unwrap(), 1);
+    // The session returns under the key its main pin's end holds in the backlog.
+    now.store(3_000, Ordering::SeqCst);
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 3_000))
+        .await
+        .unwrap();
+    hold.release();
+    wait_for(DRAINED, || {
+        let landed = store.load_routing().unwrap().cooldowns.len();
+        (handle.writer_status().deferred == 0 && landed == WRITER_DEPTH - 2).then_some(())
+    })
+    .await;
+    let handle = restarted(handle, &store, &now).await;
+    assert_eq!(
+        stored_first_seen(&store),
+        [seen("s1", "main", 3_000)],
+        "the end's cascade takes the subagent's row though the return replaced the end's pin write"
+    );
+    now.store(4_000, Ordering::SeqCst);
+    handle
+        .select(turn_of(&handle, "s1", "worker-1", "claude-sonnet-5", 4_000))
+        .await
+        .unwrap();
+    assert_eq!(
+        creation_times(&handle).await,
+        vec![
+            standing("s1", "main", "claude-sonnet-5", Some(3_000), Some(3_000)),
+            standing(
+                "s1",
+                "worker-1",
+                "claude-sonnet-5",
+                Some(4_000),
+                Some(3_000)
+            ),
+        ],
+        "the subagent's return after the restart reads a new creation time"
     );
 }
 

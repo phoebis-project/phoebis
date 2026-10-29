@@ -2346,6 +2346,13 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
             StateWrite::DeletePin(key) => {
                 tx.delete_pin(key)?;
             }
+            StateWrite::EndFirstSeen {
+                key_id,
+                session_id,
+                ended,
+            } => {
+                tx.end_first_seen(key_id, session_id, *ended)?;
+            }
             StateWrite::EndPin(key, ended) => {
                 tx.end_pin(key, *ended)?;
             }
@@ -2407,6 +2414,13 @@ fn apply_one(store: &Store, write: &StateWrite) -> Result<Marks, StoreError> {
             store.delete_cooldown(account_id, scope).map(|_| none())
         }
         StateWrite::DeletePin(key) => store.delete_pin(key).map(|_| none()),
+        StateWrite::EndFirstSeen {
+            key_id,
+            session_id,
+            ended,
+        } => store
+            .end_first_seen(key_id, session_id, *ended)
+            .map(|_| none()),
         StateWrite::EndPin(key, ended) => store.end_pin(key, *ended).map(|_| none()),
         StateWrite::InsertFirstSeen(row) => store.insert_first_seen(row).map(|()| none()),
         StateWrite::PurgeShedRounds { before } => {
@@ -5136,6 +5150,8 @@ enum DeferredKey {
     Pin(PinKey),
     PurgeShedRounds,
     PurgeStaleWindows,
+    /// A session's end by key id and session id, apart from its pins' rows, so no pin write replaces it.
+    SessionEnd(String, String),
     /// A pool's round on an account: a later round replaces the held one, as the store's write does.
     ShedRound {
         pool_id: String,
@@ -5148,13 +5164,17 @@ enum DeferredKey {
 }
 
 /// Writes the channel had no room for, the last write per row: a pin's last upsert, delete or end, an agent's
-/// first-seen record, a window's last upsert, a cooldown's last upsert or delete per scope, an overage, credits or
-/// account state per account, an affinity row's last upsert or delete per key, a pool's last round per account, one
-/// round purge, one stale-window sweep, and every rekey in order. A rekey closes the rows before it into a segment of
-/// their own, so a pin's write dated after a resolution never lands ahead of the rekey that moved its rows. A round
-/// may land on either side of the pin writes held beside it: a mark is read back only for the pin and the epoch its
-/// row names. A session's end drops the open segment's first-seen records of the session at or before its instant,
-/// since a segment lands in map order and such a record landing after the end's cascade would bring its row back.
+/// first-seen record, a session's last end, a window's last upsert, a cooldown's last upsert or delete per scope, an
+/// overage, credits or account state per account, an affinity row's last upsert or delete per key, a pool's last
+/// round per account, one round purge, one stale-window sweep, and every rekey in order. A rekey closes the rows
+/// before it into a segment of their own, so a pin's write dated after a resolution never lands ahead of the rekey that
+/// moved its rows. A round may land on either side of the pin writes held beside it: a mark is read back only for the
+/// pin and the epoch its row names. A session's end drops the open segment's first-seen records of the session at or
+/// before its instant, since a segment lands in map order and such a record landing after the end's cascade would
+/// bring its row back. The end's cascade is held under the session as well as in the pin's end, since the session's
+/// return can replace that end with an upsert under the same key, and an earlier subagent's row, whose own end carried
+/// no cascade, would then outlive the session. The cascade may land on either side of the return's record: it takes
+/// rows at or before the end's instant, and a returning session's record is stamped after it.
 #[derive(Default)]
 struct Deferred {
     /// Oldest first: each closed segment's rows and the rekey that closed it.
@@ -5284,10 +5304,36 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
         StateWrite::DeletePin(key) => {
             one(DeferredKey::Pin(key.clone()), StateWrite::DeletePin(key))
         }
-        StateWrite::EndPin(key, ended) => one(
-            DeferredKey::Pin(key.clone()),
-            StateWrite::EndPin(key, ended),
+        StateWrite::EndFirstSeen {
+            key_id,
+            session_id,
+            ended,
+        } => one(
+            DeferredKey::SessionEnd(key_id.clone(), session_id.clone()),
+            StateWrite::EndFirstSeen {
+                key_id,
+                session_id,
+                ended,
+            },
         ),
+        StateWrite::EndPin(key, ended) => {
+            let session_end = ended.map(|ended| {
+                (
+                    DeferredKey::SessionEnd(key.key_id.clone(), key.session_id.clone()),
+                    StateWrite::EndFirstSeen {
+                        key_id: key.key_id.clone(),
+                        session_id: key.session_id.clone(),
+                        ended,
+                    },
+                )
+            });
+            Ok(std::iter::once((
+                DeferredKey::Pin(key.clone()),
+                StateWrite::EndPin(key, ended),
+            ))
+            .chain(session_end)
+            .collect())
+        }
         StateWrite::InsertFirstSeen(row) => one(
             DeferredKey::FirstSeen(
                 row.key_id.clone(),

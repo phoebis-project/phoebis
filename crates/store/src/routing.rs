@@ -437,6 +437,19 @@ impl Store {
         })
     }
 
+    /// A session's end alone, one transaction: its rows written at or before `ended`, the pins untouched, answering
+    /// how many left.
+    pub fn end_first_seen(
+        &self,
+        key_id: &str,
+        session_id: &str,
+        ended: i64,
+    ) -> Result<usize, StoreError> {
+        self.routing_commit(|conn| {
+            in_transaction(conn, |tx| end_first_seen_on(tx, key_id, session_id, ended))
+        })
+    }
+
     /// Every row lands or none does; a row under an existing (model, hash) replaces it.
     pub fn upsert_affinity(&self, rows: &[AffinityRow]) -> Result<(), StoreError> {
         self.routing_commit(|conn| in_transaction(conn, |tx| upsert_affinity_on(tx, rows)))
@@ -557,6 +570,15 @@ impl RoutingTx<'_> {
 
     pub fn delete_pin(&mut self, key: &PinKey) -> Result<bool, StoreError> {
         delete_pin_on(self.tx, key, None)
+    }
+
+    pub fn end_first_seen(
+        &mut self,
+        key_id: &str,
+        session_id: &str,
+        ended: i64,
+    ) -> Result<usize, StoreError> {
+        end_first_seen_on(self.tx, key_id, session_id, ended)
     }
 
     pub fn end_pin(&mut self, key: &PinKey, ended: Option<i64>) -> Result<bool, StoreError> {
@@ -754,12 +776,21 @@ fn delete_pin_on(conn: &Connection, key: &PinKey, ended: Option<i64>) -> Result<
         params![key.key_id, key.session_id, key.agent_id, key.model],
     )? > 0;
     if let Some(ended) = ended {
-        conn.execute(
-            "DELETE FROM session_first_seen WHERE key_id = ?1 AND session_id = ?2 AND first_seen_at <= ?3",
-            params![key.key_id, key.session_id, ended],
-        )?;
+        end_first_seen_on(conn, &key.key_id, &key.session_id, ended)?;
     }
     Ok(deleted)
+}
+
+fn end_first_seen_on(
+    conn: &Connection,
+    key_id: &str,
+    session_id: &str,
+    ended: i64,
+) -> Result<usize, StoreError> {
+    Ok(conn.execute(
+        "DELETE FROM session_first_seen WHERE key_id = ?1 AND session_id = ?2 AND first_seen_at <= ?3",
+        params![key_id, session_id, ended],
+    )?)
 }
 
 fn sweep_first_seen_on(conn: &Connection) -> Result<usize, StoreError> {
