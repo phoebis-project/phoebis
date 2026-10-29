@@ -78,10 +78,17 @@ impl Chains {
 }
 
 /// `value` as canonical JSON: members in key order, no whitespace, every `cache_control` member removed, and a
-/// content array whose blocks are all text blocks with no member beyond `type`, `text` and `cache_control` cut to
-/// the blocks up to the last one carrying `cache_control`, a single remaining block as the string of its text, so
-/// the two shapes the client sends for one message hash alike and a message's hash names what the upstream cached.
+/// protocol content array (the value of a `content` member, a message's or a `tool_result` block's) whose blocks
+/// are all text blocks with no member beyond `type`, `text` and `cache_control` cut to the blocks up to the last one
+/// carrying `cache_control`, a single remaining block as the string of its text, so the two shapes the client sends
+/// for one message hash alike and a message's hash names what the upstream cached. Every other array keeps its
+/// shape, so a tool input holding text blocks never hashes as one holding their text.
 pub fn canonical(value: &Value, out: &mut Vec<u8>) {
+    write_canonical(value, out, false);
+}
+
+/// `canonical` over `value`, where `content` says whether `value` is the value of a `content` member.
+fn write_canonical(value: &Value, out: &mut Vec<u8>, content: bool) {
     match value {
         Value::Object(map) => {
             out.push(b'{');
@@ -97,13 +104,18 @@ pub fn canonical(value: &Value, out: &mut Vec<u8>) {
                 }
                 serde_json::to_writer(&mut *out, key).expect("a JSON key always encodes");
                 out.push(b':');
-                canonical(&map[*key], out);
+                write_canonical(&map[*key], out, *key == "content");
             }
             out.push(b'}');
         }
         Value::Array(items) => {
-            let items = match kept_text_blocks(items) {
-                Some([only]) => return canonical(&only["text"], out),
+            let kept = if content {
+                kept_text_blocks(items)
+            } else {
+                None
+            };
+            let items = match kept {
+                Some([only]) => return write_canonical(&only["text"], out, false),
                 Some(kept) => kept,
                 None => items.as_slice(),
             };
@@ -112,7 +124,7 @@ pub fn canonical(value: &Value, out: &mut Vec<u8>) {
                 if i > 0 {
                     out.push(b',');
                 }
-                canonical(item, out);
+                write_canonical(item, out, false);
             }
             out.push(b']');
         }
@@ -120,8 +132,9 @@ pub fn canonical(value: &Value, out: &mut Vec<u8>) {
     }
 }
 
-/// The blocks a text-only array keeps: those up to the last one carrying `cache_control`, every block where none
-/// does. `None` where a block is not a text block or carries another member, so the array keeps its shape.
+/// The blocks a text-only content array keeps, read for the value of a `content` member alone: those up to the last
+/// one carrying `cache_control`, every block where none does. `None` where a block is not a text block or carries
+/// another member, so the array keeps its shape.
 fn kept_text_blocks(items: &[Value]) -> Option<&[Value]> {
     if items.is_empty() {
         return None;
@@ -256,9 +269,10 @@ mod tests {
         );
     }
 
+    /// `value` canonicalized as the value of a message's `content` member.
     fn canon(value: Value) -> Vec<u8> {
         let mut out = Vec::new();
-        canonical(&value, &mut out);
+        write_canonical(&value, &mut out, true);
         out
     }
 
@@ -372,6 +386,39 @@ mod tests {
             canon(json!([unmarked("a"), image, unmarked("steer")]))
         );
         assert_ne!(message, canon(json!("a")));
+    }
+
+    fn tool_call(input: Value) -> Chains {
+        read(json!({"messages": [{
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "t1", "name": "x", "input": input}],
+        }]}))
+    }
+
+    #[test]
+    fn a_text_block_array_in_a_tool_input_hashes_apart_from_its_text() {
+        assert_ne!(
+            tool_call(json!([unmarked("x")])).message_boundaries,
+            tool_call(json!("x")).message_boundaries
+        );
+        assert_ne!(
+            tool_call(json!({"payload": [marked("x")]})).message_boundaries,
+            tool_call(json!({"payload": "x"})).message_boundaries
+        );
+    }
+
+    #[test]
+    fn a_tool_results_one_text_block_content_hashes_as_its_string() {
+        let result = |content: Value| {
+            read(json!({"messages": [{
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "t1", "content": content}],
+            }]}))
+        };
+        assert_eq!(
+            result(json!([marked("ok")])).message_boundaries,
+            result(json!("ok")).message_boundaries
+        );
     }
 
     #[test]
