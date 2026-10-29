@@ -40,8 +40,8 @@ sessions:
   memory_cap: 65536
   memory_idle_seconds: 86400
   memory_retention_days: 30
-  # How long a session no companion reports stays listed in the Sessions view past its last use, its last request or its
-  # companion's end.
+  # How long a session no companion reports stays listed in the Sessions view past its newest pin use, its last request
+  # or its companion's end.
   non_companion_idle_seconds: 3600
 stats:
   # Overrides the shipped price table. A missing file is fine.
