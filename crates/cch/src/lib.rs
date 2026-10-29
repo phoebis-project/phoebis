@@ -355,9 +355,10 @@ pub fn array_member_span(body: &[u8], path: &[&str], index: usize) -> Option<(us
     Some((start, s.pos))
 }
 
-/// The position of the closing `]` of the array at `path` when it holds no element, or `None` when it holds one
-/// or `path` does not resolve to an array. `array_member_span` already covers an array with at least one
-/// element; this is the empty case it has nothing to return for.
+/// The position of the closing `]` of the array at `path` when it holds no element, or `None` when it holds one,
+/// when `path` does not resolve to an array, or when it resolves to one at the depth `value` refuses.
+/// `array_member_span` already covers an array with at least one element, and this is the empty case it has nothing
+/// to return for.
 pub fn empty_array_member_end(body: &[u8], path: &[&str]) -> Option<usize> {
     let mut s = Scanner {
         body,

@@ -650,7 +650,7 @@ pub fn refusal_categories(
             .into(),
     );
     // SQL does not express the fold, so the patterns match each raw pair in memory, grouped first so a pair repeated
-    // across many refusals folds once.
+    // across many refusals folds once per category.
     let sql = format!(
         "SELECT COALESCE((SELECT a.refusal_category FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), '-') AS category, \
          client, user_agent, COUNT(*) FROM requests WHERE {} GROUP BY category, client, user_agent",

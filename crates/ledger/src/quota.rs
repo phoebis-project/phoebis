@@ -702,7 +702,11 @@ impl QuotaPoll {
                     }
                     if before != after {
                         if let Err(error) = router.reload().await {
-                            tracing::debug!(account = %account.id, %error, "the router did not reload for a new tier, class or plan");
+                            tracing::debug!(
+                                account = %account.id,
+                                %error,
+                                "the router did not reload for a new tier, class or plan"
+                            );
                         }
                     }
                 }
@@ -763,7 +767,11 @@ impl QuotaPoll {
             Ok(false) => {
                 if before != Self::stored_term(store, &account.id) {
                     if let Err(error) = router.reload().await {
-                        tracing::debug!(account = %account.id, %error, "the router did not reload for a new tier, class or plan");
+                        tracing::debug!(
+                            account = %account.id,
+                            %error,
+                            "the router did not reload for a new tier, class or plan"
+                        );
                     }
                 }
             }

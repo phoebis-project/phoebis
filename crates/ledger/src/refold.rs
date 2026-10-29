@@ -95,10 +95,12 @@ pub fn refold_bands(
     let loaded = thresholds_of(prices);
     // Each purge's own arithmetic, a zero keeping its rows for good. A nonzero request retention bounds the walk,
     // since the configuration holds a nonzero rollup retention at least as long as the request one, so the rollup
-    // purge drops at most the hour the request cutoff splits. The first hour boundary at or after the request cutoff,
-    // or under a request retention of 0 the first hour the rollup purge keeps, guards each request before it rather
-    // than bounding the walk, since the purge keeps a budgeted member's hours from its period's start, before that
-    // hour, and `member_spends` prices them by band.
+    // purge drops at most the hour the request cutoff splits. The first hour boundary at or after the request cutoff
+    // guards each request before it rather than bounding the walk, since that hour's rows stand for every member under
+    // a rollup retention of 0 or a longer one, and a budgeted member's under an equal one too. Under a request
+    // retention of 0 the first hour the rollup purge keeps guards each request before it rather than bounding the walk,
+    // since the purge keeps a budgeted member's hours from its period's start, before that hour, and `member_spends`
+    // prices them by band.
     let (cutoff, guard) = match (retention_days, rollup_retention_days) {
         (0, 0) => (None, None),
         (0, days) => (None, Some(first_kept_hour(now, days))),

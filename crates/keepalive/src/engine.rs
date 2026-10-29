@@ -3893,9 +3893,8 @@ impl Engine {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
         // The five asks behind `router_view` (canonicals, pins, cooldowns, overages, member spends) are a round
-        // trip apiece, plus one `store.subscription` read per OAuth account; a tick with nothing due pays none of
-        // them. `drop_sessions_of_dead_keys` reads the snapshot alone, which `RouterHandle::snapshot` answers
-        // without a command.
+        // trip apiece, and a tick with nothing due pays none of them. `drop_sessions_of_dead_keys` reads the snapshot
+        // alone, which `RouterHandle::snapshot` answers without a command.
         let retained_models = {
             let mut inner = self.lock();
             if inner.closed {

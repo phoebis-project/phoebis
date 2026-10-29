@@ -952,7 +952,7 @@ impl DecisionRecord {
     }
 }
 
-/// A key or resolve refusal's summary fact: the key it turned away, drawn as a link.
+/// A key, resolve or guardrail refusal's summary fact: the key it turned away, drawn as a link.
 pub(crate) fn key_fact(key_id: &str) -> SummaryFact {
     SummaryFact {
         key: "key",

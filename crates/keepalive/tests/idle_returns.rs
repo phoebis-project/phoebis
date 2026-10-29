@@ -1,7 +1,7 @@
 //! The idle-age counters: per pool and idle-age bucket, the idle windows of the main conversation that reached the
 //! bucket's start and those whose next request continued the prefix the window opened on. The windows are counted at
-//! every tick and at the request that ends one, whether or not a recipe is still retained. Beside them, the chain watch:
-//! a refreshing request whose chain holds neither boundary of that prefix while its answer reads the cache.
+//! every tick and at the request that ends one, whether or not a recipe is still retained. Beside them, the chain
+//! watch: a refreshing request whose chain holds neither boundary of that prefix while its answer reads the cache.
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};

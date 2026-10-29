@@ -440,7 +440,8 @@ pub(crate) struct Event {
     ///   same reset, with the figure before, the reading's or the prediction's, the reading after and the unchanged
     ///   reset, so the history no longer keeps the window spent.
     /// - `window_reset`: a plan window's reset passed, seen by a sample naming a later reset, or naming none once
-    ///   read past it (`sample`), or by the clock (`clock`), once per reset.
+    ///   read past it (`sample`), or by the clock (`clock`), once per reset, with the `plan` and the `tier` of the
+    ///   reading whose reset passed, each null where that reading names none.
     /// - `window_spent`: a plan window's reading reached 1.0 from under it, with the head's request when a head
     ///   read it. A window first seen at 1.0, with no stored reading before it, reads as spent.
     #[schema(example = "account_state_changed")]

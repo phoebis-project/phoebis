@@ -393,8 +393,9 @@ pub struct KeepaliveDelta {
     pub wasted_cache_write_1h_tokens: u64,
     pub wasted_output_tokens: u64,
     pub wasted_probe_reasons: std::collections::BTreeMap<String, u64>,
-    /// The account tier that keys the row: the one a settlement read for its probe, or the one the store names for a
-    /// credited request's serving account. `None` files under `-`.
+    /// The priced tier that keys the row, as `SubscriptionTerm::priced_tier` answers it: the one a settlement read for
+    /// its probe, or the one a credited request's serving account prices by. `None`, the answer for a plan the router
+    /// does not price, files under `-`.
     pub tier: Option<String>,
     /// The prompt-length band the row's counts price at: a settled probe's, read at its exchange, or a credited
     /// request's own, read off its usage against the revision in force at its arrival. `None` (standard) for a probe

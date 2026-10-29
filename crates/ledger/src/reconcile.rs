@@ -116,7 +116,8 @@ impl Reading {
     }
 }
 
-/// A run's readings between two falls: the parts of one key reconcile together as the window's one row.
+/// A run's readings between two falls, except across a faulty dip `drop_faulty_dips` joins: the parts of one key
+/// reconcile together as the window's one row.
 #[derive(Debug)]
 struct Part {
     readings: Vec<Reading>,
@@ -139,7 +140,8 @@ impl Part {
     }
 }
 
-/// The consecutive readings of one window that name one reset, in parts split at each fall.
+/// The consecutive readings of one window that name one reset, in parts split at each fall except across a faulty dip
+/// `drop_faulty_dips` joins.
 #[derive(Debug)]
 struct Run {
     parts: Vec<Part>,
