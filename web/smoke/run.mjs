@@ -4787,21 +4787,67 @@ m.unmount();
 
   // Sunset's saved end passed three days back inside its week, so its latest reset is the term's end, read off the last
   // sample of its 7-day series before the end, its seed's reading 0.46: 0.54 of its week. Its three weeks before left
-  // 0.52, 0.48 and 0.57. Its plan reads free, which the router prices no capacity for, so under Native each figure and
-  // the total read a dash and the card reads the Free note.
+  // 0.52, 0.48 and 0.57, each under the Pro pair the account held before its plan ended (`WEEKLY_RESETS`), so under
+  // Native each prices at Pro's tier. The term's end carries no pair and reads at the account's plan, free, which the
+  // router prices no capacity for, so its figure and the total it joins read a dash beside the Free note.
   const sunset = story.get('sunset');
   const end = Date.parse(sunset.subscription.endsAt);
   const sunsetResets = [end, ...resetsBack(new Date(end + 4 * 24 * 3_600_000).toISOString(), 3)];
   const ended = await mount('/accounts/sunset', { now: CLOCK_ORIGIN });
   const term = blockOf(ended);
-  const termWant = [columnOf('7-day', 'seven_day', [1 - 0.46, 0.52, 0.48, 0.57], sunsetResets, () => '-', { line: `left at ${instantOf(end)} term ended`, badge: 'term ended', title: hoverOf(end, "the term's end") })];
-  const freeNote = 'Free has no priced capacity in the cost model, so the equivalents read a dash. Window shares reads the shares.';
+  const termColumn = columnOf('7-day', 'seven_day', [1 - 0.46, 0.52, 0.48, 0.57], sunsetResets, nativeOf('default_claude_ai'), { line: `left at ${instantOf(end)} term ended`, badge: 'term ended', title: hoverOf(end, "the term's end") });
+  const termWant = [{ ...termColumn, head: ['7-day', '-'], total: ['Total, 4 weeks', '-'] }];
+  const freeNote = 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it. Window shares reads the shares.';
   results.push({
-    name: "/accounts/sunset the week its term ended inside reads as its latest reset, \"left at\" its end with the neutral \"term ended\" badge, and under Native a dash for each figure with the Free note while its plan reads free",
+    name: "/accounts/sunset the week its term ended inside reads as its latest reset, \"left at\" its end with the neutral \"term ended\" badge, and under Native its weeks before the end at Pro's tier, a dash for the term's end and the total, with the Free note while its plan reads free",
     ok: sunset.subscription.plan === 'free' && JSON.stringify(term?.columns) === JSON.stringify(termWant) && term?.note === freeNote,
     missing: [sunset.subscription.plan, JSON.stringify(term?.columns ?? null), JSON.stringify(termWant), term?.note ?? 'no note'],
   });
   ended.unmount();
+
+  {
+    // Studio's seed (`claude_max` on `default_claude_max_5x` in mock/accounts.ts) started its subscription 16 days back,
+    // an upgrade from Pro inside its second-newest week, so its weekly resets (`WEEKLY_RESETS`) at or before that start
+    // carry Pro's pair and the newer ones its own. Its 7-day window left 0.44, 0.39, 0.5 and 0.47 of its week, newest
+    // first, and its Fable week 0.79, 0.84, 0.76 and 0.82, read here off the route with each reset's pair. Under Native a
+    // week prices at the tier it ran under: the Pro week's figure stands to the one its share reads at Max 5x as Pro's
+    // 7-day capacity stands to Max 5x's on the cost table the page reads, and the total adds the weeks' own figures
+    // rather than pricing the summed shares at the current tier.
+    const studio = story.get('studio');
+    const since = Date.parse(studio.subscription.since);
+    const span = { from: new Date(CLOCK_ORIGIN - 29 * 24 * 3_600_000).toISOString(), to: new Date(CLOCK_ORIGIN).toISOString() };
+    const windows = (await api.getAnalyticsUnusedAllowance(span, { accountIds: ['studio'] })).accounts[0]?.windows ?? [];
+    const ranUnder = (r) => (Date.parse(r.resetAt) <= since ? 'default_claude_ai' : studio.subscription.rateLimitTier);
+    const weekWeight = (tier) => tierCapacity(costs, tier, 'seven_day') / tierCapacity(costs, anchorTier(costs), 'seven_day');
+    const ratio = tierCapacity(costs, 'default_claude_ai', 'seven_day') / tierCapacity(costs, studio.subscription.rateLimitTier, 'seven_day');
+    const columnWant = (label, window) => {
+      const resets = windows.find((w) => w.window === window)?.resets ?? [];
+      const own = resets.map((r) => r.shareLeft * weekWeight(ranUnder(r)));
+      return {
+        head: [label, equivalentShort(window, own[0])],
+        rows: resets.slice(1).map((r, i) => [day(Date.parse(r.resetAt)), equivalentShort(window, own[i + 1])]),
+        total: [`Total, ${resets.length} weeks`, equivalentShort(window, sum(own))],
+      };
+    };
+    const upgraded = await mount('/accounts/studio', { now: CLOCK_ORIGIN });
+    const drawn = blockOf(upgraded)?.columns.map(({ head, rows, total }) => ({ head, rows, total })) ?? null;
+    upgraded.unmount();
+    const sevenDay = windows.find((w) => w.window === 'seven_day')?.resets ?? [];
+    const pairs = windows.map((w) => `${w.window} ${w.resets.map((r) => r.plan).join(',')}`);
+    const want = [columnWant('7-day', 'seven_day'), columnWant('7-day Fable', 'seven_day_fable')];
+    // The Pro week through the ratio: what its share reads at the newest week's tier, times Pro's capacity over Max 5x's.
+    const proWeek = equivalentShort('seven_day', (sevenDay[2]?.shareLeft ?? NaN) * weekWeight(studio.subscription.rateLimitTier) * ratio);
+    const atCurrent = equivalentShort('seven_day', sum(sevenDay.map((r) => r.shareLeft)) * weekWeight(studio.subscription.rateLimitTier));
+    results.push({
+      name: "/accounts/studio under Native each week prices at the tier it ran under, the weeks before the upgrade at Pro's and the total adding the weeks' own figures",
+      ok:
+        JSON.stringify(pairs) === '["seven_day max_5x,max_5x,pro,pro","seven_day_fable max_5x,max_5x,pro,pro"]' &&
+        JSON.stringify(drawn) === JSON.stringify(want) &&
+        drawn?.[0]?.rows[1]?.[1] === proWeek &&
+        drawn[0].total[1] !== atCurrent,
+      missing: [JSON.stringify(pairs), JSON.stringify(drawn), JSON.stringify(want), `the Pro week ${proWeek}, the shares at the current tier ${atCurrent}`],
+    });
+  }
 
   // The clock walk announced nightly's third 7-day reset, which the second of its week rows reads.
   const nightly = await mount('/accounts/nightly', { now: CLOCK_ORIGIN });
@@ -18380,6 +18426,32 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     ok: JSON.stringify(native?.totals.map(([label]) => label)) === JSON.stringify(['7-day, fleet total', 'Fable, fleet total', null]),
     missing: [JSON.stringify(native?.totals ?? null)],
   });
+  {
+    // Each week prices at the tier it ran under, as on the Accounts block: studio's seed (`claude_max` on
+    // `default_claude_max_5x` in mock/accounts.ts) started its subscription 16 days back, so its resets at or before
+    // that start carry Pro's pair, and its row reads its newest week at Max 5x's tier and its four weeks the weeks' own
+    // figures added, the block's total. Sunset's term's end carries no pair and reads at its free plan, so its row
+    // reads a dash for both and the fleet's note leaves it out. The 7-day fleet total adds the other rows' four weeks,
+    // derived from the cost table the page reads and the shares off the route, since the drawn texts round.
+    const sum = (values) => values.reduce((a, b) => a + b, 0);
+    const costs = (await api.getSettings()).subscriptionCosts;
+    const story = new Map((await api.listAccounts()).map((a) => [a.id, a]));
+    const since = Date.parse(story.get('studio').subscription.since);
+    const answer = await api.getAnalyticsUnusedAllowance({ from: new Date(CLOCK_ORIGIN - 29 * DAY_MS).toISOString(), to: new Date(CLOCK_ORIGIN).toISOString() });
+    const ranUnder = (id, r) => (id === 'studio' && Date.parse(r.resetAt) <= since ? 'default_claude_ai' : story.get(id).subscription.rateLimitTier);
+    const weekWeight = (tier) => tierCapacity(costs, tier, 'seven_day') / tierCapacity(costs, anchorTier(costs), 'seven_day');
+    const weeksOf = (a) => (a.windows.find((w) => w.window === 'seven_day')?.resets ?? []).slice(0, 4);
+    const fourWeeks = (a) => sum(weeksOf(a).map((r) => r.shareLeft * weekWeight(ranUnder(a.accountId, r))));
+    const studio = answer.accounts.find((a) => a.accountId === 'studio');
+    const rowOf = (id) => native?.rows[native.ids.indexOf(id)]?.slice(2, 4) ?? null;
+    const studioWant = studio === undefined ? null : [equivalentShort('seven_day', weeksOf(studio)[0].shareLeft * weekWeight(story.get('studio').subscription.rateLimitTier)), equivalentShort('seven_day', fourWeeks(studio))];
+    const fleet = equivalentShort('seven_day', sum(answer.accounts.filter((a) => a.accountId !== 'sunset').map(fourWeeks)));
+    results.push({
+      name: "/analytics under Native the unused allowance card prices each week at the tier it ran under, studio's four weeks at their own tiers, sunset's row a dash and the fleet total over the priced rows",
+      ok: studioWant !== null && JSON.stringify(rowOf('studio')) === JSON.stringify(studioWant) && JSON.stringify(rowOf('sunset')) === '["-","-"]' && native?.totals[0]?.[1] === fleet && native.totals[2]?.[2] === '4 accounts priced, sunset left out unpriced',
+      missing: [JSON.stringify(rowOf('studio')), JSON.stringify(studioWant), JSON.stringify(rowOf('sunset')), JSON.stringify(native?.totals ?? null), fleet],
+    });
+  }
   await chooseUnit(page, 'share');
   const shares = read(page);
   // The 7-day mean sums the seeded shares of secondary, sunset (its three weeks and its 0.54 term-end reset), studio,

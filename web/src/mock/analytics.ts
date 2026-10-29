@@ -910,12 +910,12 @@ function termEndOf(a: Account, at: number): number | null {
 
 /**
  * The weekly resets in range per subscription account as the route answers them, from the story's `window_reset` rows
- * and, for an account whose term ended in range, one `term_ended` reset per weekly window at the end, its share the
- * last reading of the window's quota history strictly before the end, as the ledger reads `observed_at < end`. A reset
- * at or after an end the read has reached is left out, an end before the range's start included, as the ledger drops
- * the resets at or after every end it lists, so the week the end cut short counts once. The `term_ended` rows build for
- * an end inside the range alone. The term is read at the range's end capped at the story's now, and the windows run in
- * key order, the 7-day window first.
+ * with the pair each event carries and, for an account whose term ended in range, one `term_ended` reset per weekly
+ * window at the end with no pair, its share the last reading of the window's quota history strictly before the end, as
+ * the ledger reads `observed_at < end`. A reset at or after an end the read has reached is left out, an end before the
+ * range's start included, as the ledger drops the resets at or after every end it lists, so the week the end cut short
+ * counts once. The `term_ended` rows build for an end inside the range alone. The term is read at the range's end
+ * capped at the story's now, and the windows run in key order, the 7-day window first.
  */
 export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], history: QuotaHistory[], span: Range, filters: Pick<AnalyticsQuery, 'accountIds'> = {}): UnusedAllowanceAnswer {
   const fromMs = Date.parse(span.from);
@@ -934,9 +934,9 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
       for (const e of events) {
         const at = Date.parse(e.at);
         if (e.kind !== 'window_reset' || e.accountId !== a.id || at < fromMs || at > toMs) continue;
-        const d = e.detail as { observed: string; reset_at: number; utilization_before: number; window: string };
+        const d = e.detail as { observed: string; plan: string | null; reset_at: number; tier: string | null; utilization_before: number; window: string };
         if (!isWeekly(d.window) || (elapsed !== null && d.reset_at >= elapsed)) continue;
-        add(d.window, { observedAt: e.at, resetAt: iso(d.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - d.utilization_before)), source: d.observed });
+        add(d.window, { observedAt: e.at, plan: d.plan, resetAt: iso(d.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - d.utilization_before)), source: d.observed, tier: d.tier });
       }
       if (ended !== null) {
         for (const h of history) {
@@ -944,7 +944,7 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
           if (h.accountId !== a.id || !isWeekly(window)) continue;
           const before = h.samples.filter((x) => Date.parse(x.at) < ended);
           const last = before[before.length - 1];
-          if (last) add(window, { observedAt: last.at, resetAt: iso(ended), shareLeft: Math.min(1, Math.max(0, 1 - last.utilization)), source: 'term_ended' });
+          if (last) add(window, { observedAt: last.at, plan: null, resetAt: iso(ended), shareLeft: Math.min(1, Math.max(0, 1 - last.utilization)), source: 'term_ended', tier: null });
         }
       }
       const windows = [...byWindow]

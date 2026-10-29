@@ -1272,7 +1272,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(samples.at(-1).at, cleared.at, 'the samples end at the last clean poll');
     // No poll read the window after its reset, so the clock announced it, from the reading the last clean poll stored.
     const resets = log.filter((e) => e.kind === 'window_reset' && e.detail.window === 'five_hour');
-    assert.deepEqual(resets.map((e) => [e.at, e.detail]), [[five.resetsAt, { next_reset: null, observed: 'clock', reset_at: Date.parse(five.resetsAt), utilization_before: five.utilization, window: 'five_hour' }]]);
+    assert.deepEqual(resets.map((e) => [e.at, e.detail]), [[five.resetsAt, { next_reset: null, observed: 'clock', plan: legacy.subscription.plan, reset_at: Date.parse(five.resetsAt), tier: legacy.subscription.rateLimitTier, utilization_before: five.utilization, window: 'five_hour' }]]);
     assert.ok(Date.parse(five.resetsAt) > Date.parse(cleared.at) && cleared.detail.reset === Date.parse(five.resetsAt));
   });
 
@@ -1298,9 +1298,25 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // Each row in the engine's shape, announced at its reset, a sample's naming the next reset a week on and the clock
     // walk's none, all before the day the dashboard and the routing log count.
     const next = (e) => (e.detail.observed === 'clock' ? null : e.detail.reset_at + WEEK);
-    const off = weekly.filter((e) => JSON.stringify(Object.keys(e.detail).sort()) !== '["next_reset","observed","reset_at","utilization_before","window"]' || e.at !== iso(e.detail.reset_at) || e.detail.next_reset !== next(e) || !(e.detail.utilization_before > 0 && e.detail.utilization_before < 1) || Date.parse(e.at) >= s.now - DAY);
+    const off = weekly.filter((e) => JSON.stringify(Object.keys(e.detail).sort()) !== '["next_reset","observed","plan","reset_at","tier","utilization_before","window"]' || e.at !== iso(e.detail.reset_at) || e.detail.next_reset !== next(e) || !(e.detail.utilization_before > 0 && e.detail.utilization_before < 1) || Date.parse(e.at) >= s.now - DAY);
     assert.deepEqual(off.map((e) => `${e.accountId} ${e.at} ${JSON.stringify(e.detail)}`), []);
     assert.deepEqual(weekly.filter((e) => e.detail.observed !== 'sample').map((e) => `${e.accountId} ${e.detail.window} ${e.detail.observed}`), ['nightly seven_day clock'], 'one clock walk among the samples');
+    // Each reset carries the pair of the reading it replaced. Studio's seed (`claude_max` on `default_claude_max_5x`)
+    // upgraded 16 days back, inside its second-newest week, so its third and fourth weeks ran under Pro on both
+    // windows, one poll's readings naming one plan. Sunset's weeks before its plan ended ran under Pro too. Every
+    // other reset, the five-hour ones among them, carries its account's current pair.
+    const pairOf = (e) => ({ plan: e.detail.plan, tier: e.detail.tier });
+    const current = (id) => ({ plan: accountOf.get(id).subscription.plan, tier: accountOf.get(id).subscription.rateLimitTier });
+    const PRO = { plan: 'pro', tier: 'default_claude_ai' };
+    assert.deepEqual(current('studio'), { plan: 'max_5x', tier: 'default_claude_max_5x' }, "studio's current pair");
+    for (const window of ['seven_day', 'seven_day_fable']) {
+      const studio = weekly.filter((e) => e.accountId === 'studio' && e.detail.window === window).sort((x, y) => y.detail.reset_at - x.detail.reset_at);
+      assert.deepEqual(studio.map(pairOf), [current('studio'), current('studio'), PRO, PRO], `studio ${window}, newest first`);
+    }
+    assert.deepEqual(weekly.filter((e) => e.accountId === 'sunset').map(pairOf), [PRO, PRO, PRO], "sunset's weeks before its plan ended");
+    const resets = page.rows.filter((e) => e.type === 'event' && e.accountId !== 'studio' && e.accountId !== 'sunset');
+    assert.ok(resets.some((e) => e.detail.window === 'five_hour'), 'the five-hour resets read too');
+    assert.deepEqual(resets.filter((e) => JSON.stringify(pairOf(e)) !== JSON.stringify(current(e.accountId))).map((e) => `${e.accountId} ${e.detail.window} ${e.at} ${JSON.stringify(pairOf(e))}`), [], "every other reset carries its account's current pair");
 
     const answer = await s.api.getAnalyticsUnusedAllowance(span);
     assert.deepEqual([answer.from, answer.to], [span.from, span.to]);
@@ -1313,7 +1329,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         const fromLog = weekly
           .filter((e) => e.accountId === a.accountId && e.detail.window === w.window)
           .sort((x, y) => y.detail.reset_at - x.detail.reset_at)
-          .map((e) => ({ observedAt: e.at, resetAt: iso(e.detail.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - e.detail.utilization_before)), source: e.detail.observed }));
+          .map((e) => ({ observedAt: e.at, plan: e.detail.plan, resetAt: iso(e.detail.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - e.detail.utilization_before)), source: e.detail.observed, tier: e.detail.tier }));
         assert.deepEqual(a.accountId === 'sunset' ? w.resets.slice(1) : w.resets, fromLog, `${a.accountId} ${w.window}: the log's resets, newest first`);
         assert.ok(w.resetsCounted === w.resets.length && near(w.totalShareLeft, sum(w.resets, (r) => r.shareLeft)), `${a.accountId} ${w.window}: the total and the count over the listed resets`);
       }
@@ -1323,7 +1339,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const series = (await s.api.getQuotaHistory('sunset')).find((h) => h.windowId === '7d');
     const before = series.samples.filter((x) => Date.parse(x.at) < end).at(-1);
     const ended = answer.accounts.find((a) => a.accountId === 'sunset').windows[0].resets[0];
-    assert.deepEqual(ended, { observedAt: before.at, resetAt: iso(end), shareLeft: 1 - before.utilization, source: 'term_ended' });
+    assert.deepEqual(ended, { observedAt: before.at, plan: null, resetAt: iso(end), shareLeft: 1 - before.utilization, source: 'term_ended', tier: null }, "the term's end carries no pair");
     assert.ok(near(ended.shareLeft, 0.54), `sunset left ${ended.shareLeft} of its last week`);
     const one = await s.api.getAnalyticsUnusedAllowance(span, { accountIds: ['studio'] });
     assert.deepEqual(one.accounts, answer.accounts.filter((a) => a.accountId === 'studio'), 'the Accounts filter keeps its account alone');

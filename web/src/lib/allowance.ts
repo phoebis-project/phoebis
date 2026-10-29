@@ -34,7 +34,7 @@ export type AllowanceFigure = { kind: 'share'; share: number; text: string } | {
  *  words differ, so the test bundle's star exports keep both. */
 export const ALLOWANCE_UNPRICED_TITLE = "Unpriced: the cost model holds no capacity for this account's plan";
 export const NO_READING_TITLE = 'no reading at this reset';
-export const FREE_NOTE = 'Free has no priced capacity in the cost model, so the equivalents read a dash. Window shares reads the shares.';
+export const FREE_NOTE = 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it. Window shares reads the shares.';
 
 /**
  * What one share of the account's own window weighs in the anchor's: the tier's capacity over the anchor's on the
@@ -53,15 +53,40 @@ function capacityWeight(account: Pick<AllowanceAccount, 'plan' | 'tier'>, window
   return own === null || anchor === null || anchor === 0 ? null : own / anchor;
 }
 
+/**
+ * The pair a reset prices at: the plan and the tier of the reading it replaced where the router recorded them, the
+ * account's current pair where it did not. A missing key reads as null, since the wire writes both or neither.
+ */
+const pairOf = (account: Pick<AllowanceAccount, 'plan' | 'tier'>, reset?: Pick<AllowanceReset, 'plan' | 'tier'>): Pick<AllowanceAccount, 'plan' | 'tier'> =>
+  reset !== undefined && (reset.plan ?? null) !== null && (reset.tier ?? null) !== null ? reset : account;
+
 /** With no cost model an equivalent reads the unpriced dash, an arm the pages never draw, since they hold the skeleton
  *  under an equivalent unit while the model loads. */
-export function allowanceFigure(share: number | null, window: string, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts | null, unit: UnitPosition): AllowanceFigure {
+export function allowanceFigure(share: number | null, window: string, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts | null, unit: UnitPosition, reset?: Pick<AllowanceReset, 'plan' | 'tier'>): AllowanceFigure {
   if (share === null) return { kind: 'none', text: '-', title: NO_READING_TITLE };
   if (unit === 'share') return { kind: 'share', share, text: fmtShare(share) };
-  const weight = capacityWeight(account, window, costs);
+  const weight = capacityWeight(pairOf(account, reset), window, costs);
   if (weight === null) return { kind: 'unpriced', text: '-', title: ALLOWANCE_UNPRICED_TITLE };
   const equivalent = share * weight;
   return { kind: 'equivalent', share: equivalent, text: equivalentShort(window, equivalent) };
+}
+
+/**
+ * A window's four weeks' figure: the shares added under Window shares (the answer's total as `newestResets` hands it),
+ * else each reset's equivalent at its own pair added, so a week before a tier change weighs at the tier it ran under.
+ * A reset that prices nothing leaves the total unpriced, since a sum without that week would count fewer weeks than
+ * its label names.
+ */
+export function weeksFigure(window: AllowanceWindow, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts | null, unit: UnitPosition): AllowanceFigure {
+  const { resets, total } = newestResets(window);
+  if (unit === 'share' || resets.length === 0) return allowanceFigure(total, window.window, account, costs, unit);
+  let sum = 0;
+  for (const reset of resets) {
+    const figure = allowanceFigure(reset.shareLeft, window.window, account, costs, unit, reset);
+    if (figure.kind !== 'equivalent') return figure;
+    sum += figure.share;
+  }
+  return { kind: 'equivalent', share: sum, text: equivalentShort(window.window, sum) };
 }
 
 /** The block's subtitle by unit. */
@@ -110,7 +135,7 @@ export const resetInstant = (isoTime: string): string => `${resetDate(isoTime)} 
 
 /** One account of the Analytics card: each weekly window's last and four weeks' figures with the resets counted,
  *  keyed by the wire key, the 7-day window's count, the instant of a latest reset that is the term's end, and whether
- *  the plan prices no capacity on the 7-day window. */
+ *  one of the newest 7-day weeks prices no capacity at the pair it ran under. */
 export interface AllowanceRow {
   accountId: string;
   figures: Record<string, { counted: number; last: AllowanceFigure; weeks: AllowanceFigure }>;
@@ -130,13 +155,17 @@ export function allowanceRows(answer: UnusedAllowanceAnswer, costs: Subscription
     const figures: AllowanceRow['figures'] = {};
     let termEndedAt: string | null = null;
     for (const w of allowanceWindows(account)) {
-      const { counted, resets, total } = newestResets(w);
+      const { counted, resets } = newestResets(w);
       if (resets.length === 0) continue;
-      figures[w.window] = { counted, last: allowanceFigure(resets[0].shareLeft, w.window, account, costs, unit), weeks: allowanceFigure(total, w.window, account, costs, unit) };
+      figures[w.window] = { counted, last: allowanceFigure(resets[0].shareLeft, w.window, account, costs, unit, resets[0]), weeks: weeksFigure(w, account, costs, unit) };
       if (termEndedAt === null && resets[0].source === 'term_ended') termEndedAt = resets[0].resetAt;
     }
-    // Without the model the shares price nothing, so the plan word alone marks an account the router prices no tier for.
-    const unpriced = costs === null ? pricedTier(account.plan, account.tier, null).tier === null : capacityWeight(account, 'seven_day', costs) === null;
+    // Read off each newest 7-day week's own pair under every unit, so the fleet's note names every account the sum
+    // leaves out. Without the model the shares price nothing, so the plan word alone marks a pair the router prices no
+    // tier for.
+    const sevenDay = account.windows.find((w) => w.window === 'seven_day');
+    const pairs = sevenDay === undefined || sevenDay.resets.length === 0 ? [account] : newestResets(sevenDay).resets.map((r) => pairOf(account, r));
+    const unpriced = pairs.some((pair) => (costs === null ? pricedTier(pair.plan, pair.tier, null).tier === null : capacityWeight(pair, 'seven_day', costs) === null));
     return { accountId: account.accountId, figures, resets: figures.seven_day?.counted ?? 0, termEndedAt, unpriced };
   });
   const lead = (r: AllowanceRow, window: string) => valueOf(r.figures[window]?.weeks) ?? Number.NEGATIVE_INFINITY;

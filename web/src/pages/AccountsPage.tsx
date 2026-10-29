@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError } from '@/api';
-import type { Account, AllowanceAccount, AllowanceWindow, PairingConfirmed, PairingPreview, PairingSession, QuotaHistory, ReconciliationsAnswer, SubscriptionCosts } from '@/api/types';
+import type { Account, AllowanceAccount, AllowanceReset, AllowanceWindow, PairingConfirmed, PairingPreview, PairingSession, QuotaHistory, ReconciliationsAnswer, SubscriptionCosts } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { CatalogDialog } from '@/components/CatalogDialog';
@@ -18,7 +18,7 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, E
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, METER_CODEC, sortAddressOf, sortDirOf } from '@/lib/address';
-import { FREE_NOTE, allowanceFigure, allowanceSpan, allowanceSubtitle, allowanceWindows, newestResets, resetDate, resetHover, resetInstant, type AllowanceFigure } from '@/lib/allowance';
+import { FREE_NOTE, allowanceFigure, allowanceSpan, allowanceSubtitle, allowanceWindows, newestResets, resetDate, resetHover, resetInstant, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
@@ -915,15 +915,15 @@ function DriftCard({ accountId, answer, error, onRetry }: { accountId: string; a
 }
 
 function AllowanceColumn({ account, costs, unit, window: w }: { account: AllowanceAccount; costs: SubscriptionCosts | null; unit: UnitPosition; window: AllowanceWindow }) {
-  const { counted, resets, total } = newestResets(w);
+  const { counted, resets } = newestResets(w);
   const [latest, ...before] = resets;
-  const figure = (share: number | null) => allowanceFigure(share, w.window, account, costs, unit);
+  const figure = (reset: AllowanceReset | undefined) => allowanceFigure(reset?.shareLeft ?? null, w.window, account, costs, unit, reset);
   const ended = <Badge tone="neutral">term ended</Badge>;
   return (
     <div className="allowance__col">
       <div className="wbar__head">
         <span className="wbar__label">{WINDOW_LABEL[windowKeyId(w.window) ?? ''] ?? w.window}</span>
-        <AllowanceText className="wbar__pct num" figure={figure(latest?.shareLeft ?? null)} />
+        <AllowanceText className="wbar__pct num" figure={figure(latest)} />
       </div>
       {latest && (
         <div className="wbar__reset allowance__reset" title={resetHover(latest)}>
@@ -942,12 +942,12 @@ function AllowanceColumn({ account, costs, unit, window: w }: { account: Allowan
             {resetDate(r.resetAt)}
             {r.source === 'term_ended' && <> {ended}</>}
           </span>
-          <AllowanceText className="num" figure={figure(r.shareLeft)} />
+          <AllowanceText className="num" figure={figure(r)} />
         </div>
       ))}
       <div className="allowance__row allowance__total">
         <span>{counted === 1 ? 'Total, 1 week' : `Total, ${counted} weeks`}</span>
-        <AllowanceText className="num" figure={figure(total)} />
+        <AllowanceText className="num" figure={weeksFigure(w, account, costs, unit)} />
       </div>
     </div>
   );

@@ -32,9 +32,12 @@ const FREE = { plan: 'free', tier: 'default_claude_ai' };
 const EQUIVALENT_UNITS = ['native', 'all', 'usd', 'equivalent'];
 
 const NOW = Date.UTC(2026, 9, 25, 18, 0);
-/** A window's resets, newest first, a week apart back from `newest`, with the route's total and count over them. */
-const windowOf = (window, shares, { newest = NOW - DAY, sources = [], total } = {}) => {
-  const resets = shares.map((shareLeft, i) => ({ observedAt: iso(newest - i * WEEK), resetAt: iso(newest - i * WEEK), shareLeft, source: sources[i] ?? 'sample' }));
+/**
+ * A window's resets, newest first, a week apart back from `newest`, with the route's total and count over them, each
+ * carrying the pair `pairs` names for it and the decoded nulls otherwise.
+ */
+const windowOf = (window, shares, { newest = NOW - DAY, pairs = [], sources = [], total } = {}) => {
+  const resets = shares.map((shareLeft, i) => ({ observedAt: iso(newest - i * WEEK), plan: pairs[i]?.plan ?? null, resetAt: iso(newest - i * WEEK), shareLeft, source: sources[i] ?? 'sample', tier: pairs[i]?.tier ?? null }));
   return { resets, resetsCounted: resets.length, totalShareLeft: total ?? shares.reduce((s, x) => s + x, 0), window };
 };
 const accountOf = (accountId, plan, windows) => ({ accountId, ...plan, windows });
@@ -86,7 +89,7 @@ test('a figure reads a dash where the plan is Free, the cost model sizes no capa
   assert.equal(d.allowanceFigure(0.33, 'seven_day', FREE, COSTS, 'share').text, '33%', 'Window shares reads a Free account its shares');
   for (const unit of ['share', ...EQUIVALENT_UNITS]) assert.deepEqual(d.allowanceFigure(null, 'seven_day', PRO, COSTS, unit), { kind: 'none', text: '-', title: d.NO_READING_TITLE }, unit);
   assert.equal(d.NO_READING_TITLE, 'no reading at this reset');
-  assert.equal(d.FREE_NOTE, 'Free has no priced capacity in the cost model, so the equivalents read a dash. Window shares reads the shares.');
+  assert.equal(d.FREE_NOTE, 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it. Window shares reads the shares.');
   const texts = [0, 0.004, 0.33, 0.999].flatMap((share) => ['share', ...EQUIVALENT_UNITS].flatMap((unit) => [PRO, MAX_5X, FREE].flatMap((plan) => ['seven_day', 'seven_day_fable'].map((w) => d.allowanceFigure(share, w, plan, COSTS, unit).text))));
   assert.deepEqual(texts.filter((t) => t.includes('~')), [], 'no model is priced here, so no figure is estimated');
 });
@@ -122,6 +125,29 @@ test('a Team or Enterprise seat prices through its tier where the cost model hol
   assert.equal(d.fleetFigures(rows, 'native').note, '2 accounts priced');
 });
 
+/** The cost model of the per-reset cases: Max 5x's 7-day capacity a quarter of the anchor's, Pro's a twentieth. */
+const QUARTER = { ...COSTS, capacity: { ...COSTS.capacity, default_claude_max_5x: { fiveHour: 5_000, sevenDay: 25_000 } } };
+const NO_PAIR = { plan: null, tier: null };
+
+test("a reset prices at the plan and the tier it ran under, and at the account's current pair where it carries none", () => {
+  for (const unit of EQUIVALENT_UNITS) {
+    const bare = d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, unit);
+    assert.deepEqual([bare.kind, bare.share], ['equivalent', 0.5], `${unit}: the anchor's own week`);
+    assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, unit, NO_PAIR), bare, `${unit}: a reset the router recorded no pair for`);
+    // A reset built without the two keys reads as one the router recorded no pair for, the wire writing both or neither.
+    assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, unit, {}), bare, `${unit}: a reset without the keys`);
+    const earlier = d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, unit, MAX_5X);
+    assert.equal(earlier.kind, 'equivalent', unit);
+    assert.ok(near(earlier.share, bare.share / 4), `${unit}: a week under Max 5x reads a quarter of the same share at Max 20x, ${earlier.share}`);
+    assert.equal(earlier.text, d.equivalentShort('seven_day', 0.125), unit);
+    assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, unit, FREE), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${unit}: a week whose own pair prices nothing, though the account's would`);
+  }
+  // The shares price nothing, so the pair changes no share, with no cost model as with one.
+  for (const costs of [QUARTER, null]) {
+    for (const pair of [MAX_5X, FREE, NO_PAIR]) assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_20X, costs, 'share', pair), { kind: 'share', share: 0.5, text: '50%' }, `${pair.plan} ${costs === null ? 'without' : 'with'} a cost model`);
+  }
+});
+
 test('the subtitle names the unit the figures read in', () => {
   assert.equal(d.allowanceSubtitle('share'), 'The share of each weekly window left unused when it reset, the last four weeks');
   for (const unit of EQUIVALENT_UNITS) assert.equal(d.allowanceSubtitle(unit), 'Each weekly window left unused when it reset, in 20x window equivalents, the last four weeks', unit);
@@ -138,7 +164,7 @@ test("an account's windows and the card's column pairs read the 7-day window fir
 
 test("a reset's hover names its instant and the reading's source in the block's own words, and its dates always carry the day", () => {
   const at = Date.UTC(2026, 8, 12, 20, 10);
-  const reset = (source) => ({ observedAt: iso(at), resetAt: iso(at), shareLeft: 0.5, source });
+  const reset = (source) => ({ observedAt: iso(at), plan: null, resetAt: iso(at), shareLeft: 0.5, source, tier: null });
   assert.deepEqual(
     ['sample', 'clock', 'term_ended', 'replayed'].map((source) => d.resetHover(reset(source))),
     [`${d.fmtAbsolute(iso(at))}, read from a usage sample`, `${d.fmtAbsolute(iso(at))}, read from the clock walk`, `${d.fmtAbsolute(iso(at))}, read from the term's end`, `${d.fmtAbsolute(iso(at))}, read from replayed`],
@@ -227,4 +253,53 @@ test("the fleet figures read the mean share per reset under Window shares and th
   assert.deepEqual(d.fleetFigures(d.allowanceRows(priced, COSTS, 'usd'), 'usd').note, '1 account priced');
   assert.deepEqual(d.fleetFigures(d.allowanceRows({ ...FLEET, accounts: FLEET.accounts.slice(8) }, COSTS, 'share'), 'share'), { fable: '-', note: "1 reset on 1 account, each a share of its account's own week", sevenDay: d.fmtShare(0.25) });
   assert.deepEqual(d.fleetFigures([], 'native'), { fable: '-', note: '0 accounts priced', sevenDay: '-' });
+});
+
+/**
+ * A Max 20x account whose newest 7-day week carries no pair and whose second ran under Max 5x, each leaving a whole
+ * week, beside a Max 20x account whose four weeks leave half a week, and an account one of whose weeks ran on Free.
+ */
+const MIXED = {
+  accounts: [
+    accountOf('mixed', MAX_20X, [windowOf('seven_day', [1, 1], { pairs: [NO_PAIR, MAX_5X] })]),
+    accountOf('steady', MAX_20X, [windowOf('seven_day', [0.125, 0.125, 0.125, 0.125])]),
+  ],
+  from: iso(NOW - 29 * DAY),
+  to: iso(NOW),
+};
+
+test("the four weeks' figure, the rows and the fleet total add each week's equivalent at the tier it ran under", () => {
+  const [mixed, steady] = MIXED.accounts;
+  const [window] = mixed.windows;
+  for (const unit of EQUIVALENT_UNITS) {
+    // 1 week at Max 20x and 1 at Max 5x read 1.25 anchor weeks, where the summed shares priced at Max 20x read 2.
+    const weeks = d.weeksFigure(window, mixed, QUARTER, unit);
+    assert.equal(weeks.kind, 'equivalent', unit);
+    assert.ok(near(weeks.share, 1.25), `${unit}: ${weeks.share}`);
+    assert.equal(weeks.text, d.equivalentShort('seven_day', 1.25), unit);
+    const row = d.allowanceRows(MIXED, QUARTER, unit).find((r) => r.accountId === 'mixed');
+    assert.ok(near(row.figures.seven_day.weeks.share, 1.25) && near(row.figures.seven_day.last.share, 1), `${unit}: weeks ${row.figures.seven_day.weeks.share}, last ${row.figures.seven_day.last.share}`);
+    assert.equal(row.unpriced, false, unit);
+    // 1.25 beside steady's 0.5, where the summed shares priced once read 2.5.
+    assert.equal(d.fleetFigures(d.allowanceRows(MIXED, QUARTER, unit), unit).sevenDay, d.equivalentShort('seven_day', 1.75), unit);
+  }
+  assert.deepEqual(d.weeksFigure(window, mixed, QUARTER, 'share'), { kind: 'share', share: 2, text: d.fmtShare(2) }, "Window shares adds the shares as the answer's total");
+  assert.deepEqual(d.allowanceRows(MIXED, QUARTER, 'share').find((r) => r.accountId === 'mixed').figures.seven_day.weeks, { kind: 'share', share: 2, text: d.fmtShare(2) });
+  assert.deepEqual(d.weeksFigure(steady.windows[0], steady, null, 'share'), { kind: 'share', share: 0.5, text: d.fmtShare(0.5) }, 'the shares with no cost model');
+
+  // A week on Free prices nothing, so the four weeks it joins read the dash, and the row is marked under every unit.
+  const freed = accountOf('freed', MAX_20X, [windowOf('seven_day', [0.5, 0.5], { pairs: [NO_PAIR, FREE] })]);
+  const answer = { ...MIXED, accounts: [...MIXED.accounts, freed] };
+  for (const unit of EQUIVALENT_UNITS) {
+    assert.deepEqual(d.weeksFigure(freed.windows[0], freed, QUARTER, unit), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, unit);
+    const rows = d.allowanceRows(answer, QUARTER, unit);
+    const row = rows.find((r) => r.accountId === 'freed');
+    assert.deepEqual([row.figures.seven_day.last.kind, row.figures.seven_day.weeks.kind, row.unpriced], ['equivalent', 'unpriced', true], unit);
+    assert.deepEqual(rows.map((r) => r.accountId), ['mixed', 'steady', 'freed'], `${unit}: the unpriced row last`);
+    assert.deepEqual(d.fleetFigures(rows, unit), { fable: '-', note: '2 accounts priced, freed left out unpriced', sevenDay: d.equivalentShort('seven_day', 1.75) }, unit);
+  }
+  for (const costs of [QUARTER, null]) {
+    const marks = d.allowanceRows(answer, costs, 'share').map((r) => [r.accountId, r.unpriced]);
+    assert.deepEqual(marks, [['mixed', false], ['freed', true], ['steady', false]], `Window shares ${costs === null ? 'without' : 'with'} a cost model`);
+  }
 });

@@ -5534,6 +5534,59 @@ async function analyticsAllowanceTable(theme) {
 }
 
 /**
+ * A week priced at the tier it ran under, under the default unit. On the studio account's detail the allowance block's
+ * 7-day column draws its third-newest week, which ran under Pro before the upgrade, in the type size, weight and right
+ * edge of the second-newest week's figure and from the right edge of the head's figure, the figures and the total
+ * recorded. On the Analytics view's Accounts tab the unused allowance card's studio row draws its 7-day four weeks'
+ * figure in the type size, weight and right edge of the next row's, both texts recorded. The Traffic tab and the bare
+ * Accounts view are the pass's again after. The mock pass's alone, since the router pass seeds no weekly reset.
+ */
+async function allowancePricedWeek(theme) {
+  const say = (what) => failures.push(`${theme} a week priced at its own tier: ${what}`);
+  try {
+    await loadAtOrigin('/accounts/studio', '.allowance__col');
+    const block = await page.evaluate(() => {
+      const box = (el) => {
+        if (!el) return null;
+        const style = getComputedStyle(el);
+        return { fontSize: style.fontSize, fontWeight: style.fontWeight, right: Math.round(el.getBoundingClientRect().right), text: el.textContent?.trim() ?? '' };
+      };
+      const column = document.querySelector('.allowance__col');
+      const weeks = [...(column?.querySelectorAll('.allowance__row:not(.allowance__total)') ?? [])];
+      return { head: box(column?.querySelector('.wbar__pct') ?? null), pro: box(weeks[1]?.querySelector('.num') ?? null), second: box(weeks[0]?.querySelector('.num') ?? null), total: box(column?.querySelector('.allowance__total .num') ?? null) };
+    });
+    measurements.push(`${theme} /accounts/studio allowance block priced weeks ${JSON.stringify(block)}`);
+    for (const what of compare(block.pro, block.second, ['fontSize', 'fontWeight', 'right'], "the Pro week's figure against the second-newest week's")) say(what);
+    for (const what of compare(block.pro, block.head, ['right'], "the Pro week's figure against the head's")) say(what);
+    for (const [name, read] of Object.entries(block)) if (!/ 20x 7d$/.test(read?.text ?? '')) say(`the block's ${name} figure reads ${JSON.stringify(read?.text ?? null)}, not a 20x 7-day equivalent`);
+
+    await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    if (!(await tabTo(theme, 'Accounts'))) return;
+    const card = await page.evaluate(() => {
+      const box = (el) => {
+        if (!el) return null;
+        const style = getComputedStyle(el);
+        return { fontSize: style.fontSize, fontWeight: style.fontWeight, right: Math.round(el.getBoundingClientRect().right), text: el.textContent?.trim() ?? '' };
+      };
+      const unused = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Unused allowance by account');
+      const at = [...(unused?.querySelectorAll('thead th') ?? [])].findIndex((th) => th.textContent?.trim() === '7-day, 4 weeks');
+      const rows = [...(unused?.querySelectorAll('tbody tr') ?? [])];
+      const own = rows.findIndex((tr) => tr.querySelector('td.col-fill a')?.textContent?.trim() === 'studio');
+      const cell = (tr) => (tr && at !== -1 ? box(tr.children[at] ?? null) : null);
+      return { next: own === -1 ? null : cell(rows[own + 1]), studio: own === -1 ? null : cell(rows[own]) };
+    });
+    measurements.push(`${theme} /analytics Unused allowance by account studio's four weeks ${JSON.stringify(card)}`);
+    for (const what of compare(card.studio, card.next, ['fontSize', 'fontWeight', 'right'], "studio's 7-day four weeks' figure against the next row's")) say(what);
+    if (!/ 20x 7d$/.test(card.studio?.text ?? '')) say(`studio's 7-day four weeks' figure reads ${JSON.stringify(card.studio?.text ?? null)}, not a 20x 7-day equivalent`);
+    if (card.studio?.text !== block.total?.text) say(`studio's 7-day four weeks' figure ${JSON.stringify(card.studio?.text ?? null)} is not the block's total ${JSON.stringify(block.total?.text ?? null)}`);
+    await tabTo(theme, 'Traffic');
+    await atRest();
+  } finally {
+    await loadAtOrigin('/accounts', '.detail__head');
+  }
+}
+
+/**
  * The Analytics tables' columns under the width rule, each read on the tab that draws it: the Traffic breakdown on the
  * landing tab (its group column the fill, Key under the default grouping) and the Guardrails card above it (Guardrail),
  * the misses-by-reason breakdown (Key again, its ten figure headers wrapped so the group column keeps its room, each
@@ -11874,6 +11927,7 @@ try {
       if (view.path === '/accounts') await planEndedLines(theme, '/accounts/sunset');
       if (view.path === '/accounts' && mock) await firstReadingHint(theme);
       if (view.path === '/accounts' && mock) await slowedUsageBar(theme);
+      if (view.path === '/accounts' && mock) await allowancePricedWeek(theme);
       if (CARD_VIEWS.includes(view.path)) await barRow(theme, view.path);
     }
   }

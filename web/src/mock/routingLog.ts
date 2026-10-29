@@ -1,5 +1,5 @@
 import type {
-  Account, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordOutcome,
+  Account, AllowanceReset, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordOutcome,
   PoolKeepalive, RecordPin, RecordRequest, RecordSettings, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
 import { endOf } from '@/lib/quota';
@@ -2420,16 +2420,38 @@ function planEndedClose(account: Account): EventSeed[] {
 
 const WEEK = 7 * DAY;
 
+/** The plan word and the tier a `window_reset` stores, those of the reading it replaced. */
+type ReadingPair = Pick<AllowanceReset, 'plan' | 'tier'>;
+
+/** The account's pair as its subscription reads now, the one a reading taken under it stores. */
+const currentPair = (accountId: string): ReadingPair => {
+  const subscription = accountOf.get(accountId)?.subscription;
+  return { plan: subscription?.plan ?? null, tier: subscription?.rateLimitTier ?? null };
+};
+
+/**
+ * The pair an account held up to an instant before it changed: a reset at or before `through` replaced a reading taken
+ * under `pair`, whatever window it closes, since one poll's readings name one plan.
+ */
+interface EarlierPair {
+  pair: ReadingPair;
+  through: number;
+}
+
+const PRO_READING: ReadingPair = { plan: 'pro', tier: 'default_claude_ai' };
+
 /**
  * A weekly window's resets over the four weeks before the story's, a week apart back from `resetsAtMs`, its current
- * reset, each storing the reading before it so the share left is one less it, newest first. The clock walk announces a
- * reset no poll read after it, which names no next reset, as the engine writes it.
+ * reset, each storing the reading before it so the share left is one less it, newest first, with that reading's pair:
+ * the account's current one, or `earlier`'s for a reset at or before its instant. The clock walk announces a reset no
+ * poll read after it, which names no next reset, as the engine writes it.
  */
-function weeklyResets(accountId: string, window: string, resetsAtMs: number, shares: number[], clockAt = -1): EventSeed[] {
+function weeklyResets(accountId: string, window: string, resetsAtMs: number, shares: number[], clockAt = -1, earlier: EarlierPair | null = null): EventSeed[] {
   return shares.map((share, i) => {
     const reset = resetsAtMs - (i + 1) * WEEK;
     const clockWalk = i === clockAt;
-    return { accountId, at: iso(reset), detail: { next_reset: clockWalk ? null : reset + WEEK, observed: clockWalk ? 'clock' : 'sample', reset_at: reset, utilization_before: Math.round((1 - share) * 1000) / 1000, window }, kind: 'window_reset' };
+    const { plan, tier } = earlier !== null && reset <= earlier.through ? earlier.pair : currentPair(accountId);
+    return { accountId, at: iso(reset), detail: { next_reset: clockWalk ? null : reset + WEEK, observed: clockWalk ? 'clock' : 'sample', plan, reset_at: reset, tier, utilization_before: Math.round((1 - share) * 1000) / 1000, window }, kind: 'window_reset' };
   });
 }
 
@@ -2437,6 +2459,14 @@ const resetOf = (accountId: string, window: '7d' | '7d_fable'): number => {
   const a = accountOf.get(accountId);
   return Date.parse((window === '7d_fable' ? a?.fableWindow : a?.windows.find((w) => w.id === window))?.resetsAt ?? '');
 };
+
+/**
+ * Studio upgraded from Pro to Max 5x at its subscription's start, inside its second-newest week, so its third and
+ * fourth weeks ran under Pro on both its windows. Sunset was a Pro login until its plan ended, so its weeks before
+ * the end ran under Pro, whatever plan the profile read found after it.
+ */
+const STUDIO_BEFORE_UPGRADE: EarlierPair = { pair: PRO_READING, through: Date.parse(accountOf.get('studio')?.subscription?.since ?? '') };
+const SUNSET_BEFORE_END: EarlierPair = { pair: PRO_READING, through: Date.parse(accountOf.get('sunset')?.subscription?.endsAt ?? '') };
 
 /**
  * The story's weekly resets, the routing log's rows the unused allowance route answers from: each weekly window of the
@@ -2450,9 +2480,9 @@ export const WEEKLY_RESETS: EventSeed[] = [
   ...weeklyResets('secondary', 'seven_day', resetOf('secondary', '7d'), [0.61, 0.55, 0.7, 0.58]),
   ...weeklyResets('nightly', 'seven_day', resetOf('nightly', '7d'), [0.18, 0.22, 0.15, 0.29], 2),
   ...weeklyResets('nightly', 'seven_day_fable', resetOf('nightly', '7d_fable'), [0.31, 0.36, 0.28, 0.4]),
-  ...weeklyResets('studio', 'seven_day', resetOf('studio', '7d'), [0.44, 0.39, 0.5, 0.47]),
-  ...weeklyResets('studio', 'seven_day_fable', resetOf('studio', '7d_fable'), [0.79, 0.84, 0.76, 0.82]),
-  ...weeklyResets('sunset', 'seven_day', NOW + SUNSET_WEEK_RESETS_IN, [0.52, 0.48, 0.57]),
+  ...weeklyResets('studio', 'seven_day', resetOf('studio', '7d'), [0.44, 0.39, 0.5, 0.47], -1, STUDIO_BEFORE_UPGRADE),
+  ...weeklyResets('studio', 'seven_day_fable', resetOf('studio', '7d_fable'), [0.79, 0.84, 0.76, 0.82], -1, STUDIO_BEFORE_UPGRADE),
+  ...weeklyResets('sunset', 'seven_day', NOW + SUNSET_WEEK_RESETS_IN, [0.52, 0.48, 0.57], -1, SUNSET_BEFORE_END),
 ];
 
 /**
@@ -2508,7 +2538,7 @@ function buildEvents(): RoutingEvent[] {
     seeds.push(
       { accountId: 'legacy', at: iso(LEGACY_FIVE_HOUR_SPENT_AT), detail: { ...read, utilization: 1 }, kind: 'window_spent' },
       { accountId: 'legacy', at: legacy.observedAt, detail: { ...read, utilization: legacy.utilization, utilization_before: 1 }, kind: 'window_cleared' },
-      { accountId: 'legacy', at: iso(reset), detail: { next_reset: null, observed: 'clock', reset_at: reset, utilization_before: legacy.utilization, window: 'five_hour' }, kind: 'window_reset' },
+      { accountId: 'legacy', at: iso(reset), detail: { next_reset: null, observed: 'clock', ...currentPair('legacy'), reset_at: reset, utilization_before: legacy.utilization, window: 'five_hour' }, kind: 'window_reset' },
     );
   }
   // Studio's wall after the round its stretch fired at 14:05: a poll read the 5-hour window at its limit, and the
@@ -2617,7 +2647,7 @@ function buildEvents(): RoutingEvent[] {
     ...legacyPolls(),
     ...reservePolls(),
     { accountId: 'research', at: iso(t(12, 41, 7)), detail: { budget_usd: 20, period: 'day', period_end: startOfDay(t(12, 41, 7)) + DAY, source_request_id: BUDGET_CROSSING_ID, spent_usd: 20.4 }, kind: 'budget_reached', poolId: 'jobs', requestId: BUDGET_CROSSING_ID },
-    { accountId: 'primary', at: iso(fiveHourReset), detail: { next_reset: fiveHourReset + 5 * HOUR, observed: 'sample', reset_at: fiveHourReset, utilization_before: beforeReset, window: 'five_hour' }, kind: 'window_reset' },
+    { accountId: 'primary', at: iso(fiveHourReset), detail: { next_reset: fiveHourReset + 5 * HOUR, observed: 'sample', ...currentPair('primary'), reset_at: fiveHourReset, utilization_before: beforeReset, window: 'five_hour' }, kind: 'window_reset' },
     ...WEEKLY_RESETS,
     { accountId: 'overflow', at: iso(t(11, 30, 12)), detail: { cause: 'funding_refused', detail: 'Your credit balance is too low to access the Anthropic API.', from: 'ready', to: 'funding_required' }, kind: 'account_state_changed' },
     {

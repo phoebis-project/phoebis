@@ -1756,10 +1756,13 @@ export type AllowanceResetSource = 'clock' | 'sample' | 'term_ended' | string;
 
 export interface AllowanceReset {
   observedAt: string;
+  /** The pair of the reading the reset replaced, null on a reset whose event carries none and on a term's end. */
+  plan: PlanWord | null;
   resetAt: string;
   /** One less the utilization before the reset, inside the unit interval. */
   shareLeft: number;
   source: AllowanceResetSource;
+  tier: string | null;
 }
 
 export interface AllowanceWindow {

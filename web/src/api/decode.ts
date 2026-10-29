@@ -853,7 +853,7 @@ export const decodeReconciliations = (v: unknown): ReconciliationsAnswer => ({ r
 
 const decodeAllowanceReset = (v: unknown): AllowanceReset => {
   const r = rec(v);
-  return { observedAt: isoOr(r.observed_at, epoch), resetAt: isoOr(r.reset_at, epoch), shareLeft: num(r.share_left), source: str(r.source) };
+  return { observedAt: isoOr(r.observed_at, epoch), plan: strOrNull(r.plan), resetAt: isoOr(r.reset_at, epoch), shareLeft: num(r.share_left), source: str(r.source), tier: strOrNull(r.tier) };
 };
 export const decodeUnusedAllowance = (v: unknown): UnusedAllowanceAnswer => ({
   accounts: list(rec(v).accounts)

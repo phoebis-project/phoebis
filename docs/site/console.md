@@ -327,13 +327,15 @@ samples yet" with "Quota samples appear after the first successful quota fetch."
 ("left at {date}" and the badge where that reset is the term's end), the three weeks before it with their figures, and
 "Total, {n} weeks", each week's hover naming its reset's instant and where its reading came from. The figures follow the
 top bar's unit: the share of the account's own window under Window shares, and under every other position the share's
-20x window equivalent through the account's tier, a dash where the cost model holds no capacity for the account's plan
-(a Free plan among them, the card then noting it). Under Window shares the block draws without the cost model, so a
-failed settings read leaves its shares in place. A week the account's term ended inside counts as a reset with the badge
-"term ended", a clock-walk reset reads the last reading before it as the event carries it, and the card reads "No weekly
-reset recorded yet. The first shows once this account's week ends." before the first. The card reads its weeks once per
-account, again on the bar's Refresh, once a weekly window resets and once the account's term end moves (its cancellation
-flag, saved end or plan-ended flag), and a failed read draws its error with Try again.
+20x window equivalent, each week priced at the tier the account ran under at that reset, so a week before an upgrade
+reads its equivalent at the earlier tier's weight, and a reset the router recorded no tier for at the account's current
+one, a dash where the cost model holds no capacity for the account's plan (a Free plan among them, the card then noting
+it). Under Window shares the block draws without the cost model, so a failed settings read leaves its shares in place. A
+week the account's term ended inside counts as a reset with the badge "term ended", a clock-walk reset reads the last
+reading before it as the event carries it, and the card reads "No weekly reset recorded yet. The first shows once this
+account's week ends." before the first. The card reads its weeks once per account, again on the bar's Refresh, once a
+weekly window resets and once the account's term end moves (its cancellation flag, saved end or plan-ended flag), and a
+failed read draws its error with Try again.
 
 "Meter drift" draws, beside it, one line per window kind the account's completed windows hold: the newest completed
 window's ratio of the upstream's rise over the router's priced share (a warning badge where the rise and the priced
@@ -991,11 +993,13 @@ table Accounts in range lists Peak 5h, Peak 7d, "Peak 7d, extra usage", Time in 
 created, Migrated in and Migrated out. The section keeps reading the rollups under a session filter, since they carry
 no session, and its subtitle says so. The card "Unused allowance by account" follows Accounts in range, one row per
 subscription account with a weekly reset in the last four weeks under the Accounts filter whatever the range, with
-Resets, each weekly window's last and four weeks' figures in the top bar's unit, sorted most left first on the four
-weeks' 7-day figure, a row whose latest reset is a term's end reading "term ended {date}" under its account, and two
-fleet figures over the rows: under Window shares the mean share per reset with the resets and accounts counted, under
-every other position the priced accounts' equivalents added with the unpriced accounts named. Under Window shares the
-card draws without the cost model, so a failed settings read leaves its shares in place.
+Resets, each weekly window's last and four weeks' figures in the top bar's unit (each week priced at the tier the
+account ran under at that reset, so a week before an upgrade reads its equivalent at the earlier tier's weight, and a
+reset the router recorded no tier for at the account's current one), sorted most left first on the four weeks' 7-day
+figure, a row whose latest reset is a term's end reading "term ended {date}" under its account, and two fleet figures
+over the rows: under Window shares the mean share per reset with the resets and accounts counted, under every other
+position the priced accounts' equivalents added with the unpriced accounts named. Under Window shares the card draws
+without the cost model, so a failed settings read leaves its shares in place.
 
 ## Sessions
 

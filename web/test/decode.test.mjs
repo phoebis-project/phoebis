@@ -788,6 +788,7 @@ test("the refusal categories answer keeps the route's rows in order with the das
 test('the unused allowance answer keeps every account, window and reset as the route lists them, newest first, its instants as ISO strings', () => {
   const end = 1_791_633_600_000;
   const at = (hours) => end - hours * 3_600_000;
+  // No reset carries the plan and the tier of the reading it replaced, so each decodes null for both.
   const reset = (hours, share, source, observedHours = hours) => ({ observed_at: at(observedHours), reset_at: at(hours), share_left: share, source });
   const body = {
     accounts: [
@@ -818,10 +819,10 @@ test('the unused allowance answer keeps every account, window and reset as the r
         windows: [
           {
             resets: [
-              { observedAt: iso(at(30)), resetAt: iso(at(24)), shareLeft: 0.54, source: 'term_ended' },
-              { observedAt: iso(at(192)), resetAt: iso(at(192)), shareLeft: 0.15000000000000002, source: 'clock' },
-              { observedAt: iso(at(360)), resetAt: iso(at(360)), shareLeft: 0.38, source: 'sample' },
-              { observedAt: iso(at(528)), resetAt: iso(at(528)), shareLeft: 0.6, source: 'sample' },
+              { observedAt: iso(at(30)), plan: null, resetAt: iso(at(24)), shareLeft: 0.54, source: 'term_ended', tier: null },
+              { observedAt: iso(at(192)), plan: null, resetAt: iso(at(192)), shareLeft: 0.15000000000000002, source: 'clock', tier: null },
+              { observedAt: iso(at(360)), plan: null, resetAt: iso(at(360)), shareLeft: 0.38, source: 'sample', tier: null },
+              { observedAt: iso(at(528)), plan: null, resetAt: iso(at(528)), shareLeft: 0.6, source: 'sample', tier: null },
             ],
             resetsCounted: 4,
             totalShareLeft: 1.67,
@@ -829,8 +830,8 @@ test('the unused allowance answer keeps every account, window and reset as the r
           },
           {
             resets: [
-              { observedAt: iso(at(48)), resetAt: iso(at(48)), shareLeft: 0.2, source: 'sample' },
-              { observedAt: iso(at(216)), resetAt: iso(at(216)), shareLeft: 0.7, source: 'clock' },
+              { observedAt: iso(at(48)), plan: null, resetAt: iso(at(48)), shareLeft: 0.2, source: 'sample', tier: null },
+              { observedAt: iso(at(216)), plan: null, resetAt: iso(at(216)), shareLeft: 0.7, source: 'clock', tier: null },
             ],
             resetsCounted: 2,
             totalShareLeft: 0.9,
@@ -838,12 +839,25 @@ test('the unused allowance answer keeps every account, window and reset as the r
           },
         ],
       },
-      { accountId: 'unprofiled', plan: null, tier: null, windows: [{ resets: [{ observedAt: iso(at(72)), resetAt: iso(at(72)), shareLeft: 1, source: 'replayed' }], resetsCounted: 1, totalShareLeft: 1, window: 'seven_day' }] },
+      { accountId: 'unprofiled', plan: null, tier: null, windows: [{ resets: [{ observedAt: iso(at(72)), plan: null, resetAt: iso(at(72)), shareLeft: 1, source: 'replayed', tier: null }], resetsCounted: 1, totalShareLeft: 1, window: 'seven_day' }] },
     ],
     from: iso(at(29 * 24)),
     to: iso(end),
   });
   assert.deepEqual(d.decodeUnusedAllowance({ accounts: [], from: at(24), to: end }), { accounts: [], from: iso(at(24)), to: iso(end) }, 'a range with no weekly reset lists no account');
+});
+
+test("an unused allowance reset keeps the plan and the tier of the reading it replaced, beside the account's current pair", () => {
+  const end = 1_791_633_600_000;
+  const pairOf = (pair) => {
+    const body = { accounts: [{ account_id: 'max-org', plan: 'max_20x', tier: 'default_claude_max_20x', windows: [{ resets: [{ observed_at: end, reset_at: end, share_left: 0.5, source: 'sample', ...pair }], resets_counted: 1, total_share_left: 0.5, window: 'seven_day' }] }], from: end - 29 * 86_400_000, to: end };
+    const { plan, tier } = d.decodeUnusedAllowance(body).accounts[0].windows[0].resets[0];
+    return { plan, tier };
+  };
+  assert.deepEqual(pairOf({ plan: 'max_5x', tier: 'default_claude_max_5x' }), { plan: 'max_5x', tier: 'default_claude_max_5x' }, 'a week before an upgrade');
+  assert.deepEqual(pairOf({ plan: null, tier: null }), { plan: null, tier: null }, 'a reset whose event carries no pair');
+  // The account's plan reader keeps a word the console does not know, so the reset's does too, and nothing prices it.
+  assert.deepEqual(pairOf({ plan: 'bogus', tier: 'default_claude_max_5x' }), { plan: 'bogus', tier: 'default_claude_max_5x' }, 'a plan word kept as sent');
 });
 
 test('a candidate decodes its fit figures and an outcome its reservation and its hold\'s reason', () => {
