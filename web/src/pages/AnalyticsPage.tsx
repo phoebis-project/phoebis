@@ -2451,7 +2451,7 @@ const CONVERSATION_HINT = CONVERSATION_CLASSES.join(', ');
 const OVERHEAD_HINT = 'every other class, and requests that named none';
 const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}. Overhead is ${OVERHEAD_HINT}`;
 
-const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription account's fast-mode and overage answers. Its plan quota spends window share, charted per window beside it";
+const SPEND_NOTE = "Dollars per minute: API-key traffic, a usage-based seat's whole spend, and a subscription account's fast-mode and overage answers. Its plan quota spends window share, charted per window beside it";
 /** A folded rest of subscription accounts as the dollars chart names it: its dollars are its members' fast-mode
  *  and overage answers, and its own label names the plan unit, which the dollars axis does not chart. */
 const SPEND_REST = 'Other (fast mode or overage)';

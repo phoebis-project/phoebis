@@ -18617,7 +18617,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [`${section?.querySelectorAll('select').length ?? 'no'} selects in the section`, ...options.map((o) => `${o.value}=${o.textContent}`)],
     });
   }
-  expect('/analytics the Burn tab draws the spend per minute note', card('Spend per minute')?.querySelector('.card__subtitle')?.textContent ?? '', ["Dollars per minute: API-key traffic, and a subscription account's fast-mode and overage answers."]);
+  expect('/analytics the Burn tab draws the spend per minute note', card('Spend per minute')?.querySelector('.card__subtitle')?.textContent ?? '', ["Dollars per minute: API-key traffic, a usage-based seat's whole spend, and a subscription account's fast-mode and overage answers."]);
   await tab(m, 'Traffic');
   {
     expect('/analytics speed and effort', m.text(), ['Requests by speed', 'Standard and fast per bucket, stacked', 'Effort levels', 'Requests per effort level in range']);
