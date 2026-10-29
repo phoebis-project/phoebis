@@ -701,9 +701,11 @@ mod tests {
             ));
             decisions += matches!(typed, Row::Decision(_)) as usize;
         }
+        // The fifteenth is the guardrail block's `refused` decision row, the seed's last row.
         assert_eq!(
-            decisions, 14,
-            "the fixture's 14 decision rows round-trip through DecisionRow and its summary mirrors"
+            decisions, 15,
+            "the fixture's 15 decision rows, the guardrail block's among them, round-trip through \
+             DecisionRow and its summary mirrors"
         );
     }
 }
