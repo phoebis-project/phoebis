@@ -589,9 +589,9 @@ function SessionRows({
 }) {
   const { account, lines, session, shown } = row;
   const summary = stateSummary(shown);
-  // A pin exists only with an account: a request refused before any account served it leaves a row without one.
-  const pinned = shown.filter((a) => a.accountId !== null);
-  const otherModels = pinned.filter((a) => a.model !== session.model);
+  // A pin exists only with an account: a request refused before any account served it leaves a row without one. The
+  // hover reads the recipes in the order the expanded lines draw them.
+  const otherModels = lines.flatMap((l) => (l.recipe !== null && l.recipe.accountId !== null && l.recipe.model !== session.model ? [l.recipe] : []));
   // A retained agent with no time is waiting on its first stream event, which is
   // a different thing from a session nothing probes.
   const pendingProbe = shown.some((a) => a.state === 'retained' && a.nextProbeAt === null);

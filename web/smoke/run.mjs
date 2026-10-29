@@ -24436,6 +24436,20 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     results.push({ name: '/sessions marks sessions whose agents run another model', ok: modelPlus.length >= 2 && modelPlus.every((b) => /^\+\d+$/.test(b.textContent?.trim() ?? '')), missing: modelPlus.map((b) => b.textContent?.trim() ?? '') });
     const modelTitle = modelPlus[0]?.getAttribute('title') ?? '';
     results.push({ name: '/sessions +N hover lists agent, model and account', ok: /\n\S+: claude-\S+ on \w+/.test(modelTitle), missing: [modelTitle] });
+    // The story's first session (`sessionSpec[0]` in mock/operations.ts) pins two subagents on another model, and under
+    // Last activity its lines draw the compacted one, whose last request is newer, ahead of the one paused on its cold
+    // probes, where the recipes list the paused one first. The hover reads the lines' order.
+    const byActivity = await mount('/sessions?sort=activity', { now: CLOCK_ORIGIN });
+    const twice = [...byActivity.container.querySelectorAll('tbody tr.srow')].find((tr) => (tr.querySelector('.srow__pin .badge')?.getAttribute('title') ?? '').split('\n').length > 2);
+    const hovered = (twice?.querySelector('.srow__pin .badge')?.getAttribute('title') ?? '').split('\n').slice(1).map((l) => l.replace(/ on \S+$/, ''));
+    twice?.click();
+    await byActivity.settle(150);
+    const detail = twice?.nextElementSibling?.classList.contains('srow__detail') ? twice.nextElementSibling : null;
+    const lined = [...(detail?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])]
+      .map((l) => `${l.querySelector('.agents__id')?.getAttribute('title')}: ${l.children[1]?.getAttribute('title') ?? l.children[1]?.textContent?.trim()}`)
+      .filter((line) => hovered.includes(line));
+    byActivity.unmount();
+    results.push({ name: "/sessions the +N hover lists the agents pinned elsewhere in the expanded lines' order", ok: hovered.length === 2 && JSON.stringify(lined) === JSON.stringify(hovered), missing: [JSON.stringify(hovered), JSON.stringify(lined)] });
   }
 
   // The Last request column, and the two rows the state semantics changed.
