@@ -20819,7 +20819,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         sizedId !== undefined &&
         tierless.length === 1 &&
         valueOf(tierless[0]) === 'tier unknown' &&
-        tierless[0].getAttribute('title') === 'A free plan, a usage-based seat, no tier on file or one the cost model does not hold, so no share of its windows is priced',
+        tierless[0].getAttribute('title') === 'A free plan, no tier on file or one the cost model does not hold, so no share of its windows is priced',
       missing: [`sized ${sizedId}`, ...items.map((li) => `${labelOf(li)}=${valueOf(li)}`)],
     });
     results.push({
@@ -20829,7 +20829,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     });
     results.push({
       name: "/analytics under Window shares grouped by model with an unsized account named the plan cards' empty state names the account's tier",
-      ok: namedEmpty.every((e) => e === 'The named account has a free plan, is a usage-based seat, or has no tier on file or one the cost model does not hold, so no share of its windows is priced.'),
+      ok: namedEmpty.every((e) => e === 'The named account has a free plan, or has no tier on file or one the cost model does not hold, so no share of its windows is priced.'),
       missing: namedEmpty,
     });
   }

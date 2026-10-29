@@ -2456,7 +2456,7 @@ const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription acco
  *  and overage answers, and its own label names the plan unit, which the dollars axis does not chart. */
 const SPEND_REST = 'Other (fast mode or overage)';
 const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown: 'Other (fast mode or overage, tier unknown)', window_share: SPEND_REST };
-const TIER_UNKNOWN_HINT = 'A free plan, a usage-based seat, no tier on file or one the cost model does not hold, so no share of its windows is priced';
+const TIER_UNKNOWN_HINT = 'A free plan, no tier on file or one the cost model does not hold, so no share of its windows is priced';
 const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model of no known tier, or on a tier the cost model has no capacity for on that window, prices no share there and draws no point';
 // "Model tier", since the tier unknown entries beside it name the account tier.
 const ESTIMATED_HINT = 'A bucket whose model has no measured weight and reads the latest weighed model of its model tier';
@@ -2683,7 +2683,7 @@ function BurnCharts({
               : unpriced.length > 0
                 ? byAccount
                   ? `No subscription account in range has a tier the router prices: ${unpriced.map(nameOf).join(', ')}.`
-                  : 'The named account has a free plan, is a usage-based seat, or has no tier on file or one the cost model does not hold, so no share of its windows is priced.'
+                  : 'The named account has a free plan, or has no tier on file or one the cost model does not hold, so no share of its windows is priced.'
                 : figure === 'share'
                   ? 'No subscription account burned in this range.'
                   : 'No subscription traffic in this range.')

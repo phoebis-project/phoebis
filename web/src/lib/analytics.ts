@@ -60,7 +60,7 @@ export const MAX_BURN_LINES = 7;
 export const OTHER_KEY = 'other';
 /**
  * The unit a burn line charts in. `unknown` is a subscription account whose plan the router prices on no tier the cost
- * model sizes (`pricedTier`): a free plan, a usage-based seat, an account with no tier or one on a tier the model has
+ * model sizes (`pricedTier`): a free plan, an account with no tier or one on a tier the model has
  * no capacity row for. It has no share to draw, and dollars only for what its fast-mode and overage answers spent.
  */
 export type BurnLineUnit = BurnUnit | 'unknown';

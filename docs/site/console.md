@@ -909,13 +909,14 @@ link that opens the dialog on Tiers and peak band. A hollow dot marks a bucket w
 reads the latest weighed model of its model tier, with an "estimated" entry in the legend and a `~` on the legend's and
 the tooltip's figures. A bucket whose traffic ran on a model of no known tier, or on a tier the cost model has no
 capacity for on that window, prices no share there and draws no point, under a "model unlisted" entry, and under Window
-shares an account the router prices no tier for (a free plan, a usage-based seat, no tier on file or one the cost model
-does not hold) reads "tier unknown". Spend per minute charts the dollars alone, a subscription account's among them for
-its fast-mode and overage answers. With the Model week card drawn, the four cards sit two by two in the window widths
-where three would otherwise share a row with the fourth alone (1344 px to 1701 px), and without it the three cards share
-one row from 1344 px, an odd last card spanning its row in the narrower widths alone. The section closes on Member
-budgets, Pool, Account, Spent, Budget and Period ends, one row per budget a member carries, a member at its budget
-marked and one the ledger has not reported on reading "not reported".
+shares an account the router prices no tier for (a free plan, no tier on file or one the cost model does not hold) reads
+"tier unknown", while a usage-based seat's dollars chart under Spend per minute alone. Spend per minute charts the
+dollars alone, a subscription account's among them for its fast-mode and overage answers. With the Model week card
+drawn, the four cards sit two by two in the window widths where three would otherwise share a row with the fourth alone
+(1344 px to 1701 px), and without it the three cards share one row from 1344 px, an odd last card spanning its row in
+the narrower widths alone. The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends, one row
+per budget a member carries, a member at its budget marked and one the ledger has not reported on reading "not
+reported".
 
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-light.png#only-light)
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-dark.png#only-dark)
