@@ -216,6 +216,14 @@ for (const r of REQUESTS) {
   if (!seen) ledgered.set(id, { last: r.at, requests: counted });
   else ledgered.set(id, r.at > seen.last ? { last: r.at, requests: seen.requests + counted } : { ...seen, requests: seen.requests + counted });
 }
+/** Each agent's earliest request of its session, the instant the router first saw the agent there. */
+const firstRequestAt = new Map<string, string>();
+for (const r of REQUESTS) {
+  if (r.sessionId === null || r.agentId === null || r.kind === 'probe') continue;
+  const id = `${activityOf(r.keyId, r.keyGeneration, r.sessionId)}|${r.agentId}`;
+  const seen = firstRequestAt.get(id);
+  if (seen === undefined || r.at < seen) firstRequestAt.set(id, r.at);
+}
 
 /** The weight `model` prices at on the 5-hour window (a dated id reads its undated name), its model tier's latest
  *  weighed model's where it has none of its own. Null for a model of no weighted tier, which has no share for any
@@ -264,11 +272,19 @@ const byteOrder = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const lineOrder = (a: Pick<AgentContext, 'agentId' | 'model'>, b: Pick<AgentContext, 'agentId' | 'model'>) =>
   (a.agentId === 'main') !== (b.agentId === 'main') ? (a.agentId === 'main' ? -1 : 1) : byteOrder(a.agentId, b.agentId) || byteOrder(a.model, b.model);
 /**
- * A row's lines in the route's order, each agent first seen a minute per place after the session's first-seen time,
- * main's at it, so no two lines share a creation time and the view's created order has an order to read.
+ * A row's lines in the route's order, each at its agent's first-seen time: main's at the session's, a subagent's at its
+ * earliest request of the session in the requests seed. A subagent no request names reads the session's time plus a
+ * minute per place among the row's subagent lines, a stand-in for a first sighting the story does not write.
  */
-const datedLines = (createdAt: string | null, lines: readonly Omit<AgentContext, 'createdAt'>[]): AgentContext[] =>
-  [...lines].sort(lineOrder).map((line, k) => ({ ...line, createdAt: createdAt === null ? null : iso(Date.parse(createdAt) + k * MINUTE) }));
+const datedLines = (createdAt: string | null, session: string, lines: readonly Omit<AgentContext, 'createdAt'>[]): AgentContext[] => {
+  let place = 0;
+  return [...lines].sort(lineOrder).map((line) => {
+    if (line.agentId === 'main') return { ...line, createdAt };
+    place += 1;
+    const first = firstRequestAt.get(`${session}|${line.agentId}`);
+    return { ...line, createdAt: first ?? (createdAt === null ? null : iso(Date.parse(createdAt) + place * MINUTE)) };
+  });
+};
 /** A request's prompt as the route counts a pin's last turn: its uncached input, cache reads and cache writes. */
 const promptOf = (r: { usage: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; input: number } }) => r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h;
 
@@ -600,6 +616,7 @@ const agentTokens = (i: number, j: number) => 2_000 + ((i * 31 + j * 17) % 23) *
 SESSIONS.forEach((pin, i) => {
   pin.agentContexts = datedLines(
     pin.createdAt,
+    activityOf(pin.keyId, pin.keyGeneration, pin.sessionId),
     RECIPES.filter((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId).flatMap((r, j) => {
       if (r.agentState === 'released' || r.accountId === null) return [];
       const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
@@ -650,7 +667,7 @@ SLOWED_PINS.forEach((pin, k) => {
   SESSIONS.push({
     ...SESSION_SAMPLE,
     accountId: 'studio',
-    agentContexts: datedLines(createdAt, lines),
+    agentContexts: datedLines(createdAt, activityOf('notebook', Date.parse(keyById.get('notebook')!.createdAt), pin.sessionId), lines),
     agentId: 'main',
     agents: pin.agents.length,
     burn: pin.burn,
@@ -724,7 +741,7 @@ if (FLEET_PINS.length > 0) {
   SESSIONS.push({
     ...SESSION_SAMPLE,
     accountId: lastAttempt.accountId,
-    agentContexts: datedLines(firstSeen.at, lines),
+    agentContexts: datedLines(firstSeen.at, activityOf('fleet', keyGeneration, FLEET_SESSION_ID), lines),
     agentId: 'main',
     agents: 1,
     burn: 0.36,
@@ -936,7 +953,7 @@ const WRITTEN_SESSIONS = [
   writtenRow(
     {
       accountId: 'overflow',
-      agentContexts: datedLines(AUXILIARY_ONLY_CREATED_AT, [auxiliaryOnlyLine]),
+      agentContexts: datedLines(AUXILIARY_ONLY_CREATED_AT, activityOf('laptop', Date.parse(keyById.get('laptop')!.createdAt), AUXILIARY_ONLY_SESSION_ID), [auxiliaryOnlyLine]),
       agentId: auxiliaryOnlyLine.agentId,
       agents: 1,
       burn: 0.05,
@@ -953,7 +970,7 @@ const WRITTEN_SESSIONS = [
   writtenRow(
     {
       accountId: 'contract',
-      agentContexts: datedLines(NO_MOD_CREATED_AT, noModLines),
+      agentContexts: datedLines(NO_MOD_CREATED_AT, activityOf('fleet', Date.parse(keyById.get('fleet')!.createdAt), NO_MOD_SESSION_ID), noModLines),
       agentId: 'main',
       agents: noModLines.length,
       burn: 0.22,
