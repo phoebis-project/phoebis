@@ -419,7 +419,8 @@ const REGISTRY_VERB: Record<string, string> = { updated: 'edited' };
 const SHARE_FIELDS = new Set(['pace_floor', 'select_below_utilization', 'shed_ahead_of_pace', 'shed_cap', 'shed_share', 'window_ceiling']);
 /**
  * The fields whose label is not their words: a row written before the rename keeps the old field names, so a renamed
- * field reads its new word and a removed one says so, and a pool's keepalive policy member reads by its dotted name.
+ * field reads its new word and a removed one says so, and a pool's keepalive policy member, written under its dotted
+ * name, reads its label.
  */
 const FIELD_LABEL: Record<string, string> = {
   burn_window_seconds: 'burn average seconds (then burn_window_seconds)',

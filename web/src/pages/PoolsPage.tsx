@@ -244,8 +244,9 @@ export function PoolsPage() {
   // auto reload, and Refresh reads it again.
   const catalog = useAsync(() => api.listCatalog(), []);
   const sessions = useAsync(() => api.listSessions(), [], reread);
-  // The dialog's return rate over the range the dialog picks.
-  const overview = useAsync(() => api.getKeepaliveOverview({ range: returnRange }), [returnRange], reread);
+  // The dialog's return rate over the range the dialog picks, each answer carrying the range it was read for.
+  const overview = useAsync(() => api.getKeepaliveOverview({ range: returnRange }).then((overview) => ({ overview, range: returnRange })), [returnRange], reread);
+  const answer = overview.data?.range === returnRange ? overview.data.overview : null;
   const attention = useAttention();
   const now = useNow();
   const location = useLocation();
@@ -420,10 +421,11 @@ export function PoolsPage() {
         pools={pools.data ?? []}
         sessions={dialog?.pool ? (sessionsByPool.get(dialog.pool.id) ?? []) : []}
         idleReturns={{
-          buckets: (dialog?.pool && overview.data?.pools.find((p) => p.poolId === dialog.pool?.id)?.idleReturns) || [],
-          error: overview.data === null ? overview.error : null,
-          // Until the read for a new range lands, the rows drawn are the other range's.
-          loading: overview.error === null && (overview.data === null || overview.stale),
+          // The last answer outlives a pending or failed read, which after a pick is the other range's, so the dialog
+          // draws an answer read for the range it names, its loading or its error otherwise.
+          buckets: (dialog?.pool && answer?.pools.find((p) => p.poolId === dialog.pool?.id)?.idleReturns) || [],
+          error: answer === null && !overview.loading ? overview.error : null,
+          loading: answer === null && overview.loading,
           onRange: (range) => setDialog((d) => d && { ...d, range }),
           range: returnRange,
         }}
@@ -925,7 +927,7 @@ function ReturnRate({ buckets, error, loading, onRange, range }: ReturnRateProps
     <div className="field return-rate">
       <label className="row">
         <span className="field__label">Return rate by idle age</span>
-        <Select value={range} onChange={(e) => onRange(e.target.value as OverviewRange)} aria-label="Return rate by idle age">
+        <Select value={range} onChange={(e) => onRange(e.target.value as OverviewRange)} aria-label="Return rate range">
           <option value="7d">7 days</option>
           <option value="30d">30 days</option>
         </Select>

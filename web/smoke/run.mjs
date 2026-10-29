@@ -6644,7 +6644,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 
   {
     // The return rate's range is the dialog's own and opens on 7 days each time. The 30-day pick reads the overview
-    // over 30 days, whose rows are the mock's `IDLE_REACHED_30D` and `IDLE_RETURNED_30D` seeds.
+    // over 30 days. The 7-day rows are the mock's `IDLE_REACHED` and `IDLE_RETURNED` seeds, the 30-day rows its
+    // `IDLE_REACHED_30D` and `IDLE_RETURNED_30D`.
     const recorded = recordedCalls('getKeepaliveOverview');
     try {
       const page = await mount('/pools', { now: CLOCK_ORIGIN });
@@ -6655,7 +6656,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       const readOf = () => {
         const keepalive = group(page.container.querySelector('dialog[open]'), 'Keepalive');
         const field = [...(keepalive?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Return rate by idle age');
-        const select = field?.querySelector('label select') ?? null;
+        const select = field?.querySelector('select[aria-label="Return rate range"]') ?? null;
         return {
           hint: field?.querySelector(':scope > .field__hint')?.textContent?.trim() ?? null,
           options: [...(select?.options ?? [])].map((o) => o.textContent?.trim()),
@@ -6694,6 +6695,39 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     } finally {
       recorded.restore();
     }
+  }
+
+  {
+    // A pick whose read fails draws the read's error under the picked range's hint, never the rows of the range the
+    // dialog drew before it (the 7-day `IDLE_REACHED` and `IDLE_RETURNED` seeds).
+    const page = await mount('/pools', { now: CLOCK_ORIGIN });
+    [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+    await page.settle(300);
+    const fieldOf = () => [...(group(page.container.querySelector('dialog[open]'), 'Keepalive')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Return rate by idle age');
+    const select = fieldOf()?.querySelector('label select') ?? null;
+    const before = fieldOf()?.querySelectorAll('.return-rate__row').length ?? 0;
+    if (select) {
+      failNextCall('getKeepaliveOverview', '/admin/keepalive/overview', 'ledger locked', { quiet: true });
+      select.value = '30d';
+      select.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await page.settle(400);
+    }
+    const field = fieldOf();
+    const read = {
+      error: [...(field?.querySelectorAll(':scope > p.muted') ?? [])].map((e) => e.textContent?.trim()),
+      hint: field?.querySelector(':scope > .field__hint')?.textContent?.trim() ?? null,
+      rows: field?.querySelectorAll('.return-rate__row').length ?? 0,
+      value: select?.selectedOptions[0]?.textContent?.trim() ?? null,
+    };
+    results.push({
+      name: "/pools a failed 30-day read of the return rate reads its error under the 30-day hint and draws no row of the 7 days",
+      ok:
+        before === 10 && read.value === '30 days' && read.rows === 0 &&
+        read.hint === 'Of the idle windows that reached each age in the last 30 days, the ones whose next request continued the same prefix within it.' &&
+        JSON.stringify(read.error) === JSON.stringify(['Could not load the return rate: ledger locked']),
+      missing: [String(before), JSON.stringify(read)],
+    });
+    page.unmount();
   }
 
   {
@@ -16952,10 +16986,12 @@ m.unmount();
           JSON.stringify(ddWords(pairs.find((p) => p.label === 'Reading it')?.dd)) === JSON.stringify(read.map((field) => `decisions before ${hhmm(at)} carry ${fieldWord(field)} ${e.detail.diff[field].from}`)),
         missing: pairs.map((p) => `${p.label}: ${p.dd?.textContent}`),
       });
-      // The story's edit moved the pool's idle window from the mock's `BEFORE_EDIT` policy to the pool's own.
+      // The story's edit moved the pool's idle window from the mock's `BEFORE_EDIT` policy to the pool's own. The
+      // pool's seed takes that figure from the console's keepalive default, so the case reads it off the pool.
+      const idle = (await api.listPools()).find((p) => p.id === 'all')?.keepalive.maxIdleSeconds;
       results.push({
         name: "/routing-log a pool edit's detail reads the keepalive idle window it moved as its dotted field's row",
-        ok: JSON.stringify(ddWords(pairs.find((p) => p.label === 'keepalive idle window seconds')?.dd)) === JSON.stringify(['from 43200', 'to 3600']) && !read.includes('keepalive.max_idle_seconds'),
+        ok: JSON.stringify(ddWords(pairs.find((p) => p.label === 'keepalive idle window seconds')?.dd)) === JSON.stringify(['from 43200', `to ${idle}`]) && !read.includes('keepalive.max_idle_seconds'),
         missing: pairs.map((p) => `${p.label}: ${p.dd?.textContent}`),
       });
       page.unmount();

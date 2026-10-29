@@ -2914,7 +2914,7 @@ async function poolReturnRange(theme) {
         };
         const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === label);
         const field = section?.querySelector('.field.return-rate') ?? null;
-        const select = field?.querySelector('select') ?? null;
+        const select = field?.querySelector('select[aria-label="Return rate range"]') ?? null;
         return {
           hint: field?.querySelector(':scope > .field__hint')?.textContent ?? null,
           label: field ? { ...box(field.querySelector('.field__label')), text: field.querySelector('.field__label')?.textContent ?? null } : null,
