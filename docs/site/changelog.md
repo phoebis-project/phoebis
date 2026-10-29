@@ -412,8 +412,10 @@ the request arrived. The price table and the subscription cost model are revisio
 account's tier and the prompt-length band join the hourly rollups, a model the cost model does not weight reads its
 model tier's latest weight as an estimate and raises an attention item, and the cost model names each model's tier
 ([statistics](statistics.md#pricing), [installation](installation.md#stats)). The shipped price table carries Claude
-Sonnet 4.6 and reads Claude Fable 5's cache read at $1 per million tokens in every revision
-([statistics](statistics.md#pricing)).
+Sonnet 4.6 and Claude Sonnet 4.5 and reads Claude Fable 5's cache read at $1 per million tokens in every revision
+([statistics](statistics.md#pricing)). The subscription cost model weighs Claude Fable 5, Opus 5, Opus 4.8 and Sonnet
+4.6 as the plan meter measured them on 2026-10-29, the measurement confirming Sonnet 5's weight
+([statistics](statistics.md#plan-meter)).
 
 The console prices every figure in the unit the shell's Unit switch names, native by default (a subscription request as
 20x window equivalents, a billed request in dollars), with a legend beside it. The cost reference shows one row per

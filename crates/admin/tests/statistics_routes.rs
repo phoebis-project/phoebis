@@ -1573,19 +1573,19 @@ async fn a_plan_request_on_a_model_the_cost_model_does_not_weight_reads_an_estim
         tables
             .revisions
             .in_force(now)
-            .weight_or_fallback("claude-opus-5", phoebis_routing::FIVE_HOUR)
+            .weight_or_fallback("claude-opus-4-7", phoebis_routing::FIVE_HOUR)
             .is_some_and(|(_, fallback)| fallback),
-        "the shipped cost model has no weight of its own for Opus 5"
+        "the shipped cost model has no weight of its own for Opus 4.7"
     );
     let donor = tables
-        .tier_of("claude-opus-5", now)
+        .tier_of("claude-opus-4-7", now)
         .and_then(|tier| tables.latest_weighted(tier, now))
-        .expect("the shipped cost model weighs a model of Opus 5's model tier");
+        .expect("the shipped cost model weighs a model of Opus 4.7's model tier");
     // The landing records the account's Max 20x tier on each attempt. One request on the plan, one answered in
     // overage.
     set_max_20x(&parts).await;
-    let plan = record("opus-plan", now - HOUR, "claude-opus-5", "s0");
-    let mut billed = record("opus-billed", now - HOUR, "claude-opus-5", "s1");
+    let plan = record("opus-plan", now - HOUR, "claude-opus-4-7", "s0");
+    let mut billed = record("opus-billed", now - HOUR, "claude-opus-4-7", "s1");
     let Record::Request { attempts, .. } = &mut billed else {
         unreachable!("record builds a request")
     };

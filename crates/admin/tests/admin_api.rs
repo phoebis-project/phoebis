@@ -6407,14 +6407,14 @@ async fn a_pool_member_answers_the_engines_pace_score_whatever_its_kind() {
 
 #[tokio::test]
 async fn a_pin_on_a_model_without_a_weight_reads_an_estimated_burn() {
-    // The pin burns Opus 5, which the shipped cost model has no weight for: the share is estimated at the weight of
-    // its model tier's latest weighted model, and the same pin in overage prices in dollars, since the price table
+    // The pin burns Sonnet 4.5, which the shipped cost model has no weight for: the share is estimated at the weight
+    // of its model tier's latest weighted model, and the same pin in overage prices in dollars, since the price table
     // lists the model.
     use common::{get, json, login, wait_json};
     let now = common::NOW;
     let parts = sessions_harness_with(|generation| {
         vec![phoebis_store::PinRow {
-            model: "claude-opus-5".into(),
+            model: "claude-sonnet-4-5".into(),
             ..burning_opus_pin("s1", "business", generation, now, 100.0, 100.0)
         }]
     })
@@ -6423,9 +6423,9 @@ async fn a_pin_on_a_model_without_a_weight_reads_an_estimated_burn() {
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let tables = phoebis_ledger::PlanTables::shipped();
     let donor = tables
-        .tier_of("claude-opus-5", now)
+        .tier_of("claude-sonnet-4-5", now)
         .and_then(|tier| tables.latest_weighted(tier, now))
-        .expect("the shipped model weighs a model of Opus 5's model tier");
+        .expect("the shipped model weighs a model of Sonnet 4.5's model tier");
     // The banded copy at the fixed clock, which the peak band never covers, priced at the donor's weight on Max 20x.
     let share_per_hour = tables
         .share_at(

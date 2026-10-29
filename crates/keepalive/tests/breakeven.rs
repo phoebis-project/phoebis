@@ -281,9 +281,9 @@ fn a_plan_recipe_reads_the_plans_multipliers_on_every_model_and_a_dollar_recipe_
     );
 }
 
-/// On the shipped tables `claude-opus-5` has a dollar row and no plan weight. A token costs the model's weight times
-/// the type's multiplier, so the weight cancels from read over write and a plan recipe on it breaks even where every
-/// plan recipe does.
+/// On the shipped tables `claude-opus-5` has a dollar row and a plan weight other than Opus 5.5's. A token costs the
+/// model's weight times the type's multiplier, so the weight cancels from read over write and a plan recipe on it
+/// breaks even where every plan recipe does.
 #[test]
 fn a_plan_recipe_breaks_even_on_the_plans_multipliers_whatever_the_models_weight() {
     let timing = KeepaliveTiming::default();
@@ -304,7 +304,7 @@ fn a_plan_recipe_breaks_even_on_the_plans_multipliers_whatever_the_models_weight
     assert_eq!(
         both(&prices, &plan, "claude-opus-5"),
         both(&prices, &plan, "claude-opus-5-5"),
-        "the same figure as the weighted model beside it"
+        "the same figure as Opus 5.5 at another weight"
     );
     let costs = COSTS.replace(
         "overrides: {}",

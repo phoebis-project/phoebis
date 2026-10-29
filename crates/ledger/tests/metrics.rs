@@ -501,7 +501,7 @@ async fn a_landed_request_reaches_the_request_and_attempt_series() {
     let resp = h
         .app
         .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5[1m]", "s1"))
+        .oneshot(request_for(KEY, "claude-opus-4-7[1m]", "s1"))
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
@@ -519,7 +519,7 @@ async fn a_landed_request_reaches_the_request_and_attempt_series() {
     );
     assert!(
         text.contains(r#"phoebis_attempts_total{account="a",model="other",outcome="succeeded"} 1"#),
-        "the shipped table does not price claude-sonnet-4-5, so the label is other:\n{text}"
+        "the shipped table does not price claude-opus-4-7, so the label is other:\n{text}"
     );
     up.shutdown().await;
 }

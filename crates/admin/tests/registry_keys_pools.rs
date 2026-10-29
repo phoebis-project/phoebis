@@ -1209,9 +1209,9 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
         (2, Some(1)),
         "the card's head figure equals its bars"
     );
-    // A plan request on the subscription account beside the api_key rows, on Opus 5, which the shipped cost model
-    // prices at its model tier's latest weight: the dollars count it, the billed part does not, and the equivalent
-    // is its own.
+    // A plan request on the subscription account beside the api_key rows, on Sonnet 4.5, which the shipped cost
+    // model prices at its model tier's latest weight: the dollars count it, the billed part does not, and the
+    // equivalent is its own.
     let plan_at = now - 30_000;
     let usage = phoebis_routing::PinUsage {
         input: 100,
@@ -1226,8 +1226,8 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
             key_id: Some("desktop".into()),
             key_generation,
             pool_id: Some("main".into()),
-            model: "claude-opus-5".into(),
-            canonical_model: "claude-opus-5".into(),
+            model: "claude-sonnet-4-5".into(),
+            canonical_model: "claude-sonnet-4-5".into(),
             kind: "inference".into(),
             origin: "client".into(),
             status: Some(200),
@@ -1249,7 +1249,7 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
         bodies: None,
     });
     let plan = common::priced_row(
-        "claude-opus-5",
+        "claude-sonnet-4-5",
         phoebis_ledger::Funding::Plan,
         plan_at,
         usage,
