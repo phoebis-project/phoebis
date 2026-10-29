@@ -56,7 +56,7 @@ export const classLegendOf = (requestClass: string): ClassLegend => ((CONVERSATI
 
 /** Lines a burn chart draws before the rest fold into one, the stacked cost chart's limit. */
 export const MAX_BURN_LINES = 7;
-/** The key the folded rest carries, suffixed by its unit under the account grouping; no group is looked up by it. */
+/** The key the folded rest carries, suffixed by its unit under the account grouping. No group is looked up by it. */
 export const OTHER_KEY = 'other';
 /**
  * The unit a burn line charts in. `unknown` is a subscription account whose plan the router prices on no tier the cost
@@ -610,7 +610,7 @@ const SCALE_FLOOR = 0.1;
 const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
 
 /**
- * The burn route's points as chart lines and rows. The request-class grouping folds into its two legend entries;
+ * The burn route's points as chart lines and rows. The request-class grouping folds into its two legend entries, and
  * every other grouping keeps the groups with the most tokens and sums the rest as other, which draws no plan line, so
  * its plan figures stay empty. Under the account grouping the rest folds once per unit, since a subscription account's
  * window share and an API-key account's dollars chart on different axes. Where the shares answer (that grouping, or
@@ -621,7 +621,7 @@ const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
  *
  * `rangeEndMs` is the end of the range the points were read for and `nowMs` the instant of that read, the end when
  * absent. The route reads whole hours through the hour ceiling of the end, so a bucket covers its width up to the hour
- * ceiling of the range's end, no later than the read's instant; the full width without an end.
+ * ceiling of the range's end, no later than the read's instant, and its full width without an end.
  */
 export function foldBurn(
   points: BurnPoint[],

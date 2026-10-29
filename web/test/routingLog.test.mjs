@@ -1677,7 +1677,7 @@ test("a Pace row's By chip carries the strategy's hint and a rung row's none", (
 
 test("a usage-based candidate's one window cell reads its spend share over the reset, marked where the reset is estimated, at any tier", () => {
   // The engine writes the spend entry for a paid source whatever its tier, and files it in group 2 only while the pool
-  // prefers subscriptions, so the entry marks the class and the tier does not.
+  // prefers subscriptions, so the entry decides the cells at any tier.
   const seat = (windows, tier = [2, 1, 0]) => d.candidateCells(candidate({ accountId: 'seat', planTier: 'default_claude_zero', priority: 1, tier, windows }), record(), NOW);
   const reset = Date.UTC(2026, 9, 1);
   const estimated = seat({ spend: window5h(0.41, reset, 'estimated', 300_000) });
@@ -1728,9 +1728,9 @@ test('the Pace header passes over a subscription candidate whose pace names no w
   assert.equal(d.paceHeader(record({ candidates: [lapsed] })), 'Pace', 'no subscription candidate names a window');
 });
 
-test("a Pace cell and its title read the score in the unit the record's pick step gives it, else the unit its pace's shape names", () => {
-  // A seat whose share lapsed carries no spend entry, so its cells read by the plan arm, while the engine scores it as a
-  // paid source: a percent with a burn of 0, and a pace with no hours, no deadline and no window, which its title reads.
+test("a Pace cell reads the score in the unit the record's pick step gives it, else the unit its pace's shape names, and a seat's title reads its allowance", () => {
+  // A lapsed seat carries no spend entry, so its cells read by the plan arm, while the engine scores it as a paid
+  // source: a percent with a burn of 0, and a pace with no hours, no deadline and no window, which its title reads.
   const lapsed = candidate({ accountId: 'seat', pace: { burn: 0, deadline: null, end: null, hours: null, remaining: 0.9, reset: null, score: 0.42, window: null }, planTier: 'default_claude_zero', priority: 1, tier: [0, 1, 0], windows: {} });
   const allowance = '90% of its allowance left. Scored by the remaining share alone, with no division by hours.';
   const plan = candidate({ pace: { burn: 0.004, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.006, window: 'seven_day' } });
@@ -1742,7 +1742,7 @@ test("a Pace cell and its title read the score in the unit the record's pick ste
   // member finds none about itself.
   const lower = { ...lapsed, tier: [2, 1, 0] };
   const below = picked(lower, [wfact('score', 0.006, 'percent_per_hour', 'primary')], [plan, lower]);
-  assert.deepEqual([below.pace, below.paceTitle], ['42%', allowance], `a seat below the pick's tier reads the percent its pace names, not another member's unit: ${below.paceTitle}`);
+  assert.deepEqual([below.pace, below.paceTitle], ['42%', allowance], "a seat below the pick's tier reads the percent its pace names, not another member's unit, and its title its allowance");
   const later = { ...plan, priority: 2, tier: [0, 2, 0] };
   const behind = picked(later, [wfact('score', 0.42, 'percent', 'seat')], [lapsed, later]);
   assert.deepEqual([behind.pace, behind.paceTitle.includes(': 0.60 %/h.')], ['0.60 %/h', true], "a plan member below a seat's tier reads the plan unit its pace names");

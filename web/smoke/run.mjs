@@ -387,7 +387,9 @@ const addPattern = async (page, label, text) => {
   await page.settle(700);
   return true;
 };
-/** Unchecks the checked row reading `value` in `label`'s list, which drops that value alone: false where none stands. */
+/**
+ * Unchecks the checked row reading `value` in `label`'s list, which drops that value alone: false where none stands.
+ */
 const uncheck = async (page, label, value) => {
   await addFilter(page, label);
   const row = boxOptions().find((o) => o.textContent?.trim() === value && o.getAttribute('aria-selected') === 'true');
@@ -3856,8 +3858,8 @@ expect('/accounts/secondary', m.text(), [
   results.push({ name: '/accounts one story account carries an ended plan, and its Identity list alone draws a Plan ended row', ok: JSON.stringify(flagged) === JSON.stringify(['sunset']) && JSON.stringify(drawn) === JSON.stringify(['sunset']), missing: [`flagged ${JSON.stringify(flagged)}`, `drawn ${JSON.stringify(drawn)}`] });
   {
     // The sunset seed's profile read found no plan four hours before the mock's load, after its saved end three days
-    // back, so the route answers no window for it: its Usage card names the ended plan, its row's badge and its Plan row
-    // read Free, the plan the router resolves from the document that read found, and the list counts it with every
+    // back, so the route answers no window for it: its Usage card names the ended plan, its row's badge and its Plan
+    // row read Free, the plan the router resolves from the document that read found, and the list counts it with every
     // other account. The smoke runs under TZ=UTC, so the Plan ended hover reads 10:30 and the Plan row's start its UTC
     // day, where a viewer's zone would move them.
     const sunset = story.find((a) => a.id === 'sunset');
@@ -17706,8 +17708,8 @@ m.unmount();
   page.unmount();
 }
 
-// A pattern typed in Add filter's step commits on Enter or Apply alone. The clock stands still and a tick passes the
-// pause a field elsewhere commits on, so a read before the key could only come from a timer.
+// A pattern typed in Add filter's step commits on Enter alone. The clock stands still and a tick passes the pause a
+// field elsewhere commits on, so a read before the key could only come from a timer.
 {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const typeInto = (input, text) => {
@@ -23166,8 +23168,8 @@ const CARD_VIEWS = [
 }
 {
   // The bar's sort control on a bare /accounts. Each order is read off the story's accounts (`ACCOUNTS` in
-  // `web/src/mock/accounts.ts`) through `api.listAccounts`, the next reset at the mount's frozen clock as the page reads
-  // it. A key's own direction leaves the address, so a pick of Most used writes `sort=usage` alone.
+  // `web/src/mock/accounts.ts`) through `api.listAccounts`, the next reset at the mount's frozen clock as the page
+  // reads it. A key's own direction leaves the address, so a pick of Most used writes `sort=usage` alone.
   const name = "/accounts the sort control reads its key and its direction's arrow, lists the keys over the directions, and each pick writes the address and orders the rows";
   const accounts = await api.listAccounts();
   const usage = (a) => Math.max(0, ...a.windows.map((w) => w.utilization));
@@ -24303,7 +24305,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const ciCells = ci.map((r) => [cell(r, 'Cache warming')?.textContent?.trim(), cell(r, 'Next probe')?.textContent?.trim()]);
     api.listSessions = listSessions;
     await redraw();
-    results.push({ name: '/sessions still lists the ci key\'s sessions', ok: ci.length === 2, missing: [String(ci.length)] });
+    results.push({ name: "/sessions draws the ci key's two sessions from the seed", ok: ci.length === 2, missing: [String(ci.length)] });
     results.push({ name: '/sessions ci sessions read no recipe, not scheduled', ok: ciCells.every(([k, n]) => k === 'no recipe' && n === 'not scheduled'), missing: ciCells.flat() });
   }
   await m.navigate('/sessions');
@@ -24414,7 +24416,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   // Expiry now rides under the last-used time rather than in a column of its own.
   const expiries = rows().map((r) => cell(r, 'Last used')?.querySelector('.sub')?.textContent?.trim() ?? '');
   // Of the 23 rows the default filters keep, the registration-only row and the laptop row the ledger never saw carry no
-  // last use and no request, so they have no expiry to count down.
+  // last use and no request, so they have no expiry to count down. The earlier holder, the ci key's two rows, the row
+  // idle for two hours and the refusal-only row, each with an expiry, left the list under the non-companion timeout.
   results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 23 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 21, missing: [`${expiries.length} rows`, ...expiries.slice(0, 3)] });
   const counts = rows().map((r) => Number(cell(r, 'Requests')?.textContent?.trim()));
   // 18 of the 23 rows the default filters keep hold ledgered requests, and the two rows with no last use, nightly's
@@ -24499,7 +24502,9 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     });
     const lasts = rows().map((r) => cell(r, 'Last request')?.textContent?.trim() ?? '');
     // The 18 rows the default filters keep that hold ledgered requests read a last request and the other five none, the
-    // two written sessions among the five. The refusal-only row left the list under the non-companion timeout.
+    // two written sessions among the five. The earlier holder, the ci key's two rows and the refusal-only row, which
+    // read a last request, and the row idle for two hours, which read none, left the list under the non-companion
+    // timeout.
     results.push({ name: '/sessions last request is relative or none', ok: lasts.filter((v) => v === 'none').length === 5 && lasts.filter((v) => /ago$|^now$/.test(v)).length === 18, missing: lasts });
     const silentRows = rows().filter((r) => (cell(r, 'Companion')?.textContent?.trim() ?? '').startsWith('silent'));
     const silentWarming = silentRows.map((r) => cell(r, 'Cache warming')?.textContent?.trim() ?? '');
@@ -24868,7 +24873,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   await m.settle(150);
   results.push({ name: '/sessions row collapses again', ok: m.container.querySelectorAll('.srow__detail').length === 0, missing: [] });
 
-  // Expand all reaches every hold reason and both ci explanations.
+  // Expand all reaches every hold reason.
   const expandAll = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all');
   expandAll?.click();
   await m.settle(250);
@@ -25167,7 +25172,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const count = cell(row, 'Agents')?.textContent?.trim();
     const tile = [...m.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value')?.textContent?.trim();
     // The 23 rows the default filters keep hold 35 records, two of them the written session's released subagents and
-    // three the two written sessions'.
+    // three the two written sessions'. The earlier holder, the ci key's two rows, the row idle for two hours and the
+    // refusal-only row left the list under the non-companion timeout with their records.
     const want = '33 of 1,024';
     results.push({
       name: '/sessions a line the mod released is not listed, one the session\'s end released is, and the Agents column and tile leave the hidden ones out of their counts',
@@ -25242,7 +25248,8 @@ m.unmount();
 
 // The cost reference, opened from each of its six entry points on the tab each names. Every figure it draws is read
 // against the decoded settings the mock answers, the files the fixtures captured, through lib/costs.ts and the page's
-// own formatting, never against a literal.
+// own formatting, never against a literal, while the console's own words for the regimes and the band are pinned as
+// literals.
 {
   const wired = decodeSettings(SETTINGS_WIRE);
   // The dialog draws each file's entry in force at its instant, here the mount's pinned clock.
@@ -25689,7 +25696,7 @@ m.unmount();
       const widths = [...(tierCard?.querySelectorAll('.cost-ref__bar') ?? [])].map((bar) => Number.parseFloat(bar.style.width));
       const stripes = allRows.filter((r, n) => r.classList.contains('is-alt') !== (n % 2 === 1)).length;
       results.push({
-        name: '/sessions windows by tier lists a group row and a row per tier each regime names',
+        name: '/sessions windows by tier lists a group row and a row per tier each regime names, then the Headless group and the base rows',
         ok:
           regimeNames(costs).length > 0 &&
           JSON.stringify(drawn) === JSON.stringify(want) &&

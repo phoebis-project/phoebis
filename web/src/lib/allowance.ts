@@ -135,7 +135,8 @@ export const resetInstant = (isoTime: string): string => `${resetDate(isoTime)} 
 
 /** One account of the Analytics card: each weekly window's last and four weeks' figures with the resets counted,
  *  keyed by the wire key, the 7-day window's count, the instant of a latest reset that is the term's end, and whether
- *  one of the newest 7-day weeks prices no capacity at the pair it ran under. */
+ *  one of the newest 7-day weeks prices no capacity at the pair it ran under, the account's own pair standing in where
+ *  it holds no 7-day reset, and the plan word alone deciding where no cost model answered. */
 export interface AllowanceRow {
   accountId: string;
   figures: Record<string, { counted: number; last: AllowanceFigure; weeks: AllowanceFigure }>;

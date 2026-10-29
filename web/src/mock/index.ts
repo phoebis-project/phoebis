@@ -1487,8 +1487,8 @@ export class MockApi implements Api {
     if (idx < 0) return Promise.reject(new Error(`Unknown key ${id}`));
     const { expiresAt: expiry, guardrails: ownIds, ...rest } = input;
     const current = this.keys[idx];
-    // The route reads the pool before the rule list, the guardrail list and the edit's stamp, so an edit onto a missing
-    // pool answers 404 ahead of their refusals.
+    // The route reads the pool before the rule list and the guardrail list, and before it compares the edit's stamp, so
+    // an edit onto a missing pool answers 404 ahead of their refusals.
     if (!this.pools.some((p) => p.id === rest.poolId)) return Promise.reject(new ApiError(404, 'pool not found', null));
     const refusal = keyRulesRefusal(input);
     if (refusal) return Promise.reject(new ApiError(400, refusal, null));

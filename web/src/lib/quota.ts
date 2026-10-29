@@ -98,10 +98,12 @@ export function endOf(account: Pick<Account, 'canceled' | 'subscription'>, now: 
   return trial > now ? trial : null;
 }
 
-/** The account's `end` where a window's pace runs to it, an end before the reset (one at the reset is the reset); else null. */
+/** The account's `end` where a window's pace runs to it, an end before the reset (one at the reset is the reset), and
+ *  null otherwise. */
 export const paceEnd = (resetsAt: string | null, end: number | null): number | null => (resetsAt !== null && end !== null && end < Date.parse(resetsAt) ? end : null);
 
-/** " to its end at 15:42" for the end a pace runs to (`paceEnd`), as the decision card's Pace hover names it; empty for none. */
+/** " to its end at 15:42" for the end a pace runs to (`paceEnd`), as the decision card's Pace hover names it, and empty
+ *  for none. */
 export const toEndWords = (end: number | null, now: number): string => (end === null ? '' : ` to its end at ${instant(end, now)}`);
 
 /** One less the share elapsed, read off the field as the utilization less the lead, so the mark and the words read one

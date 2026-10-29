@@ -1347,12 +1347,13 @@ async function routingLogRegistryTarget(theme) {
 
 /**
  * The story's rows the panels draw by their writers' members, under the 24-hour range on their kinds, each row opened
- * in turn: the pool edit's `keepalive idle window seconds` row against the settings row above it, sunset's backoff close
- * with its "Ended by the plan's end" row against the Backed off row in the label and against the Attempts row above it,
- * the one plain value of the two, in the value, and the window reset's Read from row against its Before the reset row,
- * each in the label's type and left edge and the value's type with the texts recorded. The guardrail record's two
- * chips on its Answer row compare against the `key` chip on their line in height, top edge and font size, their texts
- * recorded. The router's seed holds none of the rows, so the mock pass alone reads them. The bare log loads again after.
+ * in turn: the pool edit's `keepalive idle window seconds` row against the settings row above it, sunset's backoff
+ * close with its "Ended by the plan's end" row against the Backed off row in the label and against the Attempts row
+ * above it, the one plain value of the two, in the value, and the window reset's Read from row against its Before the
+ * reset row, each in the label's type and left edge and the value's type with the texts recorded. The guardrail
+ * record's two chips on its Answer row compare against the `key` chip on their line in height, top edge and font size,
+ * their texts recorded. The router's seed holds none of the rows, so the mock pass alone reads them. The bare log loads
+ * again after.
  */
 async function routingLogEventPanels(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -1580,9 +1581,9 @@ async function diagnosticsNav(theme, path) {
  * own reads: each fit column as wide as its widest cell within 1 px past the gutter, the gutter 30 px within 1 px,
  * Account the one fill and at least its 132 px floor, and on the three wide viewports each table inside its wrap with
  * nothing to scroll sideways. At 375 the document is as wide as the window, each table wider than its card scrolls
- * inside its `.table-wrap`, and the first line's Latest ratio cell ends inside the wrap, in view with no scroll. At 1280
- * a collapsed line is 37.8 px within 0.5 px, the badged line (nightly's 5-hour one in the mock's story) as tall as a
- * plain one, and the height of one open group, nightly's 5-hour line with its first page of windows, goes to the
+ * inside its `.table-wrap`, and the first line's Latest ratio cell ends inside the wrap, in view with no scroll. At
+ * 1280 a collapsed line is 37.8 px within 0.5 px, the badged line (nightly's 5-hour one in the mock's story) as tall as
+ * a plain one, and the height of one open group, nightly's 5-hour line with its first page of windows, goes to the
  * measurements. That group's nested rows alternate two tones, each row read by the ground its first cell shows (the
  * cell's own fill, else the nearest one behind it), since nightly's line is its card's second and the stripe paints
  * the detail row the nested table sits in. The tones go to the measurements. With that group open, the group table's
@@ -5295,8 +5296,8 @@ async function planLegend(theme) {
  * row draws that second line. Every budget row draws its bar, one row per budgeted period, and in the mock's story the
  * member past its budget carries the at-budget badge, and the subscription member's spend leads with the muted word
  * metered in the figure's own type. The Burn section's cards end on Member budgets after the charts, with no
- * reconciliation card among them. The router's seed places nothing and budgets no member, so there the tables draw their
- * empty rows. Each section shows on its own tab, so the Cache tables are read there and Member budgets on Burn.
+ * reconciliation card among them. The router's seed places nothing and budgets no member, so there the tables draw
+ * their empty rows. Each section shows on its own tab, so the Cache tables are read there and Member budgets on Burn.
  */
 async function analyticsTables(theme) {
   const say = (what) => failures.push(`${theme} /analytics: ${what}`);
@@ -10744,10 +10745,10 @@ async function costReference(theme) {
 }
 
 /**
- * The cost reference's headline words from Sessions at 1280 by 800, as the walk reads the dialog. On Tiers and peak band
- * the Windows by tier group rows read the Interactive title, then the Headless title, the first group row's cell in the
- * type size of the table's first head and above its weight, and the Peak band card's subtitle reads the shipped band
- * sentence after "This week.". On Plan rates the Regime control's pressed option reads Interactive. The texts, the
+ * The cost reference's headline words from Sessions at 1280 by 800, as the walk reads the dialog. On Tiers and peak
+ * band the Windows by tier group rows read the Interactive title, then the Headless title, the first group row's cell
+ * in the type size of the table's first head and above its weight, and the Peak band card's subtitle reads the shipped
+ * band sentence after "This week.". On Plan rates the Regime control's pressed option reads Interactive. The texts, the
  * caption and both weights are recorded. The mock pass's alone, since the subtitle's week word reads the pinned clock.
  */
 async function costReferenceHeadlines(theme) {

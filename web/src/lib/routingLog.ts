@@ -1380,9 +1380,9 @@ const PACE_WINDOW_WORD: Record<string, string> = { seven_day: '7-day', seven_day
 const PACE_WINDOW_PHRASE: Record<string, string> = { seven_day: 'the 7-day window', seven_day_fable: 'the 7-day Fable window' };
 
 /**
- * A usage-based seat: the engine writes a paid source's pace with no hours, no deadline and no window whatever its tier,
- * and keeps it where a share that lapsed at its reset or was not yet read leaves no spend entry, so the shape marks the
- * class and neither the entry nor the tier does.
+ * A usage-based seat: the engine writes a paid source's pace with no hours, no deadline and no window whatever its
+ * tier, and keeps it where a share that lapsed at its reset or was not yet read leaves no spend entry, so the shape
+ * marks the class and neither the entry nor the tier does.
  */
 const isSpendSeat = (c: RecordCandidate): boolean => c.kind === 'oauth' && c.pace !== null && c.pace.hours === null && c.pace.deadline === null && (c.pace.window ?? null) === null;
 

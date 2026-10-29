@@ -6,7 +6,9 @@ import { WINDOW_ORDER } from '@/lib/windows';
 import { Meter } from './primitives';
 import { SpeedChip } from './SpeedChip';
 
-/** `slowDown` is a slowed account's slow-down, which the whole 5-hour bar alone reads: its speed chip follows the label. */
+/**
+ * `slowDown` is a slowed account's slow-down, which the whole 5-hour bar alone reads: its speed chip follows the label.
+ */
 export function WindowBar({ window: w, now, soon = false, showLabel = true, compact = false, slowDown = null }: { compact?: boolean; now: number; showLabel?: boolean; slowDown?: AccountSlowDown | null; soon?: boolean; window: RateLimitWindow }) {
   const remaining = remainingOf(w);
   const reset = compact ? fmtRelative(w.resetsAt, now) : `resets ${fmtRelative(w.resetsAt, now)}`;

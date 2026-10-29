@@ -335,8 +335,8 @@ test("a custom range's poll over a stale list with no next cursor leaves a late 
 
 test("a custom range's poll that withholds a late row under a stale list keeps its stamp, so the poll after the list's return lands the row", async () => {
   // The list was read through stamp 7. Row 0, above it, was written at 8 and row 26, below its last row, at 9, and a
-  // watermarked read answers only what was written after the stamp it sends, so a poll that passed 9 while row 26 was
-  // withheld would never read the row again.
+  // watermarked read answers only what was written after the stamp it sends, so a poll that moved the stamp to 9 while
+  // row 26 was withheld would never read the row again.
   const clock = frozen();
   const { rows } = route(27);
   const sent = [];

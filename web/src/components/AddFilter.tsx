@@ -26,8 +26,9 @@ const SEARCHED = 12;
 export const PATTERN_GRAMMAR = '* matches any run of characters, ? one, and a backslash quotes either';
 
 /**
- * A typed list's rows: each checked value no option carries under "Patterns", ahead of the range's own under "In range",
- * so a typed pattern stands as a row that unchecks like any other and reads apart from the values the range holds.
+ * A typed list's rows: each checked value no option carries under "Patterns", ahead of the range's own under
+ * "In range", so a typed pattern stands as a row that unchecks like any other and reads apart from the values the
+ * range holds.
  */
 function typedOptions(known: Option[], listed: string[]): Option[] {
   const typed = [...new Set(listed)].filter((v) => !known.some((o) => o.value === v));

@@ -1762,6 +1762,7 @@ export interface AllowanceReset {
   /** One less the utilization before the reset, inside the unit interval. */
   shareLeft: number;
   source: AllowanceResetSource;
+  /** The tier of that reading, null where `plan` is. */
   tier: string | null;
 }
 

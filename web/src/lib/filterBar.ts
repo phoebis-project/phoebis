@@ -108,7 +108,11 @@ export function withoutValue(dimension: Dimension, filters: Record<string, unkno
 /** A value as a pattern that matches itself in full: `*`, `?` and `\` quoted, the rest verbatim. */
 export const escapePattern = (value: string): string => value.replace(/[*?\\]/g, '\\$&');
 
-/** A list as up to three option labels then "+N" with every label in the title, a pattern as itself, an id as its first eight characters and an ellipsis with the whole id in the title, a choice as its option's label, a flag as the word alone with no colon. */
+/**
+ * A list as up to three option labels then "+N" with every label in the title, a typed list's labels each cut to 32
+ * characters and an ellipsis, a pattern as itself, an id as its first eight characters and an ellipsis with the whole
+ * id in the title, a choice as its option's label, a flag as the word alone with no colon.
+ */
 export function chipText(dimension: Dimension, value: unknown, options: Option[] = []): ChipText {
   const { word } = dimension;
   switch (dimension.kind) {
