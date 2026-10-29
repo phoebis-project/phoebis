@@ -10769,6 +10769,50 @@ async function agentLines(theme, width) {
 }
 
 /**
+ * The Sessions bar's sort control and the order it gives the rows: the Sort button in the height, top edge, type size
+ * and weight of the Columns control beside it, its text "Sort: Created" on the bare address and "Sort: Last activity"
+ * under `?sort=activity`, and the session ids of the first five rows under each recorded. The bare view loads again
+ * after, so the shot and the measures after it read the view as it first drew.
+ */
+async function sessionsSortOrder(theme) {
+  const say = (what) => failures.push(`${theme} /sessions sort order: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const row = document.querySelector('.filter-bar__row');
+      const box = (el) => {
+        if (!el) return null;
+        const style = getComputedStyle(el);
+        const b = el.getBoundingClientRect();
+        return { fontSize: style.fontSize, fontWeight: style.fontWeight, height: Math.round(b.height), top: Math.round(b.top) };
+      };
+      const sort = row?.querySelector('button[aria-label="Sort"]') ?? null;
+      const session = [...document.querySelectorAll('.sessions-table thead th')].findIndex((th) => th.textContent?.trim() === 'Session');
+      return {
+        columns: box(row?.querySelector('button[aria-label="Columns"]')),
+        first: [...document.querySelectorAll('.sessions-table tbody tr.srow')].slice(0, 5).map((tr) => tr.children[session]?.getAttribute('title') ?? ''),
+        sort: sort === null ? null : { ...box(sort), text: sort.textContent?.trim() ?? '' },
+      };
+    });
+  try {
+    const bare = await read();
+    await loadAtOrigin('/sessions?sort=activity', '.sessions-table');
+    const activity = await read();
+    measurements.push(`${theme} /sessions sort order ${JSON.stringify({ activity, bare })}`);
+    for (const [got, text] of [
+      [bare, 'Sort: Created'],
+      [activity, 'Sort: Last activity'],
+    ]) {
+      if (got.sort === null) say(`the bar draws no Sort button where it should read "${text}"`);
+      else if (got.sort.text !== text) say(`the Sort button reads ${JSON.stringify(got.sort.text)}, not "${text}"`);
+      for (const what of compare(got.sort, got.columns, ['fontSize', 'fontWeight', 'height', 'top'], `the Sort button reading "${text}" against the Columns control`)) say(what);
+    }
+    if (mock && bare.first.length < 5) say(`the story draws ${bare.first.length} rows, fewer than the five the order is read on`);
+  } finally {
+    await loadAtOrigin('/sessions', '.sessions-table');
+  }
+}
+
+/**
  * The Sessions table's fork badge against the row's other badges: it sits under the session id's line in the face of
  * the Companion and Cache warming badges (its height is free, since it wraps its words when the column is narrower
  * than they are). Both seeds record a fork, so both passes measure the fork badge, and only the mock's pass fails when
@@ -11259,6 +11303,8 @@ try {
           await page.setViewportSize({ height: 800, width: 1280 });
           await settle();
         }
+        // Its loads end on the bare view, so the measures after it read the view as it first drew.
+        await sessionsSortOrder(theme);
         await sessionForkMark(theme);
         await sessionForkBadges(theme);
         await probeBarSlots(theme);

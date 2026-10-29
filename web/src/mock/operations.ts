@@ -7,7 +7,7 @@ import { keyById, poolById } from './pools';
 import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
-import { HOUR, MINUTE, NOW, ago, ahead } from './time';
+import { HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
 
 const rng = createRng(2_024);
 
@@ -255,14 +255,20 @@ const EFFORT_WORDS = ['medium', 'high', 'low', 'max'] as const;
 const effortAt = (i: number) => EFFORT_WORDS[i % EFFORT_WORDS.length];
 
 /** A pin's line as the route answers it: warm while its last use is inside its cache TTL at the story's clock. */
-const pinLine = (line: Omit<AgentContext, 'warm'>): AgentContext => ({
+const pinLine = (line: Omit<AgentContext, 'createdAt' | 'warm'>): Omit<AgentContext, 'createdAt'> => ({
   ...line,
   warm: line.lastUsedAt !== null && line.cacheTtlMs !== null && NOW - Date.parse(line.lastUsedAt) < line.cacheTtlMs,
 });
 const byteOrder = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 /** The route's order of a session's lines: main first, then by agent id and model as bytes. */
-const lineOrder = (a: AgentContext, b: AgentContext) =>
+const lineOrder = (a: Pick<AgentContext, 'agentId' | 'model'>, b: Pick<AgentContext, 'agentId' | 'model'>) =>
   (a.agentId === 'main') !== (b.agentId === 'main') ? (a.agentId === 'main' ? -1 : 1) : byteOrder(a.agentId, b.agentId) || byteOrder(a.model, b.model);
+/**
+ * A row's lines in the route's order, each agent first seen a minute per place after the session's first-seen time,
+ * main's at it, so no two lines share a creation time and the view's created order has an order to read.
+ */
+const datedLines = (createdAt: string | null, lines: readonly Omit<AgentContext, 'createdAt'>[]): AgentContext[] =>
+  [...lines].sort(lineOrder).map((line, k) => ({ ...line, createdAt: createdAt === null ? null : iso(Date.parse(createdAt) + k * MINUTE) }));
 /** A request's prompt as the route counts a pin's last turn: its uncached input, cache reads and cache writes. */
 const promptOf = (r: { usage: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; input: number } }) => r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h;
 
@@ -313,7 +319,8 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     epoch: i < 3 ? 2 : 1,
     historical: false,
     keyGeneration,
-    // An unpinned session has no pin to date, so the route answers no creation and the last use its own rows read.
+    // The router keeps a session's first-seen time until its last pin leaves, so an unpinned session answers none, and
+    // its last use is what its own rows read.
     createdAt: pinned ? ago(createdAgo) : null,
     lastUsedAt: !pinned ? (seen ? seen.last : null) : lastFromRows === null ? null : ago(lastUsedAgo),
     lastRequestAt: seen ? seen.last : null,
@@ -591,14 +598,15 @@ const agentTokens = (i: number, j: number) => 2_000 + ((i * 31 + j * 17) % 23) *
 // companion reports holds main's alone. The subagents' pins take the companion's five-minute TTL, their place's effort
 // word and their last request as their last use.
 SESSIONS.forEach((pin, i) => {
-  pin.agentContexts = RECIPES.filter((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId)
-    .flatMap((r, j) => {
+  pin.agentContexts = datedLines(
+    pin.createdAt,
+    RECIPES.filter((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId).flatMap((r, j) => {
       if (r.agentState === 'released' || r.accountId === null) return [];
-      const own = { accountId: r.accountId, agentId: r.agentId, createdAt: pin.createdAt, model: r.model };
+      const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
       if (r.agentId === 'main') return [pinLine({ ...own, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt })];
       return [pinLine({ ...own, cacheTtlMs: 5 * MINUTE, effort: effortAt(j), lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt })];
-    })
-    .sort(lineOrder);
+    }),
+  );
 });
 
 /**
@@ -624,7 +632,8 @@ SLOWED_PINS.forEach((pin, k) => {
   const lastAttempt = last.attempts[last.attempts.length - 1];
   const lastInputTokens = promptOf(last);
   const effort = effortAt(k);
-  // Each agent's pin reads its own newest turn, which wrote the hour's cache, and dates from its first.
+  const createdAt = main[main.length - 1].at;
+  // Each agent's pin reads its own newest turn, which wrote the hour's cache.
   const lines = pin.agents.map(({ agentId, model }, j) => {
     const own = rows.filter((r) => r.agentId === agentId);
     const newest = own[0];
@@ -632,7 +641,6 @@ SLOWED_PINS.forEach((pin, k) => {
       accountId: 'studio',
       agentId,
       cacheTtlMs: HOUR,
-      createdAt: own[own.length - 1].at,
       effort: agentId === 'main' ? effort : effortAt(k + j),
       lastInputTokens: promptOf(newest),
       lastUsedAt: newest.attempts[newest.attempts.length - 1].startedAt,
@@ -642,7 +650,7 @@ SLOWED_PINS.forEach((pin, k) => {
   SESSIONS.push({
     ...SESSION_SAMPLE,
     accountId: 'studio',
-    agentContexts: [...lines].sort(lineOrder),
+    agentContexts: datedLines(createdAt, lines),
     agentId: 'main',
     agents: pin.agents.length,
     burn: pin.burn,
@@ -652,7 +660,7 @@ SLOWED_PINS.forEach((pin, k) => {
     cacheTtlMs: HOUR,
     companion: 'none',
     companionSince: null,
-    createdAt: main[main.length - 1].at,
+    createdAt,
     cycleMs: pin.cycleMs,
     effort,
     epoch: 1,
@@ -701,15 +709,22 @@ if (FLEET_PINS.length > 0) {
   const lastInputTokens = promptOf(last);
   const keyGeneration = Date.parse(keyById.get('fleet')!.createdAt);
   const seen = ledgered.get(activityOf('fleet', keyGeneration, FLEET_SESSION_ID)) ?? null;
-  // One line per standing pin, each dated and read off its model's last turn as the row reads the newest one.
+  // The session is first seen at the oldest turn of its last unbroken run: a turn that came once the pin before it had
+  // passed the affinity window found the session holding no pin, so the router dated the session again from it.
+  let firstSeen = fleetRows[0];
+  for (const r of fleetRows.slice(1)) {
+    if (Date.parse(firstSeen.at) - Date.parse(r.attempts[r.attempts.length - 1].startedAt) > fleetTtlMs) break;
+    firstSeen = r;
+  }
+  // One line per standing pin, each read off its model's last turn as the row reads the newest one.
   const lines = FLEET_PINS.map((pin, j) => {
     const attempt = pin.attempts[pin.attempts.length - 1];
-    return pinLine({ accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, createdAt: pin.at, effort: effortAt(j + 1), lastInputTokens: promptOf(pin), lastUsedAt: attempt.startedAt, model: pin.canonicalModel });
+    return pinLine({ accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), lastInputTokens: promptOf(pin), lastUsedAt: attempt.startedAt, model: pin.canonicalModel });
   });
   SESSIONS.push({
     ...SESSION_SAMPLE,
     accountId: lastAttempt.accountId,
-    agentContexts: [...lines].sort(lineOrder),
+    agentContexts: datedLines(firstSeen.at, lines),
     agentId: 'main',
     agents: 1,
     burn: 0.36,
@@ -719,7 +734,7 @@ if (FLEET_PINS.length > 0) {
     cacheTtlMs: 5 * MINUTE,
     companion: 'none',
     companionSince: null,
-    createdAt: last.at,
+    createdAt: firstSeen.at,
     cycleMs: null,
     effort: lines[0].effort,
     epoch: 1,
@@ -876,18 +891,19 @@ const auxiliaryOnlyLine = pinLine({
   accountId: 'overflow',
   agentId: auxiliaryOnlyRecipe.agentId,
   cacheTtlMs: 5 * MINUTE,
-  createdAt: ago(31 * MINUTE),
   effort: 'high',
   lastInputTokens: 23_400,
   lastUsedAt: auxiliaryOnlyRecipe.lastRequestAt,
   model: auxiliaryOnlyRecipe.model,
 });
+const AUXILIARY_ONLY_CREATED_AT = ago(38 * MINUTE);
 const noModLines = [
-  pinLine({ accountId: 'contract', agentId: 'main', cacheTtlMs: 5 * MINUTE, createdAt: ago(47 * MINUTE), effort: 'max', lastInputTokens: 41_200, lastUsedAt: ago(2 * MINUTE), model: 'claude-sonnet-5-5' }),
-  pinLine({ accountId: 'contract', agentId: '5c8e', cacheTtlMs: 5 * MINUTE, createdAt: ago(39 * MINUTE), effort: 'low', lastInputTokens: 7_900, lastUsedAt: ago(25 * MINUTE), model: HAIKU }),
+  pinLine({ accountId: 'contract', agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: 'max', lastInputTokens: 41_200, lastUsedAt: ago(2 * MINUTE), model: 'claude-sonnet-5-5' }),
+  pinLine({ accountId: 'contract', agentId: '5c8e', cacheTtlMs: 5 * MINUTE, effort: 'low', lastInputTokens: 7_900, lastUsedAt: ago(25 * MINUTE), model: HAIKU }),
 ];
+const NO_MOD_CREATED_AT = ago(47 * MINUTE);
 /** A written row that names no fork, no cycle, no runway and no shed stamp, and has reached no ledger. */
-const writtenRow = (row: Pick<Session, 'accountId' | 'agentContexts' | 'agentId' | 'agents' | 'burn' | 'companion' | 'createdAt' | 'keepalive' | 'keyId' | 'presenceAgeSeconds' | 'sessionId'>, line: AgentContext): Session => ({
+const writtenRow = (row: Pick<Session, 'accountId' | 'agentContexts' | 'agentId' | 'agents' | 'burn' | 'companion' | 'createdAt' | 'keepalive' | 'keyId' | 'presenceAgeSeconds' | 'sessionId'>, line: Omit<AgentContext, 'createdAt'>): Session => ({
   ...SESSION_SAMPLE,
   ...row,
   burnAt: line.lastUsedAt,
@@ -920,12 +936,12 @@ const WRITTEN_SESSIONS = [
   writtenRow(
     {
       accountId: 'overflow',
-      agentContexts: [auxiliaryOnlyLine],
+      agentContexts: datedLines(AUXILIARY_ONLY_CREATED_AT, [auxiliaryOnlyLine]),
       agentId: auxiliaryOnlyLine.agentId,
       agents: 1,
       burn: 0.05,
       companion: 'reporting',
-      createdAt: ago(38 * MINUTE),
+      createdAt: AUXILIARY_ONLY_CREATED_AT,
       // Main holds no recipe, so the summary names no state, cause or guard, and its next probe is the subagent's.
       keepalive: { cause: null, lastGuard: null, nextProbeAt: auxiliaryOnlyRecipe.nextProbeAt, state: null },
       keyId: 'laptop',
@@ -937,12 +953,12 @@ const WRITTEN_SESSIONS = [
   writtenRow(
     {
       accountId: 'contract',
-      agentContexts: noModLines,
+      agentContexts: datedLines(NO_MOD_CREATED_AT, noModLines),
       agentId: 'main',
       agents: noModLines.length,
       burn: 0.22,
       companion: 'none',
-      createdAt: noModLines[0].createdAt,
+      createdAt: NO_MOD_CREATED_AT,
       keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
       keyId: 'fleet',
       presenceAgeSeconds: null,

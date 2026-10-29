@@ -5,17 +5,18 @@ import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecip
 import { useSession } from '@/app/session';
 import { HELD_PROBE_HINT, MIGRATED_PROBE_HINT } from '@/components/charts/theme';
 import { FilterBar } from '@/components/FilterBar';
+import { SortControl } from '@/components/SortControl';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useDescription } from '@/components/ui/primitives';
-import { ANALYTICS_CODEC, REQUESTS_CODEC, SESSIONS_CODEC, type SessionsAddress } from '@/lib/address';
+import { ANALYTICS_CODEC, REQUESTS_CODEC, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel } from '@/lib/format';
-import { CAUSE_HINT, CAUSE_LABEL, contextCell, firstFailedRead, isFinished, isReleasedLine, orderRecipes, pinTtlMs, releasedCount, requestsRange, sessionLines, type SessionLine, type TileRead, WARNING_CAUSES } from '@/lib/keepalive';
+import { CAUSE_HINT, CAUSE_LABEL, contextCell, firstFailedRead, isFinished, isReleasedLine, orderLines, orderRows, pinTtlMs, releasedCount, requestsRange, sessionLines, type SessionLine, type TileRead, WARNING_CAUSES } from '@/lib/keepalive';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { ageWord, aroundSubject, logHref } from '@/lib/routingLog';
@@ -89,12 +90,14 @@ interface Row {
   agents: KeepaliveRecipe[];
   /** The engine is done with the session, which draws every line it holds under the released sentence. */
   finished: boolean;
+  /** The lines the row draws in the view's order: the recipes `shown` holds and the pins no recipe stands on. */
+  lines: SessionLine[];
   /** Why a session carries no recipe at all; null while it has one. */
   noRecipe: string | null;
   /** The session's lines the view hides, which its Agents column takes off the engine's record count. */
   released: number;
   session: Session;
-  /** The lines the row draws, in the view's order: the summary, the badges and the expanded lines read this list. */
+  /** The recipes the row draws, the release filter applied: the summary, the badges and the probe state read them. */
   shown: KeepaliveRecipe[];
 }
 
@@ -135,9 +138,10 @@ function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
 
 /**
  * `poolsFailed`: the pool list did not load, so a session whose pool is not found has no cause the rows can name but
- * that. `showReleased`: the Released agents filter, which draws a live session's released lines.
+ * that. `showReleased`: the Released agents filter, which draws a live session's released lines. `sort` and `dir`: the
+ * sort control's key and direction, which order the rows and each row's lines.
  */
-function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Account[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, showReleased: boolean, now: number): Row[] {
+function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Account[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, showReleased: boolean, sort: string, dir: SortDir, now: number): Row[] {
   const accountById = new Map(accounts.map((a) => [a.id, a]));
   const keyById = new Map(keys.map((k) => [k.id, k]));
   const poolById = new Map(pools.map((p) => [p.id, p]));
@@ -154,7 +158,7 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
     const id = `${r.keyId}:${g}:${r.sessionId}`;
     bySession.set(id, [...(bySession.get(id) ?? []), r]);
   }
-  return sessions.map((session) => {
+  const rows = sessions.map((session) => {
     const agents = bySession.get(rowKey(session)) ?? [];
     const key = keyById.get(session.keyId) ?? null;
     const pool = key ? poolById.get(key.poolId) ?? null : null;
@@ -181,16 +185,19 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
     // A finished session keeps every line so its probe facts stay in view, and a live one draws its released lines
     // only while the filter asks for them.
     const drawsReleased = finished || showReleased;
+    const shown = drawsReleased ? agents : agents.filter((a) => !isReleasedLine(a));
     return {
       account: accountById.get(session.accountId ?? '') ?? null,
       agents,
       finished,
+      lines: orderLines(sessionLines(session, shown), sort, dir),
       noRecipe: agents.length === 0 || idleLimitOnly ? causes.join(' and ') : null,
       released: drawsReleased ? 0 : releasedCount(agents),
       session,
-      shown: orderRecipes(drawsReleased ? agents : agents.filter((a) => !isReleasedLine(a))),
+      shown,
     };
   });
+  return orderRows(rows, sort, dir);
 }
 
 /**
@@ -242,6 +249,7 @@ export function SessionsPage() {
   const [howOpen, setHowOpen] = useState(false);
   const howId = useId();
   const { address, filters, update } = useQueryFilters(SESSIONS_CODEC);
+  const dir = sortDirOf(SESSION_SORT_KEYS, filters);
 
   const sessionData = sessions.data;
   const recipeData = recipes.data;
@@ -251,12 +259,12 @@ export function SessionsPage() {
   const listed = useMemo(
     () =>
       sessionData && recipeData && keys.data
-        ? buildRows(sessionData, recipeData, accounts.data ?? [], keys.data, pools.data ?? [], poolsFailed, filters.released, now).filter((r) => {
+        ? buildRows(sessionData, recipeData, accounts.data ?? [], keys.data, pools.data ?? [], poolsFailed, filters.released, filters.sort, dir, now).filter((r) => {
             const lastUsed = r.session.lastUsedAt ?? r.session.lastRequestAt;
             return expireAfterSeconds === null || lastUsed === null || Date.parse(lastUsed) + expireAfterSeconds * 1000 > now;
           })
         : null,
-    [sessionData, recipeData, accounts.data, keys.data, pools.data, poolsFailed, filters.released, expireAfterSeconds, now],
+    [sessionData, recipeData, accounts.data, keys.data, pools.data, poolsFailed, filters.released, filters.sort, dir, expireAfterSeconds, now],
   );
   // The expiry stays the outer bound, and the filters narrow the list inside it.
   const rows = useMemo(
@@ -354,6 +362,7 @@ export function SessionsPage() {
         update={update}
       >
         <ColumnsControl columns={SESSION_COLUMNS} visible={visible} onChange={setVisible} />
+        <SortControl keys={SESSION_SORT_KEYS} onChange={(next) => update(sortAddressOf(SESSION_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
       </FilterBar>
       <div className="page-head">
         <div className="page-head__lead">
@@ -578,7 +587,7 @@ function SessionRows({
   row: Row;
   visible: ReadonlySet<SessionColumnId>;
 }) {
-  const { account, session, shown } = row;
+  const { account, lines, session, shown } = row;
   const summary = stateSummary(shown);
   // A pin exists only with an account: a request refused before any account served it leaves a row without one.
   const pinned = shown.filter((a) => a.accountId !== null);
@@ -601,8 +610,6 @@ function SessionRows({
   const baseAccountId = baseRow !== null && baseRow.session.pinned ? baseRow.session.accountId : null;
   // The row's figures are main's conversation pin's, so a row with no pin reads a dash.
   const context = contextCell(session.pinned ? session.lastInputTokens : null);
-  // Every session draws its lines: the recipes the filters keep and the pins no recipe stands on.
-  const lines = sessionLines(session, shown);
   return (
     <>
       <tr

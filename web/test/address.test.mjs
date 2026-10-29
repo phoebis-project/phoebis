@@ -19,7 +19,7 @@ const FILLED = {
   QUOTA_CODEC: {},
   REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentId: 'main', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], classifiers: ['client', '-'], client: 'claude-code/*', efforts: ['high', 'low'], guardrails: ['large-auxiliary', '-'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), refusalCategories: ['cyber', '-'], request: 'req_f8085653', requestClasses: ['conversation', 'title'], rows: '50', search: 'req_1d9c3e55', session: '407dd39b-dd60', speeds: ['fast', 'standard'], statuses: ['200', '429'], stopReasons: ['refusal', '-'], turnOrigins: ['agent', 'user'] },
   ROUTING_LOG_CODEC: { accounts: ['primary', 'secondary'], agentId: 'main', keys: ['desktop', 'laptop'], kinds: ['exhausted', 'moved'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], range: preset('6h'), request: 'req_1d9c3e55', session: '407dd39b-dd60' },
-  SESSIONS_CODEC: { companion: true, finished: true, released: true },
+  SESSIONS_CODEC: { companion: true, dir: 'asc', finished: true, released: true, sort: 'activity' },
 };
 
 test("each view's codec reads back the address it writes, the range at a preset and at a custom span", () => {
@@ -36,10 +36,10 @@ test("each view's codec reads back the address it writes, the range at a preset 
 
 test('the Sessions codec writes the filters off their defaults alone, in the bar order, reads no age, and Reset leaves a bare address', () => {
   const defaults = read(d.SESSIONS_CODEC, '');
-  assert.deepEqual(defaults, { companion: false, finished: false, released: false });
+  assert.deepEqual(defaults, { companion: false, dir: '', finished: false, released: false, sort: 'created' });
   assert.equal(write(d.SESSIONS_CODEC, defaults), '');
   assert.deepEqual(read(d.SESSIONS_CODEC, 'age=6h'), defaults, 'an age is a key the codec does not know');
-  const set = { companion: true, finished: false, released: true };
+  const set = { ...defaults, companion: true, released: true };
   assert.equal(write(d.SESSIONS_CODEC, set), 'companion=1&released=1');
   assert.deepEqual(read(d.SESSIONS_CODEC, 'companion=1&age=6h&released=1'), set);
   const reset = Object.fromEntries(d.SESSIONS_DIMENSIONS.map((x) => [x.field, d.emptyValue(x)]));
@@ -76,6 +76,29 @@ test("the Accounts codec carries the sort's direction after its key, written onl
       ['reset', 'Soonest reset', 'asc'],
       ['usage', 'Most used', 'desc'],
       ['status', 'Status', 'asc'],
+    ],
+  );
+});
+
+test("the Sessions codec carries the sort's direction after its key and the filters, each written only off its default, both keys newest first", () => {
+  const bare = read(d.SESSIONS_CODEC, '');
+  assert.deepEqual([bare.sort, bare.dir], ['created', '']);
+  assert.equal(write(d.SESSIONS_CODEC, { ...bare, dir: '', sort: 'activity' }), 'sort=activity', "the key's own direction leaves the address");
+  assert.equal(write(d.SESSIONS_CODEC, { ...bare, dir: 'asc', sort: 'activity' }), 'sort=activity&dir=asc');
+  assert.equal(write(d.SESSIONS_CODEC, { ...bare, dir: 'asc' }), 'dir=asc');
+  assert.equal(write(d.SESSIONS_CODEC, { ...bare, companion: true, dir: 'asc', released: true, sort: 'activity' }), 'companion=1&released=1&sort=activity&dir=asc', 'the control follows the filters in the bar');
+  assert.equal(read(d.SESSIONS_CODEC, 'dir=bogus').dir, '');
+  assert.equal(read(d.SESSIONS_CODEC, 'sort=bogus').sort, 'created');
+  // A bare address and a bogus direction both mean the key's own direction, newest first.
+  assert.equal(d.sortDirOf(d.SESSION_SORT_KEYS, bare), 'desc');
+  assert.equal(d.sortDirOf(d.SESSION_SORT_KEYS, read(d.SESSIONS_CODEC, 'sort=activity&dir=bogus')), 'desc');
+  assert.equal(d.sortDirOf(d.SESSION_SORT_KEYS, read(d.SESSIONS_CODEC, 'sort=activity&dir=asc')), 'asc');
+  assert.deepEqual(d.sortAddressOf(d.SESSION_SORT_KEYS, { dir: 'desc', sort: 'activity' }), { dir: '', sort: 'activity' });
+  assert.deepEqual(
+    d.SESSION_SORT_KEYS.map((k) => [k.id, k.label, k.defaultDir]),
+    [
+      ['created', 'Created', 'desc'],
+      ['activity', 'Last activity', 'desc'],
     ],
   );
 });

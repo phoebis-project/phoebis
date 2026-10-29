@@ -282,39 +282,40 @@ Burn tab's three cards share one row from 1344 px ([Analytics](console.md#analyt
 subagent's record keeps its slot of the agent cap for one cache TTL after the release and then leaves the engine
 ([Sessions](console.md#sessions)). The Sessions view offers Companion only, Finished sessions (Show finished sessions)
 and Released agents (Show released agents) as filters in its address, hides a finished session by default, and counts
-the rows the filters keep on its tiles ([Sessions](console.md#sessions)). The Sessions view reads each row from main's
-conversation pin with an Effort column, draws a line for every pin of every session, main's among them, with Effort,
-Context and a warm or cold state on a pin no recipe stands on, links each line's agent to the request log and its
-account to the Accounts view, and lists the sessions the router lists within its non-companion timeout
-([Sessions](console.md#sessions)). The Sessions view reads the context in tokens from main's conversation pin on every
-row and from each line's own pin, and the Requests column shows through the Columns control to make room
-([Sessions](console.md#sessions)). The Settings page's About card lists the session expiry and the non-companion
-timeout, the two keys of the `sessions` block, each as a duration with its seconds beside it and its hover naming the
-key ([Settings](console.md#settings)). The Settings page's About card names the bootstrap's body capture limit beside
-its two retention lines ([Settings](console.md#settings)). A decision card's cache-map row folds a record of four
-entries or more to one chip per tier with the count and the depth range and the latest three depths, behind a control
-that lists every entry ([Routing log](console.md#routing-log)). An event panel's When reads in the viewer's zone, and a
-shedding round's Rewrite cell names the window as the cost figures do ([Routing log](console.md#routing-log)). A renewal
-after a hold carries the wait it followed on its card ([Routing log](console.md#routing-log)). A guardrail's update
-records each changed field with its value before and after, as an account's, a key's or a pool's update does ([Routing
-log](console.md#routing-log)). A request refused before it resolved a model reads a dash in the Routing log's Model
-cell, as it does on the Requests view ([Routing log](console.md#routing-log)). The candidate table of a routing
-decision, "Candidates, by rank", lists the chosen member first and the ranked members by rank ([Routing
-log](console.md#routing-log)). The pick line of a decision names the tied accounts, the runway that narrowed them and
-whether a draw chose among them ([Routing log](console.md#routing-log)). The registry's change log records an edit of a
-pool, a key or an account as each changed field's value before and after, an account edit that replaced the secret says
-so without its value, and a registry change's Account cell links the account or the key it edited ([Routing
-log](console.md#routing-log)). A pool save that changes nothing writes no change row and no event, so the change log
-shows real changes alone ([Routing log](console.md#routing-log)). The routing log lists a failed usage poll as `poll
-failed` and a stream cut after its head as `stream interrupted`, and a shedding round that walks no pin and leaves one
-out off the window that fired reads `off window` ([Routing log](console.md#routing-log)). The routing log lists an
-account whose plan ended as `plan ended` and the plan's return as `plan restored`, each with the read's source and the
-profile's organization type, rate-limit tier and subscription status ([Routing log](console.md#routing-log)). The
-Routing log's Pace cell and hover read a lapsed usage-based seat's remaining share as a percent ([Routing
-log](console.md#routing-log)). The Meter view badges a ratio only where the priced share reaches the rise's floor
-([Meter](console.md#meter)). The Meter view in the Diagnostics group lists every subscription account's completed
-windows of the last 30 days grouped by account and window kind, the weekly windows apart, each group collapsed to its
-latest ratio, its off count and a 30-day ratio spark, and the Meter drift condition opens it on the account
+the rows the filters keep on its tiles ([Sessions](console.md#sessions)). The Sessions view orders its rows and their
+lines by the session's creation time, newest first, or by its last activity through the filter bar's sort control
+([Sessions](console.md#sessions)). The Sessions view reads each row from main's conversation pin with an Effort column,
+draws a line for every pin of every session, main's among them, with Effort, Context and a warm or cold state on a pin
+no recipe stands on, links each line's agent to the request log and its account to the Accounts view, and lists the
+sessions the router lists within its non-companion timeout ([Sessions](console.md#sessions)). The Sessions view reads
+the context in tokens from main's conversation pin on every row and from each line's own pin, and the Requests column
+shows through the Columns control to make room ([Sessions](console.md#sessions)). The Settings page's About card lists
+the session expiry and the non-companion timeout, the two keys of the `sessions` block, each as a duration with its
+seconds beside it and its hover naming the key ([Settings](console.md#settings)). The Settings page's About card names
+the bootstrap's body capture limit beside its two retention lines ([Settings](console.md#settings)). A decision card's
+cache-map row folds a record of four entries or more to one chip per tier with the count and the depth range and the
+latest three depths, behind a control that lists every entry ([Routing log](console.md#routing-log)). An event panel's
+When reads in the viewer's zone, and a shedding round's Rewrite cell names the window as the cost figures do ([Routing
+log](console.md#routing-log)). A renewal after a hold carries the wait it followed on its card ([Routing
+log](console.md#routing-log)). A guardrail's update records each changed field with its value before and after, as an
+account's, a key's or a pool's update does ([Routing log](console.md#routing-log)). A request refused before it resolved
+a model reads a dash in the Routing log's Model cell, as it does on the Requests view ([Routing
+log](console.md#routing-log)). The candidate table of a routing decision, "Candidates, by rank", lists the chosen member
+first and the ranked members by rank ([Routing log](console.md#routing-log)). The pick line of a decision names the tied
+accounts, the runway that narrowed them and whether a draw chose among them ([Routing log](console.md#routing-log)). The
+registry's change log records an edit of a pool, a key or an account as each changed field's value before and after, an
+account edit that replaced the secret says so without its value, and a registry change's Account cell links the account
+or the key it edited ([Routing log](console.md#routing-log)). A pool save that changes nothing writes no change row and
+no event, so the change log shows real changes alone ([Routing log](console.md#routing-log)). The routing log lists a
+failed usage poll as `poll failed` and a stream cut after its head as `stream interrupted`, and a shedding round that
+walks no pin and leaves one out off the window that fired reads `off window` ([Routing log](console.md#routing-log)).
+The routing log lists an account whose plan ended as `plan ended` and the plan's return as `plan restored`, each with
+the read's source and the profile's organization type, rate-limit tier and subscription status ([Routing
+log](console.md#routing-log)). The Routing log's Pace cell and hover read a lapsed usage-based seat's remaining share as
+a percent ([Routing log](console.md#routing-log)). The Meter view badges a ratio only where the priced share reaches the
+rise's floor ([Meter](console.md#meter)). The Meter view in the Diagnostics group lists every subscription account's
+completed windows of the last 30 days grouped by account and window kind, the weekly windows apart, each group collapsed
+to its latest ratio, its off count and a 30-day ratio spark, and the Meter drift condition opens it on the account
 ([Dashboard](console.md#dashboard), [Meter](console.md#meter)). A confirmation toast shows ahead of the failures queued
 behind the one on screen. A whole-day or whole-hour duration drops its zero part, so three whole days read `3d` and an
 hour `1h`. Every data table alternates its row tone, with a hovered or selected row reading over it ([The

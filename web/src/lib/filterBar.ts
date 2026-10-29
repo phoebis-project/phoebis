@@ -273,5 +273,5 @@ export const NOT_DIMENSIONS: Record<'accounts' | 'analytics' | 'keys' | 'request
   keys: ['range', 'rows', 'search'],
   requests: ['range', 'rows', 'search'],
   routingLog: ['range', 'rows', 'search'],
-  sessions: ['range', 'rows', 'search'],
+  sessions: ['dir', 'range', 'rows', 'search', 'sort'],
 };

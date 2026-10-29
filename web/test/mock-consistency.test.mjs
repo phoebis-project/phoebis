@@ -1097,6 +1097,27 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const line of plain.agentContexts) assert.equal(line.cacheTtlMs, 5 * 60_000, `${line.agentId}'s TTL`);
   });
 
+  test(`every session a pin placed reads its first-seen time at or before its last use and one no pin placed none, and each line its row's time a minute per place in the list, main's the row's, at ${at}`, async () => {
+    const s = await story;
+    const recipes = await s.api.listKeepaliveRecipes();
+    // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
+    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds);
+    // A recipe stands on a pin its first request placed, so a released or finished row with no pin left once held one.
+    const placed = (row) => row.pinned || (!row.historical && recipes.some((r) => r.keyId === row.keyId && r.sessionId === row.sessionId));
+    for (const row of seeded) {
+      const name = `${row.keyId} ${row.sessionId}${row.historical ? ', the earlier holder' : ''}`;
+      if (placed(row)) {
+        const lastUse = s.lib.lastUseOf(row);
+        assert.ok(row.createdAt !== null && lastUse !== null && Date.parse(row.createdAt) <= Date.parse(lastUse), `${name} first seen at ${row.createdAt}, last used at ${lastUse}`);
+      } else assert.equal(row.createdAt, null, `${name}: no pin ever placed it`);
+      row.agentContexts.forEach((c, k) => assert.equal(c.createdAt, iso(Date.parse(row.createdAt) + k * 60_000), `${name}: ${c.agentId} on ${c.model} at place ${k}`));
+    }
+    const unplaced = seeded.filter((row) => !placed(row));
+    assert.ok(unplaced.some((row) => row.companion !== 'none' && row.lastRequestAt === null), 'the registration-only row reads none');
+    assert.ok(unplaced.some((row) => row.lastRequestAt !== null), 'a row the ledger alone knows reads none');
+    assert.ok(seeded.some((row) => row.agentContexts[0]?.agentId === 'main' && row.agentContexts.length >= 3), 'a row lists main and two agents after it');
+  });
+
   test(`one subagent's recipe stands under compacted after its compaction completed: ended, last guarded as a compaction, with no probe scheduled, at ${at}`, async () => {
     const s = await story;
     const recipes = await s.api.listKeepaliveRecipes();

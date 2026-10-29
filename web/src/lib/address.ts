@@ -356,15 +356,25 @@ export const QUOTA_CODEC = codecOf<Record<string, never>>({});
 export interface SessionsAddress {
   /** Companion only: the rows whose companion reports or went silent. */
   companion: boolean;
+  /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
+  dir: string;
   /** Show finished sessions. */
   finished: boolean;
   /** Show released agents on a live session. */
   released: boolean;
+  /** The rows' order: `created` the default, the session's creation time, or `activity`, its last activity. */
+  sort: string;
 }
+
+export const SESSION_SORT_KEYS: readonly SortKey[] = [
+  { defaultDir: 'desc', id: 'created', label: 'Created' },
+  { defaultDir: 'desc', id: 'activity', label: 'Last activity' },
+];
 
 // The codec's literal keeps the bar's order: codecOf writes the address's keys in its specification's order.
 export const SESSIONS_CODEC = codecOf<SessionsAddress>({
   companion: { kind: 'flag', name: 'companion' },
   finished: { kind: 'flag', name: 'finished' },
   released: { kind: 'flag', name: 'released' },
+  ...sortSpecs(SESSION_SORT_KEYS, 'created'),
 });

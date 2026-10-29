@@ -1,5 +1,5 @@
 import type { AgentContext, KeepaliveRecipe, KeepaliveState, RecipeCause, Session } from '@/api/types';
-import { RANGE_PRESETS } from '@/lib/address';
+import { RANGE_PRESETS, type SortDir } from '@/lib/address';
 import { fmtCompact } from '@/lib/format';
 
 export const CAUSE_LABEL: Record<RecipeCause, string> = {
@@ -142,26 +142,49 @@ export const WARNING_CAUSES: RecipeCause[] = ['affinity_too_short', 'budget', 'e
 /** The engine's name for a session's main conversation. */
 export const MAIN_AGENT = 'main';
 
-/** The lifecycle words in the order a session's lines run after main. `unknown` sits with `parked`, and `released`
- * closes the list wherever a released record is still listed. */
+/** The lifecycle words in the order a session's recipe lines run after main. `unknown` sits with `parked`, and
+ * `released` closes the recipe lines wherever a released record is still listed. */
 const STATE_ORDER: Record<KeepaliveState, number> = { busy: 0, idle: 1, parked: 2, released: 3, unknown: 2 };
 
 /** Newest last request first, an agent without one last. */
-function byLastRequest(a: KeepaliveRecipe, b: KeepaliveRecipe): number {
+function byLastRequest(a: Pick<KeepaliveRecipe, 'lastRequestAt'>, b: Pick<KeepaliveRecipe, 'lastRequestAt'>): number {
   if (a.lastRequestAt === null || b.lastRequestAt === null) return a.lastRequestAt === b.lastRequestAt ? 0 : a.lastRequestAt === null ? 1 : -1;
   return Date.parse(b.lastRequestAt) - Date.parse(a.lastRequestAt);
 }
 
 /**
- * A session's agents in the order the Sessions view draws them: main first, then by lifecycle word, inside a word the
- * newest last request first, an agent without one last, and ties by agent id, so two reads of one list draw one
- * order. The list handed in is left as it is.
+ * Two instants newest first under `desc` and oldest first under `asc`, an instant missing last under either, so the
+ * direction flips the dated entries alone.
  */
-export function orderRecipes(agents: readonly KeepaliveRecipe[]): KeepaliveRecipe[] {
-  return [...agents].sort((a, b) => {
-    if (a.agentId === MAIN_AGENT || b.agentId === MAIN_AGENT) return a.agentId === b.agentId ? 0 : a.agentId === MAIN_AGENT ? -1 : 1;
-    return STATE_ORDER[a.agentState] - STATE_ORDER[b.agentState] || byLastRequest(a, b) || a.agentId.localeCompare(b.agentId);
-  });
+const byInstant = (a: string | null, b: string | null, dir: SortDir): number => {
+  const order = byLastRequest({ lastRequestAt: a }, { lastRequestAt: b });
+  return a === null || b === null || dir === 'desc' ? order : -order;
+};
+
+/** The later of a session's own last use and its last ledgered request, the `activity` key's value. */
+export const lastActivity = (s: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>): string | null => {
+  if (s.lastUsedAt === null || s.lastRequestAt === null) return s.lastUsedAt ?? s.lastRequestAt;
+  return Date.parse(s.lastRequestAt) > Date.parse(s.lastUsedAt) ? s.lastRequestAt : s.lastUsedAt;
+};
+
+/** The rows under a key and a direction, ties by session id, a row without the key's value last either way. */
+export function orderRows<T extends { session: Pick<Session, 'createdAt' | 'lastRequestAt' | 'lastUsedAt' | 'sessionId'> }>(rows: readonly T[], sort: string, dir: SortDir): T[] {
+  const valueOf = (s: T['session']) => (sort === 'activity' ? lastActivity(s) : s.createdAt);
+  return [...rows].sort((a, b) => byInstant(valueOf(a.session), valueOf(b.session), dir) || a.session.sessionId.localeCompare(b.session.sessionId));
+}
+
+/** A line's group: main first, then the recipe lines by lifecycle word, then the pins no recipe stands on. */
+const lineGroup = (line: SessionLine): number => (line.agentId === MAIN_AGENT ? -1 : line.recipe === null ? STATE_ORDER.released + 1 : STATE_ORDER[line.recipe.agentState]);
+
+/**
+ * The lines under the rows' key: main first, then the lifecycle groups of the recipe lines (`STATE_ORDER`), then the
+ * pin-only lines, and inside a group by the line's own `createdAt` under `created` (a line without one last) or by
+ * `byLastRequest` under `activity` (a pin-only line by its pin's last use), the direction applied inside the groups,
+ * ties by agent id and then by model.
+ */
+export function orderLines(lines: readonly SessionLine[], sort: string, dir: SortDir): SessionLine[] {
+  const valueOf = (line: SessionLine) => (sort === 'activity' ? (line.recipe !== null ? line.recipe.lastRequestAt : (line.pin?.lastUsedAt ?? null)) : (line.pin?.createdAt ?? null));
+  return [...lines].sort((a, b) => lineGroup(a) - lineGroup(b) || byInstant(valueOf(a), valueOf(b), dir) || a.agentId.localeCompare(b.agentId) || a.model.localeCompare(b.model));
 }
 
 export type RequestsRange = (typeof RANGE_PRESETS)[number]['name'];
@@ -230,8 +253,8 @@ export interface SessionLine {
 }
 
 /**
- * The union of a session's entries and its recipes, keyed by agent id and pin model, in the order handed: the
- * recipes first as `orderRecipes` ordered them, then the pins no recipe claims as the route ordered them.
+ * The union of a session's entries and its recipes, keyed by agent id and pin model: the recipes first in the order
+ * handed, then the pins no recipe claims in the route's order, which `orderLines` sorts into the view's.
  */
 export function sessionLines(s: Pick<Session, 'agentContexts'>, recipes: readonly KeepaliveRecipe[]): SessionLine[] {
   const claimed = new Set<AgentContext>();

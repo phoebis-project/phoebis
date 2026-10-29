@@ -270,14 +270,17 @@ id's width, the session row menu, the agent lines (at 1280 by 800 and 1440 by 90
 subagent id's cells on one left edge per column within 1 px on the companion session that holds that id, every id whole
 on one line and every Account cell with its speed chip inside its box, each state badge inside its grid's scroll width
 at 1280 px and inside its visible box at 1440 px, where no grid scrolls, the widest grid's scroll and client widths
-recorded, and the plain session's Model, Context and Effort cells on its Session cell's top edge and height), the fork
-badge's face (under the session id, in the row's badge face), the fork badges (inside their cell and whole), the session
-row's chevron (14 px square at the icon's 1.75 stroke), the Sessions tiles in error (mock pass, on loads of its own
-under the mock's sessions failure switch: the Sessions and Agents tiles a dash over "could not load" titled with the
-read's message, in the box, the value's line and the note's line of the Retained tile beside them, which keeps its
-figure, and the notice under the tiles naming the sessions), the released session's line and the Agents tile's hover,
-their words against the detail's type (mock pass, on a load of its own under the finished filter once the session list's
-shot is taken), the fork link, which is followed once the session list's shot is taken, the copy fallback (Copied on the
+recorded, and the plain session's Model, Context and Effort cells on its Session cell's top edge and height), the
+Sessions bar's sort control and its order (on loads of its own that end on the bare view: the Sort button in the height,
+top edge, type size and weight of the Columns control beside it, reading "Sort: Created" on the bare address and "Sort:
+Last activity" under `?sort=activity`, the first five rows' session ids recorded under each), the fork badge's face
+(under the session id, in the row's badge face), the fork badges (inside their cell and whole), the session row's
+chevron (14 px square at the icon's 1.75 stroke), the Sessions tiles in error (mock pass, on loads of its own under the
+mock's sessions failure switch: the Sessions and Agents tiles a dash over "could not load" titled with the read's
+message, in the box, the value's line and the note's line of the Retained tile beside them, which keeps its figure, and
+the notice under the tiles naming the sessions), the released session's line and the Agents tile's hover, their words
+against the detail's type (mock pass, on a load of its own under the finished filter once the session list's shot is
+taken), the fork link, which is followed once the session list's shot is taken, the copy fallback (Copied on the
 Settings snippet with the clipboard API removed, on the Settings view's own load, and on a Key created dialog's secret
 in the mock pass, on a load of its own), the login screen's Stay logged in row (on both logins, the light theme's and
 the dark one's after the Log out: the secret field's, the row's, its box's, its label's and its hint's edges inside the

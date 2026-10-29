@@ -22003,9 +22003,11 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
     const [first, ...rest] = await listKeepaliveRecipes();
     return [first, { ...first, accountId: null, agentId: 'zz01', cause: 'forced_tool', model: 'claude-haiku-4-5', nextProbeAt: null, state: 'not_retained' }, ...rest];
   };
+  const [story] = await listKeepaliveRecipes();
   const page = await mount('/sessions');
   await page.settle();
-  const row = page.container.querySelector('tbody tr.srow');
+  // The line joins the first recipe's session, read by its id since the view orders the rows by their creation.
+  const row = [...page.container.querySelectorAll('tbody tr.srow')].find((tr) => sessionCell(page, tr, 'Session')?.getAttribute('title') === story?.sessionId && sessionCell(page, tr, 'Key')?.querySelector('.sub') === null);
   const pins = [...(sessionCell(page, row, 'Model')?.querySelectorAll('.badge') ?? [])].map((b) => b.getAttribute('title') ?? '');
   row?.click();
   await page.settle(200);
@@ -22817,7 +22819,7 @@ const CARD_VIEWS = [
     '/keys': ['search: Search keys', 'Add filter', 'Create key', 'edge: Refresh, count'],
     '/pools': ['Create pool', 'edge: Refresh, count'],
     '/quota': ['Refresh all', 'edge: Refresh, count'],
-    '/sessions': ['Add filter', 'Columns', 'edge: Refresh, count'],
+    '/sessions': ['Add filter', 'Columns', 'Sort', 'edge: Refresh, count'],
   };
   const read = {};
   for (const [path] of CARD_VIEWS) {
@@ -23210,6 +23212,202 @@ const CARD_VIEWS = [
 }
 
 {
+  // The Sessions view's order through the bar's sort control, read on the story's instant. The rows are the story's
+  // sessions as `api.listSessions()` answers them (`SESSIONS` in `web/src/mock/operations.ts`), ordered by the rule the
+  // page reads: the session's creation time under Created, the default, or the later of its last use and its last
+  // request under Last activity, newest first unless Ascending is picked, ties by session id and a row without the
+  // key's time last under either direction.
+  const listed = await api.listSessions();
+  const recipes = await api.listKeepaliveRecipes();
+  const idOfRow = (s) => `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`;
+  const later = (a, b) => (a === null ? b : b === null || Date.parse(a) >= Date.parse(b) ? a : b);
+  /** Two instants newest first, or oldest first under `asc`, a missing one last under either. */
+  const byTime = (a, b, dir) => (a === null || b === null ? (a === b ? 0 : a === null ? 1 : -1) : (dir === 'asc' ? 1 : -1) * (Date.parse(a) - Date.parse(b)));
+  const timeOf = (s, sort) => (sort === 'activity' ? later(s.lastUsedAt, s.lastRequestAt) : s.createdAt);
+  const ordered = (rows, sort, dir) => [...rows].sort((a, b) => byTime(timeOf(a, sort), timeOf(b, sort), dir) || a.sessionId.localeCompare(b.sessionId)).map(idOfRow);
+  const drawnIds = (page) => [...page.container.querySelectorAll('tbody tr.srow')].map((tr) => tr.id);
+  const sortButton = (page) => page.container.querySelector('.filter-bar button[aria-label="Sort"]');
+  const sortBox = () => document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
+  const ARROWS = { 'rotate(-90 12 12)': 'up', 'rotate(90 12 12)': 'down' };
+  {
+    const name = '/sessions the sort control reads Created newest first on a bare address, its radios mark the key and the direction, and each pick writes the address and orders the rows';
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    // The rows the default filters keep, in the route's order, which the page reorders.
+    const drawn = listed.filter((s) => drawnIds(page).includes(idOfRow(s)));
+    const read = () => ({
+      arrow: ARROWS[sortButton(page)?.querySelector('svg path')?.getAttribute('transform') ?? ''] ?? 'no arrow',
+      rows: drawnIds(page),
+      search: page.location().search,
+      text: sortButton(page)?.textContent ?? null,
+    });
+    const radios = async () => {
+      sortButton(page)?.click();
+      await page.settle(100);
+      const marks = [...(sortBox()?.querySelectorAll('[role="radiogroup"]') ?? [])].map((g) => [...g.querySelectorAll('[role="radio"]')].map((r) => `${r.textContent?.trim()} ${r.getAttribute('aria-checked')}`));
+      await closeBoxes(page);
+      return marks;
+    };
+    const choose = async (label) => {
+      sortButton(page)?.click();
+      await page.settle(100);
+      [...(sortBox()?.querySelectorAll('[role="radio"]') ?? [])].find((r) => r.textContent?.trim() === label)?.click();
+      await page.settle(300);
+      return { ...read(), open: sortBox() !== null };
+    };
+    const bare = read();
+    const bareRadios = await radios();
+    // A key's pick writes its own direction, so Last activity after Ascending leaves `dir` out of the address.
+    const picks = { createdAsc: await choose('Ascending'), activity: await choose('Last activity'), activityAsc: await choose('Ascending') };
+    const ascRadios = await radios();
+    page.unmount();
+    const shown = (arrow, rows, search, label) => ({ arrow, rows, search, text: `Sort: ${label}` });
+    const want = {
+      bare: shown('down', ordered(drawn, 'created', 'desc'), '', 'Created'),
+      createdAsc: { ...shown('up', ordered(drawn, 'created', 'asc'), '?dir=asc', 'Created'), open: false },
+      activity: { ...shown('down', ordered(drawn, 'activity', 'desc'), '?sort=activity', 'Last activity'), open: false },
+      activityAsc: { ...shown('up', ordered(drawn, 'activity', 'asc'), '?sort=activity&dir=asc', 'Last activity'), open: false },
+    };
+    // Each order moves rows past the route's own, and the story holds rows with no creation time, which tie and read by
+    // session id, and rows with no activity, the registration-only row among both.
+    const none = (sort) => drawn.filter((s) => timeOf(s, sort) === null).length;
+    const story = drawn.length === 23 && ![drawn.map(idOfRow), want.activity.rows].some((rows) => JSON.stringify(rows) === JSON.stringify(want.bare.rows)) && none('created') >= 2 && none('activity') >= 1;
+    const wantRadios = {
+      ascRadios: [
+        ['Created false', 'Last activity true'],
+        ['Ascending true', 'Descending false'],
+      ],
+      bareRadios: [
+        ['Created true', 'Last activity false'],
+        ['Ascending false', 'Descending true'],
+      ],
+    };
+    results.push({
+      name,
+      ok: story && JSON.stringify(bare) === JSON.stringify(want.bare) && JSON.stringify({ ascRadios, bareRadios }) === JSON.stringify(wantRadios) && Object.entries(picks).every(([key, got]) => JSON.stringify(got) === JSON.stringify(want[key])),
+      missing: [`story ${story}: ${drawn.length} rows, ${none('created')} with no creation time, ${none('activity')} with no activity`, `bare ${JSON.stringify(bare)} against ${JSON.stringify(want.bare)}`, `radios ${JSON.stringify({ ascRadios, bareRadios })}`, ...Object.entries(picks).map(([key, got]) => `${key} ${JSON.stringify(got)} against ${JSON.stringify(want[key])}`)],
+    });
+  }
+  {
+    // An expanded row's lines follow the rows' key: main first, then the recipe lines by lifecycle word, then the pins
+    // no recipe stands on, inside a group by the line's own creation time or by its last request (a pin's last use
+    // where no recipe stands on it), ties by agent id. No story session draws recipe lines and pin-only lines together,
+    // so two read it: the written session on desktop, whose seven agents hold a line in each lifecycle word and three
+    // released records (`WRITTEN_SUBAGENTS` in `web/src/mock/operations.ts`), and the slowed notebook session, whose
+    // main and Haiku subagent hold pins no recipe stands on (`SLOWED_PINS`). The written session's released lines stand
+    // on no pin, so under Created they tie and read by agent id, and under Last activity by their last requests.
+    const SLOWED_ID = '5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65';
+    const RANK = { busy: 0, idle: 1, parked: 2, unknown: 2, released: 3 };
+    const writtenId = recipes.find((r) => r.agentId === 'e7c1' && r.cause === 'agent_released')?.sessionId;
+    const hosts = { slowed: listed.find((s) => s.sessionId === SLOWED_ID), written: listed.find((s) => !s.historical && s.sessionId === writtenId) };
+    const releasedLive = (r) => r.agentState === 'released' && r.cause === 'agent_released';
+    const wantLines = (s, released, sort, dir) => {
+      const own = recipes.filter((r) => r.keyId === s.keyId && r.sessionId === s.sessionId && (released || !releasedLive(r)));
+      // Every recipe of these two sessions runs on its pin's model as written, so a pin is found by its agent and
+      // model.
+      const pinOf = (r) => s.agentContexts.find((c) => c.agentId === r.agentId && c.model === r.model) ?? null;
+      const lines = [
+        ...own.map((r) => ({ at: sort === 'activity' ? r.lastRequestAt : (pinOf(r)?.createdAt ?? null), group: RANK[r.agentState], id: r.agentId })),
+        ...s.agentContexts.filter((c) => !own.some((r) => pinOf(r) === c)).map((c) => ({ at: sort === 'activity' ? c.lastUsedAt : c.createdAt, group: 4, id: c.agentId })),
+      ];
+      return lines.sort((a, b) => ((a.id === 'main') !== (b.id === 'main') ? (a.id === 'main' ? -1 : 1) : a.group - b.group || byTime(a.at, b.at, dir) || a.id.localeCompare(b.id))).map((l) => l.id);
+    };
+    const QUERIES = [
+      ['', false, 'created', 'desc'],
+      ['?sort=activity', false, 'activity', 'desc'],
+      ['?released=1', true, 'created', 'desc'],
+      ['?released=1&sort=activity', true, 'activity', 'desc'],
+      ['?released=1&sort=activity&dir=asc', true, 'activity', 'asc'],
+    ];
+    const reads = [];
+    for (const [query, released, sort, dir] of QUERIES) {
+      const page = await mount(`/sessions${query}`, { now: CLOCK_ORIGIN });
+      await showColumn(page, 'Agents');
+      const got = { agents: null };
+      for (const [key, s] of Object.entries(hosts)) {
+        const row = s === undefined ? null : page.container.querySelector(`[id="${idOfRow(s)}"]`);
+        if (key === 'written') got.agents = sessionCell(page, row, 'Agents')?.textContent?.trim() ?? null;
+        row?.click();
+        await page.settle(150);
+        got[key] = row?.nextElementSibling?.classList.contains('srow__detail') ? [...row.nextElementSibling.querySelectorAll('.agents__row:not(.agents__row--head)')].map((l) => l.firstElementChild?.textContent?.trim() ?? '') : null;
+      }
+      page.unmount();
+      const want = Object.fromEntries(Object.entries(hosts).map(([key, s]) => [key, s === undefined ? null : wantLines(s, released, sort, dir)]));
+      reads.push({ got, query, released, want });
+    }
+    // The written session's released lines read one order under Created and another under Last activity.
+    const releasedTail = (lines) => lines?.filter((id) => ['91aa', 'c3a9', 'e7c1'].includes(id)) ?? [];
+    const story = hosts.slowed !== undefined && hosts.written !== undefined && JSON.stringify(releasedTail(reads[2].want.written)) !== JSON.stringify(releasedTail(reads[3].want.written));
+    results.push({
+      name: "/sessions an expanded row's lines read main first and then their groups under each key and direction, the released lines tied under Created and read by agent id",
+      ok: story && reads.every((r) => JSON.stringify([r.got.slowed, r.got.written]) === JSON.stringify([r.want.slowed, r.want.written]) && r.want.slowed?.[0] === 'main' && r.want.written?.[0] === 'main'),
+      missing: [`story ${story}`, ...reads.map((r) => `${r.query || 'bare'}: ${JSON.stringify({ slowed: r.got.slowed, written: r.got.written })} against ${JSON.stringify(r.want)}`)],
+    });
+    // The release filter applies before the lines join their pins, under either key: `e7c1` and `91aa`, the subagents
+    // the mod released under the live session, draw no line with Released agents off, `c3a9`, released by the
+    // session's end, draws, and the filter on draws all three. The Agents cell counts the session's seven records less
+    // the two the view hides, and all seven with the filter on.
+    const release = reads.slice(0, 4).map((r) => ({ agents: r.got.agents, drawn: ['91aa', 'c3a9', 'e7c1'].filter((id) => r.got.written?.includes(id)), query: r.query, released: r.released }));
+    results.push({
+      name: "/sessions Released agents off hides the written session's two subagents the mod released and keeps the one the session's end released under each key, and on draws all three",
+      ok: release.every((r) => JSON.stringify([r.agents, r.drawn]) === JSON.stringify(r.released ? ['7', ['91aa', 'c3a9', 'e7c1']] : ['5', ['c3a9']])),
+      missing: release.map((r) => JSON.stringify(r)),
+    });
+  }
+  {
+    // The five-second re-read keeps an expanded row's place under Created. MockApi.listSessions answers the story's
+    // fixed seed, so no tick moves a row's activity, and the case answers every read after the first with nightly's
+    // notebook row (`6d2f8b40`, a fixed row of `sessionSpec` in `web/src/mock/operations.ts`, created 95 minutes back
+    // and last used 20, neither the newest created nor the newest active row at the first read) last used and last
+    // requested at the tick's instant, its creation as the seed carries it.
+    const name = "/sessions a re-read that moves a session's activity keeps the rows and its expanded row in place under Created and moves that row to the top under Last activity";
+    const MOVED_ID = '6d2f8b40-1e7a-4c95-a3d8-7b5e0c9f2a61';
+    const TICK = 5_000;
+    const moved = listed.find((s) => s.sessionId === MOVED_ID);
+    const { listSessions } = api;
+    let answered = 0;
+    api.listSessions = async (...args) => {
+      answered += 1;
+      const rows = await listSessions.apply(api, args);
+      return answered === 1 ? rows : rows.map((s) => (s.sessionId === MOVED_ID ? { ...s, lastRequestAt: isoAt(CLOCK_ORIGIN + TICK), lastUsedAt: isoAt(CLOCK_ORIGIN + TICK) } : s));
+    };
+    const read = async (query) => {
+      answered = 0;
+      const page = await mount(`/sessions${query}`, { now: CLOCK_ORIGIN });
+      const row = () => (moved === undefined ? null : page.container.querySelector(`[id="${idOfRow(moved)}"]`));
+      const at = () => ({ open: row()?.getAttribute('aria-expanded') ?? null, place: moved === undefined ? -1 : drawnIds(page).indexOf(idOfRow(moved)), reads: answered, rows: drawnIds(page) });
+      row()?.click();
+      await page.settle(150);
+      const before = at();
+      tick(TICK);
+      await page.settle();
+      const after = at();
+      page.unmount();
+      return { after, before };
+    };
+    let created;
+    let activity;
+    try {
+      created = await read('');
+      activity = await read('?sort=activity');
+    } finally {
+      api.listSessions = listSessions;
+    }
+    const brief = (r) => ({ after: { ...r.after, rows: r.after.rows.length }, before: { ...r.before, rows: r.before.rows.length } });
+    results.push({
+      name,
+      ok:
+        created.before.place > 0 &&
+        activity.before.place > 0 &&
+        [created, activity].every((r) => r.before.reads === 1 && r.after.reads === 2 && r.before.open === 'true' && r.after.open === 'true') &&
+        JSON.stringify(created.after.rows) === JSON.stringify(created.before.rows) &&
+        activity.after.place === 0 &&
+        JSON.stringify(activity.after.rows.slice(1)) === JSON.stringify(activity.before.rows.filter((id) => id !== activity.before.rows[activity.before.place])),
+      missing: [`created ${JSON.stringify(brief(created))}`, `activity ${JSON.stringify(brief(activity))}`],
+    });
+  }
+}
+
+{
   // The row reads main's conversation pin and every session draws its lines from its recipes and its pins, read on the
   // story's instant. The figures are the seeds the mock answers, the two written sessions among them: the
   // auxiliary-only session, whose main has sent auxiliary calls alone, so its row reads its subagent's pin, and the
@@ -23227,6 +23425,9 @@ const CARD_VIEWS = [
   const listed = await api.listSessions();
   const recipes = await api.listKeepaliveRecipes();
   const idOfRow = (s) => `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`;
+  // The story's first session, whose recipes the route lists first: a companion session on desktop with main and two
+  // subagents and ledgered traffic, read by its id since the view orders the rows by their creation.
+  const storySession = listed.find((s) => !s.historical && s.keyId === recipes[0]?.keyId && s.sessionId === recipes[0]?.sessionId);
   /** An expanded row's agent lines, each cell read under its head. */
   const linesOf = (page, tr) => {
     const detail = tr?.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
@@ -23267,7 +23468,7 @@ const CARD_VIEWS = [
     // session, the fleet session no mod reports and the auxiliary-only session, whose row reads its subagent's pin,
     // each read so, and the registration-only row, which holds no pin, reads three dashes.
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
-    const first = listed.find((s) => idOfRow(s) === page.container.querySelector('tbody tr.srow')?.id);
+    const first = storySession;
     const cells = (s) => {
       const tr = page.container.querySelector(`[id="${s === undefined ? '' : idOfRow(s)}"]`);
       const read = (header) => sessionCell(page, tr, header);
@@ -23353,7 +23554,7 @@ const CARD_VIEWS = [
     // An Agent cell links to the request log on the session and the agent, the codec writing the session, then the
     // agent, before the key lifetime, on a session with traffic.
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
-    const first = listed.find((s) => idOfRow(s) === page.container.querySelector('tbody tr.srow')?.id);
+    const first = storySession;
     const { lines } = linesOf(page, await open(page, first));
     page.unmount();
     const links = lines.map((l) => {
@@ -23827,7 +24028,10 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       ok: parkedRows.length === 2 && probedParked.length === 1 && cell(probedParked[0], 'Next probe')?.textContent?.trim() !== 'not scheduled',
       missing: parkedRows.map((r) => `${cell(r, 'Cache warming')?.textContent?.trim()} ${cell(r, 'Next probe')?.textContent?.trim()}`),
     });
-    const mixedRow = rows()[0];
+    // The story's first session, whose recipes the route lists first, read by its id since the view orders the rows by
+    // their creation.
+    const [story] = await api.listKeepaliveRecipes();
+    const mixedRow = rows().find((r) => cell(r, 'Session')?.getAttribute('title') === story?.sessionId && cell(r, 'Key')?.querySelector('.sub') === null);
     results.push({
       name: '/sessions an agent awaiting cache evidence counts as retained in the row summary',
       ok: (cell(mixedRow, 'Cache warming')?.textContent ?? '').includes('1 retained, 1 paused, 1 ended'),
@@ -23954,7 +24158,11 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   // request was refused, so the row is found by its last request instead.
   const ledgerSessions = await api.listSessions();
   const rowOfSession = (s) => (s === undefined ? undefined : rows().find((r) => r.id === `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`));
-  const busyRow = () => rows().find((r) => Number(cell(r, 'Requests')?.textContent?.trim()) > 0);
+  // The story's first session, whose recipes the route lists first: ledgered requests on a plan account, main awaiting
+  // its cache evidence, and an id an earlier holder of the key shares. The cases below read it by its id, since the
+  // view orders the rows by their creation.
+  const [storyRecipe] = await api.listKeepaliveRecipes();
+  const busyRow = () => rowOfSession(ledgerSessions.find((s) => !s.historical && s.keyId === storyRecipe?.keyId && s.sessionId === storyRecipe?.sessionId));
   const barren = rowOfSession(ledgerSessions.find((s) => !s.historical && s.lastRequestAt === null));
   const openMenu = async (row) => {
     row?.querySelector('.menu__trigger')?.click();
@@ -24067,10 +24275,13 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     await showColumn(m, 'Requests');
     await showColumn(m, 'Agents');
     const idOf = (r) => cell(r, 'Session')?.getAttribute('title') ?? '';
-    const shared = rows().filter((r) => idOf(r) !== '' && idOf(r) === idOf(rows()[0]));
+    // The id the earlier holder shares with the live session, read off its seed since the view orders the rows by their
+    // creation.
+    const sharedId = (await api.listSessions()).find((s) => s.historical)?.sessionId;
+    const shared = rows().filter((r) => idOf(r) !== '' && idOf(r) === sharedId);
     const gone = shared.find((r) => cell(r, 'Key')?.querySelector('.sub') !== null);
     const live = shared.find((r) => cell(r, 'Key')?.querySelector('.sub') === null);
-    results.push({ name: '/sessions a session id held by two generations of a key is two rows', ok: shared.length === 2 && gone !== undefined && live !== undefined, missing: [String(shared.length), idOf(rows()[0])] });
+    results.push({ name: '/sessions a session id held by two generations of a key is two rows', ok: shared.length === 2 && gone !== undefined && live !== undefined, missing: [String(shared.length), String(sharedId)] });
     results.push({
       name: '/sessions the earlier holder is marked, carries no agents and no recipe',
       ok:
@@ -24123,8 +24334,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     await showColumn(m, 'Agents');
   }
 
-  // A row opens into one line per agent and closes again.
-  rows()[0]?.click();
+  // A row opens into one line per agent and closes again: the story's first session's.
+  busyRow()?.click();
   await m.settle(150);
   const detail = m.container.querySelector('.srow__detail');
   expect('/sessions row expands into its agents', detail?.textContent ?? '', ['Created', ' ago', 'Agent', 'Model', 'Account', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State', 'main']);
@@ -24154,7 +24365,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   }
   const agentRows = detail?.querySelectorAll('.agents__row').length ?? 0;
   results.push({ name: '/sessions expanded row lists a head plus one line per agent', ok: agentRows >= 2, missing: [String(agentRows)] });
-  rows()[0]?.click();
+  busyRow()?.click();
   await m.settle(150);
   results.push({ name: '/sessions row collapses again', ok: m.container.querySelectorAll('.srow__detail').length === 0, missing: [] });
 

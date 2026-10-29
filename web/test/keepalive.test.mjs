@@ -38,30 +38,57 @@ const recipe = (agentId, agentState, lastRequestAt) => ({
   ttlSeconds: 300,
   wakeAt: null,
 });
-const words = (list) => list.map((r) => (r.agentId === 'main' ? 'main' : r.agentState));
-const ids = (list) => list.map((r) => r.agentId);
+/** A row as the page builds it, with the three times the order reads, each null or a clock time on the test's day. */
+const orderRow = (sessionId, createdAt, lastUsedAt, lastRequestAt) => ({ session: { createdAt: createdAt && iso(createdAt), lastRequestAt: lastRequestAt && iso(lastRequestAt), lastUsedAt: lastUsedAt && iso(lastUsedAt), sessionId } });
+const sessionIds = (rows) => rows.map((r) => r.session.sessionId);
 
-test('orderRecipes puts main first wherever it sat, then the words busy, idle, parked with unknown, released', () => {
-  const at = ms(14, 20);
-  const list = [recipe('3e', 'released', at), recipe('u7', 'unknown', at), recipe('b4', 'busy', at), recipe('main', 'idle', ms(13, 0)), recipe('p2', 'parked', at), recipe('i9', 'idle', at)];
-  const sorted = d.orderRecipes(list);
-  assert.deepEqual(words(sorted), ['main', 'busy', 'idle', 'parked', 'unknown', 'released']);
-  assert.deepEqual(ids(sorted), ['main', 'b4', 'i9', 'p2', 'u7', '3e']);
+test('orderRows reads the newest created first, ties by session id and a row with no creation time last under either direction', () => {
+  // a1 and a2 share an instant an hour after b, and n has no creation time. Each row's later time is a different one of
+  // its two, so a key that read either alone would order the activity reads otherwise.
+  const rows = [orderRow('n', null, null, null), orderRow('b', ms(13, 0), ms(14, 25), null), orderRow('a2', ms(14, 0), ms(14, 2), ms(14, 20)), orderRow('a1', ms(14, 0), ms(14, 10), ms(14, 5))];
+  const before = sessionIds(rows);
+  assert.deepEqual(sessionIds(d.orderRows(rows, 'created', 'desc')), ['a1', 'a2', 'b', 'n']);
+  assert.deepEqual(sessionIds(d.orderRows(rows, 'created', 'asc')), ['b', 'a1', 'a2', 'n']);
+  assert.deepEqual(sessionIds(d.orderRows(rows, 'activity', 'desc')), ['b', 'a2', 'a1', 'n'], 'the later of the last use and the last request decides');
+  assert.deepEqual(sessionIds(d.orderRows(rows, 'activity', 'asc')), ['a1', 'a2', 'b', 'n'], 'a row with neither time stays last');
+  assert.deepEqual(sessionIds(rows), before, 'the list handed in is left as it is');
+  assert.deepEqual(
+    rows.map((r) => d.lastActivity(r.session)),
+    [null, iso(ms(14, 25)), iso(ms(14, 20)), iso(ms(14, 10))],
+  );
 });
 
-test('orderRecipes reads the newest last request first inside a word, an agent without one last, and ties by agent id', () => {
-  const list = [recipe('0a', 'busy', null), recipe('e9', 'idle', ms(14, 10)), recipe('c3', 'busy', ms(14, 20)), recipe('4d', 'idle', ms(14, 10)), recipe('7f', 'busy', ms(14, 29))];
-  const sorted = d.orderRecipes(list);
-  assert.deepEqual(ids(sorted), ['7f', 'c3', '0a', '4d', 'e9']);
-  assert.deepEqual(ids(d.orderRecipes(sorted)), ids(sorted));
-});
+/** A line as `sessionLines` answers it: a recipe with its pin or none, or a pin with no recipe. */
+const line = (r, p) => ({ agentId: (r ?? p).agentId, model: (r ?? p).model, pin: p, recipe: r });
+const linePin = (agentId, model, createdAt, lastUsedAt) => ({ accountId: 'primary', agentId, cacheTtlMs: 5 * MINUTE, createdAt: iso(createdAt), effort: 'high', lastInputTokens: 9_000, lastUsedAt: iso(lastUsedAt), model, warm: false });
+const lineNames = (lines) => lines.map((l) => (l.model === 'claude-sonnet-5' ? l.agentId : `${l.agentId} on ${l.model}`));
 
-test('orderRecipes leaves the list it was handed as it was', () => {
-  const list = [recipe('3e', 'released', ms(14, 20)), recipe('b4', 'busy', ms(14, 0)), recipe('main', 'idle', ms(13, 0))];
-  const before = ids(list);
-  const sorted = d.orderRecipes(list);
-  assert.deepEqual(ids(list), before);
-  assert.notDeepEqual(ids(sorted), before);
+test('orderLines puts main first, then the recipe lines by lifecycle word, then the pins no recipe stands on, each group under the key and the direction', () => {
+  const HAIKU = 'claude-haiku-4-5';
+  const released = (agentId, at) => ({ ...recipe(agentId, 'released', at), cause: 'agent_released' });
+  // Handed in no group's order: two busy lines, one on a pin and one with none, an idle one, two released ones with no
+  // pin, and two pin-only agents whose creation and last use run opposite ways, e5 pinned on two models at one instant.
+  const lines = [
+    line(null, linePin('e5', 'claude-sonnet-5', ms(13, 40), ms(14, 12))),
+    line(released('e7c1', ms(14, 8)), null),
+    line(recipe('a4', 'busy', ms(14, 20)), null),
+    line(null, linePin('d1', 'claude-sonnet-5', ms(13, 20), ms(14, 15))),
+    line(recipe('c2', 'idle', ms(14, 5)), linePin('c2', 'claude-sonnet-5', ms(13, 10), ms(14, 5))),
+    line(recipe('main', 'busy', ms(14, 0)), linePin('main', 'claude-sonnet-5', ms(13, 0), ms(14, 0))),
+    line(null, linePin('e5', HAIKU, ms(13, 40), ms(14, 12))),
+    line(released('91aa', ms(14, 2)), null),
+    line(recipe('b7', 'busy', ms(14, 10)), linePin('b7', 'claude-sonnet-5', ms(13, 30), ms(14, 10))),
+  ];
+  const before = lineNames(lines);
+  const e5 = [`e5 on ${HAIKU}`, 'e5'];
+  // Under created a line reads its own pin's creation, the busy line with no pin and the two released ones last in
+  // their groups whichever the direction, the released pair tied and read by agent id.
+  assert.deepEqual(lineNames(d.orderLines(lines, 'created', 'desc')), ['main', 'b7', 'a4', 'c2', '91aa', 'e7c1', ...e5, 'd1']);
+  assert.deepEqual(lineNames(d.orderLines(lines, 'created', 'asc')), ['main', 'b7', 'a4', 'c2', '91aa', 'e7c1', 'd1', ...e5]);
+  // Under activity a recipe line reads its last request and a pin-only line its pin's last use, newest first.
+  assert.deepEqual(lineNames(d.orderLines(lines, 'activity', 'desc')), ['main', 'a4', 'b7', 'c2', 'e7c1', '91aa', 'd1', ...e5]);
+  assert.deepEqual(lineNames(d.orderLines(lines, 'activity', 'asc')), ['main', 'b7', 'a4', 'c2', '91aa', 'e7c1', ...e5, 'd1']);
+  assert.deepEqual(lineNames(lines), before, 'the list handed in is left as it is');
 });
 
 test('requestsRange picks the narrowest range that covers the last request, with a minute of headroom under each width', () => {
