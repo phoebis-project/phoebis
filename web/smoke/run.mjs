@@ -4809,13 +4809,13 @@ m.unmount();
   ended.unmount();
 
   {
-    // Studio's seed (`claude_max` on `default_claude_max_5x` in mock/accounts.ts) started its subscription 16 days back,
-    // an upgrade from Pro inside its second-newest week, so its weekly resets (`WEEKLY_RESETS`) at or before that start
-    // carry Pro's pair and the newer ones its own. Its 7-day window left 0.44, 0.39, 0.5 and 0.47 of its week, newest
-    // first, and its Fable week 0.79, 0.84, 0.76 and 0.82, read here off the route with each reset's pair. Under Native a
-    // week prices at the tier it ran under: the Pro week's figure stands to the one its share reads at Max 5x as Pro's
-    // 7-day capacity stands to Max 5x's on the cost table the page reads, and the total adds the weeks' own figures
-    // rather than pricing the summed shares at the current tier.
+    // Studio's seed (`claude_max` on `default_claude_max_5x` in mock/accounts.ts) started its subscription 16 days
+    // back, an upgrade from Pro inside its second-newest week, so its weekly resets (`WEEKLY_RESETS`) at or before that
+    // start carry Pro's pair and the newer ones its own. Its 7-day window left 0.44, 0.39, 0.5 and 0.47 of its week,
+    // newest first, and its Fable week 0.79, 0.84, 0.76 and 0.82, read here off the route with each reset's pair. Under
+    // Native a week prices at the tier it ran under: the Pro week's figure stands to the one its share reads at Max 5x
+    // as Pro's 7-day capacity stands to Max 5x's on the cost table the page reads, and the total adds the weeks' own
+    // figures rather than pricing the summed shares at the current tier.
     const studio = story.get('studio');
     const since = Date.parse(studio.subscription.since);
     const span = { from: new Date(CLOCK_ORIGIN - 29 * 24 * 3_600_000).toISOString(), to: new Date(CLOCK_ORIGIN).toISOString() };
@@ -4838,7 +4838,8 @@ m.unmount();
     const sevenDay = windows.find((w) => w.window === 'seven_day')?.resets ?? [];
     const pairs = windows.map((w) => `${w.window} ${w.resets.map((r) => r.plan).join(',')}`);
     const want = [columnWant('7-day', 'seven_day'), columnWant('7-day Fable', 'seven_day_fable')];
-    // The Pro week through the ratio: what its share reads at the newest week's tier, times Pro's capacity over Max 5x's.
+    // The Pro week through the ratio: what its share reads at the newest week's tier, times Pro's capacity over
+    // Max 5x's.
     const proWeek = equivalentShort('seven_day', (sevenDay[2]?.shareLeft ?? NaN) * weekWeight(studio.subscription.rateLimitTier) * ratio);
     const atCurrent = equivalentShort('seven_day', sum(sevenDay.map((r) => r.shareLeft)) * weekWeight(studio.subscription.rateLimitTier));
     results.push({

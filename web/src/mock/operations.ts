@@ -277,9 +277,9 @@ const lineOrder = (a: Pick<AgentContext, 'agentId' | 'model'>, b: Pick<AgentCont
   (a.agentId === 'main') !== (b.agentId === 'main') ? (a.agentId === 'main' ? -1 : 1) : byteOrder(a.agentId, b.agentId) || byteOrder(a.model, b.model);
 /**
  * A row's lines in the route's order, each at its agent's first-seen time: main's at the session's, a subagent's at its
- * earliest request of the session in the requests seed. A subagent no request names reads the session's time plus a
- * minute per place among the row's subagents, a stand-in for a first sighting the story does not write, and an agent
- * pinned on two models takes one place, since it holds one first-seen time.
+ * earliest placing request (`firstRequestAt`) of the session in the requests seed. A subagent no placing request names
+ * reads the session's time plus a minute per place among the row's subagents, a stand-in for a first sighting the story
+ * does not write, and an agent pinned on two models takes one place, since it holds one first-seen time.
  */
 const datedLines = (createdAt: string | null, session: string, lines: readonly Omit<AgentContext, 'createdAt'>[]): AgentContext[] => {
   const places = new Map<string, number>();

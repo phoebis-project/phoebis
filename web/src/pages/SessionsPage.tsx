@@ -939,8 +939,8 @@ function AgentLine({ accountById, line, now, requestsTo }: { accountById: Readon
           <span className="agents__counts num" title={COUNTS_HINT}>
             {a.probesToday} / {a.creditedToday}
           </span>
-          {/* The state word carries its cause's sentence on hover, and the line below repeats it for a reader that never
-              hovers. */}
+          {/* The state word carries its cause's sentence on hover, and the line below repeats it for a reader that
+              never hovers. */}
           <span className="agents__state row" style={{ gap: 6 }}>
             <Badge tone={STATE_TONE[a.state]} dot title={CAUSE_HINT[a.cause]}>
               {STATE_LABEL[a.state]}
