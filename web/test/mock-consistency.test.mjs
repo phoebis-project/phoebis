@@ -1132,15 +1132,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const line of plain.agentContexts) assert.equal(line.cacheTtlMs, 5 * 60_000, `${line.agentId}'s TTL`);
   });
 
-  test(`every session a pin placed reads its first-seen time at or before its last use and one no pin placed none, and each line its agent's: main's the row's, a subagent's its earliest request of the session, and one no request names a minute per place among the row's subagents, at ${at}`, async () => {
+  test(`every session a pin placed reads its first-seen time at or before its last use and one no pin placed none, and each line its agent's at or before the line's last use: main's the row's, a subagent's its earliest placing request of the session, and one no request names a minute per place among the row's distinct subagents, at ${at}`, async () => {
     const s = await story;
     const recipes = await s.api.listKeepaliveRecipes();
     // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
     const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds);
     // A recipe stands on a pin its first request placed, so a released or finished row with no pin left once held one.
     const placed = (row) => row.pinned || (!row.historical && recipes.some((r) => r.keyId === row.keyId && r.sessionId === row.sessionId));
-    // The requests seed itself, probes left out, since a probe follows the request that placed its agent's pin.
-    const seed = [...s.lib.requestById.values()].filter((r) => r.kind !== 'probe');
+    // The requests seed itself, read for the requests that place a pin: an inference request with an attempt, since a
+    // probe follows the request that placed its agent's pin and a count or a refusal before any attempt places none.
+    const seed = [...s.lib.requestById.values()].filter((r) => r.kind === 'inference' && r.attempts.length > 0);
     const firstRequestOf = (row, agentId) =>
       seed.filter((r) => r.keyId === row.keyId && r.keyGeneration === row.keyGeneration && r.sessionId === row.sessionId && r.agentId === agentId).reduce((first, r) => (first === null || r.at < first ? r.at : first), null);
     const arms = { main: 0, request: 0, standIn: 0 };
@@ -1150,15 +1151,18 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         const lastUse = s.lib.lastUseOf(row);
         assert.ok(row.createdAt !== null && lastUse !== null && Date.parse(row.createdAt) <= Date.parse(lastUse), `${name} first seen at ${row.createdAt}, last used at ${lastUse}`);
       } else assert.equal(row.createdAt, null, `${name}: no pin ever placed it`);
-      let place = 0;
+      // An agent holds one first-seen time whatever models it is pinned on, so its place counts once.
+      const places = new Map();
       for (const c of row.agentContexts) {
         const where = `${name}: ${c.agentId} on ${c.model}`;
+        if (c.createdAt !== null && c.lastUsedAt !== null) assert.ok(Date.parse(c.createdAt) <= Date.parse(c.lastUsedAt), `${where} first seen at ${c.createdAt}, after its last use at ${c.lastUsedAt}`);
         if (c.agentId === 'main') {
           arms.main += 1;
           assert.equal(c.createdAt, row.createdAt, `${where} reads the session's first-seen time`);
           continue;
         }
-        place += 1;
+        if (!places.has(c.agentId)) places.set(c.agentId, places.size + 1);
+        const place = places.get(c.agentId);
         const first = firstRequestOf(row, c.agentId);
         if (first !== null) {
           arms.request += 1;

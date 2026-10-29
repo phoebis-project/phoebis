@@ -216,10 +216,14 @@ for (const r of REQUESTS) {
   if (!seen) ledgered.set(id, { last: r.at, requests: counted });
   else ledgered.set(id, r.at > seen.last ? { last: r.at, requests: seen.requests + counted } : { ...seen, requests: seen.requests + counted });
 }
-/** Each agent's earliest request of its session, the instant the router first saw the agent there. */
+/**
+ * Each agent's earliest request of its session that placed a pin, the instant the router first saw the agent there: an
+ * inference request with an attempt, since the router writes the record at the first placement and a count, a probe or
+ * a refusal before any attempt places none.
+ */
 const firstRequestAt = new Map<string, string>();
 for (const r of REQUESTS) {
-  if (r.sessionId === null || r.agentId === null || r.kind === 'probe') continue;
+  if (r.sessionId === null || r.agentId === null || r.kind !== 'inference' || r.attempts.length === 0) continue;
   const id = `${activityOf(r.keyId, r.keyGeneration, r.sessionId)}|${r.agentId}`;
   const seen = firstRequestAt.get(id);
   if (seen === undefined || r.at < seen) firstRequestAt.set(id, r.at);
@@ -274,13 +278,15 @@ const lineOrder = (a: Pick<AgentContext, 'agentId' | 'model'>, b: Pick<AgentCont
 /**
  * A row's lines in the route's order, each at its agent's first-seen time: main's at the session's, a subagent's at its
  * earliest request of the session in the requests seed. A subagent no request names reads the session's time plus a
- * minute per place among the row's subagent lines, a stand-in for a first sighting the story does not write.
+ * minute per place among the row's subagents, a stand-in for a first sighting the story does not write, and an agent
+ * pinned on two models takes one place, since it holds one first-seen time.
  */
 const datedLines = (createdAt: string | null, session: string, lines: readonly Omit<AgentContext, 'createdAt'>[]): AgentContext[] => {
-  let place = 0;
+  const places = new Map<string, number>();
   return [...lines].sort(lineOrder).map((line) => {
     if (line.agentId === 'main') return { ...line, createdAt };
-    place += 1;
+    if (!places.has(line.agentId)) places.set(line.agentId, places.size + 1);
+    const place = places.get(line.agentId)!;
     const first = firstRequestAt.get(`${session}|${line.agentId}`);
     return { ...line, createdAt: first ?? (createdAt === null ? null : iso(Date.parse(createdAt) + place * MINUTE)) };
   });
