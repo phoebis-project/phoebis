@@ -689,7 +689,8 @@ function buildRequests(): RequestLog[] {
   rows.push(...drawnRows);
   rows.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   // Every desktop row before the live key's creation is its earlier holder's, and the holder's last request ran on
-  // the session the live key holds now, so the Sessions view lists that id once under each holder.
+  // the session the live key holds now, so the request log shows that session id under each holder's generation while
+  // the Sessions view lists it once, under the live key, the holder's last use having passed the non-companion timeout.
   const holderRows = rows.filter((r) => r.keyId === 'desktop' && Date.parse(r.at) < DELETED_HOLDER_END);
   for (const r of holderRows) r.keyGeneration = DELETED_HOLDER_GENERATION;
   const holderLast = holderRows.find((r) => r.kind !== 'probe');
