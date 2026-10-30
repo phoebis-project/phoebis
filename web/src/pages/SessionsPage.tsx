@@ -589,9 +589,12 @@ function SessionRows({
 }) {
   const { account, lines, session, shown } = row;
   const summary = stateSummary(shown);
-  // A pin exists only with an account: a request refused before any account served it leaves a row without one. The
-  // hover reads the recipes in the order the expanded lines draw them.
-  const otherModels = lines.flatMap((l) => (l.recipe !== null && l.recipe.accountId !== null && l.recipe.model !== session.model ? [l.recipe] : []));
+  // Every line names its model and its account, its pin's or its recipe's, so the badge counts each agent pinned on
+  // another model, recipe or not. The hover reads the lines in the order the expanded row draws them.
+  const otherModels = lines.flatMap((l) => {
+    const accountId = l.pin?.accountId ?? l.recipe?.accountId ?? null;
+    return accountId !== null && l.model !== session.model ? [{ accountId, agentId: l.agentId, model: l.model }] : [];
+  });
   // A retained agent with no time is waiting on its first stream event, which is
   // a different thing from a session nothing probes.
   const pendingProbe = shown.some((a) => a.state === 'retained' && a.nextProbeAt === null);
@@ -983,8 +986,8 @@ function LineAccount({ account, id, now }: { account: Account | null; id: string
   );
 }
 
-/** "+2" beside a session's main pin, hovering into one line per agent that sits elsewhere. */
-function OtherPins({ agents }: { agents: KeepaliveRecipe[] }) {
+/** "+2" beside a session's main pin, hovering into one line per agent that sits on another model. */
+function OtherPins({ agents }: { agents: { accountId: string; agentId: string; model: string }[] }) {
   if (agents.length === 0) return null;
   return (
     <Badge tone="neutral" title={`Agents pinned elsewhere:\n${agents.map((a) => `${a.agentId}: ${a.model} on ${a.accountId}`).join('\n')}`}>

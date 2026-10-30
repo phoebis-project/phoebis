@@ -1047,7 +1047,9 @@ asked left out, and "View in requests" lists those with the rest, so a session w
 opens its analytics and its request log. Session takes the card's free width and keeps at least 74 px, and a set of
 columns wider than the card scrolls inside it. Context reads the main agent's context in tokens, `184K`, with a dash for
 a session with no pin or no figure, and Effort the effort of its pin's last turn, `high`, with a dash for none, both
-from main's conversation pin (or, where main holds none, the newest conversation pin of another agent). Runway reads the
+from main's conversation pin (or, where main holds none, the newest conversation pin of another agent). The Model cell
+adds a "+N" badge where N agents of the session are pinned on another model, with or without a recipe, its hover naming
+each agent with its model and account in the lines' order. Runway reads the
 time until the projection of the pin's account reaches the ceiling on the window that binds, among those the pin's model
 draws: a span such as `6 h 55 min`, `none` where the runway is gone, `unbounded` where nothing burns or where the runway
 would pass the binding window's next reset, and a dash for an unpinned row or a pinned row with no projection. On a

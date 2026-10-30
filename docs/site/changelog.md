@@ -293,7 +293,9 @@ read leaves them in place ([Analytics](console.md#analytics), [Accounts](console
 classifier grouping the requests with no classifier call are labeled `none`, as the Requests facet names them
 ([Analytics](console.md#analytics)). Without the Model week card the Burn tab's three cards share one row from 1344 px
 ([Analytics](console.md#analytics)). On the Sessions view a released subagent's record keeps its slot of the agent cap
-for one cache TTL after the release and then leaves the engine ([Sessions](console.md#sessions)). The Sessions view
+for one cache TTL after the release and then leaves the engine ([Sessions](console.md#sessions)). The Sessions row's
+"+N" badge counts every agent pinned on another model, a pin without a recipe among them
+([Sessions](console.md#sessions)). The Sessions view
 offers Companion only, Finished sessions (Show finished sessions) and Released agents (Show released agents) as filters
 in its address, hides a finished session by default, and counts the rows the filters keep on its tiles
 ([Sessions](console.md#sessions)). The Sessions view orders its rows and their lines by the session's creation time,

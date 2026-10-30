@@ -24431,19 +24431,56 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   // earlier holder, which hold some, left the list under the non-companion timeout.
   results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length === 18 && counts.includes(0), missing: counts.map(String) });
 
-  // Per-agent pins: a "+N" badge on the Model cell wherever an agent runs another model, its hover naming each one's
-  // account.
+  // Per-agent pins: a "+N" badge on the Model cell wherever an agent is pinned on another model, recipe or not, its
+  // hover naming each one's model and account. The set is read off the mock's answer: a listed session's pins on
+  // another model, then its shown recipes no pin stands under likewise, a recipe naming no account left out.
   {
-    const modelPlus = [...m.container.querySelectorAll('.srow__pin .badge')];
-    results.push({ name: '/sessions marks sessions whose agents run another model', ok: modelPlus.length >= 2 && modelPlus.every((b) => /^\+\d+$/.test(b.textContent?.trim() ?? '')), missing: modelPlus.map((b) => b.textContent?.trim() ?? '') });
-    const modelTitle = modelPlus[0]?.getAttribute('title') ?? '';
-    results.push({ name: '/sessions +N hover lists agent, model and account', ok: /\n\S+: claude-\S+ on \w+/.test(modelTitle), missing: [modelTitle] });
+    const listed = await api.listSessions();
+    const recipes = await api.listKeepaliveRecipes();
+    const idOfRow = (s) => `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`;
+    const elsewhere = (s) => {
+      const lines = new Map(s.agentContexts.map((c) => [`${c.agentId} ${c.model}`, c]));
+      for (const r of recipes) {
+        const shown = !s.historical && r.keyId === s.keyId && r.sessionId === s.sessionId && !(r.agentState === 'released' && r.cause === 'agent_released');
+        if (shown && !lines.has(`${r.agentId} ${r.model}`)) lines.set(`${r.agentId} ${r.model}`, r);
+      }
+      return [...lines.values()].filter((l) => l.accountId !== null && l.model !== s.model).map((l) => `${l.agentId}: ${l.model} on ${l.accountId}`);
+    };
+    const drawn = rows().map((tr) => {
+      const s = listed.find((x) => idOfRow(x) === tr.id);
+      const badge = tr.querySelector('.srow__pin .badge');
+      return { expected: s === undefined ? null : elsewhere(s), hover: (badge?.getAttribute('title') ?? '').split('\n'), id: s?.sessionId ?? tr.id, text: badge?.textContent?.trim() ?? null };
+    });
+    const off = drawn.filter((d) =>
+      d.expected === null || d.expected.length === 0
+        ? d.text !== null
+        : d.text !== `+${d.expected.length}` || d.hover[0] !== 'Agents pinned elsewhere:' || JSON.stringify(d.hover.slice(1).sort()) !== JSON.stringify([...d.expected].sort()),
+    );
+    results.push({
+      name: '/sessions marks every session with an agent pinned on another model, recipe or not, its "+N" the count and its hover the agents',
+      ok: drawn.length > 0 && drawn.every((d) => d.expected !== null) && off.length === 0,
+      missing: [`${drawn.length} rows, ${drawn.filter((d) => d.text !== null).length} badges`, ...off.map((d) => `${d.id}: ${d.text ?? 'no badge'} ${JSON.stringify(d.hover.slice(1))} against ${JSON.stringify(d.expected)}`)],
+    });
+    // The two story sessions whose subagent is pinned on Haiku with no recipe standing on the pin (`SLOWED_PINS` and
+    // `noModLines` in mock/operations.ts): studio's slowed notebook session and the fleet session no mod reports.
+    const PIN_ONLY = [
+      ['5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65', '7b2e: claude-haiku-4-5-20251001 on studio'],
+      ['b7e2d5a9-6c13-4f80-a4d2-9e1f3c7b0a68', '5c8e: claude-haiku-4-5-20251001 on contract'],
+    ];
+    const pinOnly = PIN_ONLY.map(([id]) => drawn.find((d) => d.id === id));
+    const modelTitle = drawn.find((d) => d.text !== null)?.hover.join('\n') ?? '';
+    results.push({
+      name: '/sessions +N hover lists agent, model and account, a pin no recipe stands on among them',
+      ok: /\n\S+: claude-\S+ on \w+/.test(modelTitle) && PIN_ONLY.every(([, line], i) => pinOnly[i]?.text === '+1' && JSON.stringify(pinOnly[i].hover) === JSON.stringify(['Agents pinned elsewhere:', line])),
+      missing: [modelTitle, ...pinOnly.map((d, i) => `${PIN_ONLY[i][0]}: ${d === undefined ? 'no row' : `${d.text ?? 'no badge'} ${JSON.stringify(d.hover)}`}`)],
+    });
     // The story's first session (`sessionSpec[0]` in mock/operations.ts) pins two subagents on another model, and under
     // Last activity its lines draw the compacted one, whose last request is newer, ahead of the one paused on its cold
     // probes, where the recipes list the paused one first. The hover reads the lines' order.
     const byActivity = await mount('/sessions?sort=activity', { now: CLOCK_ORIGIN });
     const twice = [...byActivity.container.querySelectorAll('tbody tr.srow')].find((tr) => (tr.querySelector('.srow__pin .badge')?.getAttribute('title') ?? '').split('\n').length > 2);
     const hovered = (twice?.querySelector('.srow__pin .badge')?.getAttribute('title') ?? '').split('\n').slice(1).map((l) => l.replace(/ on \S+$/, ''));
+    const twiceSession = listed.find((s) => idOfRow(s) === twice?.id);
     twice?.click();
     await byActivity.settle(150);
     const detail = twice?.nextElementSibling?.classList.contains('srow__detail') ? twice.nextElementSibling : null;
@@ -24451,7 +24488,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       .map((l) => `${l.querySelector('.agents__id')?.getAttribute('title')}: ${l.children[1]?.getAttribute('title') ?? l.children[1]?.textContent?.trim()}`)
       .filter((line) => hovered.includes(line));
     byActivity.unmount();
-    results.push({ name: "/sessions the +N hover lists the agents pinned elsewhere in the expanded lines' order", ok: hovered.length === 2 && JSON.stringify(lined) === JSON.stringify(hovered), missing: [JSON.stringify(hovered), JSON.stringify(lined)] });
+    results.push({ name: "/sessions the +N hover lists the agents pinned elsewhere in the expanded lines' order", ok: twiceSession !== undefined && hovered.length === elsewhere(twiceSession).length && JSON.stringify(lined) === JSON.stringify(hovered), missing: [JSON.stringify(hovered), JSON.stringify(lined)] });
   }
 
   // The Last request column, and the two rows the state semantics changed.
