@@ -27838,7 +27838,7 @@ m.unmount();
   [...page.container.querySelectorAll('.card--table tbody tr')].find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop')?.querySelector('.menu__trigger')?.click();
   await page.settle(120);
   [...page.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
-  await page.settle(700);
+  await until(page, () => page.container.querySelectorAll('dialog[open] .effective-rules .badge[title]').length > 0);
   const inDialog = page.container.querySelectorAll('dialog[open] .effective-rules .badge[title]').length;
   sweep('/keys laptop dialog');
   results.push({
