@@ -1411,7 +1411,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
       holds: spec.holds ?? [],
       keyGeneration: r.keyGeneration, keyId: r.keyId ?? '', lane: { effort: r.shape.effort ?? '-', speed: fast ? 'fast' : 'standard', thinking: r.shape.thinkingType ?? 'none' }, parentAgentId: r.agentId === 'main' ? null : 'main', poolId: r.poolId ?? '',
       registryRevision: 412, requestClass: r.requestClass, requestId: r.id, seq: spec.seq, sessionId: r.sessionId,
-      ...(spec.refusal?.kind === 'guardrail' ? blockedFacts(r) : {}),
+      ...(spec.refusal?.kind === 'guardrail' || spec.refusal?.kind === 'client' ? refusedFacts(r, spec.refusal.code === 'drift') : {}),
     },
     requestId: r.id,
     seq: spec.seq,
@@ -1731,16 +1731,19 @@ const FABLE_WEEK_PINS: RoundPin[] = [
 const roundOfPins = (pins: RoundPin[]): ShedRound => ({ marks: pins.filter((p) => p.marked).map((p) => ({ agentId: p.agentId, keyId: p.keyId, model: p.model, sessionId: p.sessionId })), pins });
 
 /**
- * A guardrail's block refuses before any selection, so its record keeps the class and the count flag the block read and
- * leaves the parent agent, the lane, the chains, the accounts attempted and the holds empty, as a contract refusal's.
+ * A refusal at admission (a guardrail's block, a client's drift or contract) comes before any selection, so its record
+ * leaves the parent agent, the lane, the chains, the accounts attempted and the holds empty. The block and the contract
+ * keep the class and the count flag the request carried, the drift keeps no class. A key refusal is the selection's
+ * own and keeps the request's facts.
  */
-const blockedFacts = (r: RequestLog): Pick<RecordRequest, 'attempted' | 'chain' | 'flags' | 'holds' | 'lane' | 'parentAgentId'> => ({
+const refusedFacts = (r: RequestLog, drift: boolean): Pick<RecordRequest, 'attempted' | 'chain' | 'flags' | 'holds' | 'lane' | 'parentAgentId' | 'requestClass'> => ({
   attempted: [],
   chain: { boundaries: 0, staticBoundaries: 0, staticHash: false },
   flags: { contextCompacted: false, count: r.kind === 'count_tokens', fast: false, marker: false, portable: false, probe: r.kind === 'probe' },
   holds: [],
   lane: { effort: '', speed: '', thinking: '' },
   parentAgentId: null,
+  requestClass: drift ? null : r.requestClass,
 });
 
 /** A guardrail's block as the relay answers it: the stored name of the guardrail the request's matches mark blocking. */

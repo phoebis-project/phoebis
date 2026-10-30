@@ -1851,6 +1851,31 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(preset.rows.some((x) => x.type === 'decision' && x.requestId === r.requestId && x.refusal?.kind === 'guardrail'), `${id}: the refused kind lists the record`);
   });
 
+  test(`a client's refusal writes its record with the selection's facts empty, as a guardrail's block does, at ${at}`, async () => {
+    const s = await story;
+    const refused = (await decisionsOf(s)).filter((r) => r.outcome.refusal?.kind === 'client');
+    assert.equal(refused.length, 2, 'the drift and the contract write their records');
+    for (const r of refused) {
+      const id = `${r.requestId}/${r.seq}`;
+      const row = s.requests.find((x) => x.id === r.requestId);
+      const { attempted, chain, flags, holds, lane, parentAgentId, requestClass } = r.request;
+      assert.deepEqual(
+        { attempted, chain, flags, holds, lane, parentAgentId, requestClass },
+        {
+          attempted: [],
+          chain: { boundaries: 0, staticBoundaries: 0, staticHash: false },
+          flags: { contextCompacted: false, count: row.kind === 'count_tokens', fast: false, marker: false, portable: false, probe: row.kind === 'probe' },
+          holds: [],
+          lane: { effort: '', speed: '', thinking: '' },
+          parentAgentId: null,
+          // The route reads no class for a drift and the header's for a contract.
+          requestClass: r.outcome.refusal.code === 'drift' ? null : row.requestClass,
+        },
+        `${id}: the refusal leaves the selection's facts empty`,
+      );
+    }
+  });
+
   test(`the usage poll's two backoff closes read their causes, the plan's end at the pause's instant, at ${at}`, async () => {
     const s = await story;
     const log = await logOf(s);
