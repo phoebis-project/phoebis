@@ -1855,6 +1855,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const refused = (await decisionsOf(s)).filter((r) => r.outcome.refusal?.kind === 'client');
     assert.equal(refused.length, 2, 'the drift and the contract write their records');
+    const defaults = { contextCompacted: false, count: false, fast: false, marker: false, portable: false, probe: false };
     for (const r of refused) {
       const id = `${r.requestId}/${r.seq}`;
       const row = s.requests.find((x) => x.id === r.requestId);
@@ -1864,7 +1865,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         {
           attempted: [],
           chain: { boundaries: 0, staticBoundaries: 0, staticHash: false },
-          flags: { contextCompacted: false, count: row.kind === 'count_tokens', fast: false, marker: false, portable: false, probe: row.kind === 'probe' },
+          // The route writes a drift's flags as their defaults and derives count and probe from the request's kind for
+          // a contract alone.
+          flags: r.outcome.refusal.code === 'drift' ? defaults : { ...defaults, count: row.kind === 'count_tokens', probe: row.kind === 'probe' },
           holds: [],
           lane: { effort: '', speed: '', thinking: '' },
           parentAgentId: null,
