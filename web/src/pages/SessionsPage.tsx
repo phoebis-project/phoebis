@@ -589,8 +589,9 @@ function SessionRows({
 }) {
   const { account, lines, session, shown } = row;
   const summary = stateSummary(shown);
-  // Every line names its model and its account, its pin's or its recipe's, so the badge counts each agent pinned on
-  // another model, recipe or not. The hover reads the lines in the order the expanded row draws them.
+  // A line takes its account from its pin, or from its recipe where no pin stands, and a recipe whose request was
+  // refused before any account served it names none, so that line is left out. The badge counts every other line on
+  // another model, recipe or not, and the hover reads them in the order the expanded row draws them.
   const otherModels = lines.flatMap((l) => {
     const accountId = l.pin?.accountId ?? l.recipe?.accountId ?? null;
     return accountId !== null && l.model !== session.model ? [{ accountId, agentId: l.agentId, model: l.model }] : [];
