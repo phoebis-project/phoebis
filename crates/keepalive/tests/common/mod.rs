@@ -899,6 +899,7 @@ pub fn read_dollars(r: &Rig, rows: &[phoebis_ledger::RollupRow]) -> (f64, f64) {
         None,
         &r.pricing,
         &r.tables,
+        r.now(),
     )
     .first()
     .map_or((0.0, 0.0), |group| {

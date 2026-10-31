@@ -360,49 +360,20 @@
         "wasted_probes": 0,
         "wasted_probe_usd": 0.0,
         "wasted_probe_reasons": {},
-        "cost_shares": {
-          "five_hour": 0.0000746125,
-          "seven_day": 0.000019896666666666665
-        },
-        "cache_shares": {
-          "five_hour": {
-            "read": 5.291666666666666e-7,
-            "write": 0.000010583333333333334
-          },
-          "seven_day": {
-            "read": 1.411111111111111e-7,
-            "write": 2.8222222222222227e-6
-          }
-        },
+        "cost_shares": {},
+        "cache_shares": {},
         "probe_shares": {},
         "plan_requests": 9,
         "plan_output_tokens": 900,
-        "cost_equivalent": {
-          "five_hour": 0.0014922499999999999,
-          "seven_day": 0.00019896666666666666
-        },
-        "unpriced": {
-          "five_hour": false,
-          "seven_day": false
-        },
-        "cache_equivalent": {
-          "five_hour": {
-            "read": 0.000010583333333333334,
-            "write": 0.00021166666666666667
-          },
-          "seven_day": {
-            "read": 1.411111111111111e-6,
-            "write": 0.000028222222222222227
-          }
-        },
-        "probe_equivalent": {},
-        "probe_unpriced": {
-          "five_hour": false,
-          "seven_day": false
+        "cost_equivalent": null,
+        "cache_equivalent": null,
+        "probe_equivalent": {
+          "cost": 0.0,
+          "wasted": 0.0
         },
         "saving_usd": 0.0,
         "saving_shares": {},
-        "saving_equivalent": {},
+        "saving_equivalent": 0.0,
         "billed_usd": 0.0071,
         "billed": {
           "cache_read": 0.0001,
@@ -410,14 +381,7 @@
           "input": 0.004,
           "output": 0.002
         },
-        "equivalent_split": {
-          "input": 0.00011288888888888888,
-          "cache_read": 1.411111111111111e-6,
-          "cache_write": 0.000028222222222222227,
-          "output": 0.000056444444444444454
-        },
-        "estimated": true,
-        "probe_estimated": false
+        "equivalent_split": null
       },
       {
         "key": "direct",
@@ -775,20 +739,18 @@
         "probe_shares": null,
         "plan_requests": 0,
         "plan_output_tokens": 0,
-        "cost_equivalent": {},
-        "unpriced": {
-          "five_hour": false,
-          "seven_day": false
+        "cost_equivalent": 0.0,
+        "cache_equivalent": {
+          "read": 0.0,
+          "write": 0.0
         },
-        "cache_equivalent": {},
-        "probe_equivalent": {},
-        "probe_unpriced": {
-          "five_hour": false,
-          "seven_day": false
+        "probe_equivalent": {
+          "cost": 0.0,
+          "wasted": 0.0
         },
         "saving_usd": 0.0,
         "saving_shares": null,
-        "saving_equivalent": {},
+        "saving_equivalent": 0.0,
         "billed_usd": 0.0036,
         "billed": {
           "cache_read": 0.0001,
@@ -796,9 +758,12 @@
           "input": 0.002,
           "output": 0.001
         },
-        "equivalent_split": {},
-        "estimated": false,
-        "probe_estimated": false
+        "equivalent_split": {
+          "input": 0.0,
+          "cache_read": 0.0,
+          "cache_write": 0.0,
+          "output": 0.0
+        }
       },
       {
         "key": "-",
@@ -1157,20 +1122,18 @@
         "probe_shares": null,
         "plan_requests": 0,
         "plan_output_tokens": 0,
-        "cost_equivalent": {},
-        "unpriced": {
-          "five_hour": false,
-          "seven_day": false
+        "cost_equivalent": 0.0,
+        "cache_equivalent": {
+          "read": 0.0,
+          "write": 0.0
         },
-        "cache_equivalent": {},
-        "probe_equivalent": {},
-        "probe_unpriced": {
-          "five_hour": false,
-          "seven_day": false
+        "probe_equivalent": {
+          "cost": 0.0,
+          "wasted": 0.0
         },
         "saving_usd": 0.0,
         "saving_shares": null,
-        "saving_equivalent": {},
+        "saving_equivalent": 0.0,
         "billed_usd": 0.0,
         "billed": {
           "cache_read": 0.0,
@@ -1178,9 +1141,12 @@
           "input": 0.0,
           "output": 0.0
         },
-        "equivalent_split": {},
-        "estimated": false,
-        "probe_estimated": false
+        "equivalent_split": {
+          "input": 0.0,
+          "cache_read": 0.0,
+          "cache_write": 0.0,
+          "output": 0.0
+        }
       },
       {
         "key": "usage-seat",
@@ -1538,20 +1504,18 @@
         "probe_shares": null,
         "plan_requests": 0,
         "plan_output_tokens": 0,
-        "cost_equivalent": {},
-        "unpriced": {
-          "five_hour": false,
-          "seven_day": false
+        "cost_equivalent": 0.0,
+        "cache_equivalent": {
+          "read": 0.0,
+          "write": 0.0
         },
-        "cache_equivalent": {},
-        "probe_equivalent": {},
-        "probe_unpriced": {
-          "five_hour": false,
-          "seven_day": false
+        "probe_equivalent": {
+          "cost": 0.0,
+          "wasted": 0.0
         },
         "saving_usd": 0.0,
         "saving_shares": null,
-        "saving_equivalent": {},
+        "saving_equivalent": 0.0,
         "billed_usd": 0.00355,
         "billed": {
           "cache_read": 0.00005,
@@ -1559,9 +1523,12 @@
           "input": 0.002,
           "output": 0.001
         },
-        "equivalent_split": {},
-        "estimated": false,
-        "probe_estimated": false
+        "equivalent_split": {
+          "input": 0.0,
+          "cache_read": 0.0,
+          "cache_write": 0.0,
+          "output": 0.0
+        }
       }
     ]
   }

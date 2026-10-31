@@ -10,7 +10,7 @@ use phoebis_ledger::{dashboard, latest_quota};
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
-use crate::openapi::{HourPointView, LedgerFailure, SharedEquivalentView};
+use crate::openapi::{HourPointView, LedgerFailure};
 use crate::AdminState;
 
 /// The ledger's dashboard rollup with the newest quota sample per account and window, and the live pin count. The
@@ -30,12 +30,9 @@ pub(crate) struct Dashboard {
     /// The dollars of the window's billed rows alone (fast mode, overage, API key accounts and usage-based seats), a
     /// part of `cost_24h`.
     pub billed_24h: f64,
-    /// The window's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served
-    /// them.
-    pub equivalent_24h: SharedEquivalentView,
-    /// Whether a plan-funded row of the window priced at its model tier's latest weight, for a model the cost model
-    /// does not weight.
-    pub estimated_24h: bool,
+    /// The window's plan-funded rows as the Pro-week figure, whatever tier served them, null where a row priced
+    /// nothing.
+    pub equivalent_24h: Option<f64>,
     /// The requests that did not succeed over the requests, null with none. The refused requests are in neither.
     pub error_rate_24h: Option<f64>,
     /// The window's most frequent error code, null with none.
@@ -129,8 +126,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
         tokens_cached_24h: board.tokens_cached_24h,
         cost_24h: board.cost_24h,
         billed_24h: board.billed_24h,
-        equivalent_24h: (&board.equivalent_24h).into(),
-        estimated_24h: board.estimated_24h,
+        equivalent_24h: board.equivalent_24h,
         error_rate_24h: board.error_rate_24h,
         top_error_code: board.top_error_code,
         refused_24h: board.refused_24h,
@@ -142,7 +138,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
                 at: h.at,
                 billed: h.billed,
                 cost: h.cost,
-                equivalent: (&h.equivalent).into(),
+                equivalent: h.equivalent,
                 errors: h.errors,
                 refused: h.refused,
                 requests: h.requests,

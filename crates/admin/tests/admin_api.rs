@@ -5333,18 +5333,20 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
                 ..phoebis_routing::PinUsage::default()
             },
             now,
+            now,
+            now,
         )
         .unwrap()
         * 3_600.0;
     let (s1, s2) = (row(&sessions, "s1"), row(&sessions, "s2"));
     assert!(
-        close(s1["burn_equivalent"].as_f64(), equivalent_per_hour) && s1["estimated"] == false,
+        close(s1["burn_equivalent"].as_f64(), equivalent_per_hour) && s1.get("estimated").is_none(),
         "the plan pin's banded copy as its 20x 5-hour equivalent per hour, on a weighted model: {s1}"
     );
     assert_eq!(
-        (s2.get("burn_equivalent"), &s2["estimated"]),
-        (Some(&serde_json::Value::Null), &serde_json::json!(false)),
-        "a pin billed in dollars has no window equivalent to mark, whatever its model: {s2}"
+        (s2.get("burn_equivalent"), s2.get("estimated")),
+        (Some(&serde_json::Value::Null), None),
+        "a pin billed in dollars has no window equivalent, whatever its model: {s2}"
     );
     // Pushed into overage with a reset ahead of now: the same pin reads the dollar average instead.
     parts
@@ -5480,8 +5482,8 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
         );
         let row = session_row(&sessions, session);
         assert_eq!(
-            (row.get("burn_equivalent"), &row["estimated"]),
-            (Some(&serde_json::Value::Null), &serde_json::json!(false)),
+            (row.get("burn_equivalent"), row.get("estimated")),
+            (Some(&serde_json::Value::Null), None),
             "{session}: a pin billed in dollars reads no window equivalent: {row}"
         );
     }
@@ -5610,17 +5612,22 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
             "claude-opus-5-5",
             million,
             now,
+            now,
+            now,
         )
         .unwrap()
         * 3_600.0
         / window;
     let equivalent_of = |sessions: &serde_json::Value| {
         let row = session_row(sessions, "s1");
-        (row["burn_equivalent"].as_f64(), row["estimated"].clone())
+        (
+            row["burn_equivalent"].as_f64(),
+            row.get("estimated").cloned(),
+        )
     };
     let (on_20x, estimated) = equivalent_of(&renewed);
     assert!(
-        close(on_20x, equivalent) && estimated == false,
+        close(on_20x, equivalent) && estimated.is_none(),
         "the burn as the 20x 5-hour equivalent per hour: {on_20x:?} against {equivalent}"
     );
     name_the_tier(&parts.store, "business", "default_claude_ai");
@@ -6406,10 +6413,9 @@ async fn a_pool_member_answers_the_engines_pace_score_whatever_its_kind() {
 }
 
 #[tokio::test]
-async fn a_pin_on_a_model_without_a_weight_reads_an_estimated_burn() {
-    // The pin burns Sonnet 4.5, which the shipped cost model has no weight for: the share is estimated at the weight
-    // of its model tier's latest weighted model, and the same pin in overage prices in dollars, since the price table
-    // lists the model.
+async fn a_pin_on_a_model_without_a_weight_reads_a_null_burn() {
+    // The pin burns Sonnet 4.5, which the shipped cost model has no weight for: it prices nothing on the plan window
+    // whatever its model tier, and the same pin in overage prices in dollars, since the price table lists the model.
     use common::{get, json, login, wait_json};
     let now = common::NOW;
     let parts = sessions_harness_with(|generation| {
@@ -6421,50 +6427,17 @@ async fn a_pin_on_a_model_without_a_weight_reads_an_estimated_burn() {
     .await;
     let cookie = login(&parts.app, "admin-secret").await;
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
-    let tables = phoebis_ledger::PlanTables::shipped();
-    let donor = tables
-        .tier_of("claude-sonnet-4-5", now)
-        .and_then(|tier| tables.latest_weighted(tier, now))
-        .expect("the shipped model weighs a model of Sonnet 4.5's model tier");
-    // The banded copy at the fixed clock, which the peak band never covers, priced at the donor's weight on Max 20x.
-    let share_per_hour = tables
-        .share_at(
-            phoebis_routing::FIVE_HOUR,
-            None,
-            "default_claude_max_20x",
-            donor,
-            phoebis_routing::PinUsage {
-                input: 100,
-                ..phoebis_routing::PinUsage::default()
-            },
-            now,
-        )
-        .unwrap()
-        * 3_600.0;
     let (burn, unit) = burn_of(&sessions, "s1");
-    assert!(
-        close(burn, share_per_hour) && unit.as_deref() == Some("window_share"),
-        "a model the cost model has no weight for burns at its model tier's latest weight: {:?} against \
-         {share_per_hour}",
-        (burn, unit)
+    assert_eq!(
+        (burn, unit.as_deref()),
+        (None, Some("window_share")),
+        "a model the cost model has no weight for burns nothing on the plan window"
     );
-    let equivalent_per_hour = tables
-        .equivalent_at(
-            phoebis_routing::FIVE_HOUR,
-            None,
-            donor,
-            phoebis_routing::PinUsage {
-                input: 100,
-                ..phoebis_routing::PinUsage::default()
-            },
-            now,
-        )
-        .unwrap()
-        * 3_600.0;
     let row = session_row(&sessions, "s1");
-    assert!(
-        close(row["burn_equivalent"].as_f64(), equivalent_per_hour) && row["estimated"] == true,
-        "the 20x equivalent at the donor's weight, marked estimated: {row}"
+    assert_eq!(
+        (row.get("burn_equivalent"), row.get("estimated")),
+        (Some(&serde_json::Value::Null), None),
+        "the equivalent prices nothing either, and no row carries an estimate mark: {row}"
     );
     parts
         .router
@@ -6491,9 +6464,9 @@ async fn a_pin_on_a_model_without_a_weight_reads_an_estimated_burn() {
     );
     let row = session_row(&in_overage, "s1");
     assert_eq!(
-        (row.get("burn_equivalent"), &row["estimated"]),
-        (Some(&serde_json::Value::Null), &serde_json::json!(false)),
-        "the dollars are the price table's own, so nothing is estimated: {row}"
+        (row.get("burn_equivalent"), row.get("estimated")),
+        (Some(&serde_json::Value::Null), None),
+        "the dollars are the price table's own: {row}"
     );
 }
 

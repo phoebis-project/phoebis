@@ -57,9 +57,9 @@ pub(crate) fn answered_speed(usage: ProbeUsage) -> Speed {
     usage.speed.unwrap_or(Speed::Standard)
 }
 
-/// `row` when the cost model in force at `at` gives the model no weight on the 5-hour window, neither its own nor its
-/// model tier's latest, else `tier`: the only two reasons left, since the loader refuses an anchor tier without a
-/// capacity on either window and a weighted model prices every type. Read under the regime of `entrypoint`.
+/// `row` when the cost model in force at `at` gives the model no weight on the 5-hour window, whatever its model tier,
+/// else `tier`: the only two reasons left, since the loader refuses an anchor tier without a capacity on either window
+/// and a weighted model prices every type. Read under the regime of `entrypoint`.
 pub(crate) fn unpriced_reason(
     tables: &PlanTables,
     entrypoint: Option<&str>,
@@ -81,7 +81,7 @@ pub(crate) fn unpriced_reason(
 
 /// The unit a probe settles in: `default_unit`, unless that is the window share and the cost model in force at `at`
 /// cannot price the account's tier and model on the 5-hour window under the regime of `entrypoint` (no weight of the
-/// model's own or of its model tier, or no capacity), in which case dollars.
+/// model's own, or no capacity), in which case dollars.
 pub(crate) fn settlement_unit(
     default_unit: SavingsUnit,
     tables: &PlanTables,
@@ -324,18 +324,18 @@ mod tests {
     }
 
     #[test]
-    fn an_unpriced_probe_reads_row_for_a_model_of_no_weighted_tier_and_tier_otherwise() {
-        // The test table weighs Opus 5.5, leaves Opus 5 null and has no row for Opus 9, so both price at Opus 5.5's
-        // weight, and places Mystery 2 in a tier with no weighted model.
+    fn an_unpriced_probe_reads_row_for_a_model_without_a_weight_and_tier_otherwise() {
+        // The test table weighs Opus 5.5, leaves Opus 5 null, has no row for Opus 9 and places Mystery 2 in a tier with
+        // no weighted model, so only Opus 5.5 has a weight of its own and the other three price nothing.
         let tables = phoebis_ledger::test_tables::subscription_costs();
         let at = phoebis_ledger::test_tables::JANUARY_2026;
-        assert_eq!(
-            unpriced_reason(&tables, None, "claude-mystery-2", at),
-            "row"
-        );
-        for model in ["claude-opus-5", "claude-opus-9", "claude-opus-5-5"] {
-            assert_eq!(unpriced_reason(&tables, None, model, at), "tier", "{model}");
+        for model in ["claude-opus-5", "claude-opus-9", "claude-mystery-2"] {
+            assert_eq!(unpriced_reason(&tables, None, model, at), "row", "{model}");
         }
+        assert_eq!(
+            unpriced_reason(&tables, None, "claude-opus-5-5", at),
+            "tier"
+        );
         assert_eq!(
             unpriced_reason(&tables, None, "claude-opus-5-5-20260401", at),
             "tier",

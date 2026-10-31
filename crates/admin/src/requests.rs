@@ -12,7 +12,7 @@ use phoebis_bus::Classifier;
 use phoebis_ledger::{
     entrypoint_of_client, free_equivalent, free_shares, funding_of, list_request_page,
     price_equivalent, price_shares, request_by_id, request_events, AttemptRecord, Funding,
-    LiveKeys, PlanTables, PriceRevisions, PricedShares, RequestFilter, RequestRecord, Speed,
+    LiveKeys, PlanTables, PriceRevisions, RequestFilter, RequestRecord, Speed, WindowShares,
     SHARE_REASON_CLIENT_CLASSIFIER,
 };
 use phoebis_routing::PinUsage;
@@ -28,26 +28,34 @@ const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 500;
 
 /// What a request's figures are priced with, read once per handler call: the cost model, whose revision in force at
-/// the request's receipt prices the serving attempt's shares under the account tier that attempt recorded and its 20x
-/// equivalent, and the API price list, whose revision in force at the receipt prices its attempts' dollars.
+/// the request's receipt prices the serving attempt's shares under the account tier that attempt recorded and its
+/// Pro-week figure against the anchor row in force at `now`, the handler's clock, and the API price list, whose
+/// revision in force at the receipt prices its attempts' dollars.
 pub(crate) struct ShareContext {
     pub tables: Arc<PlanTables>,
     pub prices: Arc<PriceRevisions>,
+    pub now: i64,
 }
 
 impl ShareContext {
     pub(crate) fn read(state: &AdminState) -> ShareContext {
-        ShareContext::of(state.tables.clone(), state.pricing.revisions())
+        ShareContext::of(
+            state.tables.clone(),
+            state.pricing.revisions(),
+            (state.clock)(),
+        )
     }
 
-    /// The tables and prices given: a test's own, or the process's shared ones.
+    /// The tables and prices given, read at `now`: a test's own, or the process's shared ones.
     pub(crate) fn of(
         tables: impl Into<Arc<PlanTables>>,
         prices: impl Into<Arc<PriceRevisions>>,
+        now: i64,
     ) -> ShareContext {
         ShareContext {
             tables: tables.into(),
             prices: prices.into(),
+            now,
         }
     }
 }
@@ -150,19 +158,17 @@ pub(crate) struct RequestSummary {
     /// Else an object keyed by the account's window ids, `five_hour`, `seven_day` and the model's own week where it
     /// has one, each the serving attempt's share of that window under the account tier the attempt recorded, priced
     /// at read time on the cost revision in force at the request's receipt with the peak band read at the attempt's
-    /// finish, or null where the account tier has no capacity on that window or neither the model nor its model tier
-    /// has a weight there. An empty object for an attempt that recorded no account tier. A free call under
+    /// finish, or null where the account tier has no capacity on that window or the model has no weight there, a
+    /// model without a weight. An empty object for an attempt that recorded no account tier. A free call under
     /// `share_reason` lists the windows its account tier sizes alone, each at zero.
     pub cost_shares: Option<BTreeMap<String, Option<f64>>>,
-    /// Null for a request billed in dollars, as `cost_shares`. Else the serving attempt's usage as the share of a
-    /// Max 20x account's windows under the same keys, at the same revision and band, whatever account tier served it.
-    pub cost_equivalent: Option<BTreeMap<String, Option<f64>>>,
+    /// Null for a request billed in dollars, as `cost_shares`, and for a plan-funded request the cost model cannot
+    /// price, a model without a weight. Else the serving attempt's usage as the share of the Pro 7-day window, the
+    /// cost model's units over the Pro capacity under the request's regime, whatever account tier served it.
+    pub cost_equivalent: Option<f64>,
     /// `client_classifier` where `cost_shares` and `cost_equivalent` read zero by rule, for the client's own
     /// classifier call under a subscription window. Null for a figure priced from the request's counts.
     pub share_reason: Option<String>,
-    /// Whether `cost_shares` or `cost_equivalent` priced a window at the weight of the model tier's latest weighted
-    /// model, for a model the cost model does not weight.
-    pub estimated: bool,
     /// The serving attempt's account tier the router priced by when the request landed, null as on the attempt.
     pub tier: Option<String>,
     pub phases: RequestPhases,
@@ -491,7 +497,7 @@ pub(crate) fn request_summary(
     shares: &ShareContext,
 ) -> RequestSummary {
     let last = attempts.last();
-    let plan = plan_figures(r, attempts, &shares.tables);
+    let plan = plan_figures(r, attempts, &shares.tables, shares.now);
     RequestSummary {
         id: r.id.clone(),
         at: r.received_at,
@@ -543,14 +549,10 @@ pub(crate) fn request_summary(
             .filter_map(|a| attempt_usd(a, r, &shares.prices))
             .fold(0.0, |a, b| a + b),
         cost_shares: plan.as_ref().map(cost_shares_json),
-        cost_equivalent: plan.as_ref().map(|p| windows_json(&p.equivalent)),
+        cost_equivalent: plan.as_ref().and_then(|p| p.equivalent),
         share_reason: plan
             .as_ref()
             .and_then(|p| p.share_reason.map(str::to_string)),
-        estimated: plan.as_ref().is_some_and(|p| {
-            p.equivalent.any_estimated()
-                || p.shares.as_ref().is_some_and(PricedShares::any_estimated)
-        }),
         tier: last.and_then(|a| a.tier.clone()),
         phases: phases_json(r, attempts),
         attempts: attempts
@@ -613,21 +615,23 @@ fn phases_json(r: &RequestRecord, attempts: &[AttemptRecord]) -> RequestPhases {
 }
 
 /// The serving attempt's figures on the plan: its shares under the account tier it recorded, `None` for an attempt
-/// that recorded none, and its 20x equivalent, which reads no account tier.
+/// that recorded none, and its Pro-week figure, which reads no account tier.
 struct PlanFigures {
-    shares: Option<PricedShares>,
-    equivalent: PricedShares,
+    shares: Option<WindowShares>,
+    equivalent: Option<f64>,
     share_reason: Option<&'static str>,
 }
 
 /// `None` for a request no subscription window paid: no attempt, or a serving attempt whose funding is not plan.
 /// The request's receipt selects the cost revision, as it selects the price revision of the dollars, and the
 /// attempt's completion (else the request's, else the attempt's start) reads the peak band, where the meter charges
-/// it. The entrypoint the request's `client` names picks the regime both figures price under.
+/// it, and the revision in force at `now` holds the anchor row the Pro-week figure divides by. The entrypoint the
+/// request's `client` names picks the regime both figures price under.
 fn plan_figures(
     r: &RequestRecord,
     attempts: &[AttemptRecord],
     tables: &PlanTables,
+    now: i64,
 ) -> Option<PlanFigures> {
     let a = attempts.last()?;
     if funding_of(
@@ -651,14 +655,10 @@ fn plan_figures(
     if r.classifier.as_deref() == Some(Classifier::Client.as_str()) {
         // The admin prices through the share helpers and not price_row, so the free call's rule is taken here.
         return Some(PlanFigures {
-            shares: a.tier.as_deref().map(|tier| PricedShares {
-                shares: free_shares(tables, entrypoint, tier, &r.canonical_model, r.received_at),
-                estimated: Default::default(),
+            shares: a.tier.as_deref().map(|tier| {
+                free_shares(tables, entrypoint, tier, &r.canonical_model, r.received_at)
             }),
-            equivalent: PricedShares {
-                shares: free_equivalent(tables, entrypoint, &r.canonical_model, r.received_at),
-                estimated: Default::default(),
-            },
+            equivalent: Some(free_equivalent()),
             share_reason: Some(SHARE_REASON_CLIENT_CLASSIFIER),
         });
     }
@@ -681,6 +681,7 @@ fn plan_figures(
             usage,
             r.received_at,
             band_at,
+            now,
         ),
         share_reason: None,
     })
@@ -693,11 +694,10 @@ fn cost_shares_json(plan: &PlanFigures) -> BTreeMap<String, Option<f64>> {
         .map_or_else(BTreeMap::new, windows_json)
 }
 
-/// A sorted map keeps the order `price_shares` and `price_equivalent` insert the window ids in: `five_hour`,
-/// `seven_day`, then the model week named `seven_day_<family>`.
-fn windows_json(priced: &PricedShares) -> BTreeMap<String, Option<f64>> {
-    priced
-        .shares
+/// A sorted map keeps the order `price_shares` inserts the window ids in: `five_hour`, `seven_day`, then the model week
+/// named `seven_day_<family>`.
+fn windows_json(shares: &WindowShares) -> BTreeMap<String, Option<f64>> {
+    shares
         .iter()
         .map(|(window, share)| (window.to_string(), *share))
         .collect()
@@ -1172,6 +1172,9 @@ mod tests {
     /// The same Monday at 18:00 UTC, 11:00 in Los Angeles, where `SHARE_COSTS`'s peak band ends.
     const WEEKDAY_PEAK_END: i64 = WEEKDAY_OFF_PEAK - 2 * 3_600_000;
 
+    /// The read's instant, after every request these cases price.
+    const NOW: i64 = WEEKDAY_OFF_PEAK + 3_600_000;
+
     /// A cost model in round numbers: one Fable input token weighs 10 units, `test_tier` holds 100 units on the
     /// 5-hour window and 1000 on the week, `narrow_tier` sizes the 5-hour window alone, and the Fable week is half
     /// the 7-day window.
@@ -1217,6 +1220,7 @@ revisions:
                 CostRevisions::from_yaml(SHARE_COSTS).expect("the share cost model parses"),
             ),
             PriceRevisions::shipped(),
+            NOW,
         )
     }
 
@@ -1289,7 +1293,7 @@ revisions:
         let summary = serde_json::to_value(request_summary(
             &RequestRecord::default(),
             &[],
-            &ShareContext::of(PlanTables::shipped(), PriceRevisions::shipped()),
+            &ShareContext::of(PlanTables::shipped(), PriceRevisions::shipped(), NOW),
         ))
         .unwrap();
         assert_eq!(
@@ -1325,7 +1329,7 @@ revisions:
                 ..Default::default()
             },
         ];
-        let shares = ShareContext::of(PlanTables::shipped(), PriceRevisions::shipped());
+        let shares = ShareContext::of(PlanTables::shipped(), PriceRevisions::shipped(), NOW);
         let summary = |attempts: &[AttemptRecord]| {
             serde_json::to_value(request_summary(&row, attempts, &shares)).unwrap()
         };
@@ -1540,33 +1544,29 @@ revisions:
     }
 
     #[test]
-    fn cost_equivalent_answers_the_three_columns_for_a_plan_request_and_null_for_a_billed_one() {
+    fn cost_equivalent_answers_the_pro_week_figure_and_null_for_a_billed_request() {
         let shares = shares_of();
-        let plan = request_summary(
-            &request_of("claude-fable-5-1"),
-            &[attempt_of("oauth", None, None)],
-            &shares,
-        );
-        let equivalent = plan.cost_equivalent.expect("a plan request");
+        let request = request_of("claude-fable-5-1");
+        let plan = request_summary(&request, &[attempt_of("oauth", None, None)], &shares);
         let one_input = PinUsage {
             input: 1,
             ..PinUsage::default()
         };
         let finished = WEEKDAY_OFF_PEAK + 400;
-        assert_eq!(
-            equivalent.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["five_hour", "seven_day", "seven_day_fable"],
-            "the two shared windows and the model week"
+        let want = shares.tables.equivalent_at(
+            "seven_day",
+            None,
+            "claude-fable-5-1",
+            one_input,
+            request.received_at,
+            finished,
+            shares.now,
         );
-        for (window, share) in &equivalent {
-            assert_eq!(
-                *share,
-                shares
-                    .tables
-                    .equivalent_at(window, None, "claude-fable-5-1", one_input, finished),
-                "{window}: the cost model's units over the anchor tier's capacity"
-            );
-        }
+        assert!(want.is_some(), "the test model weighs Fable 5.1");
+        assert_eq!(
+            plan.cost_equivalent, want,
+            "the cost model's units over the anchor tier's 7-day capacity"
+        );
         let billed = serde_json::to_value(request_summary(
             &request_of("claude-fable-5-1"),
             &[attempt_of("api_key", None, None)],
@@ -1581,27 +1581,21 @@ revisions:
     }
 
     #[test]
-    fn a_plan_request_on_a_model_without_a_weight_is_estimated_and_one_with_a_weight_is_not() {
+    fn a_plan_request_on_a_model_without_a_weight_reads_a_null_figure_and_one_with_a_weight_its_own(
+    ) {
         let shares = shares_of();
-        let estimated = |model: &str, kind: &str| {
-            let summary =
-                request_summary(&request_of(model), &[attempt_of(kind, None, None)], &shares);
-            (summary.estimated, summary.cost_equivalent.is_some())
+        let figure = |model: &str, kind: &str| {
+            request_summary(&request_of(model), &[attempt_of(kind, None, None)], &shares)
+                .cost_equivalent
         };
         assert_eq!(
-            estimated("claude-sonnet-5", "oauth"),
-            (true, true),
-            "a Sonnet model the cost model does not list prices at Sonnet 5.5's weight"
+            figure("claude-sonnet-5", "oauth"),
+            None,
+            "a Sonnet model the cost model does not list prices nothing, though Sonnet 5.5 weighs its model tier"
         );
-        assert_eq!(
-            estimated("claude-fable-5-1", "oauth"),
-            (false, true),
+        assert!(
+            figure("claude-fable-5-1", "oauth").is_some_and(|figure| figure > 0.0),
             "a weighted model prices at its own weight"
-        );
-        assert_eq!(
-            estimated("claude-sonnet-5", "api_key"),
-            (false, false),
-            "a request billed in dollars has no window figure to mark"
         );
     }
 
@@ -1626,6 +1620,7 @@ revisions:
                     .unwrap(),
             ),
             PriceRevisions::shipped(),
+            COMPLETION,
         );
         let request = RequestRecord {
             received_at: RECEIPT,
@@ -1652,12 +1647,21 @@ revisions:
                 at,
             )
         };
+        // `test_tier` is the anchor and both revisions size it alike, so the anchor's 7-day share at a revision is the
+        // Pro-week figure of that revision's units.
         let equivalent = |costs: &phoebis_ledger::SubscriptionCosts, at: i64| {
-            costs.equivalent_at("five_hour", None, "claude-fable-5-1", one_input, at)
+            costs.share_at(
+                "seven_day",
+                None,
+                "test_tier",
+                "claude-fable-5-1",
+                one_input,
+                at,
+            )
         };
         let got = (
             summary.cost_shares.expect("a plan request")["five_hour"],
-            summary.cost_equivalent.expect("a plan request")["five_hour"],
+            summary.cost_equivalent,
         );
         assert_eq!(
             got,
@@ -1705,6 +1709,7 @@ revisions:
                 CostRevisions::from_yaml(SHARE_COSTS).expect("the share cost model parses"),
             ),
             PriceRevisions::from_yaml(prices, "test").expect("the price list parses"),
+            NOW,
         )
     }
 

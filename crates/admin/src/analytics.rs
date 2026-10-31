@@ -93,9 +93,9 @@ fn filter_of(q: &HashMap<String, String>) -> RollupFilter {
     }
 }
 
-/// The range in Unix milliseconds, the group-by, the filter, and the live keys' generations the key dimension is read
-/// against.
-type Selection = ((i64, i64), String, RollupFilter, LiveKeys);
+/// The range in Unix milliseconds, the group-by, the filter, the live keys' generations the key dimension is read
+/// against, and the clock the range was read at, whose anchor row divides the Pro-week figure.
+type Selection = ((i64, i64), String, RollupFilter, LiveKeys, i64);
 
 /// The registry's account kinds by id, which name a burn group's unit.
 #[allow(clippy::result_large_err)]
@@ -109,7 +109,8 @@ fn kinds(state: &AdminState) -> Result<HashMap<String, AccountKind>, Response> {
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 async fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Selection, Response> {
-    let (from, to) = parse_range(q.get("range").map(String::as_str), (state.clock)())
+    let now = (state.clock)();
+    let (from, to) = parse_range(q.get("range").map(String::as_str), now)
         .map_err(|m| failure(StatusCode::BAD_REQUEST, &m))?;
     let group_by = q.get("group_by").cloned().unwrap_or_else(|| "all".into());
     if !GROUP_BYS.contains(&group_by.as_str()) {
@@ -140,7 +141,7 @@ async fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Se
         }
     };
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
-    Ok(((from, to), group_by, filter, live))
+    Ok(((from, to), group_by, filter, live, now))
 }
 
 /// The query of `GET /admin/analytics/accounts`, `GET /admin/analytics/guardrails` and `GET /admin/analytics/rewrites`.
@@ -327,7 +328,7 @@ pub(crate) async fn series(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, filter, live) = match selection(&state, &q).await {
+    let ((from, to), group_by, filter, live, now) = match selection(&state, &q).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -347,6 +348,7 @@ pub(crate) async fn series(
         pricing,
         &state.pricing.revisions(),
         &state.tables,
+        now,
     )
     .await
     {
@@ -396,7 +398,7 @@ pub(crate) async fn breakdown(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, filter, live) = match selection(&state, &q).await {
+    let ((from, to), group_by, filter, live, now) = match selection(&state, &q).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -414,6 +416,7 @@ pub(crate) async fn breakdown(
         pricing,
         &state.pricing.revisions(),
         &state.tables,
+        now,
     )
     .await
     {
@@ -825,10 +828,9 @@ pub(crate) async fn accounts(
 }
 
 /// The burn series per group: an API key account's tokens in dollars, and a subscription account's as the share of
-/// its own 5-hour and 7-day window and of its model's own week, and as the 20x window equivalent of each. `unit` and
-/// the shares answer under `group_by=account` and under any grouping whose `accounts` filter names exactly one
-/// account, and read null otherwise, since shares of different accounts' windows do not add. The equivalents answer
-/// under every grouping.
+/// its own 5-hour and 7-day window and of its model's own week, and as the Pro-week figure. `unit` and the shares
+/// answer under `group_by=account` and under any grouping whose `accounts` filter names exactly one account, and read
+/// null otherwise, since shares of different accounts' windows do not add. The figure answers under every grouping.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Burn {
@@ -858,9 +860,8 @@ pub(crate) struct BurnPoint {
     /// The share of the account's own 5-hour window, band-weighted by the hour the tokens landed in: a fraction of
     /// the window, not a percentage. Null under every grouping but `account` unless the `accounts` filter names
     /// exactly one account, for an API key account, one whose tier is unknown, a bucket with no row the cost model
-    /// prices, such as an idle hour, or a bucket holding a row the cost model cannot price (a model it weighs neither
-    /// by itself nor by its model tier, or a tier it has no capacity for on that window), so a partial figure never
-    /// reads as the bucket's share.
+    /// prices, such as an idle hour, or a bucket holding a row the cost model cannot price (a model without a weight,
+    /// or a tier it has no capacity for on that window), so a partial figure never reads as the bucket's share.
     pub five_hour_share: Option<f64>,
     /// The same tokens over the 7-day window, weighed by the week's own band factor, 1 in the shipped model. Null
     /// in the same cases.
@@ -868,26 +869,13 @@ pub(crate) struct BurnPoint {
     /// The same tokens over the model's own week, where the model has one. Null where no row of the bucket is on
     /// such a model, and in the same cases.
     pub model_week_share: Option<f64>,
-    /// The bucket's plan-funded tokens as the share of a Max 20x account's 5-hour window, whatever tier served them,
-    /// band-weighted as `five_hour_share` is, under every grouping. A billed row adds a zero, so a bucket with tokens
-    /// and no plan row reads 0. Null for an idle bucket and for a bucket holding a row the cost model cannot price on
-    /// the window.
-    pub five_hour_equivalent: Option<f64>,
-    /// The same over a Max 20x account's 7-day window. Null in the same cases.
-    pub seven_day_equivalent: Option<f64>,
-    /// The same over the model's own week, null where no row of the bucket is on a model with a week of its own.
-    pub model_week_equivalent: Option<f64>,
-    /// Whether a plan-funded row of the bucket priced at its model tier's latest weight, for a model the cost model
-    /// does not weight.
-    pub estimated: bool,
-    /// True for a bucket holding a plan-funded row with tokens the cost model could not price on the 5-hour window,
-    /// false for an idle bucket, so a null `five_hour_equivalent` with the flag false is an idle bucket. A window
-    /// stays unpriced only for a model with no tier, or a tier with no weighted model.
-    pub five_hour_unpriced: bool,
-    /// The same on the 7-day window.
-    pub seven_day_unpriced: bool,
-    /// The same on the model's own week, false where no row of the bucket is on a model with a week of its own.
-    pub model_week_unpriced: bool,
+    /// The bucket's plan-funded tokens as the Pro-week figure, whatever tier served them, under every grouping. A
+    /// billed row adds a zero, so a bucket with tokens and no plan-funded row reads 0. Null for an idle bucket and for
+    /// a bucket holding a plan-funded row the cost model cannot price, a model without a weight.
+    pub equivalent: Option<f64>,
+    /// True for a bucket holding a plan-funded row with tokens the cost model could not price, so a null `equivalent`
+    /// with the flag false is an idle bucket.
+    pub unpriced: bool,
     pub cached_tokens: u64,
     /// Every token of the bucket, uncached input, cache reads, both cache writes and output. Zero for a bucket
     /// with no traffic the ledger can attribute.
@@ -910,9 +898,9 @@ pub(crate) struct BurnPoint {
 )]
 // The shares and `unit` are answered where each group holds one account's rows, the account grouping or a filter
 // naming exactly one account, and read null otherwise, since shares of different accounts' windows do not add. A
-// point whose shares answer knows its account's funding, so `unit` follows the same gate. The 20x equivalents add
-// across accounts and tiers, so they answer under every grouping. A bucket holding a row the table cannot price
-// reads null on that window, so a partial sum never reads as its share. Each point's `tokens` counts every token
+// point whose shares answer knows its account's funding, so `unit` follows the same gate. The Pro-week figure adds
+// across accounts and tiers, so it answers under every grouping. A bucket holding a row the table cannot price reads
+// null on that window and in the figure, so a partial sum never reads as its share. Each point's `tokens` counts every token
 // type of the bucket's rows, whatever the tables priced, so a reader tells an idle bucket from one whose traffic no
 // table priced.
 pub(crate) async fn burn(
@@ -958,7 +946,7 @@ pub(crate) async fn burn(
         state
             .ledger
             .db()
-            .read(move |c| session_burn_series(c, &tables, &prices, &filter))
+            .read(move |c| session_burn_series(c, &tables, &prices, &filter, now))
             .await
     } else {
         // One paged read for every group: each row is priced into its own group's buckets as its page arrives,
@@ -971,6 +959,7 @@ pub(crate) async fn burn(
             &group_by,
             &LiveKeys::from_snapshot(&state.router.snapshot()),
             &agent_groups,
+            now,
         )
         .await
     };
@@ -1006,15 +995,10 @@ pub(crate) async fn burn(
                 five_hour_share: p.five_hour_share,
                 seven_day_share: p.seven_day_share,
                 model_week_share: p.model_week_share,
-                five_hour_equivalent: p.five_hour_equivalent,
-                seven_day_equivalent: p.seven_day_equivalent,
-                model_week_equivalent: p.model_week_equivalent,
-                estimated: p.estimated,
-                // The equivalents' latches, never the shares' `five_hour_unpriced`, `seven_day_unpriced` and
+                equivalent: p.equivalent,
+                // The figure's latch, never the shares' `five_hour_unpriced`, `seven_day_unpriced` and
                 // `model_week_unpriced`, which latch only where the read prices shares.
-                five_hour_unpriced: p.five_hour_equivalent_unpriced,
-                seven_day_unpriced: p.seven_day_equivalent_unpriced,
-                model_week_unpriced: p.model_week_equivalent_unpriced,
+                unpriced: p.unpriced,
                 cached_tokens: p.cached_tokens,
                 tokens: p.tokens,
                 uncached_tokens: p.uncached_tokens,
@@ -1067,8 +1051,6 @@ pub(crate) struct Reconciliation {
     pub ratio: f64,
     /// The attempts priced.
     pub requests: u32,
-    /// The attempts among them priced at a model tier's estimate.
-    pub estimated: u32,
     pub computed_at: i64,
 }
 
@@ -1112,7 +1094,6 @@ pub(crate) async fn reconciliations(
                 predicted_share: r.predicted_share,
                 ratio: r.ratio,
                 requests: r.requests,
-                estimated: r.estimated,
                 computed_at: r.computed_at,
             })
             .collect(),

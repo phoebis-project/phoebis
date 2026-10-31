@@ -127,7 +127,7 @@ fn window<'a>(
         out.succeeded += row.succeeded;
         out.failed += row.failed + row.rate_limited + row.exhausted + row.rejected;
         out.incomplete += row.incomplete;
-        let usd = priced(row, prices, costs)
+        let usd = priced(row, prices, costs, to)
             .usd
             .map_or(0.0, |usd| usd.total());
         out.cost_usd += usd;

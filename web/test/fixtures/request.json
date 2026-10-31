@@ -72,7 +72,6 @@
       "cost_shares": null,
       "cost_equivalent": null,
       "share_reason": null,
-      "estimated": false,
       "tier": "default_claude_max_20x",
       "phases": {
         "received_at": 1791717400000,

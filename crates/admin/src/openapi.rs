@@ -368,44 +368,8 @@ pub(crate) struct TrafficBucketView {
     /// The dollars of the billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part of
     /// `cost_usd`.
     pub billed_usd: f64,
-    /// The plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
-    pub equivalent: SharedEquivalentView,
-    /// Whether a plan-funded row of the bucket priced at its model tier's latest weight, for a model the cost model
-    /// does not weight.
-    pub estimated: bool,
-}
-
-/// A figure as the share of a Max 20x account's 5-hour and 7-day windows.
-#[derive(Default, Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SharedEquivalentView {
-    pub five_hour: f64,
-    pub seven_day: f64,
-    /// Per window, whether a plan-funded row with tokens priced nothing on it, so a reader tells "nothing priced"
-    /// from "no plan-funded rows" with no count beside the figure. A window stays unpriced only for a model with no
-    /// tier, or a tier with no weighted model.
-    pub unpriced: SharedUnpricedView,
-}
-
-/// Whether a plan-funded row with tokens priced nothing on each of the two shared windows.
-#[derive(Default, Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SharedUnpricedView {
-    pub five_hour: bool,
-    pub seven_day: bool,
-}
-
-impl From<&phoebis_ledger::SharedEquivalent> for SharedEquivalentView {
-    fn from(equivalent: &phoebis_ledger::SharedEquivalent) -> Self {
-        SharedEquivalentView {
-            five_hour: equivalent.five_hour,
-            seven_day: equivalent.seven_day,
-            unpriced: SharedUnpricedView {
-                five_hour: equivalent.unpriced.five_hour,
-                seven_day: equivalent.unpriced.seven_day,
-            },
-        }
-    }
+    /// The plan-funded rows as the Pro-week figure, null where a row priced nothing.
+    pub equivalent: Option<f64>,
 }
 
 /// One model's list prices, each cell per million tokens.
@@ -458,9 +422,8 @@ pub(crate) struct SubscriptionCostsView {
     pub capacity: BTreeMap<String, CapacityView>,
     pub peak: PeakView,
     pub type_multiplier: TypeMultiplierView,
-    /// Units per plain input token, keyed by undated model id. A null weight, like a model left out, prices at the
-    /// weight of its model tier's latest weighted model as an estimate, and a model of no model tier, or of one with
-    /// no weighted model, prices nothing.
+    /// Units per plain input token, keyed by undated model id. A model without a weight, or of no model tier, prices
+    /// nothing.
     pub model_weight: BTreeMap<String, Option<f64>>,
     pub model_windows: BTreeMap<String, ModelWindowView>,
     pub overrides: BTreeMap<String, OverrideView>,
@@ -650,45 +613,31 @@ pub(crate) struct BreakdownRow {
     pub plan_requests: Option<u64>,
     /// The plan-funded output tokens the shares and the equivalent were summed over, under every grouping.
     pub plan_output_tokens: Option<u64>,
-    /// The plan-funded rows priced as the share of a Max 20x account's windows, whatever tier served them, keyed as
-    /// `cost_shares` and summed under every grouping, the probe rows joining under the `include_probes` rule, and a
-    /// window absent where a row could not be priced on it.
-    pub cost_equivalent: BTreeMap<String, f64>,
-    /// Keyed `five_hour`, `seven_day` and the model's own week where a plan-funded row's model has one: true for a
-    /// window a plan-funded row of the group with tokens could not be priced on, false otherwise, so a window absent
-    /// from `cost_equivalent` and `cache_equivalent` with the flag false is one no plan-funded row reached. A window
-    /// stays unpriced only for a model with no tier, or a tier with no weighted model.
-    pub unpriced: BTreeMap<String, bool>,
-    /// Each `read` and `write`, keyed and summed as `cost_equivalent`.
-    pub cache_equivalent: BTreeMap<String, CacheEquivalentView>,
-    /// Each `cost` and `wasted`, keyed and summed as `cost_equivalent`, the probe rows always joining.
-    pub probe_equivalent: BTreeMap<String, ProbeEquivalentView>,
-    /// The same as `unpriced` for the group's plan-funded probe rows and their wasted counts, the window absent from
-    /// `probe_equivalent`.
-    pub probe_unpriced: BTreeMap<String, bool>,
+    /// The plan-funded rows as the Pro-week figure, whatever tier served them, summed under every grouping, the probe
+    /// rows joining under the `include_probes` rule: null where a plan-funded row with tokens priced nothing, a model
+    /// without a weight, and 0 for a group with no plan-funded row.
+    pub cost_equivalent: Option<f64>,
+    /// The plan-funded rows' cache reads and writes in the Pro-week figure, null as `cost_equivalent` is.
+    pub cache_equivalent: Option<CacheEquivalentView>,
+    /// The plan-funded probe rows and their wasted counts in the Pro-week figure, the probe rows always joining, null
+    /// where one of them priced nothing.
+    pub probe_equivalent: Option<ProbeEquivalentView>,
     /// The kept-warm requests' saving, gross of the probes: the write each count avoided at its TTL's rate less the
     /// read it paid, summed over the group's rows.
     pub saving_usd: f64,
     /// The saving as a share of the account tier's windows, keyed and summed as `cost_shares` and null under the same
     /// rule.
     pub saving_shares: Option<BTreeMap<String, f64>>,
-    /// The saving in the 20x window equivalent per window, under every grouping, a window absent where a row could not
-    /// be priced on it.
-    pub saving_equivalent: BTreeMap<String, f64>,
+    /// The saving in the Pro-week figure, under every grouping, null where a kept-warm count priced nothing.
+    pub saving_equivalent: Option<f64>,
     /// The dollars of the billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part of
     /// `cost_usd`.
     pub billed_usd: f64,
     /// `billed_usd` by token kind.
     pub billed: CostSplitView,
-    /// The plan-funded rows' 7-day equivalent by token kind, `input`, `cache_read`, `cache_write` and `output`,
-    /// which sum to `cost_equivalent`'s `seven_day`. Empty where that window is.
-    pub equivalent_split: BTreeMap<String, f64>,
-    /// Whether a plan-funded row of the group priced at its model tier's latest weight, for a model the cost model
-    /// does not weight.
-    pub estimated: bool,
-    /// Whether a plan-funded probe row of the group was priced through the fallback, its own counts or its wasted
-    /// counts, so a probe figure is marked apart from the request rows'. `estimated` covers the probe rows too.
-    pub probe_estimated: bool,
+    /// The plan-funded rows' Pro-week figure by token kind, `input`, `cache_read`, `cache_write` and `output`, null
+    /// where a row priced nothing, summing to `cost_equivalent`.
+    pub equivalent_split: Option<BTreeMap<String, f64>>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -778,7 +727,7 @@ pub(crate) struct ProbeShareView {
     pub wasted: Option<f64>,
 }
 
-/// The read and write halves of a window's equivalent.
+/// The read and write halves of a group's cache in the Pro-week figure.
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CacheEquivalentView {
@@ -786,7 +735,7 @@ pub(crate) struct CacheEquivalentView {
     pub write: f64,
 }
 
-/// The probe rows' equivalent of a window and the wasted probes' own counts priced on it, 0 where none was wasted.
+/// The probe rows in the Pro-week figure and the wasted probes' own counts priced in it, 0 where none was wasted.
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProbeEquivalentView {
@@ -811,8 +760,8 @@ pub(crate) struct HourPointView {
     /// part of `cost`.
     pub billed: f64,
     pub cost: f64,
-    /// The hour's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
-    pub equivalent: SharedEquivalentView,
+    /// The hour's plan-funded rows as the Pro-week figure, whatever tier served them, null where a row priced nothing.
+    pub equivalent: Option<f64>,
     pub errors: u64,
     pub refused: u64,
     pub requests: u64,

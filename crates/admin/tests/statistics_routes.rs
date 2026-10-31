@@ -55,15 +55,6 @@ fn usd_of(priced: &phoebis_ledger::Priced) -> f64 {
     priced.usd.as_ref().map_or(0.0, |usd| usd.total())
 }
 
-/// A priced row's 20x equivalent on `window`, zero for a billed row or a window it could not price.
-fn equivalent_of(priced: &phoebis_ledger::Priced, window: &str) -> f64 {
-    priced
-        .equivalent
-        .as_ref()
-        .and_then(|windows| windows.get(window).copied().flatten())
-        .unwrap_or(0.0)
-}
-
 fn close_to(got: &serde_json::Value, want: f64) -> bool {
     got.as_f64()
         .is_some_and(|got| (got - want).abs() <= 1e-12 + want.abs() * 1e-9)
@@ -318,8 +309,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(1), Some(0), Some(4_096)),
-        "the ledger reports the baseline's schema version, no dropped record and the channel depth it is built with"
+        (Some(2), Some(0), Some(4_096)),
+        "the ledger reports its chain's head, no dropped record and the channel depth it is built with"
     );
     assert_eq!(
         (
@@ -1098,20 +1089,12 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
         .collect();
     let billed = usd_of(&seeded[OVERAGE as usize]);
     let dollars: f64 = seeded.iter().map(usd_of).sum();
-    let five_hour: f64 = seeded
-        .iter()
-        .map(|p| equivalent_of(p, phoebis_routing::FIVE_HOUR))
-        .sum();
-    let seven_day: f64 = seeded
-        .iter()
-        .map(|p| equivalent_of(p, phoebis_routing::SEVEN_DAY))
-        .sum();
+    // The overage row carries no figure, since dollars fund it, and the plan rows each carry theirs.
+    let figure: f64 = seeded.iter().filter_map(|p| p.equivalent).sum();
     assert!(
-        billed > 0.0 && billed < dollars && five_hour > 0.0 && seven_day > 0.0,
-        "the seed prices both sides: {billed} of {dollars}, {five_hour} and {seven_day}"
+        billed > 0.0 && billed < dollars && figure > 0.0,
+        "the seed prices both sides: {billed} of {dollars}, {figure}"
     );
-    // Whether the shipped cost model weighs the seeded model is its own fact, read rather than assumed.
-    let estimated = seeded.iter().any(|p| p.estimated);
     let traffic = json(
         get(
             &parts.app,
@@ -1150,33 +1133,21 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
     assert!(
         close_to(&summed(&|b| b["billed_usd"].as_f64().unwrap()), billed)
             && close_to(&summed(&|b| b["cost_usd"].as_f64().unwrap()), dollars)
-            && close_to(
-                &summed(&|b| b["equivalent"]["five_hour"].as_f64().unwrap()),
-                five_hour
-            )
-            && close_to(
-                &summed(&|b| b["equivalent"]["seven_day"].as_f64().unwrap()),
-                seven_day
-            )
-            && buckets.iter().any(|b| b["estimated"] == true) == estimated,
-        "the buckets carry the overage row's dollars as billed and the plan rows' equivalent: {traffic}"
+            && close_to(&summed(&|b| b["equivalent"].as_f64().unwrap()), figure),
+        "the buckets carry the overage row's dollars as billed and the plan rows' figure: {traffic}"
     );
     let pool = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();
     assert!(
         close_to(&pool["cost_24h"], dollars)
             && close_to(&pool["billed_24h"], billed)
-            && close_to(&pool["equivalent_24h"]["five_hour"], five_hour)
-            && close_to(&pool["equivalent_24h"]["seven_day"], seven_day)
-            && pool["estimated_24h"] == estimated,
-        "the pool's day answers its billed dollars and its 20x equivalent beside its dollars: {pool}"
+            && close_to(&pool["equivalent_24h"], figure),
+        "the pool's day answers its billed dollars and its Pro-week figure beside its dollars: {pool}"
     );
     let board = json(get(&parts.app, "/admin/dashboard", Some(&cookie)).await).await;
     assert!(
         close_to(&board["cost_24h"], dollars)
             && close_to(&board["billed_24h"], billed)
-            && close_to(&board["equivalent_24h"]["five_hour"], five_hour)
-            && close_to(&board["equivalent_24h"]["seven_day"], seven_day)
-            && board["estimated_24h"] == estimated,
+            && close_to(&board["equivalent_24h"], figure),
         "the dashboard's day answers the same figures: {board}"
     );
     let hourly = board["hourly"].as_array().unwrap();
@@ -1185,14 +1156,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
     };
     assert!(
         close_to(&hourly_sum(&|h| h["billed"].as_f64().unwrap()), billed)
-            && close_to(
-                &hourly_sum(&|h| h["equivalent"]["five_hour"].as_f64().unwrap()),
-                five_hour
-            )
-            && close_to(
-                &hourly_sum(&|h| h["equivalent"]["seven_day"].as_f64().unwrap()),
-                seven_day
-            ),
+            && close_to(&hourly_sum(&|h| h["equivalent"].as_f64().unwrap()), figure),
         "the hours sum to the day: {board}"
     );
     assert_eq!(
@@ -1227,8 +1191,9 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
     assert!(rows[0]["epoch"].is_null() && rows[0]["created_at"].is_null());
 }
 
-/// The harness on the ledger's test cost model, where `claude-mystery-2` sits in a tier that weighs no model, so it
-/// prices on no window, `claude-opus-5` prices at its tier's latest weight and `claude-sonnet-5-5` at its own.
+/// The harness on the ledger's test cost model, where `claude-mystery-2` sits in a tier that weighs no model and
+/// `claude-opus-5` carries a null weight, so neither prices on any window, and `claude-sonnet-5-5` prices at its own
+/// weight.
 async fn on_test_costs() -> (common::Full, String) {
     let parts =
         common::admin_parts_full_costed(phoebis_ledger::test_tables::subscription_costs()).await;
@@ -1279,48 +1244,32 @@ fn hour_ago(ago: i64) -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn a_plan_row_the_cost_model_cannot_weigh_flags_its_windows_on_every_route_that_sums_them() {
+async fn a_plan_row_the_cost_model_cannot_weigh_nulls_the_figure_on_every_route_that_sums_it() {
     let (parts, cookie) = an_hour_with_an_unweighted_plan_row().await;
     let at = hour_ago;
-    let both = serde_json::json!({"five_hour": true, "seven_day": true});
-    let neither = serde_json::json!({"five_hour": false, "seven_day": false});
 
     let board = json(get(&parts.app, "/admin/dashboard", Some(&cookie)).await).await;
     assert!(
-        positive(&board["equivalent_24h"]["five_hour"])
-            && board["equivalent_24h"]["unpriced"] == both,
-        "the day keeps the priced rows' sum and flags both windows: {board}"
-    );
-    assert_eq!(
-        (
-            &entry_of(&board["hourly"], "at", at(1))["equivalent"]["unpriced"],
-            &entry_of(&board["hourly"], "at", at(2))["equivalent"]["unpriced"]
-        ),
-        (&both, &neither),
-        "the hour holding the unweighted row flags it, the hour before reads priced: {board}"
+        board["equivalent_24h"].is_null()
+            && entry_of(&board["hourly"], "at", at(1))["equivalent"].is_null()
+            && positive(&entry_of(&board["hourly"], "at", at(2))["equivalent"]),
+        "the day and the hour holding the unweighted row read null, the hour before its figure: {board}"
     );
 
     let keys = json(get(&parts.app, "/admin/keys", Some(&cookie)).await).await;
     let key = entry_of(&keys["keys"], "id", serde_json::json!("desktop"));
-    assert_eq!(
-        (
-            &key["usage_7d"]["equivalent"]["unpriced"],
-            &key["lifetime"]["equivalent"]["unpriced"]
-        ),
-        (&both, &both),
-        "the key's week and lifetime flag both windows: {key}"
+    assert!(
+        key["usage_7d"]["equivalent"].is_null() && key["lifetime"]["equivalent"].is_null(),
+        "the key's week and lifetime read null: {key}"
     );
 
     let pools = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await;
     let pool = entry_of(&pools["pools"], "id", serde_json::json!("main"));
-    assert_eq!(
-        (
-            &pool["equivalent_24h"]["unpriced"],
-            &entry_of(&pool["traffic_24h"], "at", at(1))["equivalent"]["unpriced"],
-            &entry_of(&pool["traffic_24h"], "at", at(2))["equivalent"]["unpriced"]
-        ),
-        (&both, &both, &neither),
-        "the pool's day and its traffic buckets flag the windows the same way: {pool}"
+    assert!(
+        pool["equivalent_24h"].is_null()
+            && entry_of(&pool["traffic_24h"], "at", at(1))["equivalent"].is_null()
+            && positive(&entry_of(&pool["traffic_24h"], "at", at(2))["equivalent"]),
+        "the pool's day and its traffic buckets read the figure the same way: {pool}"
     );
     let traffic = json(
         get(
@@ -1331,12 +1280,9 @@ async fn a_plan_row_the_cost_model_cannot_weigh_flags_its_windows_on_every_route
         .await,
     )
     .await;
-    assert_eq!(
-        (
-            &entry_of(&traffic["buckets"], "at", at(1))["equivalent"]["unpriced"],
-            &entry_of(&traffic["buckets"], "at", at(2))["equivalent"]["unpriced"]
-        ),
-        (&both, &neither),
+    assert!(
+        entry_of(&traffic["buckets"], "at", at(1))["equivalent"].is_null()
+            && positive(&entry_of(&traffic["buckets"], "at", at(2))["equivalent"]),
         "{traffic}"
     );
 
@@ -1351,16 +1297,13 @@ async fn a_plan_row_the_cost_model_cannot_weigh_flags_its_windows_on_every_route
     .await;
     let unweighted = row_of(&breakdown, "claude-mystery-2");
     assert!(
-        unweighted["unpriced"] == both
-            && unweighted["cost_equivalent"]
-                .as_object()
-                .is_some_and(|m| m.is_empty()),
-        "the unweighted model's group flags the windows it left out of its equivalent: {unweighted}"
+        unweighted["cost_equivalent"].is_null() && unweighted["cache_equivalent"].is_null(),
+        "the unweighted model's group reads a null figure: {unweighted}"
     );
     let sonnet = row_of(&breakdown, "claude-sonnet-5-5");
     assert!(
-        sonnet["unpriced"] == neither && positive(&sonnet["cost_equivalent"]["five_hour"]),
-        "a group whose plan rows all priced reads both windows priced: {sonnet}"
+        positive(&sonnet["cost_equivalent"]),
+        "a group whose plan rows all priced reads its figure: {sonnet}"
     );
 
     let series = json(
@@ -1373,10 +1316,9 @@ async fn a_plan_row_the_cost_model_cannot_weigh_flags_its_windows_on_every_route
     )
     .await;
     let group_at = |ago: i64| entry_of(&series["points"], "at", at(ago))["groups"][0].clone();
-    assert_eq!(
-        (&group_at(1)["unpriced"], &group_at(2)["unpriced"]),
-        (&both, &neither),
-        "a series bucket's group flags the windows its own rows left out: {series}"
+    assert!(
+        group_at(1)["cost_equivalent"].is_null() && positive(&group_at(2)["cost_equivalent"]),
+        "a series bucket's group reads null where its own rows priced nothing: {series}"
     );
 }
 
@@ -1403,36 +1345,25 @@ async fn the_burn_flags_a_bucket_holding_a_plan_row_the_cost_model_cannot_weigh_
             .cloned()
             .unwrap_or_else(|| panic!("a business point {ago} hours ago: {burn}"))
     };
-    let flags = |p: &serde_json::Value| {
-        [
-            p["five_hour_unpriced"].clone(),
-            p["seven_day_unpriced"].clone(),
-            p["model_week_unpriced"].clone(),
-        ]
-    };
     let unpriced = point(1);
     assert!(
-        null_field(&unpriced, "five_hour_equivalent")
-            && flags(&unpriced) == [true, true, false].map(serde_json::Value::from),
-        "the bucket holding the unweighted row flags both shared windows and no model week: {unpriced}"
+        null_field(&unpriced, "equivalent") && unpriced["unpriced"] == true,
+        "the bucket holding the unweighted row reads a null figure and says so: {unpriced}"
     );
     let priced = point(2);
     assert!(
-        positive(&priced["five_hour_equivalent"])
-            && flags(&priced) == [false; 3].map(serde_json::Value::from),
+        positive(&priced["equivalent"]) && priced["unpriced"] == false,
         "a bucket whose rows priced reads no flag: {priced}"
     );
     let idle = point(5);
     assert!(
-        null_field(&idle, "five_hour_equivalent")
-            && null_field(&idle, "seven_day_equivalent")
-            && flags(&idle) == [false; 3].map(serde_json::Value::from),
-        "an idle bucket's null equivalent carries no flag: {idle}"
+        null_field(&idle, "equivalent") && idle["unpriced"] == false,
+        "an idle bucket's null figure carries no flag: {idle}"
     );
 }
 
 #[tokio::test]
-async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_marks_a_probe_estimate_on_its_own(
+async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_nulls_the_probe_figure_on_its_own(
 ) {
     let (parts, cookie) = on_test_costs().await;
     let at = common::NOW - HOUR;
@@ -1458,8 +1389,8 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_marks_a_pro
                 ..Default::default()
             }));
     }
-    // On the plan, a request the cost model weighs, a probe it prices at its tier's latest weight and one it cannot
-    // weigh. Through the API key account, one probe.
+    // On the plan, a request the cost model weighs and two probes it cannot weigh, one on a null weight and one on a
+    // tier of no weighted model. Through the API key account, one probe.
     let probe = |id: &str, model: &str, account: &str, account_kind: &str| {
         let mut row = record(id, at, model, "s1");
         if let Record::Request {
@@ -1476,7 +1407,7 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_marks_a_pro
         .ledger
         .record(record("plain", at, "claude-sonnet-5-5", "s1"));
     parts.ledger.record(probe(
-        "probe-fallback",
+        "probe-null-weight",
         "claude-opus-5",
         "business",
         "oauth",
@@ -1497,7 +1428,7 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_marks_a_pro
         &parts,
         &[
             "plain",
-            "probe-fallback",
+            "probe-null-weight",
             "probe-unweighted",
             "probe-billed",
         ],
@@ -1512,24 +1443,11 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_marks_a_pro
         .await,
     )
     .await;
-    let both = serde_json::json!({"five_hour": true, "seven_day": true});
-    let neither = serde_json::json!({"five_hour": false, "seven_day": false});
     let business = row_of(&body, "business");
-    assert_eq!(
-        (
-            &business["unpriced"],
-            &business["probe_unpriced"],
-            &business["probe_estimated"],
-            &business["estimated"]
-        ),
-        (
-            &neither,
-            &both,
-            &serde_json::json!(true),
-            &serde_json::json!(true)
-        ),
-        "the plan probes flag the windows the unweighted probe left out and the fallback the other priced at, and \
-         the request row, priced at its own weight, flags neither: {business}"
+    assert!(
+        positive(&business["cost_equivalent"]) && business["probe_equivalent"].is_null(),
+        "the plan probes null the probe figure, and the request row, priced at its own weight, keeps the group's: \
+         {business}"
     );
     assert_eq!(
         (&business["kept_warm"], &business["probes"]),
@@ -1547,8 +1465,7 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_marks_a_pro
         (
             &direct["kept_warm"],
             &direct["probes"],
-            &direct["probe_estimated"],
-            &direct["probe_unpriced"]
+            &direct["probe_equivalent"]
         ),
         (
             &serde_json::json!({
@@ -1556,15 +1473,15 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_marks_a_pro
                 "plan_requests": 0, "plan_tokens_5m": 0, "plan_tokens_1h": 0
             }),
             &serde_json::json!({"failed": 0, "held": 0, "migrated": 0, "ok": 1, "plan_ok": 0, "skipped": 0}),
-            &serde_json::json!(false),
-            &neither
+            &serde_json::json!({"cost": 0.0, "wasted": 0.0})
         ),
-        "the API key account's credit and probe count as billed, and its probe marks and flags nothing: {direct}"
+        "the API key account's credit and probe count as billed, and its probe figure reads the zero of no plan \
+         row: {direct}"
     );
 }
 
 #[tokio::test]
-async fn a_plan_request_on_a_model_the_cost_model_does_not_weight_reads_an_estimated_equivalent() {
+async fn a_plan_request_on_a_model_the_cost_model_does_not_weight_reads_a_null_figure() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
@@ -1573,14 +1490,14 @@ async fn a_plan_request_on_a_model_the_cost_model_does_not_weight_reads_an_estim
         tables
             .revisions
             .in_force(now)
-            .weight_or_fallback("claude-opus-4-7", phoebis_routing::FIVE_HOUR)
-            .is_some_and(|(_, fallback)| fallback),
-        "the shipped cost model has no weight of its own for Opus 4.7"
+            .weight("claude-opus-4-7", phoebis_routing::SEVEN_DAY)
+            .is_none()
+            && tables
+                .tier_of("claude-opus-4-7", now)
+                .and_then(|tier| tables.latest_weighted(tier, now))
+                .is_some(),
+        "the shipped cost model has no weight for Opus 4.7 and weighs a model of its model tier"
     );
-    let donor = tables
-        .tier_of("claude-opus-4-7", now)
-        .and_then(|tier| tables.latest_weighted(tier, now))
-        .expect("the shipped cost model weighs a model of Opus 4.7's model tier");
     // The landing records the account's Max 20x tier on each attempt. One request on the plan, one answered in
     // overage.
     set_max_20x(&parts).await;
@@ -1596,47 +1513,24 @@ async fn a_plan_request_on_a_model_the_cost_model_does_not_weight_reads_an_estim
         parts.db.request("opus-billed").await.unwrap()
     })
     .await;
-    let usage = phoebis_routing::PinUsage {
-        input: 1_000,
-        output: 100,
-        ..phoebis_routing::PinUsage::default()
-    };
-    // The request finished 500 ms after its receipt, where its plan figures read the peak band.
-    let band_at = now - HOUR + 500;
     let summary = json(get(&parts.app, "/admin/requests/opus-plan", Some(&cookie)).await).await
         ["request"]
         .clone();
-    let windows = summary["cost_equivalent"]
-        .as_object()
-        .map(|m| m.keys().cloned().collect::<Vec<_>>());
     assert_eq!(
-        windows,
-        Some(vec!["five_hour".to_string(), "seven_day".to_string()]),
-        "an Opus model's equivalent reads the two shared windows: {summary}"
-    );
-    for window in [phoebis_routing::FIVE_HOUR, phoebis_routing::SEVEN_DAY] {
-        let at_the_donor = tables
-            .equivalent_at(window, None, donor, usage, band_at)
-            .unwrap();
-        assert!(
-            close_to(&summary["cost_equivalent"][window], at_the_donor),
-            "{window}: the 20x equivalent at the weight of the model tier's latest weighted model, \
-             {at_the_donor}: {summary}"
-        );
-    }
-    assert_eq!(
-        (&summary["estimated"], &summary["tier"]),
         (
-            &serde_json::json!(true),
-            &serde_json::json!("default_claude_max_20x")
+            summary.get("cost_equivalent"),
+            summary.get("estimated"),
+            &summary["tier"],
+            &summary["cost_shares"]
         ),
-        "the figure is marked estimated, and the summary names the tier the serving attempt recorded: {summary}"
-    );
-    assert!(
-        summary["cost_shares"]["five_hour"]
-            .as_f64()
-            .is_some_and(|share| share > 0.0),
-        "the shares price under that tier: {summary}"
+        (
+            Some(&serde_json::Value::Null),
+            None,
+            &serde_json::json!("default_claude_max_20x"),
+            &serde_json::json!({"five_hour": null, "seven_day": null})
+        ),
+        "a model without a weight prices nothing whatever its model tier weighs, and the summary still names the \
+         tier the serving attempt recorded: {summary}"
     );
     let billed = json(get(&parts.app, "/admin/requests/opus-billed", Some(&cookie)).await).await
         ["request"]
@@ -1644,16 +1538,16 @@ async fn a_plan_request_on_a_model_the_cost_model_does_not_weight_reads_an_estim
     assert_eq!(
         (
             billed.get("cost_equivalent"),
-            &billed["estimated"],
+            billed.get("estimated"),
             billed.get("tier")
         ),
         (
             Some(&serde_json::Value::Null),
-            &serde_json::json!(false),
+            None,
             Some(&serde_json::json!("default_claude_max_20x"))
         ),
-        "a request billed in dollars answers a null equivalent and nothing estimated, and still names the account \
-         tier its attempt recorded: {billed}"
+        "a request billed in dollars answers a null figure, and still names the account tier its attempt \
+         recorded: {billed}"
     );
 }
 
@@ -1976,21 +1870,17 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
         (&serde_json::json!("window_share"), &serde_json::json!(0.0)),
         "a subscription spends no dollars: {point}"
     );
-    let equivalent = |window: &str, model: &str, at: i64| {
-        tables
-            .equivalent_at(window, None, model, usage, at)
-            .unwrap()
+    // A rollup row keeps no completion, so its hour is its band instant, and the route reads at its own clock.
+    let figure = |model: &str, at: i64| {
+        phoebis_ledger::price_equivalent(&tables, None, model, usage, at, at, now).unwrap()
     };
-    let five_hour_equivalent = equivalent(phoebis_routing::FIVE_HOUR, "claude-opus-5-5", hour);
-    let seven_day_equivalent = equivalent(phoebis_routing::SEVEN_DAY, "claude-opus-5-5", hour);
+    let opus_figure = figure("claude-opus-5-5", hour);
     assert!(
-        close_to(&point["five_hour_equivalent"], five_hour_equivalent)
-            && close_to(&point["seven_day_equivalent"], seven_day_equivalent)
-            && point["estimated"] == false,
-        "beside its shares the bucket reads the 20x equivalent of both windows, its model weighted: {point}"
+        close_to(&point["equivalent"], opus_figure) && point["unpriced"] == false,
+        "beside its shares the bucket reads the Pro-week figure, its model weighted: {point}"
     );
     assert!(
-        null_field(&point, "model_week_share") && null_field(&point, "model_week_equivalent"),
+        null_field(&point, "model_week_share"),
         "Opus 5.5 has no week of its own: {point}"
     );
     let fable = business(&burn, now - 3 * HOUR);
@@ -2005,15 +1895,10 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
             fable_hour,
         )
         .unwrap();
-    let week_equivalent = equivalent(
-        phoebis_routing::SEVEN_DAY_FABLE,
-        "claude-fable-5-1",
-        fable_hour,
-    );
+    let fable_figure = figure("claude-fable-5-1", fable_hour);
     assert!(
-        close_to(&fable["model_week_share"], week_share)
-            && close_to(&fable["model_week_equivalent"], week_equivalent),
-        "a Fable row reads its model week's share and equivalent beside the shared windows: {fable}"
+        close_to(&fable["model_week_share"], week_share) && close_to(&fable["equivalent"], fable_figure),
+        "a Fable row reads its model week's share beside the shared windows and its figure: {fable}"
     );
     let mut keys: Vec<&str> = point
         .as_object()
@@ -2027,23 +1912,18 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
         [
             "at",
             "cached_tokens",
-            "estimated",
-            "five_hour_equivalent",
+            "equivalent",
             "five_hour_share",
-            "five_hour_unpriced",
             "group",
-            "model_week_equivalent",
             "model_week_share",
-            "model_week_unpriced",
-            "seven_day_equivalent",
             "seven_day_share",
-            "seven_day_unpriced",
             "tokens",
             "uncached_tokens",
             "unit",
+            "unpriced",
             "usd"
         ],
-        "a point carries its shares, its 20x equivalents with their unpriced flags and the estimated flag: {point}"
+        "a point carries its shares, its Pro-week figure and the figure's unpriced flag: {point}"
     );
     parts.ledger.record(Record::Request {
         request: RequestRecord {
@@ -2131,17 +2011,12 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     };
     let keyed_opus = bucket_at(keyed, hour);
     assert!(
-        close_to(&keyed_opus["five_hour_equivalent"], five_hour_equivalent)
-            && close_to(&keyed_opus["seven_day_equivalent"], seven_day_equivalent)
-            && keyed_opus["estimated"] == false,
-        "the 20x equivalent adds across accounts, the api_key row adding a zero to the subscription's: {keyed_opus}"
+        close_to(&keyed_opus["equivalent"], opus_figure),
+        "the figure adds across accounts, the api_key row adding a zero to the subscription's: {keyed_opus}"
     );
     assert!(
-        close_to(
-            &bucket_at(keyed, fable_hour)["model_week_equivalent"],
-            week_equivalent
-        ),
-        "and so does the model week's: {by_key}"
+        close_to(&bucket_at(keyed, fable_hour)["equivalent"], fable_figure),
+        "and so does the Fable row's: {by_key}"
     );
     let one_account = json(
         get(
@@ -2240,8 +2115,8 @@ async fn the_reconciliations_route_lists_the_trailing_thirty_days_under_the_acco
             for (account, window, window_end, ratio) in planted {
                 c.execute(
                     "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, \
-                     last_reading_at, observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, 0.2, ?6, ?7, 3, 1, ?8)",
+                     last_reading_at, observed_rise, predicted_share, ratio, requests, computed_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, 0.2, ?6, ?7, 3, ?8)",
                     rusqlite::params![
                         account,
                         window,
@@ -2319,7 +2194,6 @@ async fn the_reconciliations_route_lists_the_trailing_thirty_days_under_the_acco
             "predicted_share": 0.1,
             "ratio": 2.0,
             "requests": 3,
-            "estimated": 1,
             "computed_at": now - DAY + HOUR,
         }),
         "a row carries its readings, its figures and its counts"
@@ -3330,17 +3204,9 @@ async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
          {point}"
     );
     assert_eq!(
-        (
-            &point["five_hour_equivalent"],
-            &point["seven_day_equivalent"],
-            &point["estimated"],
-        ),
-        (
-            &serde_json::json!(0.0),
-            &serde_json::json!(0.0),
-            &serde_json::json!(false),
-        ),
-        "a bucket with tokens and no plan row reads a zero 20x equivalent, and a fast row marks no estimate: {point}"
+        (&point["equivalent"], &point["unpriced"]),
+        (&serde_json::json!(0.0), &serde_json::json!(false)),
+        "a bucket with tokens and no plan row reads a zero Pro-week figure: {point}"
     );
 }
 
@@ -3545,7 +3411,7 @@ async fn the_breakdown_answers_shares_for_an_oauth_group_under_the_account_group
     assert!(
         business["saving_usd"].is_number()
             && business["saving_shares"].is_object()
-            && business["saving_equivalent"].is_object(),
+            && business["saving_equivalent"].is_number(),
         "the saving's three members beside the probe cost: {business}"
     );
     assert_eq!(
@@ -3603,10 +3469,8 @@ async fn the_breakdown_answers_shares_for_an_oauth_group_under_the_account_group
         "the plan-funded counts answer under every grouping: {sonnet}"
     );
     assert!(
-        positive(&sonnet["cost_equivalent"]["five_hour"])
-            && positive(&sonnet["billed_usd"])
-            && sonnet["estimated"] == false,
-        "the plan row's equivalent and the api_key row's dollars answer beside today's members: {sonnet}"
+        positive(&sonnet["cost_equivalent"]) && positive(&sonnet["billed_usd"]),
+        "the plan row's figure and the api_key row's dollars answer beside today's members: {sonnet}"
     );
     let one_account = json(
         get(
@@ -4035,11 +3899,8 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         "s-mid's bucket reads its attempt's dollars at read time: {mid_point} vs {mid_usd}"
     );
     assert_eq!(
-        (
-            &mid_point["five_hour_equivalent"],
-            &mid_point["seven_day_equivalent"]
-        ),
-        (&serde_json::json!(0.0), &serde_json::json!(0.0)),
+        &mid_point["equivalent"],
+        &serde_json::json!(0.0),
         "an api_key session draws no plan window: {mid_point}"
     );
     // A session can move between upstreams, and shares of different accounts' windows do not add.
@@ -4082,21 +3943,20 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         };
         // The band reads at the attempt's completion, the request's finish half a second after its start.
         let completed = started + 500;
-        let equivalent = |window: &str| {
-            tables
-                .equivalent_at(window, None, "claude-sonnet-5", usage, completed)
-                .unwrap()
-        };
+        let figure = phoebis_ledger::price_equivalent(
+            &tables,
+            None,
+            "claude-sonnet-5",
+            usage,
+            started,
+            completed,
+            now,
+        )
+        .unwrap();
         let any = bucket_of(points);
         assert!(
-            close_to(
-                &any["five_hour_equivalent"],
-                equivalent(phoebis_routing::FIVE_HOUR)
-            ) && close_to(
-                &any["seven_day_equivalent"],
-                equivalent(phoebis_routing::SEVEN_DAY)
-            ) && any["estimated"] == false,
-            "a session's bucket reads its attempt's 20x equivalent with no account named: {any}"
+            close_to(&any["equivalent"], figure),
+            "a session's bucket reads its attempt's Pro-week figure with no account named: {any}"
         );
         let share = |window: &str| {
             tables

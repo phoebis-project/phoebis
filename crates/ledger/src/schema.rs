@@ -384,8 +384,9 @@ CREATE TABLE IF NOT EXISTS routing_conditions (
   PRIMARY KEY (kind, subject_kind, subject_id)
 );
 -- One row per completed 5-hour, 7-day and Fable window of an account: the rise its readings showed against the share
--- the router priced for its own plan-funded attempts between those readings, and how many of them priced at a model
--- tier's estimate. The hourly fold reads the newest of each window for the meter's drift.
+-- the router priced for its own plan-funded attempts between those readings. The hourly fold reads the newest of each
+-- window for the meter's drift. Every open runs this baseline, so it keeps the `estimated` count the second migration
+-- drops, which a fresh file then loses as a stamped one does.
 CREATE TABLE IF NOT EXISTS window_reconciliations (
   account_id TEXT NOT NULL,
   window TEXT NOT NULL,
@@ -404,4 +405,7 @@ CREATE TABLE IF NOT EXISTS window_reconciliations (
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or rebuild a
 /// table, so an older build refuses a newer ledger rather than misreading it.
-pub const MIGRATIONS: &[(u32, &str)] = &[];
+pub const MIGRATIONS: &[(u32, &str)] = &[(
+    2,
+    "ALTER TABLE window_reconciliations DROP COLUMN estimated",
+)];

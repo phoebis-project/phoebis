@@ -4505,13 +4505,32 @@ async fn a_usage_based_seats_kept_warm_credit_files_under_no_tier_as_its_request
 
 /// A credit files beside its request's own row: a Haiku 5.5 request in January whose prompt passes that month's
 /// long-context threshold, kept warm on a Max 20x account, keys the credit under `long` and the account's tier, so the
-/// saving prices at the long-context cells and reaches the account's window shares.
+/// saving prices at the long-context cells and reaches the account's window shares. The test cost model weighs no
+/// Haiku 5.5, and a model without a weight prices nothing, so the case weighs it as the model weighs Haiku 4.5.
 #[tokio::test]
 async fn a_credit_keys_its_requests_tier_and_band_and_reaches_the_saving_shares() {
     const HAIKU: &str = "claude-haiku-5-5";
+    let costs = phoebis_ledger::test_tables::SUBSCRIPTION_COSTS
+        .replace(
+            "      claude-haiku-4-5: 0.5\n",
+            "      claude-haiku-4-5: 0.5\n      claude-haiku-5-5: 0.5\n",
+        )
+        .replace(
+            "      claude-haiku-4-5: 1\n",
+            "      claude-haiku-4-5: 1\n      claude-haiku-5-5: 1\n",
+        )
+        .replace(
+            "      claude-haiku-4-5: haiku\n",
+            "      claude-haiku-4-5: haiku\n      claude-haiku-5-5: haiku\n",
+        );
     let mut r = rig(RigSpec {
         pricing: phoebis_ledger::test_tables::api_prices(),
-        tables: phoebis_ledger::test_tables::subscription_costs(),
+        tables: phoebis_ledger::PlanTables {
+            revisions: phoebis_ledger::CostRevisions::from_yaml(&costs)
+                .expect("the test cost model with Haiku 5.5 weighed loads"),
+            path: None,
+            source: "test".to_string(),
+        },
         tier: Some("default_claude_max_20x"),
         ..plan_funded_spec()
     })
@@ -4560,6 +4579,7 @@ async fn a_credit_keys_its_requests_tier_and_band_and_reaches_the_saving_shares(
         Some(phoebis_ledger::SharePricing { tables: &r.tables }),
         &r.pricing,
         &r.tables,
+        r.now(),
     );
     let saving = groups
         .iter()
@@ -4577,6 +4597,7 @@ async fn a_credit_keys_its_requests_tier_and_band_and_reaches_the_saving_shares(
         classifier: false,
         at: credit.hour * 1_000,
         band_at: None,
+        now: r.now(),
     };
     let shares = |usage: PinUsage| {
         phoebis_ledger::price_row(&r.pricing, &r.tables, &key, usage)
@@ -4711,6 +4732,7 @@ async fn a_credit_answered_across_a_revision_boundary_files_at_its_requests_arri
         None,
         &r.pricing,
         &r.tables,
+        r.now(),
     )
     .first()
     .map_or(0.0, |group| group.saving_usd);
@@ -4720,12 +4742,10 @@ async fn a_credit_answered_across_a_revision_boundary_files_at_its_requests_arri
     );
 }
 
-/// A plan-funded probe on a model the cost model leaves unweighted settles in the window share when its model tier
-/// has a weighted model, at that model's weight: the test table leaves Opus 5 null beside Opus 5.5 at 2, so the
-/// share the settlement prices for the probe's own counts on Max 20x is Opus 5.5's.
+/// A plan-funded probe on a model without a weight settles in dollars whatever its model tier: the test table leaves
+/// Opus 5 null beside Opus 5.5 at 2, and the settlement reads `priced`, which reads the model's own weight alone.
 #[tokio::test]
-async fn a_plan_funded_probe_on_an_unweighted_model_of_a_weighted_tier_settles_in_the_share_at_its_tiers_weight(
-) {
+async fn a_plan_funded_probe_on_a_model_without_a_weight_settles_in_dollars() {
     let mut r = rig(RigSpec {
         tables: phoebis_ledger::test_tables::subscription_costs(),
         tier: Some("default_claude_max_20x"),
@@ -4749,45 +4769,11 @@ async fn a_plan_funded_probe_on_an_unweighted_model_of_a_weighted_tier_settles_i
         ),
         (
             Some("claude-opus-5"),
-            Some("window_share"),
+            Some("usd"),
             Some("default_claude_max_20x")
         ),
-        "the probe settled in a share of Max 20x's 5-hour window: {probe}"
+        "the probe settled in dollars on the Max 20x account: {probe}"
     );
-    // The counts as the settlement types them: an aggregate write without the split is a five-minute write.
-    let count = |member: &str| probe["usage"][member].as_u64().expect("a count");
-    let (write_5m, write_1h) = match (count("five_minutes"), count("one_hour")) {
-        (0, 0) => (count("write"), 0),
-        split => split,
-    };
-    let usage = PinUsage {
-        input: count("input"),
-        cache_read: count("read"),
-        write_5m,
-        write_1h,
-        output: count("output"),
-    };
-    assert!(tokens(usage) > 0, "the probe read its prefix back");
-    let at = probe["at"].as_i64().expect("the exchange instant");
-    let donor = r
-        .tables
-        .tier_of("claude-opus-5", at)
-        .and_then(|tier| r.tables.latest_weighted(tier, at))
-        .expect("the test table weighs a model of Opus 5's model tier");
-    assert_eq!(donor, OPUS);
-    let share = |model: &str| {
-        r.tables.share_at(
-            phoebis_routing::FIVE_HOUR,
-            None,
-            "default_claude_max_20x",
-            model,
-            usage,
-            at,
-        )
-    };
-    let priced = share("claude-opus-5").expect("the settlement prices the share");
-    assert!(priced > 0.0, "{priced}");
-    assert_eq!(Some(priced), share(donor), "at Opus 5.5's weight");
 }
 
 const OPUS: &str = "claude-opus-5-5";

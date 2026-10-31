@@ -46,7 +46,7 @@ const WINDOWS: [&str; 3] = [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE];
 
 const COLUMNS: &str =
     "account_id, window, window_end, first_reading_at, last_reading_at, observed_rise, \
-                       predicted_share, ratio, requests, estimated, computed_at";
+                       predicted_share, ratio, requests, computed_at";
 
 /// One completed window of an account, reconciled.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -68,8 +68,6 @@ pub struct ReconciliationRow {
     pub ratio: f64,
     /// The attempts priced.
     pub requests: u32,
-    /// The attempts among them priced at a model tier's estimate.
-    pub estimated: u32,
     pub computed_at: i64,
 }
 
@@ -385,7 +383,7 @@ pub fn reconcile(
                 }
                 drop_faulty_dips(tx, prices, tables, account, window, &mut run)?;
                 let (mut first_at, mut last_at) = (None, 0);
-                let (mut rise, mut share, mut requests, mut estimated) = (0.0, 0.0, 0u32, 0u32);
+                let (mut rise, mut share, mut requests) = (0.0, 0.0, 0u32);
                 for part in &run.parts {
                     let Some((first, last)) = part.ends() else {
                         continue;
@@ -399,7 +397,6 @@ pub fn reconcile(
                         Prediction::Priced {
                             share: part_share,
                             requests: part_requests,
-                            estimated: part_estimated,
                         } => {
                             first_at.get_or_insert(from);
                             last_at = to;
@@ -407,7 +404,6 @@ pub fn reconcile(
                             rise += rounded(last.utilization - first.utilization).max(0.0);
                             share += part_share;
                             requests += part_requests;
-                            estimated += part_estimated;
                         }
                     }
                 }
@@ -421,7 +417,7 @@ pub fn reconcile(
                 tx.execute(
                     &format!(
                         "INSERT OR IGNORE INTO window_reconciliations ({COLUMNS}) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
                     ),
                     params![
                         account,
@@ -433,7 +429,6 @@ pub fn reconcile(
                         share,
                         rise / share,
                         requests,
-                        estimated,
                         now
                     ],
                 )?;
@@ -493,12 +488,8 @@ fn readings_of(
 
 /// What `predicted` found between two ends.
 enum Prediction {
-    /// The attempts' summed share, how many priced and how many of those at a model tier's estimate.
-    Priced {
-        share: f64,
-        requests: u32,
-        estimated: u32,
-    },
+    /// The attempts' summed share and how many priced.
+    Priced { share: f64, requests: u32 },
     /// No attempt priced to a share above zero.
     Empty,
     /// An attempt with tokens priced to no share on the window, or a sum that is not finite.
@@ -565,7 +556,7 @@ fn predicted(
             usage_based: r.get(15)?,
         })
     })?;
-    let (mut share, mut requests, mut estimated) = (0.0, 0u32, 0u32);
+    let (mut share, mut requests) = (0.0, 0u32);
     for attempt in attempts {
         let a = attempt?;
         let funding = funding_of(
@@ -611,6 +602,9 @@ fn predicted(
                 classifier,
             },
             true,
+            // The prediction reads the shares alone, which take no anchor row, so the part's end stands in for the
+            // read's instant.
+            to,
         );
         let priced = match window {
             FIVE_HOUR => point.five_hour_share,
@@ -624,17 +618,12 @@ fn predicted(
         if let Some(priced) = priced {
             share += priced;
             requests += 1;
-            estimated += u32::from(point.estimated);
         }
     }
     Ok(if !share.is_finite() {
         Prediction::Unpriced
     } else if share > 0.0 {
-        Prediction::Priced {
-            share,
-            requests,
-            estimated,
-        }
+        Prediction::Priced { share, requests }
     } else {
         Prediction::Empty
     })
@@ -651,8 +640,7 @@ fn row_to_reconciliation(r: &Row) -> rusqlite::Result<ReconciliationRow> {
         predicted_share: r.get(6)?,
         ratio: r.get(7)?,
         requests: r.get(8)?,
-        estimated: r.get(9)?,
-        computed_at: r.get(10)?,
+        computed_at: r.get(9)?,
     })
 }
 

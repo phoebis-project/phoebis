@@ -151,7 +151,6 @@ fn main() -> anyhow::Result<()> {
                 })?;
             let costs = tables.revisions.in_force(now);
             let weighted = costs.weighted_model_count();
-            let by_tier = costs.by_tier_count();
             let sized = costs.sized_tier_count();
             let regimes = regime_clause(costs.regimes.keys().map(String::as_str));
             // `PlanTables::load` replaces the shipped revisions whole, so an instance with a file never sees a shipped
@@ -175,9 +174,7 @@ fn main() -> anyhow::Result<()> {
                         .pending(now)
                         .map(|next| next.effective.as_str()),
                     config.stats.subscription_costs_path.as_deref(),
-                    format!(
-                        "{weighted} weighted models, {by_tier} more by model tier, {sized} account tiers{regimes}{newer}"
-                    )
+                    format!("{weighted} weighted models, {sized} account tiers{regimes}{newer}")
                 )
             );
             let days = |n: u32| {

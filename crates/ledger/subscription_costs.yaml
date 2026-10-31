@@ -4,8 +4,7 @@
 # window, the step the usage header moves in, is 900,000 units. A `regimes` entry prices the entrypoints it lists at
 # its own capacity rows and band factor, every other entrypoint at the rows above. The unit stays the base Pro 7-day
 # window, of which an interactive window holds 112,500,000. An account tier left out, or set to null, is unpriced. A
-# model without a weight prices at the weight of its model tier's latest weighted model, as an estimate, and a model
-# of no model tier, or of one with no weight, prices nothing.
+# model without a weight, or of no model tier, prices nothing.
 unit: {tier: default_claude_ai, window: seven_day}
 revisions:
   - effective: 2026-10-05

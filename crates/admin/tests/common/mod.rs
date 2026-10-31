@@ -1385,7 +1385,7 @@ impl Captured {
 }
 
 /// One seeded request's row as the readers price it: at the start of its hour, at the cells its prompt selects, with
-/// no account tier, which the 20x window equivalent never reads.
+/// no account tier, which the Pro-week figure never reads, and read at that hour.
 pub fn priced_row(
     model: &str,
     funding: phoebis_ledger::Funding,
@@ -1414,6 +1414,7 @@ pub fn priced_row(
             classifier: false,
             at: hour,
             band_at: None,
+            now: hour,
         },
         usage,
     )

@@ -1,5 +1,5 @@
 //! A row's counts priced in one call: the dollars at the price revision in force at the row's instant, the shares of
-//! the account tier's windows and the 20x window equivalent at the cost revision in force then. One function answers
+//! the account tier's windows and the Pro-week figure at the cost revision in force then. One function answers
 //! every figure so the native rule (a plan row in the equivalent, a billed row in dollars) is written once by the
 //! caller and never recomputed from the account tier the registry holds now. The probe rows' fallback to the dearest
 //! listed cells sits inside it too: a probe that consumed quota must never read as free, and a reader filling the
@@ -8,8 +8,7 @@
 use phoebis_routing::PinUsage;
 
 use crate::plan::{
-    free_equivalent, free_shares, price_equivalent, price_shares, Funding, PlanTables,
-    PricedShares, WindowShares,
+    free_equivalent, free_shares, price_equivalent, price_shares, Funding, PlanTables, WindowShares,
 };
 use crate::pricing::{Band, PriceRevisions, Speed};
 use crate::query::PROBE_KIND;
@@ -39,6 +38,9 @@ pub struct RowKey<'a> {
     pub classifier: bool,
     pub at: i64,
     pub band_at: Option<i64>,
+    /// The read's instant, which selects the revision whose anchor row divides the Pro-week figure. The queries, the
+    /// rollup's readers and the routes fill it from the clock they price at.
+    pub now: i64,
 }
 
 /// Every figure a reader may want, so the native rule (a plan row in the equivalent, a billed row in dollars) is
@@ -51,10 +53,9 @@ pub struct Priced {
     /// The shares of the account tier's windows for `Funding::Plan` with an account tier the cost revision sizes,
     /// else `None`.
     pub shares: Option<WindowShares>,
-    /// The 20x window equivalent for `Funding::Plan`, else `None`.
-    pub equivalent: Option<WindowShares>,
-    /// Whether any window of `shares` or `equivalent` priced at the weight of its model tier's latest weighted model.
-    pub estimated: bool,
+    /// The Pro-week figure for `Funding::Plan`, `Some(0.0)` for a classifier call, `None` for a billed row and for a
+    /// plan row the cost model cannot price.
+    pub equivalent: Option<f64>,
     /// Why the shares read zero by rule rather than by usage: `client_classifier` under the plan for a classifier
     /// call, `None` for a row priced from its counts.
     pub share_reason: Option<&'static str>,
@@ -79,7 +80,7 @@ pub fn price_row(
         };
     }
     if key.classifier {
-        // A free call spends no window, so the 20x equivalent is zero too, and the dollars stay for the cost views.
+        // A free call spends no window, so the Pro-week figure is zero too, and the dollars stay for the cost views.
         let shares = key
             .tier
             .filter(|tier| costs.revisions.in_force(key.at).sizes(key.entrypoint, tier))
@@ -87,8 +88,7 @@ pub fn price_row(
         return Priced {
             usd,
             shares,
-            equivalent: Some(free_equivalent(costs, key.entrypoint, key.model, key.at)),
-            estimated: false,
+            equivalent: Some(free_equivalent()),
             share_reason: Some(SHARE_REASON_CLIENT_CLASSIFIER),
         };
     }
@@ -109,13 +109,18 @@ pub fn price_row(
                 band_at,
             )
         });
-    let equivalent = price_equivalent(costs, key.entrypoint, key.model, counts, key.at, band_at);
     Priced {
         usd,
-        estimated: equivalent.any_estimated()
-            || shares.as_ref().is_some_and(PricedShares::any_estimated),
-        shares: shares.map(|priced| priced.shares),
-        equivalent: Some(equivalent.shares),
+        shares,
+        equivalent: price_equivalent(
+            costs,
+            key.entrypoint,
+            key.model,
+            counts,
+            key.at,
+            band_at,
+            key.now,
+        ),
         share_reason: None,
     }
 }
@@ -137,7 +142,7 @@ fn dearest(prices: &PriceRevisions, at: i64, counts: PinUsage) -> CostSplit {
 mod tests {
     use super::*;
     use crate::test_tables::{
-        api_prices, first_entry_costs_text, subscription_costs, JANUARY_2026,
+        api_prices, first_entry_costs_text, subscription_costs, JANUARY_2026, SUBSCRIPTION_COSTS,
     };
     use crate::CostRevisions;
     use phoebis_routing::{FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
@@ -164,7 +169,7 @@ mod tests {
         }
     }
 
-    /// A standard, plan-funded Opus 5.5 inference row on Max 20x, out of band in January.
+    /// A standard, plan-funded Opus 5.5 inference row on Max 20x, out of band in January, read in February.
     fn plan_row() -> RowKey<'static> {
         RowKey {
             model: OPUS,
@@ -177,6 +182,7 @@ mod tests {
             classifier: false,
             at: JANUARY_2026,
             band_at: None,
+            now: FEBRUARY_2026,
         }
     }
 
@@ -196,8 +202,8 @@ mod tests {
             .collect()
     }
 
-    // One Opus 5.5 input token: $10 per million, 2 units over Max 20x's 100 and 1000, and over the anchor Pro's 5 and
-    // 50 in the equivalent.
+    // One Opus 5.5 input token: $10 per million, 2 units over Max 20x's 100 and 1000, and over the anchor Pro's 50 in
+    // the Pro-week figure.
     #[test]
     fn a_plan_row_on_a_sized_tier_answers_dollars_shares_and_the_equivalent() {
         let priced = price(&plan_row(), input(1));
@@ -206,17 +212,12 @@ mod tests {
         assert_eq!(usd.total(), usd.input_usd);
         let shares = priced.shares.as_ref().expect("Max 20x is sized");
         assert!(close(shares[FIVE_HOUR], 0.02) && close(shares[SEVEN_DAY], 0.002));
-        let equivalent = priced.equivalent.as_ref().expect("the anchor is sized");
-        assert!(
-            close(equivalent[FIVE_HOUR], 0.4) && close(equivalent[SEVEN_DAY], 0.04),
-            "{equivalent:?}"
-        );
-        assert!(!priced.estimated);
+        assert!(close(priced.equivalent, 0.04), "{:?}", priced.equivalent);
     }
 
     // The test regime holds 200 and 1,250 units on Max 20x against the base 100 and 1,000, so the one token's 2 units
-    // read half the base 5-hour share and four fifths of the week's. The equivalent reads the regime's Pro row, 2 / 10
-    // and 2 / 62.5.
+    // read half the base 5-hour share and four fifths of the week's. The Pro-week figure reads the regime's Pro row,
+    // 2 / 62.5.
     #[test]
     fn a_rows_entrypoint_prices_its_shares_and_its_equivalent_under_the_regime() {
         let priced = price(
@@ -226,14 +227,10 @@ mod tests {
             },
             input(1),
         );
-        for (figures, five_hour, seven_day) in [
-            (&priced.shares, 0.01, 0.0016),
-            (&priced.equivalent, 0.2, 0.032),
-        ] {
-            let figures = figures.as_ref().expect("a plan row on Max 20x");
-            assert!(close(figures[FIVE_HOUR], five_hour), "{figures:?}");
-            assert!(close(figures[SEVEN_DAY], seven_day), "{figures:?}");
-        }
+        let shares = priced.shares.as_ref().expect("a plan row on Max 20x");
+        assert!(close(shares[FIVE_HOUR], 0.01), "{shares:?}");
+        assert!(close(shares[SEVEN_DAY], 0.0016), "{shares:?}");
+        assert!(close(priced.equivalent, 0.032), "{priced:?}");
     }
 
     // The fast block's input is 20 per million, the standard cell 10.
@@ -258,8 +255,8 @@ mod tests {
                 "{funding:?}: {priced:?}"
             );
             assert_eq!(
-                (&priced.shares, &priced.equivalent, priced.estimated),
-                (&None, &None, false),
+                (&priced.shares, priced.equivalent),
+                (&None, None),
                 "{funding:?}"
             );
         }
@@ -278,22 +275,17 @@ mod tests {
         );
         assert!(free.usd.is_some(), "Opus 5.5 is listed");
         assert_eq!(free.usd, plain.usd, "the dollars stay for the cost views");
-        for (free_map, plain_map) in [
-            (&free.shares, &plain.shares),
-            (&free.equivalent, &plain.equivalent),
-        ] {
-            let plain_windows = windows(plain_map);
-            assert!(!plain_windows.is_empty(), "{plain:?}");
-            assert_eq!(
-                windows(free_map),
-                plain_windows
-                    .iter()
-                    .map(|(window, _)| (*window, Some(0.0)))
-                    .collect::<Vec<_>>(),
-                "every window the plain row prices reads zero: {free:?}"
-            );
-        }
-        assert!(!free.estimated);
+        let plain_windows = windows(&plain.shares);
+        assert!(!plain_windows.is_empty(), "{plain:?}");
+        assert_eq!(
+            windows(&free.shares),
+            plain_windows
+                .iter()
+                .map(|(window, _)| (*window, Some(0.0)))
+                .collect::<Vec<_>>(),
+            "every window the plain row prices reads zero: {free:?}"
+        );
+        assert_eq!(free.equivalent, Some(0.0), "{free:?}");
         assert_eq!(free.share_reason, Some("client_classifier"));
         assert_eq!(plain.share_reason, None);
     }
@@ -335,29 +327,27 @@ mod tests {
             },
             input(1_000),
         );
-        for map in [&free.shares, &free.equivalent] {
-            assert_eq!(
-                windows(map),
-                [(FIVE_HOUR, Some(0.0)), (SEVEN_DAY, Some(0.0))],
-                "{free:?}"
-            );
-        }
-        assert!(!free.estimated);
+        assert_eq!(
+            (windows(&free.shares), free.equivalent),
+            (
+                vec![(FIVE_HOUR, Some(0.0)), (SEVEN_DAY, Some(0.0))],
+                Some(0.0)
+            ),
+            "{free:?}"
+        );
         assert_eq!(free.share_reason, Some("client_classifier"));
         let plain = price(&row, input(1_000));
-        for map in [&plain.shares, &plain.equivalent] {
-            assert_eq!(
-                windows(map),
-                [(FIVE_HOUR, None), (SEVEN_DAY, None)],
-                "{plain:?}"
-            );
-        }
+        assert_eq!(
+            (windows(&plain.shares), plain.equivalent),
+            (vec![(FIVE_HOUR, None), (SEVEN_DAY, None)], None),
+            "{plain:?}"
+        );
     }
 
-    // With Sonnet 5.5's weight nulled its tier holds no weighted model, so no fallback prices it.
+    // With Sonnet 5.5's weight nulled the model prices nothing, while the marker's zero maps come from the tier's
+    // capacity alone.
     #[test]
-    fn a_classifier_call_on_a_model_with_a_null_weight_and_no_fallback_answers_the_full_zero_maps()
-    {
+    fn a_classifier_call_on_a_model_with_a_null_weight_answers_the_full_zero_maps() {
         let text = first_entry_costs_text().replace(
             "      claude-sonnet-5-5: 1\n",
             "      claude-sonnet-5-5: null\n",
@@ -381,23 +371,21 @@ mod tests {
             },
             input(1_000),
         );
-        for map in [&free.shares, &free.equivalent] {
-            assert_eq!(
-                windows(map),
-                [(FIVE_HOUR, Some(0.0)), (SEVEN_DAY, Some(0.0))],
-                "{free:?}"
-            );
-        }
-        assert!(!free.estimated);
+        assert_eq!(
+            (windows(&free.shares), free.equivalent),
+            (
+                vec![(FIVE_HOUR, Some(0.0)), (SEVEN_DAY, Some(0.0))],
+                Some(0.0)
+            ),
+            "{free:?}"
+        );
         assert_eq!(free.share_reason, Some("client_classifier"));
         let plain = price_row(&api_prices(), &costs, &row, input(1_000));
-        for map in [&plain.shares, &plain.equivalent] {
-            assert_eq!(
-                windows(map),
-                [(FIVE_HOUR, None), (SEVEN_DAY, None)],
-                "{plain:?}"
-            );
-        }
+        assert_eq!(
+            (windows(&plain.shares), plain.equivalent),
+            (vec![(FIVE_HOUR, None), (SEVEN_DAY, None)], None),
+            "{plain:?}"
+        );
     }
 
     // Haiku 5.5's long-context input is 5 per million and its standard input 1, whatever the counts.
@@ -431,10 +419,8 @@ mod tests {
             input(1),
         );
         assert_eq!(priced.shares, None);
-        let equivalent = windows(&priced.equivalent);
-        assert_eq!(equivalent.len(), 2, "{equivalent:?}");
-        // The anchor Pro's 5 and 50.
-        assert!(close(equivalent[0].1, 0.4) && close(equivalent[1].1, 0.04));
+        // The anchor Pro's 50.
+        assert!(close(priced.equivalent, 0.04), "{priced:?}");
     }
 
     #[test]
@@ -498,10 +484,7 @@ mod tests {
             windows(&mystery.shares),
             [(FIVE_HOUR, None), (SEVEN_DAY, None)]
         );
-        assert_eq!(
-            windows(&mystery.equivalent),
-            [(FIVE_HOUR, None), (SEVEN_DAY, None)]
-        );
+        assert_eq!(mystery.equivalent, None);
         let team = price(
             &RowKey {
                 tier: Some(TEAM),
@@ -531,9 +514,10 @@ mod tests {
         assert_ne!(max.shares, team.shares);
     }
 
-    // Opus 5 carries a null weight and reads Opus 5.5's as the estimate, priced in dollars at its own row.
+    // Opus 5 carries a null weight, so it prices nothing on any window though Opus 5.5 weighs its model tier, and its
+    // dollars read its own row.
     #[test]
-    fn a_row_priced_at_its_model_tiers_latest_weight_reads_estimated() {
+    fn a_model_without_a_weight_prices_nothing() {
         let unweighted = price(
             &RowKey {
                 model: "claude-opus-5",
@@ -541,33 +525,12 @@ mod tests {
             },
             input(1),
         );
-        let weighted = price(&plan_row(), input(1));
-        assert!(unweighted.estimated);
-        assert!(!weighted.estimated);
+        assert_eq!(
+            (windows(&unweighted.shares), unweighted.equivalent),
+            (vec![(FIVE_HOUR, None), (SEVEN_DAY, None)], None),
+            "{unweighted:?}"
+        );
         assert!(close(unweighted.usd.as_ref().map(|u| u.input_usd), 5e-6));
-        assert_eq!(unweighted.shares, weighted.shares);
-        assert_eq!(unweighted.equivalent, weighted.equivalent);
-        // Haiku 4.5 with a null shared weight keeps its override on the week and reads Haiku 5.5 on the 5-hour
-        // window, so one window's estimate marks the row.
-        let text = first_entry_costs_text()
-            .replace(
-                "      claude-haiku-4-5: 0.5\n",
-                "      claude-haiku-4-5: null\n      claude-haiku-5-5: 0.25\n",
-            )
-            .replace(
-                "      claude-haiku-4-5: haiku\n",
-                "      claude-haiku-4-5: haiku\n      claude-haiku-5-5: haiku\n",
-            );
-        let costs = PlanTables {
-            revisions: CostRevisions::from_yaml(&text).expect("the edited model loads"),
-            path: None,
-            source: "test".to_string(),
-        };
-        let haiku = RowKey {
-            model: "claude-haiku-4-5",
-            ..plan_row()
-        };
-        assert!(price_row(&api_prices(), &costs, &haiku, input(1)).estimated);
     }
 
     #[test]
@@ -596,11 +559,9 @@ mod tests {
             };
             let priced = price(&RowKey { at, ..probe }, counts);
             assert_eq!(priced.usd, Some(want), "{at}");
-            assert!(
-                windows(&priced.equivalent)
-                    .iter()
-                    .all(|(_, share)| share.is_none()),
-                "a model of no weighted model tier prices no equivalent: {priced:?}"
+            assert_eq!(
+                priced.equivalent, None,
+                "a model without a weight prices no Pro-week figure: {priced:?}"
             );
             let inference = price(
                 &RowKey {
@@ -627,44 +588,51 @@ mod tests {
         let input_usd = |p: &Priced| p.usd.as_ref().unwrap().input_usd;
         assert_eq!(input_usd(&february), 2.0 * input_usd(&january));
         for window in [FIVE_HOUR, SEVEN_DAY] {
-            for (what, january, february) in [
-                ("shares", &january.shares, &february.shares),
-                ("equivalent", &january.equivalent, &february.equivalent),
-            ] {
-                let january = january.as_ref().unwrap()[window].unwrap();
-                let february = february.as_ref().unwrap()[window];
-                assert!(close(february, 2.0 * january), "{what} on {window}");
-            }
+            let share = |p: &Priced| p.shares.as_ref().unwrap()[window];
+            assert!(
+                close(share(&february), 2.0 * share(&january).unwrap()),
+                "shares on {window}"
+            );
         }
+        assert!(close(
+            february.equivalent,
+            2.0 * january.equivalent.unwrap()
+        ));
     }
 
     // `at` in January keeps Opus 5.5's weight of 2, and `band_at` inside the band divides the 5-hour window's units
     // by its 0.5, so the share reads 0.04 where the revision at `band_at` would read 0.08 and the band at `at` 0.02.
-    // The equivalent reads the same units over the anchor Pro's 5 and 50.
+    // The test tables leave the week unbanded, so the Pro-week figure reads 2 / 50 either way. A first entry that bands
+    // the week at 0.5 reads the figure at twice its out-of-band 0.04 under `band_at` inside the band.
     #[test]
     fn band_at_inside_the_band_raises_the_five_hour_share_while_at_picks_the_revision() {
+        let banded_week = PlanTables {
+            revisions: CostRevisions::from_yaml(&first_entry_costs_text().replacen(
+                "capacity_factor: {five_hour: 0.5, seven_day: 1}",
+                "capacity_factor: {five_hour: 0.5, seven_day: 0.5}",
+                1,
+            ))
+            .expect("the edited model loads"),
+            path: None,
+            source: "test".to_string(),
+        };
+        let out_of_band = price_row(&api_prices(), &banded_week, &plan_row(), input(1));
+        assert!(close(out_of_band.equivalent, 0.04), "{out_of_band:?}");
         for band_at in [JANUARY_IN_BAND, FEBRUARY_IN_BAND] {
-            let priced = price(
-                &RowKey {
-                    band_at: Some(band_at),
-                    ..plan_row()
-                },
-                input(1),
+            let key = RowKey {
+                band_at: Some(band_at),
+                ..plan_row()
+            };
+            let priced = price(&key, input(1));
+            let shares = priced.shares.as_ref().unwrap();
+            assert!(close(shares[FIVE_HOUR], 0.04), "{band_at}: {shares:?}");
+            assert!(close(shares[SEVEN_DAY], 0.002), "{band_at}: {shares:?}");
+            assert!(close(priced.equivalent, 0.04), "{band_at}: {priced:?}");
+            let banded = price_row(&api_prices(), &banded_week, &key, input(1));
+            assert!(
+                close(banded.equivalent, 2.0 * 0.04),
+                "{band_at}: {banded:?}"
             );
-            for (figures, five_hour, seven_day) in [
-                (&priced.shares, 0.04, 0.002),
-                (&priced.equivalent, 0.8, 0.04),
-            ] {
-                let figures = figures.as_ref().unwrap();
-                assert!(
-                    close(figures[FIVE_HOUR], five_hour),
-                    "{band_at}: {figures:?}"
-                );
-                assert!(
-                    close(figures[SEVEN_DAY], seven_day),
-                    "{band_at}: {figures:?}"
-                );
-            }
         }
     }
 
@@ -699,15 +667,86 @@ mod tests {
                 )
             };
             assert!(doubled(&february.shares, &crossing.shares), "{window}");
-            assert!(
-                doubled(&february.equivalent, &crossing.equivalent),
-                "{window}"
-            );
         }
+        assert!(close(
+            february.equivalent,
+            2.0 * crossing.equivalent.unwrap()
+        ));
         assert!(!crossing
             .shares
             .as_ref()
             .unwrap()
             .contains_key(SEVEN_DAY_FABLE));
+    }
+
+    // Under the anchor tier the Pro-week figure is the row's 7-day share, a billed row carries none and a classifier
+    // call reads zero.
+    #[test]
+    fn the_equivalent_is_one_pro_week_figure() {
+        let pro = RowKey {
+            tier: Some(PRO),
+            ..plan_row()
+        };
+        let priced = price(&pro, input(1));
+        assert!(
+            close(
+                priced.equivalent,
+                priced.shares.as_ref().expect("Pro is sized")[SEVEN_DAY].unwrap()
+            ),
+            "{priced:?}"
+        );
+        let billed = price(
+            &RowKey {
+                funding: Funding::ApiKey,
+                ..pro
+            },
+            input(1),
+        );
+        assert_eq!(billed.equivalent, None, "{billed:?}");
+        let classifier = price(
+            &RowKey {
+                classifier: true,
+                ..pro
+            },
+            input(1),
+        );
+        assert_eq!(classifier.equivalent, Some(0.0), "{classifier:?}");
+    }
+
+    // The test tables size the Pro week at 50 in both revisions, so the case edits the second entry's Pro row to 200.
+    // One Opus 5.5 input token in January is 2 units, the January weight, over the February anchor row of 200: 0.01,
+    // where a divisor read at `at` would read 2 / 50 and units read at `now` 4 / 200. The shares keep January's rows.
+    #[test]
+    fn a_row_of_the_first_revision_read_at_the_second_divides_by_the_second_revisions_anchor() {
+        let (first, second) = SUBSCRIPTION_COSTS
+            .split_once("  - effective: 2026-02-01\n")
+            .expect("the cost fixture carries a second entry");
+        let resized = second.replacen(
+            "      default_claude_ai:      {five_hour: 5, seven_day: 50}\n",
+            "      default_claude_ai:      {five_hour: 5, seven_day: 200}\n",
+            1,
+        );
+        assert_ne!(
+            resized, second,
+            "the edit lands on the second entry's Pro row"
+        );
+        let costs = PlanTables {
+            revisions: CostRevisions::from_yaml(&format!(
+                "{first}  - effective: 2026-02-01\n{resized}"
+            ))
+            .expect("a revision that resizes the anchor row loads"),
+            path: None,
+            source: "test".to_string(),
+        };
+        let key = RowKey {
+            tier: Some(PRO),
+            at: JANUARY_2026,
+            now: FEBRUARY_2026,
+            ..plan_row()
+        };
+        let priced = price_row(&api_prices(), &costs, &key, input(1));
+        assert!(close(priced.equivalent, 2.0 / 200.0), "{priced:?}");
+        let shares = priced.shares.as_ref().expect("Pro is sized");
+        assert!(close(shares[SEVEN_DAY], 2.0 / 50.0), "{shares:?}");
     }
 }

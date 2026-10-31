@@ -768,8 +768,8 @@ fn reconciled(
     db.write(|c| {
         c.execute(
             "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, \
-             last_reading_at, observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?3)",
+             last_reading_at, observed_rise, predicted_share, ratio, requests, computed_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?3)",
             rusqlite::params![
                 account,
                 window,

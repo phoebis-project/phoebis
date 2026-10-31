@@ -262,9 +262,8 @@ fn the_summary_names_the_routing_keys() {
                 &cost.effective,
                 costs.pending(now).map(|next| next.effective.as_str()),
                 format!(
-                    "{} weighted models, {} more by model tier, {} account tiers{regimes}",
+                    "{} weighted models, {} account tiers{regimes}",
                     cost.weighted_model_count(),
-                    cost.by_tier_count(),
                     cost.sized_tier_count()
                 )
             )
@@ -364,10 +363,9 @@ revisions:
 /// null, and weighs Sonnet 5 and Haiku 4.5 on the week through overrides. Its four account tiers are Pro and Max 20x
 /// sized on both windows, Team on the 5-hour window alone and Enterprise on neither. Each file holds one revision.
 /// Counted by hand: two models on the price line (a row priced by prompt length is one model), and on the cost line
-/// four weighted models (Opus 5 left out, Sonnet 5 in through its override, Haiku 4.5 once), one more by model tier
-/// (Opus 5, the one `model_tier` entry neither a weight nor an override prices, in the model tier Opus 5.5 weighs),
-/// three account tiers (Enterprise left out) and no regime, since the file carries no `regimes` map. The file is dated
-/// before the built-in model's newest revision, which the line names after the counts.
+/// four weighted models (Opus 5 left out, Sonnet 5 in through its override, Haiku 4.5 once), three account tiers
+/// (Enterprise left out) and no regime, since the file carries no `regimes` map. The file is dated before the built-in
+/// model's newest revision, which the line names after the counts.
 #[test]
 fn files_at_both_paths_count_each_model_a_weight_or_an_override_prices_once_and_each_tier_sized_on_a_window(
 ) {
@@ -394,8 +392,8 @@ fn files_at_both_paths_count_each_model_a_weight_or_an_override_prices_once_and_
         prices.display()
     );
     let subscription_costs = format!(
-        "subscription costs: {} (file, 1 revision, in force 2026-03-01, 4 weighted models, 1 more by model tier, \
-         3 account tiers, no regime, the built-in model has a newer revision {})",
+        "subscription costs: {} (file, 1 revision, in force 2026-03-01, 4 weighted models, 3 account tiers, no \
+         regime, the built-in model has a newer revision {})",
         costs.display(),
         phoebis_ledger::CostRevisions::shipped().latest().effective
     );
@@ -443,8 +441,8 @@ fn files_whose_one_entry_is_dated_after_now_name_it_in_force_and_no_next_date() 
         prices.display()
     );
     let subscription_costs = format!(
-        "subscription costs: {} (file, 1 revision, in force 2099-03-01, 4 weighted models, 1 more by model tier, \
-         3 account tiers, no regime)",
+        "subscription costs: {} (file, 1 revision, in force 2099-03-01, 4 weighted models, 3 account tiers, no \
+         regime)",
         costs.display()
     );
     assert_eq!(
@@ -491,8 +489,8 @@ fn a_cost_model_file_behind_the_built_in_revision_names_the_newer_one() {
     assert_eq!(
         behind,
         format!(
-            "subscription costs: {path} (file, 1 revision, in force 2026-03-01, 4 weighted models, 1 more by model \
-             tier, 3 account tiers, no regime, the built-in model has a newer revision {newest})"
+            "subscription costs: {path} (file, 1 revision, in force 2026-03-01, 4 weighted models, 3 account tiers, \
+             no regime, the built-in model has a newer revision {newest})"
         ),
         "a file whose newest revision predates the built-in one hides it"
     );
@@ -502,8 +500,8 @@ fn a_cost_model_file_behind_the_built_in_revision_names_the_newer_one() {
     assert_eq!(
         ahead,
         format!(
-            "subscription costs: {path} (file, 1 revision, in force 2099-03-01, 4 weighted models, 1 more by model \
-             tier, 3 account tiers, no regime)"
+            "subscription costs: {path} (file, 1 revision, in force 2099-03-01, 4 weighted models, 3 account tiers, \
+             no regime)"
         ),
         "a file newer than every built-in revision hides none"
     );
@@ -754,8 +752,7 @@ fn a_cost_model_with_two_entries_dated_the_same_fails_check_config_naming_the_da
 /// An entry dated after now is held rather than refused, so a change the provider announces can be recorded ahead.
 /// The line names the entry in force and the held one as `next`, the date a restart takes it at. The file is the cost
 /// fixture's two entries with a third dated 2099 appended. Counted by hand on the second entry: four weighted models
-/// (Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 4.5), two more by model tier (Opus 5 and Opus 4.8, in the model tier
-/// Opus 5.5 weighs, while Mystery 2's model tier weighs nothing), four account tiers and the one regime, `desk`.
+/// (Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 4.5), four account tiers and the one regime, `desk`.
 #[test]
 fn a_cost_model_entry_dated_after_now_is_held_and_named_as_next_beside_the_entry_in_force() {
     let dir = tempfile::tempdir().unwrap();
@@ -779,7 +776,7 @@ fn a_cost_model_entry_dated_after_now_is_held_and_named_as_next_beside_the_entry
     let stdout = String::from_utf8_lossy(&out.stdout);
     let subscription_costs = format!(
         "subscription costs: {} (file, 3 revisions, in force 2026-02-01, next 2099-01-01, 4 weighted models, \
-         2 more by model tier, 4 account tiers, 1 regime: desk)",
+         4 account tiers, 1 regime: desk)",
         costs.display()
     );
     assert_eq!(

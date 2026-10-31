@@ -1092,12 +1092,9 @@ pub(crate) struct Pool {
     /// The dollars of the day's billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part
     /// of `cost_24h`.
     pub billed_24h: f64,
-    /// The day's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
-    #[schema(value_type = crate::openapi::SharedEquivalentView)]
-    pub equivalent_24h: phoebis_ledger::SharedEquivalent,
-    /// Whether a plan-funded row of the day priced at its model tier's latest weight, for a model the cost model does
-    /// not weight.
-    pub estimated_24h: bool,
+    /// The day's plan-funded rows as the Pro-week figure, whatever tier served them, null where a row priced nothing
+    /// and 0 with no plan-funded row.
+    pub equivalent_24h: Option<f64>,
     /// The pins under the pool's keys.
     pub active_pins: usize,
     /// 25 hourly buckets from 24 hours before the current hour's start, the current partial hour last, whose
@@ -1392,7 +1389,15 @@ pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, Stor
         .ledger
         .db()
         .read(move |c| {
-            phoebis_ledger::request_totals(c, "pool_id", hour - 24 * 3_600, to, &prices, &tables)
+            phoebis_ledger::request_totals(
+                c,
+                "pool_id",
+                hour - 24 * 3_600,
+                to,
+                &prices,
+                &tables,
+                now,
+            )
         })
         .await
         .unwrap_or_default();
@@ -1463,6 +1468,7 @@ pub(crate) async fn pool_json_from(
         3_600,
         &state.pricing.revisions(),
         &state.tables,
+        now,
     )
     .await
     .unwrap_or_default();
@@ -1618,11 +1624,7 @@ pub(crate) async fn pool_json_from(
         requests_24h: day.get(&row.id).map_or(0, |t| t.requests),
         cost_24h: day.get(&row.id).map_or(0.0, |t| t.cost_usd),
         billed_24h: day.get(&row.id).map_or(0.0, |t| t.billed_usd),
-        equivalent_24h: day
-            .get(&row.id)
-            .map(|t| t.equivalent.clone())
-            .unwrap_or_default(),
-        estimated_24h: day.get(&row.id).is_some_and(|t| t.estimated),
+        equivalent_24h: day.get(&row.id).map_or(Some(0.0), |t| t.equivalent),
         active_pins,
         traffic_24h: traffic,
         guardrails: context
@@ -1680,6 +1682,7 @@ pub(crate) async fn traffic(
         bucket,
         &state.pricing.revisions(),
         &state.tables,
+        now,
     )
     .await
     {
@@ -1700,7 +1703,7 @@ mod tests {
     use crate::openapi::round_trip::{round_trips, round_trips_each};
     use crate::openapi::{
         CacheTtlPolicyView, KeepalivePolicyView, ModelRuleView, ResolvedCeilingsView,
-        SharedEquivalentView, TrafficBucketView,
+        TrafficBucketView,
     };
     use std::collections::BTreeMap;
 
@@ -1752,8 +1755,7 @@ mod tests {
         requests_24h: u64,
         cost_24h: f64,
         billed_24h: f64,
-        equivalent_24h: SharedEquivalentView,
-        estimated_24h: bool,
+        equivalent_24h: Option<f64>,
         active_pins: usize,
         traffic_24h: Vec<TrafficBucketView>,
         guardrails: Vec<crate::guardrails::GuardrailRef>,

@@ -1034,7 +1034,7 @@ mod tests {
     async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
-        assert_eq!(db.read_blocking(read_version).unwrap(), 1);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 2);
         let mode: String = db
             .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
@@ -1125,7 +1125,7 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
-        assert_eq!(version, 1, "and answered what the connection holds");
+        assert_eq!(version, 2, "and answered what the connection holds");
     }
 
     #[tokio::test]
@@ -1139,7 +1139,7 @@ mod tests {
         assert!(matches!(panicked, Err(LedgerError::ReadCanceled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
-            1,
+            2,
             "the poisoned guard recovered rather than turning every later read into ReadCanceled too"
         );
     }
@@ -1180,7 +1180,7 @@ mod tests {
                 refused,
                 LedgerError::SchemaTooNew {
                     found: 99,
-                    supported: 1,
+                    supported: 2,
                     ..
                 }
             ),
@@ -1338,6 +1338,58 @@ mod tests {
             )
             .unwrap();
         assert_eq!(probes, 1, "the step that landed keeps its table");
+    }
+
+    fn estimated_columns(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('window_reconciliations') WHERE name = 'estimated'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The baseline still creates the column, since every open runs it, so the build's own chain must drop it on a
+    /// fresh file as on a stamped one.
+    #[test]
+    fn a_fresh_ledger_opens_without_the_estimated_column() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        prepare(&mut conn, Path::new(":memory:"), schema::MIGRATIONS).unwrap();
+        assert_eq!(
+            (estimated_columns(&conn), read_version(&conn).unwrap()),
+            (0, 2)
+        );
+    }
+
+    #[test]
+    fn a_ledger_stamped_at_version_one_loses_the_column_and_keeps_its_rows() {
+        let mut conn = prepared_in_memory();
+        let window_end = 1_768_485_600_000_i64;
+        conn.execute(
+            "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, last_reading_at, \
+             observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
+             VALUES ('a', 'five_hour', ?1, ?2, ?3, 0.2, 0.25, 0.8, 7, 2, ?1)",
+            params![window_end, window_end - 18_000_000, window_end - 60_000],
+        )
+        .unwrap();
+        migrate(&mut conn, 1, schema::MIGRATIONS).unwrap();
+        let rows = crate::reconcile::read_reconciliations(&conn, &[], window_end).unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| (
+                    row.account_id.as_str(),
+                    row.window_end,
+                    row.ratio,
+                    row.requests
+                ))
+                .collect::<Vec<_>>(),
+            [("a", window_end, 0.8, 7)],
+            "the row keeps its other columns"
+        );
+        assert_eq!(
+            (estimated_columns(&conn), read_version(&conn).unwrap()),
+            (0, 2)
+        );
     }
 
     #[tokio::test]

@@ -2184,14 +2184,15 @@ mod tests {
         "window_reconciliations",
     ];
 
-    /// `SCHEMA` creates every table in one batch, so a file that did not exist opens at version 1 with all of them.
+    /// `SCHEMA` creates every table in one batch and the chain runs above it, so a file that did not exist opens at the
+    /// chain's head, version 2, with all of them.
     #[test]
-    fn a_fresh_ledger_is_at_version_one_with_the_baseline_tables() {
+    fn a_fresh_ledger_is_at_the_chains_head_with_the_baseline_tables() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ledger.sqlite");
         assert!(!path.exists());
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 1);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 2);
         assert_eq!(db.read_blocking(|c| Ok(tables(c))).unwrap(), FINAL_TABLES);
     }
 
@@ -3177,6 +3178,7 @@ mod tests {
             classifier: false,
             at: row.hour * 1_000,
             band_at: None,
+            now: row.hour * 1_000,
         };
         let costs = crate::test_tables::subscription_costs();
         let usd = crate::price::price_row(&prices(), &costs, &key, row.usage())
@@ -3258,6 +3260,7 @@ mod tests {
                     classifier: false,
                     at: d.hour * 1_000,
                     band_at: None,
+                    now: d.hour * 1_000,
                 };
                 crate::price::price_row(&prices(), &costs, &key, d.usage())
                     .usd

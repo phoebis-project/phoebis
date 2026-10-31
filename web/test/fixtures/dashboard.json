@@ -6,15 +6,7 @@
     "tokens_cached_24h": 6500,
     "cost_24h": 0.04265,
     "billed_24h": 0.014249999999999999,
-    "equivalent_24h": {
-      "five_hour": 0.00149225,
-      "seven_day": 0.00019896666666666666,
-      "unpriced": {
-        "five_hour": false,
-        "seven_day": false
-      }
-    },
-    "estimated_24h": true,
+    "equivalent_24h": null,
     "error_rate_24h": 0.16666666666666666,
     "top_error_code": "upstream_error",
     "refused_24h": 2,
@@ -24,14 +16,7 @@
         "at": 1791637200000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -41,14 +26,7 @@
         "at": 1791640800000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -58,14 +36,7 @@
         "at": 1791644400000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -75,14 +46,7 @@
         "at": 1791648000000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -92,14 +56,7 @@
         "at": 1791651600000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -109,14 +66,7 @@
         "at": 1791655200000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -126,14 +76,7 @@
         "at": 1791658800000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -143,14 +86,7 @@
         "at": 1791662400000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -160,14 +96,7 @@
         "at": 1791666000000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -177,14 +106,7 @@
         "at": 1791669600000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -194,14 +116,7 @@
         "at": 1791673200000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -211,14 +126,7 @@
         "at": 1791676800000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -228,14 +136,7 @@
         "at": 1791680400000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -245,14 +146,7 @@
         "at": 1791684000000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -262,14 +156,7 @@
         "at": 1791687600000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -279,14 +166,7 @@
         "at": 1791691200000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -296,14 +176,7 @@
         "at": 1791694800000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -313,14 +186,7 @@
         "at": 1791698400000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -330,14 +196,7 @@
         "at": 1791702000000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -347,14 +206,7 @@
         "at": 1791705600000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -364,14 +216,7 @@
         "at": 1791709200000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -381,14 +226,7 @@
         "at": 1791712800000,
         "billed": 0.0,
         "cost": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0,
         "errors": 0,
         "refused": 0,
         "requests": 0,
@@ -398,14 +236,7 @@
         "at": 1791716400000,
         "billed": 0.01065,
         "cost": 0.03195,
-        "equivalent": {
-          "five_hour": 0.00088125,
-          "seven_day": 0.0001175,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": 0.0001175,
         "errors": 1,
         "refused": 2,
         "requests": 8,
@@ -415,14 +246,7 @@
         "at": 1791720000000,
         "billed": 0.0036,
         "cost": 0.010700000000000001,
-        "equivalent": {
-          "five_hour": 0.000611,
-          "seven_day": 0.00008146666666666666,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
+        "equivalent": null,
         "errors": 1,
         "refused": 0,
         "requests": 4,

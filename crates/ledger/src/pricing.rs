@@ -413,11 +413,9 @@ impl PriceTable {
                 ))
             })
             .collect();
-        // The dearest-cell fallback already covers an unlisted id, so dollars carry no model tier rows.
         phoebis_routing::RateTable {
             rows,
             long_context,
-            tiers: std::collections::HashMap::new(),
             fallback,
         }
     }
@@ -437,7 +435,6 @@ impl PriceTable {
         phoebis_routing::RateTable {
             rows: self.per_token_rows(|row| row.fast.as_ref().unwrap_or(&row.standard)),
             long_context,
-            tiers: dollars.tiers,
             fallback: dollars.fallback,
         }
     }

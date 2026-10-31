@@ -22,7 +22,7 @@ pub(crate) struct SessionList {
     pub sessions: Vec<Value>,
 }
 
-/// One session row. On a row with no pin the keys from `burn` to `shed_reason` read null, `estimated` false.
+/// One session row. On a row with no pin the keys from `burn` to `shed_reason` read null.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Session {
@@ -42,8 +42,8 @@ pub(crate) struct Session {
     pub pinned: bool,
     /// The pin's typed burn per hour, decayed to the read with its pool's `burn_average_seconds` as a shedding round
     /// decays it, priced in `burn_unit`: the share of the account's own 5-hour window on plan quota, dollars
-    /// otherwise, null when the account's tier is unknown, when neither the model nor its model tier has a weight on
-    /// the 5-hour window, or when the account tier has no capacity on it. Null as well on a pinned row whose account
+    /// otherwise, null when the account's tier is unknown, when the model has no weight on the 5-hour window, a model
+    /// without a weight, or when the account tier has no capacity on it. Null as well on a pinned row whose account
     /// has left the registry.
     pub burn: Option<f64>,
     /// `window_share` or `usd`, also null when the pin's account has left the registry, with no kind left to pick
@@ -51,12 +51,9 @@ pub(crate) struct Session {
     #[schema(example = "window_share")]
     pub burn_unit: Option<String>,
     /// The burn per hour on plan quota as the share of a Max 20x account's 5-hour window, whatever account tier the
-    /// pin sits on, null where `burn_unit` is not `window_share` and where neither the model nor its model tier has a
-    /// weight on the 5-hour window.
+    /// pin sits on, null where `burn_unit` is not `window_share` and where the model has no weight on the 5-hour
+    /// window.
     pub burn_equivalent: Option<f64>,
-    /// Whether `burn_equivalent` priced at the weight of the model tier's latest weighted model, for a model the cost
-    /// model does not weight.
-    pub estimated: bool,
     /// The instant the served burn is decayed to, the read's own, so a reader that decays it again from here adds
     /// nothing at the read. Null for a pin never renewed with usage, whose burn has nothing to decay.
     pub burn_at: Option<i64>,
@@ -251,7 +248,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     // Each account's tier is read once per request.
     let revisions = state.pricing.revisions();
     let prices = revisions.in_force(now);
-    let costs = state.tables.revisions.in_force(now);
     let rates = BurnRates {
         dollars: prices.rate_table(),
         five_hour: state.tables.regime_rates(FIVE_HOUR, now),
@@ -328,11 +324,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             .then(|| rates.price_pin(BurnUnit::WindowShare, p))
             .flatten()
             .map(|b| b * 3_600.0);
-        // The mark is the equivalent's alone: a dollar burn reads the price table's own cells.
-        let estimated = equivalent.is_some()
-            && costs
-                .weight_or_fallback(&p.model, FIVE_HOUR)
-                .is_some_and(|(_, fallback)| fallback);
         let burn = match unit {
             None => None,
             Some(BurnUnit::Usd) => rates.price_pin(BurnUnit::Usd, p).map(|b| b * 3_600.0),
@@ -344,8 +335,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                     tiers.insert(p.account_id.clone(), tier);
                 }
                 let tier = tiers.get(&p.account_id).and_then(Option::as_deref);
-                // An account tier the cost model does not size prices nothing, as does a model with no weight of its
-                // own or of its model tier, so the figure reads null rather than a guess.
+                // An account tier the cost model does not size prices nothing, as does a model without a weight, so
+                // the figure reads null rather than a guess.
                 tier.and_then(|t| {
                     state
                         .tables
@@ -360,7 +351,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             json!({
                 "key_id": p.key_id, "key_generation": generation, "session_id": p.session_id, "agent_id": p.agent_id, "model": p.model, "account_id": p.account_id, "epoch": p.epoch,
                 "created_at": created_at, "last_used_at": p.last_used_at, "last_request_at": null, "requests": null, "pinned": true,
-                "burn": burn, "burn_unit": unit, "burn_equivalent": equivalent, "estimated": estimated, "burn_at": p.burn_at, "runway_ms": standing.runway_ms, "runway_bounded": standing.runway_bounded, "cache_ttl_ms": p.cache_ttl_ms,
+                "burn": burn, "burn_unit": unit, "burn_equivalent": equivalent, "burn_at": p.burn_at, "runway_ms": standing.runway_ms, "runway_bounded": standing.runway_bounded, "cache_ttl_ms": p.cache_ttl_ms,
                 "speed": standing.speed,
                 "cycle_ms": standing.cycle_ms,
                 "last_input_tokens": p.last_input_tokens, "effort": standing.effort, "last_refresh_at": p.last_refresh_at, "shed_from": p.shed_from, "shed_reason": p.shed_reason,
@@ -377,7 +368,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 json!({
                     "key_id": a.key_id, "key_generation": a.key_generation, "session_id": a.session_id, "agent_id": null, "model": a.model, "account_id": null, "epoch": null,
                     "created_at": created_at, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
-                    "burn": null, "burn_unit": null, "burn_equivalent": null, "estimated": false, "burn_at": null, "runway_ms": null, "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
+                    "burn": null, "burn_unit": null, "burn_equivalent": null, "burn_at": null, "runway_ms": null, "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
                     "speed": null,
                     "cycle_ms": null,
                     "last_refresh_at": null, "shed_from": null, "shed_reason": null,
@@ -407,7 +398,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             json!({
                 "key_id": key.0, "key_generation": key.1, "session_id": key.2, "agent_id": null, "model": null, "account_id": null, "epoch": null,
                 "created_at": created.get(key), "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
-                "burn": null, "burn_unit": null, "burn_equivalent": null, "estimated": false, "burn_at": null, "runway_ms": null, "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
+                "burn": null, "burn_unit": null, "burn_equivalent": null, "burn_at": null, "runway_ms": null, "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
                 "speed": null,
                 "cycle_ms": null,
                 "last_refresh_at": null, "shed_from": null, "shed_reason": null,

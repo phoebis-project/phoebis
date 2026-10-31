@@ -13,15 +13,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791637200000,
@@ -30,15 +22,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791640800000,
@@ -47,15 +31,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791644400000,
@@ -64,15 +40,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791648000000,
@@ -81,15 +49,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791651600000,
@@ -98,15 +58,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791655200000,
@@ -115,15 +67,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791658800000,
@@ -132,15 +76,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791662400000,
@@ -149,15 +85,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791666000000,
@@ -166,15 +94,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791669600000,
@@ -183,15 +103,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791673200000,
@@ -200,15 +112,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791676800000,
@@ -217,15 +121,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791680400000,
@@ -234,15 +130,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791684000000,
@@ -251,15 +139,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791687600000,
@@ -268,15 +148,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791691200000,
@@ -285,15 +157,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791694800000,
@@ -302,15 +166,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791698400000,
@@ -319,15 +175,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791702000000,
@@ -336,15 +184,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791705600000,
@@ -353,15 +193,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791709200000,
@@ -370,15 +202,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791712800000,
@@ -387,15 +211,7 @@
         "tokens": 0,
         "cost_usd": 0.0,
         "billed_usd": 0.0,
-        "equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0
       },
       {
         "at": 1791716400000,
@@ -404,15 +220,7 @@
         "tokens": 16200,
         "cost_usd": 0.03195,
         "billed_usd": 0.01065,
-        "equivalent": {
-          "five_hour": 0.00088125,
-          "seven_day": 0.0001175,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": false
+        "equivalent": 0.0001175
       },
       {
         "at": 1791720000000,
@@ -421,15 +229,7 @@
         "tokens": 7200,
         "cost_usd": 0.010700000000000001,
         "billed_usd": 0.0036,
-        "equivalent": {
-          "five_hour": 0.000611,
-          "seven_day": 0.00008146666666666666,
-          "unpriced": {
-            "five_hour": false,
-            "seven_day": false
-          }
-        },
-        "estimated": true
+        "equivalent": null
       }
     ]
   }

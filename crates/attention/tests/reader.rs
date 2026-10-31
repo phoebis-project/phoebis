@@ -1664,8 +1664,8 @@ fn reconciled(rig: &Rig, window_end: i64, rise: f64, predicted: f64, ratio: f64)
         rig,
         &format!(
             "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, \
-             last_reading_at, observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
-             VALUES ('business', 'five_hour', {window_end}, {}, {}, {rise}, {predicted}, {ratio}, 4, 0, {NOW});",
+             last_reading_at, observed_rise, predicted_share, ratio, requests, computed_at) \
+             VALUES ('business', 'five_hour', {window_end}, {}, {}, {rise}, {predicted}, {ratio}, 4, {NOW});",
             window_end - 3 * HOUR,
             window_end - HOUR,
         ),

@@ -11,7 +11,6 @@ use phoebis_ledger::{
     LedgerDb, LiveKeys, PlanTables, PriceRevisions, Record, RequestRecord, RollupSelect, Speed,
     UNATTRIBUTED,
 };
-use phoebis_routing::FIVE_HOUR;
 
 /// The dollars of `counts` on Sonnet 5 at the shipped revision in force at `at`, the list `insert_request` folds with
 /// and the readers here price at.
@@ -271,6 +270,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         None,
         &prices,
         &costs,
+        NOW,
     );
     let desktop = groups.iter().find(|g| g.key == "desktop").unwrap();
     assert_eq!(
@@ -296,6 +296,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         None,
         &prices,
         &costs,
+        NOW,
     );
     let desktop = without.iter().find(|g| g.key == "desktop").unwrap();
     assert_eq!(
@@ -437,10 +438,10 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
 }
 
 /// A kept-warm credit keys the client of the request it credits, so the analytics read prices its saving under that
-/// client's regime as the request's own row does. The test cost model doubles the anchor Pro tier's 5-hour capacity
-/// under `desk`, and `JANUARY_2026` falls at 04:00 in Los Angeles, before the base regime's peak: ten tokens read on
-/// Opus 5.5 (weight 2) save ten writes at the five-minute multiplier 2 less ten reads at 0.1, 38 units, 3.8 of the
-/// desk's 10 and 7.6 of the base's 5.
+/// client's regime as the request's own row does. The test cost model sizes the anchor Pro tier's week at 62.5 under
+/// `desk` and 50 at the base, and `JANUARY_2026` falls at 04:00 in Los Angeles, before the base regime's peak: ten
+/// tokens read on Opus 5.5 (weight 2) save ten writes at the five-minute multiplier 2 less ten reads at 0.1, 38 units,
+/// 0.608 of the desk's Pro week and 0.76 of the base's.
 #[test]
 fn a_kept_warm_credit_folds_under_its_requests_client_and_prices_its_saving_under_that_clients_regime(
 ) {
@@ -476,14 +477,12 @@ fn a_kept_warm_credit_folds_under_its_requests_client_and_prices_its_saving_unde
         None,
         &prices,
         &costs,
+        at,
     )
     .into_iter()
-    .map(|group| {
-        let five_hour = group.saving_equivalent.get(FIVE_HOUR).copied();
-        (group.key, five_hour.unwrap_or(f64::NAN))
-    })
+    .map(|group| (group.key, group.saving_equivalent.unwrap_or(f64::NAN)))
     .collect();
-    let want = [("claude-code/desk", 3.8), ("claude-code/sdk-cli", 7.6)];
+    let want = [("claude-code/desk", 0.608), ("claude-code/sdk-cli", 0.76)];
     assert!(
         savings.len() == want.len()
             && savings

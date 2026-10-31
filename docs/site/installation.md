@@ -99,7 +99,7 @@ With both price files left uninstalled, `check-config` names the shipped revisio
 
 ```text
 api prices: built in (2 revisions, in force 2026-10-08, 11 models), since /etc/phoebis/api_prices.yaml was not found
-subscription costs: built in (1 revision, in force 2026-10-05, 10 weighted models, 4 more by model tier, 3 account tiers, 1 regime: interactive), since /etc/phoebis/subscription_costs.yaml was not found
+subscription costs: built in (1 revision, in force 2026-10-05, 10 weighted models, 3 account tiers, 1 regime: interactive), since /etc/phoebis/subscription_costs.yaml was not found
 ```
 
 While a file holds an entry dated after the one in force, its line adds `next {date}` after the date in force, the date
@@ -247,11 +247,10 @@ against a production file while the router is up. It prints, in order:
    names a file that is missing, or `api prices: built in ({n} revisions, in force {date}, {n} models)` when the key is
    set to `null`, with `revision` for a list of one entry and `, next {date}` after the date in force while an entry is
    held
-10. `subscription costs: {path} (file, {n} revisions, in force {date}, {n} weighted models, {n} more by model tier, {n}
-    account tiers, {n} regimes: {names})`, in the same three shapes, from `stats.subscription_costs_path`, where `more
-    by model tier` counts the models `model_tier` names without a weight whose model tier has a weighed model, the
-    regime clause reads `, no regime` for a model without the map and `, 1 regime: {name}` for one, and a file whose
-    newest entry is dated before the built-in model's adds `, the built-in model has a newer revision {date}`
+10. `subscription costs: {path} (file, {n} revisions, in force {date}, {n} weighted models, {n} account tiers, {n}
+    regimes: {names})`, in the same three shapes, from `stats.subscription_costs_path`, where the regime clause reads
+    `, no regime` for a model without the map and `, 1 regime: {name}` for one, and a file whose newest entry is dated
+    before the built-in model's adds `, the built-in model has a newer revision {date}`
 11. `retention {n days|forever}, rollups {n days|forever}`
 12. `keepalive: {n} sessions, {n} agents, {n} MiB retained`
 13. the registry line, `registry at {config.storage.path} does not exist yet, and the first start creates it` when the

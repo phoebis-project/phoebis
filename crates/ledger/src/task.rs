@@ -1910,12 +1910,12 @@ async fn land_acknowledging(
     }
 }
 
-/// Records a landed request whose plan-funded attempts with usage priced through the model tier's fallback at its
-/// arrival: the entry enters, or counts the request once however many of its attempts answered. A landing that finds
-/// the model weighted clears the entry and keeps its key, so its gauge series reads 0. A model the fallback cannot
-/// price (no model tier, or none weighted in it) is never named, since nothing stands in for it. The entry follows
-/// landing order, by design: a request received before the revision that weighted its model and landed after the clear
-/// raises the entry again with its own earlier receipt as `since`.
+/// Records a landed request whose plan-funded attempts with usage ran at its arrival on a model without a weight whose
+/// model tier has a weighted model: the entry enters, or counts the request once however many of its attempts
+/// answered. A landing that finds the model weighted clears the entry and keeps its key, so its gauge series reads 0.
+/// A model of no model tier, or of one with no weighted model, is never named, since no model of its tier stands beside
+/// it. The entry follows landing order, by design: a request received before the revision that weighted its model and
+/// landed after the clear raises the entry again with its own earlier receipt as `since`.
 fn note_unweighted(
     tables: &PlanTables,
     unweighted: &Unweighted,
@@ -1942,14 +1942,11 @@ fn note_unweighted(
     let model = phoebis_routing::listing::undated(canonical).unwrap_or(canonical);
     let costs = tables.revisions.in_force(request.received_at);
     let mut served = unweighted.lock().expect(UNWEIGHTED_POISONED);
-    match costs.weight_or_fallback(canonical, FIVE_HOUR) {
-        Some((_, true)) => {
-            let Some((tier, weight_of)) = costs
-                .tier_of(canonical)
-                .and_then(|tier| Some((tier, costs.latest_weighted(tier)?)))
-            else {
-                return;
-            };
+    let weighted_of_tier = costs
+        .tier_of(canonical)
+        .and_then(|tier| Some((tier, costs.latest_weighted(tier)?)));
+    match (costs.weight(canonical, FIVE_HOUR), weighted_of_tier) {
+        (None, Some((tier, weight_of))) => {
             let entry = served
                 .entry(model.to_string())
                 .or_insert_with(|| UnweightedModel {
@@ -1966,13 +1963,13 @@ fn note_unweighted(
             entry.since.get_or_insert(request.received_at);
             entry.requests += 1;
         }
-        Some((_, false)) => {
+        (Some(_), _) => {
             if let Some(entry) = served.get_mut(model) {
                 entry.since = None;
                 entry.requests = 0;
             }
         }
-        None => {}
+        (None, None) => {}
     }
 }
 

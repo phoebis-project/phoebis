@@ -73,7 +73,6 @@
         "cost_shares": null,
         "cost_equivalent": null,
         "share_reason": null,
-        "estimated": false,
         "tier": null,
         "phases": {
           "received_at": 1791720970000,
@@ -209,12 +208,8 @@
           "five_hour": 8.8125e-6,
           "seven_day": 2.35e-6
         },
-        "cost_equivalent": {
-          "five_hour": 0.00017625,
-          "seven_day": 0.0000235
-        },
+        "cost_equivalent": 0.0000235,
         "share_reason": null,
-        "estimated": false,
         "tier": "default_claude_max_20x",
         "phases": {
           "received_at": 1791720940000,
@@ -344,12 +339,8 @@
           "five_hour": 8.8125e-6,
           "seven_day": 2.35e-6
         },
-        "cost_equivalent": {
-          "five_hour": 0.00017625,
-          "seven_day": 0.0000235
-        },
+        "cost_equivalent": 0.0000235,
         "share_reason": null,
-        "estimated": false,
         "tier": "default_claude_max_20x",
         "phases": {
           "received_at": 1791720880000,
@@ -479,12 +470,8 @@
           "five_hour": 8.8125e-6,
           "seven_day": 2.35e-6
         },
-        "cost_equivalent": {
-          "five_hour": 0.00017625,
-          "seven_day": 0.0000235
-        },
+        "cost_equivalent": 0.0000235,
         "share_reason": null,
-        "estimated": false,
         "tier": "default_claude_max_20x",
         "phases": {
           "received_at": 1791717400600,
@@ -614,12 +601,8 @@
           "five_hour": 8.8125e-6,
           "seven_day": 2.35e-6
         },
-        "cost_equivalent": {
-          "five_hour": 0.00017625,
-          "seven_day": 0.0000235
-        },
+        "cost_equivalent": 0.0000235,
         "share_reason": null,
-        "estimated": false,
         "tier": "default_claude_max_20x",
         "phases": {
           "received_at": 1791717400500,
@@ -748,7 +731,6 @@
         "cost_shares": null,
         "cost_equivalent": null,
         "share_reason": null,
-        "estimated": false,
         "tier": "default_claude_max_20x",
         "phases": {
           "received_at": 1791717400000,
@@ -982,7 +964,6 @@
         "cost_shares": null,
         "cost_equivalent": null,
         "share_reason": null,
-        "estimated": false,
         "tier": null,
         "phases": {
           "received_at": 1791717399400,
@@ -1083,12 +1064,8 @@
           "five_hour": 0.0,
           "seven_day": 0.0
         },
-        "cost_equivalent": {
-          "five_hour": 0.0,
-          "seven_day": 0.0
-        },
+        "cost_equivalent": 0.0,
         "share_reason": "client_classifier",
-        "estimated": false,
         "tier": "default_claude_max_20x",
         "phases": {
           "received_at": 1791717398800,
@@ -1217,7 +1194,6 @@
         "cost_shares": null,
         "cost_equivalent": null,
         "share_reason": null,
-        "estimated": false,
         "tier": null,
         "phases": {
           "received_at": 1791717398200,
@@ -1306,7 +1282,6 @@
         "cost_shares": null,
         "cost_equivalent": null,
         "share_reason": null,
-        "estimated": false,
         "tier": null,
         "phases": {
           "received_at": 1791717397600,
@@ -1430,12 +1405,8 @@
           "five_hour": 8.8125e-6,
           "seven_day": 2.35e-6
         },
-        "cost_equivalent": {
-          "five_hour": 0.00017625,
-          "seven_day": 0.0000235
-        },
+        "cost_equivalent": 0.0000235,
         "share_reason": null,
-        "estimated": false,
         "tier": "default_claude_max_20x",
         "phases": {
           "received_at": 1791717397000,
@@ -1565,12 +1536,8 @@
           "five_hour": 8.8125e-6,
           "seven_day": 2.35e-6
         },
-        "cost_equivalent": {
-          "five_hour": 0.00017625,
-          "seven_day": 0.0000235
-        },
+        "cost_equivalent": 0.0000235,
         "share_reason": null,
-        "estimated": false,
         "tier": "default_claude_max_20x",
         "phases": {
           "received_at": 1791717396400,
@@ -1700,12 +1667,8 @@
           "five_hour": 8.8125e-6,
           "seven_day": 2.35e-6
         },
-        "cost_equivalent": {
-          "five_hour": 0.00017625,
-          "seven_day": 0.0000235
-        },
+        "cost_equivalent": 0.0000235,
         "share_reason": null,
-        "estimated": false,
         "tier": "default_claude_max_20x",
         "phases": {
           "received_at": 1791717395800,

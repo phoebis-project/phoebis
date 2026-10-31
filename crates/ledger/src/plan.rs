@@ -1,8 +1,8 @@
 //! The subscription cost model, shipped beside the price file and read like it: a list of revisions keyed by the date
 //! each takes effect. A token costs a model weight times a type multiplier in units on every window, a window holds a
 //! capacity in units per tier, the peak band is a capacity factor per window read at a request's completion, and a
-//! model week is sized against the 7-day window. A model without a weight reads the latest weighted model of its model
-//! tier, and a model of no weighted model tier, or a tier left out or set to `null`, prices nothing.
+//! model week is sized against the 7-day window. A model without a weight, or of no model tier, prices nothing, and so
+//! does an account tier left out or set to `null`.
 
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
@@ -71,7 +71,9 @@ impl PerWindow {
     }
 }
 
-/// The tier and window whose capacity is one unit's whole, read once per file and handed to each revision.
+/// The tier and window whose capacity is one unit's whole, read once per file and handed to each revision. The anchor
+/// row of the revision in force at the read is one unit's whole, so every row's figure divides by one anchor whatever
+/// revision priced its tokens.
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Unit {
@@ -263,9 +265,8 @@ pub struct SubscriptionCosts {
     pub capacity: IndexMap<String, Capacity>,
     pub peak: Peak,
     pub type_multiplier: TypeMultiplier,
-    /// Units per plain input token, keyed by undated model id. A `null` weight, like a model left out, prices at the
-    /// weight of its model tier's latest weighted model as an estimate, and a model of no model tier, or of one with
-    /// no weighted model, prices nothing.
+    /// Units per plain input token, keyed by undated model id. A model without a weight, or of no model tier, prices
+    /// nothing.
     pub model_weight: IndexMap<String, Option<f64>>,
     pub model_windows: IndexMap<String, ModelWindow>,
     pub overrides: IndexMap<String, Override>,
@@ -581,7 +582,8 @@ impl SubscriptionCosts {
         {
             return Some(tier.as_str());
         }
-        // A model can serve traffic before a release lists it, so its id names the tier until one does.
+        // A model can serve traffic before a release lists it, so its id names the tier the model order reads until
+        // one does. A model without a weight prices nothing whatever its tier.
         let named = phoebis_routing::listing::tier_segment(canonical_model)?;
         self.tier_order
             .iter()
@@ -620,30 +622,6 @@ impl SubscriptionCosts {
             .map(|(model, _)| model.as_str())
     }
 
-    /// `(weight, false)` from the model's own weight on `window` (its override row first, then its `model_weight`),
-    /// else `(weight, true)` from the base `model_weight` entry of `latest_weighted` of its tier, never from the
-    /// donor's override row, else `None`. An override row applies to the model it names alone.
-    pub fn weight_or_fallback(&self, canonical_model: &str, window: &str) -> Option<(f64, bool)> {
-        if let Some(weight) = self.weight(canonical_model, window) {
-            return Some((weight, false));
-        }
-        let donor = self.latest_weighted(self.tier_of(canonical_model)?)?;
-        let weight = (*self.model_weight.get(donor)?)?;
-        Some((weight, true))
-    }
-
-    /// The `model_tier` entries that `weighted_model_count` does not count (an override's window weight counts as a
-    /// weight) and whose tier has a weighted model: what `check-config` prints beside the weighted count.
-    pub fn by_tier_count(&self) -> usize {
-        let weighted = self.weighted_models();
-        self.model_tier
-            .iter()
-            .filter(|(model, tier)| {
-                !weighted.contains(model.as_str()) && self.latest_weighted(tier).is_some()
-            })
-            .count()
-    }
-
     /// The shared window `window` prices on and the model-week divisor: the two shared windows price on themselves;
     /// a `model_windows` key on its `of` window over its `capacity_factor`; any other window starting with
     /// `seven_day` as the 7-day share once, as the classifier's window claims allow; anything else prices nothing.
@@ -665,9 +643,9 @@ impl SubscriptionCosts {
         phoebis_routing::listing::row_for(canonical_model, |k| self.overrides.get(k))
     }
 
-    /// `overrides[model].weight_by_window[window]` when that row names `window` as sent, else
-    /// `model_weight[model]`; the model by its canonical id, then its undated base. `None` is unpriced.
-    fn weight(&self, canonical_model: &str, window: &str) -> Option<f64> {
+    /// `overrides[model].weight_by_window[window]` when that row names `window` as sent, else `model_weight[model]`,
+    /// the model read by its canonical id and then by its undated base. `None` is unpriced, whatever the model's tier.
+    pub fn weight(&self, canonical_model: &str, window: &str) -> Option<f64> {
         self.override_of(canonical_model)
             .and_then(|row| row.weight_by_window.as_ref()?.get(window).copied())
             .or_else(|| {
@@ -709,15 +687,32 @@ impl SubscriptionCosts {
         factors.on(priced).unwrap_or(1.0)
     }
 
-    /// The anchor tier's capacity under the regime: the unit is the base window, and a regime's table divides by its
-    /// own anchor row so an interactive pin ranks at the rate the meter charges it.
-    fn anchor_capacity(&self, priced: &str, entrypoint: Option<&str>) -> Option<f64> {
+    /// The anchor tier's capacity on `window` under the regime `entrypoint` names, in this revision: what one unit's
+    /// whole is while this revision is in force. A model week reads its shared window's row, and a regime's table
+    /// divides by its own anchor row so an interactive pin ranks at the rate the meter charges it.
+    pub fn anchor_capacity(&self, window: &str, entrypoint: Option<&str>) -> Option<f64> {
+        let (priced, _) = self.priced_window(window)?;
         self.capacity_of(entrypoint, &self.unit.tier)?.on(priced)
+    }
+
+    /// The model's own weight on `window` times each type's multiplier, summed over `usage`, before any band, divisor
+    /// or capacity. `None` where the model has no weight on the window.
+    fn weighted_units(&self, window: &str, canonical_model: &str, usage: PinUsage) -> Option<f64> {
+        let weight = self.weight(canonical_model, window)?;
+        let [cache_read, write_1h, write_5m, input, output] = self.multipliers(canonical_model);
+        Some(
+            usage.input as f64 * weight * input
+                + usage.cache_read as f64 * weight * cache_read
+                + usage.write_5m as f64 * weight * write_5m
+                + usage.write_1h as f64 * weight * write_1h
+                + usage.output as f64 * weight * output,
+        )
     }
 
     /// The share of the tier's own `window` `usage` consumes for a request completing at `at`: its units over the
     /// tier's capacity on the priced window, over the band's capacity factor there and the model week's divisor, the
-    /// capacity and the factor read under the regime `entrypoint` names.
+    /// capacity and the factor read under the regime `entrypoint` names. `None` where the model has no weight on the
+    /// window, whatever its model tier.
     pub fn share_at(
         &self,
         window: &str,
@@ -727,39 +722,31 @@ impl SubscriptionCosts {
         usage: PinUsage,
         at: i64,
     ) -> Option<f64> {
-        self.share_and_flag_at(window, entrypoint, tier, canonical_model, usage, at)
-            .map(|(share, _)| share)
+        let (priced, divisor) = self.priced_window(window)?;
+        let units = self.weighted_units(window, canonical_model, usage)?;
+        let capacity = self.capacity_of(entrypoint, tier)?.on(priced)?;
+        Some(units / capacity / self.factor_at(priced, entrypoint, at) / divisor)
     }
 
-    /// `share_at` with the fallback's mark from the same weight lookup, so a reader that flags the share walks
-    /// `latest_weighted` once.
-    fn share_and_flag_at(
+    /// The cost model's units `usage` spends on `window` at the band of `at`, before any capacity: the weight times
+    /// the type multipliers over the band's factor and the model week's divisor. `None` where the model has no weight
+    /// on the window or the window prices nothing.
+    pub fn units_at(
         &self,
         window: &str,
         entrypoint: Option<&str>,
-        tier: &str,
         canonical_model: &str,
         usage: PinUsage,
         at: i64,
-    ) -> Option<(f64, bool)> {
+    ) -> Option<f64> {
         let (priced, divisor) = self.priced_window(window)?;
-        let (weight, estimated) = self.weight_or_fallback(canonical_model, window)?;
-        let capacity = self.capacity_of(entrypoint, tier)?.on(priced)?;
-        let [cache_read, write_1h, write_5m, input, output] = self.multipliers(canonical_model);
-        let units = usage.input as f64 * weight * input
-            + usage.cache_read as f64 * weight * cache_read
-            + usage.write_5m as f64 * weight * write_5m
-            + usage.write_1h as f64 * weight * write_1h
-            + usage.output as f64 * weight * output;
-        Some((
-            units / capacity / self.factor_at(priced, entrypoint, at) / divisor,
-            estimated,
-        ))
+        let units = self.weighted_units(window, canonical_model, usage)?;
+        Some(units / self.factor_at(priced, entrypoint, at) / divisor)
     }
 
     /// The share of the tier's own `window` a pin burning `burn` typed tokens a second consumes per second at `at`:
-    /// `share_at` over a rate rather than a count, the same weight with its fallback, multipliers, capacity, capacity
-    /// factor and model-week divisor. `None` where `share_at` answers none.
+    /// `share_at` over a rate rather than a count, the same weight, multipliers, capacity, capacity factor and
+    /// model-week divisor. `None` where `share_at` answers none.
     pub fn share_rate_at(
         &self,
         window: &str,
@@ -770,7 +757,7 @@ impl SubscriptionCosts {
         at: i64,
     ) -> Option<f64> {
         let (priced, divisor) = self.priced_window(window)?;
-        let (weight, _) = self.weight_or_fallback(canonical_model, window)?;
+        let weight = self.weight(canonical_model, window)?;
         let capacity = self.capacity_of(entrypoint, tier)?.on(priced)?;
         let [cache_read, write_1h, write_5m, input, output] = self.multipliers(canonical_model);
         let units = burn.input * weight * input
@@ -779,26 +766,6 @@ impl SubscriptionCosts {
             + burn.write_1h * weight * write_1h
             + burn.output * weight * output;
         Some(units / capacity / self.factor_at(priced, entrypoint, at) / divisor)
-    }
-
-    /// `share_at` under the anchor tier (`unit.tier`): the cost model's units over the anchor's capacity, the regime's
-    /// own where `entrypoint` names one, since the equivalent is what an anchor-tier account would spend.
-    pub fn equivalent_at(
-        &self,
-        window: &str,
-        entrypoint: Option<&str>,
-        canonical_model: &str,
-        usage: PinUsage,
-        at: i64,
-    ) -> Option<f64> {
-        self.share_at(
-            window,
-            entrypoint,
-            &self.unit.tier,
-            canonical_model,
-            usage,
-            at,
-        )
     }
 
     /// The weight the band puts on a charge landing on `window` at `at`: the reciprocal of the priced window's
@@ -862,15 +829,10 @@ impl SubscriptionCosts {
     }
 
     /// The per-token share of the anchor tier's `window` out of band under the regime `entrypoint` names, empty for a
-    /// window that prices nothing. A row per `model_weight` and `model_tier` key: at the model's weight on the window,
-    /// else at the base weight of its model tier's `latest_weighted` (the estimate is the same model tier's measured
-    /// weight, so a pin on an unweighted model ranks by it rather than last, as the console prices it), else with no
-    /// rate. A `tiers` row per model tier with a weighted model, at the same base weight and the shared multipliers,
-    /// prices an id no file lists by the model tier its id names, as `tier_of` reads it.
+    /// window that prices nothing. A row per `model_weight` and `model_tier` key, at the model's weight on the window,
+    /// else with no rate.
     pub fn rate_table(&self, window: &str, entrypoint: Option<&str>) -> RateTable {
-        // An estimate is the model tier's measured weight, the one `share_at` charges the model at, so a shed it
-        // orders is the one the meter charges. A model neither a row nor a model tier row names takes no rate, and
-        // its pin ranks last.
+        // A model no row names takes no rate, so its pin ranks last.
         let fallback = Rates {
             input: None,
             cache_read: None,
@@ -882,7 +844,6 @@ impl SubscriptionCosts {
             return RateTable {
                 rows: HashMap::new(),
                 long_context: HashMap::new(),
-                tiers: HashMap::new(),
                 fallback,
             };
         };
@@ -890,7 +851,6 @@ impl SubscriptionCosts {
             return RateTable {
                 rows: HashMap::new(),
                 long_context: HashMap::new(),
-                tiers: HashMap::new(),
                 fallback,
             };
         };
@@ -909,42 +869,20 @@ impl SubscriptionCosts {
                 output: rate(output),
             }
         };
-        // A listed model the fallback leaves unpriced keeps a row of no rates, so `rates_for` reads it before the
-        // model tier its id names, as the meter reads the model tier the file lists it under.
+        // A listed model without a weight keeps a row of no rates, so `rates_for` reads it before `fallback` and the pin
+        // ranks last, as the meter prices it at nothing.
         let rows = models
             .into_iter()
             .map(|model| {
                 let rates = self
-                    .weight_or_fallback(model, window)
-                    .map_or(fallback, |(weight, _)| {
-                        rates_at(weight, self.multipliers(model))
-                    });
+                    .weight(model, window)
+                    .map_or(fallback, |weight| rates_at(weight, self.multipliers(model)));
                 (model.clone(), rates)
-            })
-            .collect();
-        // An id no file lists has no override row, since every override names a listed model, so it reads the
-        // shared multipliers and the donor's base weight, as `weight_or_fallback` does.
-        let shared = &self.type_multiplier;
-        let shared = [
-            shared.cache_read,
-            shared.cache_write_1h,
-            shared.cache_write_5m,
-            shared.input,
-            shared.output,
-        ];
-        let tiers = self
-            .tier_order
-            .iter()
-            .filter_map(|tier| {
-                let donor = self.latest_weighted(tier)?;
-                let weight = (*self.model_weight.get(donor)?)?;
-                Some((tier.clone(), rates_at(weight, shared)))
             })
             .collect();
         RateTable {
             rows,
             long_context: HashMap::new(),
-            tiers,
             fallback,
         }
     }
@@ -976,7 +914,7 @@ impl SubscriptionCosts {
         let Some((priced, _)) = self.priced_window(window) else {
             return false;
         };
-        self.weight_or_fallback(canonical_model, window).is_some()
+        self.weight(canonical_model, window).is_some()
             && self
                 .capacity_of(entrypoint, tier)
                 .is_some_and(|row| row.on(priced).is_some())
@@ -1205,6 +1143,11 @@ impl PlanTables {
         )
     }
 
+    /// The Pro share of `window`: `usage`'s units at the revision in force at `at` with the band read at `band_at`
+    /// (a completion where the reader has one, else `at`), over the anchor tier's capacity on the window in the
+    /// revision in force at `now`, the read's instant, so every figure a page sums divides by one whole whatever
+    /// revision priced its tokens. `None` where either side prices nothing.
+    #[allow(clippy::too_many_arguments)]
     pub fn equivalent_at(
         &self,
         window: &str,
@@ -1212,10 +1155,18 @@ impl PlanTables {
         canonical_model: &str,
         usage: PinUsage,
         at: i64,
+        band_at: i64,
+        now: i64,
     ) -> Option<f64> {
-        self.revisions
-            .in_force(at)
-            .equivalent_at(window, entrypoint, canonical_model, usage, at)
+        let anchor = self
+            .revisions
+            .in_force(now)
+            .anchor_capacity(window, entrypoint)?;
+        let costs = self.revisions.in_force(at);
+        let (priced, divisor) = costs.priced_window(window)?;
+        // The share's own order of division, so a Pro share and the figure of one revision agree to the last digit.
+        let units = costs.weighted_units(window, canonical_model, usage)?;
+        Some(units / anchor / costs.factor_at(priced, entrypoint, band_at) / divisor)
     }
 
     pub fn band_factor(&self, window: &str, entrypoint: Option<&str>, at: i64) -> f64 {
@@ -1391,27 +1342,11 @@ impl Funding {
 /// could not price (`None`), and a model week is never nulled by a model that has none.
 pub type WindowShares = IndexMap<&'static str, Option<f64>>;
 
-/// Shares with the fallback's mark per window: `estimated` holds the keys of `shares`, true where that window's
-/// share priced at the weight of the model tier's latest weighted model. A model with a null weight and an override
-/// weight on one window prices that window on its own weight and the others through the fallback.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
-pub struct PricedShares {
-    pub shares: WindowShares,
-    pub estimated: IndexMap<&'static str, bool>,
-}
-
-impl PricedShares {
-    /// Whether any window priced through the fallback, the flag a reader marking a whole figure reads.
-    pub fn any_estimated(&self) -> bool {
-        self.estimated.values().any(|estimated| *estimated)
-    }
-}
-
 /// `share_at` under the account tier and the regime `entrypoint` names on the two shared windows and on
-/// `window_for(canonical_model)` where that is a model week, each window flagged where it priced through the fallback.
-/// `at` selects the cost revision (the request's receipt, what the dollars and the rollup select on) and `band_at` the
-/// peak band inside that revision (the completion where a reader has one, else `at`). The revision never reads
-/// `band_at`.
+/// `window_for(canonical_model)` where that is a model week, `None` inside the map on a window the model has no
+/// weight for. `at` selects the cost revision (the request's receipt, what the dollars and the rollup select on) and
+/// `band_at` the peak band inside that revision (the completion where a reader has one, else `at`). The revision never
+/// reads `band_at`.
 pub fn price_shares(
     tables: &PlanTables,
     entrypoint: Option<&str>,
@@ -1420,16 +1355,15 @@ pub fn price_shares(
     usage: PinUsage,
     at: i64,
     band_at: i64,
-) -> PricedShares {
+) -> WindowShares {
     let costs = tables.revisions.in_force(at);
     priced_windows(canonical_model, |window| {
-        costs.share_and_flag_at(window, entrypoint, tier, canonical_model, usage, band_at)
+        costs.share_at(window, entrypoint, tier, canonical_model, usage, band_at)
     })
 }
 
-/// The three equivalent columns (`five_hour`, `seven_day`, the model week where the model carries one) at the
-/// revision in force at `at` under the regime `entrypoint` names, the band read at `band_at`, the weight through the
-/// fallback.
+/// The Pro-week figure: `PlanTables::equivalent_at(SEVEN_DAY, entrypoint, canonical_model, usage, at, band_at, now)`,
+/// the revision at `at`, the band at `band_at` and the anchor row at `now`.
 pub fn price_equivalent(
     tables: &PlanTables,
     entrypoint: Option<&str>,
@@ -1437,12 +1371,17 @@ pub fn price_equivalent(
     usage: PinUsage,
     at: i64,
     band_at: i64,
-) -> PricedShares {
-    let costs = tables.revisions.in_force(at);
-    let anchor = &costs.unit.tier;
-    priced_windows(canonical_model, |window| {
-        costs.share_and_flag_at(window, entrypoint, anchor, canonical_model, usage, band_at)
-    })
+    now: i64,
+) -> Option<f64> {
+    tables.equivalent_at(
+        SEVEN_DAY,
+        entrypoint,
+        canonical_model,
+        usage,
+        at,
+        band_at,
+        now,
+    )
 }
 
 /// The windows a plan row's shares would key, each at zero: what a free call reads. Built from the tier's capacity
@@ -1463,15 +1402,9 @@ pub fn free_shares(
     )
 }
 
-/// `free_shares` under the anchor tier (`unit.tier`): the windows `price_equivalent` names, each at zero.
-pub fn free_equivalent(
-    tables: &PlanTables,
-    entrypoint: Option<&str>,
-    canonical_model: &str,
-    at: i64,
-) -> WindowShares {
-    let costs = tables.revisions.in_force(at);
-    zero_windows(costs, entrypoint, &costs.unit.tier, canonical_model)
+/// A free call spends no window, so its Pro-week figure is zero by rule, with no weight lookup.
+pub fn free_equivalent() -> f64 {
+    0.0
 }
 
 /// `Some(0.0)` on each window `priced_windows` walks for the model that `tier` holds a capacity on under the regime
@@ -1504,24 +1437,15 @@ pub fn entrypoint_of_client(client: &str) -> Option<&str> {
     client.strip_prefix("claude-code/")
 }
 
-/// `share` on the two shared windows and on `window_for(canonical_model)` where that is a model week, each window
-/// marked where it priced through the fallback.
+/// `share` on the two shared windows and on `window_for(canonical_model)` where that is a model week.
 fn priced_windows(
     canonical_model: &str,
-    share: impl Fn(&'static str) -> Option<(f64, bool)>,
-) -> PricedShares {
+    share: impl Fn(&'static str) -> Option<f64>,
+) -> WindowShares {
     let week = window_for(canonical_model);
-    let mut priced = PricedShares::default();
-    for window in [FIVE_HOUR, SEVEN_DAY]
+    [FIVE_HOUR, SEVEN_DAY]
         .into_iter()
         .chain((week != SEVEN_DAY).then_some(week))
-    {
-        let share = share(window);
-        // A window that prices nothing carries no estimate, so a bucket the readers null is never marked.
-        priced.shares.insert(window, share.map(|(share, _)| share));
-        priced
-            .estimated
-            .insert(window, share.is_some_and(|(_, estimated)| estimated));
-    }
-    priced
+        .map(|window| (window, share(window)))
+        .collect()
 }

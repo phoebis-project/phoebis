@@ -2107,6 +2107,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
                     to,
                     &prices,
                     &tables,
+                    now,
                 )?,
                 phoebis_ledger::request_totals(
                     c,
@@ -2115,9 +2116,18 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
                     to,
                     &prices,
                     &tables,
+                    now,
                 )?,
                 // Lifetime: `i64::MIN` sits at or below the earliest hour the rollups can hold, so every row clears it.
-                phoebis_ledger::request_totals(c, "account_id", i64::MIN, to, &prices, &tables)?,
+                phoebis_ledger::request_totals(
+                    c,
+                    "account_id",
+                    i64::MIN,
+                    to,
+                    &prices,
+                    &tables,
+                    now,
+                )?,
             ))
         })
         .await;

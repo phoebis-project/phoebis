@@ -24,8 +24,6 @@ const SONNET: &str = "claude-sonnet-5-5";
 const OPUS: &str = "claude-opus-5-5";
 /// Weight 10, on a week of its own at half the 7-day capacity.
 const FABLE: &str = "claude-fable-5-1";
-/// Unweighted, so it prices through its model tier's latest weighted model, Opus 5.5 at weight 2, as an estimate.
-const OPUS_UNWEIGHTED: &str = "claude-opus-5";
 /// Of the model tier `mystery`, which no weighted model shares, so it prices to no share.
 const MYSTERY: &str = "claude-mystery-2";
 
@@ -224,7 +222,6 @@ fn a_complete_run_prices_its_attempts_and_writes_the_ratio() {
                 r.first_reading_at,
                 r.last_reading_at,
                 r.requests,
-                r.estimated,
                 r.computed_at,
             ))
             .collect::<Vec<_>>(),
@@ -235,7 +232,6 @@ fn a_complete_run_prices_its_attempts_and_writes_the_ratio() {
             SATURDAY,
             SATURDAY + 20 * MINUTE,
             2,
-            0,
             now
         )],
         "one row for the closed run, the new run of one reading left open: {rows:?}"
@@ -327,17 +323,10 @@ fn a_fall_inside_a_run_splits_it_and_the_row_sums_its_parts() {
         None,
     )
     .unwrap();
-    // 0.84 of the window from 84 Sonnet units before the grant, and 0.10 after it from five tokens of Opus 5 at Opus
-    // 5.5's weight of 2, an estimate.
+    // 0.84 of the window from 84 Sonnet units before the grant, and 0.10 after it from five tokens of Opus 5.5 at its
+    // weight of 2.
     served(&db, "before", SONNET, SATURDAY + 5 * MINUTE, 84, None);
-    served(
-        &db,
-        "after",
-        OPUS_UNWEIGHTED,
-        SATURDAY + 25 * MINUTE,
-        5,
-        None,
-    );
+    served(&db, "after", OPUS, SATURDAY + 25 * MINUTE, 5, None);
     let now = reset + HOUR;
     fold(&db, now);
     let rows = rows(&db, now);
@@ -347,11 +336,10 @@ fn a_fall_inside_a_run_splits_it_and_the_row_sums_its_parts() {
                 r.window.as_str(),
                 r.first_reading_at,
                 r.last_reading_at,
-                r.requests,
-                r.estimated
+                r.requests
             ))
             .collect::<Vec<_>>(),
-        [(FIVE_HOUR, SATURDAY, SATURDAY + 30 * MINUTE, 2, 1)],
+        [(FIVE_HOUR, SATURDAY, SATURDAY + 30 * MINUTE, 2)],
         "one row for the window, from the first part's first reading to the second part's last: {rows:?}"
     );
     let row = &rows[0];
@@ -414,11 +402,10 @@ fn a_part_with_no_priced_attempt_adds_nothing_and_the_other_part_writes_the_row(
                 r.window.as_str(),
                 r.first_reading_at,
                 r.last_reading_at,
-                r.requests,
-                r.estimated
+                r.requests
             ))
             .collect::<Vec<_>>(),
-        [(FIVE_HOUR, SATURDAY, SATURDAY + 10 * MINUTE, 1, 0)],
+        [(FIVE_HOUR, SATURDAY, SATURDAY + 10 * MINUTE, 1)],
         "the row reads the first part alone: {rows:?}"
     );
     let row = &rows[0];
@@ -726,8 +713,8 @@ fn a_drift_holds_only_where_the_rise_and_the_priced_share_both_reach_the_least_r
         for (account, rise, predicted) in [("light", 0.05, 0.0381), ("priced", 0.06 * ratio, 0.06)] {
             c.execute(
                 "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, \
-                 last_reading_at, observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
-                 VALUES (?1, 'five_hour', ?2, ?2 - 10800000, ?2 - 3600000, ?3, ?4, ?5, 1, 0, ?2)",
+                 last_reading_at, observed_rise, predicted_share, ratio, requests, computed_at) \
+                 VALUES (?1, 'five_hour', ?2, ?2 - 10800000, ?2 - 3600000, ?3, ?4, ?5, 1, ?2)",
                 rusqlite::params![account, now - HOUR, rise, predicted, ratio],
             )?;
         }
@@ -1034,8 +1021,8 @@ fn rows_older_than_thirty_days_leave_with_the_fold() {
         for window_end in [now - 30 * DAY - 1, now - 30 * DAY] {
             c.execute(
                 "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, \
-                 last_reading_at, observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
-                 VALUES ('a', 'five_hour', ?1, ?1, ?1, 0.2, 0.2, 1.0, 1, 0, ?1)",
+                 last_reading_at, observed_rise, predicted_share, ratio, requests, computed_at) \
+                 VALUES ('a', 'five_hour', ?1, ?1, ?1, 0.2, 0.2, 1.0, 1, ?1)",
                 [window_end],
             )?;
         }
@@ -1073,8 +1060,8 @@ fn the_drift_reads_the_windows_that_ended_inside_eight_days_while_the_route_keep
         ] {
             c.execute(
                 "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, \
-                 last_reading_at, observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
-                 VALUES (?1, 'five_hour', ?2, ?2 - 10800000, ?2 - 3600000, 0.5, 0.25, 2.0, 3, 0, ?2)",
+                 last_reading_at, observed_rise, predicted_share, ratio, requests, computed_at) \
+                 VALUES (?1, 'five_hour', ?2, ?2 - 10800000, ?2 - 3600000, 0.5, 0.25, 2.0, 3, ?2)",
                 rusqlite::params![account, window_end],
             )?;
         }
@@ -1147,29 +1134,20 @@ fn a_second_fold_writes_no_duplicate_row() {
 }
 
 #[test]
-fn an_estimated_attempt_is_counted_and_an_overage_attempt_draws_nothing() {
+fn a_plan_attempt_is_counted_and_an_overage_attempt_draws_nothing() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
     seed_request(&db, "seed", SATURDAY - MINUTE);
     db.insert_samples(
         &[
             reading(FIVE_HOUR, SATURDAY, 0.10, reset),
-            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.40, reset),
+            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.20, reset),
         ],
         None,
     )
     .unwrap();
-    // 0.1 of the window from ten Sonnet units, 0.2 from ten tokens of Opus 5 at Opus 5.5's weight of 2, and nothing
-    // from thirty Sonnet units the head billed in overage.
+    // 0.1 of the window from ten Sonnet units, and nothing from thirty Sonnet units the head billed in overage.
     served(&db, "sonnet", SONNET, SATURDAY + 5 * MINUTE, 10, None);
-    served(
-        &db,
-        "fallback",
-        OPUS_UNWEIGHTED,
-        SATURDAY + 10 * MINUTE,
-        10,
-        None,
-    );
     answered(
         &db,
         "overage",
@@ -1183,15 +1161,13 @@ fn an_estimated_attempt_is_counted_and_an_overage_attempt_draws_nothing() {
     fold(&db, now);
     let rows = rows(&db, now);
     assert_eq!(
-        rows.iter()
-            .map(|r| (r.requests, r.estimated))
-            .collect::<Vec<_>>(),
-        [(2, 1)],
-        "the two plan-funded attempts, one priced through its model tier: {rows:?}"
+        rows.iter().map(|r| r.requests).collect::<Vec<_>>(),
+        [1],
+        "the plan-funded attempt alone: {rows:?}"
     );
     assert!(
-        close(rows[0].predicted_share, 0.3),
-        "0.1 and 0.2, the overage answer adding nothing: {}",
+        close(rows[0].predicted_share, 0.1),
+        "the overage answer adds nothing: {}",
         rows[0].predicted_share
     );
     assert!(close(rows[0].ratio, 1.0), "{}", rows[0].ratio);
@@ -1217,10 +1193,8 @@ fn a_classifier_attempt_beside_a_main_turn_predicts_the_main_turns_share_alone()
     fold(&db, now);
     let rows = rows(&db, now);
     assert_eq!(
-        rows.iter()
-            .map(|r| (r.requests, r.estimated))
-            .collect::<Vec<_>>(),
-        [(1, 0)],
+        rows.iter().map(|r| r.requests).collect::<Vec<_>>(),
+        [1],
         "the main turn alone is counted: {rows:?}"
     );
     assert!(

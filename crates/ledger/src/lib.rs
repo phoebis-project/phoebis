@@ -48,9 +48,8 @@ pub use pattern::{
 };
 pub use plan::{
     entrypoint_of_client, free_equivalent, free_shares, funding_of, price_equivalent, price_shares,
-    Capacity, CostRevisions, Funding, ModelWindow, Override, Peak, PerWindow, PlanTables,
-    PricedShares, Regime, RegimePeak, SubscriptionCosts, TypeMultiplier, TypeOverride, Unit,
-    WindowShares,
+    Capacity, CostRevisions, Funding, ModelWindow, Override, Peak, PerWindow, PlanTables, Regime,
+    RegimePeak, SubscriptionCosts, TypeMultiplier, TypeOverride, Unit, WindowShares,
 };
 pub use price::{price_row, Priced, RowKey, SHARE_REASON_CLIENT_CLASSIFIER};
 pub use pricing::{
@@ -72,12 +71,12 @@ pub use query::{
     request_by_id, request_events, request_totals, revision_spans, rewrite_series,
     routing_conditions, series_paged, session_activity, session_burn_series, session_identities,
     BudgetedMember, BurnPoint, CacheEquivalent, CacheFacts, CacheShare, Dashboard, DecisionListRow,
-    Equivalent, EventListRow, FundingFilter, GroupRow, GuardrailCountRow, HourlyWindowSample,
-    LiveKeys, ParkedSummary, PlacementRow, ProbeCounts, ProbeEquivalent, ProbeShare, RequestFilter,
+    EventListRow, FundingFilter, GroupRow, GuardrailCountRow, HourlyWindowSample, LiveKeys,
+    ParkedSummary, PlacementRow, ProbeCounts, ProbeEquivalent, ProbeShare, RequestFilter,
     RollupFilter, RoutingCondition, RoutingLogCursor, RoutingLogFilter, RoutingLogPage,
-    RoutingLogRow, SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, SharePricing,
-    SharedEquivalent, Span, Totals, TrafficBucket, DECISION_KINDS, EVENT_KINDS, GROUP_BYS,
-    GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL, MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
+    RoutingLogRow, SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, SharePricing, Span,
+    Totals, TrafficBucket, DECISION_KINDS, EVENT_KINDS, GROUP_BYS, GUARDRAIL_BLOCKED_BYTES_SQL,
+    GUARDRAIL_COUNTS_SQL, MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
 };
 pub use query::{guardrail_sample_page, request_body, SampleRow, SampleSubject};
 pub use query::{list_request_page, refusal_categories, RequestPage};

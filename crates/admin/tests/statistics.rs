@@ -1075,22 +1075,23 @@ async fn the_request_log_reads_the_classifiers_filter_and_the_show_route_prices_
         (
             &marked["classifier"],
             &marked["share_reason"],
-            &marked["estimated"]
+            marked.get("estimated")
         ),
         (
             &serde_json::json!("client"),
             &serde_json::json!("client_classifier"),
-            &serde_json::json!(false)
+            None
         ),
         "{marked}"
     );
-    for figure in ["cost_shares", "cost_equivalent"] {
-        assert_eq!(
-            marked[figure],
-            serde_json::json!({ "five_hour": 0.0, "seven_day": 0.0 }),
-            "{figure}: each window the tier sizes reads zero by rule: {marked}"
-        );
-    }
+    assert_eq!(
+        (&marked["cost_shares"], &marked["cost_equivalent"]),
+        (
+            &serde_json::json!({ "five_hour": 0.0, "seven_day": 0.0 }),
+            &serde_json::json!(0.0)
+        ),
+        "each window the tier sizes and the Pro-week figure read zero by rule: {marked}"
+    );
     let plain = json(get(&parts.app, "/admin/requests/r-main", Some(&cookie)).await).await
         ["request"]
         .clone();
@@ -1105,7 +1106,7 @@ async fn the_request_log_reads_the_classifiers_filter_and_the_show_route_prices_
 }
 
 /// The breakdown answers the shares only where a filter names one account, so the grouped read without one asserts
-/// the 20x equivalent and the filtered read the shares.
+/// the Pro-week figure and the filtered read the shares.
 #[tokio::test]
 async fn the_analytics_group_on_the_classifier_dimension() {
     let parts = classifier_pair().await;
@@ -1141,19 +1142,13 @@ async fn the_analytics_group_on_the_classifier_dimension() {
         marked["cost_usd"].as_f64().is_some_and(|usd| usd > 0.0),
         "the marked group keeps its dollar estimate: {marked}"
     );
-    for window in ["five_hour", "seven_day"] {
-        assert_eq!(
-            marked["cost_equivalent"][window].as_f64(),
-            Some(0.0),
-            "{window}: {marked}"
-        );
-        assert!(
-            plain["cost_equivalent"][window]
-                .as_f64()
-                .is_some_and(|equivalent| equivalent > 0.0),
-            "{window}: {plain}"
-        );
-    }
+    assert_eq!(marked["cost_equivalent"].as_f64(), Some(0.0), "{marked}");
+    assert!(
+        plain["cost_equivalent"]
+            .as_f64()
+            .is_some_and(|equivalent| equivalent > 0.0),
+        "{plain}"
+    );
     let one_account = json(
         get(
             &parts.app,

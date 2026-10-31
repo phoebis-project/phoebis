@@ -1834,8 +1834,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .write(|c| {
             c.execute(
                 "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, \
-                 last_reading_at, observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
-                 VALUES ('business', 'five_hour', ?1, ?2, ?3, 0.7, 0.5, 1.4, 3, 0, ?4)",
+                 last_reading_at, observed_rise, predicted_share, ratio, requests, computed_at) \
+                 VALUES ('business', 'five_hour', ?1, ?2, ?3, 0.7, 0.5, 1.4, 3, ?4)",
                 rusqlite::params![
                     window_end,
                     window_end - 4 * 3_600_000,

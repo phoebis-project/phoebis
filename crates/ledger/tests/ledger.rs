@@ -35,6 +35,7 @@ fn row_usd(prices: &PriceRevisions, row: &RollupRow) -> f64 {
         classifier: false,
         at: row.hour * 1_000,
         band_at: None,
+        now: NOW,
     };
     phoebis_ledger::price_row(prices, &PlanTables::shipped(), &key, row.usage())
         .usd
@@ -4456,6 +4457,7 @@ async fn the_landing_records_no_tier_for_a_free_organization_or_a_usage_based_se
             classifier: false,
             at: row.hour * 1_000,
             band_at: None,
+            now: NOW,
         };
         phoebis_ledger::price_row(&PriceRevisions::shipped(), &tables, &key, row.usage())
             .shares
@@ -5032,6 +5034,7 @@ fn a_usage_based_seats_attempt_stores_its_class_folds_under_usage_based_and_pric
             classifier: false,
             at: row.hour * 1_000,
             band_at: None,
+            now: NOW,
         },
         row.usage(),
     );
@@ -5039,9 +5042,9 @@ fn a_usage_based_seats_attempt_stores_its_class_folds_under_usage_based_and_pric
         (
             priced.usd.as_ref().map(|usd| usd.total()),
             &priced.shares,
-            &priced.equivalent
+            priced.equivalent
         ),
-        (Some(1_000_000.0), &None, &None),
+        (Some(1_000_000.0), &None, None),
         "the seat's counts read dollars alone: {priced:?}"
     );
 }
@@ -8184,6 +8187,7 @@ fn a_request_with_two_answered_attempts_books_each_at_the_set_its_own_prompt_sel
         None,
         &revisions,
         &PlanTables::shipped(),
+        NOW,
     );
     let group = groups
         .iter()

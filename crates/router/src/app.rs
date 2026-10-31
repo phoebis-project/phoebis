@@ -808,8 +808,9 @@ fn router_config(
         .with_rate(move |window, entrypoint, tier, model, burn, at| {
             rate_tables.share_rate_at(window, entrypoint, tier, model, burn, at)
         })
+        // The pick prices at its own instant, so the revision, the band and the anchor row all read there.
         .with_equivalent(move |window, entrypoint, model, usage, at| {
-            equivalent_tables.equivalent_at(window, entrypoint, model, usage, at)
+            equivalent_tables.equivalent_at(window, entrypoint, model, usage, at, at, at)
         })
         .with_band_segments(move |window, entrypoint, from, to| {
             segment_tables.band_segments(window, entrypoint, from, to)
@@ -1263,7 +1264,7 @@ mod tests {
         ] {
             assert_eq!(
                 config.share.equivalent(window, None, model, write, at),
-                shipped.equivalent_at(window, None, model, write, at),
+                shipped.equivalent_at(window, None, model, write, at, at, at),
                 "the closure answers the tables' equivalent on {window}"
             );
         }
@@ -1506,31 +1507,30 @@ mod tests {
                 .expect("a priced model"),
             "the share table, not the unit table's token count"
         );
-        let estimated = config
-            .rates
-            .five_hour
-            .base
-            .price("claude-sonnet-4-5", usage, prompt)
-            .expect("a model of a weighted model tier");
-        let expected = tables
-            .share_at(
-                phoebis_routing::FIVE_HOUR,
-                None,
-                "default_claude_ai",
-                "claude-sonnet-4-5",
-                usage,
-                out_of_band,
-            )
-            .unwrap();
-        assert!(
-            (estimated - expected).abs() < 1e-15,
-            "a model the cost model has no weight for prices at its model tier's estimate, as the meter charges it: \
-             {estimated} against {expected}"
+        assert_eq!(
+            (
+                config
+                    .rates
+                    .five_hour
+                    .base
+                    .price("claude-sonnet-4-5", usage, prompt),
+                tables.share_at(
+                    phoebis_routing::FIVE_HOUR,
+                    None,
+                    "default_claude_ai",
+                    "claude-sonnet-4-5",
+                    usage,
+                    out_of_band,
+                )
+            ),
+            (None, None),
+            "a model the cost model has no weight for prices nothing, as the meter charges it nothing, though its \
+             model tier has a weighted model"
         );
         assert_eq!(
             config.rates.five_hour.base.price("gpt-5", usage, prompt),
             None,
-            "the share table prices no model outside every weighted model tier"
+            "the share table prices no model the cost model does not list"
         );
         assert!(
             config
@@ -1784,32 +1784,38 @@ revisions:
         assert_eq!((view.retention_days, view.rollup_retention_days), (30, 0));
     }
 
-    /// The anchor tier carries a capacity on both windows, so every model the cost model names has a burn rate on
-    /// each, at its own weight or, as an estimate, at its model tier's latest weight: a pin on a model without a
-    /// weight ranks by its estimated burn rather than last.
+    /// A model without a weight prices nothing, so the burn rates keep a row of no rates for a listed one and read the
+    /// fallback's for an id no file lists: either pin ranks last, as the meter prices it at nothing.
     #[test]
-    fn the_burn_rates_carry_a_row_per_model_the_fallback_prices_so_an_unweighted_pin_ranks_by_its_estimate(
-    ) {
+    fn an_unlisted_id_reads_no_rate_so_its_pin_ranks_last() {
         let tables = phoebis_ledger::PlanTables::shipped();
         let costs = tables.revisions.in_force(START);
+        let anchor = costs.unit.tier.as_str();
         for window in [phoebis_routing::FIVE_HOUR, phoebis_routing::SEVEN_DAY] {
             let rates = tables.rate_table(window, None, START);
             let mut rows: Vec<&str> = rates.rows.keys().map(String::as_str).collect();
             rows.sort_unstable();
-            let mut priced: Vec<&str> = costs
+            let mut listed: Vec<&str> = costs
                 .model_weight
                 .keys()
                 .chain(costs.model_tier.keys())
                 .map(String::as_str)
-                .filter(|model| costs.weight_or_fallback(model, window).is_some())
                 .collect();
-            priced.sort_unstable();
-            priced.dedup();
-            assert!(
-                !rows.is_empty(),
-                "{window}: the shipped model weighs a model"
+            listed.sort_unstable();
+            listed.dedup();
+            assert_eq!(rows, listed, "{window}: a row per model the file lists");
+            for model in listed {
+                assert_eq!(
+                    rates.rows[model] == rates.fallback,
+                    !tables.priced(window, None, anchor, model, START),
+                    "{window}: {model} has rates exactly where the meter prices it"
+                );
+            }
+            assert_eq!(
+                rates.rates_for("claude-opus-99", 0),
+                rates.fallback,
+                "{window}: an id no file lists reads no rate"
             );
-            assert_eq!(rows, priced, "{window}");
         }
     }
 
