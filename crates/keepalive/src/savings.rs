@@ -4,17 +4,17 @@
 use std::collections::BTreeMap;
 
 use phoebis_ledger::{Band, KeepaliveDelta, PlanTables, Record, Speed, UNATTRIBUTED};
-use phoebis_routing::{PinUsage, FIVE_HOUR};
+use phoebis_routing::{PinUsage, SEVEN_DAY};
 use phoebis_store::AccountKind;
 
 use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement, Skipped};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
 
-/// A probe's estimated cost as the share of the `tier`'s 5-hour window at `at` (the band inside the price) under the
-/// regime of the agent's `entrypoint`, the base one for `None`. `None` for a model the subscription cost model gives no
-/// weight, its own or its model tier's latest, or an account tier it has no capacity for on the window. A probe's
-/// dollars are its own request row's counts, which the ledger prices.
+/// A probe's estimated cost as the share of the `tier`'s 7-day window at `at` (the band inside the price) under the
+/// regime of the agent's `entrypoint`, the base one for `None`. `None` for a model the cost model gives no weight on
+/// the window or an account tier it has no capacity for on it. A probe's dollars are its own request row's counts,
+/// which the ledger prices.
 pub(crate) fn probe_cost(
     tables: &PlanTables,
     entrypoint: Option<&str>,
@@ -24,7 +24,7 @@ pub(crate) fn probe_cost(
     at: i64,
 ) -> Option<f64> {
     tables.share_at(
-        FIVE_HOUR,
+        SEVEN_DAY,
         entrypoint,
         tier?,
         canonical_model,
@@ -57,9 +57,9 @@ pub(crate) fn answered_speed(usage: ProbeUsage) -> Speed {
     usage.speed.unwrap_or(Speed::Standard)
 }
 
-/// `row` when the cost model in force at `at` gives the model no weight on the 5-hour window, whatever its model tier,
-/// else `tier`: the only two reasons left, since the loader refuses an anchor tier without a capacity on either window
-/// and a weighted model prices every type. Read under the regime of `entrypoint`.
+/// `row` when the cost model in force at `at` gives the model no weight on the 7-day window, else `tier`: the only
+/// two reasons left, since the loader refuses an anchor tier without a capacity on the unit's window and a weighted
+/// model prices every type. Read under the regime of `entrypoint`.
 pub(crate) fn unpriced_reason(
     tables: &PlanTables,
     entrypoint: Option<&str>,
@@ -67,7 +67,7 @@ pub(crate) fn unpriced_reason(
     at: i64,
 ) -> &'static str {
     if !tables.priced(
-        FIVE_HOUR,
+        SEVEN_DAY,
         entrypoint,
         &tables.revisions.in_force(at).unit.tier,
         canonical_model,
@@ -79,9 +79,10 @@ pub(crate) fn unpriced_reason(
     }
 }
 
-/// The unit a probe settles in: `default_unit`, unless that is the window share and the cost model in force at `at`
-/// cannot price the account's tier and model on the 5-hour window under the regime of `entrypoint` (no weight of the
-/// model's own, or no capacity), in which case dollars.
+/// The unit a probe settles in: the share of the account's 7-day window where the cost model weighs the model on the
+/// week and the account's tier carries a capacity on it, dollars otherwise, or for any other funding. A
+/// `default_unit` other than the window share is that funding's own and passes through as it is. Read under the
+/// regime of `entrypoint` on the cost model in force at `at`.
 pub(crate) fn settlement_unit(
     default_unit: SavingsUnit,
     tables: &PlanTables,
@@ -91,7 +92,7 @@ pub(crate) fn settlement_unit(
     at: i64,
 ) -> SavingsUnit {
     let priced =
-        tier.is_some_and(|tier| tables.priced(FIVE_HOUR, entrypoint, tier, canonical_model, at));
+        tier.is_some_and(|tier| tables.priced(SEVEN_DAY, entrypoint, tier, canonical_model, at));
     if default_unit == SavingsUnit::WindowShare && !priced {
         SavingsUnit::Usd
     } else {
@@ -324,9 +325,11 @@ mod tests {
     }
 
     #[test]
-    fn an_unpriced_probe_reads_row_for_a_model_without_a_weight_and_tier_otherwise() {
+    fn an_unpriced_probe_reads_row_for_a_model_without_a_weight_and_tier_for_a_tier_without_a_week()
+    {
         // The test table weighs Opus 5.5, leaves Opus 5 null, has no row for Opus 9 and places Mystery 2 in a tier with
-        // no weighted model, so only Opus 5.5 has a weight of its own and the other three price nothing.
+        // no weighted model, so only Opus 5.5 has a weight of its own and the other three price nothing. Its Team row
+        // sizes a 5-hour window and no week.
         let tables = phoebis_ledger::test_tables::subscription_costs();
         let at = phoebis_ledger::test_tables::JANUARY_2026;
         for model in ["claude-opus-5", "claude-opus-9", "claude-mystery-2"] {
@@ -340,6 +343,18 @@ mod tests {
             unpriced_reason(&tables, None, "claude-opus-5-5-20260401", at),
             "tier",
             "a dated id reads its undated weight"
+        );
+        assert_eq!(
+            settlement_unit(
+                SavingsUnit::WindowShare,
+                &tables,
+                None,
+                Some("default_claude_team"),
+                "claude-opus-5-5",
+                at
+            ),
+            SavingsUnit::Usd,
+            "a weighted model on a tier without a week settles in dollars, its reason the tier"
         );
     }
 

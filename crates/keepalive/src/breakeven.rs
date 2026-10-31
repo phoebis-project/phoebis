@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use phoebis_ledger::{PlanTables, PriceRevisions, PriceTable};
 use phoebis_relay::{CacheTtl, CacheTtlPolicy, TtlBranch};
 use phoebis_routing::rules::{allows, process, RulesMode};
-use phoebis_routing::{listing::row_for, LongContextRates, Rates, FIVE_HOUR};
+use phoebis_routing::{listing::row_for, LongContextRates, Rates, SEVEN_DAY};
 use phoebis_store::{canonical_id, ModelRule};
 
 use crate::config::{KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, ONE_HOUR_MS};
@@ -60,12 +60,11 @@ pub fn break_even_ms(
 }
 
 /// The factors for `canonical_model` under `funding`, at the fast cells when `fast`, on the cost model in force at
-/// `at`. Plan funding reads `tables.rate_table(FIVE_HOUR, None, at).rows`, a listed model without a weight of its own
-/// at its model tier's estimate there, under the base regime since the break-even ratio cancels a regime's capacity as
-/// it cancels the weight, so a regime's rows change nothing a recipe breaks even on. Any other model reads its type
-/// multipliers, the model's own override where it has one: an id no file lists, which the share prices at its named
-/// model tier's estimate and the shared multipliers, breaks even at that same ratio. A token costs the model's weight
-/// times the type's multiplier, so the weight cancels from read over write and every plan recipe breaks even alike.
+/// `at`. Plan funding reads `tables.rate_table(SEVEN_DAY, None, at).rows` under the base regime, since the break-even
+/// ratio cancels a regime's capacity as it cancels the weight, so a regime's rows change nothing a recipe breaks even
+/// on. Any other model reads its type multipliers, the model's own override where it has one: a model without a
+/// weight prices nothing and breaks even where a weighted one does. A token costs the model's weight times the type's
+/// multiplier, so the weight cancels from read over write and every plan recipe breaks even alike.
 /// Dollars read `pricing.rate_table().rows`, or `pricing.fast_rate_table().rows` for a fast recipe, whose probes draw
 /// usage credits at the fast cells, at a row's long-context rates when `prompt_tokens` is above their threshold, the
 /// set a probe's cost reads on the same prompt, and a model the price table prices nowhere takes the tightest row of
@@ -136,7 +135,7 @@ impl FactorRows {
             fast,
             dollars_long,
             fast_long,
-            plan: tables.rate_table(FIVE_HOUR, None, at).rows,
+            plan: tables.rate_table(SEVEN_DAY, None, at).rows,
             plan_multipliers,
             plan_overrides,
             tightest,

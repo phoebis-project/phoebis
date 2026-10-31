@@ -2534,8 +2534,8 @@ async fn a_fast_recipe_served_standard_settles_its_waste_as_plan_at_the_standard
     );
     let share = groups
         .iter()
-        .find_map(|group| group.probe_shares.as_ref()?.get(phoebis_routing::FIVE_HOUR))
-        .expect("the plan-funded probe's share of the 5-hour window");
+        .find_map(|group| group.probe_shares.as_ref()?.get(phoebis_routing::SEVEN_DAY))
+        .expect("the plan-funded probe's share of the 7-day window");
     assert!(
         share.cost > 0.0
             && share

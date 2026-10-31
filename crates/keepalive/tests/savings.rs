@@ -4361,7 +4361,7 @@ async fn the_credit_follows_only_a_re_arming_request() {
 const OAUTH_SECRET: &str = "sk-ant-oat01-OOOO";
 
 /// A subscription account on plan quota under a tier the shipped tables price, so its standard probes on a model they
-/// weigh settle in a share of the 5-hour window.
+/// weigh settle in a share of the 7-day window.
 fn plan_funded_spec() -> RigSpec {
     RigSpec {
         accounts: vec![oauth("o", OAUTH_SECRET, 0)],
@@ -4391,6 +4391,12 @@ async fn a_request_kept_warm_on_a_plan_funded_account_is_credited() {
         payload["unanswered"][0]["unit"].as_str(),
         Some("window_share"),
         "the probe settled in a share of the window: {}",
+        payload["unanswered"]
+    );
+    assert_eq!(
+        payload["unanswered"][0]["window"].as_str(),
+        Some("seven_day"),
+        "the share is of the 7-day window, which every plan keeps: {}",
         payload["unanswered"]
     );
     r.advance(60_000);

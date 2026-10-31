@@ -10,6 +10,7 @@ use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 use phoebis_ledger::{Band, Speed};
+use phoebis_routing::{FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
 use serde::{Deserialize, Serialize};
@@ -213,6 +214,9 @@ pub(crate) struct PersistedPrior {
     pub account: Option<String>,
     pub covered: bool,
     pub unit: Option<String>,
+    /// Absent from a payload the earlier build wrote, which priced in the 5-hour window and reads so.
+    #[serde(default)]
+    pub window: Option<String>,
     pub model: String,
     pub fast: bool,
     pub real_at: i64,
@@ -240,6 +244,9 @@ pub(crate) struct PersistedUnanswered {
     /// `Band::as_str`'s word.
     pub band: String,
     pub unit: Option<String>,
+    /// Absent from a payload the earlier build wrote, which priced in the 5-hour window and reads so.
+    #[serde(default)]
+    pub window: Option<String>,
     pub account: Option<String>,
     pub fast: bool,
     pub model: String,
@@ -272,6 +279,9 @@ pub(crate) struct PersistedKept {
     pub in_overage: bool,
     pub covered: bool,
     pub unit: Option<String>,
+    /// Absent from a payload the earlier build wrote, which priced in the 5-hour window and reads so.
+    #[serde(default)]
+    pub window: Option<String>,
     pub pending: Option<String>,
 }
 
@@ -340,6 +350,16 @@ fn optional_unit(word: Option<String>) -> Option<Option<SavingsUnit>> {
     match word {
         None => Some(None),
         Some(word) => unit_of(&word).map(Some),
+    }
+}
+
+/// The window a settlement's unit was priced in. `None` is an entry the earlier build saved, which priced in the
+/// 5-hour window, so its settlement keeps that word, and a word this build does not know refuses the row.
+fn window_of(window: Option<String>) -> Option<&'static str> {
+    match window.as_deref() {
+        None | Some("five_hour") => Some(FIVE_HOUR),
+        Some("seven_day") => Some(SEVEN_DAY),
+        Some(_) => None,
     }
 }
 
@@ -449,6 +469,7 @@ impl PersistedAgent {
                     account: prior.account.clone(),
                     covered: prior.covered,
                     unit: prior.unit.map(unit_word),
+                    window: Some(prior.window.to_string()),
                     model: prior.model.clone(),
                     fast: prior.fast,
                     real_at: prior.real_at,
@@ -500,6 +521,7 @@ impl PersistedAgent {
                     at: probe.at,
                     band: probe.band.as_str().to_string(),
                     unit: probe.unit.map(unit_word),
+                    window: Some(probe.window.to_string()),
                     account: probe.account.clone(),
                     fast: probe.fast,
                     model: probe.model.clone(),
@@ -529,6 +551,7 @@ impl PersistedAgent {
                     in_overage: kept.in_overage,
                     covered: kept.covered,
                     unit: kept.unit.map(unit_word),
+                    window: Some(kept.window.to_string()),
                     pending: kept.pending.map(|label| label.as_str().to_string()),
                 })
                 .collect(),
@@ -606,6 +629,7 @@ impl PersistedAgent {
                     at: probe.at,
                     band: Band::of_rollup(&probe.band),
                     unit: optional_unit(probe.unit)?,
+                    window: window_of(probe.window)?,
                     account: probe.account,
                     fast: probe.fast,
                     model: probe.model,
@@ -637,6 +661,7 @@ impl PersistedAgent {
                     in_overage: kept.in_overage,
                     covered: kept.covered,
                     unit: optional_unit(kept.unit)?,
+                    window: window_of(kept.window)?,
                     pending: optional_wasted(kept.pending)?,
                 })
             })
@@ -664,6 +689,7 @@ impl PersistedObservation {
                 account: prior.account,
                 covered: prior.covered,
                 unit: optional_unit(prior.unit)?,
+                window: window_of(prior.window)?,
                 model: prior.model,
                 fast: prior.fast,
                 real_at: prior.real_at,
@@ -1537,6 +1563,63 @@ mod tests {
         assert_eq!(
             restored.entrypoint, None,
             "its probes price at the base regime until the next request names one"
+        );
+    }
+
+    #[test]
+    fn a_settlement_payload_without_a_window_reads_five_hour_and_one_naming_the_week_keeps_it() {
+        let mut agent = Agent::new("main", "k", 1, 0, KeepaliveTiming::default());
+        agent.unanswered.push(UnansweredProbe {
+            id: "probe".into(),
+            usage: ProbeUsage::default(),
+            tier: Some("default_claude_max_20x".into()),
+            at: 0,
+            band: Band::Standard,
+            unit: Some(SavingsUnit::WindowShare),
+            window: SEVEN_DAY,
+            account: Some("o".into()),
+            fast: false,
+            model: "claude-opus-5-5".into(),
+            expires: 0,
+            covered: true,
+            kind: None,
+            usage_based: false,
+            in_overage: false,
+        });
+        let payload = serde_json::to_value(PersistedAgent::of(&agent)).unwrap();
+        assert_eq!(
+            payload["unanswered"][0]["window"].as_str(),
+            Some("seven_day"),
+            "the settlement names its window beside its unit: {}",
+            payload["unanswered"]
+        );
+        let window_of_restored = |payload: serde_json::Value| {
+            serde_json::from_value::<PersistedAgent>(payload)
+                .expect("the payload loads")
+                .restore(KeepaliveTiming::default())
+                .map(|(agent, _)| agent.unanswered[0].window)
+        };
+        assert_eq!(
+            window_of_restored(payload.clone()),
+            Some(SEVEN_DAY),
+            "a payload naming the week keeps it"
+        );
+        let mut before = payload.clone();
+        before["unanswered"][0]
+            .as_object_mut()
+            .expect("the entry is an object")
+            .remove("window");
+        assert_eq!(
+            window_of_restored(before),
+            Some(FIVE_HOUR),
+            "an entry the earlier build saved was priced in the 5-hour window"
+        );
+        let mut unknown = payload;
+        unknown["unanswered"][0]["window"] = "fortnight".into();
+        assert_eq!(
+            window_of_restored(unknown),
+            None,
+            "a window this build does not know refuses the row"
         );
     }
 }

@@ -14,7 +14,9 @@ use phoebis_bus::{
 use phoebis_ledger::{Band, Ledger, Metrics, PlanTables, Pricing, Speed};
 use phoebis_oauth::Clock;
 use phoebis_relay::{CacheTtl, CacheTtlPolicy, Relay};
-use phoebis_routing::{budget_deadline, listing, MemberSpend, RegistrySnapshot, RouterHandle};
+use phoebis_routing::{
+    budget_deadline, listing, MemberSpend, RegistrySnapshot, RouterHandle, SEVEN_DAY,
+};
 use phoebis_store::{AccountKind, AccountRow, AccountState, OveragePolicy, PoolRow, Store};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -442,7 +444,8 @@ impl Funding {
         }
     }
 
-    /// `Plan` is the share of the account's 5-hour window, the other three dollars: `BurnUnit::of`'s rule.
+    /// `Plan` is the share of the account's 7-day window, the window every plan keeps, the other three dollars:
+    /// `BurnUnit::of`'s rule.
     pub fn unit(self) -> SavingsUnit {
         match self {
             Funding::Plan => SavingsUnit::WindowShare,
@@ -931,6 +934,9 @@ pub(crate) struct PriorCoverage {
     /// that leaves the registry while its probe is in flight still lands a unit. `None` when the answer named no
     /// account (one the relay built before any selection), in which case the credit never fires.
     pub unit: Option<SavingsUnit>,
+    /// The window a `WindowShare` settlement was priced in, `seven_day` for every entry this build writes and
+    /// `five_hour` for one loaded from an agent the earlier build saved.
+    pub window: &'static str,
     pub model: String,
     /// The covering recipe's speed, which the credited request's has to match.
     pub fast: bool,
@@ -1074,6 +1080,7 @@ fn prior_coverage(agent: &Agent, now: i64) -> Option<PriorCoverage> {
                 account: probe.account.clone(),
                 covered: probe.covered,
                 unit: probe.unit,
+                window: probe.window,
                 model: probe.model.clone(),
                 fast: probe.fast,
                 real_at,
@@ -1084,6 +1091,7 @@ fn prior_coverage(agent: &Agent, now: i64) -> Option<PriorCoverage> {
                 account: kept.account.clone(),
                 covered: kept.covered,
                 unit: kept.unit,
+                window: kept.window,
                 model: kept.canonical_model.clone(),
                 fast: kept.fast,
                 real_at,
@@ -1094,6 +1102,7 @@ fn prior_coverage(agent: &Agent, now: i64) -> Option<PriorCoverage> {
                 account: None,
                 covered: false,
                 unit: None,
+                window: SEVEN_DAY,
                 model: agent.canonical_model.clone(),
                 fast: false,
                 real_at,
@@ -1234,6 +1243,8 @@ pub(crate) struct UnansweredProbe {
     pub at: i64,
     pub band: Band,
     pub unit: Option<SavingsUnit>,
+    /// The window `unit` was priced in, as `PriorCoverage::window` reads it.
+    pub window: &'static str,
     pub account: Option<String>,
     pub fast: bool,
     pub model: String,
@@ -1278,6 +1289,8 @@ pub(crate) struct Kept {
     /// ceiling moved the probe here reads the evidence the unanswered list held.
     pub covered: bool,
     pub unit: Option<SavingsUnit>,
+    /// The window `unit` was priced in, as `PriorCoverage::window` reads it.
+    pub window: &'static str,
     /// The label a probe written off at a ceiling settles under when its chain's last entry lapses with no turn:
     /// `idle_limit` today. A turn that reads the probe leaves the label in place, so one that ends without deciding the
     /// probe hands it back to the lapse sweep. `None` for a probe a real request superseded, which waits for that
@@ -1305,6 +1318,7 @@ impl Kept {
             in_overage: probe.in_overage,
             covered: probe.covered,
             unit: probe.unit,
+            window: probe.window,
             pending: None,
         }
     }

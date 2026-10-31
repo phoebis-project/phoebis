@@ -12,7 +12,7 @@ use bytes::{Bytes, BytesMut};
 use http_body_util::BodyExt;
 use phoebis_ledger::{prompt_tokens, Band, PlanTables, PriceTable, Speed};
 use phoebis_relay::RelayOutcome;
-use phoebis_routing::BUDGET_WINDOW;
+use phoebis_routing::{BUDGET_WINDOW, SEVEN_DAY};
 use phoebis_store::AccountKind;
 use serde_json::Value;
 
@@ -223,13 +223,13 @@ fn settled_unit(
     if unit == SavingsUnit::WindowShare
         && probe_cost(tables, entrypoint, tier, canonical_model, usage, at).is_none()
     {
-        // `settlement_unit` reads `priced`, which asks exactly what `share_at` needs (a weight on the window and a
-        // capacity for the tier), so this branch is unreachable. It stays as the defensive read of a `None`.
+        // `settlement_unit` reads `priced`, which asks exactly what `share_at` needs (a weight on the 7-day window and
+        // a capacity for the tier on it), so this branch is unreachable. It stays as the defensive read of a `None`.
         tracing::debug!(
             account,
             model = canonical_model,
             unpriced = unpriced_reason(tables, entrypoint, canonical_model, at),
-            "a probe the cost model cannot price on the window share settles in dollars"
+            "a probe the cost model cannot price on the 7-day window share settles in dollars"
         );
         return SavingsUnit::Usd;
     }
@@ -603,6 +603,7 @@ impl Inner {
                             // and a turn on its lineage that reads the cache leaves it unwasted.
                             covered: false,
                             unit: covered_unit,
+                            window: SEVEN_DAY,
                             pending: Some(Wasted::IdleLimit),
                         });
                         self.touch_agent(key, agent_id);
@@ -692,6 +693,7 @@ impl Inner {
             at: record.at,
             band: record.band,
             unit: covered_unit,
+            window: SEVEN_DAY,
             account: Some(record.account.clone()),
             fast: job.recipe.fast,
             model: agent.canonical_model.clone(),
@@ -1512,8 +1514,8 @@ mod tests {
         );
     }
 
-    // The test model's regime `desk` holds 200 units of the Max 20x 5-hour window against the base 100 and keeps its
-    // own band, so at an instant outside the base band a probe sent under it costs half the base share.
+    // The test model's regime `desk` sizes the `default_claude_max_20x` 7-day window apart from the base row, so a
+    // probe sent under it costs the base share scaled by the base week over the regime's, each as its band weighs it.
     #[test]
     fn a_probes_cost_and_its_settlement_follow_the_agents_entrypoint() {
         let tables = phoebis_ledger::test_tables::subscription_costs();
@@ -1529,10 +1531,20 @@ mod tests {
             )
             .expect("a weighted model on a sized tier")
         };
+        let week = |entrypoint| {
+            let row = tables
+                .revisions
+                .in_force(at)
+                .capacity_of(entrypoint, MAX_20X.unwrap())
+                .and_then(|row| row.seven_day)
+                .expect("the tier sizes its week");
+            row / tables.band_factor(SEVEN_DAY, entrypoint, at)
+        };
+        let ratio = week(None) / week(Some("desk"));
         let (interactive, base) = (cost(Some("desk")), cost(None));
         assert!(
-            (interactive / base - 0.5).abs() < 1e-12,
-            "the probe's share under the regime is half the base one: {interactive} against {base}"
+            (interactive / base - ratio).abs() < 1e-12,
+            "the probe's share under the regime is {ratio} of the base one: {interactive} against {base}"
         );
         for entrypoint in [Some("desk"), None] {
             assert_eq!(
@@ -1552,16 +1564,25 @@ mod tests {
         }
     }
 
-    // The test table: Opus 5.5 weighs 2 and an input token multiplies by 1, the Max 20x 5-hour window holds 100
-    // units, and the band holds 0.5 of it.
+    // One input token's units over the `default_claude_max_20x` 7-day window, with the band's factor on the week
+    // inside the price.
     #[test]
-    fn a_plan_funded_probe_on_a_listed_model_settles_in_five_hour_share() {
+    fn a_plan_funded_probe_on_a_listed_model_settles_in_seven_day_share() {
         // The first cost entry alone, so the September instant below reads its figures.
         let tables = PlanTables {
             revisions: phoebis_ledger::test_tables::first_entry_costs(),
             path: None,
             source: "test".to_string(),
         };
+        let costs = tables.revisions.in_force(OFF_BAND);
+        let units = costs
+            .weight("claude-opus-5-5", SEVEN_DAY)
+            .expect("Opus 5.5 weighs the week")
+            * costs.type_multiplier.input;
+        let week = costs
+            .capacity_of(None, MAX_20X.unwrap())
+            .and_then(|row| row.seven_day)
+            .expect("the tier sizes its week");
         let one_input = ProbeUsage {
             input: 1,
             ..ProbeUsage::default()
@@ -1581,13 +1602,14 @@ mod tests {
             |at: i64| probe_cost(&tables, None, MAX_20X, "claude-opus-5-5", one_input, at).unwrap();
         let cost = share(OFF_BAND);
         assert!(
-            (cost - 2.0 / 100.0).abs() < 1e-12,
-            "one Opus 5.5 input token is its 2 units over the window's 100: {cost}"
+            (cost - units / week).abs() < 1e-12,
+            "one Opus 5.5 input token is its {units} units over the week's {week}: {cost}"
         );
         let banded = share(IN_BAND);
+        let factor = tables.band_factor(SEVEN_DAY, None, IN_BAND);
         assert!(
-            (banded - 2.0 / 100.0 / 0.5).abs() < 1e-12,
-            "the band is inside the price at the settlement instant: {banded}"
+            (banded - units / week * factor).abs() < 1e-12,
+            "the band's factor on the week is inside the price at the settlement instant: {banded}"
         );
     }
 
