@@ -3630,27 +3630,25 @@ async fn a_decision_lands_as_a_row_whose_frame_decodes_to_the_record() {
         serde_json::to_value(&summary).unwrap(),
         "the summary is stored as its JSON"
     );
-    let read =
+    let mut read =
         h.db.read_blocking(|c| phoebis_ledger::decision_record(c, "r1", 2))
             .unwrap()
             .expect("the decision is stored");
-    let mut expected = serde_json::to_value(&record).unwrap();
-    // A moved decision whose request has not landed composes a completion that carries no answer.
-    expected["outcome"]["completion"] = serde_json::json!({
-        "status": null,
-        "cache_read_tokens": null,
-        "input_tokens": null,
-        "promised_tokens": null,
-        "hit": null,
-        "held_ms": null,
-        "freed": false,
-        "cache_map_written": null,
-        "completed_at": null,
-    });
+    // The read composes the completion from the request's own rows, so only the rest of it comes from the frame.
+    read["outcome"]
+        .as_object_mut()
+        .expect("the record has an outcome")
+        .remove("completion");
     let mut answer = serde_json::Map::new();
     answer.insert("request_id".into(), "r1".into());
     answer.insert("seq".into(), 2.into());
-    answer.extend(expected.as_object().unwrap().clone());
+    answer.extend(
+        serde_json::to_value(&record)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
     assert_eq!(read, serde_json::Value::Object(answer));
     // The routing-log tests store their rows through `put_decision`, so its frame has to be the writer's. No reader
     // shows the header's content size, since `decode_record` also reads a frame without one.

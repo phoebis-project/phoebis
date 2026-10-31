@@ -2111,8 +2111,8 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             "{kind} is written but not listed"
         );
     }
-    // Two kinds the ledger writes from its own records rather than from a router event, which the routing log's
-    // kinds filter selects only while this list names them.
+    // Three kinds the ledger writes from its own records rather than from a router event. The admin routes wait on
+    // them through the routing log's kinds filter, which refuses a kind this list does not name.
     let poll_fault = phoebis_oauth::PollFault {
         endpoint: "usage",
         status: Some(500),
@@ -2121,6 +2121,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
     };
     for record in [
         phoebis_ledger::plan_ended("a", 1, "profile", &serde_json::json!({})),
+        phoebis_ledger::plan_restored("a", 1, "profile", &serde_json::json!({})),
         phoebis_ledger::poll_failed("a", 1, &poll_fault),
     ] {
         let phoebis_ledger::Record::Event(row) = record else {

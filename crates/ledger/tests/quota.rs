@@ -1483,6 +1483,10 @@ async fn a_stalled_startup_fetch_is_aborted_by_ledger_shutdown_and_makes_no_furt
             paused: 0
         }
     );
+    assert!(
+        Arc::strong_count(&tables) > 1,
+        "the stalled fetch task holds its clone of the tables until shutdown aborts it"
+    );
     h.ledger.clone().shutdown().await.unwrap();
     // Released only now: an aborted task never reaches the profile half, even once the fetch it never
     // awaited the end of is free to finish.
