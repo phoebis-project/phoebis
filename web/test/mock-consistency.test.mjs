@@ -929,9 +929,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(Date.parse(exhausted[0].nextProbeAt) > s.now, `its next probe ${exhausted[0].nextProbeAt} lies ahead of the story's now`);
     const overview = await s.api.getKeepaliveOverview();
     assert.deepEqual([overview.agents.busy, overview.agents.idle, overview.agents.parked], [10, 9, 4], 'the tiles count the recipe rows by lifecycle word, released ones left out');
-    // The engine's cap counts every record it holds, the idle recipe of the row two hours back among them, which left
-    // the route's list under the non-companion timeout: the 31 agents of the sessions the mod registered or a recipe
-    // warms, and the auxiliary-only session's subagent.
+    // The engine's cap counts every record it holds, the idle recipe of the row two hours back among them, which the
+    // route's list leaves out. The session specs the mod registered or a recipe warms hold 31 agents, the
+    // registration-only row none, and the auxiliary-only row its one subagent.
     assert.equal(overview.limits.agents.count, 32, 'the cap counts every record');
   });
 
@@ -993,7 +993,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`every row and every agent line reads its effort as one of the four words or none, and each written line reads warm by its TTL at the story's clock, at ${at}`, async () => {
+  test(`every row and every agent line reads its effort as one of the four words or none, and each line reads warm by its TTL at the story's clock, at ${at}`, async () => {
     const s = await story;
     const words = ['low', 'medium', 'high', 'max', null];
     // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
@@ -1009,14 +1009,31 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(lines.length > 0, 'the story holds agent lines');
     for (const line of lines) assert.ok(words.includes(line.effort), `${line.agentId} reads the effort ${line.effort}`);
     assert.ok(lines.some((l) => l.warm) && lines.some((l) => !l.warm), 'warm and cold lines both');
-    // The written rows' lines, each on a five-minute TTL: the session no mod reports used main 2 minutes back and its
+    // The written rows' lines on a five-minute TTL: the session no mod reports used main 2 minutes back and its
     // subagent 25, the auxiliary-only session's subagent 3, and the finished row, the row two hours back and the
-    // notebook row last used main 21, 120 and 20 minutes back.
+    // notebook row used main 21, 120 and 20 minutes back. The slowed session's lines sit on the hour's TTL, main last
+    // used at 14:05 and its Haiku subagent at 13:59:05, so both read warm where five minutes would read them cold.
+    const written = ['b7e2d5a9-6c13-4f80-a4d2-9e1f3c7b0a68', '3e9b7c21-4d58-4a06-8f1e-6c2a9d0b5e74', '9b4e2f71-6c3d-4a85-b0e2-5d7f8a1c3e96', 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58', '6d2f8b40-1e7a-4c95-a3d8-7b5e0c9f2a61', '5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65'];
     const warmOf = (sessionId) => seeded.find((x) => x.sessionId === sessionId)?.agentContexts.map((c) => [c.agentId, c.warm]);
-    assert.deepEqual(
-      ['b7e2d5a9-6c13-4f80-a4d2-9e1f3c7b0a68', '3e9b7c21-4d58-4a06-8f1e-6c2a9d0b5e74', '9b4e2f71-6c3d-4a85-b0e2-5d7f8a1c3e96', 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58', '6d2f8b40-1e7a-4c95-a3d8-7b5e0c9f2a61'].map(warmOf),
-      [[['main', true], ['5c8e', false]], [['d41c', true]], [['main', false]], [['main', false]], [['main', false]]],
-    );
+    assert.deepEqual(written.map(warmOf), [
+      [
+        ['main', true],
+        ['5c8e', false],
+      ],
+      [['d41c', true]],
+      [['main', false]],
+      [['main', false]],
+      [['main', false]],
+      [
+        ['main', true],
+        ['7b2e', true],
+      ],
+    ]);
+    // The other rows' last uses are mostly draws, so their lines read warm by their own TTL at the story's clock.
+    for (const line of seeded.filter((x) => !written.includes(x.sessionId)).flatMap((x) => x.agentContexts)) {
+      const warm = line.lastUsedAt !== null && line.cacheTtlMs !== null && s.now - Date.parse(line.lastUsedAt) < line.cacheTtlMs;
+      assert.equal(line.warm, warm, `${line.agentId} on ${line.model}, last used ${line.lastUsedAt} on a ${line.cacheTtlMs} ms TTL`);
+    }
   });
 
   test(`a companion row lists main's line and one per unreleased subagent recipe, main first and then by agent id and model, and none of a released agent, at ${at}`, async () => {
@@ -1094,25 +1111,48 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds);
     // A recipe stands on a pin its first request placed, so a released or finished row with no pin left once held one.
     const placed = (row) => row.pinned || (!row.historical && recipes.some((r) => r.keyId === row.keyId && r.sessionId === row.sessionId));
+    // The rows the literal below reads. The other rows' first sightings are mostly draws, so their subagents' lines
+    // are read against the requests seed: an inference request with an attempt places a pin, since a probe follows the
+    // request that placed its agent's pin and a count or a refusal before any attempt places none.
+    const written = ['5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65', 'b7e2d5a9-6c13-4f80-a4d2-9e1f3c7b0a68', '3e9b7c21-4d58-4a06-8f1e-6c2a9d0b5e74'];
+    const seed = [...s.lib.requestById.values()].filter((r) => r.kind === 'inference' && r.attempts.length > 0);
+    const firstRequestOf = (row, agentId) =>
+      seed.filter((r) => r.keyId === row.keyId && r.keyGeneration === row.keyGeneration && r.sessionId === row.sessionId && r.agentId === agentId).reduce((first, r) => (first === null || r.at < first ? r.at : first), null);
+    let laterPlaces = 0;
     for (const row of seeded) {
       const name = `${row.keyId} ${row.sessionId}${row.historical ? ', the earlier holder' : ''}`;
       if (placed(row)) {
         const lastUse = s.lib.lastUseOf(row);
         assert.ok(row.createdAt !== null && lastUse !== null && Date.parse(row.createdAt) <= Date.parse(lastUse), `${name} first seen at ${row.createdAt}, last used at ${lastUse}`);
       } else assert.equal(row.createdAt, null, `${name}: no pin ever placed it`);
+      // An agent holds one first-seen time whatever models it is pinned on, so its place counts once.
+      const places = new Map();
       for (const c of row.agentContexts) {
         const where = `${name}: ${c.agentId} on ${c.model}`;
         if (c.createdAt !== null && c.lastUsedAt !== null) assert.ok(Date.parse(c.createdAt) <= Date.parse(c.lastUsedAt), `${where} first seen at ${c.createdAt}, after its last use at ${c.lastUsedAt}`);
-        if (c.agentId === 'main') assert.equal(c.createdAt, row.createdAt, `${where} reads the session's first-seen time`);
-        else if (c.createdAt !== null) assert.ok(Date.parse(c.createdAt) >= Date.parse(row.createdAt), `${where} first seen at ${c.createdAt}, before the session at ${row.createdAt}`);
+        if (c.agentId === 'main') {
+          assert.equal(c.createdAt, row.createdAt, `${where} reads the session's first-seen time`);
+          continue;
+        }
+        if (c.createdAt !== null) assert.ok(Date.parse(c.createdAt) >= Date.parse(row.createdAt), `${where} first seen at ${c.createdAt}, before the session at ${row.createdAt}`);
+        if (!places.has(c.agentId)) places.set(c.agentId, places.size + 1);
+        if (written.includes(row.sessionId)) continue;
+        const place = places.get(c.agentId);
+        const first = firstRequestOf(row, c.agentId);
+        if (first !== null) assert.equal(c.createdAt, first, `${where} reads its earliest request of the session`);
+        else {
+          if (place > 1) laterPlaces += 1;
+          assert.equal(c.createdAt, iso(Date.parse(row.createdAt) + place * 60_000), `${where} at place ${place} among the subagents`);
+        }
       }
     }
+    assert.ok(laterPlaces > 0, 'a drawn row holds a stand-in past its first place');
     // The written rows' lines: the slowed session's main at its oldest turn, 13:58:40, and its Haiku subagent at the one
     // request it placed, 13:59:05, and a subagent no request names a minute past its session's first sighting, 47
     // minutes back for the session no mod reports and 38 for the auxiliary-only one.
     const linesOf = (sessionId) => seeded.find((x) => x.sessionId === sessionId)?.agentContexts.map((c) => [c.agentId, c.createdAt]);
     assert.deepEqual(
-      ['5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65', 'b7e2d5a9-6c13-4f80-a4d2-9e1f3c7b0a68', '3e9b7c21-4d58-4a06-8f1e-6c2a9d0b5e74'].map(linesOf),
+      written.map(linesOf),
       [
         [
           ['main', iso(s.now - 31 * 60_000 - 20_000)],
@@ -1835,6 +1875,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         for (const [field, change] of Object.entries(pairs)) if (member(field) in pool) assert.deepEqual(change.to, pool[member(field)], `${e.id}: ${field} reads the pool's value`);
         // A policy member's dotted field names its path under the pool's policy.
         const policy = Object.entries(pairs).filter(([field]) => field.startsWith('keepalive.'));
+        assert.ok(policy.length > 0, `${e.id}: the edit moves a policy member`);
         for (const [field, change] of policy) {
           const [, name] = member(field).split('.');
           assert.deepEqual(change.to, pool.keepalive[name], `${e.id}: ${field} reads the pool's policy`);
@@ -2148,7 +2189,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const pick = r.walk.find((w) => w.step === 'pick' && w.verdict === 'chosen');
       if (!pick) continue;
       const id = `${r.requestId}/${r.seq}`;
-      const [ties, kept, , turn] = drawOf(pick);
+      const [ties, kept, drawn, turn] = drawOf(pick);
       seen.add(r.settings.strategy);
       // The round-robin pool holds research alone, so its cursor names the one turn and leaves no draw.
       if (r.settings.strategy === 'round_robin') {
@@ -2156,7 +2197,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         continue;
       }
       if (kept !== undefined) assert.ok(kept.length > 0 && kept.length < ties.length && kept.every((x) => ties.includes(x)), `${id}: by runway ${kept.join(', ')}`);
-      assert.equal(turn, undefined, `${id}: the turn`);
+      // The draw is left to the runway's ties where they narrowed the strategy's, else to the strategy's own.
+      assert.deepEqual([drawn, turn], [(kept ?? ties).length > 1, undefined], `${id}: the draw`);
     }
     assert.deepEqual([...seen].sort(), ['pace', 'priority', 'round_robin']);
     // The tie's failover ties primary and nightly on Pace, both fitting, and the runway keeps primary, so no draw is
@@ -2392,9 +2434,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
     // The model's own week where it draws one, else the 7-day window.
     const weekOf = (model) => (model.includes('fable') ? 'seven_day_fable' : 'seven_day');
-    // The marked pins' rewrites, each a Sonnet pin's tokens at 1.4e-8 of the 7-day window a token at a Sonnet weight of
-    // 0.25, to five places: 22,000 and 88,000 tokens in the morning's round, 30,000 and 40,000 in the stretch's. The
-    // 30,000 pin's 0.000105 sits on the rounding half, which binary floating point holds a hair under it.
+    // A marked Sonnet pin's rewrite is its tokens times 1.4e-8, the share of the 7-day window one token takes, times
+    // the Sonnet weight of 0.25, to five places, for 22,000 and 88,000 tokens in the morning's round and 30,000 and
+    // 40,000 in the stretch's. The double nearest 1.4e-8 sits a hair under it, so the 30,000 pin's 0.000105 rounds down
+    // to 0.0001.
     const rewrites = { 22_000: 0.00008, 30_000: 0.0001, 40_000: 0.00014, 88_000: 0.00031 };
     const read = { api_key: 0, oauth: 0 };
     for (const e of rounds) {
@@ -2672,8 +2715,21 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`the four routing conditions name the story's subjects in the route's order, studio's slow-down with its spans, its bar and the pool's stretch, at ${at}`, async () => {
     const s = await story;
     const kinds = ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'];
-    const read = s.attention.filter((i) => kinds.includes(i.kind)).map((i) => `${i.kind} ${i.subject.id}`);
-    assert.deepEqual(read, ['wall_reached nightly', 'wall_reached secondary', 'wall_reached studio', 'destination_spent nightly', 'shed_no_runway all', 'slowed_long studio']);
+    // A time on the story's clock, which reads 14:30 at the instant the story loads.
+    const storyTime = (h, m, sec = 0) => iso(s.now - ((14 - h) * 60 + 30 - m) * 60_000 + sec * 1_000);
+    // Each condition dates from its first event of the trailing day: nightly's 5-hour window read spent by the poll at
+    // 12:01:05, secondary's by the 429 answered at 14:02:11 and studio's by the poll at 14:20, the least-bad move onto
+    // nightly at 11:01:50 within the hour before its wall, all's round at 14:12:30 that found no runway, and studio's
+    // oldest slow-down span from 09:12.
+    const read = s.attention.filter((i) => kinds.includes(i.kind)).map((i) => [i.kind, i.subject.id, i.since]);
+    assert.deepEqual(read, [
+      ['wall_reached', 'nightly', storyTime(12, 1, 5)],
+      ['wall_reached', 'secondary', storyTime(14, 2, 11)],
+      ['wall_reached', 'studio', storyTime(14, 20)],
+      ['destination_spent', 'nightly', storyTime(11, 1, 50)],
+      ['shed_no_runway', 'all', storyTime(14, 12, 30)],
+      ['slowed_long', 'studio', storyTime(9, 12)],
+    ]);
     const item = s.attention.find((i) => i.kind === 'slowed_long');
     assert.deepEqual(
       [item.detail.spans, item.detail.open, item.detail.setting, item.detail.setting_values],
@@ -2853,9 +2909,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const studio = round.candidates.find((c) => c.accountId === 'studio');
     const x = studio.windows.five_hour;
     const fired = (excess) => ({ excess, slowed: true, window: 'five_hour' });
-    // Studio has no end, so its horizon is its reset, and the round's shed line reads the excess there: the 0.86 its
-    // head read at 14:05 and its demand of 0.1286 an hour over the 54 minutes to 15:29 less work's 30-minute threshold
-    // land 0.02574 past the 0.95 ceiling, 0.0286 an hour.
+    // Studio has no end, so its horizon is its reset at 15:29, and the round's shed line reads the excess there. The 84
+    // minutes from 14:05 less work's 30-minute threshold leave 54, in which a demand of 0.1286 an hour carries the
+    // head's 0.86 to 0.02574 past the 0.95 ceiling, 0.0286 an hour.
     assert.equal(x.horizon, x.reset);
     assert.deepEqual(s.lib.stretchTriggerOf(studio, work, when), fired(0.0286));
     assert.equal(round.walk.find((w) => w.step === 'move:shed').facts.find((f) => f.key === 'excess')?.value, 0.0286);
@@ -2969,8 +3025,23 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // $10 a million, its Opus 5.5 turn, 2,400, 20,000, 2,200 and 1,540 at $4, $0.20, $5 and $20, and the slowed
     // session's first turn on Sonnet 5.5, 2,400 input, 64,000 1-hour write and 910 output at $2, $4 and $10. The ci
     // key's three refusals named no model, which the entry lacks.
+    const named = ['req_c94d1e07-b35', 'req_3f6a9c21-d48', 'req_c5d8e2b7-e95', 'req_6c3a9e27-5b1', 'req_9b4f1c62-a07', 'req_2d8e5b13-f40'];
     const costOf = (id) => s.requests.find((r) => r.id === id)?.costUsd;
-    assert.deepEqual(['req_c94d1e07-b35', 'req_3f6a9c21-d48', 'req_c5d8e2b7-e95', 'req_6c3a9e27-5b1', 'req_9b4f1c62-a07', 'req_2d8e5b13-f40'].map(costOf), [0.0337, 0.0554, 0.2699, 0, 0, 0]);
+    assert.deepEqual(named.map(costOf), [0.0337, 0.0554, 0.2699, 0, 0, 0]);
+    // The other rows mostly draw their tokens, so each reads the cells of the entry in force at its instant.
+    let priced = 0;
+    for (const r of s.requests.filter((x) => !named.includes(x.id))) {
+      const entry = s.lib.revisionAt(revisions, r.at);
+      const want = dollarsAt(entry, r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast');
+      if (want === null) {
+        assert.equal(r.costUsd, 0, `${r.id} on ${r.model}, which the entry of ${entry?.effective} lacks, reads ${r.costUsd}`);
+        continue;
+      }
+      // A row's dollars are rounded to the hundredth of a cent.
+      assert.ok(Math.abs(r.costUsd - want) <= 0.00005 + 1e-12, `${r.id} on ${r.model} at ${r.at} reads ${r.costUsd} against the entry of ${entry?.effective}'s ${want}`);
+      priced += 1;
+    }
+    assert.ok(priced > 0, 'the story prices its drawn rows');
     // The request rows all run after the latest entry's date, so the month's synthesized hours before it carry the
     // earlier entry, each pricing its tokens as one answer at the hour, as the mock writes it.
     const latest = s.lib.revisionAt(revisions, s.now)?.effective;
