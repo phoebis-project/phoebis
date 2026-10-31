@@ -3116,7 +3116,12 @@ impl RoutingState {
         }
         for reservation in self.live_bookings(account_id) {
             let entrypoint = reservation.entrypoint.as_deref();
-            for (window, burn) in &reservation.burn {
+            // As in `shares`: a booking made before a poll dropped a window still names it.
+            for (window, burn) in reservation
+                .burn
+                .iter()
+                .filter(|(window, _)| self.has_window(account_id, window))
+            {
                 let Some(to) = horizon(window) else {
                     continue;
                 };
@@ -5492,6 +5497,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             [SEVEN_DAY],
             "the booking still in flight burns on the account's one shared window alone"
+        );
+        assert_eq!(
+            state
+                .banded_shares("a", &|_| true, "t", 2_500, 1_800_000, 1.0, &|_| Some(
+                    2_500 + HOUR_MS
+                ))
+                .into_keys()
+                .collect::<Vec<_>>(),
+            [SEVEN_DAY],
+            "a horizon on the 5-hour window adds none of the booking's 5-hour burn either"
         );
     }
 
