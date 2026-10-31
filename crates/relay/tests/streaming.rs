@@ -397,11 +397,13 @@ async fn a_connection_that_cannot_be_opened_is_retried_once_after_the_wait() {
 #[tokio::test]
 async fn a_request_refused_on_both_connects_answers_502_after_one_wait() {
     // The listener is bound and dropped before the request, so both connects are refused. An API-key account, so
-    // the relay calls no control plane on the dead address.
+    // the relay calls no control plane on the dead address. The relay logs one debug line right before each connect
+    // wait, so the count of that line is the count of waits.
+    let captured = common::Captured::default();
+    let _log = captured.install_at(tracing::Level::DEBUG);
     let up = FakeUpstream::start(Vec::new()).await;
     let app = common::relay_with(phoebis_store::AccountKind::ApiKey, &up).await;
     up.shutdown().await;
-    let started = Instant::now();
     let resp = tokio::time::timeout(
         Duration::from_secs(5),
         app.oneshot(common::stream_request("phoebis-testkey")),
@@ -409,16 +411,18 @@ async fn a_request_refused_on_both_connects_answers_502_after_one_wait() {
     .await
     .expect("two refused connects and one wait end the request well inside the bound")
     .unwrap();
-    let elapsed = started.elapsed();
     assert_eq!(resp.status(), 502);
     assert_eq!(
         resp.headers().get("x-phoebis-error-code").unwrap(),
         "upstream_unreachable"
     );
-    eprintln!("two refused connects answered after {elapsed:?}");
-    assert!(
-        elapsed >= CONNECT_RETRY_WAIT && elapsed < 2 * CONNECT_RETRY_WAIT,
-        "one wait between the two connects and none after the second, answered after {elapsed:?}"
+    assert_eq!(
+        captured
+            .text()
+            .matches("retrying a request that never reached the upstream")
+            .count(),
+        1,
+        "one wait between the two connects and none after the second"
     );
     let outcome = resp
         .extensions()
