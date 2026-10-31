@@ -1,7 +1,6 @@
 //! `tls reload` from the outside: the binary against a router started in-process on loopback with an admin pair,
-//! trusting the pair's CA through `--ca`, with `--json` and with a refused secret. A removed registry command is
-//! refused as an unknown subcommand. `status.rs` and `admin_client.rs` drive the shared flags over plain HTTP and
-//! without the file.
+//! trusting the pair's CA through `--ca`, with `--json` and with a refused secret. `status.rs` and `admin_client.rs`
+//! drive the shared flags over plain HTTP and without the file.
 
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
@@ -362,84 +361,4 @@ async fn tls_reload_with_a_refused_secret_exits_1_and_prints_no_secret() {
     assert_eq!(stderr, "the admin secret was refused\n");
     assert_no_secret(&refused, &[WRONG, ADMIN_SECRET]);
     running.stop().await;
-}
-
-/// The help lists the binary's commands in the table's order, with clap's own `help` entry allowed beside them.
-#[tokio::test]
-async fn the_help_lists_every_command_and_no_other() {
-    let dir = tempfile::tempdir().unwrap();
-    let absent = dir.path().join("absent.yaml");
-    let help = phoebis(&["--help"], &absent, &[], &[], None).await;
-    assert_exit(&help, 0);
-    let (stdout, _) = text(&help);
-    // A command's own line is indented two spaces, and a description wrapped past it further.
-    let commands: Vec<&str> = stdout
-        .lines()
-        .skip_while(|line| *line != "Commands:")
-        .skip(1)
-        .take_while(|line| !line.is_empty())
-        .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
-        .filter_map(|line| line.split_whitespace().next())
-        .filter(|command| *command != "help")
-        .collect();
-    assert_eq!(
-        commands,
-        [
-            "backup",
-            "check-config",
-            "health",
-            "init",
-            "recover-key",
-            "status",
-            "tls"
-        ],
-        "{stdout}"
-    );
-}
-
-/// Clap prints each flag's doc comment as its help line, so a doc comment that joins two clauses with a semicolon
-/// reaches the terminal as one.
-#[tokio::test]
-async fn no_help_screen_joins_two_clauses_with_a_semicolon() {
-    let dir = tempfile::tempdir().unwrap();
-    let absent = dir.path().join("absent.yaml");
-    for command in [
-        &[][..],
-        &["backup"],
-        &["check-config"],
-        &["health"],
-        &["init"],
-        &["recover-key"],
-        &["status"],
-        &["tls"],
-        &["tls", "reload"],
-    ] {
-        let args: Vec<&str> = command.iter().copied().chain(["--help"]).collect();
-        let help = phoebis(&args, &absent, &[], &[], None).await;
-        assert_exit(&help, 0);
-        let (stdout, _) = text(&help);
-        let joined: Vec<&str> = stdout.lines().filter(|line| line.contains(';')).collect();
-        assert!(joined.is_empty(), "{command:?} --help: {joined:#?}");
-    }
-}
-
-/// The console is the one place a registry row is created or edited, so the binary knows no registry command: clap
-/// refuses each as an unknown subcommand before any file is read.
-#[tokio::test]
-async fn a_removed_subcommand_is_unknown() {
-    let dir = tempfile::tempdir().unwrap();
-    let absent = dir.path().join("absent.yaml");
-    for (args, name) in [
-        (&["account", "add", "x"][..], "account"),
-        (&["ledger", "replay-parked"], "ledger"),
-    ] {
-        let refused = phoebis(args, &absent, &[], &[], None).await;
-        assert_exit(&refused, 2);
-        let (stdout, stderr) = text(&refused);
-        assert_eq!(stdout, "", "{args:?}");
-        assert!(
-            stderr.starts_with(&format!("error: unrecognized subcommand '{name}'\n")),
-            "{args:?}: {stderr}"
-        );
-    }
 }

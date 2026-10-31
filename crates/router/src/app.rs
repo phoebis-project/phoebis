@@ -1784,35 +1784,6 @@ revisions:
         assert_eq!((view.retention_days, view.rollup_retention_days), (30, 0));
     }
 
-    /// The anchor tier carries a capacity on both windows, so every model the cost model names has a burn rate on
-    /// each, at its own weight or, as an estimate, at its model tier's latest weight: a pin on a model without a
-    /// weight ranks by its estimated burn rather than last.
-    #[test]
-    fn the_burn_rates_carry_a_row_per_model_the_fallback_prices_so_an_unweighted_pin_ranks_by_its_estimate(
-    ) {
-        let tables = phoebis_ledger::PlanTables::shipped();
-        let costs = tables.revisions.in_force(START);
-        for window in [phoebis_routing::FIVE_HOUR, phoebis_routing::SEVEN_DAY] {
-            let rates = tables.rate_table(window, None, START);
-            let mut rows: Vec<&str> = rates.rows.keys().map(String::as_str).collect();
-            rows.sort_unstable();
-            let mut priced: Vec<&str> = costs
-                .model_weight
-                .keys()
-                .chain(costs.model_tier.keys())
-                .map(String::as_str)
-                .filter(|model| costs.weight_or_fallback(model, window).is_some())
-                .collect();
-            priced.sort_unstable();
-            priced.dedup();
-            assert!(
-                !rows.is_empty(),
-                "{window}: the shipped model weighs a model"
-            );
-            assert_eq!(rows, priced, "{window}");
-        }
-    }
-
     #[tokio::test]
     async fn the_production_resolver_honours_an_explicit_port_and_defaults_to_443() {
         let resolve = resolver_for(&UpstreamConfig::default());

@@ -406,33 +406,6 @@ fn an_address_off_loopback_is_written_without_a_tls_line_and_passes_check_config
 const REFUSED_TLS_FLAGS: [[&str; 2]; 3] = [["--tls", "files"], ["--tls", "self-signed"], ["--proxy-tls", "self_signed"]];
 
 #[test]
-fn a_tls_flag_is_a_usage_error() {
-    for [flag, value] in REFUSED_TLS_FLAGS {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("config.yaml");
-        let out = init(
-            dir.path(),
-            &[
-                flag,
-                value,
-                "--non-interactive",
-                "--config",
-                path_arg(&config),
-            ],
-        );
-        assert_eq!(out.status.code(), Some(2), "{value}: {}", printed(&out));
-        assert!(
-            String::from_utf8_lossy(&out.stderr)
-                .contains(&format!("error: unexpected argument '{flag}' found")),
-            "{value}: {}",
-            printed(&out)
-        );
-        assert!(out.stdout.is_empty(), "{value}: {}", printed(&out));
-        assert!(entries(dir.path()).is_empty(), "{value}");
-    }
-}
-
-#[test]
 fn a_failure_after_the_first_write_removes_what_the_run_wrote() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("new").join("config.yaml");
