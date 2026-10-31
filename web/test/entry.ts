@@ -39,7 +39,7 @@ export * from '@/lib/tokenBar';
 export * from '@/lib/trend';
 export * from '@/lib/unit';
 export { MockApi } from '@/mock';
-export { ACCOUNTS, resolvedPlan } from '@/mock/accounts';
+export { ACCOUNTS } from '@/mock/accounts';
 export { burnOf, groupsOf, refusalCategoriesOf } from '@/mock/analytics';
 export { slowedLongOf } from '@/mock/attention';
 export { leadOf } from '@/mock/lead';
