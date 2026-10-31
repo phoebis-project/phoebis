@@ -581,66 +581,6 @@ mod tests {
         assert_ne!(hash.message, suffix.message);
     }
 
-    /// A contract refusal's fix is the client's environment, so each message names the item the request lacks and
-    /// the answer tells the client not to resend it unchanged. The words are the identity's own, so a word the
-    /// message table spells differently answers the wrong message here.
-    #[test]
-    fn every_contract_message_names_its_item_and_ends_without_a_semicolon() {
-        use crate::identity::{
-            ITEM_AGENT_ID_HEADER, ITEM_ATTRIBUTION_LINE, ITEM_CLASS_HEADER, ITEM_CLIENT_VERSION,
-            ITEM_COMPACTION_HEADER, ITEM_METADATA_USER_ID, ITEM_SESSION_HEADER,
-        };
-        for (item, name) in [
-            (ITEM_CLIENT_VERSION, "User-Agent"),
-            (ITEM_SESSION_HEADER, "x-claude-code-session-id"),
-            (ITEM_CLASS_HEADER, "x-claude-code-request-class"),
-            (ITEM_ATTRIBUTION_LINE, "system[0]"),
-            (ITEM_METADATA_USER_ID, "account_uuid"),
-            (ITEM_AGENT_ID_HEADER, "x-claude-code-agent-id"),
-            (ITEM_COMPACTION_HEADER, "x-claude-code-compaction"),
-        ] {
-            let failure = relay_failure(&RelayError::ClientContract { item });
-            assert_eq!(
-                (
-                    failure.status,
-                    failure.error_type,
-                    failure.code,
-                    failure.retry_after,
-                    failure.no_retry
-                ),
-                (
-                    StatusCode::FORBIDDEN,
-                    "permission_error",
-                    "client_contract",
-                    None,
-                    true
-                ),
-                "{item}"
-            );
-            assert!(
-                failure.message.contains(name),
-                "{item}: {}",
-                failure.message
-            );
-            assert!(
-                !failure.message.contains(';'),
-                "{item}: {}",
-                failure.message
-            );
-            for phrase in [
-                "prompt is too long",
-                "model:",
-                "OAuth token has been revoked",
-            ] {
-                assert!(
-                    !failure.message.contains(phrase),
-                    "{item}: the client acts on {phrase:?} in a 4xx: {}",
-                    failure.message
-                );
-            }
-        }
-    }
-
     /// The client page quotes each message whole, so a word or a space the table's wrapped lines drop answers a text
     /// the page does not show.
     #[test]

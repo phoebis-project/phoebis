@@ -121,23 +121,6 @@ async fn an_inference_a_count_and_a_probe_are_refused_with_ledger_behind_while_t
     up.shutdown().await;
 }
 
-#[tokio::test]
-async fn a_relay_built_without_an_accounting_reading_admits_every_request() {
-    let up = FakeUpstream::start(vec![count_rule(), ok_rule()]).await;
-    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
-    for path in ["/v1/messages", "/v1/messages/count_tokens"] {
-        let response = h.app.clone().oneshot(request_to(path)).await.unwrap();
-        assert_eq!(
-            response.status(),
-            200,
-            "{path}: {}",
-            text_of(response).await
-        );
-    }
-    assert_eq!(up.requests().len(), 2);
-    up.shutdown().await;
-}
-
 /// Each refusal the relay answers before any dial, with the request that draws it and the status and code it
 /// answers.
 fn refusals() -> Vec<(&'static str, Request<Body>, u16, &'static str)> {

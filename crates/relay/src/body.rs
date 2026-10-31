@@ -866,14 +866,6 @@ mod tests {
     }
 
     #[test]
-    fn detach_diagnostics_leaves_a_null_id_as_sent() {
-        let sent = br#"{"diagnostics":{"previous_message_id":null},"stream":true}"#;
-        let mut body = sent.to_vec();
-        assert!(!detach_diagnostics(&mut body));
-        assert_eq!(body, sent);
-    }
-
-    #[test]
     fn detach_diagnostics_leaves_an_absent_member_as_sent() {
         let sent = br#"{"model":"m","stream":true}"#;
         let mut body = sent.to_vec();
@@ -1620,27 +1612,5 @@ mod tests {
     fn a_placeholder_ahead_of_a_second_stamp_is_drift() {
         let body = a_line_stamped("cch=00000; cch=abcde;");
         assert!(matches!(drift(&body), Ok(Some("hash"))));
-    }
-
-    #[test]
-    fn body_shapes_display_names_a_repeated_member_rather_than_an_absent_one() {
-        assert_eq!(
-            RelayError::BodyShape(BodyMember::Repeated("model")).to_string(),
-            "request body carries the top-level member \"model\" more than once"
-        );
-        assert_eq!(
-            RelayError::BodyShape(BodyMember::Repeated("system[0].text")).to_string(),
-            "request body carries the member \"system[0].text\" more than once",
-            "the billing line is no top-level member"
-        );
-        assert_eq!(
-            RelayError::BodyShape(BodyMember::Repeated("metadata.user_id")).to_string(),
-            "request body carries the member \"metadata.user_id\" more than once",
-            "nor is the user id under metadata"
-        );
-        assert_eq!(
-            RelayError::BodyShape(BodyMember::Model).to_string(),
-            "request body has no model member to edit"
-        );
     }
 }

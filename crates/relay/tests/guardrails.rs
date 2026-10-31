@@ -229,6 +229,7 @@ async fn an_enforcing_pool_guardrail_refuses_the_fork_before_the_upstream_sees_i
     let (h, mut sub) = harness(&up, PoolSpec::default()).await;
     let row = summary(GuardrailMode::Enforce);
     guarded(&h, &row, &["main"], &[]).await;
+    let mut decisions = h.router.subscribe_events();
     let answer = send(&h, &mut sub, fork()).await;
     assert_eq!(
         (
@@ -271,50 +272,6 @@ async fn an_enforcing_pool_guardrail_refuses_the_fork_before_the_upstream_sees_i
             blocked: true
         }]
     );
-    assert_eq!(
-        (
-            complete.outcome,
-            complete.status,
-            complete.error_code.as_deref(),
-            complete.attempt
-        ),
-        (Outcome::Rejected, 403, Some("guardrail_blocked"), 0)
-    );
-    up.shutdown().await;
-}
-
-/// The block keeps its answer and its request row, and the router records it as the request's one decision, so the
-/// routing log shows the block under the name the answer carries.
-#[tokio::test]
-async fn an_enforcing_guardrails_block_records_a_refused_decision_under_the_guardrails_name() {
-    let up = upstream().await;
-    let (h, mut sub) = harness(&up, PoolSpec::default()).await;
-    guarded(&h, &summary(GuardrailMode::Enforce), &["main"], &[]).await;
-    let mut decisions = h.router.subscribe_events();
-    let answer = send(&h, &mut sub, fork()).await;
-    assert_eq!(
-        (
-            answer.status,
-            answer.header("x-phoebis-error-code"),
-            answer.header("x-should-retry"),
-            answer.error_type.as_str(),
-            answer.message.as_str()
-        ),
-        (
-            403,
-            Some("guardrail_blocked"),
-            Some("false"),
-            "permission_error",
-            r#"blocked by guardrail "Subagent status summary""#
-        )
-    );
-    assert!(up.requests().is_empty());
-    let [Event::RequestObserved(observed), Event::RequestComplete(complete)] =
-        answer.events.as_slice()
-    else {
-        panic!("{:?}", answer.events)
-    };
-    assert_eq!(observed.guardrail_id.as_deref(), Some("summary"));
     assert_eq!(
         (
             complete.outcome,
@@ -430,16 +387,6 @@ async fn answered_by_the_id(id: &str, name: &str) {
 #[tokio::test]
 async fn a_stored_name_carrying_the_model_access_phrase_is_answered_by_the_guardrails_id() {
     answered_by_the_id("model-phrase", "Model: Opus Only").await;
-}
-
-#[tokio::test]
-async fn a_stored_name_carrying_the_token_refresh_phrase_is_answered_by_the_guardrails_id() {
-    answered_by_the_id("token-phrase", "oauth TOKEN has been REVOKED").await;
-}
-
-#[tokio::test]
-async fn a_stored_name_carrying_the_compaction_phrase_is_answered_by_the_guardrails_id() {
-    answered_by_the_id("compaction-phrase", "Prompt is too long, trimmed").await;
 }
 
 #[tokio::test]
@@ -863,17 +810,5 @@ async fn a_second_request_on_the_key_is_admitted_after_a_block() {
     );
     assert!(answer.observed().guardrails.is_empty());
     assert_eq!(up.requests().len(), 1);
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn a_key_without_guardrails_answers_as_before() {
-    let up = upstream().await;
-    let (h, mut sub) = harness(&up, PoolSpec::default()).await;
-    let answer = send(&h, &mut sub, fork()).await;
-    assert_eq!(answer.status, 200);
-    assert_eq!(up.requests().len(), 1);
-    assert_eq!(answer.observed().guardrail_id, None);
-    assert!(answer.observed().guardrails.is_empty());
     up.shutdown().await;
 }

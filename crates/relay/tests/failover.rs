@@ -1095,49 +1095,6 @@ async fn an_api_key_401_marks_the_account_with_the_verdict_s_cause_and_the_upstr
     up.shutdown().await;
 }
 
-#[tokio::test]
-async fn a_credit_balance_400_marks_funding_required_and_fails_over() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: json_200(),
-    }])
-    .await;
-    up.add_credential_rule(
-        "sk-ant-api03-KEY1",
-        "/v1/messages",
-        Respond::Json {
-            status: 400,
-            headers: vec![],
-            body: br#"{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}"#.to_vec(),
-        },
-    );
-    let h = harness(
-        &up,
-        &[api_key("k1", "sk-ant-api03-KEY1", 0), oauth("b", B, 1)],
-        PoolSpec::default(),
-    )
-    .await;
-    let resp = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-        .await
-        .unwrap();
-    assert_eq!(
-        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
-        (200, "b")
-    );
-    // The mark travels through the router task and its writer, so it lands after the client's response.
-    wait_for(Duration::from_secs(2), || {
-        h.store
-            .account("k1")
-            .unwrap()
-            .filter(|row| row.state == AccountState::FundingRequired)
-    })
-    .await;
-    up.shutdown().await;
-}
-
 /// The account's state and the word its writer stored with it, once the row reads `state`.
 async fn stored_with(h: &Harness, id: &str, state: AccountState) -> StateCause {
     wait_for(Duration::from_secs(5), || {

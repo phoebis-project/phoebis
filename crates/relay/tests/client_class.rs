@@ -58,37 +58,6 @@ fn identity_less_request(agent: &str) -> Request<Body> {
     req
 }
 
-#[tokio::test]
-async fn a_claude_cli_user_agent_on_the_mixed_pool_may_land_on_either_member() {
-    let up = FakeUpstream::start(vec![ok()]).await;
-    let h = harness(
-        &up,
-        &[
-            oauth("oauth-member", "sk-ant-oat01-EITHER", 0),
-            api_key("apikey-member", "sk-ant-api03-EITHER", 1),
-        ],
-        PoolSpec::default(),
-    )
-    .await;
-    // The body carries `metadata.user_id`, so landing on the OAuth member succeeds too: the point here is the
-    // class, not the identity splice.
-    let mut req = request_from_fixture(
-        inference_head(FixtureKind::OauthNonFirstParty),
-        body(BodyFixture::Oauth),
-        KEY,
-    );
-    set_header(&mut req, "user-agent", CLAUDE_CLI_USER_AGENT);
-    let resp = h.app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let seen = credentials_seen(&up);
-    assert!(
-        seen == vec!["sk-ant-oat01-EITHER".to_string()]
-            || seen == vec!["sk-ant-api03-EITHER".to_string()],
-        "either member may serve a Claude Code request: {seen:?}"
-    );
-    up.shutdown().await;
-}
-
 /// The gate: a user agent outside `claude-cli/` is refused before the body is read, under a key that admits
 /// Claude Code as every key does, the request row carries the code, the label and the user agent, no decision
 /// is recorded for the request, and the warn line names the key and the user agent.

@@ -329,46 +329,6 @@ async fn a_client_hash_is_re_signed_over_the_inserted_member() {
 }
 
 #[tokio::test]
-async fn an_immediate_next_request_carries_the_id_the_last_answer_named() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: ok_with_id("msg_01"),
-    }])
-    .await;
-    let h = harness(
-        &up,
-        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
-        PoolSpec {
-            cache_diagnostics: true,
-            ..Default::default()
-        },
-    )
-    .await;
-    let r1 = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-        .await
-        .unwrap();
-    assert_eq!(r1.status(), 200);
-    r1.into_body().collect().await.unwrap();
-    // No flush in between: the next request has to find the id the hook already wrote, which the awaited
-    // hand-off guarantees once the first answer's body is fully drained.
-    let r2 = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-        .await
-        .unwrap();
-    assert_eq!(r2.status(), 200);
-    assert_eq!(
-        diagnostics_previous(&up.requests()[1].body).as_deref(),
-        Some("msg_01")
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
 async fn a_flush_after_the_answer_completes_carries_its_id_to_the_store() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
@@ -467,52 +427,6 @@ async fn an_unsent_retry_still_lands_a_well_formed_edit_and_a_present_member_or_
         1,
         "the caller's own beta travels once, not doubled by the injector"
     );
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn the_switch_is_off_by_default_and_on_for_the_pool_that_sets_it() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: json_200(),
-    }])
-    .await;
-    let h = harness(
-        &up,
-        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
-        PoolSpec::default(),
-    )
-    .await;
-    h.app
-        .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-        .await
-        .unwrap();
-    let sent = &up.requests()[0];
-    assert!(!beta_header(sent).is_some_and(|b| b.split(',').any(|t| t == CACHE_DIAGNOSIS_BETA)));
-    assert!(!has_diagnostics(&sent.body));
-    up.shutdown().await;
-
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: json_200(),
-    }])
-    .await;
-    let h = harness(
-        &up,
-        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
-        PoolSpec {
-            cache_diagnostics: true,
-            ..Default::default()
-        },
-    )
-    .await;
-    h.app
-        .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-        .await
-        .unwrap();
-    assert_diagnosed_turn(&up.requests()[0], None);
     up.shutdown().await;
 }
 

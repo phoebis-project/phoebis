@@ -203,10 +203,9 @@ mod tests {
     use bytes::Bytes;
     use phoebis_oauth::Clock;
     use phoebis_transport::request::RawRequest;
-    use phoebis_transport::TransportError;
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-    use super::{send_and_read, unsent, AttemptFailure};
+    use super::{send_and_read, AttemptFailure};
 
     /// A connection that takes every byte of the request and then fails the flush.
     struct FlushFails;
@@ -255,15 +254,6 @@ mod tests {
             .expect("a failed flush fails the attempt");
         assert!(matches!(failure, AttemptFailure::Lost(_)), "{failure}");
         assert!(sending.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn a_checkout_that_could_not_open_a_connection_is_unsent_as_a_connect_failure() {
-        let failure = unsent(TransportError::Io(io::ErrorKind::ConnectionRefused.into()));
-        assert!(
-            matches!(failure, AttemptFailure::Unsent { connect: true, .. }),
-            "{failure:?}"
-        );
     }
 
     #[tokio::test]

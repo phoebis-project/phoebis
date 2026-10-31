@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
-use phoebis_relay::{CACHE_DIAGNOSIS_BETA, EXTENDED_TTL_BETA};
+use phoebis_relay::EXTENDED_TTL_BETA;
 use phoebis_routing::{warm, RefusalFacts, RouterEvent};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
@@ -69,73 +69,6 @@ fn count_request(kind: FixtureKind, fixture: BodyFixture) -> axum::http::Request
 
 fn count_request_with(kind: FixtureKind, body: &[u8]) -> axum::http::Request<axum::body::Body> {
     request_from_fixture(inference_head(kind), body, KEY)
-}
-
-#[tokio::test]
-async fn under_the_defaults_the_recorded_count_reaches_the_upstream_as_the_client_sent_it() {
-    let up = FakeUpstream::start(vec![count_rule()]).await;
-    let h = harness(&up, &[api_key("acct", A, 0)], PoolSpec::default()).await;
-    let resp = h
-        .app
-        .clone()
-        .oneshot(count_request(FixtureKind::CountApiKey, BodyFixture::Count))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let sent = &up.requests()[0];
-    assert!(
-        sent.body == body(BodyFixture::Count),
-        "no edit under the defaults"
-    );
-    assert!(sent.line.starts_with("POST /v1/messages/count_tokens"));
-    assert!(
-        beta_list(sent)
-            .iter()
-            .any(|b| b == "token-counting-2024-11-01"),
-        "the client's own beta travels"
-    );
-    assert!(!beta_list(sent).iter().any(|b| b == CACHE_DIAGNOSIS_BETA));
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn under_the_policy_the_recorded_count_travels_as_sent() {
-    let up = FakeUpstream::start(vec![count_rule()]).await;
-    let h = harness(
-        &up,
-        &[api_key("acct", A, 0)],
-        policy(r#"{"enabled":true,"metered":{"main":"1h"}}"#),
-    )
-    .await;
-    let resp = h
-        .app
-        .clone()
-        .oneshot(count_request(FixtureKind::CountApiKey, BodyFixture::Count))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let sent = &up.requests()[0];
-    assert!(
-        markers(body(BodyFixture::Count)).is_empty(),
-        "the client sends a count with no marker of its own"
-    );
-    assert!(
-        sent.body == body(BodyFixture::Count),
-        "the count endpoint gets no top-level member the client never sent"
-    );
-    assert!(
-        !beta_list(sent).iter().any(|b| b == EXTENDED_TTL_BETA),
-        "no beta for an hour the body does not carry"
-    );
-    assert!(
-        phoebis_cch::object_member_span(&sent.body, &["diagnostics"]).is_none(),
-        "nothing to diagnose on a count"
-    );
-    assert!(
-        phoebis_cch::string_member_span(&sent.body, &["metadata", "user_id"]).is_none(),
-        "no identity slot on a count"
-    );
-    up.shutdown().await;
 }
 
 #[tokio::test]

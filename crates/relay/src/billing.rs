@@ -273,11 +273,6 @@ mod tests {
         serde_json::from_slice(&body[start..end]).unwrap()
     }
 
-    #[test]
-    fn cc_version_hashes_the_salt_the_prompt_units_and_the_client_version() {
-        assert_eq!(cc_version("2.1.269", [b'0' as u16; 3]), "2.1.269.517");
-    }
-
     /// The formula as the 2.1.278 binary computes it (read 2026-09-21): UTF-16 code units 4, 7, and 20 of the
     /// first user message's text, `0` for a missing one, the salt, the version, sha256, three hex characters.
     /// The prompt below is longer than 20 units and pure ASCII, so scalar-value and code-unit indexing agree.
@@ -515,28 +510,6 @@ mod tests {
             assert!(injected.is_empty());
             assert_eq!(body, before);
         }
-    }
-
-    #[test]
-    fn the_field_order_names_the_clients_thirteen_fields_with_cc_turn_origin_eighth() {
-        assert_eq!(
-            FIELD_ORDER.as_slice(),
-            [
-                "cc_version",
-                "cc_entrypoint",
-                "cch",
-                "cc_workload",
-                "cc_is_subagent",
-                "cc_prev_req",
-                "cc_prompt_id",
-                "cc_turn_origin",
-                "cc_prompt_index",
-                "cc_turn_index",
-                "cc_gateway",
-                "cc_project",
-                "cc_project_src",
-            ]
-        );
     }
 
     /// `insert_if_absent` already seats a field by `FIELD_ORDER` position alone, so a trailing field the

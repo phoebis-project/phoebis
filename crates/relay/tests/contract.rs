@@ -144,7 +144,7 @@ fn probe_of(h: &Harness) -> Probe {
 }
 
 /// The contract's answer for `item`: a `403` the client is told not to retry, its message naming `name` with no
-/// semicolon, the item's word on the completion, and nothing sent upstream.
+/// semicolon, the item's word and no spent attempt on the completion, and nothing sent upstream.
 fn assert_refused_for(answer: &Answer, up: &FakeUpstream, item: &str, name: &str) {
     assert_eq!(answer.status, 403, "{item}");
     assert_eq!(
@@ -165,6 +165,7 @@ fn assert_refused_for(answer: &Answer, up: &FakeUpstream, item: &str, name: &str
         Some(item),
         "{item}"
     );
+    assert_eq!(answer.complete().attempt, 0, "{item}: no attempt was spent");
     assert!(
         up.requests().is_empty(),
         "{item}: nothing was sent upstream"

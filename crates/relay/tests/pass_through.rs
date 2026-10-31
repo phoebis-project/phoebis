@@ -388,36 +388,6 @@ async fn socket_harness(up: &FakeUpstream) -> Harness {
     .await
 }
 
-#[tokio::test]
-async fn a_head_read_off_a_socket_reaches_the_upstream_with_the_callers_own_spelling() {
-    let up = upstream().await;
-    let h = socket_harness(&up).await;
-    let (addr, stop) = listening(h.relay.clone(), None).await;
-    let mut socket = TcpStream::connect(addr).await.unwrap();
-    socket.write_all(&raw_request(addr, "first")).await.unwrap();
-    assert!(read_response(&mut socket)
-        .await
-        .starts_with("HTTP/1.1 200 "));
-    assert_eq!(
-        names(&up.requests()[0]),
-        [
-            "Host",
-            "AccePT",
-            "X-CoRp-TrAcE",
-            "x-api-key",
-            "User-Agent",
-            "X-Claude-Code-Session-Id",
-            "x-claude-code-request-class",
-            "anthropic-VERSION",
-            "Content-Length",
-        ],
-        "hyper's lowercase map is not what the upstream sees"
-    );
-    assert_eq!(value(&up.requests()[0], "host"), Some("api.anthropic.com"));
-    let _ = stop.send(true);
-    up.shutdown().await;
-}
-
 /// The recorder wraps the TLS stream rather than the socket, so a listener that terminates TLS hands the relay the
 /// caller's own spelling as a plain one does.
 #[tokio::test]

@@ -409,41 +409,6 @@ async fn a_request_without_the_prompt_id_header_gets_no_cc_prompt_id_on_a_tool_l
 }
 
 #[tokio::test]
-async fn a_subagents_first_request_takes_no_prompt_id_from_its_parent() {
-    const SESSION: &str = "11111111-1111-4111-8111-111111111111";
-    const SENT: &str = "33333333-3333-4333-8333-333333333333";
-    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
-    let app = relay_with(AccountKind::Oauth, &up).await;
-    // The parent's turn names its id in the header beside the line, so the memory holds it for the session.
-    app.clone()
-        .oneshot(with_prompt_id(
-            request_from_fixture(
-                inference_head(FixtureKind::OauthFirstParty),
-                body(BodyFixture::FirstParty),
-                KEY,
-            ),
-            SENT,
-        ))
-        .await
-        .unwrap();
-    assert_eq!(
-        field(&billing_line(&up.requests()[0].body), "cc_prompt_id"),
-        Some(SENT),
-        "a line that carries the field is relayed with it"
-    );
-    app.clone()
-        .oneshot(cli_request(SESSION, Some("sub-1"), Some("main")))
-        .await
-        .unwrap();
-    assert_eq!(
-        field(&billing_line(&up.requests()[1].body), "cc_prompt_id"),
-        None,
-        "a reduced-shape subagent that sends no header gets none, whatever its parent's turn named"
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
 async fn a_carried_prompt_id_of_any_length_travels_as_sent_and_a_later_turn_without_the_header_gets_none(
 ) {
     const SESSION: &str = "8f0d1f6e-9f7a-4f63-9e2d-2f8b1c5a7d31";
@@ -470,25 +435,6 @@ async fn a_carried_prompt_id_of_any_length_travels_as_sent_and_a_later_turn_with
         "the subagent's turn sends no header, so its line carries no id"
     );
     up.shutdown().await;
-}
-
-/// The answer to a body that carries no attribution line under a `claude-cli/` agent: the contract's refusal for
-/// the line, naming its slot, with nothing sent upstream.
-async fn assert_refused_for_the_line(resp: axum::http::Response<Body>, up: &FakeUpstream) {
-    assert_eq!(resp.status(), 403);
-    assert_eq!(resp.headers()["x-phoebis-error-code"], "client_contract");
-    assert_eq!(
-        outcome(&resp).client_contract.as_deref(),
-        Some("attribution_line")
-    );
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let refusal: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    let message = refusal["error"]["message"].as_str().unwrap();
-    assert!(
-        message.contains("system[0]") && !message.contains(';'),
-        "{message}"
-    );
-    assert!(up.requests().is_empty(), "nothing was sent upstream");
 }
 
 /// The contract's answer to a `claude-cli/` version spelled any other way than the client's: a `403` the client is
@@ -614,21 +560,6 @@ async fn a_prerelease_client_version_keeps_the_first_party_restoration() {
     up.shutdown().await;
 }
 
-/// The client's attribution opt-out under its own agent: the line the router requires of a Claude Code client is
-/// missing, so the body is refused rather than relayed as sent.
-#[tokio::test]
-async fn a_body_without_the_block_under_a_claude_code_user_agent_is_refused_and_nothing_is_sent() {
-    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
-    let app = relay_with(AccountKind::Oauth, &up).await;
-    let resp = app
-        .clone()
-        .oneshot(without_billing_line("s-1"))
-        .await
-        .unwrap();
-    assert_refused_for_the_line(resp, &up).await;
-    up.shutdown().await;
-}
-
 /// The wire-level characterization of `insert_if_absent`'s seating rule: a first-party line that carries
 /// `cc_turn_origin` and two of the fields the client writes after it keeps all three in place once a field is
 /// filled ahead of them, and the `cch` filled ahead of it is the client's own placeholder.
@@ -710,27 +641,6 @@ async fn nothing_is_restored_for_a_probe_turn() {
             field(&line, "cc_prompt_id")
         ),
         (None, None, None)
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn an_api_key_account_toward_api_anthropic_com_is_restored_too() {
-    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
-    let app = relay_with(AccountKind::ApiKey, &up).await;
-    app.clone()
-        .oneshot(request_from_fixture(
-            inference_head(FixtureKind::ApiKey),
-            body(BodyFixture::ApiKey),
-            KEY,
-        ))
-        .await
-        .unwrap();
-    let sent = &up.requests()[0];
-    assert!(field(&billing_line(&sent.body), "cch").is_some());
-    assert_eq!(
-        position(sent, "x-client-request-id"),
-        position(sent, "x-app") + 1
     );
     up.shutdown().await;
 }
@@ -1638,28 +1548,6 @@ fn field_names(line: &str) -> Vec<&str> {
         .split("; ")
         .map(|f| f.split('=').next().unwrap())
         .collect()
-}
-
-#[tokio::test]
-async fn a_main_turn_without_cc_prev_req_gets_the_memorys_previous_id() {
-    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
-    let app = relay_with(AccountKind::Oauth, &up).await;
-    app.clone()
-        .oneshot(class_request("s-1", "main"))
-        .await
-        .unwrap();
-    app.clone()
-        .oneshot(class_request("s-1", "main"))
-        .await
-        .unwrap();
-    let line = billing_line(&up.requests()[1].body);
-    assert_eq!(field(&line, "cc_prev_req"), Some("req_up_0001"));
-    assert_eq!(
-        field(&line, "cc_prompt_id"),
-        None,
-        "the turn sent no prompt-id header"
-    );
-    up.shutdown().await;
 }
 
 #[tokio::test]

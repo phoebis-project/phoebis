@@ -1496,40 +1496,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_record_past_the_retention_is_a_miss_and_one_inside_it_is_restored() {
-        let store = Arc::new(MapStore::default());
-        let (a, b) = (key("a"), key("b"));
-        store
-            .rows
-            .lock()
-            .unwrap()
-            .insert(a.clone(), seeded("req_a", None, 0));
-        store
-            .rows
-            .lock()
-            .unwrap()
-            .insert(b.clone(), seeded("req_b", None, 5_000));
-        let mem = Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), 1_000));
-        mem.restore(&a, 5_500).await;
-        mem.restore(&b, 5_500).await;
-        assert_eq!(
-            mem.previous(&a, "acct", "claude-sonnet-4-5").request_id,
-            None,
-            "a row past the retention is a miss on read-through"
-        );
-        assert_eq!(
-            mem.previous(&b, "acct", "claude-sonnet-4-5")
-                .request_id
-                .as_deref(),
-            Some("req_b")
-        );
-        assert!(
-            store.rows.lock().unwrap().contains_key(&a),
-            "the read leaves the row for the hourly purge rather than dropping it itself"
-        );
-    }
-
-    #[tokio::test]
     async fn a_record_at_the_retention_bound_is_restored_and_one_a_millisecond_older_is_not() {
         let store = Arc::new(MapStore::default());
         let (at_bound, older) = (key("at"), key("older"));
@@ -1557,6 +1523,10 @@ mod tests {
             mem.previous(&older, "acct", "claude-sonnet-4-5").request_id,
             None,
             "one millisecond older is past it"
+        );
+        assert!(
+            store.rows.lock().unwrap().contains_key(&older),
+            "the read leaves the row for the hourly purge rather than dropping it itself"
         );
     }
 
