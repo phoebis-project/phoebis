@@ -263,12 +263,6 @@ impl SessionMemory {
         self.mark_dirty(&mut inner, key);
     }
 
-    #[cfg(test)]
-    pub(crate) fn stored_prompt_id(&self, key: &MemoryKey) -> Option<String> {
-        let inner = self.inner.lock().unwrap();
-        inner.entries.get(key).and_then(|e| e.prompt_id.clone())
-    }
-
     pub fn previous(&self, key: &MemoryKey, account_id: &str, canonical_model: &str) -> Previous {
         let inner = self.inner.lock().unwrap();
         let Some(account) = inner
@@ -930,6 +924,13 @@ mod tests {
         v1.accounts.get("acct").and_then(|a| a.request_id.clone())
     }
 
+    fn prompt_id_of(store: &MapStore, key: &MemoryKey) -> Option<String> {
+        let rows = store.rows.lock().unwrap();
+        let record = rows.get(key)?;
+        let v1: RecordV1 = serde_json::from_str(&record.payload).ok()?;
+        v1.prompt_id
+    }
+
     fn key(session: &str) -> MemoryKey {
         MemoryKey::for_session("k", 1, session, "main")
     }
@@ -953,13 +954,13 @@ mod tests {
     fn the_cap_evicts_the_least_recently_seen_entry() {
         let mem = SessionMemory::new(2, MEMORY_IDLE_MS);
         let (a, b, c) = (key("a"), key("b"), key("c"));
-        mem.touch(&a, Some("p-a"), 1_000);
+        mem.record_request_id(&a, "acct", "req_a", 1_000);
         mem.touch(&b, None, 2_000);
         // A third entry past the cap evicts `a`, the least recently seen of the two held.
         mem.touch(&c, None, 3_000);
         mem.touch(&a, None, 4_000);
         assert_eq!(
-            mem.stored_prompt_id(&a),
+            mem.previous(&a, "acct", "claude-sonnet-4-5").request_id,
             None,
             "the evicted turn was forgotten, so the id written before the eviction is gone"
         );
@@ -969,12 +970,12 @@ mod tests {
     fn the_purge_drops_an_entry_idle_past_the_bound() {
         let mem = SessionMemory::new(10, MEMORY_IDLE_MS);
         let a = key("a");
-        mem.touch(&a, Some("p-a"), 0);
+        mem.record_request_id(&a, "acct", "req_a", 0);
         // The second call must clear both gates: the idle bound itself, and PURGE_INTERVAL_MS since the
         // sweep only runs once a minute, so it lands at their sum rather than at the idle bound alone.
         mem.touch(&a, None, MEMORY_IDLE_MS + PURGE_INTERVAL_MS);
         assert_eq!(
-            mem.stored_prompt_id(&a),
+            mem.previous(&a, "acct", "claude-sonnet-4-5").request_id,
             None,
             "an entry idle the whole bound is purged once the once-a-minute sweep next runs"
         );
@@ -982,43 +983,51 @@ mod tests {
         // An idle bound far shorter than PURGE_INTERVAL_MS still waits on the sweep: the entry is stale
         // well before the sweep runs, but the sweep, not the bound, decides when it is dropped.
         let custom = SessionMemory::new(10, 1_000);
-        custom.touch(&a, Some("p-a"), 0);
+        custom.record_request_id(&a, "acct", "req_a", 0);
         custom.touch(&a, None, PURGE_INTERVAL_MS + 1_000);
         assert_eq!(
-            custom.stored_prompt_id(&a),
+            custom.previous(&a, "acct", "claude-sonnet-4-5").request_id,
             None,
             "a 1-second bound is enforced only once the 60-second sweep gate opens, at 60_000 + 1_000"
         );
     }
 
-    #[test]
-    fn touch_writes_the_headers_prompt_id_onto_the_entry() {
-        let mem = SessionMemory::new(10, MEMORY_IDLE_MS);
+    #[tokio::test]
+    async fn touch_writes_the_headers_prompt_id_onto_the_entry() {
+        let store = Arc::new(MapStore::default());
+        let mem =
+            Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let a = key("a");
         mem.touch(&a, Some("p-1"), 1_000);
-        assert_eq!(mem.stored_prompt_id(&a).as_deref(), Some("p-1"));
+        mem.flush(1_000).await;
+        assert_eq!(prompt_id_of(&store, &a).as_deref(), Some("p-1"));
         mem.touch(&a, Some("p-2"), 2_000);
+        mem.flush(2_000).await;
         assert_eq!(
-            mem.stored_prompt_id(&a).as_deref(),
+            prompt_id_of(&store, &a).as_deref(),
             Some("p-2"),
             "a later header names the turn that is current"
         );
     }
 
-    #[test]
-    fn touch_without_a_header_leaves_the_entrys_prompt_id_as_it_was_and_mints_nothing() {
-        let mem = SessionMemory::new(10, MEMORY_IDLE_MS);
+    #[tokio::test]
+    async fn touch_without_a_header_leaves_the_entrys_prompt_id_as_it_was_and_mints_nothing() {
+        let store = Arc::new(MapStore::default());
+        let mem =
+            Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let (a, b) = (key("a"), key("b"));
         mem.touch(&a, None, 1_000);
+        mem.flush(1_000).await;
         assert!(
-            mem.inner.lock().unwrap().entries.contains_key(&a),
+            store.rows.lock().unwrap().contains_key(&a),
             "the entry is written all the same"
         );
-        assert_eq!(mem.stored_prompt_id(&a), None, "and holds no id");
+        assert_eq!(prompt_id_of(&store, &a), None, "and holds no id");
         mem.touch(&b, Some("p-1"), 1_000);
         mem.touch(&b, None, 2_000);
+        mem.flush(2_000).await;
         assert_eq!(
-            mem.stored_prompt_id(&b).as_deref(),
+            prompt_id_of(&store, &b).as_deref(),
             Some("p-1"),
             "a request without the header leaves the turn's id in place"
         );
@@ -1118,19 +1127,18 @@ mod tests {
         mem.record_request_id(&c, "acct", "req_c", 3_000); // evicts a into the overlay
         mem.record_request_id(&d, "acct", "req_d", 4_000); // evicts b into the overlay
         mem.record_request_id(&e, "acct", "req_e", 5_000); // evicts c; the overlay is full, a is dropped
-        let inner = mem.inner.lock().unwrap();
+        let unsaved: std::collections::HashSet<MemoryKey> = mem
+            .snapshot_dirty(5_000)
+            .into_iter()
+            .map(|(k, _, _)| k)
+            .collect();
         assert_eq!(
-            inner.pending.len(),
-            2,
-            "the overlay never grows past the cap while the store is failing"
+            unsaved,
+            std::collections::HashSet::from([b, c, d, e]),
+            "beside the map's d and e the overlay holds b and c: it never grows past the cap while the store \
+             is failing, and the oldest last_seen left first"
         );
-        assert!(
-            !inner.pending.contains_key(&a),
-            "the oldest last_seen left first"
-        );
-        assert!(inner.pending.contains_key(&b));
-        assert!(inner.pending.contains_key(&c));
-        assert_eq!(inner.dropped_pending, 1);
+        assert_eq!(mem.inner.lock().unwrap().dropped_pending, 1);
     }
 
     #[tokio::test]
@@ -1184,14 +1192,12 @@ mod tests {
                                                            // Captured before the barrier releases: the parked save thread waits on `gate` for a second party
                                                            // that must arrive whether or not the assertion below holds, or the runtime's drop hangs forever
                                                            // joining a blocking thread nothing would release.
-        let (pending_len, holds_c, dropped) = {
-            let inner = mem.inner.lock().unwrap();
-            (
-                inner.pending.len(),
-                inner.pending.contains_key(&c),
-                inner.dropped_pending,
-            )
-        };
+        let unsaved: std::collections::HashSet<MemoryKey> = mem
+            .snapshot_dirty(4_000)
+            .into_iter()
+            .map(|(k, _, _)| k)
+            .collect();
+        let dropped = mem.inner.lock().unwrap().dropped_pending;
         tokio::task::spawn_blocking(move || gate.wait())
             .await
             .unwrap();
@@ -1200,34 +1206,38 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            pending_len, 1,
-            "the overlay never grows past the cap while a save hangs"
+            unsaved,
+            std::collections::HashSet::from([c, d]),
+            "beside the map's d the overlay holds c alone: it never grows past the cap while a save hangs"
         );
-        assert!(holds_c);
         assert_eq!(dropped, 2);
     }
 
     #[tokio::test]
     async fn an_overlay_record_past_the_retention_is_not_revived() {
         let store = Arc::new(MapStore::default());
-        let mem = Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), 1_000));
-        let a = key("a");
-        mem.inner
-            .lock()
-            .unwrap()
-            .pending
-            .insert(a.clone(), (seeded("req_old", Some("p-old"), 0), 1));
+        let mem = Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), 1_000));
+        let (a, b) = (key("a"), key("b"));
+        mem.record_request_id(&a, "acct", "req_old", 0);
+        store.fail_next_save.store(true, Ordering::SeqCst);
+        mem.flush(0).await;
+        mem.record_request_id(&b, "acct", "req_b", 5_000); // evicts a into the overlay
         mem.restore(&a, 5_000).await;
         assert_eq!(
             mem.previous(&a, "acct", "claude-sonnet-4-5").request_id,
             None
         );
-        let inner = mem.inner.lock().unwrap();
-        assert!(
-            !inner.pending.contains_key(&a),
+        let unsaved: std::collections::HashSet<MemoryKey> = mem
+            .snapshot_dirty(5_000)
+            .into_iter()
+            .map(|(k, _, _)| k)
+            .collect();
+        assert_eq!(
+            unsaved,
+            std::collections::HashSet::from([b]),
             "the expired record left the overlay"
         );
-        assert_eq!(inner.expired_unsaved, 1);
+        assert_eq!(mem.inner.lock().unwrap().expired_unsaved, 1);
     }
 
     #[tokio::test]
@@ -1486,10 +1496,12 @@ mod tests {
             Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         mem.restore(&a, 1_000).await;
         mem.touch(&a, None, 1_000);
-        assert_eq!(mem.stored_prompt_id(&a).as_deref(), Some("p-old"));
+        mem.flush(1_000).await;
+        assert_eq!(prompt_id_of(&store, &a).as_deref(), Some("p-old"));
         mem.touch(&a, Some("p-new"), 2_000);
+        mem.flush(2_000).await;
         assert_eq!(
-            mem.stored_prompt_id(&a).as_deref(),
+            prompt_id_of(&store, &a).as_deref(),
             Some("p-new"),
             "a header's id replaces the restored one"
         );
@@ -1630,7 +1642,7 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test]
     async fn a_blocked_store_read_does_not_stall_the_runtime() {
         let store = Arc::new(MapStore::default());
         let mem =
@@ -1643,13 +1655,12 @@ mod tests {
             let mem = mem.clone();
             async move { mem.restore(&a, 1_000).await }
         });
-        // The read for `a` is held in the store; the map is free, and the runtime's timer still fires.
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            tokio::time::sleep(Duration::from_millis(50)),
-        )
-        .await
-        .unwrap();
+        // The read for `a` is held in the store, and this task still runs on the runtime's one thread with the
+        // map free.
+        fake_upstream::wait_for(Duration::from_secs(5), || {
+            store.hold_load.lock().unwrap().is_none().then_some(())
+        })
+        .await;
         assert_eq!(
             mem.previous(&b, "acct", "claude-sonnet-4-5")
                 .request_id
@@ -1725,7 +1736,7 @@ mod tests {
         .await;
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test]
     async fn concurrent_restores_of_one_key_read_the_store_once() {
         let store = Arc::new(MapStore::default());
         let a = key("a");
@@ -1750,7 +1761,8 @@ mod tests {
             let (mem, a) = (mem.clone(), a.clone());
             async move { mem.restore(&a, 1_000).await }
         });
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // On the runtime's one thread the yield runs the second restore up to its wait.
+        tokio::task::yield_now().await;
         assert!(!second.is_finished(), "the second waits for the first");
         tokio::task::spawn_blocking(move || gate.wait())
             .await
@@ -1760,7 +1772,7 @@ mod tests {
         assert_eq!(store.loads_started.load(Ordering::SeqCst), 1);
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test]
     async fn a_finished_loader_leaves_a_replacement_loaders_mark_in_place() {
         let store = Arc::new(MapStore::default()); // no row for `a`, so every load is a miss
         let a = key("a");
@@ -1780,7 +1792,8 @@ mod tests {
             let (mem, a) = (mem.clone(), a.clone());
             async move { mem.restore(&a, 1_000).await }
         });
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // On the runtime's one thread the yield runs the second loader up to its wait behind the first.
+        tokio::task::yield_now().await;
         let second_gate = Arc::new(Barrier::new(2));
         *store.hold_load.lock().unwrap() = Some(second_gate.clone());
         tokio::task::spawn_blocking(move || first_gate.wait())
@@ -1807,32 +1820,59 @@ mod tests {
 
     #[test]
     fn last_seen_never_moves_backwards() {
-        let mem = SessionMemory::new(10, MEMORY_IDLE_MS);
-        let a = key("a");
+        let mem = SessionMemory::new(2, MEMORY_IDLE_MS);
+        let (a, b, c) = (key("a"), key("b"), key("c"));
         mem.record_request_id(&a, "acct", "req", 2_000);
         mem.record_message_id(&a, "acct", "claude-sonnet-4-5", "msg", 1_000);
+        // `b` is last seen at 1_500, between the two writes' instants, so the cap takes `a` only if the late write
+        // moved it back.
+        mem.touch(&b, None, 1_500);
+        mem.touch(&c, None, 3_000);
         assert_eq!(
-            mem.inner.lock().unwrap().entries.get(&a).unwrap().last_seen,
-            2_000
+            mem.previous(&a, "acct", "claude-sonnet-4-5")
+                .request_id
+                .as_deref(),
+            Some("req")
         );
     }
 
-    #[test]
-    fn an_eviction_skips_the_oldest_key_only_while_its_read_is_in_flight() {
-        let mem = SessionMemory::new(2, MEMORY_IDLE_MS);
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_eviction_skips_the_oldest_key_only_while_its_read_is_in_flight() {
+        let store = Arc::new(MapStore::default());
+        let mem =
+            Arc::new(SessionMemory::new(2, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let (a, b, c) = (key("a"), key("b"), key("c"));
-        mem.touch(&a, None, 1_000);
-        mem.touch(&b, None, 2_000);
-        mem.inner
-            .lock()
+        let gate = Arc::new(Barrier::new(2));
+        *store.hold_load.lock().unwrap() = Some(gate.clone());
+        let held = tokio::spawn({
+            let (mem, a) = (mem.clone(), a.clone());
+            async move { mem.restore(&a, 1_000).await }
+        });
+        fake_upstream::wait_for(Duration::from_secs(5), || {
+            store.hold_load.lock().unwrap().is_none().then_some(())
+        })
+        .await;
+        // Written while its read is in flight, `a` is the oldest of the two held when `c` arrives.
+        mem.record_request_id(&a, "acct", "req_a", 1_000);
+        mem.record_request_id(&b, "acct", "req_b", 2_000);
+        mem.record_request_id(&c, "acct", "req_c", 3_000);
+        tokio::task::spawn_blocking(move || gate.wait())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), held)
+            .await
             .unwrap()
-            .loading
-            .insert(a.clone(), Arc::new(tokio::sync::Mutex::new(())));
-        mem.touch(&c, None, 3_000);
-        let inner = mem.inner.lock().unwrap();
-        assert!(inner.entries.contains_key(&a), "the loading key stayed");
-        assert!(
-            !inner.entries.contains_key(&b),
+            .unwrap();
+        assert_eq!(
+            mem.previous(&a, "acct", "claude-sonnet-4-5")
+                .request_id
+                .as_deref(),
+            Some("req_a"),
+            "the loading key stayed"
+        );
+        assert_eq!(
+            mem.previous(&b, "acct", "claude-sonnet-4-5").request_id,
+            None,
             "the next oldest left instead"
         );
     }

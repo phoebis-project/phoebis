@@ -991,15 +991,21 @@ async fn the_upstreams_request_id_rides_on_the_outcome_of_the_committed_attempt(
 async fn a_compressed_chunk_that_expands_past_the_bound_ends_the_stream_with_an_error() {
     let bomb = gzip(&vec![b'a'; 8 << 20]);
     let up = gzip_upstream(bomb).await;
-    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
     let mut request = common::stream_request("phoebis-testkey");
     common::set_header(&mut request, "accept-encoding", "identity");
-    let resp = app.oneshot(request).await.unwrap();
+    let resp = h.app.clone().oneshot(request).await.unwrap();
     assert_eq!(resp.status(), 200);
     let body = resp.into_body().collect().await;
     assert!(
         body.is_err(),
         "the body ended in an error rather than a multi-megabyte chunk"
+    );
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Incomplete, Some("stream_cut")),
+        "a body past its bound ends incomplete under the cut's code"
     );
     up.shutdown().await;
 }
@@ -1082,13 +1088,14 @@ async fn a_relayed_stream_is_delivered_frame_by_frame_as_the_upstream_writes() {
         text_delta_event("hi"),
         message_stop_event(),
     ];
+    // The fake writes the first event and holds the rest until the release, so the first frame can only reach the
+    // caller on its own and the second only once the upstream wrote it.
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
-        respond: Respond::Sse {
+        respond: Respond::SseGated {
             status: 200,
             headers: vec![],
             events,
-            delay_between: Duration::from_millis(400),
         },
     }])
     .await;
@@ -1098,25 +1105,21 @@ async fn a_relayed_stream_is_delivered_frame_by_frame_as_the_upstream_writes() {
         .await
         .unwrap();
     let mut body = resp.into_body();
-    let started = Instant::now();
-    let first = body.frame().await.unwrap().unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(5), body.frame())
+        .await
+        .expect("the first event was not held for the second")
+        .unwrap()
+        .unwrap();
     assert!(first
         .data_ref()
         .unwrap()
         .starts_with(b"event: message_start"));
-    assert!(
-        started.elapsed() < Duration::from_millis(300),
-        "the first event was not held for the second"
-    );
+    up.release();
     let second = body.frame().await.unwrap().unwrap();
     assert!(second
         .data_ref()
         .unwrap()
         .starts_with(b"event: content_block_delta"));
-    assert!(
-        started.elapsed() >= Duration::from_millis(350),
-        "the second arrived with the upstream's delay"
-    );
     up.shutdown().await;
 }
 
@@ -1993,12 +1996,14 @@ async fn a_streamed_answer_undecodable_after_its_head_warns_once_with_the_decode
     assert!(resp.into_body().collect().await.is_err());
     let complete = completion(&mut sub).await;
     assert_eq!(complete.error_code.as_deref(), Some("stream_undecodable"));
-    assert_cut_warned(
-        &captured.text(),
-        &complete,
-        "stream_undecodable",
-        "undecodable response: corrupt deflate stream",
-    );
+    // The words after the relay's prefix are the decoder's own, which a dependency bump may reword.
+    let text = complete
+        .interruption
+        .as_ref()
+        .map(|cut| cut.text.clone())
+        .expect("the completion carries the cut");
+    assert!(text.starts_with("undecodable response: "), "{text}");
+    assert_cut_warned(&captured.text(), &complete, "stream_undecodable", &text);
     up.shutdown().await;
 }
 

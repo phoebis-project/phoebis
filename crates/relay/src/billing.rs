@@ -292,17 +292,6 @@ mod tests {
             cc_version("2.1.269", [units[4], units[7], units[20]]),
             "2.1.269.3ef"
         );
-        let short = "Explain";
-        let padded: Vec<u16> = short
-            .encode_utf16()
-            .chain(std::iter::repeat(b'0' as u16))
-            .take(21)
-            .collect();
-        assert_eq!(
-            (padded[4], padded[7], padded[20]),
-            (b'a' as u16, b'0' as u16, b'0' as u16),
-            "a short prompt pads with zeros"
-        );
     }
 
     /// The seat's example: a supplementary-plane character before position 4 shifts the client's UTF-16 sample

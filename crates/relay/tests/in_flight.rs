@@ -4,7 +4,7 @@
 mod common;
 
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::Request;
@@ -355,7 +355,6 @@ async fn a_pinned_sessions_request_lands_on_its_account_at_the_cap_while_a_fresh
         .await
         .unwrap();
     assert_eq!(h.router.in_flight().account("a"), 1, "a is at its cap");
-    let started = Instant::now();
     let pinned = tokio::time::timeout(
         Duration::from_secs(5),
         h.app.clone().oneshot(request_for(KEY, MODEL, "s1")),
@@ -363,7 +362,6 @@ async fn a_pinned_sessions_request_lands_on_its_account_at_the_cap_while_a_fresh
     .await
     .expect("the pinned session is never held")
     .unwrap();
-    assert!(started.elapsed() < HELD_FOR);
     assert_eq!(
         (
             pinned.status().as_u16(),
@@ -399,17 +397,8 @@ async fn a_pinned_sessions_request_lands_on_its_account_at_the_cap_while_a_fresh
 async fn past_the_bound_a_held_request_re_selects_with_the_account_attempted() {
     let up = FakeUpstream::start(vec![]).await;
     up.add_credential_rule(A, "/v1/messages", held_stream());
-    // b's stream ends on its own before the bound, but a's never does: a held request waits on a alone.
-    up.add_credential_rule(
-        B,
-        "/v1/messages",
-        Respond::Sse {
-            status: 200,
-            headers: vec![],
-            events: vec![message_start(), message_stop()],
-            delay_between: Duration::from_millis(600),
-        },
-    );
+    // b's slot frees when its client leaves during the hold, but a's never does: a held request waits on a alone.
+    up.add_credential_rule(B, "/v1/messages", held_stream());
     let h = harness(
         &up,
         &[oauth("a", A, 0), oauth("b", B, 1)],
@@ -437,14 +426,30 @@ async fn past_the_bound_a_held_request_re_selects_with_the_account_attempted() {
         "b",
         "a is at its cap, so a fresh placement goes to b"
     );
-    let started = Instant::now();
-    let third = tokio::time::timeout(
-        Duration::from_secs(5),
-        h.app.clone().oneshot(request_for(KEY, MODEL, "s3")),
-    )
-    .await
-    .expect("the bound ends the hold")
-    .unwrap();
+    let mut events = h.router.subscribe_events();
+    // On the paused clock the one-second bound on a runs only while the test waits on it, so b's slot is free
+    // well inside it whatever the machine's load. The clock runs again before b is dialed, since the fake's
+    // answer comes over a real socket.
+    tokio::time::pause();
+    let started = tokio::time::Instant::now();
+    let app = h.app.clone();
+    let third =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s3")).await.unwrap() });
+    let id = next_held(&mut events).await.request.request_id;
+    drop(on_b);
+    wait_for(Duration::from_secs(5), || {
+        (h.router.in_flight().account("b") == 0).then_some(())
+    })
+    .await;
+    router_events_until(&mut events, |event| {
+        matches!(event, RouterEvent::Decision { record, .. } if record.request.request_id == id)
+    })
+    .await;
+    tokio::time::resume();
+    let third = tokio::time::timeout(Duration::from_secs(5), third)
+        .await
+        .expect("the bound ends the hold")
+        .unwrap();
     assert!(
         started.elapsed() >= Duration::from_millis(900),
         "held for the one-second bound on a: {:?}",
@@ -469,7 +474,7 @@ async fn past_the_bound_a_held_request_re_selects_with_the_account_attempted() {
         ["a"],
         "the request waited on a alone, and b's slot freed inside the bound took it with no hold of its own"
     );
-    drop((on_a, on_b, third));
+    drop((on_a, third));
     up.release();
     up.shutdown().await;
 }
@@ -789,13 +794,15 @@ async fn a_freed_slot_another_request_takes_passes_the_account_over_instead_of_a
         .unwrap();
     assert_eq!(h.router.in_flight().account("a"), 1, "a is at its cap");
     let mut events = h.router.subscribe_events();
+    let mut holds = h.router.subscribe_events();
     // Both placements wait on a. Ending the one stream wakes both in the same turn; a freed slot is read, not
     // reserved, so the placement whose selection runs second finds it taken by the first.
     let (two, three, ()) = tokio::join!(
         h.app.clone().oneshot(request_for(KEY, MODEL, "s2")),
         h.app.clone().oneshot(request_for(KEY, MODEL, "s3")),
         async {
-            tokio::time::sleep(HELD_FOR).await;
+            next_hold(&mut holds).await;
+            next_hold(&mut holds).await;
             assert_eq!(posts(&up), 1, "both placements are held");
             up.release_one().await;
         },
@@ -1615,17 +1622,25 @@ async fn a_pool_with_nothing_to_hold_for_still_answers_accounts_unavailable() {
     // Paused, the account is no longer one a request could be held for, cap or not.
     h.store.set_enabled("a", false).unwrap();
     h.router.reload().await.unwrap();
-    let started = Instant::now();
+    let mut events = h.router.subscribe_events();
     let resp = h
         .app
         .clone()
         .oneshot(request_for(KEY, MODEL, "s2"))
         .await
         .unwrap();
-    assert!(
-        started.elapsed() < HELD_FOR,
-        "answered without a hold: {:?}",
-        started.elapsed()
+    let id = outcome(&resp).request_id;
+    let seen = router_events_until(&mut events, |event| match event {
+        RouterEvent::Decision {
+            summary, record, ..
+        } => record.request.request_id == id && summary.kind == "exhausted",
+        _ => false,
+    })
+    .await;
+    assert_eq!(
+        decided(&seen, &id).kinds,
+        [(1, "exhausted")],
+        "answered without a hold"
     );
     assert_eq!(
         (

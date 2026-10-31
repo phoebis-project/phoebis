@@ -766,7 +766,7 @@ mod tests {
     #[test]
     fn a_token_count_body_needs_no_account_uuid() {
         let mut body = br#"{"model":"claude-sonnet-4-5","messages":[]}"#.to_vec();
-        let edits = edit_body(
+        edit_body(
             &mut body,
             &NativeEdit {
                 account_uuid: AccountUuidEdit::Keep,
@@ -781,7 +781,7 @@ mod tests {
             },
         )
         .expect("a token count's body has no slot for the account identity");
-        assert!(!edits.account_uuid_replaced);
+        assert_eq!(body, br#"{"model":"claude-sonnet-4-5","messages":[]}"#);
     }
 
     #[test]

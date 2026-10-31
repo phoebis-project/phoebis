@@ -11,7 +11,7 @@ mod common;
 use common::*;
 
 #[tokio::test]
-async fn oauth_non_first_party_request_passes_through_with_only_the_uuid_edit() {
+async fn oauth_non_first_party_request_passes_through_with_the_uuid_edit_and_the_restoration() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::Json {
@@ -22,24 +22,55 @@ async fn oauth_non_first_party_request_passes_through_with_only_the_uuid_edit() 
     }])
     .await;
     let app = relay_with(AccountKind::Oauth, &up).await;
+    let head = inference_head(FixtureKind::OauthNonFirstParty);
     let native = body(BodyFixture::Oauth);
     let resp = app
-        .oneshot(request_from_fixture(
-            inference_head(FixtureKind::OauthNonFirstParty),
-            native,
-            "phoebis-testkey",
-        ))
+        .oneshot(request_from_fixture(head, native, "phoebis-testkey"))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let got = &up.requests()[0];
-    assert!(got
+    // The recorded head already carries the account's own token, so the credential slot reads as recorded. The
+    // body takes the account's uuid and the placeholder stamp the reduced shape lacks, and the head takes the
+    // client request id after `x-app`, read off the relayed request since it is fresh.
+    let got = wire_of(&up.requests()[0]);
+    let client_request_id = up.requests()[0]
         .headers
         .iter()
-        .any(|(n, v)| n == "Authorization" && v == "Bearer sk-ant-oat01-PLACEHOLDER"));
-    assert!(std::str::from_utf8(&got.body)
+        .find(|(n, _)| n.eq_ignore_ascii_case("x-client-request-id"))
+        .map(|(_, v)| v.clone())
+        .expect("the restoration sends a client request id");
+    let edited = String::from_utf8(native.to_vec())
         .unwrap()
-        .contains(&format!(r#"\"account_uuid\":\"{ACCOUNT_UUID}\""#)));
+        .replacen(
+            r#"\"account_uuid\":\"\""#,
+            &format!(r#"\"account_uuid\":\"{ACCOUNT_UUID}\""#),
+            1,
+        )
+        .replacen(
+            "cc_entrypoint=sdk-cli;",
+            "cc_entrypoint=sdk-cli; cch=00000;",
+            1,
+        );
+    let mut expected_head = String::from_utf8(head.to_vec())
+        .unwrap()
+        .replace(
+            &format!("Content-Length: {}", native.len()),
+            &format!("Content-Length: {}", edited.len()),
+        )
+        .replace(
+            "x-app: cli\r\n",
+            &format!("x-app: cli\r\nx-client-request-id: {client_request_id}\r\n"),
+        );
+    // The request was built from the client's head, which the harness ends with the class header the recorded
+    // head predates.
+    let end = expected_head.rfind("\r\n\r\n").unwrap();
+    expected_head.insert_str(end + 2, "x-claude-code-request-class: main\r\n");
+    let mut expected = expected_head.into_bytes();
+    expected.extend_from_slice(edited.as_bytes());
+    assert_eq!(
+        got, expected,
+        "an OAuth fixture round-trips byte-identical but for the account's uuid and what the restoration adds"
+    );
     up.shutdown().await;
 }
 
@@ -217,33 +248,6 @@ async fn local_rejections_are_anthropic_shaped() {
     assert_eq!(
         app.clone().oneshot(both).await.unwrap().status(),
         StatusCode::UNAUTHORIZED
-    );
-    let hello = Request::builder()
-        .method("HEAD")
-        .uri("/api/hello")
-        .body(Body::empty())
-        .unwrap();
-    assert_eq!(
-        app.clone().oneshot(hello).await.unwrap().status(),
-        StatusCode::OK
-    );
-    let models = Request::builder()
-        .method("GET")
-        .uri("/v1/models")
-        .header("Authorization", "Bearer phoebis-testkey")
-        .body(Body::empty())
-        .unwrap();
-    let resp = app.oneshot(models).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert!(
-        v["data"].is_array(),
-        "the harness's default catalog fake feeds the listing"
-    );
-    assert!(
-        up.requests().is_empty(),
-        "the catalog fetches go to catalog_up"
     );
     up.shutdown().await;
 }

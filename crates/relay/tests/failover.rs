@@ -7,7 +7,6 @@ use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery};
 use phoebis_ledger::{Assembler, Record};
 use phoebis_oauth::AcquireError;
-use phoebis_profile::fixtures::{body, BodyFixture};
 use phoebis_routing::{
     FactValue, MoveCause, Report, RouterConfig, RouterEvent, SharePricer, UtilizationSample,
     WindowReading, WindowSource, FIVE_HOUR,
@@ -3924,12 +3923,6 @@ async fn priced_harness(up: &FakeUpstream, accounts: &[TestAccount]) -> Harness 
     h
 }
 
-/// The rewrite the fixture body books on `TIER`: its bytes over four, the relay's estimate of its prompt tokens, each
-/// a ten-millionth of the window.
-fn fixture_rewrite() -> f64 {
-    (body(BodyFixture::Oauth).len() / 4) as f64 / 10_000_000.0
-}
-
 /// The 5-hour prediction of `account`, as the router answers it now.
 async fn five_hour(h: &Harness, account: &str) -> f64 {
     h.router
@@ -4008,8 +4001,9 @@ async fn a_failover_replaces_the_booking_and_a_usage_a_refusal_or_an_exhaustion_
         "the failover's selection took the booking off a"
     );
     let on_b = five_hour(&h, "b").await;
+    // The fixture body's 84,390 bytes over four are 21,097 tokens, a ten-millionth of the window each.
     assert!(
-        (on_b - (0.5 + fixture_rewrite())).abs() < 1e-9,
+        (on_b - (0.5 + 0.002_109_7)).abs() < 1e-9,
         "and placed the body's estimate on b: {on_b}"
     );
     up.release();

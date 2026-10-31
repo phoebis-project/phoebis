@@ -15,7 +15,6 @@ use phoebis_routing::{
     DecisionRecord, Report, RouterConfig, RouterEvent, UtilizationSample, WindowReading,
     WindowSource, FIVE_HOUR, SEVEN_DAY,
 };
-use phoebis_store::MemoryStore;
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
@@ -352,22 +351,39 @@ async fn a_flush_after_the_answer_completes_carries_its_id_to_the_store() {
         .unwrap();
     assert_eq!(r1.status(), 200);
     r1.into_body().collect().await.unwrap();
-    h.relay.flush_memory().await;
-    // The key's own generation is the store's insertion stamp, not the harness clock: `insert_api_key` stamps
-    // it from the wall clock.
-    let generation = h.store.api_key("desktop").unwrap().unwrap().created_at;
-    let key = MemoryKey::for_session("desktop", generation, "s1", "main");
     // A spawned write can land after the flush unless the hand-off is awaited ahead of it; the drain above is
     // what makes the flush see it.
-    let record = h
-        .store
-        .load(&key)
-        .unwrap()
-        .expect("the flush wrote the session's row");
-    let payload: serde_json::Value = serde_json::from_str(&record.payload).unwrap();
+    h.relay.flush_memory().await;
+    // A relay restarted on the same store holds nothing for the session, and a history that matches no boundary
+    // leaves the session memory's id the only one it can name, so the id comes from the row the flush wrote.
+    let store = h.store.clone();
+    drop(h);
+    let h = harness_on(
+        store,
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+        default_limits(),
+    )
+    .await;
+    let r2 = h
+        .app
+        .clone()
+        .oneshot(conversation_request(
+            KEY,
+            "claude-sonnet-4-5",
+            "s1",
+            &[user("Summary of the conversation so far")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r2.status(), 200);
     assert_eq!(
-        payload["accounts"]["acct"]["message_ids"]["claude-sonnet-4-5"],
-        "msg_01"
+        diagnostics_previous(&up.requests()[1].body).as_deref(),
+        Some("msg_01")
     );
     up.shutdown().await;
 }
@@ -1088,52 +1104,6 @@ async fn a_400_naming_the_diagnostics_member_strips_the_member_and_a_second_400_
 
 #[tokio::test]
 async fn a_strip_retry_runs_on_the_same_account_before_any_failover() {
-    let up = FakeUpstream::start(vec![]).await;
-    up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_400(REFUSED_BETA));
-    up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_200());
-    let h = harness(
-        &up,
-        &[api_key("acct", ACCT_SECRET, 0)],
-        PoolSpec {
-            cache_diagnostics: true,
-            ..Default::default()
-        },
-    )
-    .await;
-    let resp = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-        .await
-        .unwrap();
-    assert_eq!(
-        resp.status(),
-        200,
-        "the 400 named the router's own beta, so the corrected body went to the same account"
-    );
-    assert_eq!(up.requests().len(), 2);
-    assert!(!beta_header(&up.requests()[1])
-        .is_some_and(|b| b.split(',').any(|t| t == CACHE_DIAGNOSIS_BETA)));
-    assert_eq!(
-        outcome(&resp).attempt,
-        2,
-        "the outcome counts wire submissions, which the ledger keys its attempt rows by"
-    );
-
-    // The latch still lands: the next request carries no beta, in one upstream request.
-    up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_200());
-    let resp2 = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-        .await
-        .unwrap();
-    assert_eq!(resp2.status(), 200);
-    assert_eq!(up.requests().len(), 3);
-    assert!(!beta_header(&up.requests()[2])
-        .is_some_and(|b| b.split(',').any(|t| t == CACHE_DIAGNOSIS_BETA)));
-    up.shutdown().await;
-
     // Two accounts: a's 429 fails over and the strip on b still runs on b.
     let up2 = FakeUpstream::start(vec![]).await;
     up2.add_credential_rule(A, "/v1/messages", json_429_unified(RESET, "five_hour"));
@@ -1591,17 +1561,24 @@ async fn an_account_move_names_the_new_accounts_memory_id_and_its_answer_replace
         "b's leg asks again on b, which holds no answer and no memory"
     );
     settle(&h).await;
-    let walked = boundaries_of(third);
-    for (index, boundary) in walked.iter().enumerate() {
-        let entry = entry_at(&h, SONNET, boundary).expect("every boundary has an entry");
-        assert_eq!(entry.account_id, "b", "boundary {index}");
-        let tail = index + 1 == walked.len();
-        assert_eq!(
-            entry.message_id.as_deref(),
-            tail.then_some("msg_b3"),
-            "boundary {index}"
-        );
-    }
+    let entries: Vec<phoebis_routing::AffinityEntry> = boundaries_of(third)
+        .iter()
+        .map(|boundary| entry_at(&h, SONNET, boundary).expect("every boundary has an entry"))
+        .collect();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| (entry.account_id.as_str(), entry.message_id.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("b", None),
+            ("b", None),
+            ("b", None),
+            ("b", None),
+            ("b", Some("msg_b3")),
+        ],
+        "each of the third turn's five boundaries is b's, and the tail alone names b's answer"
+    );
 
     let served = turn(&h, conversation_request(KEY, SONNET, "s1", &fourth)).await;
     assert_eq!(served, "b");

@@ -47,17 +47,29 @@ fn turn(body: &[u8]) -> Request<Body> {
     req
 }
 
-/// The session's pin once the selection at `now` has reached the store.
-async fn pin_at(store: &Store, now: i64) -> PinRow {
-    wait_for(Duration::from_secs(2), || {
-        store
-            .load_routing()
+/// The session's pin once the selection at `now` has reached the router.
+async fn pin_at(h: &Harness, now: i64) -> PinRow {
+    wait_for_async(Duration::from_secs(2), || async move {
+        h.router
+            .pins()
+            .await
             .unwrap()
-            .pins
             .into_iter()
             .find(|p| p.session_id == "s1" && p.last_used_at == now)
     })
     .await
+}
+
+/// Every boundary of `body`'s two chains, the hashes the router keys an answer's affinity entries on.
+fn boundaries_of(body: &[u8]) -> Vec<String> {
+    let chains = phoebis_relay::Chains::read(&serde_json::from_slice(body).unwrap())
+        .expect("the body is an object");
+    chains
+        .static_boundaries
+        .iter()
+        .chain(chains.message_boundaries.iter())
+        .cloned()
+        .collect()
 }
 
 #[tokio::test]
@@ -84,15 +96,20 @@ async fn a_speed_switch_reads_the_pin_cold_and_stamps_the_lane_on_the_pin_and_th
     let first = body(BodyFixture::Oauth);
     let resp = h.app.clone().oneshot(turn(first)).await.unwrap();
     assert_eq!(resp.status(), 200);
-    let pin = pin_at(&store, NOW).await;
+    let pin = pin_at(&h, NOW).await;
     assert_eq!(
         (pin.lane.as_str(), pin.last_refresh_at),
         (standard.as_str(), NOW),
         "a fresh pin takes the request's lane, warm"
     );
-    let first_rows: HashSet<String> = wait_for(Duration::from_secs(2), || {
-        let rows = store.load_routing().unwrap().affinity;
-        (!rows.is_empty()).then(|| rows.into_iter().map(|r| r.hash).collect())
+    let first_rows: HashSet<String> = boundaries_of(first).into_iter().collect();
+    wait_for(Duration::from_secs(2), || {
+        let map = h.router.affinity();
+        let entries = map.read().unwrap();
+        first_rows
+            .iter()
+            .any(|hash| entries.entry(SPELLING, hash).is_some())
+            .then_some(())
     })
     .await;
 
@@ -106,25 +123,28 @@ async fn a_speed_switch_reads_the_pin_cold_and_stamps_the_lane_on_the_pin_and_th
     let second_at = h.clock.fetch_add(1_000, Ordering::SeqCst) + 1_000;
     let resp = h.app.clone().oneshot(turn(&next)).await.unwrap();
     assert_eq!(resp.status(), 200);
-    let pin = pin_at(&store, second_at).await;
+    let pin = pin_at(&h, second_at).await;
     assert_eq!(
         (pin.lane.as_str(), pin.last_refresh_at),
         (fast.as_str(), 0),
         "the same conversation on another speed is another cache"
     );
     let second_rows = wait_for(Duration::from_secs(2), || {
-        let rows: Vec<_> = store
-            .load_routing()
-            .unwrap()
-            .affinity
+        let map = h.router.affinity();
+        let entries = map.read().unwrap();
+        let lanes: Vec<(String, String)> = boundaries_of(&next)
             .into_iter()
-            .filter(|r| !first_rows.contains(&r.hash))
+            .filter(|hash| !first_rows.contains(hash))
+            .filter_map(|hash| {
+                let lane = entries.entry(SPELLING, &hash)?.lane.clone();
+                Some((hash, lane))
+            })
             .collect();
-        (!rows.is_empty()).then_some(rows)
+        (!lanes.is_empty()).then_some(lanes)
     })
     .await;
     assert!(
-        second_rows.iter().all(|r| r.lane == fast),
+        second_rows.iter().all(|(_, lane)| *lane == fast),
         "the entries the fast answer wrote carry its lane: {second_rows:?}"
     );
 
@@ -146,7 +166,7 @@ async fn a_speed_switch_reads_the_pin_cold_and_stamps_the_lane_on_the_pin_and_th
     let resp = h.app.clone().oneshot(per_turn(&third)).await.unwrap();
     assert_eq!(resp.status(), 200);
     assert_eq!(
-        pin_at(&store, third_at).await.lane,
+        pin_at(&h, third_at).await.lane,
         lane_key(SPELLING, "fast", "enabled:31999", "*"),
         "under the per-turn beta the effort leaves the lane"
     );
@@ -160,7 +180,7 @@ async fn a_speed_switch_reads_the_pin_cold_and_stamps_the_lane_on_the_pin_and_th
     let resp = h.app.clone().oneshot(per_turn(&fourth)).await.unwrap();
     assert_eq!(resp.status(), 200);
     assert_eq!(
-        pin_at(&store, fourth_at).await.last_refresh_at,
+        pin_at(&h, fourth_at).await.last_refresh_at,
         fourth_at,
         "another per-turn level under the beta keeps the session warm"
     );
@@ -218,7 +238,7 @@ async fn the_pin_carries_the_effort_its_turn_named_by_the_newest_control_entry_o
     let first = body(BodyFixture::Oauth).to_vec();
     answered(h.app.clone().oneshot(turn(&first)).await.unwrap()).await;
     assert_eq!(
-        pin_at(&store, NOW).await.effort,
+        pin_at(&h, NOW).await.effort,
         "",
         "a turn naming no effort stamps none"
     );
@@ -227,7 +247,7 @@ async fn the_pin_carries_the_effort_its_turn_named_by_the_newest_control_entry_o
     let low_at = h.clock.fetch_add(1_000, Ordering::SeqCst) + 1_000;
     answered(h.app.clone().oneshot(per_turn(&low)).await.unwrap()).await;
     assert_eq!(
-        pin_at(&store, low_at).await.effort,
+        pin_at(&h, low_at).await.effort,
         "low",
         "a control entry names the turn's effort"
     );
@@ -236,7 +256,7 @@ async fn the_pin_carries_the_effort_its_turn_named_by_the_newest_control_entry_o
     let high_at = h.clock.fetch_add(1_000, Ordering::SeqCst) + 1_000;
     answered(h.app.clone().oneshot(per_turn(&high)).await.unwrap()).await;
     assert_eq!(
-        pin_at(&store, high_at).await.effort,
+        pin_at(&h, high_at).await.effort,
         "high",
         "the newest control entry wins over the one before it"
     );
@@ -248,7 +268,7 @@ async fn the_pin_carries_the_effort_its_turn_named_by_the_newest_control_entry_o
     let top_level_at = h.clock.fetch_add(1_000, Ordering::SeqCst) + 1_000;
     answered(h.app.clone().oneshot(turn(&top_level)).await.unwrap()).await;
     assert_eq!(
-        pin_at(&store, top_level_at).await.effort,
+        pin_at(&h, top_level_at).await.effort,
         "medium",
         "with no control entry the top-level member names the effort"
     );
