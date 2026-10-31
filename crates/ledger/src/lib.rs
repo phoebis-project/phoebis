@@ -48,9 +48,9 @@ pub use pattern::{
 };
 pub use plan::{
     entrypoint_of_client, free_equivalent, free_shares, funding_of, price_equivalent, price_shares,
-    Capacity, CostRevisions, DefinedBy, Funding, ModelWindow, Override, Peak, PerWindow,
-    PlanTables, PricedShares, Regime, RegimePeak, SubscriptionCosts, TypeMultiplier, TypeOverride,
-    Unit, WindowShares,
+    Capacity, CostRevisions, Funding, ModelWindow, Override, Peak, PerWindow, PlanTables,
+    PricedShares, Regime, RegimePeak, SubscriptionCosts, TypeMultiplier, TypeOverride, Unit,
+    WindowShares,
 };
 pub use price::{price_row, Priced, RowKey, SHARE_REASON_CLIENT_CLASSIFIER};
 pub use pricing::{

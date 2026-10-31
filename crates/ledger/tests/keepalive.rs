@@ -437,10 +437,10 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
 }
 
 /// A kept-warm credit keys the client of the request it credits, so the analytics read prices its saving under that
-/// client's regime as the request's own row does. The test cost model doubles the 20x tier's 5-hour capacity under
-/// `desk`, and `JANUARY_2026` falls at 04:00 in Los Angeles, before the base regime's peak: ten tokens read on Opus 5.5
-/// (weight 2) save ten writes at the five-minute multiplier 2 less ten reads at 0.1, 38 units, 0.19 of the desk's 200
-/// and 0.38 of the base's 100.
+/// client's regime as the request's own row does. The test cost model doubles the anchor Pro tier's 5-hour capacity
+/// under `desk`, and `JANUARY_2026` falls at 04:00 in Los Angeles, before the base regime's peak: ten tokens read on
+/// Opus 5.5 (weight 2) save ten writes at the five-minute multiplier 2 less ten reads at 0.1, 38 units, 3.8 of the
+/// desk's 10 and 7.6 of the base's 5.
 #[test]
 fn a_kept_warm_credit_folds_under_its_requests_client_and_prices_its_saving_under_that_clients_regime(
 ) {
@@ -483,7 +483,7 @@ fn a_kept_warm_credit_folds_under_its_requests_client_and_prices_its_saving_unde
         (group.key, five_hour.unwrap_or(f64::NAN))
     })
     .collect();
-    let want = [("claude-code/desk", 0.19), ("claude-code/sdk-cli", 0.38)];
+    let want = [("claude-code/desk", 3.8), ("claude-code/sdk-cli", 7.6)];
     assert!(
         savings.len() == want.len()
             && savings

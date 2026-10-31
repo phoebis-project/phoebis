@@ -449,12 +449,11 @@ pub(crate) struct LongContextView {
     pub output: f64,
 }
 
-/// Every key of the subscription cost model.
+/// Every key of the subscription cost model but `unit`, which the envelope carries once.
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SubscriptionCostsView {
     pub effective: String,
-    pub unit: UnitView,
     /// Keyed by the tier the account's profile reports.
     pub capacity: BTreeMap<String, CapacityView>,
     pub peak: PeakView,
@@ -477,14 +476,6 @@ pub(crate) struct SubscriptionCostsView {
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UnitView {
-    pub defined_by: DefinedByView,
-    pub units_per_window: u64,
-}
-
-#[derive(Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct DefinedByView {
-    pub band: String,
     pub tier: String,
     pub window: String,
 }

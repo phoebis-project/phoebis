@@ -175,11 +175,9 @@ fn the_idle_share_is_the_windows_probes_over_one_rewrite() {
 
 /// One weighted model and one model the plan leaves unweighted, written here so the figures follow from the text.
 const COSTS: &str = r#"
+unit: {tier: default_claude_max_20x, window: seven_day}
 revisions:
   - effective: 2026-01-01
-    unit:
-      defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
-      units_per_window: 100
     capacity:
       default_claude_max_20x: {five_hour: 100, seven_day: 1000}
     peak:

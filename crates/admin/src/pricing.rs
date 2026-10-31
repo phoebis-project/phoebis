@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_ledger::{ModelRow, PlanTables, PriceRevisions, PriceTable, SubscriptionCosts};
+use phoebis_ledger::{ModelRow, PlanTables, PriceRevisions, PriceTable, SubscriptionCosts, Unit};
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
@@ -43,7 +43,7 @@ pub(crate) fn long_context_json(row: &ModelRow) -> Value {
 #[derive(serde::Serialize, ToSchema)]
 pub struct Envelopes {
     pub api_prices: Envelope<PriceTableContent>,
-    pub subscription_costs: Envelope<SubscriptionCostsContent>,
+    pub subscription_costs: SubscriptionCostsEnvelope,
 }
 
 /// One table's envelope, its `content` the revision in force as loaded, key for key, and `revisions` every revision
@@ -59,6 +59,20 @@ pub struct Envelope<T: ToSchema> {
     pub source: String,
     pub content: T,
     pub revisions: Vec<Revision<T>>,
+}
+
+/// The cost model's envelope: `Envelope<T>`'s members with the file's one `unit`, which no revision's content carries.
+#[derive(serde::Serialize, ToSchema)]
+pub struct SubscriptionCostsEnvelope {
+    /// The date of the revision in force.
+    pub effective: String,
+    /// `shipped`, or `file` for the operator's file.
+    #[schema(example = "shipped")]
+    pub source: String,
+    #[schema(value_type = crate::openapi::UnitView)]
+    pub unit: Unit,
+    pub content: SubscriptionCostsContent,
+    pub revisions: Vec<Revision<SubscriptionCostsContent>>,
 }
 
 /// One revision of a table: its date and its table, `content` in the envelope's shape.
@@ -105,9 +119,10 @@ pub fn table_envelopes(prices: &PriceRevisions, tables: &PlanTables, now: i64) -
                 })
                 .collect(),
         },
-        subscription_costs: Envelope {
+        subscription_costs: SubscriptionCostsEnvelope {
             effective: costs.effective.clone(),
             source: tables.source.clone(),
+            unit: tables.revisions.unit().clone(),
             content: SubscriptionCostsContent(costs.clone()),
             revisions: tables
                 .revisions
@@ -143,11 +158,12 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
 #[cfg(test)]
 mod tests {
     use crate::openapi::round_trip::round_trips_each;
-    use crate::openapi::{ModelRowView, SubscriptionCostsView};
+    use crate::openapi::{ModelRowView, SubscriptionCostsView, UnitView};
 
     #[test]
     fn the_pricing_fixture_round_trips_through_the_mirrors() {
         round_trips_each::<ModelRowView>("pricing", &["api_prices", "content", "models", "*"]);
+        round_trips_each::<UnitView>("pricing", &["subscription_costs", "unit"]);
         round_trips_each::<SubscriptionCostsView>("pricing", &["subscription_costs", "content"]);
         round_trips_each::<ModelRowView>(
             "pricing",

@@ -69,7 +69,7 @@ pub(crate) fn unpriced_reason(
     if !tables.priced(
         FIVE_HOUR,
         entrypoint,
-        &tables.revisions.in_force(at).unit.defined_by.tier,
+        &tables.revisions.in_force(at).unit.tier,
         canonical_model,
         at,
     ) {

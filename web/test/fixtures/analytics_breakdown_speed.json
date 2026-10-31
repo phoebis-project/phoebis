@@ -750,8 +750,8 @@
         "plan_requests": 9,
         "plan_output_tokens": 900,
         "cost_equivalent": {
-          "five_hour": 0.0000746125,
-          "seven_day": 0.000019896666666666665
+          "five_hour": 0.0014922499999999999,
+          "seven_day": 0.00019896666666666666
         },
         "unpriced": {
           "five_hour": false,
@@ -759,12 +759,12 @@
         },
         "cache_equivalent": {
           "five_hour": {
-            "read": 5.291666666666666e-7,
-            "write": 0.000010583333333333334
+            "read": 0.000010583333333333334,
+            "write": 0.00021166666666666667
           },
           "seven_day": {
-            "read": 1.411111111111111e-7,
-            "write": 2.8222222222222227e-6
+            "read": 1.411111111111111e-6,
+            "write": 0.000028222222222222227
           }
         },
         "probe_equivalent": {},
@@ -783,10 +783,10 @@
           "output": 0.003
         },
         "equivalent_split": {
-          "input": 0.000011288888888888887,
-          "cache_read": 1.411111111111111e-7,
-          "cache_write": 2.8222222222222227e-6,
-          "output": 5.644444444444445e-6
+          "input": 0.00011288888888888888,
+          "cache_read": 1.411111111111111e-6,
+          "cache_write": 0.000028222222222222227,
+          "output": 0.000056444444444444454
         },
         "estimated": true,
         "probe_estimated": false

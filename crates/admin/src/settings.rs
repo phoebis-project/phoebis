@@ -22,8 +22,8 @@ pub(crate) struct Settings {
     pub retention: Retention,
     pub sessions: SessionsSettings,
     pub storage: Storage,
-    /// The subscription cost model's envelope as `GET /admin/pricing` answers it.
-    pub subscription_costs: crate::pricing::Envelope<crate::pricing::SubscriptionCostsContent>,
+    /// The subscription cost model's envelope as `GET /admin/pricing` answers it, its `unit` once at the top.
+    pub subscription_costs: crate::pricing::SubscriptionCostsEnvelope,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -160,6 +160,7 @@ mod tests {
             "settings",
             &["api_prices", "content", "models", "*"],
         );
+        round_trips_each::<crate::openapi::UnitView>("settings", &["subscription_costs", "unit"]);
         round_trips_each::<crate::openapi::SubscriptionCostsView>(
             "settings",
             &["subscription_costs", "content"],

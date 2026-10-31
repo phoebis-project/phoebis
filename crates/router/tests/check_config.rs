@@ -325,11 +325,9 @@ revisions:
 ";
 
 const COUNTED_COSTS: &str = "\
+unit: {tier: default_claude_ai, window: seven_day}
 revisions:
   - effective: 2026-03-01
-    unit:
-      defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
-      units_per_window: 100
     capacity:
       default_claude_ai:         {five_hour: 5, seven_day: 50}
       default_claude_enterprise: {five_hour: null, seven_day: null}

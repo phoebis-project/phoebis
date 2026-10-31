@@ -1176,11 +1176,9 @@ mod tests {
     /// 5-hour window and 1000 on the week, `narrow_tier` sizes the 5-hour window alone, and the Fable week is half
     /// the 7-day window.
     const SHARE_COSTS: &str = "\
+unit: {tier: test_tier, window: seven_day}
 revisions:
   - effective: 2026-01-01
-    unit:
-      defined_by: {tier: test_tier, window: five_hour, band: out_of_band}
-      units_per_window: 100
     capacity:
       test_tier:   {five_hour: 100, seven_day: 1000}
       narrow_tier: {five_hour: 100, seven_day: null}
@@ -1613,10 +1611,8 @@ revisions:
         const RECEIPT: i64 = 1_790_031_600_000;
         /// Tuesday 2026-09-22 at 13:00 UTC, 06:00 in Los Angeles: inside the band, under the second revision.
         const COMPLETION: i64 = 1_790_082_000_000;
-        let first = CostRevisions::from_yaml(SHARE_COSTS)
-            .expect("the share cost model parses")
-            .latest()
-            .clone();
+        let costs = CostRevisions::from_yaml(SHARE_COSTS).expect("the share cost model parses");
+        let first = costs.latest().clone();
         // Tripled rather than doubled, so no pairing of a revision with a band lands on the figure of another: the
         // band halves the capacity, which a doubled weight would match.
         let mut second = first.clone();
@@ -1625,7 +1621,10 @@ revisions:
             *weight *= 3.0;
         }
         let shares = ShareContext::of(
-            share_tables(CostRevisions::new(vec![first.clone(), second.clone()]).unwrap()),
+            share_tables(
+                CostRevisions::new(costs.unit().clone(), vec![first.clone(), second.clone()])
+                    .unwrap(),
+            ),
             PriceRevisions::shipped(),
         );
         let request = RequestRecord {

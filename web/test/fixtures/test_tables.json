@@ -181,16 +181,12 @@
     "subscription_costs": {
       "effective": "2026-01-01",
       "source": "test",
+      "unit": {
+        "tier": "default_claude_ai",
+        "window": "seven_day"
+      },
       "content": {
         "effective": "2026-01-01",
-        "unit": {
-          "defined_by": {
-            "band": "out_of_band",
-            "tier": "default_claude_max_20x",
-            "window": "five_hour"
-          },
-          "units_per_window": 100
-        },
         "capacity": {
           "default_claude_ai": {
             "five_hour": 5.0,
@@ -295,14 +291,6 @@
           "effective": "2026-01-01",
           "content": {
             "effective": "2026-01-01",
-            "unit": {
-              "defined_by": {
-                "band": "out_of_band",
-                "tier": "default_claude_max_20x",
-                "window": "five_hour"
-              },
-              "units_per_window": 100
-            },
             "capacity": {
               "default_claude_ai": {
                 "five_hour": 5.0,
@@ -407,14 +395,6 @@
           "effective": "2026-02-01",
           "content": {
             "effective": "2026-02-01",
-            "unit": {
-              "defined_by": {
-                "band": "out_of_band",
-                "tier": "default_claude_max_20x",
-                "window": "five_hour"
-              },
-              "units_per_window": 100
-            },
             "capacity": {
               "default_claude_ai": {
                 "five_hour": 5.0,

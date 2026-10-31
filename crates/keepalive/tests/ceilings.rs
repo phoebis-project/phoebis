@@ -29,11 +29,9 @@ revisions:
 /// The same model on the plan: a read of 0.025 against both writes of 1.25, so the break-even is 11,760,000 ms
 /// (3 h 16 min) on a five-minute entry and 158,760,000 ms (44.1 h) on a one-hour one.
 const COSTS: &str = r#"
+unit: {tier: default_claude_max_20x, window: seven_day}
 revisions:
   - effective: 2026-01-01
-    unit:
-      defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
-      units_per_window: 100
     capacity:
       default_claude_max_20x: {five_hour: 100, seven_day: 1000}
     peak:

@@ -7,8 +7,8 @@
     "cost_24h": 0.04265,
     "billed_24h": 0.014249999999999999,
     "equivalent_24h": {
-      "five_hour": 0.0000746125,
-      "seven_day": 0.000019896666666666665,
+      "five_hour": 0.00149225,
+      "seven_day": 0.00019896666666666666,
       "unpriced": {
         "five_hour": false,
         "seven_day": false
@@ -399,8 +399,8 @@
         "billed": 0.01065,
         "cost": 0.03195,
         "equivalent": {
-          "five_hour": 0.00004406250000000001,
-          "seven_day": 0.00001175,
+          "five_hour": 0.00088125,
+          "seven_day": 0.0001175,
           "unpriced": {
             "five_hour": false,
             "seven_day": false
@@ -416,8 +416,8 @@
         "billed": 0.0036,
         "cost": 0.010700000000000001,
         "equivalent": {
-          "five_hour": 0.000030550000000000004,
-          "seven_day": 8.146666666666666e-6,
+          "five_hour": 0.000611,
+          "seven_day": 0.00008146666666666666,
           "unpriced": {
             "five_hour": false,
             "seven_day": false

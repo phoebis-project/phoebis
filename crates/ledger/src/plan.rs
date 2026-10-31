@@ -71,21 +71,12 @@ impl PerWindow {
     }
 }
 
-/// The tier, window and band whose capacity the unit is a fraction of.
-#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DefinedBy {
-    pub band: String,
-    pub tier: String,
-    pub window: String,
-}
-
-/// Documents the unit and anchors the file to itself: `units_per_window` is the capacity `defined_by` names.
-#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+/// The tier and window whose capacity is one unit's whole, read once per file and handed to each revision.
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Unit {
-    pub defined_by: DefinedBy,
-    pub units_per_window: u64,
+    pub tier: String,
+    pub window: String,
 }
 
 /// The peak band: the hours and weekdays it covers, read in `zone` (an IANA name) from `from_hour` up to but not
@@ -264,6 +255,9 @@ pub struct Override {
 #[serde(deny_unknown_fields)]
 pub struct SubscriptionCosts {
     pub effective: String,
+    /// The file's one unit, which the loader hands every revision so each pricer reads its anchor off the revision it
+    /// prices with. A revision that spells it is refused as an unknown field, and the wire carries it on the envelope.
+    #[serde(skip)]
     pub unit: Unit,
     /// Keyed by the tier the account's profile reports.
     pub capacity: IndexMap<String, Capacity>,
@@ -288,6 +282,7 @@ pub struct SubscriptionCosts {
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CostFile {
+    unit: Unit,
     revisions: Vec<SubscriptionCosts>,
 }
 
@@ -401,35 +396,18 @@ impl SubscriptionCosts {
     }
 
     fn validate(&self) -> Result<(), LedgerError> {
-        let anchor = &self.unit.defined_by;
+        let anchor = &self.unit;
         capacity_rules("capacity", &self.capacity, &anchor.tier)?;
-        if self.unit.units_per_window == 0 {
-            return Err(refuse(
-                "unit.units_per_window: a count of units above zero".to_string(),
-            ));
-        }
-        let Some(row) = self.capacity.get(&anchor.tier) else {
+        // `capacity_rules` refuses a null window on the anchor's row first, so this refuses a revision without the row.
+        if self
+            .capacity
+            .get(&anchor.tier)
+            .and_then(|row| row.on(&anchor.window))
+            .is_none()
+        {
             return Err(refuse(format!(
-                "unit.defined_by.tier: `{}` is not a capacity row",
-                anchor.tier
-            )));
-        };
-        let Some(anchored) = row.on(&anchor.window) else {
-            return Err(refuse(format!(
-                "unit.defined_by.window: `{}` is neither {FIVE_HOUR} nor {SEVEN_DAY}",
-                anchor.window
-            )));
-        };
-        if anchor.band != "out_of_band" {
-            return Err(refuse(format!(
-                "unit.defined_by.band: `{}` is not out_of_band",
-                anchor.band
-            )));
-        }
-        if anchored != self.unit.units_per_window as f64 {
-            return Err(refuse(format!(
-                "unit.units_per_window: {} differs from capacity.{}.{}",
-                self.unit.units_per_window, anchor.tier, anchor.window
+                "capacity.{}.{}: the anchor tier carries a capacity on the unit's window",
+                anchor.tier, anchor.window
             )));
         }
         let peak = &self.peak;
@@ -570,7 +548,8 @@ impl SubscriptionCosts {
                 )));
             }
         }
-        // Every weighted model has a tier, so the fallback never guesses one for a model the file lists.
+        // Every weighted model has a tier, so the cost reference's rows and the model order never guess one for a model
+        // the file lists.
         for model in self.model_weight.keys().chain(self.overrides.keys()) {
             if !self.model_tier.contains_key(model) {
                 return Err(refuse(format!("model_tier: no tier for {model}")));
@@ -733,8 +712,7 @@ impl SubscriptionCosts {
     /// The anchor tier's capacity under the regime: the unit is the base window, and a regime's table divides by its
     /// own anchor row so an interactive pin ranks at the rate the meter charges it.
     fn anchor_capacity(&self, priced: &str, entrypoint: Option<&str>) -> Option<f64> {
-        self.capacity_of(entrypoint, &self.unit.defined_by.tier)?
-            .on(priced)
+        self.capacity_of(entrypoint, &self.unit.tier)?.on(priced)
     }
 
     /// The share of the tier's own `window` `usage` consumes for a request completing at `at`: its units over the
@@ -803,8 +781,8 @@ impl SubscriptionCosts {
         Some(units / capacity / self.factor_at(priced, entrypoint, at) / divisor)
     }
 
-    /// `share_at` under the anchor tier (`unit.defined_by.tier`): the cost model's units over the Max 20x capacity,
-    /// the regime's own where `entrypoint` names one, since the equivalent is what a Max 20x account would spend.
+    /// `share_at` under the anchor tier (`unit.tier`): the cost model's units over the anchor's capacity, the regime's
+    /// own where `entrypoint` names one, since the equivalent is what an anchor-tier account would spend.
     pub fn equivalent_at(
         &self,
         window: &str,
@@ -816,7 +794,7 @@ impl SubscriptionCosts {
         self.share_at(
             window,
             entrypoint,
-            &self.unit.defined_by.tier,
+            &self.unit.tier,
             canonical_model,
             usage,
             at,
@@ -1053,9 +1031,10 @@ fn version_of(canonical_model: &str) -> Vec<u32> {
 }
 
 /// The cost model's revisions sorted ascending by instant, with the instants precomputed at load so `in_force` is a
-/// binary search. Serializes as the file's one key.
+/// binary search. Serializes with the unit first, then the revisions, as the file reads.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct CostRevisions {
+    unit: Unit,
     revisions: Vec<SubscriptionCosts>,
     #[serde(skip)]
     instants: Vec<i64>,
@@ -1064,32 +1043,56 @@ pub struct CostRevisions {
 // `new` refuses an empty list, so a list never reads empty.
 #[allow(clippy::len_without_is_empty)]
 impl CostRevisions {
-    /// Sorts, refuses an empty list and two entries dated the same, and computes the instants.
-    pub fn new(revisions: Vec<SubscriptionCosts>) -> Result<CostRevisions, LedgerError> {
+    /// Sorts, refuses an empty list and two entries dated the same, and computes the instants. `unit` is the file's
+    /// one unit, so a caller that builds a list from loaded revisions passes the unit of the tables it copies.
+    pub fn new(
+        unit: Unit,
+        revisions: Vec<SubscriptionCosts>,
+    ) -> Result<CostRevisions, LedgerError> {
         let dates: Vec<&str> = revisions.iter().map(|r| r.effective.as_str()).collect();
         let instants = crate::pricing::sorted_instants(&dates).map_err(refuse)?;
         let (instants, revisions) = crate::pricing::by_instant(instants, revisions);
         Ok(CostRevisions {
+            unit,
             revisions,
             instants,
         })
     }
 
     /// Refuses with `LedgerError::Plan` naming the key and the rule: the untyped pass's refusals (a parse error, a
-    /// repeated key, a key that is not an untagged string), serde's (an unknown or a missing key), then per entry
-    /// under its date a zone the bundled database lacks and each value rule in the file's order, then the list's.
+    /// repeated key, a key that is not an untagged string), serde's (an unknown or a missing key), the unit's window,
+    /// then per entry under its date a zone the bundled database lacks and each value rule in the file's order, then
+    /// the list's.
     pub fn from_yaml(text: &str) -> Result<CostRevisions, LedgerError> {
         // The typed maps read a key as its text and keep the last of two equal keys, so the untyped pass runs first
         // and refuses a repeat, a tagged one included. The typed parse stays second so serde's field errors keep
         // their line and column.
         crate::keys::untagged_string_keys(text).map_err(refuse)?;
         let file: CostFile = serde_norway::from_str(text).map_err(|e| refuse(e.to_string()))?;
+        let unit = file.unit;
+        if !matches!(unit.window.as_str(), FIVE_HOUR | SEVEN_DAY) {
+            return Err(refuse(format!(
+                "unit.window: `{}` is neither {FIVE_HOUR} nor {SEVEN_DAY}",
+                unit.window
+            )));
+        }
         let revisions = file
             .revisions
             .into_iter()
-            .map(SubscriptionCosts::resolved)
+            .map(|revision| {
+                SubscriptionCosts {
+                    unit: unit.clone(),
+                    ..revision
+                }
+                .resolved()
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        CostRevisions::new(revisions)
+        CostRevisions::new(unit, revisions)
+    }
+
+    /// The file's one unit.
+    pub fn unit(&self) -> &Unit {
+        &self.unit
     }
 
     pub fn shipped() -> CostRevisions {
@@ -1428,7 +1431,7 @@ pub fn price_equivalent(
     band_at: i64,
 ) -> PricedShares {
     let costs = tables.revisions.in_force(at);
-    let anchor = &costs.unit.defined_by.tier;
+    let anchor = &costs.unit.tier;
     priced_windows(canonical_model, |window| {
         costs.share_and_flag_at(window, entrypoint, anchor, canonical_model, usage, band_at)
     })
@@ -1452,7 +1455,7 @@ pub fn free_shares(
     )
 }
 
-/// `free_shares` under the anchor tier (`unit.defined_by.tier`): the windows `price_equivalent` names, each at zero.
+/// `free_shares` under the anchor tier (`unit.tier`): the windows `price_equivalent` names, each at zero.
 pub fn free_equivalent(
     tables: &PlanTables,
     entrypoint: Option<&str>,
@@ -1460,12 +1463,7 @@ pub fn free_equivalent(
     at: i64,
 ) -> WindowShares {
     let costs = tables.revisions.in_force(at);
-    zero_windows(
-        costs,
-        entrypoint,
-        &costs.unit.defined_by.tier,
-        canonical_model,
-    )
+    zero_windows(costs, entrypoint, &costs.unit.tier, canonical_model)
 }
 
 /// `Some(0.0)` on each window `priced_windows` walks for the model that `tier` holds a capacity on under the regime

@@ -472,8 +472,8 @@
             "plan_requests": 6,
             "plan_output_tokens": 600,
             "cost_equivalent": {
-              "five_hour": 0.00004406250000000001,
-              "seven_day": 0.00001175
+              "five_hour": 0.00088125,
+              "seven_day": 0.0001175
             },
             "unpriced": {
               "five_hour": false,
@@ -481,12 +481,12 @@
             },
             "cache_equivalent": {
               "five_hour": {
-                "read": 3.1249999999999997e-7,
-                "write": 6.25e-6
+                "read": 6.25e-6,
+                "write": 0.000125
               },
               "seven_day": {
-                "read": 8.333333333333334e-8,
-                "write": 1.6666666666666667e-6
+                "read": 8.333333333333333e-7,
+                "write": 0.000016666666666666667
               }
             },
             "probe_equivalent": {},
@@ -505,10 +505,10 @@
               "output": 0.002
             },
             "equivalent_split": {
-              "input": 6.666666666666667e-6,
-              "cache_read": 8.333333333333334e-8,
-              "cache_write": 1.6666666666666667e-6,
-              "output": 3.3333333333333333e-6
+              "input": 0.00006666666666666667,
+              "cache_read": 8.333333333333333e-7,
+              "cache_write": 0.000016666666666666667,
+              "output": 0.000033333333333333335
             },
             "estimated": false,
             "probe_estimated": false
@@ -1653,8 +1653,8 @@
             "plan_requests": 3,
             "plan_output_tokens": 300,
             "cost_equivalent": {
-              "five_hour": 0.000030550000000000004,
-              "seven_day": 8.146666666666666e-6
+              "five_hour": 0.000611,
+              "seven_day": 0.00008146666666666666
             },
             "unpriced": {
               "five_hour": false,
@@ -1662,12 +1662,12 @@
             },
             "cache_equivalent": {
               "five_hour": {
-                "read": 2.1666666666666667e-7,
-                "write": 4.333333333333334e-6
+                "read": 4.333333333333333e-6,
+                "write": 0.00008666666666666667
               },
               "seven_day": {
-                "read": 5.7777777777777775e-8,
-                "write": 1.1555555555555556e-6
+                "read": 5.777777777777778e-7,
+                "write": 0.000011555555555555556
               }
             },
             "probe_equivalent": {},
@@ -1686,10 +1686,10 @@
               "output": 0.0
             },
             "equivalent_split": {
-              "input": 4.622222222222222e-6,
-              "cache_read": 5.7777777777777775e-8,
-              "cache_write": 1.1555555555555556e-6,
-              "output": 2.311111111111111e-6
+              "input": 0.000046222222222222224,
+              "cache_read": 5.777777777777778e-7,
+              "cache_write": 0.000011555555555555556,
+              "output": 0.000023111111111111112
             },
             "estimated": true,
             "probe_estimated": false

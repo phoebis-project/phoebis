@@ -136,7 +136,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         ),
         (
             "subscription_costs",
-            &["content", "effective", "revisions", "source"],
+            &["content", "effective", "revisions", "source", "unit"],
         ),
     ]
     .iter()

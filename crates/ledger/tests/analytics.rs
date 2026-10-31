@@ -2326,7 +2326,7 @@ async fn an_unpriced_row_nulls_the_window_it_could_not_price_and_leaves_the_othe
 }
 
 /// A weighted and an unweighted plan row of an account whose tier the test cost model sizes, beside a billed row of
-/// another account: the day, the pool's traffic and the account breakdown answer the same dollars, 20x equivalent and
+/// another account: the day, the pool's traffic and the account breakdown answer the same dollars, equivalent and
 /// fallback mark whether or not the read answers the shares, each figure the test tables' own to the bit, and the read
 /// that answers the shares answers them.
 #[tokio::test]
@@ -2428,10 +2428,11 @@ async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_doll
         ("b with the shares", of_group(&shares_read, "b")),
     ];
     // Account a's rows weigh 60 units, 40 for Opus 5.5's 10 input and 1 output tokens at weight 2 and 20 for Opus 5's
-    // 10 input tokens at the same weight through the fallback: 0.6 and 0.06 of the 20x windows of 100 and 1,000 units,
-    // and $0.00015 beside $0.00005. Account b's 20 input tokens of Opus 5.5 are billed, $0.0002.
-    let both = (0.0004, 0.0002, Some(0.6000000000000001), Some(0.06), true);
-    let a = (0.0002, 0.0, Some(0.6000000000000001), Some(0.06), true);
+    // 10 input tokens at the same weight through the fallback: 12 and 1.2 of the Pro windows of 5 and 50 units, the
+    // week's sum of 0.8 and 0.4 one bit above 1.2, and $0.00015 beside $0.00005. Account b's 20 input tokens of Opus
+    // 5.5 are billed, $0.0002.
+    let both = (0.0004, 0.0002, Some(12.0), Some(1.2000000000000002), true);
+    let a = (0.0002, 0.0, Some(12.0), Some(1.2000000000000002), true);
     let b = (0.0002, 0.0002, None, None, false);
     assert_eq!(
         figures,
@@ -4988,13 +4989,19 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_
         peak.five_hour_share,
         base * factor
     );
-    // Max 20x is the anchor tier, so the 20x equivalent of its own rows is their share, band and all.
+    // The shipped Max 20x rows hold twenty of the anchor Pro's 5-hour windows and ten of its weeks, so the equivalent
+    // of its own rows is their share times those ratios, band and all.
     for point in [peak, off_peak] {
-        assert_eq!(
-            (point.five_hour_equivalent, point.seven_day_equivalent),
-            (point.five_hour_share, point.seven_day_share),
-            "{point:?}"
-        );
+        for (equivalent, share, ratio) in [
+            (point.five_hour_equivalent, point.five_hour_share, 20.0),
+            (point.seven_day_equivalent, point.seven_day_share, 10.0),
+        ] {
+            let want = share.unwrap() * ratio;
+            assert!(
+                (equivalent.unwrap() - want).abs() <= 1e-9 * want,
+                "{point:?}"
+            );
+        }
     }
     let week = |at: i64| share_of(&tables, SEVEN_DAY, MAX_20X, "claude-sonnet-5-5", tokens, at);
     for (point, at) in [(peak, WEEKDAY_PEAK), (off_peak, WEEKDAY_OFF_PEAK)] {
@@ -5533,12 +5540,18 @@ fn a_session_attempt_weighs_its_five_hour_share_by_the_band_at_its_completion() 
         (point.seven_day_share.unwrap() - week).abs() < 1e-6,
         "the 7-day share is priced too: {point:?} vs {week}"
     );
-    // The attempt's own tier is Max 20x, the anchor, so its equivalent reads its share, banded at its completion.
-    assert_eq!(
-        (point.five_hour_equivalent, point.seven_day_equivalent),
-        (point.five_hour_share, point.seven_day_share),
-        "{point:?}"
-    );
+    // The shipped Max 20x rows hold twenty of the anchor Pro's 5-hour windows and ten of its weeks, so the attempt's
+    // equivalent reads its share times those ratios, banded at its completion.
+    for (equivalent, share, ratio) in [
+        (point.five_hour_equivalent, point.five_hour_share, 20.0),
+        (point.seven_day_equivalent, point.seven_day_share, 10.0),
+    ] {
+        let want = share.unwrap() * ratio;
+        assert!(
+            (equivalent.unwrap() - want).abs() <= 1e-9 * want,
+            "{point:?}"
+        );
+    }
 }
 
 #[test]
@@ -6019,11 +6032,9 @@ fn a_session_series_naming_one_account_ranks_that_account_s_sessions_alone() {
 /// units on the 5-hour window and 1000 on the week, `narrow_tier` sizes the 5-hour window alone, and the Fable week
 /// is half the 7-day window.
 const SHARE_COSTS: &str = "\
+unit: {tier: test_tier, window: seven_day}
 revisions:
   - effective: 2026-01-01
-    unit:
-      defined_by: {tier: test_tier, window: five_hour, band: out_of_band}
-      units_per_window: 100
     capacity:
       test_tier:   {five_hour: 100, seven_day: 1000}
       narrow_tier: {five_hour: 100, seven_day: null}
@@ -7814,8 +7825,8 @@ fn a_cost_revision_inside_a_price_span_moves_the_totals_equivalent_at_its_own_bo
 }
 
 /// The totals read each group's peak factor at its own hour: one Opus 5.5 input token weighs 2 units in the test
-/// cost model's first entry, 0.02 of a Max 20x 5-hour window's 100 out of the band and 0.04 inside it, where the
-/// window holds half its capacity.
+/// cost model's first entry, 0.4 of a Pro 5-hour window's 5 out of the band and 0.8 inside it, where the window holds
+/// half its capacity.
 #[test]
 fn a_peak_hour_beside_a_quiet_one_prices_the_totals_equivalent_at_each_hours_factor() {
     let db = LedgerDb::open_in_memory().unwrap();
@@ -7857,15 +7868,16 @@ fn a_peak_hour_beside_a_quiet_one_prices_the_totals_equivalent_at_each_hours_fac
         .unwrap();
     let five_hour = totals["a"].equivalent.five_hour;
     assert!(
-        (five_hour - (0.02 + 0.04)).abs() < 1e-12,
-        "the quiet hour's 0.02 and the peak hour's 0.04: {five_hour}"
+        (five_hour - (0.4 + 0.8)).abs() < 1e-12,
+        "the quiet hour's 0.4 and the peak hour's 0.8: {five_hour}"
     );
 }
 
 /// Two rows of one hour, account tier and model, one Opus 5.5 input token each, one from an entrypoint the test regime
 /// lists and one from an entrypoint it leaves out: each prices under its own regime, 2 / 200 and 2 / 100 of the Max 20x
-/// 5-hour window, where one price over the group would read the base 0.04. A session attempt from the listed
-/// entrypoint reads the regime's figure. 04:00 in Los Angeles, before the band, in the first cost entry.
+/// 5-hour window, where one price over the group would read the base 0.04, and the equivalent 2 / 10 and 2 / 5 of the
+/// Pro one. A session attempt from the listed entrypoint reads the regime's figure. 04:00 in Los Angeles, before the
+/// band, in the first cost entry.
 #[test]
 fn a_group_mixing_two_clients_prices_each_rows_regime() {
     let costs = phoebis_ledger::test_tables::subscription_costs();
@@ -7902,7 +7914,7 @@ fn a_group_mixing_two_clients_prices_each_rows_regime() {
         .unwrap();
     let equivalent = totals["a"].equivalent.five_hour;
     assert!(
-        close(equivalent, 0.01 + 0.02),
+        close(equivalent, 0.2 + 0.4),
         "each row under its own regime: {equivalent}"
     );
     let share = points

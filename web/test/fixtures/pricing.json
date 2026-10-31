@@ -334,16 +334,12 @@
     "subscription_costs": {
       "effective": "2026-10-05",
       "source": "shipped",
+      "unit": {
+        "tier": "default_claude_ai",
+        "window": "seven_day"
+      },
       "content": {
         "effective": "2026-10-05",
-        "unit": {
-          "defined_by": {
-            "band": "out_of_band",
-            "tier": "default_claude_max_20x",
-            "window": "five_hour"
-          },
-          "units_per_window": 150000000
-        },
         "capacity": {
           "default_claude_ai": {
             "five_hour": 7500000.0,
@@ -452,14 +448,6 @@
           "effective": "2026-10-05",
           "content": {
             "effective": "2026-10-05",
-            "unit": {
-              "defined_by": {
-                "band": "out_of_band",
-                "tier": "default_claude_max_20x",
-                "window": "five_hour"
-              },
-              "units_per_window": 150000000
-            },
             "capacity": {
               "default_claude_ai": {
                 "five_hour": 7500000.0,

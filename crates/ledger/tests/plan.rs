@@ -504,12 +504,13 @@ fn the_tables_price_at_the_revision_in_force_at_the_instant_and_hold_the_next_on
     assert!(tables.measured(SEVEN_DAY_FABLE, JANUARY_2026));
     assert_eq!(
         tables.tier_factor(PRO, FIVE_HOUR, None, JANUARY_2026),
-        Some(0.05)
+        Some(1.0)
     );
     assert_eq!(tables.band_factor(FIVE_HOUR, None, IN_BAND), 2.0);
+    // The second revision's Opus 5.5 weight of 4 over the anchor's 5-hour row of 5.
     assert_eq!(
         tables.rate_table(FIVE_HOUR, None, OUT_OF_BAND).rows[OPUS].input,
-        Some(0.04)
+        Some(0.8)
     );
 }
 
@@ -647,36 +648,36 @@ fn a_tier_the_file_lacks_or_a_null_capacity_prices_nothing_on_that_window() {
     assert!(tables.priced(FIVE_HOUR, None, TEAM, OPUS));
 }
 
-// The equivalent is the share of the anchor account tier, Max 20x: one Opus 5.5 input token is 2 units, 2 / 100 of
-// the 5-hour window out of band and over the band's 0.5 inside it, 2 / 1000 of the week, and one Fable 5.1 input
-// token is 10 units over the week's 1000 and the Fable week's 0.5.
+// The equivalent is the share of the anchor account tier, Pro: one Opus 5.5 input token is 2 units, 2 / 5 of the
+// 5-hour window out of band and over the band's 0.5 inside it, 2 / 50 of the week, and one Fable 5.1 input token is
+// 10 units over the week's 50 and the Fable week's 0.5.
 #[test]
-fn the_equivalent_is_the_share_of_the_max_20x_windows_on_the_three_columns() {
+fn the_equivalent_is_the_share_of_the_pro_windows_on_the_three_columns() {
     let tables = tables();
     assert_share(
         tables.equivalent_at(FIVE_HOUR, None, OPUS, input(1), JANUARY_2026),
-        0.02,
+        0.4,
         "the 5-hour window out of band",
     );
     assert_share(
         tables.equivalent_at(FIVE_HOUR, None, OPUS, input(1), JANUARY_IN_BAND),
-        0.04,
+        0.8,
         "the 5-hour window inside the band",
     );
     assert_share(
         first().equivalent_at(FIVE_HOUR, None, OPUS, input(1), IN_BAND),
-        0.04,
+        0.8,
         "one revision's equivalent reads the band at its instant",
     );
     assert_share(
         tables.equivalent_at(SEVEN_DAY, None, OPUS, input(1), JANUARY_2026),
-        0.002,
+        0.04,
         "the week",
     );
     assert_share(
         tables.equivalent_at(SEVEN_DAY_FABLE, None, FABLE, input(1), JANUARY_2026),
-        0.02,
-        "the Fable week: 10 / 1000 / 0.5",
+        0.4,
+        "the Fable week: 10 / 50 / 0.5",
     );
     for window in [FIVE_HOUR, SEVEN_DAY] {
         assert_eq!(
@@ -695,7 +696,7 @@ fn the_equivalent_answers_the_model_week_for_a_model_that_carries_one_and_the_fa
         fable.shares.keys().copied().collect::<Vec<_>>(),
         [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE]
     );
-    for (window, want) in [(FIVE_HOUR, 0.1), (SEVEN_DAY, 0.01), (SEVEN_DAY_FABLE, 0.02)] {
+    for (window, want) in [(FIVE_HOUR, 2.0), (SEVEN_DAY, 0.2), (SEVEN_DAY_FABLE, 0.4)] {
         assert_share(fable.shares[window], want, window);
         assert!(!fable.estimated[window], "{window}");
     }
@@ -704,12 +705,8 @@ fn the_equivalent_answers_the_model_week_for_a_model_that_carries_one_and_the_fa
         opus.shares.keys().copied().collect::<Vec<_>>(),
         [FIVE_HOUR, SEVEN_DAY]
     );
-    assert_share(
-        opus.shares[FIVE_HOUR],
-        0.02,
-        "Opus 5.5 on the 5-hour window",
-    );
-    assert_share(opus.shares[SEVEN_DAY], 0.002, "Opus 5.5 on the week");
+    assert_share(opus.shares[FIVE_HOUR], 0.4, "Opus 5.5 on the 5-hour window");
+    assert_share(opus.shares[SEVEN_DAY], 0.04, "Opus 5.5 on the week");
     assert!(!opus.any_estimated());
     let unweighted = price_equivalent(
         &tables,
@@ -779,20 +776,30 @@ fn a_null_weight_with_an_override_on_one_window_marks_the_other_windows_alone_as
         path: None,
         source: "test".to_string(),
     };
-    for priced in [
-        price_shares(
-            &edited,
-            None,
-            MAX_20X,
-            HAIKU,
-            input(1),
-            JANUARY_2026,
-            JANUARY_2026,
+    // The Max 20x share reads Haiku 5.5's 0.25 over 100 and the override's 1 over 1000, the equivalent the same units
+    // over the anchor's 5 and 50.
+    for (priced, five_hour, seven_day) in [
+        (
+            price_shares(
+                &edited,
+                None,
+                MAX_20X,
+                HAIKU,
+                input(1),
+                JANUARY_2026,
+                JANUARY_2026,
+            ),
+            0.0025,
+            0.001,
         ),
-        price_equivalent(&edited, None, HAIKU, input(1), JANUARY_2026, JANUARY_2026),
+        (
+            price_equivalent(&edited, None, HAIKU, input(1), JANUARY_2026, JANUARY_2026),
+            0.05,
+            0.02,
+        ),
     ] {
-        assert_share(priced.shares[FIVE_HOUR], 0.0025, "Haiku 5.5's 0.25 / 100");
-        assert_share(priced.shares[SEVEN_DAY], 0.001, "the override's 1 / 1000");
+        assert_share(priced.shares[FIVE_HOUR], five_hour, "Haiku 5.5's 0.25");
+        assert_share(priced.shares[SEVEN_DAY], seven_day, "the override's 1");
         assert_eq!(
             priced
                 .estimated
@@ -817,9 +824,9 @@ fn a_null_weight_with_an_override_on_one_window_marks_the_other_windows_alone_as
 
 // The worked figures on the shipped file, each derived from its members rather than written down, so a revision edits
 // no test: one million input tokens of Opus 5.5 out of the band and inside it and of Fable 5.1, one million Opus 5.5
-// output tokens, and the Opus 5.5 request as a share of a Pro account's own 5-hour window.
+// output tokens, and the Opus 5.5 request as a share of a Max 20x account's own 5-hour window.
 #[test]
-fn the_shipped_equivalent_is_the_units_over_the_max_20x_capacity_and_a_pro_share_scales_it_by_the_capacities(
+fn the_shipped_equivalent_is_the_units_over_the_pro_capacity_and_a_max_20x_share_scales_it_by_the_capacities(
 ) {
     let shipped = CostRevisions::shipped();
     let costs = shipped.latest().clone();
@@ -848,7 +855,7 @@ fn the_shipped_equivalent_is_the_units_over_the_max_20x_capacity_and_a_pro_share
             "{model} carries no override"
         );
     }
-    let anchor = &costs.capacity[&costs.unit.defined_by.tier];
+    let anchor = &costs.capacity[&costs.unit.tier];
     let (five_hour, seven_day) = (anchor.five_hour.unwrap(), anchor.seven_day.unwrap());
     let fable_week = costs.model_windows[SEVEN_DAY_FABLE].capacity_factor;
     let million = 1_000_000;
@@ -890,36 +897,36 @@ fn the_shipped_equivalent_is_the_units_over_the_max_20x_capacity_and_a_pro_share
         units(OPUS, multiplier.output) / five_hour,
         "Opus 5.5 output on the 5-hour window",
     );
-    let pro = costs.capacity[PRO].five_hour.unwrap();
+    let max_20x = costs.capacity[MAX_20X].five_hour.unwrap();
     assert_share(
-        costs.share_at(FIVE_HOUR, None, PRO, OPUS, input(million), out_of_band),
-        opus_equivalent * five_hour / pro,
-        "the Pro share is the equivalent times the anchor's capacity over Pro's",
+        costs.share_at(FIVE_HOUR, None, MAX_20X, OPUS, input(million), out_of_band),
+        opus_equivalent * five_hour / max_20x,
+        "the Max 20x share is the equivalent times the anchor's capacity over Max 20x's",
     );
 }
 
-// Pro holds 5 of the anchor's 100 on the 5-hour window, Max 5x 250 of its 1000 on the week.
+// Max 20x holds 100 against the anchor's 5 on the 5-hour window, Max 5x 250 against its 50 on the week.
 #[test]
 fn the_tier_factor_is_the_capacity_over_the_anchors_and_reads_a_tier_with_or_without_its_prefix() {
     let tables = first();
     assert_share(
-        tables.tier_factor("claude_ai", FIVE_HOUR, None),
-        0.05,
+        tables.tier_factor("claude_max_20x", FIVE_HOUR, None),
+        20.0,
         "without the prefix",
     );
     assert_share(
-        tables.tier_factor(PRO, FIVE_HOUR, None),
-        0.05,
+        tables.tier_factor(MAX_20X, FIVE_HOUR, None),
+        20.0,
         "as reported",
     );
     assert_share(
         tables.tier_factor(MAX_5X, SEVEN_DAY, None),
-        0.25,
+        5.0,
         "Max 5x week",
     );
     assert_share(
         tables.tier_factor(MAX_5X, SEVEN_DAY_FABLE, None),
-        0.25,
+        5.0,
         "a model week reads the week's ratio",
     );
     assert_eq!(tables.tier_factor(TEAM, SEVEN_DAY, None), None);
@@ -1101,7 +1108,7 @@ fn a_week_the_file_does_not_name_prices_the_seven_day_share_once_and_any_other_w
     assert!(!tables.priced("one_hour", None, MAX_20X, OPUS));
 }
 
-// Per token on the anchor's 5-hour window of 100: Opus 5.5 at 2 times (1, 0.1, 2, 2, 10), Haiku at 0.5 times
+// Per token on the anchor's 5-hour window of 5: Opus 5.5 at 2 times (1, 0.1, 2, 2, 10), Haiku at 0.5 times
 // (1, 0.2, 2, 2, 10) with its cache read override. Opus 5 (a null weight) and Opus 4.8 (a model tier entry alone)
 // take Opus 5.5's 2 and the shared multipliers, and the Mystery model tier has no weighted model, so Mystery 2's row
 // carries no rate.
@@ -1111,7 +1118,7 @@ fn the_rate_table_carries_a_row_per_weighted_model_and_per_unweighted_model_of_a
     assert!(
         all_close(
             per_type(rates.rows[OPUS]),
-            [Some(0.02), Some(0.002), Some(0.04), Some(0.04), Some(0.2)]
+            [Some(0.4), Some(0.04), Some(0.8), Some(0.8), Some(4.0)]
         ),
         "{:?}",
         rates.rows[OPUS]
@@ -1119,7 +1126,7 @@ fn the_rate_table_carries_a_row_per_weighted_model_and_per_unweighted_model_of_a
     assert!(
         all_close(
             per_type(rates.rows[HAIKU]),
-            [Some(0.005), Some(0.001), Some(0.01), Some(0.01), Some(0.05)]
+            [Some(0.1), Some(0.02), Some(0.2), Some(0.2), Some(1.0)]
         ),
         "{:?}",
         rates.rows[HAIKU]
@@ -1148,8 +1155,8 @@ fn the_rate_table_carries_a_row_per_weighted_model_and_per_unweighted_model_of_a
 }
 
 // An id no file lists prices through the model tier its id names: Opus 9 at the opus model tier's latest weighted
-// model, Opus 5.5 at 2, with the shared multipliers, the share the meter charges it. Mystery 9's model tier has no
-// weighted model and GPT 5 names no model tier, so neither has a rate.
+// model, Opus 5.5 at 2, with the shared multipliers, the share the meter charges the anchor tier. Mystery 9's model
+// tier has no weighted model and GPT 5 names no model tier, so neither has a rate.
 #[test]
 fn an_unlisted_id_naming_a_weighted_tier_rates_at_its_latest_weight_as_the_meter_charges_it() {
     let costs = first();
@@ -1167,7 +1174,7 @@ fn an_unlisted_id_naming_a_weighted_tier_rates_at_its_latest_weight_as_the_meter
             .price(model, usage, 0)
             .unwrap_or_else(|| panic!("{model}: no rate"));
         let charged = costs
-            .share_at(FIVE_HOUR, None, MAX_20X, model, usage, OUT_OF_BAND)
+            .share_at(FIVE_HOUR, None, PRO, model, usage, OUT_OF_BAND)
             .expect("the meter charges it");
         assert!(close(rated, charged), "{model}: {rated} against {charged}");
     }
@@ -1269,8 +1276,8 @@ fn the_band_moves_the_base_share_and_not_the_regimes() {
 }
 
 // The test regime names Pro and Max 20x alone, so Max 5x reads its base 25 under it, 2 / 25. A tier factor divides by
-// the regime's own anchor row: Pro's 10 over 200 is the base ratio of 5 over 100, and Max 5x's base 25 over 200 is
-// the factor that turns the regime's anchor rate of 2 / 200 back into the 0.08.
+// the regime's own anchor row: Max 20x's 200 over 10 is the base ratio of 100 over 5, and Max 5x's base 25 over 10 is
+// the factor that turns the regime's anchor rate of 2 / 10 back into the 0.08.
 #[test]
 fn a_tier_the_regime_leaves_out_prices_at_the_base_row_under_it() {
     let tables = first();
@@ -1280,25 +1287,25 @@ fn a_tier_the_regime_leaves_out_prices_at_the_base_row_under_it() {
         "Max 5x under the regime",
     );
     assert_share(
-        tables.tier_factor(PRO, FIVE_HOUR, Some("desk")),
-        0.05,
-        "Pro under the regime",
+        tables.tier_factor(MAX_20X, FIVE_HOUR, Some("desk")),
+        20.0,
+        "Max 20x under the regime",
     );
     assert_share(
         tables.tier_factor(MAX_5X, FIVE_HOUR, Some("desk")),
-        0.125,
+        2.5,
         "Max 5x under the regime's anchor",
     );
 }
 
-// The equivalent is the share a Max 20x account spends, so under the regime it reads the regime's Max 20x row, and
+// The equivalent is the share a Pro account spends, so under the regime it reads the regime's Pro row, 2 / 10, and
 // the rate table divides by that row too.
 #[test]
 fn the_equivalent_and_the_rate_table_follow_the_regime() {
     let tables = first();
     assert_share(
         tables.equivalent_at(FIVE_HOUR, Some("desk"), OPUS, input(1), OUT_OF_BAND),
-        0.01,
+        0.2,
         "the regime's equivalent",
     );
     let input_rate = |entrypoint: Option<&str>| {
@@ -1479,8 +1486,8 @@ fn a_malformed_regime_is_refused_by_key() {
         "regimes.desk.capacity.default_claude_max_20x.five_hour: a capacity is a number above zero, or null",
     );
     assert_names(
-        &refused("seven_day: 1250", "seven_day: null"),
-        "regimes.desk.capacity.default_claude_max_20x.seven_day: the anchor tier carries a capacity on both windows",
+        &refused("seven_day: 62.5", "seven_day: null"),
+        "regimes.desk.capacity.default_claude_ai.seven_day: the anchor tier carries a capacity on both windows",
     );
     assert_names(
         &refused("{five_hour: 1, seven_day: 1}", "{five_hour: 0, seven_day: 1}"),
@@ -1538,60 +1545,86 @@ fn a_capacity_at_or_below_zero_or_not_finite_is_refused_and_a_null_one_loads() {
 fn an_anchor_tier_without_a_capacity_on_either_window_is_refused() {
     assert_names(
         &refused(
-            "{five_hour: 100, seven_day: 1000}",
-            "{five_hour: 100, seven_day: null}",
+            "{five_hour: 5, seven_day: 50}",
+            "{five_hour: 5, seven_day: null}",
         ),
-        "capacity.default_claude_max_20x.seven_day: the anchor tier carries a capacity on both windows",
+        "capacity.default_claude_ai.seven_day: the anchor tier carries a capacity on both windows",
     );
     assert_names(
         &refused(
-            "{five_hour: 100, seven_day: 1000}",
-            "{five_hour: null, seven_day: 1000}",
+            "{five_hour: 5, seven_day: 50}",
+            "{five_hour: null, seven_day: 50}",
         ),
-        "capacity.default_claude_max_20x.five_hour",
+        "capacity.default_claude_ai.five_hour",
+    );
+}
+
+/// The second revision's head through its anchor row, reached from the split marker since `refused_all` edits the
+/// first occurrence and the first revision carries the same row.
+const SECOND_REVISION_ANCHOR_ROW: &str =
+    "  - effective: 2026-02-01\n    capacity:\n      default_claude_ai:      {five_hour: 5, seven_day: 50}\n";
+
+#[test]
+fn a_unit_inside_a_revision_is_refused_as_an_unknown_field() {
+    assert_names(
+        &refused(
+            "unit: {tier: default_claude_ai, window: seven_day}\nrevisions:\n  - effective: 2026-01-01\n",
+            "revisions:\n  - effective: 2026-01-01\n    unit: {tier: default_claude_ai, window: seven_day}\n",
+        ),
+        "unknown field `unit`",
     );
 }
 
 #[test]
-fn a_unit_of_no_units_is_refused() {
-    assert_names(
-        &refused("units_per_window: 100", "units_per_window: 0"),
-        "unit.units_per_window",
+fn a_file_without_the_unit_block_is_refused() {
+    let message = refused("unit: {tier: default_claude_ai, window: seven_day}\n", "");
+    assert_names(&message, "missing field `unit`");
+    assert!(
+        !message.contains("revisions[0]"),
+        "the refusal names the file's own key: {message}"
     );
+}
+
+// `capacity_rules` passes an anchor tier with no row at all, so the unit's own check refuses the dropped row.
+#[test]
+fn a_revision_whose_anchor_tier_lacks_the_units_window_is_refused_naming_the_revision() {
+    assert_names(
+        &refused(
+            SECOND_REVISION_ANCHOR_ROW,
+            "  - effective: 2026-02-01\n    capacity:\n",
+        ),
+        "revision 2026-02-01: capacity.default_claude_ai.seven_day: the anchor tier carries a capacity on the unit's \
+         window",
+    );
+}
+
+// The unit's size is the anchor row of the revision in force, so nothing refuses a later revision that resizes it.
+#[test]
+fn a_revision_that_resizes_the_anchor_row_loads() {
+    let resized = SECOND_REVISION_ANCHOR_ROW.replace("seven_day: 50}", "seven_day: 100}");
+    let text = SUBSCRIPTION_COSTS.replacen(SECOND_REVISION_ANCHOR_ROW, &resized, 1);
+    assert_ne!(text, SUBSCRIPTION_COSTS, "the edit lands");
+    let revisions = CostRevisions::from_yaml(&text).expect("a resized anchor row loads");
+    let dates: Vec<&str> = revisions.iter().map(|r| r.effective.as_str()).collect();
+    assert_eq!(dates, ["2026-01-01", "2026-02-01"]);
+    assert_eq!(revisions.latest().capacity[PRO].seven_day, Some(100.0));
 }
 
 #[test]
 fn a_unit_naming_a_tier_the_file_lacks_is_refused() {
     assert_names(
-        &refused(
-            "{tier: default_claude_max_20x,",
-            "{tier: default_claude_max_1x,",
-        ),
-        "unit.defined_by.tier",
+        &refused("{tier: default_claude_ai,", "{tier: default_claude_max_1x,"),
+        "revision 2026-01-01: capacity.default_claude_max_1x.seven_day: the anchor tier carries a capacity on the \
+         unit's window",
     );
 }
 
 #[test]
 fn a_unit_naming_a_window_other_than_the_two_is_refused() {
-    assert_names(
-        &refused("window: five_hour, band", "window: seven_day_fable, band"),
-        "unit.defined_by.window",
-    );
-}
-
-#[test]
-fn a_unit_naming_a_band_other_than_out_of_band_is_refused() {
-    assert_names(
-        &refused("band: out_of_band", "band: in_band"),
-        "unit.defined_by.band",
-    );
-}
-
-#[test]
-fn a_unit_whose_count_differs_from_the_capacity_it_names_is_refused() {
-    assert_names(
-        &refused("units_per_window: 100", "units_per_window: 90"),
-        "unit.units_per_window: 90 differs from capacity.default_claude_max_20x.five_hour",
+    assert_eq!(
+        refused("window: seven_day}", "window: seven_day_fable}"),
+        "unit.window: `seven_day_fable` is neither five_hour nor seven_day",
+        "a file-level refusal, under no revision's date"
     );
 }
 
@@ -1904,7 +1937,7 @@ fn the_shipped_model_parses_and_holds_the_shape() {
                 );
             }
         }
-        let anchor = &costs.capacity[&costs.unit.defined_by.tier];
+        let anchor = &costs.capacity[&costs.unit.tier];
         assert!(anchor.five_hour.is_some() && anchor.seven_day.is_some());
         assert!(!costs.model_weight.is_empty());
         for (model, weight) in &costs.model_weight {

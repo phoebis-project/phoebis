@@ -1,17 +1,14 @@
-# The subscription cost model. A token costs weight(model) x multiplier(type) units on every window; a window holds
-# `capacity` units; a request's share of a window is the units it spent over that capacity, over the peak factor when
-# the request completes inside the band. Unit: 1/150,000,000 of the Max 20x 5-hour window outside the peak band, so
-# one percent of that window, the step the usage header moves in, is 1,500,000 units. A `regimes` entry prices the
-# entrypoints it lists at its own capacity rows and band factor, every other entrypoint at the rows above. The unit
-# stays the base Max 20x 5-hour window, of which an interactive window holds 300,000,000. An account tier left out,
-# or set to null, is unpriced. A model without a weight prices at the weight of its model tier's latest weighted
-# model, as an estimate, and a model of no model tier, or of one with no weight, prices nothing.
+# The subscription cost model. A token costs weight(model) x multiplier(type) units on every window, a window holds
+# `capacity` units, and a request's share of a window is the units it spent over that capacity, over the peak factor
+# when the request completes inside the band. Unit: 1/90,000,000 of the Pro 7-day window, so one percent of that
+# window, the step the usage header moves in, is 900,000 units. A `regimes` entry prices the entrypoints it lists at
+# its own capacity rows and band factor, every other entrypoint at the rows above. The unit stays the base Pro 7-day
+# window, of which an interactive window holds 112,500,000. An account tier left out, or set to null, is unpriced. A
+# model without a weight prices at the weight of its model tier's latest weighted model, as an estimate, and a model
+# of no model tier, or of one with no weight, prices nothing.
+unit: {tier: default_claude_ai, window: seven_day}
 revisions:
   - effective: 2026-10-05
-
-    unit:
-      defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
-      units_per_window: 150000000
 
     capacity:  # units per window, keyed by the tier the profile reports, default_claude_ai for a Pro subscription
       default_claude_ai:      {five_hour: 7500000, seven_day: 90000000}
@@ -50,9 +47,9 @@ revisions:
 
     tier_order: [fable, opus, sonnet, haiku]
 
-    # The model tier of every model either file lists and of the catalog models no file prices yet, by undated id. A
-    # model without a weight prices at the latest weighted model of its tier, which this map names before any file
-    # prices the model, so a listed model's tier is never guessed from its id.
+    # The model tier of every model either file lists and of the catalog models no file prices yet, by undated id. The
+    # tiers order the cost reference's rows and the routing log's model order, so a listed model's tier is never
+    # guessed from its id.
     model_tier:
       claude-fable-5-1: fable
       claude-fable-5: fable

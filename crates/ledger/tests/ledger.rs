@@ -4332,11 +4332,9 @@ async fn the_landing_records_the_serving_accounts_tier_as_the_registry_holds_it(
 /// seat's row files under its own funding, which prices no share whatever its tier, so its half of the shares
 /// assertion is a guard and the tier assertion carries its rule.
 const PRICE_KEY_COSTS: &str = "\
+unit: {tier: default_claude_ai, window: seven_day}
 revisions:
   - effective: 1970-01-01
-    unit:
-      defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
-      units_per_window: 100
     capacity:
       default_claude_ai:      {five_hour: 100, seven_day: 1000}
       default_claude_max_20x: {five_hour: 100, seven_day: 1000}

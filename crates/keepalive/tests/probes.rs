@@ -2575,7 +2575,11 @@ async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
         .model_weight
         .insert("claude-sonnet-4-5".to_string(), Some(1.0));
     let tables = phoebis_ledger::PlanTables {
-        revisions: phoebis_ledger::CostRevisions::new(vec![weighted]).unwrap(),
+        revisions: phoebis_ledger::CostRevisions::new(
+            phoebis_ledger::CostRevisions::shipped().unit().clone(),
+            vec![weighted],
+        )
+        .unwrap(),
         ..phoebis_ledger::PlanTables::shipped()
     };
     let mut r = rig(RigSpec {

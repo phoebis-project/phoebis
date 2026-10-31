@@ -196,7 +196,8 @@ mod tests {
             .collect()
     }
 
-    // One Opus 5.5 input token: $10 per million, 2 units over Max 20x's 100 and 1000, the same as the equivalent.
+    // One Opus 5.5 input token: $10 per million, 2 units over Max 20x's 100 and 1000, and over the anchor Pro's 5 and
+    // 50 in the equivalent.
     #[test]
     fn a_plan_row_on_a_sized_tier_answers_dollars_shares_and_the_equivalent() {
         let priced = price(&plan_row(), input(1));
@@ -205,12 +206,17 @@ mod tests {
         assert_eq!(usd.total(), usd.input_usd);
         let shares = priced.shares.as_ref().expect("Max 20x is sized");
         assert!(close(shares[FIVE_HOUR], 0.02) && close(shares[SEVEN_DAY], 0.002));
-        assert_eq!(priced.equivalent, priced.shares, "Max 20x is the anchor");
+        let equivalent = priced.equivalent.as_ref().expect("the anchor is sized");
+        assert!(
+            close(equivalent[FIVE_HOUR], 0.4) && close(equivalent[SEVEN_DAY], 0.04),
+            "{equivalent:?}"
+        );
         assert!(!priced.estimated);
     }
 
     // The test regime holds 200 and 1,250 units on Max 20x against the base 100 and 1,000, so the one token's 2 units
-    // read half the base 5-hour figure and four fifths of the week's, in the shares and in the equivalent alike.
+    // read half the base 5-hour share and four fifths of the week's. The equivalent reads the regime's Pro row, 2 / 10
+    // and 2 / 62.5.
     #[test]
     fn a_rows_entrypoint_prices_its_shares_and_its_equivalent_under_the_regime() {
         let priced = price(
@@ -220,10 +226,13 @@ mod tests {
             },
             input(1),
         );
-        for figures in [&priced.shares, &priced.equivalent] {
+        for (figures, five_hour, seven_day) in [
+            (&priced.shares, 0.01, 0.0016),
+            (&priced.equivalent, 0.2, 0.032),
+        ] {
             let figures = figures.as_ref().expect("a plan row on Max 20x");
-            assert!(close(figures[FIVE_HOUR], 0.01), "{figures:?}");
-            assert!(close(figures[SEVEN_DAY], 0.0016), "{figures:?}");
+            assert!(close(figures[FIVE_HOUR], five_hour), "{figures:?}");
+            assert!(close(figures[SEVEN_DAY], seven_day), "{figures:?}");
         }
     }
 
@@ -424,7 +433,8 @@ mod tests {
         assert_eq!(priced.shares, None);
         let equivalent = windows(&priced.equivalent);
         assert_eq!(equivalent.len(), 2, "{equivalent:?}");
-        assert!(close(equivalent[0].1, 0.02) && close(equivalent[1].1, 0.002));
+        // The anchor Pro's 5 and 50.
+        assert!(close(equivalent[0].1, 0.4) && close(equivalent[1].1, 0.04));
     }
 
     #[test]
@@ -630,6 +640,7 @@ mod tests {
 
     // `at` in January keeps Opus 5.5's weight of 2, and `band_at` inside the band divides the 5-hour window's units
     // by its 0.5, so the share reads 0.04 where the revision at `band_at` would read 0.08 and the band at `at` 0.02.
+    // The equivalent reads the same units over the anchor Pro's 5 and 50.
     #[test]
     fn band_at_inside_the_band_raises_the_five_hour_share_while_at_picks_the_revision() {
         for band_at in [JANUARY_IN_BAND, FEBRUARY_IN_BAND] {
@@ -640,10 +651,19 @@ mod tests {
                 },
                 input(1),
             );
-            for figures in [&priced.shares, &priced.equivalent] {
+            for (figures, five_hour, seven_day) in [
+                (&priced.shares, 0.04, 0.002),
+                (&priced.equivalent, 0.8, 0.04),
+            ] {
                 let figures = figures.as_ref().unwrap();
-                assert!(close(figures[FIVE_HOUR], 0.04), "{band_at}: {figures:?}");
-                assert!(close(figures[SEVEN_DAY], 0.002), "{band_at}: {figures:?}");
+                assert!(
+                    close(figures[FIVE_HOUR], five_hour),
+                    "{band_at}: {figures:?}"
+                );
+                assert!(
+                    close(figures[SEVEN_DAY], seven_day),
+                    "{band_at}: {figures:?}"
+                );
             }
         }
     }

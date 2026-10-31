@@ -1188,8 +1188,8 @@ mod tests {
 
     /// The equivalent prices on the anchor tier through the model week's own capacity factor, so on tables whose Fable
     /// week holds a quarter of the 7-day window's capacity, a write's Fable-week figure reads four times its 7-day one.
-    /// The test model's regime `desk` holds twice the base 5-hour capacity on Max 20x, so outside the band a write
-    /// under it reads half the base figure.
+    /// The test model's regime `desk` holds twice the base 5-hour capacity on the anchor Pro tier, so outside the band
+    /// a write under it reads half the base figure.
     #[test]
     fn the_router_configs_equivalent_closure_prices_a_write_through_the_tables() {
         let quarter_week = phoebis_ledger::test_tables::first_entry_costs_text().replacen(
@@ -1489,7 +1489,7 @@ mod tests {
             .share_at(
                 phoebis_routing::FIVE_HOUR,
                 None,
-                "default_claude_max_20x",
+                "default_claude_ai",
                 "claude-opus-5-5",
                 usage,
                 out_of_band,
@@ -1516,7 +1516,7 @@ mod tests {
             .share_at(
                 phoebis_routing::FIVE_HOUR,
                 None,
-                "default_claude_max_20x",
+                "default_claude_ai",
                 "claude-sonnet-4-5",
                 usage,
                 out_of_band,
