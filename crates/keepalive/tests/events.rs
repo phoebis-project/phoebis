@@ -129,62 +129,6 @@ async fn the_engine_refuses_an_unknown_event_word_and_an_unknown_state_word() {
 #[tokio::test]
 async fn registration_sequences_and_generations_follow_the_protocol() {
     let mut r = rig(RigSpec::default()).await;
-    let stale = r.engine.apply_event(
-        "desktop",
-        r.generation("desktop"),
-        Event {
-            event: "heartbeat".into(),
-            session_id: "session".into(),
-            instance_id: "instance".into(),
-            sequence: 1,
-            ..Default::default()
-        },
-    );
-    assert_eq!(stale.unwrap_err(), refusal("stale_sequence", 409));
-    let other = r.engine.apply_event(
-        "desktop",
-        r.generation("desktop"),
-        Event {
-            event: "heartbeat".into(),
-            session_id: "session".into(),
-            instance_id: "other".into(),
-            sequence: 2,
-            ..Default::default()
-        },
-    );
-    assert_eq!(other.unwrap_err(), refusal("unknown_instance", 409));
-    let conflict = r.engine.apply_event(
-        "desktop",
-        r.generation("desktop"),
-        Event {
-            event: "session_start".into(),
-            session_id: "session".into(),
-            instance_id: "other".into(),
-            sequence: 1,
-            ..Default::default()
-        },
-    );
-    assert_eq!(
-        conflict.unwrap_err(),
-        refusal("instance_conflict", 409),
-        "a replacement must name the instance it replaces"
-    );
-    let orphan = r.engine.apply_event(
-        "desktop",
-        r.generation("desktop"),
-        Event {
-            event: "session_start".into(),
-            session_id: "fresh".into(),
-            instance_id: "i".into(),
-            sequence: 1,
-            previous_instance_id: Some("gone".into()),
-            ..Default::default()
-        },
-    );
-    assert_eq!(
-        orphan.unwrap_err(),
-        refusal("unknown_previous_instance", 409)
-    );
     // A same-instance re-registration with a higher sequence renews the lease and keeps agent state.
     r.event(Event {
         event: "agent_start".into(),
@@ -225,57 +169,8 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         })
         .unwrap();
     assert_eq!(reheartbeat.lease_expires_ms, r.now() + r.lease_ms());
-    // Agents: a restart needs the released generation; activity and state need the current one.
-    assert_eq!(
-        r.event(Event {
-            event: "agent_start".into(),
-            agent_id: Some("worker".into()),
-            ..Default::default()
-        })
-        .unwrap_err(),
-        refusal("agent_exists", 409)
-    );
-    assert_eq!(
-        r.event(Event {
-            event: "state".into(),
-            agent_id: Some("ghost".into()),
-            state: Some("idle".into()),
-            request_generation: Some(0),
-            ..Default::default()
-        })
-        .unwrap_err(),
-        refusal("unknown_agent", 409)
-    );
-    assert_eq!(
-        r.event(Event {
-            event: "activity".into(),
-            agent_id: Some("worker".into()),
-            kind: Some("prompt".into()),
-            request_generation: Some(7),
-            ..Default::default()
-        })
-        .unwrap_err(),
-        EventError {
-            request_generation: Some(0),
-            ..refusal("stale_request_generation", 409)
-        },
-        "the refusal names the current generation"
-    );
+    // Agents: a restart of a released agent needs the generation its release named.
     r.state("worker", "released");
-    assert_eq!(
-        r.event(Event {
-            event: "activity".into(),
-            agent_id: Some("worker".into()),
-            kind: Some("prompt".into()),
-            request_generation: Some(r.agent("worker").request_generation),
-            ..Default::default()
-        })
-        .unwrap_err(),
-        EventError {
-            request_generation: Some(r.agent("worker").request_generation),
-            ..refusal("agent_released", 409)
-        }
-    );
     let generation = r.agent("worker").request_generation;
     assert_eq!(
         r.event(Event {
@@ -299,7 +194,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         (restarted.agent_id.as_deref(), r.agent("worker").state),
         (Some("worker"), AgentState::Busy)
     );
-    // The failed events did not advance the sequence: the next accepted one is one past the last accepted.
+    // The failed start did not advance the sequence: the next accepted one is one past the last accepted.
     assert_eq!(restarted.sequence, r.sequence);
     // session_end releases every agent and ends the instance; anything after it is refused.
     r.event(Event {

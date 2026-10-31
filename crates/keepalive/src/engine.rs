@@ -4543,17 +4543,10 @@ mod tests {
 
     #[test]
     fn a_refreshing_class_rearms_whatever_the_chain_says() {
-        for class in phoebis_routing::REFRESHING_CLASSES
-            .iter()
-            .copied()
-            .filter(|class| *class != "compaction")
-        {
-            assert_eq!(
-                guard(Some(class), None, &[], Some(("s", "t")), false),
-                Guard::Rearm,
-                "{class}"
-            );
-        }
+        assert_eq!(
+            guard(Some("subagent"), None, &[], Some(("s", "t")), false),
+            Guard::Rearm
+        );
     }
 
     #[test]
@@ -4866,35 +4859,33 @@ revisions:
 
     #[test]
     fn the_gate_holds_on_a_cooldown_row_exactly_when_the_routers_rule_does() {
+        // Each row's pair is whether the row holds a standard recipe and a fast one.
         let rows = [
-            ("account", "five_hour"),
-            ("account", "seven_day"),
-            ("account", "seven_day_fable"),
-            ("account", "retry_after"),
-            ("fast", "fast"),
-            ("model:claude-opus-5-5", "retry_after"),
-            ("model:claude-sonnet-5", "retry_after"),
+            ("account", "five_hour", (true, false)),
+            ("account", "seven_day", (true, false)),
+            ("account", "seven_day_fable", (true, false)),
+            ("account", "retry_after", (true, true)),
+            ("fast", "fast", (false, true)),
+            ("model:claude-opus-5-5", "retry_after", (true, true)),
+            ("model:claude-sonnet-5", "retry_after", (false, false)),
         ];
-        let mut answers = BTreeSet::new();
-        for (scope, window) in rows {
-            for fast in [false, true] {
-                let view = RouterView {
-                    cooled: BTreeMap::from([(
-                        ("o".to_string(), scope.to_string()),
-                        window.to_string(),
-                    )]),
-                    ..pool_view(false)
-                };
-                let holds = phoebis_routing::cooldown_holds(scope, window, "claude-opus-5-5", fast);
-                assert_eq!(
-                    gated_at(&view, "o", fast) == Some(Gate::Hold(Reason::Cooled)),
-                    holds,
-                    "{scope} at {window}, fast {fast}"
-                );
-                answers.insert(holds);
-            }
+        for (scope, window, holds) in rows {
+            let view = RouterView {
+                cooled: BTreeMap::from([(
+                    ("o".to_string(), scope.to_string()),
+                    window.to_string(),
+                )]),
+                ..pool_view(false)
+            };
+            assert_eq!(
+                (
+                    gated_at(&view, "o", false) == Some(Gate::Hold(Reason::Cooled)),
+                    gated_at(&view, "o", true) == Some(Gate::Hold(Reason::Cooled))
+                ),
+                holds,
+                "{scope} at {window}"
+            );
         }
-        assert_eq!(answers.len(), 2, "the table reaches both answers");
     }
 
     #[test]

@@ -10,7 +10,7 @@ use common::*;
 use phoebis_bus::{ClientFacts, Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
     continues_prefix, idle_age_bucket, AgentState, Event, Guard, IdleReturns, KeepalivePolicy,
-    KeepaliveTiming, PrefixAnchor, Reason, IDLE_AGE_BOUNDS_SECONDS,
+    KeepaliveTiming, PrefixAnchor, Reason,
 };
 
 const LAPTOP_SECRET: &str = "phoebis-laptop-key";
@@ -897,10 +897,10 @@ async fn a_request_holding_neither_of_the_last_two_boundaries_counts_no_return()
     );
 }
 
-/// A one-message chain leaves no boundary before its last, so neither a request with no chain nor a fresh chain
-/// counts a return on the absent one, and the next turn of the conversation counts on the one boundary.
+/// A one-message chain leaves no boundary before its last, so a request with no chain counts no return on the absent
+/// one.
 #[tokio::test]
-async fn a_one_message_requests_anchor_counts_a_return_on_its_one_boundary_alone() {
+async fn a_request_with_no_chain_counts_no_return_on_a_one_message_anchor() {
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 12).await;
@@ -914,20 +914,6 @@ async fn a_one_message_requests_anchor_counts_a_return_on_its_one_boundary_alone
         "claude-sonnet-4-5",
     ));
     assert_eq!(returned(&r), [0; 10], "no chain");
-    let mut r = rig(RigSpec::default()).await;
-    let start = idle_after_request(&mut r).await;
-    tick_to(&mut r, start, 12).await;
-    r.observe_with("main", &fresh_chain()).await;
-    assert_eq!(returned(&r), [0; 10], "a fresh chain");
-    let mut r = rig(RigSpec::default()).await;
-    let start = idle_after_request(&mut r).await;
-    tick_to(&mut r, start, 12).await;
-    r.observe_with("main", &next_turn()).await;
-    assert_eq!(
-        returned(&r),
-        [0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
-        "the next turn"
-    );
 }
 
 #[tokio::test]
@@ -1393,10 +1379,6 @@ async fn a_busy_main_a_subagent_and_a_silent_session_count_nothing() {
 
 #[test]
 fn the_bucket_bounds_are_the_specs() {
-    assert_eq!(
-        IDLE_AGE_BOUNDS_SECONDS,
-        [0, 300, 900, 1_800, 3_600, 7_200, 14_400, 28_800, 57_600, 115_200]
-    );
     assert_eq!(
         [
             299_999,

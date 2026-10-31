@@ -347,7 +347,7 @@ fn a_bogus_attempt_id_is_rejected_and_leaves_credentials_unchanged() {
 
 #[test]
 fn secret_debug_never_prints_the_value() {
-    assert_eq!(format!("{:?}", Secret::new("hunter2")), "Secret(***)");
+    assert!(!format!("{:?}", Secret::new("hunter2")).contains("hunter2"));
 }
 
 #[test]

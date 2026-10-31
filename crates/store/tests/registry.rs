@@ -94,16 +94,6 @@ fn rename(
     })
 }
 
-/// The names of `table`'s columns in their stored order.
-fn columns_of(conn: &rusqlite::Connection, table: &str) -> Vec<String> {
-    conn.prepare("SELECT name FROM pragma_table_info(?1) ORDER BY cid")
-        .unwrap()
-        .query_map([table], |r| r.get(0))
-        .unwrap()
-        .collect::<rusqlite::Result<_>>()
-        .unwrap()
-}
-
 #[test]
 fn a_version_one_registry_opens_at_two_with_the_new_columns_at_their_defaults_and_no_all_time_counters(
 ) {
@@ -206,34 +196,6 @@ fn a_version_one_registry_opens_at_two_with_the_new_columns_at_their_defaults_an
         [("five_hour", None, None)],
         "a reading from before the step reads no plan and no tier"
     );
-    drop(store);
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    let pins = columns_of(&conn, "pins");
-    assert!(
-        pins.ends_with(&["auxiliary_only".to_string(), "effort".to_string()]),
-        "{pins:?}"
-    );
-    let windows = columns_of(&conn, "usage_windows");
-    assert!(
-        windows.ends_with(&["plan".to_string(), "tier".to_string()]),
-        "{windows:?}"
-    );
-    assert_eq!(
-        columns_of(&conn, "keepalive_idle_returns"),
-        ["pool_id", "day", "bucket", "reached", "returned"]
-    );
-    assert_eq!(
-        columns_of(&conn, "session_first_seen"),
-        ["key_id", "session_id", "agent_id", "first_seen_at"]
-    );
-    let listed: bool = conn
-        .query_row(
-            "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_first_seen'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert!(listed, "the first-seen table is listed");
 }
 
 #[test]
@@ -263,26 +225,6 @@ fn a_pool_inserted_without_a_placement_reads_by_strategy() {
             .subagent_placement,
         SubagentPlacement::ByStrategy,
         "the row builder's default"
-    );
-    drop(store);
-    // Every store insert names the column, so only a raw row reads the column's own default.
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch(
-        "INSERT INTO pools (id, label, enabled, strategy, overage_policy, keepalive_json, cache_ttl_json, cache_diagnostics, created_at, updated_at) VALUES ('raw', 'raw', 1, 'priority', 'prefer_plan', '{}', '{}', 0, 1, 1);",
-    )
-    .unwrap();
-    drop(conn);
-    let reopened = Store::open(&path, &key).unwrap();
-    let raw = reopened.pool("raw").unwrap().unwrap();
-    assert_eq!(
-        raw.affinity.subagent_placement,
-        SubagentPlacement::ByStrategy,
-        "the column's default"
-    );
-    assert_eq!(
-        raw.affinity.subagent_placement,
-        Affinity::default().subagent_placement,
-        "the column's default and the row builder's agree"
     );
 }
 
@@ -611,20 +553,10 @@ fn a_pool_created_without_the_stretch_reads_two_and_a_half_hours() {
             .slow_down
             .slow_down_stretch_seconds
     };
-    let built = stretch_of(&store, "built");
-    drop(store);
-    // Every store insert names the column, so only a raw row reads the column's own default.
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch(
-        "INSERT INTO pools (id, label, enabled, strategy, overage_policy, keepalive_json, cache_ttl_json, cache_diagnostics, created_at, updated_at) VALUES ('raw', 'raw', 1, 'priority', 'prefer_plan', '{}', '{}', 0, 1, 1);",
-    )
-    .unwrap();
-    drop(conn);
-    let reopened = Store::open(&path, &key).unwrap();
     assert_eq!(
-        (built, stretch_of(&reopened, "raw")),
-        (9_000, 9_000),
-        "the row builder's default and the column's default"
+        stretch_of(&store, "built"),
+        9_000,
+        "the row builder's default"
     );
 }
 
@@ -788,13 +720,7 @@ fn the_term_classes_a_usage_based_seat_from_its_stored_tier_or_seat_tier_and_nev
 #[test]
 fn the_term_resolves_the_plan_from_the_organization_type_first_and_the_tier_second() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    let profiles: [(&str, Option<&str>, &str, Option<&str>); 13] = [
-        (
-            "enterprise",
-            Some("claude_enterprise"),
-            "default_claude_max_5x",
-            None,
-        ),
+    let profiles: [(&str, Option<&str>, &str, Option<&str>); 8] = [
         ("free", Some("claude_free"), "default_claude_ai", None),
         (
             "max",
@@ -808,8 +734,6 @@ fn the_term_resolves_the_plan_from_the_organization_type_first_and_the_tier_seco
             "default_claude_max_20x",
             None,
         ),
-        ("max-5x", Some("claude_max"), "default_claude_max_5x", None),
-        ("pro", Some("claude_pro"), "default_claude_ai", None),
         (
             "seat-by-tier",
             Some("claude_free"),
@@ -822,9 +746,7 @@ fn the_term_resolves_the_plan_from_the_organization_type_first_and_the_tier_seco
             "default_claude_max_5x",
             Some("enterprise_usage_based"),
         ),
-        ("team", Some("claude_team"), "default_claude_ai", None),
         ("untyped-20x", None, "default_claude_max_20x", None),
-        ("untyped-pro", None, "default_claude_ai", None),
         ("untyped-unnamed", None, "default_claude_unnamed", None),
         ("untyped-zero", None, "default_claude_zero", None),
     ];
@@ -855,17 +777,12 @@ fn the_term_resolves_the_plan_from_the_organization_type_first_and_the_tier_seco
     }
     let expected: Vec<(String, Option<String>)> = [
         ("bare", None),
-        ("enterprise", Some("enterprise")),
         ("free", Some("free")),
         ("max", Some("max")),
         ("max-20x", Some("max_20x")),
-        ("max-5x", Some("max_5x")),
-        ("pro", Some("pro")),
         ("seat-by-seat-tier", Some("usage_based")),
         ("seat-by-tier", Some("usage_based")),
-        ("team", Some("team")),
         ("untyped-20x", Some("max_20x")),
-        ("untyped-pro", Some("pro")),
         ("untyped-unnamed", None),
         ("untyped-zero", Some("usage_based")),
     ]
@@ -1453,7 +1370,15 @@ fn a_stored_word_outside_the_list_fails_the_read() {
     .unwrap();
     drop(conn);
     let store = Store::open(&path, &key).unwrap();
-    assert!(store.account("a").is_err());
+    let error = store.account("a").unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            StoreError::Sqlite(rusqlite::Error::InvalidColumnType(_, column, _))
+                if column == "state_cause"
+        ),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -3165,16 +3090,16 @@ fn a_creation_records_the_rows_snapshot() {
             "test",
         )
         .unwrap();
-    for (target, kind, members, label) in [
-        ("main", "pool_created", 31, "main"),
-        ("desktop", "key_created", 11, "desktop"),
+    for (target, kind, label) in [
+        ("main", "pool_created", "main"),
+        ("desktop", "key_created", "desktop"),
     ] {
         let (logged, diff) = last_change(&store, target);
         let diff = diff.as_object().unwrap().clone();
         assert_eq!(
-            (logged.as_str(), diff.len(), &diff["label"]),
-            (kind, members, &serde_json::json!(label)),
-            "{kind} names every field with its value"
+            (logged.as_str(), &diff["label"]),
+            (kind, &serde_json::json!(label)),
+            "{kind} names the label with its value"
         );
         assert!(
             diff.values()

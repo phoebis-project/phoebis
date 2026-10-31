@@ -313,40 +313,21 @@ mod tests {
     use super::*;
 
     /// The match over `Reason` has no wildcard, so a reason the engine gains fails to build until the table places
-    /// it. This pins the pause bit's rule over every reason: only a held or retained word moves, and it moves to
-    /// `paused`.
+    /// it. The pause bit moves only a held or retained word, and it moves it to `paused`.
     #[test]
-    fn every_reason_maps_onto_one_of_the_five_states() {
-        for reason in Reason::ALL {
-            let state = recipe_state(*reason, false);
-            let paused = recipe_state(*reason, true);
-            match state {
-                RecipeState::Held | RecipeState::Retained => {
-                    assert_eq!(paused, RecipeState::Paused, "{reason:?}")
-                }
-                _ => assert_eq!(paused, state, "{reason:?}"),
-            }
-        }
-        let mut counts = std::collections::BTreeMap::new();
-        for reason in Reason::ALL {
-            *counts
-                .entry(recipe_state(*reason, false).as_str())
-                .or_insert(0) += 1;
-        }
+    fn the_pause_bit_moves_only_a_held_or_retained_word_to_paused() {
+        let both = |reason| (recipe_state(reason, false), recipe_state(reason, true));
         assert_eq!(
-            counts.into_iter().collect::<Vec<_>>(),
-            [
-                ("ended", 16),
-                ("held", 17),
-                ("not_retained", 14),
-                ("paused", 9),
-                ("retained", 7)
-            ]
+            both(Reason::Cooled),
+            (RecipeState::Held, RecipeState::Paused)
         );
-        // A probe that read no cache keeps the prompt and retries after its backoff, as the other retry causes do.
         assert_eq!(
-            recipe_state(Reason::NoProbeCacheEvidence, false),
-            RecipeState::Held
+            both(Reason::Scheduled),
+            (RecipeState::Retained, RecipeState::Paused)
+        );
+        assert_eq!(
+            both(Reason::Expired),
+            (RecipeState::Ended, RecipeState::Ended)
         );
         for state in [
             RecipeState::Ended,

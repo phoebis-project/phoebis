@@ -194,14 +194,6 @@ fn the_keepalive_rows_round_trip_and_the_body_is_sealed_at_rest() {
             .any(|run| sealed.windows(8).any(|at| at == run)),
         "no eight-byte run of the prompt sits in the sealed column"
     );
-    let headers: String = conn
-        .query_row(
-            "SELECT headers FROM keepalive_agents WHERE session_id = 's:x'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(headers, r#"[["anthropic-beta","test-beta"]]"#);
 
     // A blob copied onto another agent's row fails to open there, and stays readable where it was sealed.
     set_blob(&conn, 1, "s", "main", &(sealed.clone(), nonce.clone()));

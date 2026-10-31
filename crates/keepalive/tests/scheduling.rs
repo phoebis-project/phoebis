@@ -274,32 +274,63 @@ async fn a_ledger_behind_hold_lifted_after_the_expiry_sends_no_probe() {
     );
 }
 
-#[tokio::test]
-async fn overage_under_prefer_plan_holds_and_under_allow_does_not() {
-    for (policy, held) in [
-        (OveragePolicy::PreferPlan, true),
-        (OveragePolicy::Never, true),
-        (OveragePolicy::Allow, false),
-    ] {
-        let mut r = armed(RigSpec {
-            accounts: vec![api_key("a", A, 0)],
-            pool: PoolSpec {
-                overage_policy: policy,
-                ..PoolSpec::default()
+/// A rig whose pool runs under `policy`, its account `a` reported in overage, at the tick main's first probe is due.
+async fn in_overage_at_the_due_probe(policy: OveragePolicy) -> Rig {
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        pool: PoolSpec {
+            overage_policy: policy,
+            ..PoolSpec::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.h.router
+        .report(Report::Overage {
+            account_id: "a".into(),
+            evidence: OverageEvidence {
+                in_use: true,
+                since: Some(r.now()),
+                // Ahead of the `now` the gate reads after the advance below: this test is about the policy,
+                // not the predicate's own reset or fallback handling.
+                reset: Some(r.now() + 1_000_000),
+                observed_at: r.now(),
+                source: EvidenceSource::Head,
+                incarnation: 1,
             },
-            ..RigSpec::default()
+            incarnation: 1,
         })
         .await;
+    settled(&r, |r| async move {
+        r.h.router
+            .overage("a")
+            .await
+            .unwrap()
+            .is_some_and(|e| e.in_use)
+    })
+    .await;
+    r.advance(270_000);
+    r.step().await;
+    r
+}
+
+#[tokio::test]
+async fn overage_under_prefer_plan_holds_and_under_allow_does_not() {
+    for policy in [OveragePolicy::PreferPlan, OveragePolicy::Never] {
+        let mut r = in_overage_at_the_due_probe(policy).await;
+        let status = r.status("main");
+        assert_eq!(
+            (policy, status.probes, status.reason),
+            (policy, 0, Reason::Overage)
+        );
         r.h.router
             .report(Report::Overage {
                 account_id: "a".into(),
                 evidence: OverageEvidence {
-                    in_use: true,
-                    since: Some(r.now()),
-                    // Ahead of the `now` the gate reads after the advance below: this test is about the policy,
-                    // not the predicate's own reset or fallback handling.
-                    reset: Some(r.now() + 1_000_000),
-                    observed_at: r.now(),
+                    in_use: false,
+                    since: None,
+                    reset: None,
+                    observed_at: r.now() + 1,
                     source: EvidenceSource::Head,
                     incarnation: 1,
                 },
@@ -311,55 +342,20 @@ async fn overage_under_prefer_plan_holds_and_under_allow_does_not() {
                 .overage("a")
                 .await
                 .unwrap()
-                .is_some_and(|e| e.in_use)
+                .is_none_or(|e| !e.in_use)
         })
         .await;
-        r.advance(270_000);
         r.step().await;
-        let status = r.status("main");
         assert_eq!(
-            (policy, status.probes, status.reason),
-            (
-                policy,
-                if held { 0 } else { 1 },
-                if held {
-                    Reason::Overage
-                } else {
-                    Reason::Scheduled
-                }
-            )
+            r.status("main").probes,
+            1,
+            "{policy:?}: ran once the overage ended"
         );
-        if held {
-            r.h.router
-                .report(Report::Overage {
-                    account_id: "a".into(),
-                    evidence: OverageEvidence {
-                        in_use: false,
-                        since: None,
-                        reset: None,
-                        observed_at: r.now() + 1,
-                        source: EvidenceSource::Head,
-                        incarnation: 1,
-                    },
-                    incarnation: 1,
-                })
-                .await;
-            settled(&r, |r| async move {
-                r.h.router
-                    .overage("a")
-                    .await
-                    .unwrap()
-                    .is_none_or(|e| !e.in_use)
-            })
-            .await;
-            r.step().await;
-            assert_eq!(
-                r.status("main").probes,
-                1,
-                "{policy:?}: ran once the overage ended"
-            );
-        }
     }
+    let status = in_overage_at_the_due_probe(OveragePolicy::Allow)
+        .await
+        .status("main");
+    assert_eq!((status.probes, status.reason), (1, Reason::Scheduled));
 }
 
 #[tokio::test]

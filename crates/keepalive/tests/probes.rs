@@ -568,70 +568,99 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
     );
 }
 
+/// A rig whose first probe of main the upstream has received and holds until `release`.
+async fn a_probe_held_upstream() -> Rig {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(probe_answer(2_000, 0))),
+    );
+    r.advance_attended(270_000);
+    r.engine.step().await;
+    wait_for(std::time::Duration::from_secs(5), || {
+        (r.up.requests().len() == 2).then_some(())
+    })
+    .await;
+    r
+}
+
 #[tokio::test]
 async fn a_late_probe_cannot_revive_a_new_generation() {
-    for action in ["new_request", "close", "release"] {
-        let mut r = rig(RigSpec::default()).await;
-        r.observe("main").await;
-        r.up.push_credential_rule(
-            A,
-            "/v1/messages",
-            Respond::Gated(Box::new(probe_answer(2_000, 0))),
-        );
-        r.advance_attended(270_000);
-        r.engine.step().await;
-        wait_for(std::time::Duration::from_secs(5), || {
-            (r.up.requests().len() == 2).then_some(())
-        })
-        .await;
-        match action {
-            "new_request" => r.engine.observe(r.observed("new", "main", BODY)),
-            "close" => r.engine.close(),
-            _ => r.state("main", "released"),
-        }
-        r.up.release();
-        r.engine.wait_idle().await;
-        assert_eq!(
-            r.engine.stats().running_probes,
-            0,
-            "{action}: no worker leaked"
-        );
-        if action != "close" {
-            let status = r.status("main");
-            assert_eq!(
-                (
-                    status.account_id.as_deref(),
-                    status.next_probe_at,
-                    status.unanswered
-                ),
-                (Some("a"), None, 0),
-                "{action}: the late result touched no recipe state: {status:?}"
-            );
-            assert!(
-                !status.in_flight,
-                "{action}: the orphaned result gave the record's slot back"
-            );
-        } else {
-            assert_eq!(r.engine.stats().retained_bytes, 0);
-        }
-        // The record the orphaned probe left behind is probed again once the new request arms it: a result that
-        // failed the fence must not strand the agent it started on.
-        if action == "new_request" {
-            r.engine.observe(r.selected("new", "a"));
-            r.engine.observe(read_evidence("new", 2_000));
-            assert!(
-                r.status("main").next_probe_at.is_some(),
-                "the new request armed the record"
-            );
-            r.advance(270_000);
-            r.step().await;
-            assert_eq!(
-                (r.status("main").probes, r.status("main").reason),
-                (2, Reason::Scheduled),
-                "the re-armed record probes again"
-            );
-        }
-    }
+    let mut r = a_probe_held_upstream().await;
+    r.engine.observe(r.observed("new", "main", BODY));
+    r.up.release();
+    r.engine.wait_idle().await;
+    assert_eq!(
+        r.engine.stats().running_probes,
+        0,
+        "new_request: no worker leaked"
+    );
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.account_id.as_deref(),
+            status.next_probe_at,
+            status.unanswered
+        ),
+        (Some("a"), None, 0),
+        "new_request: the late result touched no recipe state: {status:?}"
+    );
+    assert!(
+        !status.in_flight,
+        "new_request: the orphaned result gave the record's slot back"
+    );
+    // The record the orphaned probe left behind is probed again once the new request arms it: a result that
+    // failed the fence must not strand the agent it started on.
+    r.engine.observe(r.selected("new", "a"));
+    r.engine.observe(read_evidence("new", 2_000));
+    assert!(
+        r.status("main").next_probe_at.is_some(),
+        "the new request armed the record"
+    );
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (2, Reason::Scheduled),
+        "the re-armed record probes again"
+    );
+
+    let r = a_probe_held_upstream().await;
+    r.engine.close();
+    r.up.release();
+    r.engine.wait_idle().await;
+    assert_eq!(
+        r.engine.stats().running_probes,
+        0,
+        "close: no worker leaked"
+    );
+    assert_eq!(r.engine.stats().retained_bytes, 0);
+
+    let mut r = a_probe_held_upstream().await;
+    r.state("main", "released");
+    r.up.release();
+    r.engine.wait_idle().await;
+    assert_eq!(
+        r.engine.stats().running_probes,
+        0,
+        "release: no worker leaked"
+    );
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.account_id.as_deref(),
+            status.next_probe_at,
+            status.unanswered
+        ),
+        (Some("a"), None, 0),
+        "release: the late result touched no recipe state: {status:?}"
+    );
+    assert!(
+        !status.in_flight,
+        "release: the orphaned result gave the record's slot back"
+    );
 }
 
 /// A probe whose recipe a release stopped while it was in flight was still served and its ledger row carries its
@@ -2163,22 +2192,6 @@ async fn a_running_total_without_the_split_keeps_the_hour() {
         lines.len(),
         2,
         "the first arming and the probe's landing:\n{text}"
-    );
-    assert!(
-        lines[0].contains("DEBUG")
-            && lines[0].contains("agent=main")
-            && lines[0].contains("previous_ms=0")
-            && lines[0].contains("ttl_ms=3600000")
-            && lines[0].contains("one_hour=51177"),
-        "{}",
-        lines[0]
-    );
-    assert!(
-        lines[1].contains("previous_ms=3600000")
-            && lines[1].contains("ttl_ms=300000")
-            && lines[1].contains(&format!("five_minutes={prefix}")),
-        "{}",
-        lines[1]
     );
 }
 

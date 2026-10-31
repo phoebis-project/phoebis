@@ -2258,10 +2258,11 @@ async fn a_release_after_the_quiesce_is_refused_and_leaves_the_final_save_author
     let shutdown = on_own_thread(async move { engine.shutdown().await });
     // The shutdown's save has read its snapshot and waits on the held registry.
     r.engine.persist_reached(2, 2).await;
-    let refused = r.engine.release("desktop", "session");
-    assert!(
-        refused.is_err(),
-        "a release after the quiesce answers unavailable: {refused:?}"
+    let refused = r.engine.release("desktop", "session").unwrap_err();
+    assert_eq!(
+        (refused.code, refused.status),
+        ("quiesced", 503),
+        "a release after the quiesce answers unavailable"
     );
     assert_eq!(
         r.engine.stats().retained_bytes,

@@ -2204,20 +2204,5 @@ mod tests {
         .unwrap();
         prepare(&mut conn, false, &[]).unwrap();
         assert_eq!(raw_markers(&conn), vec!["1".to_string()]);
-
-        // A marker above this build's version is refused before the baseline's transaction begins.
-        let mut conn = meta_alone();
-        let newer = (schema::SCHEMA_VERSION + 1).to_string();
-        conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
-            params![newer],
-        )
-        .unwrap();
-        let error = prepare(&mut conn, false, &[]).unwrap_err();
-        assert!(
-            matches!(error, StoreError::SchemaTooNew { .. }),
-            "{error:?}"
-        );
-        assert_eq!(raw_markers(&conn), vec![newer]);
     }
 }

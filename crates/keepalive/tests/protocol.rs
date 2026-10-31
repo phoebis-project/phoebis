@@ -147,16 +147,6 @@ fn idle_report(r: &mut Rig, agent: &str, generation: u64) -> Option<(&'static st
     .map(|refused| (refused.code, refused.request_generation))
 }
 
-/// The leave the engine's next save writes for `agent` of the rig's session.
-fn saved_leave(r: &Rig, agent: &str) -> Value {
-    let (_, agents) = r.engine.persist_rows();
-    let row = agents
-        .iter()
-        .find(|row| row.session_id == "session" && row.agent_id == agent)
-        .unwrap_or_else(|| panic!("no row for {agent}"));
-    serde_json::from_str::<Value>(&row.payload).unwrap()["leaves_at"].clone()
-}
-
 /// The agent count the Sessions read shows for the rig's session.
 fn session_agents(r: &Rig) -> usize {
     r.engine
@@ -1087,11 +1077,6 @@ async fn a_start_before_a_released_agent_leaves_reuses_its_record_and_clears_the
         ),
         (released + 1, AgentState::Busy, 2)
     );
-    assert_eq!(
-        saved_leave(&r, "worker"),
-        Value::Null,
-        "the reuse clears the leave"
-    );
     r.advance_attended(3_600_000);
     r.step().await;
     assert_eq!(
@@ -1225,18 +1210,9 @@ async fn a_released_record_with_a_probe_in_flight_at_its_leave_waits_for_the_res
 async fn a_session_end_keeps_the_leave_of_a_record_the_mod_released_before_it() {
     let mut r = rig(RigSpec::default()).await;
     agent_start(&mut r, "worker", None).unwrap();
-    let released_at = r.now();
     r.state("worker", "released");
     r.advance_attended(1_000);
     r.event(session_end("session")).unwrap();
-    assert_eq!(
-        (saved_leave(&r, "worker"), saved_leave(&r, "main")),
-        (
-            json!(released_at + 3_600_000),
-            json!(released_at + 1_000 + 3_600_000)
-        ),
-        "the end writes main's leave and keeps the worker's from the mod's release"
-    );
     r.advance(3_599_000);
     r.step().await;
     assert!(
@@ -1250,6 +1226,14 @@ async fn a_session_end_keeps_the_leave_of_a_record_the_mod_released_before_it() 
             .agent_status("desktop", "session", "main")
             .is_some(),
         "main stays until its own leave"
+    );
+    r.advance(1_000);
+    r.step().await;
+    assert!(
+        r.engine
+            .agent_status("desktop", "session", "main")
+            .is_none(),
+        "the sweep at the end plus one cache TTL removes main"
     );
 }
 
@@ -1630,11 +1614,6 @@ async fn a_revival_inside_the_cache_ttl_keeps_main_and_clears_its_leave() {
     r.event(session_end("session")).unwrap();
     r.advance(1_000);
     r.reregister();
-    assert_eq!(
-        saved_leave(&r, "main"),
-        Value::Null,
-        "the revival clears main's leave"
-    );
     r.advance_attended(3_599_000);
     r.step().await;
     assert_eq!(

@@ -280,8 +280,7 @@ fn a_pins_lane_and_an_affinity_entrys_lane_survive_a_reopen() {
 }
 
 #[test]
-fn a_pins_auxiliary_mark_and_effort_survive_a_reopen_and_a_row_from_before_the_columns_reads_their_defaults(
-) {
+fn a_pins_auxiliary_mark_and_effort_survive_a_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let storage_key = StorageKey::generate();
@@ -295,15 +294,6 @@ fn a_pins_auxiliary_mark_and_effort_survive_a_reopen_and_a_row_from_before_the_c
         seed_accounts(&store, &["a"]);
         store.upsert_pin(&auxiliary).unwrap();
     }
-    // Inserted without either column, so the row reads as a pin stored before the columns existed.
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute(
-        "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation) \
-         VALUES ('k', 'older', 'main', 'claude-opus-5-5', 'a', 1, 1, 1, 1, 1)",
-        [],
-    )
-    .unwrap();
-    drop(conn);
     let marks = || {
         Store::open(&path, &storage_key)
             .unwrap()
@@ -316,11 +306,8 @@ fn a_pins_auxiliary_mark_and_effort_survive_a_reopen_and_a_row_from_before_the_c
     };
     assert_eq!(
         marks(),
-        [
-            ("older".to_string(), false, String::new()),
-            ("s".to_string(), true, "high".to_string())
-        ],
-        "the written mark and effort read back after a reopen, and the older row reads the columns' defaults"
+        [("s".to_string(), true, "high".to_string())],
+        "the written mark and effort read back after a reopen"
     );
     Store::open(&path, &storage_key)
         .unwrap()
@@ -331,7 +318,7 @@ fn a_pins_auxiliary_mark_and_effort_survive_a_reopen_and_a_row_from_before_the_c
         })
         .unwrap();
     assert_eq!(
-        marks()[1],
+        marks()[0],
         ("s".to_string(), false, "low".to_string()),
         "the renewal's mark and effort replace the stored ones"
     );

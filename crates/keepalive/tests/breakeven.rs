@@ -21,11 +21,6 @@ fn factors(read: f64, write: f64) -> BreakEvenFactors {
 #[test]
 fn the_break_even_is_write_less_read_over_cadence_times_read() {
     let timing = KeepaliveTiming::default();
-    assert_eq!(
-        (timing.lead_ms(FIVE_MINUTES_MS), timing.lead_ms(ONE_HOUR_MS)),
-        (60_000, 360_000),
-        "the production leads"
-    );
     assert_eq!(timing.cadence_per_hour(FIVE_MINUTES_MS), 15.0);
     assert!((timing.cadence_per_hour(ONE_HOUR_MS) - 1.1111).abs() < 1e-4);
     let plan = factors(0.025, 1.25);

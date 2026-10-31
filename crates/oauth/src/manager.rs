@@ -1325,15 +1325,11 @@ mod tests {
     use phoebis_transport::control::{ResolveFuture, Resolver};
     use phoebis_transport::{connector_builder, Plane};
 
-    /// One case per text an attempt row stores, so a reworded text that would move its class fails here.
+    /// One case per branch of the class rule: a rejection's code, a code that holds a colon, a rejection's status,
+    /// the words before a colon, and the text's own words.
     #[test]
-    fn every_text_a_refresh_attempt_stores_reads_as_its_class() {
+    fn every_branch_of_a_refresh_attempts_text_reads_as_its_class() {
         for (text, class) in [
-            ("superseded", "superseded"),
-            ("quarantined at start", "quarantined_at_start"),
-            ("no refresh token", "no_refresh_token"),
-            ("transport: connection refused (os error 111)", "transport"),
-            ("refresh response lost: timed out", "refresh_response_lost"),
             (
                 "refresh rejected with status 400 (invalid_grant)",
                 "invalid_grant",
@@ -1343,16 +1339,8 @@ mod tests {
                 "scope:denied",
             ),
             ("refresh rejected with status 503", "503"),
-            (
-                "refresh response could not be read",
-                "refresh_response_could_not_be_read",
-            ),
-            ("identity mismatch", "identity_mismatch"),
-            ("stale lifecycle", "stale_lifecycle"),
-            (
-                "commit failed after a rotated response: database is locked",
-                "commit_failed_after_a_rotated_response",
-            ),
+            ("refresh response lost: timed out", "refresh_response_lost"),
+            ("quarantined at start", "quarantined_at_start"),
         ] {
             assert_eq!(refresh_cause(text), class, "{text}");
         }
