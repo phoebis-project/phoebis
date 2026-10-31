@@ -386,8 +386,8 @@ impl Default for RouterConfig {
     }
 }
 
-/// The 5-hour share tables per regime, read once at start: the base table and one per regime the revision in force
-/// names, with each listed entrypoint mapped to its regime's name.
+/// One plan window's share tables per regime, read once at start: the base table and one per regime the revision in
+/// force names, with each listed entrypoint mapped to its regime's name.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RegimeRates {
     pub base: RateTable,
@@ -414,17 +414,20 @@ impl RegimeRates {
     }
 }
 
-/// The three tables a reader prices a pin's burn through: dollars per token and the subscription cost model's
-/// 5-hour share on its anchor tier per token for the pin's row under the pin's regime, and dollars per token at the
-/// fast cells for the pin's fast usage. All three default to the unit tables, so a burn read through the default is a
+/// The four tables a reader prices a pin's burn through: dollars per token, the subscription cost model's 5-hour and
+/// 7-day shares on its anchor tier per token for the pin's row under the pin's regime, and dollars per token at the
+/// fast cells for the pin's fast usage. All four default to the unit tables, so a burn read through the default is a
 /// token count.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BurnRates {
     pub dollars: RateTable,
     /// The 5-hour share per token of the pin's row under its regime, the table `BurnUnit::table` reads for
-    /// `WindowShare` when `price_pin` prices a pin. The router's own burn reads price in dollars alone, so the admin's
-    /// Sessions pricing is the reader in production, while the fit and the pace read the per-window map.
+    /// `WindowShare` when `price_pin` prices a pin on `five_hour`. The router's own burn reads price in dollars alone,
+    /// so the admin's Sessions pricing is the reader in production, while the fit and the pace read the per-window map.
     pub five_hour: RegimeRates,
+    /// The 7-day share per token under the same regimes, the table a reader prices an account's burn on where its
+    /// window set lacks the 5-hour window, and the table the Pro-week figure of every pin's burn reads.
+    pub seven_day: RegimeRates,
     /// Dollars per token at the fast cells, the table a pin's fast usage prices through. A row without fast cells
     /// carries its own standard and long-context rates here, as the ledger builds it, so a fast answer on such a
     /// row prices at the set its prompt selects, as it does in the ledger.
@@ -436,25 +439,28 @@ impl Default for BurnRates {
         BurnRates {
             dollars: RateTable::unit(),
             five_hour: RegimeRates::unit(),
+            seven_day: RegimeRates::unit(),
             fast: RateTable::unit(),
         }
     }
 }
 
 impl BurnRates {
-    /// One second of the pin's burn in `unit`, with the fast usage read from the row's own `burn_fast` and the usage
-    /// of the client's own classifier calls from the row's own `burn_unmetered`. Under `Usd` the row's plain copy at
-    /// the set the pin's last prompt selects plus the fast usage through the fast table plus the unmetered usage
-    /// through the dollar table at the set the last prompt selects. On a row with fast cells the fast table carries
-    /// them whatever the prompt, so a prompt that crosses the threshold reprices the ordinary usage alone, and on a row
-    /// without them it carries the row's own sets, so the fast usage reprices with the row, as the ledger prices a fast
-    /// answer there. Under `WindowShare` the banded copy alone, through the table of the pin's regime: fast usage draws
-    /// usage credits and a classifier call takes no share of a plan window, so neither reaches the plan's figure, while
-    /// an account in overage or on an API key pays the dollars of both. `None` where a type the pin burns has no rate.
-    pub fn price_pin(&self, unit: BurnUnit, pin: &PinRow) -> Option<f64> {
-        let own = unit.table(self, entrypoint_of(pin)).price_burn(
+    /// One second of the pin's burn in `unit` on `window` (a plan window under `WindowShare`, ignored under `Usd`),
+    /// with the fast usage read from the row's own `burn_fast` and the usage of the client's own classifier calls from
+    /// the row's own `burn_unmetered`. Under `Usd` the row's plain copy at the set the pin's last prompt selects plus
+    /// the fast usage through the fast table plus the unmetered usage through the dollar table at the set the last
+    /// prompt selects. On a row with fast cells the fast table carries them whatever the prompt, so a prompt that
+    /// crosses the threshold reprices the ordinary usage alone, and on a row without them it carries the row's own
+    /// sets, so the fast usage reprices with the row, as the ledger prices a fast answer there. Under `WindowShare` the
+    /// copy `BurnUnit::read` takes on `window` alone, the banded one on `five_hour`, through the table of the window it
+    /// prices on under the pin's regime: fast usage draws usage credits and a classifier call takes no share of a plan
+    /// window, so neither reaches the plan's figure, while an account in overage or on an API key pays the dollars of
+    /// both. `None` where a type the pin burns has no rate.
+    pub fn price_pin(&self, unit: BurnUnit, pin: &PinRow, window: &str) -> Option<f64> {
+        let own = unit.table(self, entrypoint_of(pin), window).price_burn(
             &pin.model,
-            &unit.read(pin),
+            &unit.read(pin, window),
             pin.last_input_tokens,
         )?;
         match unit {
@@ -5710,6 +5716,7 @@ mod tests {
                 base: flat(0.125),
                 ..RegimeRates::unit()
             },
+            seven_day: RegimeRates::unit(),
             fast: flat(0.5),
         };
         let input = |input: f64| PinBurn {
@@ -5750,12 +5757,12 @@ mod tests {
             effort: String::new(),
         };
         assert_eq!(
-            rates.price_pin(BurnUnit::Usd, &pin),
+            rates.price_pin(BurnUnit::Usd, &pin, FIVE_HOUR),
             Some(4.0 * 0.25 + 6.0 * 0.5),
             "the row's plain copy at the dollar rate plus its fast usage at the fast rate"
         );
         assert_eq!(
-            rates.price_pin(BurnUnit::WindowShare, &pin),
+            rates.price_pin(BurnUnit::WindowShare, &pin, FIVE_HOUR),
             Some(16.0 * 0.125),
             "the banded copy alone, since fast usage draws usage credits and never the plan's window"
         );

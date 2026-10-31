@@ -14130,7 +14130,15 @@ fn a_pin_on_a_model_the_share_table_does_not_list_burns_nothing_and_is_never_mar
         ..BurnRates::default()
     });
     over_a_fitting_b(&mut st, T - 500);
-    let (pins, sum) = st.burn_of("a", &|_| true, BurnUnit::WindowShare, st.rates(), T, HOUR);
+    let (pins, sum) = st.burn_of(
+        "a",
+        &|_| true,
+        BurnUnit::WindowShare,
+        st.rates(),
+        FIVE_HOUR,
+        T,
+        HOUR,
+    );
     let unlisted = pins
         .iter()
         .find(|(p, _)| p.model == "claude-opus-4-8")
@@ -15538,7 +15546,7 @@ fn a_round_fires_on_the_seven_day_projection_over_the_ceiling_and_prices_its_pin
         marked_pin
             .rewrite
             .is_some_and(|r| (r - 1_000.0 / 60_000_000.0).abs() < 1e-12),
-        "the rewrite as the Max 20x equivalent of the pin's week: {:?}",
+        "the rewrite as the Pro-week figure of the pin's rewrite: {:?}",
         marked_pin.rewrite
     );
     assert!(
@@ -15703,8 +15711,16 @@ fn a_model_week_over_its_ceiling_fires_a_round_that_marks_a_fable_pin_and_leaves
             ("f2", false, None, None, None),
             ("o1", false, Some("off_window"), None, None)
         ],
-        "the round walks the two Fable pins and marks one, its rewrite of the Fable week, and the Opus pin lists after \
+        "the round walks the two Fable pins and marks one, compared on the Fable week, and the Opus pin lists after \
          them off the window"
+    );
+    let f1 = &round.pins[0];
+    assert!(
+        f1.rewrite
+            .is_some_and(|r| (r - 1_000.0 / 60_000_000.0).abs() < 1e-12),
+        "the marked Fable pin's rewrite is the Pro-week figure, its write over the 7-day window's tokens, though the \
+         pick compared it on its week: {:?}",
+        f1.rewrite
     );
     assert_eq!(
         round
@@ -17930,9 +17946,18 @@ fn a_pin_whose_last_prompt_was_over_the_threshold_prices_its_burn_at_the_long_co
             base: RateTable::unit(),
             ..RegimeRates::unit()
         },
+        seven_day: RegimeRates::unit(),
         fast: RateTable::unit(),
     });
-    let (pins, sum) = st.burn_of("a", &|_| true, BurnUnit::Usd, st.rates(), T, HOUR);
+    let (pins, sum) = st.burn_of(
+        "a",
+        &|_| true,
+        BurnUnit::Usd,
+        st.rates(),
+        FIVE_HOUR,
+        T,
+        HOUR,
+    );
     let burn = |session: &str| {
         pins.iter()
             .find(|(p, _)| p.session_id == session)
@@ -17992,10 +18017,11 @@ fn a_pins_fast_usage_prices_at_the_fast_cells_in_the_round_and_counts_toward_no_
             base: RateTable::unit(),
             ..RegimeRates::unit()
         },
+        seven_day: RegimeRates::unit(),
         fast: input_prices(&[("claude-sonnet-5", Some(3.0))]),
     });
     let burn = |unit| {
-        let (pins, sum) = st.burn_of("a", &|_| true, unit, st.rates(), T, HOUR);
+        let (pins, sum) = st.burn_of("a", &|_| true, unit, st.rates(), FIVE_HOUR, T, HOUR);
         let of = |session: &str| {
             pins.iter()
                 .find(|(p, _)| p.session_id == session)
@@ -26418,7 +26444,7 @@ fn a_target_under_one_pins_burn_marks_the_cheapest_sufficient_pin() {
     assert!(
         close(rewrite("heavy"), 400_000.0 / 60_000_000.0)
             && close(rewrite("light"), 10_000.0 / 60_000_000.0),
-        "the record shows the rewrites the pick compared, each the Max 20x equivalent of the pin's week: {} and {}",
+        "the record shows the rewrites the pick compared, each the Pro-week figure of the pin's rewrite: {} and {}",
         rewrite("heavy"),
         rewrite("light")
     );
@@ -26615,8 +26641,9 @@ fn a_pick_between_a_fable_pin_and_an_opus_pin_of_one_prompt_size_marks_the_opus_
         fable
             .rewrite
             .zip(opus.rewrite)
-            .is_some_and(|(fable, opus)| (fable - 2.0 * opus).abs() < 1e-12),
-        "the Fable pin's rewrite spends its week, which holds half the 7-day window's tokens: {:?} against {:?}",
+            .is_some_and(|(fable, opus)| (fable - opus).abs() < 1e-12),
+        "both pins rewrite one prompt size, so both read one Pro-week figure, though the pick weighed the Fable pin's \
+         move on its week: {:?} against {:?}",
         fable.rewrite,
         opus.rewrite
     );

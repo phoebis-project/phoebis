@@ -4451,6 +4451,7 @@ pub(crate) struct Mark {
 #[derive(Default)]
 struct PinRead {
     skip: Option<&'static str>,
+    cost: Option<f64>,
     rewrite: Option<f64>,
     rewrite_window: Option<&'static str>,
     runway_ms: Option<i64>,
@@ -4809,7 +4810,15 @@ fn shed_round(
             .collect(),
         BurnUnit::Usd => {
             state
-                .burn_of(account_id, &in_pool, unit, state.rates(), now, average_ms)
+                .burn_of(
+                    account_id,
+                    &in_pool,
+                    unit,
+                    state.rates(),
+                    trigger.window,
+                    now,
+                    average_ms,
+                )
                 .0
         }
     };
@@ -4980,20 +4989,21 @@ fn shed_round(
         );
         read.runway_ms = fit.runway_ms;
         let model = req.canonical_model.as_str();
-        // The move's cost is the share the rewrite spends on the scarce weekly windows, since the 5-hour window
-        // refills, and the Max 20x equivalent is the pin's alone, the same on every destination: a figure that read 0
-        // on one kind of sibling would turn the pick into a destination preference, which is the gate's to make.
-        read.rewrite = state
-            .share()
-            .equivalent(
-                window_for(model),
-                req.entrypoint.as_deref(),
-                model,
-                rewrite_write(&req, Some(p)),
-                now,
-            )
-            .filter(|share| *share > 0.0);
-        read.rewrite_window = read.rewrite.map(|_| window_for(model));
+        // The move's cost is the Pro share the rewrite spends on the scarce weekly window its model draws, since the
+        // 5-hour window refills, and a Fable pin's cost carries its week's factor. The cost is the pin's alone, the
+        // same on every destination: a figure that read 0 on one kind of sibling would turn the pick into a destination
+        // preference, which is the gate's to make. The record shows the Pro-week figure, one unit for every pin.
+        let write = rewrite_write(&req, Some(p));
+        let entrypoint = req.entrypoint.as_deref();
+        let pro_share = |window: &str| {
+            state
+                .share()
+                .equivalent(window, entrypoint, model, write, now)
+                .filter(|share| *share > 0.0)
+        };
+        read.cost = pro_share(window_for(model));
+        read.rewrite = pro_share(SEVEN_DAY);
+        read.rewrite_window = read.cost.map(|_| window_for(model));
         let booking = Reservation {
             account_id: destination,
             attempt: request.attempt,
@@ -5006,13 +5016,14 @@ fn shed_round(
         };
         (read, Some(booking))
     };
-    // A move's cost in cache terms: a warm pin pays its rewrite, the Max 20x equivalent of its week and the same on
-    // every destination, while a cold pin's cache is rewritten wherever it runs next, the reason the order walks the
+    // A move's cost in cache terms: a warm pin pays its rewrite, the Pro share of the week its model draws and the same
+    // on every destination, while a cold pin's cache is rewritten wherever it runs next, the reason the order walks the
     // cold pins first, so its move costs nothing. Under `always` the order ignores warmth, and every pin pays its
-    // rewrite. A pin with no prompt size reported costs nothing, as the order ranks it.
+    // rewrite. A pin with no prompt size reported costs nothing, as the order ranks it. The record's Pro-week figure
+    // never orders a move, since it reads a Fable pin's rewrite without its week's factor.
     let cost_of = |p: &PinRow, read: &PinRead| {
         if pool.shedding.warm_sessions == WarmSessions::Always || !is_cold(p) {
-            read.rewrite.unwrap_or(0.0)
+            read.cost.unwrap_or(0.0)
         } else {
             0.0
         }
@@ -5168,6 +5179,7 @@ fn shed_round(
         threshold_ms: trigger.threshold_ms,
         factor: trigger.factor,
         unit: unit.as_str(),
+        rewrite_unit: "pro_week",
         burn_average_seconds: whole_seconds(average_ms),
         shed_cap: cap,
         burn_sum: per_hour(burn_sum),

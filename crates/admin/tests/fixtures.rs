@@ -2741,6 +2741,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
                 threshold_ms: None,
                 factor: None,
                 unit: "window_share",
+                rewrite_unit: "pro_week",
                 burn_average_seconds: 1_800,
                 shed_cap: 0.2,
                 burn_sum: 0.12,

@@ -7031,6 +7031,7 @@ fn quarter_dollar_rates() -> BurnRates {
             base: RateTable::unit(),
             ..RegimeRates::unit()
         },
+        seven_day: RegimeRates::unit(),
         fast: RateTable::unit(),
     }
 }
@@ -7348,7 +7349,7 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
         "the thousand fast tokens land in the pin's fast usage, unweighed: {fast:?}"
     );
     assert_eq!((s1.burn_at, s1.last_input_tokens), (Some(62_000), 1_000));
-    let priced = rates.price_pin(BurnUnit::Usd, s1).unwrap();
+    let priced = rates.price_pin(BurnUnit::Usd, s1, FIVE_HOUR).unwrap();
     assert!(
         (priced - (decayed * 0.25 + 1_000.0 / window * 0.5)).abs() < 1e-9,
         "priced, the row's tokens at the quarter and the fast tokens at the half: {priced}"
@@ -7467,12 +7468,14 @@ async fn a_classifier_renewal_lands_in_the_pins_unmetered_copy_priced_in_dollars
         "the thousand classifier tokens land in the pin's unmetered copy, unweighed: {:?}",
         s1.burn_unmetered
     );
-    let share = rates.price_pin(BurnUnit::WindowShare, s1).unwrap();
+    let share = rates
+        .price_pin(BurnUnit::WindowShare, s1, FIVE_HOUR)
+        .unwrap();
     assert!(
         (share - decayed).abs() < 1e-9,
         "under the window share the row's banded copy alone, so the renewal adds nothing to the plan's figure: {share}"
     );
-    let dollars = rates.price_pin(BurnUnit::Usd, s1).unwrap();
+    let dollars = rates.price_pin(BurnUnit::Usd, s1, FIVE_HOUR).unwrap();
     assert!(
         (dollars - (decayed + 1_000.0 / window) * 0.25).abs() < 1e-9,
         "in dollars the classifier tokens price at the standard quarter beside the row's: {dollars}"
@@ -7667,7 +7670,7 @@ async fn a_fast_renewal_over_the_threshold_lands_in_the_fast_usage_and_prices_at
         "the fast tokens land in the fast usage, unweighed: {fast:?}"
     );
     assert_eq!(s1.last_input_tokens, 1_001);
-    let priced = rates.price_pin(BurnUnit::Usd, &s1).unwrap();
+    let priced = rates.price_pin(BurnUnit::Usd, &s1, FIVE_HOUR).unwrap();
     assert!(
         (priced - 1_001.0 * 0.5 / window).abs() < 1e-9,
         "priced through the fast table, the burn reads the fast dollars whatever the pin's last prompt: {priced}"
@@ -7688,6 +7691,7 @@ async fn a_fast_renewal_over_the_threshold_on_a_row_without_fast_cells_prices_at
             base: RateTable::unit(),
             ..RegimeRates::unit()
         },
+        seven_day: RegimeRates::unit(),
     };
     let (s1, fast) = fast_renewed_over_the_threshold(&rates).await;
     let window = 600.0_f64;
@@ -7695,7 +7699,7 @@ async fn a_fast_renewal_over_the_threshold_on_a_row_without_fast_cells_prices_at
         (fast.input - 1_001.0 / window).abs() < 1e-9,
         "the fast tokens land in the fast usage: {fast:?}"
     );
-    let priced = rates.price_pin(BurnUnit::Usd, &s1).unwrap();
+    let priced = rates.price_pin(BurnUnit::Usd, &s1, FIVE_HOUR).unwrap();
     assert!(
         (priced - 1_001.0 / window).abs() < 1e-9,
         "priced at the long-context rates the pin's last prompt selects: {priced}"
@@ -7711,6 +7715,7 @@ fn both_blocks_rates() -> BurnRates {
             base: RateTable::unit(),
             ..RegimeRates::unit()
         },
+        seven_day: RegimeRates::unit(),
         fast: flat_rates(0.5),
     }
 }
@@ -7777,7 +7782,7 @@ async fn pin_and_fast_usage(handle: &RouterHandle) -> (PinRow, PinBurn) {
 /// selects plus its fast usage through the fast table.
 async fn dollar_burn(handle: &RouterHandle, rates: &BurnRates) -> f64 {
     rates
-        .price_pin(BurnUnit::Usd, &s1_pin(handle).await)
+        .price_pin(BurnUnit::Usd, &s1_pin(handle).await, FIVE_HOUR)
         .unwrap()
 }
 
@@ -8006,6 +8011,70 @@ async fn a_renewal_inside_the_band_folds_a_heavier_banded_copy_and_the_same_plai
         pin("s1").burn,
         pin("s2").burn,
         "the plain rates are not weighted by the band"
+    );
+}
+
+#[tokio::test]
+async fn a_pins_seven_day_burn_reads_its_plain_copy_and_its_five_hour_burn_the_banded_one() {
+    // Monday 2026-09-21 at 14:00 UTC, inside a band that weighs the 5-hour window alone.
+    let inside = 1_789_999_200_000_i64;
+    let band = BandWeight::new(|window: &str, _, at: i64| {
+        let hour = at.rem_euclid(86_400_000) / 3_600_000;
+        if window == FIVE_HOUR && (12..18).contains(&hour) {
+            1.45
+        } else {
+            1.0
+        }
+    });
+    // One share table on both windows, so the two figures part by the copy each window reads.
+    let shares = RegimeRates {
+        base: flat_rates(0.5),
+        ..RegimeRates::unit()
+    };
+    let rates = BurnRates {
+        five_hour: shares.clone(),
+        seven_day: shares,
+        ..quarter_dollar_rates()
+    };
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let config = RouterConfig {
+        band,
+        rates: rates.clone(),
+        ..RouterConfig::default()
+    };
+    let handle = spawn(store, clock(&now), config).unwrap();
+    let pin = selected_pin(
+        handle
+            .select(request(&handle, Some("s1"), 1_000))
+            .await
+            .unwrap(),
+    );
+    let usage = PinUsage {
+        input: 600,
+        ..PinUsage::default()
+    };
+    handle
+        .report(renewal(pin, inside, usage, "client", 300_000))
+        .await;
+    let pin = s1_pin(&handle).await;
+    let plain = rates
+        .seven_day
+        .base
+        .price_burn(&pin.model, &pin.burn, pin.last_input_tokens)
+        .expect("the share table prices the plain copy");
+    assert!(plain > 0.0, "the renewal folded a burn: {plain}");
+    let seven_day = rates.price_pin(BurnUnit::WindowShare, &pin, SEVEN_DAY);
+    assert!(
+        seven_day.is_some_and(|share| (share - plain).abs() < 1e-9),
+        "the 7-day burn reads the plain copy, since the band never weighed that window: {seven_day:?} against \
+         {plain}"
+    );
+    let five_hour = rates.price_pin(BurnUnit::WindowShare, &pin, FIVE_HOUR);
+    assert!(
+        five_hour.is_some_and(|share| (share - 1.45 * plain).abs() < 1e-9),
+        "the 5-hour burn reads the banded copy the meter charged: {five_hour:?} against {}",
+        1.45 * plain
     );
 }
 

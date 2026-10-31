@@ -547,9 +547,9 @@ impl SharePricer {
         }
     }
 
-    /// `equivalent(window, entrypoint, canonical_model, usage, at)`: the Max 20x equivalent of `window`, the share a
-    /// Max 20x account would spend on `usage` under the regime the entrypoint names, at the band of `at`. `None` for
-    /// a window the tables cannot price for the model. Every pricer prices nothing here until it is set.
+    /// `equivalent(window, entrypoint, canonical_model, usage, at)`: the Pro share of `window`, the share a Pro account
+    /// would spend on `usage` under the regime the entrypoint names, at the band of `at`. `None` for a window the
+    /// tables cannot price for the model. Every pricer prices nothing here until it is set.
     pub fn with_equivalent(
         self,
         equivalent: impl Fn(&str, Option<&str>, &str, PinUsage, i64) -> Option<f64>
@@ -776,9 +776,9 @@ impl RateTable {
     }
 }
 
-/// Which figure a reader takes for a pin's burn: the share of the account's 5-hour window while a subscription
-/// account runs on its plan, dollars on an api_key account, a usage-based seat or a subscription account in
-/// overage. Serializes as `window_share` or `usd`.
+/// Which figure a reader takes for a pin's burn: the share of the account's own window the burn is read on while a
+/// subscription account runs on its plan, dollars on an api_key account, a usage-based seat or a subscription account
+/// in overage. Serializes as `window_share` or `usd`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BurnUnit {
@@ -801,20 +801,32 @@ impl BurnUnit {
         }
     }
 
-    /// `pin.burn_banded` under `WindowShare` (the band is part of what the meter charged), `pin.burn` under `Usd`.
-    pub fn read(self, pin: &PinRow) -> PinBurn {
+    /// The copy `price_pin` prices on `window`: under `WindowShare` the banded copy on `five_hour`, since the band
+    /// weighs that window alone and the meter charged it, and the plain `burn` on every other window. Under `Usd` the
+    /// plain `burn`, whatever the window.
+    pub fn read(self, pin: &PinRow, window: &str) -> PinBurn {
         match self {
-            BurnUnit::Usd => pin.burn,
-            BurnUnit::WindowShare => pin.burn_banded,
+            BurnUnit::WindowShare if window == FIVE_HOUR => pin.burn_banded,
+            BurnUnit::WindowShare | BurnUnit::Usd => pin.burn,
         }
     }
 
-    /// The table `rates` prices this unit's copy through: under `WindowShare` the 5-hour table of the regime
-    /// `entrypoint` names, the base one for `None`. Dollars cost the same whatever the entrypoint.
-    pub fn table<'a>(self, rates: &'a BurnRates, entrypoint: Option<&str>) -> &'a RateTable {
+    /// The table `rates` prices this unit's copy through: under `WindowShare` the table of `window` for the regime
+    /// `entrypoint` names, the base one for `None`, the 5-hour table on `five_hour` and the 7-day table on every other
+    /// window, since a model week reads its shared window's row. Dollars cost the same whatever the entrypoint and the
+    /// window.
+    pub fn table<'a>(
+        self,
+        rates: &'a BurnRates,
+        entrypoint: Option<&str>,
+        window: &str,
+    ) -> &'a RateTable {
         match self {
             BurnUnit::Usd => &rates.dollars,
-            BurnUnit::WindowShare => rates.five_hour.for_entrypoint(entrypoint),
+            BurnUnit::WindowShare if window == FIVE_HOUR => {
+                rates.five_hour.for_entrypoint(entrypoint)
+            }
+            BurnUnit::WindowShare => rates.seven_day.for_entrypoint(entrypoint),
         }
     }
 }
@@ -3001,15 +3013,17 @@ impl RoutingState {
     /// The pins of `account_id` that `keep` admits, each priced in `unit` through `rates` and decayed to `now`, and
     /// the sum over the priced pins. `keep` is the account's current pool, built by the caller from the snapshot
     /// this state does not hold, so a pin a former pool left on the account is outside the round. Under
-    /// `WindowShare` a burn is the subscription cost model's anchor share per second, and under `Usd` the pin's fast
-    /// usage and the usage of the client's own classifier calls count beside its row's copy, as
-    /// `BurnRates::price_pin` sums them. `None` for a pin burning a type its row cannot price.
+    /// `WindowShare` a burn is the subscription cost model's anchor share of `window` per second, and under `Usd` the
+    /// pin's fast usage and the usage of the client's own classifier calls count beside its row's copy, as
+    /// `BurnRates::price_pin` sums them, whatever `window` names. `None` for a pin burning a type its row cannot price.
+    #[allow(clippy::too_many_arguments)]
     pub fn burn_of(
         &self,
         account_id: &str,
         keep: &dyn Fn(&PinRow) -> bool,
         unit: BurnUnit,
         rates: &BurnRates,
+        window: &str,
         now: i64,
         window_ms: i64,
     ) -> (Vec<(PinRow, Option<f64>)>, f64) {
@@ -3022,7 +3036,7 @@ impl RoutingState {
                 // The pin's last prompt selects the set, so a long-prompt pin ranks at the rates it burns, and a
                 // pin never renewed with usage carries zero and prices at the standard rates.
                 let burn = rates
-                    .price_pin(unit, p)
+                    .price_pin(unit, p, window)
                     .map(|priced| burn_decayed(priced, p.burn_at, now, window_ms));
                 (p.clone(), burn)
             })

@@ -771,14 +771,14 @@ pub async fn run_until(
     served
 }
 
-/// The routing task's burn prices and peak band: the model's 5-hour share per token on its anchor tier per regime and
-/// its band, and for dollars `prices`, the revision of the table `Pricing::load` chose that is in force at the start
-/// `now`, the share of an account's window a completed request consumed, and the share per second a pin's burn
-/// consumes, both priced through the model on the account's tier, and the Max 20x equivalent of a window a pin's
-/// rewrite spends, priced on the anchor tier whatever the account's. Every closure prices under the regime of the
-/// entrypoint it is handed, the base one for `None`. The `BurnRates` tables and the measured windows are read at `now`
-/// and fixed for the life of the process, so a pending revision reaches them at the next start, while the two shares
-/// and the equivalent price at each call's instant under the revision in force then.
+/// The routing task's burn prices and peak band: the model's two share tables, its 5-hour and its 7-day share per
+/// token on its anchor tier per regime, and its band, and for dollars `prices`, the revision of the table
+/// `Pricing::load` chose that is in force at the start `now`, the share of an account's window a completed request
+/// consumed, and the share per second a pin's burn consumes, both priced through the model on the account's tier, and
+/// the Pro share of a window a pin's rewrite spends, priced on the anchor tier whatever the account's. Every closure
+/// prices under the regime of the entrypoint it is handed, the base one for `None`. The `BurnRates` tables and the
+/// measured windows are read at `now` and fixed for the life of the process, so a pending revision reaches them at the
+/// next start, while the two shares and the equivalent price at each call's instant under the revision in force then.
 fn router_config(
     prices: &phoebis_ledger::PriceTable,
     tables: Arc<phoebis_ledger::PlanTables>,
@@ -797,6 +797,7 @@ fn router_config(
         rates: phoebis_routing::BurnRates {
             dollars: prices.rate_table(),
             five_hour: tables.regime_rates(phoebis_routing::FIVE_HOUR, now),
+            seven_day: tables.regime_rates(phoebis_routing::SEVEN_DAY, now),
             fast: prices.fast_rate_table(),
         },
         share: phoebis_routing::SharePricer::new(
@@ -1270,9 +1271,10 @@ mod tests {
         }
     }
 
-    /// The test model's regime `desk` holds twice the base 5-hour capacity on Max 20x, and the base's band halves the
-    /// base capacity while the regime keeps its own, so outside the band every figure under the regime is half the base
-    /// one, and inside it the band weighs the base alone.
+    /// The test model's regime `desk` holds twice the base 5-hour capacity on the Ultra tier
+    /// (`default_claude_max_20x`), and the base's band halves the base capacity while the regime keeps its own, so
+    /// outside the band every figure under the regime is half the base one, and inside it the band weighs the base
+    /// alone.
     #[test]
     fn the_router_config_passes_the_entrypoint_through_every_closure_and_builds_the_regime_tables()
     {

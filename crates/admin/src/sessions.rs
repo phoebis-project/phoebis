@@ -7,7 +7,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_routing::{entrypoint_of, BurnRates, BurnUnit, PinStanding, FIVE_HOUR};
+use phoebis_routing::{entrypoint_of, BurnRates, BurnUnit, PinStanding, FIVE_HOUR, SEVEN_DAY};
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
@@ -250,6 +250,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     let rates = BurnRates {
         dollars: prices.rate_table(),
         five_hour: state.tables.regime_rates(FIVE_HOUR, now),
+        seven_day: state.tables.regime_rates(SEVEN_DAY, now),
         fast: prices.fast_rate_table(),
     };
     let mut tiers: std::collections::HashMap<String, Option<String>> =
@@ -320,12 +321,14 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 BurnUnit::of(kind, snapshot.usage_based(&p.account_id), in_overage)
             });
         let equivalent = (unit == Some(BurnUnit::WindowShare))
-            .then(|| rates.price_pin(BurnUnit::WindowShare, p))
+            .then(|| rates.price_pin(BurnUnit::WindowShare, p, FIVE_HOUR))
             .flatten()
             .map(|b| b * 3_600.0);
         let burn = match unit {
             None => None,
-            Some(BurnUnit::Usd) => rates.price_pin(BurnUnit::Usd, p).map(|b| b * 3_600.0),
+            Some(BurnUnit::Usd) => rates
+                .price_pin(BurnUnit::Usd, p, FIVE_HOUR)
+                .map(|b| b * 3_600.0),
             Some(BurnUnit::WindowShare) => {
                 if !tiers.contains_key(&p.account_id) {
                     // The selector's own read of the plan, so a plan the cost model does not price (a free

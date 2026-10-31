@@ -2096,6 +2096,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
                 threshold_ms: Some(1_800_000),
                 factor: Some(0.4),
                 unit: "window_share",
+                rewrite_unit: "pro_week",
                 burn_average_seconds: 1_800,
                 shed_cap: 0.5,
                 burn_sum: 0.1,

@@ -15948,6 +15948,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "threshold_ms": null,
             "factor": null,
             "unit": "window_share",
+            "rewrite_unit": "pro_week",
             "burn_average_seconds": 1800,
             "shed_cap": 0.2,
             "burn_sum": 0.12,

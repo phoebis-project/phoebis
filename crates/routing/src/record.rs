@@ -657,6 +657,9 @@ pub struct ShedRoundFacts {
     /// or the plain copy in dollars at `now` with the pin's fast usage and the usage of the client's own classifier
     /// calls beside it.
     pub unit: &'static str,
+    /// `pro_week`: the unit of every pin's `rewrite`, the share of the Pro 7-day window a Pro account would spend on
+    /// the pin's rewrite. Absent from an event an earlier build wrote, whose figure a reader prints as stored.
+    pub rewrite_unit: &'static str,
     pub burn_average_seconds: u64,
     pub shed_cap: f64,
     pub burn_sum: f64,
@@ -679,7 +682,7 @@ pub struct ShedRoundFacts {
 /// One of the pool's pins on the account its round ran on: those in the round in its order, then those it left out (a
 /// fast-lane pin, and a pin whose model does not draw the trigger's window). A pin there under a key of a pool the
 /// account left is in no round and is not listed here. `burn` and `per_rewrite` are shares of the trigger's window, the
-/// burn per hour, and `rewrite` the Max 20x equivalent of the pin's weekly window.
+/// burn per hour, and `rewrite` the Pro-week figure of the pin's rewrite.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ShedPinFacts {
     pub key_id: String,
@@ -691,11 +694,10 @@ pub struct ShedPinFacts {
     pub last_input_tokens: u64,
     pub per_rewrite: Option<f64>,
     pub marked: bool,
-    /// The pin's rewrite as the Max 20x equivalent of `rewrite_window`, the share of that window a Max 20x account
-    /// would spend on it, `None` where the cost model cannot size it, where the pin has no destination, or where the
-    /// pick never read it.
+    /// The pin's rewrite as the Pro-week figure, the share of the Pro 7-day window a Pro account would spend on it,
+    /// `None` where the cost model cannot size it, where the pin has no destination, or where the pick never read it.
     pub rewrite: Option<f64>,
-    /// The window `rewrite` is the equivalent of, `seven_day` or the pin's model week, `None` with no figure.
+    /// The window the pick compared the pin on, `seven_day` or the pin's model week, `None` with no figure.
     pub rewrite_window: Option<&'static str>,
     /// The destination the round found for the pin.
     pub planned: Option<String>,
