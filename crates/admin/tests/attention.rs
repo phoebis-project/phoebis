@@ -409,12 +409,12 @@ async fn the_system_route_answers_without_an_engine_stats_member() {
     assert!(system.get("alerts").is_none(), "{system}"); // removed name
 }
 
-/// The route and the metrics listener read one reader, so the unweighted model's item lists on the route as its series
+/// The route and the metrics listener read one reader, so the unpriced model's item lists on the route as its series
 /// reads on the scrape.
 #[tokio::test]
-async fn a_held_model_unweighted_condition_lists_on_the_route_after_every_degraded_kind() {
-    // The test cost model leaves `claude-opus-5` unweighted under the `opus` model tier at the rig's clock, so the
-    // case reads no shipped figure.
+async fn a_held_model_unpriced_condition_lists_on_the_route_after_every_degraded_kind() {
+    // The test cost model leaves `claude-opus-5` without a weight at the rig's clock, so the case reads no shipped
+    // figure.
     let parts =
         common::admin_parts_full_costed(phoebis_ledger::test_tables::subscription_costs()).await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -459,7 +459,7 @@ async fn a_held_model_unweighted_condition_lists_on_the_route_after_every_degrad
             .conditions(common::NOW)
             .unwrap()
             .iter()
-            .any(|c| c.kind == phoebis_attention::Kind::ModelUnweighted && c.holds)
+            .any(|c| c.kind == phoebis_attention::Kind::ModelUnpriced && c.holds)
             .then_some(())
     })
     .await;
@@ -473,16 +473,10 @@ async fn a_held_model_unweighted_condition_lists_on_the_route_after_every_degrad
             .iter()
             .map(|i| i["kind"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["funding_required", "model_unweighted"],
+        ["funding_required", "model_unpriced"],
         "the model's item lists after every degraded kind: {body}"
     );
     let item = &body["items"][1];
-    let costs = phoebis_ledger::test_tables::subscription_costs();
-    let weight_of = costs
-        .revisions
-        .in_force(common::NOW)
-        .latest_weighted("opus")
-        .expect("the test cost model weights an opus model");
     assert_eq!(
         (
             &item["subject"],
@@ -496,7 +490,7 @@ async fn a_held_model_unweighted_condition_lists_on_the_route_after_every_degrad
             &j!(null),
             &j!([]),
             &j!(common::NOW),
-            &j!({ "model": "claude-opus-5", "requests": 1, "tier": "opus", "weight_of": weight_of }),
+            &j!({ "model": "claude-opus-5", "requests": 1 }),
         ),
         "the item opens no page, belongs to no pool and dates from the request: {item}"
     );
@@ -526,7 +520,7 @@ async fn a_held_model_unweighted_condition_lists_on_the_route_after_every_degrad
     )
     .unwrap();
     assert!(
-        text.contains(r#"phoebis_attention{kind="model_unweighted",subject="claude-opus-5"} 1"#),
+        text.contains(r#"phoebis_attention{kind="model_unpriced",subject="claude-opus-5"} 1"#),
         "{text}"
     );
 }

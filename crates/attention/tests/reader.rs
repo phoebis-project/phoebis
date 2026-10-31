@@ -1,6 +1,6 @@
 //! The sixteen conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
 //! the router's own components among them, a deleted subject's series gone unless a parked record still names it, a
-//! refresh run read back by a second reader, a listener's pair read on the read's clock, an unweighted model the
+//! refresh run read back by a second reader, a listener's pair read on the read's clock, an unpriced model the
 //! ledger's landing saw, and the gauge the metrics listener scrapes from the same read.
 mod common;
 use std::sync::Arc;
@@ -2167,7 +2167,7 @@ fn the_certificate_kinds_rank_among_the_others() {
         Kind::CertificateReloadFailed,
         Kind::PoolExhausted,
         Kind::RefreshFailed,
-        Kind::ModelUnweighted,
+        Kind::ModelUnpriced,
         Kind::WriterDegraded,
         Kind::FundingRequired,
         Kind::ClientDrift,
@@ -2186,7 +2186,7 @@ fn the_certificate_kinds_rank_among_the_others() {
             "certificate_expiring",
             "ledger_record_parked",
             "poll_backoff",
-            "model_unweighted",
+            "model_unpriced",
             "meter_drift",
             "wall_reached",
         ]
@@ -2232,9 +2232,9 @@ fn on_model(id: &str, model: &str, account: &str, at: i64, attempts: u32) -> Rec
     }
 }
 
-/// The requests the `model_unweighted` item about `model` counts, 0 while the read carries none.
-fn unweighted_requests(conditions: &[Condition], model: &str) -> u64 {
-    find(conditions, Kind::ModelUnweighted, model)
+/// The requests the `model_unpriced` item about `model` counts, 0 while the read carries none.
+fn unpriced_requests(conditions: &[Condition], model: &str) -> u64 {
+    find(conditions, Kind::ModelUnpriced, model)
         .map_or(0, |c| c.detail["requests"].as_u64().unwrap())
 }
 
@@ -2248,13 +2248,13 @@ async fn read_counting(
 ) -> Vec<Condition> {
     fake_upstream::wait_for(Duration::from_secs(5), || {
         let conditions = read(attention, at);
-        (unweighted_requests(&conditions, model) >= requests).then_some(conditions)
+        (unpriced_requests(&conditions, model) >= requests).then_some(conditions)
     })
     .await
 }
 
 #[tokio::test]
-async fn a_plan_request_on_an_unweighted_model_holds_one_item_counting_each_landed_request_once() {
+async fn a_plan_request_on_an_unpriced_model_holds_one_item_counting_each_landed_request_once() {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
     // Apart from the clock, so the item's date reads the request's arrival rather than the read.
@@ -2263,7 +2263,7 @@ async fn a_plan_request_on_an_unweighted_model_holds_one_item_counting_each_land
         .record_request(on_model("r1", "claude-opus-5", "business", arrived, 1))
         .await;
     let first = read_counting(&attention, NOW, "claude-opus-5", 1).await;
-    let held = find(&first, Kind::ModelUnweighted, "claude-opus-5").unwrap();
+    let held = find(&first, Kind::ModelUnpriced, "claude-opus-5").unwrap();
     assert_eq!(
         (
             held.holds,
@@ -2286,17 +2286,14 @@ async fn a_plan_request_on_an_unweighted_model_holds_one_item_counting_each_land
             &json!({
                 "model": "claude-opus-5",
                 "requests": 1,
-                "tier": "opus",
-                "weight_of": "claude-opus-5-5",
             })
         ),
-        "the item names the model tier and the model whose weight stands in, opens no page and belongs to no pool \
-         card"
+        "the item names the model and the requests it served, opens no page and belongs to no pool card"
     );
     let (status, text) = scrape(&rig, &attention).await;
     assert_eq!(status, 200);
     assert!(
-        text.contains(r#"phoebis_attention{kind="model_unweighted",subject="claude-opus-5"} 1"#),
+        text.contains(r#"phoebis_attention{kind="model_unpriced",subject="claude-opus-5"} 1"#),
         "{text}"
     );
     rig.ledger
@@ -2305,11 +2302,11 @@ async fn a_plan_request_on_an_unweighted_model_holds_one_item_counting_each_land
     let second = read_counting(&attention, NOW, "claude-opus-5", 2).await;
     assert_eq!(
         (
-            unweighted_requests(&second, "claude-opus-5"),
-            find(&second, Kind::ModelUnweighted, "claude-opus-5")
+            unpriced_requests(&second, "claude-opus-5"),
+            find(&second, Kind::ModelUnpriced, "claude-opus-5")
                 .unwrap()
                 .since,
-            find(&second, Kind::ModelUnweighted, "claude-opus-5-20260101").is_none()
+            find(&second, Kind::ModelUnpriced, "claude-opus-5-20260101").is_none()
         ),
         (2, Some(arrived), true),
         "a dated id counts under its undated name, and the item keeps the first request's date"
@@ -2319,22 +2316,28 @@ async fn a_plan_request_on_an_unweighted_model_holds_one_item_counting_each_land
         .await;
     let third = read_counting(&attention, NOW, "claude-opus-5", 3).await;
     assert_eq!(
-        unweighted_requests(&third, "claude-opus-5"),
+        unpriced_requests(&third, "claude-opus-5"),
         3,
         "a request whose two attempts both answered counts once"
     );
 }
 
 #[tokio::test]
-async fn a_weighted_model_a_model_of_no_weighted_tier_and_a_billed_request_raise_no_unweighted_item(
+async fn a_weighted_model_and_a_billed_request_raise_no_item_and_a_model_of_no_weighted_tier_raises_one(
 ) {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
+    let mut classifier = on_model("r-classifier", "claude-opus-9", "business", NOW, 1);
+    let Record::Request { request, .. } = &mut classifier else {
+        unreachable!("on_model builds a request record")
+    };
+    request.classifier = Some("client".into());
     for record in [
         on_model("r-weighted", "claude-opus-5-5", "business", NOW, 1),
         on_model("r-mystery", "claude-mystery-2", "business", NOW, 1),
         on_model("r-billed", "claude-opus-5", "direct", NOW, 1),
-        // Lands behind the three, so the read that sees its item sees whatever their landings recorded.
+        classifier,
+        // Lands behind the four, so the read that sees its item sees whatever their landings recorded.
         on_model("r-marker", "claude-sonnet-5", "business", NOW, 1),
     ] {
         rig.ledger.record_request(record).await;
@@ -2343,17 +2346,17 @@ async fn a_weighted_model_a_model_of_no_weighted_tier_and_a_billed_request_raise
     assert_eq!(
         conditions
             .iter()
-            .filter(|c| c.kind == Kind::ModelUnweighted)
+            .filter(|c| c.kind == Kind::ModelUnpriced)
             .map(|c| c.subject.id.as_str())
             .collect::<Vec<_>>(),
-        ["claude-sonnet-5"],
-        "a weighted model needs no stand-in, nothing stands in for a model tier without a weighted model, and an \
-         API key's request reads no window share"
+        ["claude-mystery-2", "claude-sonnet-5"],
+        "a model without a weight raises its item whatever its model tier, a weighted model and a classifier call \
+         raise none, and an API key's request reads no window share"
     );
 }
 
 #[tokio::test]
-async fn a_held_unweighted_model_has_its_series_and_ranks_after_every_degraded_state() {
+async fn a_held_unpriced_model_has_its_series_and_ranks_after_every_degraded_state() {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
     attention.observe(&observed("x1", Some("desktop"), "main"));
@@ -2369,7 +2372,7 @@ async fn a_held_unweighted_model_has_its_series_and_ranks_after_every_degraded_s
             ("funding_required", "direct".to_string(), false),
             ("ledger_record_parked", "main".to_string(), false),
             ("meter_drift", "business".to_string(), false),
-            ("model_unweighted", "claude-opus-5".to_string(), true),
+            ("model_unpriced", "claude-opus-5".to_string(), true),
             ("poll_backoff", "business".to_string(), false),
             ("pool_exhausted", "main".to_string(), true),
             ("reauth_required", "business".to_string(), false),
@@ -2391,11 +2394,11 @@ async fn a_held_unweighted_model_has_its_series_and_ranks_after_every_degraded_s
     held.sort();
     assert_eq!(
         held,
-        [Kind::PoolExhausted, Kind::ModelUnweighted],
-        "an estimate breaks nothing, so it ranks after the exhaustion held beside it"
+        [Kind::PoolExhausted, Kind::ModelUnpriced],
+        "a model that prices nothing breaks nothing, so it ranks after the exhaustion held beside it"
     );
     assert!(
-        Kind::PollBackoff < Kind::ModelUnweighted,
+        Kind::PollBackoff < Kind::ModelUnpriced,
         "and after the last degraded state"
     );
 }
@@ -2423,12 +2426,12 @@ async fn a_revision_that_weights_the_model_clears_its_item_at_the_next_landing_a
         .await;
     let cleared = fake_upstream::wait_for(Duration::from_secs(5), || {
         let conditions = read(&attention, later);
-        find(&conditions, Kind::ModelUnweighted, "claude-opus-5")
+        find(&conditions, Kind::ModelUnpriced, "claude-opus-5")
             .is_some_and(|c| !c.holds)
             .then_some(conditions)
     })
     .await;
-    let item = find(&cleared, Kind::ModelUnweighted, "claude-opus-5").unwrap();
+    let item = find(&cleared, Kind::ModelUnpriced, "claude-opus-5").unwrap();
     assert_eq!(
         (item.since, &item.detail),
         (
@@ -2436,15 +2439,13 @@ async fn a_revision_that_weights_the_model_clears_its_item_at_the_next_landing_a
             &json!({
                 "model": "claude-opus-5",
                 "requests": 0,
-                "tier": "opus",
-                "weight_of": "claude-opus-5-5",
             })
         ),
         "the landing under the revision that weights the model clears the date and the count"
     );
     let (_, text) = scrape(&rig, &attention).await;
     assert!(
-        text.contains(r#"phoebis_attention{kind="model_unweighted",subject="claude-opus-5"} 0"#),
+        text.contains(r#"phoebis_attention{kind="model_unpriced",subject="claude-opus-5"} 0"#),
         "the cleared model reads 0 under the same labels rather than vanishing: {text}"
     );
 }

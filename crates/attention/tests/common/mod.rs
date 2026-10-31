@@ -28,8 +28,7 @@ use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 pub const NOW: i64 = 1_700_000_000_000;
 
 /// The ledger's test cost model as text, since this crate's tests build the ledger without its test tables. Its
-/// first entry is in force at `NOW` and leaves `claude-opus-5` unweighted under the `opus` model tier, whose latest
-/// weighted model is `claude-opus-5-5`.
+/// first entry is in force at `NOW` and leaves `claude-opus-5` without a weight.
 pub const COSTS: &str = include_str!("../../../ledger/tests/fixtures/subscription_costs.yaml");
 
 pub fn tables_of(text: &str) -> PlanTables {

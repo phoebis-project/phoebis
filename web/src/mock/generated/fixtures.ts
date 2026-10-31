@@ -9009,7 +9009,7 @@ export const FIXTURES: Record<string, Fixture> = {
           }
         },
         {
-          "kind": "model_unweighted",
+          "kind": "model_unpriced",
           "subject": {
             "type": "model",
             "id": "claude-opus-99",
@@ -9020,9 +9020,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "since": 1791720940000,
           "detail": {
             "model": "claude-opus-99",
-            "requests": 1,
-            "tier": "opus",
-            "weight_of": "claude-opus-5-5"
+            "requests": 1
           }
         },
         {

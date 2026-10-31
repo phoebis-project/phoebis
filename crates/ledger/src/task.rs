@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use phoebis_bus::{spawn_subscriber, Bus, Classifier, Delivery, Subscriber};
 use phoebis_oauth::Clock;
-use phoebis_routing::{MemberSpend, RegistrySnapshot, Report, RouterHandle, FIVE_HOUR};
+use phoebis_routing::{MemberSpend, RegistrySnapshot, Report, RouterHandle, SEVEN_DAY};
 use phoebis_store::{AccountKind, BudgetPeriod, Store};
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
@@ -62,7 +62,7 @@ const EXPIRE_INTERVAL: Duration = Duration::from_secs(60);
 
 const TASKS_POISONED: &str = "ledger background-task list poisoned by a prior panic";
 
-const UNWEIGHTED_POISONED: &str = "ledger unweighted-model map poisoned by a prior panic";
+const UNPRICED_POISONED: &str = "ledger unpriced-model map poisoned by a prior panic";
 
 #[derive(Clone, Debug)]
 pub struct LedgerConfig {
@@ -132,28 +132,24 @@ pub struct Admission {
 #[error("the ledger task has stopped")]
 pub struct LedgerGone;
 
-/// A model the cost model in force did not weight when a plan-funded request on it landed, so its window share was
-/// estimated from its model tier's latest weighted model. Kept once seen, so its gauge series reads 0 rather than
-/// vanishing after a revision weights the model.
+/// A model the cost model in force gave no weight on the 7-day window when a plan-funded request on it landed, so its
+/// figure was null. Kept once seen, so its gauge series reads 0 rather than vanishing after a revision weights the
+/// model.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub struct UnweightedModel {
+pub struct UnpricedModel {
     /// The undated model id.
     pub model: String,
-    /// The model tier whose latest weighted model stands in.
-    pub tier: String,
-    /// The model whose weight stands in.
-    pub weight_of: String,
-    /// When the first request priced through the fallback arrived, `None` once a landing found the model weighted,
-    /// until the next fallback landing dates it again.
+    /// When the first unpriced landing arrived, `None` once a landing found the model weighted, until the next
+    /// unpriced landing dates it again.
     pub since: Option<i64>,
-    /// Landed requests with at least one plan-funded attempt priced through the fallback since `since`, one per
+    /// Landed requests with at least one plan-funded attempt with usage that priced nothing since `since`, one per
     /// request, 0 once a landing found the model weighted.
     pub requests: u64,
 }
 
-/// The unweighted models by undated id, written by the landing after its commit and read by the attention reader. A
+/// The unpriced models by undated id, written by the landing after its commit and read by the attention reader. A
 /// `std` mutex, since the reader asks synchronously from inside the runtime, where a tokio lock would have to block.
-type Unweighted = Arc<std::sync::Mutex<BTreeMap<String, UnweightedModel>>>;
+type Unpriced = Arc<std::sync::Mutex<BTreeMap<String, UnpricedModel>>>;
 
 /// What a replay of the parked records did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -183,7 +179,7 @@ enum Control {
 pub struct Ledger {
     db: Arc<LedgerDb>,
     stats: Arc<LedgerStats>,
-    unweighted: Unweighted,
+    unpriced: Unpriced,
     metrics: Arc<Metrics>,
     tx: mpsc::Sender<Record>,
     /// Flipped by `shutdown`; the writer closes its receiver on it, so no clone of the handle can keep the
@@ -217,12 +213,12 @@ impl Ledger {
         self.retention_days
     }
 
-    /// Every model a plan-funded landing priced through its model tier's fallback since the start, by undated model
-    /// id, a model a later landing found weighted among them with no `since` and no requests. Empty at each start.
-    pub fn unweighted_served(&self) -> Vec<UnweightedModel> {
-        self.unweighted
+    /// Every model a plan-funded landing priced nothing since the start, by undated model id, a model a later landing
+    /// found weighted among them with no `since` and no requests. Empty at each start.
+    pub fn unpriced_served(&self) -> Vec<UnpricedModel> {
+        self.unpriced
             .lock()
-            .expect(UNWEIGHTED_POISONED)
+            .expect(UNPRICED_POISONED)
             .values()
             .cloned()
             .collect()
@@ -378,13 +374,13 @@ pub fn spawn(
     let (tx, rx) = mpsc::channel(CHANNEL_DEPTH);
     let (control, control_rx) = mpsc::channel::<Control>(1);
     let stats = Arc::new(LedgerStats::default());
-    let unweighted = Unweighted::default();
+    let unpriced = Unpriced::default();
     let (done_tx, done_rx) = oneshot::channel();
     let (stop, stopped) = watch::channel(false);
     let ledger = Ledger {
         db: db.clone(),
         stats: stats.clone(),
-        unweighted: unweighted.clone(),
+        unpriced: unpriced.clone(),
         metrics: metrics.clone(),
         tx,
         stop: Arc::new(stop),
@@ -477,7 +473,7 @@ pub fn spawn(
         db.clone(),
         pricing,
         tables,
-        unweighted,
+        unpriced,
         router,
         rx,
         control_rx,
@@ -573,7 +569,7 @@ async fn writer(
     db: Arc<LedgerDb>,
     pricing: Arc<Pricing>,
     tables: Arc<PlanTables>,
-    unweighted: Unweighted,
+    unpriced: Unpriced,
     router: RouterHandle,
     mut rx: mpsc::Receiver<Record>,
     mut control: mpsc::Receiver<Control>,
@@ -605,7 +601,7 @@ async fn writer(
         db: db.clone(),
         pricing: pricing.clone(),
         tables: tables.clone(),
-        unweighted: unweighted.clone(),
+        unpriced: unpriced.clone(),
         router: router.clone(),
         stats: stats.clone(),
         metrics: metrics.clone(),
@@ -620,7 +616,7 @@ async fn writer(
         &db,
         &pricing,
         &tables,
-        &unweighted,
+        &unpriced,
         &stats,
         &metrics,
         &tiers,
@@ -640,7 +636,7 @@ async fn writer(
                 db: &db,
                 pricing: &pricing,
                 tables: &tables,
-                unweighted: &unweighted,
+                unpriced: &unpriced,
                 router: &router,
                 stats: &stats,
                 metrics: &metrics,
@@ -705,7 +701,7 @@ async fn writer(
                     &db,
                     &pricing,
                     &tables,
-                    &unweighted,
+                    &unpriced,
                     &stats,
                     &metrics,
                     &tiers,
@@ -767,7 +763,7 @@ async fn writer(
             &db,
             &pricing,
             &tables,
-            &unweighted,
+            &unpriced,
             &stats,
             &metrics,
             &tiers,
@@ -820,7 +816,7 @@ async fn writer(
                     &db,
                     &pricing,
                     &tables,
-                    &unweighted,
+                    &unpriced,
                     &stats,
                     &metrics,
                     &tiers,
@@ -911,7 +907,7 @@ struct WriterCtx<'a> {
     db: &'a Arc<LedgerDb>,
     pricing: &'a Arc<Pricing>,
     tables: &'a Arc<PlanTables>,
-    unweighted: &'a Unweighted,
+    unpriced: &'a Unpriced,
     router: &'a RouterHandle,
     stats: &'a Arc<LedgerStats>,
     metrics: &'a Arc<Metrics>,
@@ -958,7 +954,7 @@ async fn retry_held(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
             ctx.db,
             ctx.pricing,
             ctx.tables,
-            ctx.unweighted,
+            ctx.unpriced,
             ctx.stats,
             ctx.metrics,
             &tiers,
@@ -994,7 +990,7 @@ async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
             ctx.db,
             ctx.pricing,
             ctx.tables,
-            ctx.unweighted,
+            ctx.unpriced,
             ctx.stats,
             ctx.metrics,
             &tiers,
@@ -1051,7 +1047,7 @@ async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
                     ctx.db,
                     ctx.pricing,
                     ctx.tables,
-                    ctx.unweighted,
+                    ctx.unpriced,
                     ctx.stats,
                     ctx.metrics,
                     &tiers,
@@ -1145,7 +1141,7 @@ async fn land_parked(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
     tables: &Arc<PlanTables>,
-    unweighted: &Unweighted,
+    unpriced: &Unpriced,
     stats: &Arc<LedgerStats>,
     metrics: &Arc<Metrics>,
     tiers: &AccountTiers,
@@ -1176,7 +1172,7 @@ async fn land_parked(
                     db,
                     pricing,
                     tables,
-                    unweighted,
+                    unpriced,
                     stats,
                     metrics,
                     tiers,
@@ -1444,7 +1440,7 @@ struct Spends {
     db: Arc<LedgerDb>,
     pricing: Arc<Pricing>,
     tables: Arc<PlanTables>,
-    unweighted: Unweighted,
+    unpriced: Unpriced,
     router: RouterHandle,
     stats: Arc<LedgerStats>,
     metrics: Arc<Metrics>,
@@ -1527,7 +1523,7 @@ impl Spends {
             &self.db,
             &self.pricing,
             &self.tables,
-            &self.unweighted,
+            &self.unpriced,
             &self.stats,
             &self.metrics,
             &tiers,
@@ -1710,7 +1706,7 @@ async fn land(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
     tables: &Arc<PlanTables>,
-    unweighted: &Unweighted,
+    unpriced: &Unpriced,
     stats: &Arc<LedgerStats>,
     metrics: &Arc<Metrics>,
     tiers: &AccountTiers,
@@ -1719,7 +1715,7 @@ async fn land(
     clock: &Clock,
 ) -> Landed {
     land_acknowledging(
-        db, pricing, tables, unweighted, stats, metrics, tiers, batch, range, None, clock,
+        db, pricing, tables, unpriced, stats, metrics, tiers, batch, range, None, clock,
     )
     .await
 }
@@ -1732,7 +1728,7 @@ async fn land_acknowledging(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
     tables: &Arc<PlanTables>,
-    unweighted: &Unweighted,
+    unpriced: &Unpriced,
     stats: &Arc<LedgerStats>,
     metrics: &Arc<Metrics>,
     tiers: &AccountTiers,
@@ -1880,7 +1876,7 @@ async fn land_acknowledging(
                         {
                             pricing.unknown_counter().fetch_add(1, Ordering::Relaxed);
                         }
-                        note_unweighted(tables, unweighted, &request, &attempts);
+                        note_unpriced(tables, unpriced, &request, &attempts);
                         metrics.observe_request(
                             revisions.in_force(request.received_at),
                             &request,
@@ -1912,15 +1908,14 @@ async fn land_acknowledging(
     }
 }
 
-/// Records a landed request whose plan-funded attempts with usage ran at its arrival on a model without a weight whose
-/// model tier has a weighted model: the entry enters, or counts the request once however many of its attempts
+/// Records a plan-funded landing with usage on a model the cost model in force at its arrival gives no weight on the
+/// 7-day window, never a classifier call: the entry enters, or counts the request once however many of its attempts
 /// answered. A landing that finds the model weighted clears the entry and keeps its key, so its gauge series reads 0.
-/// A model of no model tier, or of one with no weighted model, is never named, since no model of its tier stands beside
-/// it. The entry follows landing order, by design: a request received before the revision that weighted its model and
+/// The entry follows landing order, by design: a request received before the revision that weighted its model and
 /// landed after the clear raises the entry again with its own earlier receipt as `since`.
-fn note_unweighted(
+fn note_unpriced(
     tables: &PlanTables,
-    unweighted: &Unweighted,
+    unpriced: &Unpriced,
     request: &RequestRecord,
     attempts: &[AttemptRecord],
 ) {
@@ -1943,35 +1938,26 @@ fn note_unweighted(
     let canonical = request.canonical_model.as_str();
     let model = phoebis_routing::listing::undated(canonical).unwrap_or(canonical);
     let costs = tables.revisions.in_force(request.received_at);
-    let mut served = unweighted.lock().expect(UNWEIGHTED_POISONED);
-    let weighted_of_tier = costs
-        .tier_of(canonical)
-        .and_then(|tier| Some((tier, costs.latest_weighted(tier)?)));
-    match (costs.weight(canonical, FIVE_HOUR), weighted_of_tier) {
-        (None, Some((tier, weight_of))) => {
+    let mut served = unpriced.lock().expect(UNPRICED_POISONED);
+    match costs.weight(canonical, SEVEN_DAY) {
+        None => {
             let entry = served
                 .entry(model.to_string())
-                .or_insert_with(|| UnweightedModel {
+                .or_insert_with(|| UnpricedModel {
                     model: model.to_string(),
-                    tier: String::new(),
-                    weight_of: String::new(),
                     since: None,
                     requests: 0,
                 });
-            // Read on every landing, since a revision can move the model's tier or list a newer model that stands in.
-            entry.tier = tier.to_string();
-            entry.weight_of = weight_of.to_string();
             // A cleared entry starts a new run.
             entry.since.get_or_insert(request.received_at);
             entry.requests += 1;
         }
-        (Some(_), _) => {
+        Some(_) => {
             if let Some(entry) = served.get_mut(model) {
                 entry.since = None;
                 entry.requests = 0;
             }
         }
-        (None, None) => {}
     }
 }
 
@@ -2052,7 +2038,7 @@ mod tests {
         let ledger = Ledger {
             db: Arc::new(LedgerDb::open_in_memory().unwrap()),
             stats: Arc::new(LedgerStats::default()),
-            unweighted: Unweighted::default(),
+            unpriced: Unpriced::default(),
             metrics: Arc::new(Metrics::new()),
             tx,
             stop: Arc::new(stop),
@@ -2294,7 +2280,7 @@ mod tests {
                 PriceRevisions::new(vec![table], "test").expect("one entry is a list"),
             )),
             tables: Arc::new(PlanTables::shipped()),
-            unweighted: Unweighted::default(),
+            unpriced: Unpriced::default(),
             router,
             stats: Arc::new(LedgerStats::default()),
             metrics: Arc::new(Metrics::new()),

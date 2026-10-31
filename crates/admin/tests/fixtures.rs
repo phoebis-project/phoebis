@@ -1638,11 +1638,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
-    // A plan-funded answer on a model the shipped cost model does not list, whose id names a model tier it weighs, so
-    // the attention capture holds the unweighted model's item and the analytics captures a figure priced as an
-    // estimate. An unlisted id rather than a listed unweighted one, so a revision that weighs a listed model moves
-    // nothing here. It lands after the requests capture and in the newest hour, so the request list keeps its rows and
-    // the newest priced burn point still carries cache reads and output.
+    // A plan-funded answer on a model the shipped cost model does not list, so it has no weight, so the attention
+    // capture holds the unpriced model's item and the analytics captures a null figure beside priced ones. An unlisted
+    // id rather than a listed unweighted one, so a revision that weighs a listed model moves nothing here. It lands
+    // after the requests capture and in the newest hour, so the request list keeps its rows and the newest priced burn
+    // point still carries cache reads and output.
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             model: "claude-opus-99".into(),
@@ -1674,7 +1674,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             .conditions(now)
             .unwrap()
             .iter()
-            .any(|c| c.kind == phoebis_attention::Kind::ModelUnweighted && c.holds)
+            .any(|c| c.kind == phoebis_attention::Kind::ModelUnpriced && c.holds)
             .then_some(())
     })
     .await;

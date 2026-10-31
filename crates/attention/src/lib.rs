@@ -49,9 +49,9 @@ pub trait TlsPairs: Send + Sync {
 pub struct AttentionParts {
     pub bus: Bus,
     pub clock: Clock,
-    /// The ledger's degraded flag, its parked rows, the unweighted models its landing saw and the routing conditions
+    /// The ledger's degraded flag, its parked rows, the unpriced models its landing saw and the routing conditions
     /// its fold wrote. `None` where a harness builds no ledger, and then `writer_degraded` for the ledger reads 0 and
-    /// none of `ledger_record_parked`, `model_unweighted`, `meter_drift`, `wall_reached`, `destination_spent`,
+    /// none of `ledger_record_parked`, `model_unpriced`, `meter_drift`, `wall_reached`, `destination_spent`,
     /// `shed_no_runway` and `slowed_long` has a series.
     pub ledger: Option<Ledger>,
     pub router: RouterHandle,
@@ -105,10 +105,10 @@ impl Attention {
         // The pairs before the lock too: their lock is the router's, which a reload holds across a whole load from
         // disk.
         let pairs = self.tls.as_ref().map(|tls| tls.pairs());
-        let unweighted = self
+        let unpriced = self
             .ledger
             .as_ref()
-            .map(Ledger::unweighted_served)
+            .map(Ledger::unpriced_served)
             .unwrap_or_default();
         // The fold's table, read before the lock as the parked rows are: one lookup, since the ledger folds the
         // routing log into it hourly and at start rather than on this read.
@@ -125,7 +125,7 @@ impl Attention {
             &self.router,
             self.ledger.as_ref().is_some_and(Ledger::degraded),
             parked.as_deref(),
-            &unweighted,
+            &unpriced,
             routing.as_deref(),
             pairs.as_deref(),
             self.usage.as_deref(),

@@ -1,5 +1,5 @@
 //! The sixteen conditions, read fresh on every call: the account states and the pools from the registry, the refresh
-//! runs from the store, the parked records, the ledger's degraded state, the unweighted models its landing saw and
+//! runs from the store, the parked records, the ledger's degraded state, the unpriced models its landing saw and
 //! the routing conditions its hourly fold wrote from the ledger, the routing state writer's and the listeners' pairs
 //! from the router, the poll's standing from the usage service, and the exhaustions and drift refusals from the
 //! request outcomes the bus arm keeps.
@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
-use phoebis_ledger::{polled, ParkedSummary, RoutingCondition, UnweightedModel};
+use phoebis_ledger::{polled, ParkedSummary, RoutingCondition, UnpricedModel};
 use phoebis_oauth::UsageService;
 use phoebis_routing::{shed_cap, RegistrySnapshot, RouterHandle};
 use phoebis_store::{
@@ -54,9 +54,9 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 /// back), a listener serving a pair whose replacement did not load (the next start would refuse the files as they
 /// stand), an account that serves nothing until the operator acts, an account's credential about to lapse, the
 /// router's own certificate about to lapse, priced records the ledger file keeps until the next start or a replay
-/// lands them, windows that read stale, a model whose window share is an estimate while nothing is broken, and an
-/// account whose meter charged its windows off the cost model's figures. That last one names a pricing that is off, as
-/// the estimate does, and ranks above the four routing conditions, whose causes it can explain. Those four stop no
+/// lands them, windows that read stale, a model that served plan-funded traffic and prices nothing, while nothing is
+/// broken, and an account whose meter charged its windows off the cost model's figures. That last one names a pricing
+/// that is off and ranks above the four routing conditions, whose causes it can explain. Those four stop no
 /// traffic and rank under every kind that does, worst first among themselves: an account that reached its wall, a move
 /// whose destination was spent within the hour, a pool whose rounds found no destination with runway, and an account
 /// slowed past twice its pool's stretch threshold in the day, a slow-down that worked for long.
@@ -72,7 +72,7 @@ pub enum Kind {
     CertificateExpiring,
     LedgerRecordParked,
     PollBackoff,
-    ModelUnweighted,
+    ModelUnpriced,
     MeterDrift,
     WallReached,
     DestinationSpent,
@@ -93,7 +93,7 @@ impl Kind {
             Kind::CertificateExpiring => "certificate_expiring",
             Kind::LedgerRecordParked => "ledger_record_parked",
             Kind::PollBackoff => "poll_backoff",
-            Kind::ModelUnweighted => "model_unweighted",
+            Kind::ModelUnpriced => "model_unpriced",
             Kind::MeterDrift => "meter_drift",
             Kind::WallReached => "wall_reached",
             Kind::DestinationSpent => "destination_spent",
@@ -195,7 +195,7 @@ pub struct Condition {
     /// The pools the condition belongs to, so a pool card filters the same list the dashboard reads.
     pub pools: Vec<String>,
     /// `None` for a drift refusal that carried no key, a router subject, and a pool deleted under a parked record,
-    /// which leave nothing to open, and for an unweighted model, whose cost reference dialog opens from a link on a
+    /// which leave nothing to open, and for an unpriced model, whose cost reference dialog opens from a link on a
     /// tab and has no address of its own.
     pub link: Option<Link>,
     pub detail: serde_json::Value,
@@ -411,7 +411,7 @@ pub(crate) fn refresh_runs(
 /// where no ledger is built, and neither `ledger_record_parked`, `meter_drift` nor the four routing conditions
 /// (`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`) then have a series. Where one is built,
 /// `destination_spent` stops holding once a `window_cleared` followed its spent window. `pairs` is `None`
-/// where no listener is built, and neither certificate kind then has a series. `unweighted` is the ledger's map, empty
+/// where no listener is built, and neither certificate kind then has a series. `unpriced` is the ledger's map, empty
 /// where no ledger is built.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conditions(
@@ -421,7 +421,7 @@ pub(crate) fn conditions(
     router: &RouterHandle,
     ledger_degraded: bool,
     parked: Option<&[ParkedSummary]>,
-    unweighted: &[UnweightedModel],
+    unpriced: &[UnpricedModel],
     routing: Option<&[RoutingCondition]>,
     pairs: Option<&[PairFacts]>,
     usage: Option<&UsageService>,
@@ -660,9 +660,9 @@ pub(crate) fn conditions(
         }
     }
     // A model belongs to no pool card. A model a revision weighted keeps its entry, so its series reads 0.
-    for entry in unweighted {
+    for entry in unpriced {
         out.push(Condition {
-            kind: Kind::ModelUnweighted,
+            kind: Kind::ModelUnpriced,
             subject: Subject::model(&entry.model),
             holds: entry.since.is_some(),
             since: entry.since,
@@ -671,8 +671,6 @@ pub(crate) fn conditions(
             detail: json!({
                 "model": entry.model,
                 "requests": entry.requests,
-                "tier": entry.tier,
-                "weight_of": entry.weight_of,
             }),
         });
     }

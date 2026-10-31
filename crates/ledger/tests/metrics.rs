@@ -803,7 +803,7 @@ fn the_attention_gauge_reads_one_series_per_condition_with_its_labels_escaped() 
                 ("pool_exhausted", "main".into(), true),
                 ("client_drift", "2.1.274".into(), false),
                 ("pool_exhausted", "odd\"pool".into(), false),
-                ("model_unweighted", "claude-opus-5".into(), true),
+                ("model_unpriced", "claude-opus-5".into(), true),
             ],
         },
         ..RoutingGauges::default()
@@ -814,7 +814,7 @@ fn the_attention_gauge_reads_one_series_per_condition_with_its_labels_escaped() 
         r#"phoebis_attention{kind="pool_exhausted",subject="main"} 1"#,
         r#"phoebis_attention{kind="client_drift",subject="2.1.274"} 0"#,
         r#"phoebis_attention{kind="pool_exhausted",subject="odd\"pool"} 0"#,
-        r#"phoebis_attention{kind="model_unweighted",subject="claude-opus-5"} 1"#,
+        r#"phoebis_attention{kind="model_unpriced",subject="claude-opus-5"} 1"#,
     ] {
         assert!(text.contains(line), "missing {line} in:\n{text}");
     }
@@ -963,7 +963,7 @@ revisions:
     );
 }
 
-/// The unknown-model total and the unweighted models count a request after its batch commits, so a try the file
+/// The unknown-model total and the unpriced models count a request after its batch commits, so a try the file
 /// refused counts nothing and the retry that lands it counts it once.
 #[tokio::test]
 async fn a_batch_the_file_refused_once_counts_its_request_once_when_its_retry_lands() {
@@ -999,7 +999,7 @@ async fn a_batch_the_file_refused_once_counts_its_request_once_when_its_retry_la
         Arc::new(Metrics::new()),
         LedgerConfig::default(),
     );
-    // Listed by neither test file: its id names the `opus` model tier, so the cost model's fallback prices it.
+    // Listed by neither test file: it has no weight of its own, so the item names it.
     let model = "claude-opus-9";
     ledger
         .record_request(phoebis_ledger::Record::Request {
@@ -1039,13 +1039,11 @@ async fn a_batch_the_file_refused_once_counts_its_request_once_when_its_retry_la
     })
     .await;
     assert_eq!(
-        (pricing.unknown_models(), ledger.unweighted_served()),
+        (pricing.unknown_models(), ledger.unpriced_served()),
         (
             1,
-            vec![phoebis_ledger::UnweightedModel {
+            vec![phoebis_ledger::UnpricedModel {
                 model: model.into(),
-                tier: "opus".into(),
-                weight_of: "claude-opus-5-5".into(),
                 since: Some(january),
                 requests: 1,
             }]

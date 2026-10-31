@@ -106,7 +106,7 @@ pub use rollup::{
 };
 pub use task::{
     spawn, utc_stamp, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, Replayed,
-    UnweightedModel, BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, CHANNEL_DEPTH, LEDGER_BEHIND_DEPTH,
+    UnpricedModel, BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, CHANNEL_DEPTH, LEDGER_BEHIND_DEPTH,
 };
 pub use usage::{key_usage_windows, usage_router, KeyUsageWindow, ModelUsage, UsageTokens};
 

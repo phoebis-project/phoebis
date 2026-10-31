@@ -28,7 +28,7 @@ pub(crate) struct AttentionItem {
     pub kind: String,
     pub subject: AttentionSubject,
     /// Null for a drift item whose refused request named no key, a router subject, a deleted pool, a routing condition
-    /// whose account or pool the registry no longer holds, and an unweighted model.
+    /// whose account or pool the registry no longer holds, and an unpriced model.
     pub link: Option<AttentionLink>,
     /// The pools the item belongs to: an account's memberships, a pool's own id, the pool of a drift item's key.
     /// Empty for a router subject, a model, a deleted pool, and a routing condition whose account or pool the
@@ -36,7 +36,7 @@ pub(crate) struct AttentionItem {
     pub pools: Vec<String>,
     /// Unix milliseconds: the start of the backoff run, the first failed attempt of a refresh run, the first exhaustion
     /// or refusal of a run, the oldest parked row, the refused certificate reload, 30 days before a certificate's end,
-    /// the first plan-funded landing of an unweighted model's run, the `window_end` of the oldest window the detail's
+    /// the first plan-funded landing of an unpriced model's run, the `window_end` of the oldest window the detail's
     /// `windows` lists, or the fold's instant where that end lies after it, for `meter_drift`, the oldest qualifying
     /// event of the trailing 24 hours for `wall_reached`, `destination_spent` and `shed_no_runway`, the own start of
     /// the oldest slow-down span counted for `slowed_long`, which can predate the day for a span open from before it,
@@ -47,9 +47,9 @@ pub(crate) struct AttentionItem {
     /// `component`, or `accounts`, `count` and `pool`. In that last set the pool is null for a record without one. The
     /// two certificate items carry `cert_file`. `certificate_reload_failed` adds `key_file`, `error` (the loader's
     /// line) and `serving_since` (when the pair the listener still serves was loaded). `certificate_expiring` adds
-    /// `expires` (the leaf's end) and `days_left` (whole days from the read, negative once past). `model_unweighted`
-    /// carries `model`, `requests` (the plan-funded requests its run served), `tier` (its model tier) and `weight_of`
-    /// (the tier's latest weighted model, whose weight prices it). `meter_drift` carries `windows` (per window whose
+    /// `expires` (the leaf's end) and `days_left` (whole days from the read, negative once past). `model_unpriced`
+    /// carries `model` and `requests` (the plan-funded requests its run served). `meter_drift` carries `windows` (per
+    /// window whose
     /// newest reconciled row among those that ended in the last eight days with a rise of at least 0.05 read a ratio
     /// under 0.8 or over 1.25 over a priced share of at least 0.05, so a newer row with a smaller rise leaves it
     /// standing: `window`, `ratio`, `observed_rise`, `predicted_share`, `window_end` and `requests`), `source`
@@ -98,7 +98,7 @@ pub(crate) struct AttentionLink {
 ///
 /// Answers the operator conditions that hold now, worst first (`pool_exhausted`, `client_drift`, `writer_degraded`,
 /// `certificate_reload_failed`, `reauth_required`, `funding_required`, `refresh_failed`, `certificate_expiring`,
-/// `ledger_record_parked`, `poll_backoff`, `model_unweighted`, `meter_drift`, `wall_reached`, `destination_spent`,
+/// `ledger_record_parked`, `poll_backoff`, `model_unpriced`, `meter_drift`, `wall_reached`, `destination_spent`,
 /// `shed_no_runway`, `slowed_long`) and the oldest first within a kind. The last five read the ledger: the
 /// reconciliation rows the hourly fold writes and the routing log of the trailing 24 hours. The same reader feeds the
 /// `phoebis_attention` gauge on the metrics listener, so a scrape and this answer never disagree.
