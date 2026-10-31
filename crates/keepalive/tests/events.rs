@@ -88,7 +88,7 @@ fn refusal(code: &'static str, status: u16) -> EventError {
 }
 
 #[tokio::test]
-async fn json_events_match_the_contract() {
+async fn the_engine_refuses_an_unknown_event_word_and_an_unknown_state_word() {
     let r = rig(RigSpec::default()).await;
     assert_eq!(
         r.engine
