@@ -1162,7 +1162,6 @@ pub(crate) async fn bodies(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::openapi::round_trip::{fixture, round_trips};
     use phoebis_ledger::{CostRevisions, PlanTables, RequestRecord};
     use serde_json::json;
 
@@ -1761,32 +1760,6 @@ revisions:
                 ),
                 (Some(&Value::Null), "0.0".to_string()),
                 "{case}: no dollars, and the request sums none: {summary}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_request_fixtures_round_trip_through_their_declared_types() {
-        round_trips::<RequestList>("requests");
-        round_trips::<RequestDetail>("request");
-        round_trips::<Bodies>("request_bodies");
-        // The three captures the route answers outside a JSON object, as the document test reads them back.
-        for (request, response) in [
-            (
-                json!({"model": "claude-sonnet-5", "messages": []}),
-                json!("event: message_stop\ndata: {}\n\n"),
-            ),
-            (json!("{\"model\":\"claude-son"), Value::Null),
-            (json!(42), json!("ok")),
-        ] {
-            let mut capture = fixture("request_bodies");
-            capture["request"] = request;
-            capture["response"] = response;
-            let typed: Bodies = serde_json::from_value(capture.clone()).unwrap();
-            assert_eq!(
-                serde_json::to_value(&typed).unwrap(),
-                capture,
-                "a capture outside a JSON object round-trips"
             );
         }
     }

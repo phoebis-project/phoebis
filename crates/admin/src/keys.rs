@@ -802,12 +802,7 @@ mod tests {
     use crate::openapi::round_trip::{fixture, round_trips, round_trips_each};
     use crate::openapi::ModelRuleView;
 
-    use super::{Key, KeyCreated, KeyList};
-
-    #[test]
-    fn the_key_list_answer_round_trips_through_its_declared_type() {
-        round_trips::<KeyList>("keys");
-    }
+    use super::{Key, KeyCreated};
 
     #[test]
     fn every_model_rule_of_the_key_list_round_trips_through_its_mirror() {

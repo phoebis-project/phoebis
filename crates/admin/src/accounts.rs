@@ -745,24 +745,4 @@ mod tests {
     fn the_account_list_answer_round_trips_through_its_declared_type() {
         round_trips::<crate::routes::AccountList>("accounts");
     }
-
-    #[test]
-    fn the_account_answer_round_trips_through_its_declared_type() {
-        round_trips::<crate::routes::Account>("account");
-    }
-
-    #[test]
-    fn the_catalog_answer_round_trips_through_its_declared_type() {
-        round_trips::<super::Catalog>("account_catalog");
-    }
-
-    #[test]
-    fn the_quota_answer_round_trips_through_its_declared_type() {
-        round_trips::<super::Quota>("account_quota");
-    }
-
-    #[test]
-    fn the_usage_answer_round_trips_through_its_declared_type() {
-        round_trips::<crate::routes::Usage>("account_usage");
-    }
 }

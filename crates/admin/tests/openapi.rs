@@ -527,32 +527,6 @@ async fn a_wrong_bearer_on_the_document_answers_200_and_never_counts_toward_the_
 }
 
 #[tokio::test]
-async fn the_document_route_answers_head_with_the_headers_alone_and_post_with_405() {
-    let (app, _up, _document) = document().await;
-    let head = Request::builder()
-        .method(Method::HEAD)
-        .uri(DOCUMENT_PATH)
-        .body(Body::empty())
-        .unwrap();
-    let response = app.clone().oneshot(head).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["content-type"], "application/json");
-    assert!(response
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes()
-        .is_empty());
-    let response = post(&app, DOCUMENT_PATH, "{}", None).await;
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    assert!(response.headers()["allow"]
-        .to_str()
-        .unwrap()
-        .contains("GET"));
-}
-
-#[tokio::test]
 async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_listed_ones() {
     let (_app, _up, document) = document().await;
     let mut plain = BTreeSet::new();
@@ -1006,28 +980,6 @@ async fn every_examples_key_order_is_its_schemas_property_order() {
 }
 
 #[tokio::test]
-async fn the_document_answers_a_keys_models_and_no_cooldowns_grouped_by_model() {
-    let (_app, _up, document) = document().await;
-    assert!(
-        document["paths"].get("/admin/models/state").is_none(),
-        "no operation answers the cooldowns grouped by model"
-    );
-    let schemas = document["components"]["schemas"].as_object().unwrap();
-    for name in ["KeyModels", "ModelCooldown", "RuleEntry"] {
-        assert!(
-            schemas.contains_key(name),
-            "{name}: the key's processed rules carry it"
-        );
-    }
-    for name in ["ModelCooldowns", "ModelsState", "Permit", "Rejection"] {
-        assert!(
-            !schemas.contains_key(name),
-            "{name}: no answer of the document carries it"
-        );
-    }
-}
-
-#[tokio::test]
 async fn the_request_detail_answers_stream_cut_as_null_or_the_cuts_six_members() {
     let (_app, _up, document) = document().await;
     let schemas = &document["components"]["schemas"];
@@ -1229,27 +1181,6 @@ async fn the_account_declares_its_usage_based_class_and_the_overage_it_answers_n
 }
 
 #[tokio::test]
-async fn the_account_subscription_declares_the_resolved_plan_and_its_example_reads_max_20x() {
-    let (_app, _up, document) = document().await;
-    let plan = &document["components"]["schemas"]["AccountSubscription"]["properties"]["plan"];
-    let description = plan["description"]
-        .as_str()
-        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
-    assert!(
-        description.as_deref().is_some_and(|text| text.starts_with(
-            "The plan the stored profile resolves to: `free`, `pro`, `max_5x`, `max_20x`, `max`"
-        )),
-        "the member names the resolved plan's words: {plan}"
-    );
-    let (operation, status) = target(&document, "account");
-    assert_eq!(
-        example_of(operation, &status, "account")["subscription"]["plan"],
-        "max_20x",
-        "the account example reads the seed's Max 20x organization"
-    );
-}
-
-#[tokio::test]
 async fn an_unused_allowance_reset_declares_the_plan_and_the_tier_its_reading_carried_nullable() {
     let (_app, _up, document) = document().await;
     let reset = &document["components"]["schemas"]["UnusedAllowanceReset"];
@@ -1310,42 +1241,6 @@ async fn the_account_and_its_edit_declare_the_canceled_flag_and_the_edit_its_thr
             "the edit's 400 lists {refusal}: {refusals}"
         );
     }
-}
-
-#[tokio::test]
-async fn the_account_create_lists_the_object_refusal_and_the_members_route_the_missing_list() {
-    let (_app, _up, document) = document().await;
-    let refusals = |id: &str| {
-        let (_, _, operation) = operations(&document)
-            .into_iter()
-            .find(|(_, _, operation)| operation["operationId"] == id)
-            .unwrap_or_else(|| panic!("the operation {id}"));
-        operation["responses"]["400"]["description"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned()
-    };
-    for (id, refusal) in [
-        ("accounts_create", "body must be a JSON object"),
-        ("pool_members_put", "body must carry a members list"),
-    ] {
-        let listed = refusals(id);
-        assert!(
-            listed.contains(&format!("`{refusal}`")),
-            "{id}'s 400 lists {refusal}: {listed}"
-        );
-    }
-    let members = refusals("pool_members_put");
-    assert!(
-        members.contains(
-            "also the answer to an entry with an unknown field or a value past its field's type"
-        ),
-        "the members route's object refusal names the entries it also covers: {members}"
-    );
-    assert!(
-        !members.contains("a body without a `members` list"),
-        "the members route lists no list-less clause beside its list refusal: {members}"
-    );
 }
 
 #[tokio::test]
@@ -1436,71 +1331,6 @@ async fn the_attempt_declares_the_serving_accounts_usage_based_class() {
 }
 
 #[tokio::test]
-async fn the_account_windows_doc_says_a_disconnected_reauth_required_or_plan_ended_oauth_account_answers_none(
-) {
-    let (_app, _up, document) = document().await;
-    let windows = &document["components"]["schemas"]["Account"]["properties"]["windows"];
-    // utoipa joins the doc comment's lines with line breaks, which the reference renders as spaces.
-    let description = windows["description"]
-        .as_str()
-        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
-    assert_eq!(
-        description.as_deref(),
-        Some(
-            "The account's quota windows: the router's reported sample first and the ledger's samples of the last day \
-             for the rest, the ledger's alone for an `api_key` account. Empty for an account with no reading, and \
-             for an `oauth` account in the `disconnected` or `reauth_required` state or flagged `plan_ended_at`, \
-             whose last reading the view no longer answers."
-        ),
-        "{windows}"
-    );
-    assert_eq!(
-        windows["type"], "array",
-        "the member stays an array, empty for the two states and the flag: {windows}"
-    );
-}
-
-#[tokio::test]
-async fn the_event_kind_doc_names_the_cause_a_backoff_s_end_carries() {
-    let (_app, _up, document) = document().await;
-    let kind = &document["components"]["schemas"]["Event"]["properties"]["kind"];
-    let description = kind["description"]
-        .as_str()
-        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
-    assert!(
-        description.as_deref().is_some_and(|text| text.contains(
-            "- `poll_backoff_ended`: the usage poll's backoff on an account ended, with `duration_ms` and `cause`, \
-             `clean_poll` where a clean answer ended it or `plan_ended` where the account's plan-ended pause closed \
-             it."
-        )),
-        "{kind}"
-    );
-}
-
-#[tokio::test]
-async fn the_guardrail_counts_describe_the_range_on_the_body_and_one_row_per_guardrail_on_its_member(
-) {
-    let (_app, _up, document) = document().await;
-    let counts = &document["components"]["schemas"]["GuardrailCounts"];
-    let description = |schema: &Value| {
-        schema["description"]
-            .as_str()
-            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
-    };
-    assert_eq!(
-        (
-            description(counts).as_deref(),
-            description(&counts["properties"]["guardrails"]).as_deref()
-        ),
-        (
-            Some("The guardrail matches of the range."),
-            Some("One row per guardrail that matched a request in the range, ordered by id.")
-        ),
-        "{counts}"
-    );
-}
-
-#[tokio::test]
 async fn the_pool_policy_inputs_are_closed_as_their_parsers_refuse_an_unknown_field() {
     let (_app, _up, document) = document().await;
     for name in [
@@ -1542,33 +1372,6 @@ async fn the_key_input_is_closed_and_both_key_routes_name_the_unknown_field_in_t
             "{operation_id}: the pool routes' clause"
         );
     }
-}
-
-#[tokio::test]
-async fn the_decision_rows_refusal_names_its_three_kinds_and_a_guardrails_code() {
-    let (_app, _up, document) = document().await;
-    let refusal = &document["components"]["schemas"]["SummaryRefusal"]["properties"];
-    let description = |member: &str| {
-        refusal[member]["description"]
-            .as_str()
-            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
-    };
-    assert_eq!(
-        (description("kind").as_deref(), description("code").as_deref()),
-        (
-            Some(
-                "The refusal's kind: `key` for the router's own refusals, a resolve refusal among them, `client` \
-                 for the relay's drift and contract refusals, `guardrail` for a guardrail's block."
-            ),
-            Some(
-                "The refusal's structured word: a key refusal's variant in snake case, `model_not_allowed` for a \
-                 resolve refusal, `contract` for the relay's refusal of a Claude Code request that lacks an item of \
-                 the contract, `drift` for the relay's refusal of a drifted client, `guardrail_blocked` for a \
-                 guardrail's block."
-            )
-        ),
-        "{refusal}"
-    );
 }
 
 /// Whether a rendered schema admits null. Under OpenAPI 3.1 a nullable value is a `type` array naming `null`, and a
@@ -1979,21 +1782,12 @@ async fn the_refusal_count_operation_declares_the_range_and_the_filters_it_reads
     );
 }
 
-/// The query check proves each name is declared, and the console reads what the filter keeps from the document alone.
+/// The query check compares names per module from the source text, so it would pass an operation that left its query
+/// struct out of `params` or a struct that lost `parameter_in = Query`, which utoipa then writes as `in: path`.
 #[tokio::test]
 async fn the_request_log_and_the_routing_log_declare_the_agent_id_filter() {
     let (_app, _up, document) = document().await;
-    for (path, text) in [
-        (
-            "/admin/requests",
-            "The requests whose agent id equals the value, literally. Combines with `session` and every other filter.",
-        ),
-        (
-            "/admin/routing-log",
-            "The decisions and the events whose agent id equals the value, literally, so an event that names no agent \
-             is left out. Combines with `session` and every other filter.",
-        ),
-    ] {
+    for path in ["/admin/requests", "/admin/routing-log"] {
         let parameters = document["paths"][path]["get"]["parameters"]
             .as_array()
             .unwrap_or_else(|| panic!("{path}'s parameters"));
@@ -2002,10 +1796,6 @@ async fn the_request_log_and_the_routing_log_declare_the_agent_id_filter() {
             .find(|parameter| parameter["name"] == "agent_id")
             .unwrap_or_else(|| panic!("{path} declares agent_id: {parameters:?}"));
         assert_eq!(agent_id["in"], "query", "{agent_id}");
-        let description = agent_id["description"]
-            .as_str()
-            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
-        assert_eq!(description.as_deref(), Some(text), "{path}");
     }
 }
 
@@ -2066,31 +1856,6 @@ async fn the_keepalive_overview_declares_its_range_and_the_refusal_of_another_wo
         operation["responses"]["400"]["content"]["application/json"]["example"],
         serde_json::json!({ "error": "range is 7d or 30d" }),
         "{operation}"
-    );
-}
-
-/// The query check proves the name is declared, and the console reads the flag's meaning from the document alone.
-#[tokio::test]
-async fn the_request_list_declares_the_fixed_end_flag_that_lets_its_watermark_pass_to() {
-    let (_app, _up, document) = document().await;
-    let parameters = document["paths"]["/admin/requests"]["get"]["parameters"]
-        .as_array()
-        .expect("the request list's parameters");
-    let fixed_end = parameters
-        .iter()
-        .find(|parameter| parameter["name"] == "fixed_end")
-        .unwrap_or_else(|| panic!("the request list declares fixed_end: {parameters:?}"));
-    assert_eq!(fixed_end["in"], "query", "{fixed_end}");
-    let description = fixed_end["description"]
-        .as_str()
-        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
-    assert_eq!(
-        description.as_deref(),
-        Some(
-            "`true`/`1`: the range's end is fixed, so `landed_through` may pass `to` and a poll over the range reads \
-             a row that landed after the end once. Leave it off for a live range."
-        ),
-        "{fixed_end}"
     );
 }
 

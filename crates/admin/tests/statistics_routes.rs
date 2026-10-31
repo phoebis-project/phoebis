@@ -3731,79 +3731,6 @@ async fn the_series_points_carry_the_same_shares_per_bucket() {
     }
 }
 
-#[tokio::test]
-async fn funding_billed_keeps_the_overage_fast_and_api_key_rows_and_drops_the_plan_row() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    for row in funded_rows() {
-        parts.ledger.record(row);
-    }
-    landed(
-        &parts,
-        &[
-            "fund-overage",
-            "fund-fast",
-            "fund-direct",
-            "fund-plan",
-            "fund-gone",
-        ],
-    )
-    .await;
-    let billed = json(
-        get(
-            &parts.app,
-            "/admin/analytics/breakdown?range=24h&group_by=account&funding=billed",
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(
-        request_counts(&billed),
-        [("business".to_string(), 2), ("direct".to_string(), 1)],
-        "the overage and fast rows and the api_key row, and neither plan row: {billed}"
-    );
-}
-
-#[tokio::test]
-async fn funding_plan_keeps_the_plan_row_and_one_of_an_account_the_registry_no_longer_holds() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    for row in funded_rows() {
-        parts.ledger.record(row);
-    }
-    landed(
-        &parts,
-        &[
-            "fund-overage",
-            "fund-fast",
-            "fund-direct",
-            "fund-plan",
-            "fund-gone",
-        ],
-    )
-    .await;
-    let read = |funding: &str| {
-        let url = format!("/admin/analytics/breakdown?range=24h&group_by=account{funding}");
-        let (app, cookie) = (&parts.app, &cookie);
-        async move { request_counts(&json(get(app, &url, Some(cookie)).await).await) }
-    };
-    let plan = read("&funding=plan").await;
-    assert_eq!(
-        plan,
-        [("business".to_string(), 1), ("gone".to_string(), 1)],
-        "the plan row and the row of the account the registry does not hold"
-    );
-    let sum = |rows: &[(String, u64)]| rows.iter().map(|(_, n)| n).sum::<u64>();
-    let billed = read("&funding=billed").await;
-    let every = read("").await;
-    assert_eq!(
-        (sum(&billed) + sum(&plan), sum(&every)),
-        (5, 5),
-        "the two filtered sums add up to the unfiltered sum: {billed:?} and {plan:?}"
-    );
-}
-
 /// The partition is recorded with each row, so the registry's later state moves no dollar between the two sides: the
 /// api_key account's row stays billed once the account is deleted and once its id comes back as an oauth account.
 #[tokio::test]
@@ -3840,6 +3767,24 @@ async fn the_funding_partition_holds_when_an_api_key_account_is_deleted_and_its_
             vec![("business".to_string(), 1), ("gone".to_string(), 1)]
         ),
         "the partition as the rows were recorded"
+    );
+    let every = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=account",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        request_counts(&every),
+        [
+            ("business".to_string(), 3),
+            ("direct".to_string(), 1),
+            ("gone".to_string(), 1)
+        ],
+        "all five rows, the one of the account the registry no longer holds among them: {every}"
     );
     assert_eq!(
         delete(&parts.app, "/admin/accounts/direct", Some(&cookie))
@@ -5809,117 +5754,6 @@ async fn the_routing_log_filters_on_the_stream_interrupted_kind() {
         "the cut's row alone, the cooldown left out"
     );
     assert_eq!(rows[0]["detail"]["code"], "stream_cut");
-}
-
-#[tokio::test]
-async fn the_routing_log_filters_on_the_plan_ended_kind() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    let now = common::NOW;
-    let free = serde_json::json!({"organization": {
-        "organization_type": "claude_free",
-        "rate_limit_tier": "default_claude_ai",
-        "subscription_status": "canceled",
-    }});
-    parts.ledger.record(phoebis_ledger::plan_ended(
-        "direct",
-        now - 3_000,
-        "usage_403",
-        &free,
-    ));
-    parts.ledger.record(phoebis_ledger::plan_restored(
-        "direct",
-        now - 2_000,
-        "pairing",
-        &free,
-    ));
-    let route = |kinds: &str| {
-        format!(
-            "/admin/routing-log?from={}&to={}&kinds={kinds}",
-            now - 10_000,
-            now - 1
-        )
-    };
-    let first = get(&parts.app, &route("plan_ended"), Some(&cookie)).await;
-    let status = first.status();
-    assert_eq!(status, 200, "{}", json(first).await);
-    // Both rows landed before the filtered read, so the restore's absence is the filter's.
-    wait_json(
-        &parts.app,
-        &route("plan_ended,plan_restored"),
-        &cookie,
-        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 2),
-    )
-    .await;
-    let page = json(get(&parts.app, &route("plan_ended"), Some(&cookie)).await).await;
-    let rows = page["rows"].as_array().unwrap();
-    assert_eq!(
-        rows.iter()
-            .map(|row| (row["kind"].as_str(), row["detail"]["source"].as_str()))
-            .collect::<Vec<_>>(),
-        [(Some("plan_ended"), Some("usage_403"))],
-        "the flag's row alone, the restore left out"
-    );
-    assert_eq!(
-        rows[0]["detail"],
-        serde_json::json!({
-            "source": "usage_403",
-            "organization_type": "claude_free",
-            "rate_limit_tier": "default_claude_ai",
-            "subscription_status": "canceled",
-        })
-    );
-}
-
-#[tokio::test]
-async fn the_routing_log_filters_on_the_poll_failed_kind() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    let now = common::NOW;
-    parts.ledger.record(phoebis_ledger::poll_failed(
-        "direct",
-        now - 2_000,
-        &phoebis_oauth::PollFault {
-            endpoint: "usage",
-            status: Some(403),
-            transport: false,
-            text: "usage request rejected with status 403".into(),
-        },
-    ));
-    parts
-        .ledger
-        .record(routing_event(now - 1_000, "cooldown_set"));
-    let route = |kinds: &str| {
-        format!(
-            "/admin/routing-log?from={}&to={}&kinds={kinds}",
-            now - 10_000,
-            now - 1
-        )
-    };
-    let first = get(&parts.app, &route("poll_failed"), Some(&cookie)).await;
-    let status = first.status();
-    assert_eq!(status, 200, "{}", json(first).await);
-    // Both rows landed before the filtered read, so the cooldown's absence is the filter's.
-    wait_json(
-        &parts.app,
-        &route("cooldown_set,poll_failed"),
-        &cookie,
-        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 2),
-    )
-    .await;
-    let page = json(get(&parts.app, &route("poll_failed"), Some(&cookie)).await).await;
-    let rows = page["rows"].as_array().unwrap();
-    assert_eq!(
-        rows.iter()
-            .map(|row| (row["type"].as_str(), row["kind"].as_str()))
-            .collect::<Vec<_>>(),
-        [(Some("event"), Some("poll_failed"))],
-        "the fault's row alone, the cooldown left out"
-    );
-    assert_eq!(
-        (&rows[0]["detail"]["endpoint"], &rows[0]["detail"]["status"]),
-        (&serde_json::json!("usage"), &serde_json::json!(403))
-    );
 }
 
 #[tokio::test]

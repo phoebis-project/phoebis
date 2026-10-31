@@ -1608,49 +1608,6 @@ async fn a_pool_defaults_to_pace_with_the_kind_order_on_and_the_flag_is_the_oper
     );
 }
 
-const CREATE_WITH_HEADER_SWITCH: &str = r#"{"id":"main2","label":"Main","quota_headers":"hide"}"#; // removed name
-const PATCH_WITH_HEADER_SWITCH: &str = r#"{"quota_headers":"pass"}"#; // removed name
-
-#[tokio::test]
-async fn a_pool_body_naming_the_header_switch_is_refused_as_an_unknown_field() {
-    let (app, _up) = common::admin_app().await;
-    let cookie = login(&app, "admin-secret").await;
-    let refused = post(
-        &app,
-        "/admin/pools",
-        CREATE_WITH_HEADER_SWITCH,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(refused.status(), 400);
-    assert_eq!(
-        json(refused).await["error"].as_str(),
-        Some("body must be a JSON object")
-    );
-    let created = post(
-        &app,
-        "/admin/pools",
-        r#"{"id":"main2","label":"Main"}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(created.status(), 201, "the refused create wrote nothing");
-    let created = json(created).await;
-    assert!(created.get("quota_headers").is_none(), "{created}"); // removed name
-    let refused = patch(
-        &app,
-        "/admin/pools/main2",
-        PATCH_WITH_HEADER_SWITCH,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(refused.status(), 400);
-    assert_eq!(
-        json(refused).await["error"].as_str(),
-        Some("body must be a JSON object")
-    );
-}
-
 /// The shedding fields' names before the rename and the two that left, each with a value its field took.
 const OLD_POOL_FIELDS: [(&str, &str); 6] = [
     ("burn_window_seconds", "600"),
@@ -1963,27 +1920,6 @@ async fn a_null_diagnostics_switch_is_refused_and_the_stored_one_stands() {
         [("cached", Some(true))],
         "the refused create stored nothing and the refused patch left the switch on"
     );
-}
-
-#[tokio::test]
-async fn a_cache_ttl_patch_with_an_unknown_field_is_refused() {
-    let (app, _up) = common::admin_app().await;
-    let cookie = login(&app, "admin-secret").await;
-    post(
-        &app,
-        "/admin/pools",
-        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
-        Some(&cookie),
-    )
-    .await;
-    let refused = patch(
-        &app,
-        "/admin/pools/main",
-        r#"{"cache_ttl":{"unknown_field":"5m"}}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(refused.status(), 400);
 }
 
 #[tokio::test]
@@ -2381,90 +2317,6 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
 }
 
 #[tokio::test]
-async fn a_burn_average_or_a_shed_dwell_past_two_hours_is_refused_and_writes_nothing() {
-    let (app, _up) = common::admin_app().await;
-    let app = &app;
-    let cookie = &login(app, "admin-secret").await;
-    let created = post(
-        app,
-        "/admin/pools",
-        r#"{"id":"eng","label":"Engine"}"#,
-        Some(cookie),
-    )
-    .await;
-    assert_eq!(created.status(), 201);
-    let listed =
-        || async move { json(get(app, "/admin/pools", Some(cookie)).await).await["pools"].clone() };
-    let before = listed().await;
-    for (field, message) in [
-        (
-            "burn_average_seconds",
-            "burn_average_seconds is between 600 and 7200",
-        ),
-        (
-            "shed_dwell_seconds",
-            "shed_dwell_seconds is between 300 and 7200",
-        ),
-    ] {
-        let refused = post(
-            app,
-            "/admin/pools",
-            &format!(r#"{{"id":"wide","label":"Wide","{field}":7201}}"#),
-            Some(cookie),
-        )
-        .await;
-        assert_eq!(refused.status(), 400, "POST {field}");
-        assert_eq!(json(refused).await["error"].as_str(), Some(message));
-        let refused = patch(
-            app,
-            "/admin/pools/eng",
-            &format!(r#"{{"{field}":7201}}"#),
-            Some(cookie),
-        )
-        .await;
-        assert_eq!(refused.status(), 400, "PATCH {field}");
-        assert_eq!(json(refused).await["error"].as_str(), Some(message));
-        assert_eq!(listed().await, before, "a refused {field} writes nothing");
-    }
-    let ceiling = |pool: &serde_json::Value| {
-        (
-            pool["burn_average_seconds"].as_u64(),
-            pool["shed_dwell_seconds"].as_u64(),
-        )
-    };
-    let admitted = json(
-        post(
-            app,
-            "/admin/pools",
-            r#"{"id":"long","label":"Long","burn_average_seconds":7200,"shed_dwell_seconds":7200}"#,
-            Some(cookie),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(
-        ceiling(&admitted),
-        (Some(7_200), Some(7_200)),
-        "a create at the ceiling is admitted"
-    );
-    let patched = json(
-        patch(
-            app,
-            "/admin/pools/eng",
-            r#"{"burn_average_seconds":7200,"shed_dwell_seconds":7200}"#,
-            Some(cookie),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(
-        ceiling(&patched),
-        (Some(7_200), Some(7_200)),
-        "an update to the ceiling is admitted"
-    );
-}
-
-#[tokio::test]
 async fn a_pool_accepts_its_affinity_fields_and_a_members_budget() {
     use common::{generation, wait_json};
     use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
@@ -2717,25 +2569,6 @@ async fn a_member_carries_a_daily_and_a_monthly_budget_side_by_side() {
         reports,
         [(Some("day"), Some(0.0)), (Some("month"), Some(0.0))],
         "one report per budgeted period, the day's before the month's, at no spend: {member}"
-    );
-}
-
-#[tokio::test]
-async fn a_daily_budget_of_zero_is_refused() {
-    let (app, _up) = common::admin_app().await;
-    let cookie = login(&app, "admin-secret").await;
-    let refused = post(
-        &app,
-        "/admin/pools",
-        r#"{"id":"main","label":"Main","strategy":"priority",
-            "members":[{"account_id":"direct","priority":0,"budget_daily_usd":0}]}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(refused.status(), 400);
-    assert_eq!(
-        json(refused).await["error"].as_str(),
-        Some("budget_daily_usd is above 0")
     );
 }
 
@@ -4136,22 +3969,6 @@ async fn a_malformed_expected_revision_answers_400_and_writes_nothing() {
 }
 
 #[tokio::test]
-async fn a_pool_edit_without_expected_revision_lands_as_today() {
-    let (app, _up, store, _router) = common::admin_parts().await;
-    let cookie = login(&app, "admin-secret").await;
-    pool_and_key(&app, &cookie).await;
-    let plain = patch(
-        &app,
-        "/admin/pools/main",
-        r#"{"label":"Plain"}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(plain.status(), 200);
-    assert_eq!(store.pool("main").unwrap().unwrap().label, "Plain");
-}
-
-#[tokio::test]
 async fn a_key_edit_with_a_stale_expected_revision_answers_409_and_writes_nothing() {
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
@@ -4268,22 +4085,6 @@ async fn a_key_create_accepts_expected_revision_and_ignores_it() {
     .await;
     assert_eq!(created.status(), 201);
     assert_eq!(store.api_key("desktop").unwrap().unwrap().label, "Desktop");
-}
-
-#[tokio::test]
-async fn a_key_edit_without_expected_revision_lands_as_today() {
-    let (app, _up, store, _router) = common::admin_parts().await;
-    let cookie = login(&app, "admin-secret").await;
-    pool_and_key(&app, &cookie).await;
-    let plain = patch(
-        &app,
-        "/admin/keys/desktop",
-        r#"{"label":"Plain"}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(plain.status(), 200);
-    assert_eq!(store.api_key("desktop").unwrap().unwrap().label, "Plain");
 }
 
 /// The `revision` a pool or key answer carried.

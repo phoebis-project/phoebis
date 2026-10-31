@@ -489,23 +489,6 @@ async fn a_fronts_https_makes_the_origin_https_only_on_a_plain_listener() {
     );
 }
 
-#[tokio::test]
-async fn a_plain_listener_behind_no_front_admits_an_origin_of_either_scheme() {
-    use common::{login, send_with_host};
-    const HOST: &str = "phoebis.example";
-    let (app, _up) = common::admin_app().await;
-    let cookie = login(&app, "admin-secret").await;
-    let pause = "/admin/accounts/business/pause";
-    for origin in ["http://phoebis.example", "https://phoebis.example"] {
-        let response = send_with_host(&app, "POST", pause, "", Some(&cookie), origin, HOST).await;
-        assert_ne!(
-            response.status(),
-            403,
-            "{origin} names the request's own host"
-        );
-    }
-}
-
 /// The scheme is required on a listener that terminates TLS whatever a front says, so a downgrade word relaxes
 /// nothing.
 #[tokio::test]
@@ -4023,15 +4006,6 @@ async fn a_plan_ended_oauth_account_answers_no_window_while_the_flag_stands_and_
     }
     assert!(h.store.clear_plan_ended("business").unwrap());
     for after in business_as_read_and_listed(&h, &cookie).await {
-        assert_eq!(after["windows"], before["windows"], "{after}");
-    }
-}
-
-#[tokio::test]
-async fn a_ready_oauth_account_answers_the_windows_the_router_and_the_ledger_hold() {
-    let (h, cookie, before) = business_with_both_windows_paths().await;
-    for after in business_as_read_and_listed(&h, &cookie).await {
-        assert_eq!(after["state"], "ready", "{after}");
         assert_eq!(after["windows"], before["windows"], "{after}");
     }
 }

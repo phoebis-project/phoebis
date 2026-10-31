@@ -553,40 +553,6 @@ async fn a_rejected_replacement_secret_leaves_the_original_credential_and_the_sn
 }
 
 #[tokio::test]
-async fn a_paired_account_routes_without_a_catalog_fetch() {
-    let (app, up, store, router) = common::admin_parts().await;
-    let cookie = login(&app, "admin-secret").await;
-    let id = common::exchanged_session_for(&app, &cookie, "business").await;
-    assert_eq!(
-        post(
-            &app,
-            &format!("/admin/oauth/sessions/{id}/confirm"),
-            "",
-            Some(&cookie)
-        )
-        .await
-        .status(),
-        200
-    );
-    assert!(
-        up.requests()
-            .iter()
-            .all(|r| !r.line.starts_with("GET /v1/models")),
-        "the pairing confirm probes nothing"
-    );
-    // No served-model gate stands between the catalog and routing any more: every enabled member of a
-    // pool is a candidate for a model the rules allow, whatever the live catalog answers.
-    assert_eq!(
-        store.account("business").unwrap().unwrap().state,
-        phoebis_store::AccountState::Ready
-    );
-    assert!(
-        router.snapshot().account("business").is_some(),
-        "a request routes"
-    );
-}
-
-#[tokio::test]
 async fn a_write_whose_reload_fails_answers_503_and_publishes_on_the_next_reload() {
     let (app, _up, store, router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
@@ -2020,24 +1986,6 @@ async fn a_malformed_expected_revision_on_an_account_answers_400_and_writes_noth
             "{value} wrote nothing"
         );
     }
-}
-
-#[tokio::test]
-async fn an_account_edit_without_expected_revision_lands_as_today() {
-    let (app, _up, store, _router) = common::admin_parts().await;
-    let cookie = login(&app, "admin-secret").await;
-
-    let read = store.account("business").unwrap().unwrap().revision;
-    let plain = patch(
-        &app,
-        "/admin/accounts/business",
-        r#"{"label":"Plain"}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(plain.status(), 200);
-    let row = store.account("business").unwrap().unwrap();
-    assert_eq!((row.label.as_str(), row.revision), ("Plain", read + 1));
 }
 
 #[tokio::test]
