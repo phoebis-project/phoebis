@@ -1745,8 +1745,11 @@ impl RoutingState {
                 "five_hour" => below(FIVE_HOUR),
                 "seven_day" => below(SEVEN_DAY),
                 // Any other representative claim: it does not say which shared window was exhausted, so the
-                // account is only back once both have allowance.
-                _ => below(FIVE_HOUR) && below(SEVEN_DAY),
+                // account is only back once every shared window of its set has allowance.
+                _ => [FIVE_HOUR, SEVEN_DAY]
+                    .into_iter()
+                    .filter(|window| self.has_window(account_id, window))
+                    .all(below),
             }
         };
         let mut rows: Vec<_> = self
@@ -2206,9 +2209,9 @@ impl RoutingState {
     /// or before the new reading are dropped, since the reading carries them. Past `MAX_BUCKETS_PER_ACCOUNT` bucket
     /// windows the oldest readings leave, and a window that left is not reported as moved. Then, under `poll` with at
     /// least one shared window in the sample and the sample newer than `polled_at`, drops each shared window the
-    /// sample lacks (its reading, its charges, its slow-down entries with their `Ended` edge at `now`) and sets
-    /// `polled` to the shared windows the sample carries and `polled_at` to its `observed_at`. A head, and a poll
-    /// older than the set, drop nothing and write no set.
+    /// sample lacks (its reading, its charges, and for the 5-hour window its slow-down entries, each span's `Ended`
+    /// edge closing where `purge_slow_downs` closes one) and sets `polled` to the shared windows the sample carries
+    /// and `polled_at` to its `observed_at`. A head, and a poll older than the set, drop nothing and write no set.
     pub fn record_sample(
         &mut self,
         account_id: &str,
@@ -3153,8 +3156,13 @@ impl RoutingState {
         for share in shares.values_mut() {
             *share /= speed;
         }
+        // A booking made before a poll dropped a window still names it, and the account no longer has it.
         for reservation in self.live_bookings(account_id) {
-            for (window, burn) in &reservation.burn {
+            for (window, burn) in reservation
+                .burn
+                .iter()
+                .filter(|(window, _)| self.has_window(account_id, window))
+            {
                 *shares.entry(window.clone()).or_insert(0.0) += burn;
             }
         }
@@ -5214,6 +5222,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_representative_claim_recovers_on_the_shared_windows_of_the_accounts_set() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.record_sample("a", sampled(&[SEVEN_DAY], 1.0, 500, true), 500);
+        state.record_cooldown(CooldownRow {
+            account_id: "a".into(),
+            scope: "account".into(),
+            until: 10_000,
+            set_at: 1_000,
+            reason: "rate_limit".into(),
+            window: "seven_day_opus".into(),
+            source_request_id: None,
+            incarnation: 1,
+        });
+        let poll = sampled(&[SEVEN_DAY], 0.5, 2_000, true);
+        state.record_sample("a", poll.clone(), 2_000);
+        assert_eq!(
+            state
+                .recovered_cooldowns("a", &poll, 3_000)
+                .into_iter()
+                .map(|row| row.scope)
+                .collect::<Vec<_>>(),
+            ["account"],
+            "the account's one shared window has allowance again, and it has no 5-hour window to wait for"
+        );
+    }
+
     /// A booking on `account` under `attempt`, standing from `booked_at` to `expires_at`.
     fn reservation(
         account: &str,
@@ -5422,6 +5457,41 @@ mod tests {
         assert!(
             close(fresh[FIVE_HOUR], 0.01),
             "no time passed, no decay: {fresh:?}"
+        );
+    }
+
+    #[test]
+    fn a_booking_made_before_the_drop_adds_no_five_hour_burn_after_it() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.record_sample(
+            "a",
+            sampled(&[FIVE_HOUR, SEVEN_DAY], 0.5, 1_000, true),
+            1_000,
+        );
+        state.book_reservation(
+            "r-1",
+            Reservation {
+                account_id: "a".into(),
+                attempt: 1,
+                pin: None,
+                entrypoint: None,
+                booked_at: 1_500,
+                rewrite: BTreeMap::new(),
+                burn: BTreeMap::from([
+                    (FIVE_HOUR.to_string(), 0.01),
+                    (SEVEN_DAY.to_string(), 0.001),
+                ]),
+                expires_at: 1_500 + IN_FLIGHT_RECLAIM_MS,
+            },
+        );
+        state.record_sample("a", sampled(&[SEVEN_DAY], 0.5, 2_000, true), 2_000);
+        assert_eq!(
+            state
+                .burn_shares("a", &|_| true, "t", 2_500, 1_800_000)
+                .into_keys()
+                .collect::<Vec<_>>(),
+            [SEVEN_DAY],
+            "the booking still in flight burns on the account's one shared window alone"
         );
     }
 

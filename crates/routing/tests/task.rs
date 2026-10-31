@@ -2004,8 +2004,9 @@ fn a_usage_snapshot_becomes_a_sample_and_overage_evidence() {
             sample.reading(FIVE_HOUR).map(|r| r.utilization),
             sample.reading(SEVEN_DAY).map(|r| r.utilization),
             sample.observed_at,
+            sample.poll,
         ),
-        (Some(1.0), Some(0.4), 5_000)
+        (Some(1.0), Some(0.4), 5_000, true)
     );
     assert!(overage
         .as_ref()
