@@ -30,9 +30,9 @@ use crate::record::{
 #[cfg(any(test, feature = "test-support"))]
 use crate::rollup::read_rollups;
 use crate::rollup::{
-    hour_of, read_account_rollups, read_rollups_paged, CostSplit, KeySelector, RollupRow,
-    RollupSelect, DIMENSION_MAX_BYTES, EFFORTS, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, PLAN_FUNDING,
-    UNATTRIBUTED,
+    fold_identifier, fold_user_agent, hour_of, read_account_rollups, read_rollups_paged, CostSplit,
+    KeySelector, RollupRow, RollupSelect, DIMENSION_MAX_BYTES, EFFORTS, NO_CLASS, NO_EFFORT,
+    OTHER_DIMENSION, PLAN_FUNDING, UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -115,6 +115,8 @@ pub struct RequestFilter {
     pub request: Option<String>,
     /// Keep the requests whose session id equals the value, literally.
     pub session: Option<String>,
+    /// Keep the requests whose `agent_id` equals the value, literally.
+    pub agent_id: Option<String>,
     /// Keep the rows whose `landed_at` is above the value.
     pub landed_after: Option<i64>,
     pub keys: Vec<String>,
@@ -130,6 +132,14 @@ pub struct RequestFilter {
     pub user_agent: Option<String>,
     /// A pattern under the wildcard grammar over the row's `client`; a row with none matches `-`.
     pub client: Option<String>,
+    /// Patterns under the wildcard grammar over the row's `client` folded as the rollup folds it, as the series read
+    /// them: a row matches when any pattern matches. Read by `refusal_categories`, the request log reading the
+    /// singular `client`.
+    pub clients: Vec<String>,
+    /// Patterns under the wildcard grammar over the agent's first product token, as the series read them: a row
+    /// matches when any pattern matches. Read by `refusal_categories`, the request log reading the singular
+    /// `user_agent` raw.
+    pub user_agents: Vec<String>,
     pub agent_types: Vec<String>,
     pub turn_origins: Vec<String>,
     /// `fast`, `standard`: the serving attempt's `speed`, else `fast` for a request that asked for it and
@@ -323,6 +333,10 @@ fn filter_clauses(filter: &RequestFilter, live: &LiveKeys) -> (Vec<Box<dyn ToSql
     if let Some(session) = filter.session.as_deref().filter(|s| !s.is_empty()) {
         args.push(Box::new(session.to_string()));
         clauses.push(format!("session_id = ?{}", args.len()));
+    }
+    if let Some(agent_id) = filter.agent_id.as_deref().filter(|a| !a.is_empty()) {
+        args.push(Box::new(agent_id.to_string()));
+        clauses.push(format!("agent_id = ?{}", args.len()));
     }
     if let Some(landed_after) = filter.landed_after {
         args.push(Box::new(landed_after));
@@ -616,7 +630,8 @@ pub fn list_request_page(
 
 /// The requests in `[from, to]` under `filter` whose serving attempt's `stop_reason` is `refusal`, counted per
 /// category (`-` for a refusal with none), the largest count first and then the category. Read off the attempts at the
-/// request, since no rollup carries the category.
+/// request, since no rollup carries the category. The `clients` and `user_agents` patterns match each row's client and
+/// agent folded as the rollups fold them, so the count narrows as the series do.
 pub fn refusal_categories(
     conn: &Connection,
     filter: &RequestFilter,
@@ -634,16 +649,52 @@ pub fn refusal_categories(
         "(SELECT a.stop_reason FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1) = 'refusal'"
             .into(),
     );
+    // SQL does not express the fold, so the patterns match each raw pair in memory, grouped first so a pair repeated
+    // across many refusals folds once per category.
     let sql = format!(
         "SELECT COALESCE((SELECT a.refusal_category FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), '-') AS category, \
-         COUNT(*) AS requests FROM requests WHERE {} GROUP BY category ORDER BY requests DESC, category",
+         client, user_agent, COUNT(*) FROM requests WHERE {} GROUP BY category, client, user_agent",
         clauses.join(" AND ")
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, i64>(3)? as u64,
+        ))
     })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+    for row in rows {
+        let (category, client, user_agent, requests) = row?;
+        if passes_request_patterns(&filter, client.as_deref(), user_agent.as_deref()) {
+            *counts.entry(category).or_default() += requests;
+        }
+    }
+    let mut counts: Vec<(String, u64)> = counts.into_iter().collect();
+    // The map hands the categories in byte order, as SQLite compares text, and the stable sort keeps that order among
+    // equal counts.
+    counts.sort_by_key(|(_, requests)| std::cmp::Reverse(*requests));
+    Ok(counts)
+}
+
+/// Whether a request row passes the filter's `clients` and `user_agents`, each value folded as `deltas_of` keys the
+/// hour row (`-` for none, the agent to its first product token), so a pattern reads as `passes_patterns` reads it.
+fn passes_request_patterns(
+    filter: &RequestFilter,
+    client: Option<&str>,
+    user_agent: Option<&str>,
+) -> bool {
+    let passes = |patterns: &[String], raw: Option<&str>, fold: fn(&str) -> String| {
+        if patterns.is_empty() {
+            return true;
+        }
+        let value = raw.map_or_else(|| UNATTRIBUTED.to_string(), fold);
+        patterns.iter().any(|p| crate::pattern::matches(p, &value))
+    };
+    passes(&filter.user_agents, user_agent, fold_user_agent)
+        && passes(&filter.clients, client, fold_identifier)
 }
 
 /// The same three queries `LedgerDb::request` runs, over a connection the caller already holds.
@@ -965,6 +1016,9 @@ pub struct RoutingLogFilter {
     pub request: Option<String>,
     /// A session id or its prefix.
     pub session: Option<String>,
+    /// Keep the decisions and the events whose `agent_id` equals the value, literally, so a session-level event,
+    /// which names no agent, is left out.
+    pub agent_id: Option<String>,
     pub keys: Vec<String>,
     pub pools: Vec<String>,
     pub accounts: Vec<String>,
@@ -1187,6 +1241,10 @@ impl LogStatement {
                 "({alias}.session_id = ?{exact} OR {alias}.session_id LIKE ?{} ESCAPE '\\')",
                 exact + 1
             ));
+        }
+        if let Some(agent_id) = &filter.agent_id {
+            args.push(Box::new(agent_id.clone()));
+            clauses.push(format!("{alias}.agent_id = ?{}", args.len()));
         }
         in_list(
             &format!("{alias}.key_id"),

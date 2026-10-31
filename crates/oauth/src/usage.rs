@@ -103,7 +103,26 @@ pub enum BackoffEdge {
         since: i64,
         attempts: u32,
         resumed_at: i64,
+        cause: BackoffEndCause,
     },
+}
+
+/// What closed a backoff run: the word the `poll_backoff_ended` event's detail carries as `cause`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BackoffEndCause {
+    /// A clean usage answer, so the poll resumed at `resumed_at`.
+    CleanPoll,
+    /// The plan-ended pause, so the poll stays paused and `resumed_at` is the pause's instant.
+    PlanEnded,
+}
+
+impl BackoffEndCause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CleanPoll => "clean_poll",
+            Self::PlanEnded => "plan_ended",
+        }
+    }
 }
 
 pub type BackoffHook = Arc<dyn Fn(BackoffEdge) + Send + Sync>;
@@ -649,6 +668,7 @@ impl UsageService {
                         since,
                         attempts: std::mem::take(&mut entry.rate_limited_in_a_row),
                         resumed_at: at,
+                        cause: BackoffEndCause::PlanEnded,
                     });
                     self.inner.backoff_hook(edge)
                 }
@@ -1065,6 +1085,7 @@ impl Inner {
                         since,
                         attempts: entry.rate_limited_in_a_row,
                         resumed_at: fetched_at,
+                        cause: BackoffEndCause::CleanPoll,
                     })
                 });
                 cache.insert(

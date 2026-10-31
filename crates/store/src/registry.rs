@@ -1114,8 +1114,9 @@ impl Store {
             None => pairs,
         };
         let pairs_changed = diff != "{}";
-        // `pool_fields` leaves the keepalive policy out of the pairs, and the `UPDATE` writes it.
-        let policy_changed = before.keepalive_json != row.keepalive_json;
+        // The policy's members ride the pairs. The compare reads both texts parsed, so a key order or a whitespace
+        // alone writes nothing. Two texts that both fail to parse count as no change, and no route writes such a text.
+        let policy_changed = parsed(&before.keepalive_json) != parsed(&row.keepalive_json);
         let members_changed = match members {
             Some(members) => stored_members(&tx, &row.id)? != members,
             None => false,
@@ -1516,6 +1517,10 @@ impl Store {
             params![id, incarnation],
         )?;
         tx.execute("DELETE FROM pins WHERE key_id = ?1", params![id])?;
+        tx.execute(
+            "DELETE FROM session_first_seen WHERE key_id = ?1",
+            params![id],
+        )?;
         // Nothing reads these rows again, since a key created under the id next takes a later generation;
         // dropping them here spares the retention purge a table of dead entries.
         tx.execute("DELETE FROM session_memory WHERE key_id = ?1", params![id])?;
@@ -2454,8 +2459,10 @@ fn pool_pairs(before: &PoolRow, after: &PoolRow) -> String {
     serde_json::Value::Object(changed(&pool_fields(before), &pool_fields(after))).to_string()
 }
 
+/// The pool's fields the change rows name, with each member of the stored keepalive policy under
+/// `keepalive.<member>`, so a policy edit records the member it moved.
 fn pool_fields(row: &PoolRow) -> serde_json::Value {
-    serde_json::json!({
+    let mut fields = serde_json::json!({
         "label": row.label,
         "enabled": row.enabled,
         "strategy": row.strategy.as_str(),
@@ -2487,7 +2494,19 @@ fn pool_fields(row: &PoolRow) -> serde_json::Value {
         "session_placement": row.affinity.session_placement.as_str(),
         "min_shared_prefix_tokens": row.affinity.min_shared_prefix_tokens,
         "auto_mode_server": row.auto_mode_server,
-    })
+    });
+    if let (serde_json::Value::Object(named), Some(serde_json::Value::Object(policy))) =
+        (&mut fields, parsed(&row.keepalive_json))
+    {
+        for (member, value) in policy {
+            named.insert(format!("keepalive.{member}"), value);
+        }
+    }
+    fields
+}
+
+fn parsed(text: &str) -> Option<serde_json::Value> {
+    serde_json::from_str(text).ok()
 }
 
 fn key_diff(row: &ApiKeyRow) -> String {
@@ -2546,7 +2565,9 @@ fn account_pairs(before: &AccountRow, u: &AccountUpdate<'_>, term: &Subscription
     serde_json::Value::Object(pairs).to_string()
 }
 
-/// Each member whose value differs between two snapshots of one row, as `{"from": old, "to": new}`.
+/// Each member whose value differs between two snapshots of one row, as `{"from": old, "to": new}`: `before`'s
+/// members, then the members of `after` that `before` lacks, so a save that gives a policy member the row did not
+/// hold a value names it. A member one side lacks reads null there, so a null beside a missing member is no change.
 fn changed(
     before: &serde_json::Value,
     after: &serde_json::Value,
@@ -2554,12 +2575,17 @@ fn changed(
     let (Some(before), Some(after)) = (before.as_object(), after.as_object()) else {
         return serde_json::Map::new();
     };
+    let null = &serde_json::Value::Null;
+    let added = after
+        .iter()
+        .filter(|(field, _)| !before.contains_key(*field))
+        .map(|(field, to)| (field, null, to));
     before
         .iter()
-        .filter_map(|(field, from)| {
-            let to = after.get(field).unwrap_or(&serde_json::Value::Null);
-            (from != to).then(|| (field.clone(), serde_json::json!({ "from": from, "to": to })))
-        })
+        .map(|(field, from)| (field, from, after.get(field).unwrap_or(null)))
+        .chain(added)
+        .filter(|(_, from, to)| from != to)
+        .map(|(field, from, to)| (field.clone(), serde_json::json!({ "from": from, "to": to })))
         .collect()
 }
 

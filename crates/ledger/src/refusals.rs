@@ -89,9 +89,12 @@ struct Cursor {
 /// meets no page, since the mark stands by then. The cursor is the refold's rule: a start that fails after a page
 /// committed resumes after that page rather than taking its contribution out a second time.
 ///
-/// `retention_days` 0 keeps the requests for good, so the walk is bounded by the rollup retention instead, the
-/// purge's own cutoff rounded up to the first hour the purge keeps, since it drops whole hours: a request whose hour
-/// the rollup purge removed meets no page and writes no map-only row into that hour. Both 0 walks from the start.
+/// A nonzero `retention_days` walks from the request cutoff, and a refusal received before the first hour boundary at
+/// or after that cutoff moves only where a row of its hour still holds it: the rollup purge drops whole hours, so under
+/// an equal rollup retention the hour that cutoff splits is gone, while under a rollup retention of 0 or a longer one
+/// its rows stand. `retention_days` 0 keeps the requests for good, so the walk is bounded by the rollup retention
+/// instead, the purge's own cutoff rounded up to the first hour the purge keeps. Either way a refusal whose hour the
+/// rollup purge removed stays out of the map and writes no row into that hour. Both 0 walks from the start.
 pub fn refold_refusals(
     db: &LedgerDb,
     prices: &PriceRevisions,
@@ -108,18 +111,19 @@ pub fn refold_refusals(
     if mark.is_some() {
         return Ok(0);
     }
-    // Each purge's own arithmetic, a zero keeping its rows for good. A nonzero request retention bounds the walk,
-    // since the configuration holds a nonzero rollup retention at least as long as the request one.
-    let from = match (retention_days, rollup_retention_days) {
-        (0, 0) => i64::MIN,
-        (0, days) => {
-            // The rollup purge cuts in seconds and drops every hour that starts before its cutoff.
-            let cutoff = now / 1_000 - i64::from(days) * DAY_S;
-            let hour = cutoff.div_euclid(HOUR_S) * HOUR_S;
-            let first_kept = if hour < cutoff { hour + HOUR_S } else { hour };
-            first_kept * 1_000
-        }
-        (days, _) => now - i64::from(days) * DAY_MS,
+    // Each purge's own arithmetic, a zero keeping its rows for good. A nonzero request retention bounds the walk, and
+    // since the configuration holds a nonzero rollup retention at least as long as the request one, the rollup purge
+    // drops at most the hour the request cutoff splits. The first hour boundary at or after that cutoff guards each
+    // refusal before it rather than bounding the walk, since that hour's rows stand under a rollup retention of 0 or a
+    // longer one. Under a request retention of 0 the first hour the rollup purge keeps bounds the walk, since a
+    // refusal's row names no account and no budget keeps it before that hour.
+    let (from, guard) = match (retention_days, rollup_retention_days) {
+        (0, 0) => (i64::MIN, None),
+        (0, days) => (first_kept_hour(now, days), None),
+        (days, _) => (
+            now - i64::from(days) * DAY_MS,
+            Some(first_kept_hour(now, days)),
+        ),
     };
     let page = page_size();
     let mut moved = 0;
@@ -134,8 +138,16 @@ pub fn refold_refusals(
                     refused: false,
                     ..request.clone()
                 };
-                for delta in deltas_of(&before, &[], prices) {
-                    unfold_from_holding_row(&tx, request, &delta)?;
+                let was = deltas_of(&before, &[], prices);
+                // The purge removes an hour whole, so a refusal whose rows are gone stays out of the hour rather than
+                // writing a map-only row into it.
+                if guard.is_some_and(|guard| request.received_at < guard)
+                    && !rows_hold(&tx, request, &was)?
+                {
+                    continue;
+                }
+                for delta in &was {
+                    unfold_from_holding_row(&tx, request, delta)?;
                 }
                 for delta in deltas_of(request, &[], prices) {
                     let mut row = read_rollup(&tx, &delta)?.unwrap_or_else(|| empty_row(&delta));
@@ -176,17 +188,62 @@ pub fn refold_refusals(
     Ok(moved)
 }
 
-/// Takes a stored refusal's old `delta` out of the row that holds it, with `unfold`'s arithmetic. The row is found
-/// rather than keyed by today's fold, since the build that stored it may have keyed it otherwise: the raw
-/// `User-Agent`, client and class before those dimensions were folded, and `standard` on every row stored before the
-/// speed joined the key, where today's fold keys a refusal that asked for `fast` under `fast`. Within one hour every
-/// row is of one build's fold, so today's exact key wins wherever it holds the refusal. Where no row holds it, the
-/// pass books the refusal in the map anyway and names the request in the log.
+/// The first hour the rollup purge keeps under a retention of `days` at `now`, in milliseconds. The purge cuts in
+/// seconds and drops every hour that starts before its cutoff.
+fn first_kept_hour(now: i64, days: u32) -> i64 {
+    let cutoff = now / 1_000 - i64::from(days) * DAY_S;
+    let hour = cutoff.div_euclid(HOUR_S) * HOUR_S;
+    let first_kept = if hour < cutoff { hour + HOUR_S } else { hour };
+    first_kept * 1_000
+}
+
+/// Takes a stored refusal's old `delta` out of the row `holding_row` finds, with `unfold`'s arithmetic. Where no row
+/// holds it, the pass books the refusal in the map anyway and names the request in the log.
 pub(crate) fn unfold_from_holding_row(
     conn: &Connection,
     request: &RequestRecord,
     delta: &RollupRow,
 ) -> Result<(), LedgerError> {
+    let Some(mut row) = holding_row(conn, request, delta)? else {
+        tracing::warn!(
+            request = %request.id,
+            hour = %crate::task::utc_stamp(delta.hour * 1_000),
+            "no hourly row holds the stored refusal's figures, so they stay where the older fold booked them"
+        );
+        return Ok(());
+    };
+    row.subtract(delta);
+    if row.holds_nothing() {
+        delete_rollup(conn, &row)
+    } else {
+        write_rollup(conn, &row)
+    }
+}
+
+/// Whether a row of each delta's hour holds the stored refusal, as `holding_row` finds it.
+fn rows_hold(
+    conn: &Connection,
+    request: &RequestRecord,
+    deltas: &[RollupRow],
+) -> Result<bool, LedgerError> {
+    for delta in deltas {
+        if holding_row(conn, request, delta)?.is_none() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The row that holds a stored refusal's old `delta`, `None` where no row of its hour does. The row is found rather
+/// than keyed by today's fold, since the build that stored it may have keyed it otherwise: the raw `User-Agent`,
+/// client and class before those dimensions were folded, and `standard` on every row stored before the speed joined
+/// the key, where today's fold keys a refusal that asked for `fast` under `fast`. Within one hour every row is of one
+/// build's fold, so today's exact key wins wherever it holds the refusal.
+fn holding_row(
+    conn: &Connection,
+    request: &RequestRecord,
+    delta: &RollupRow,
+) -> Result<Option<RollupRow>, LedgerError> {
     let code = request.error_code.as_deref().unwrap_or_default();
     let select = RollupSelect {
         pools: vec![delta.pool_id.clone()],
@@ -212,21 +269,7 @@ pub(crate) fn unfold_from_holding_row(
                 .position(|row| row.key_generation == delta.key_generation)
         })
         .or((!holding.is_empty()).then_some(0));
-    let Some(at) = at else {
-        tracing::warn!(
-            request = %request.id,
-            hour = %crate::task::utc_stamp(delta.hour * 1_000),
-            "no hourly row holds the stored refusal's figures, so they stay where the older fold booked them"
-        );
-        return Ok(());
-    };
-    let mut row = holding.swap_remove(at);
-    row.subtract(delta);
-    if row.holds_nothing() {
-        delete_rollup(conn, &row)
-    } else {
-        write_rollup(conn, &row)
-    }
+    Ok(at.map(|at| holding.swap_remove(at)))
 }
 
 /// The next page of flagged requests received at or after `from`, past `after`, in `(received_at, id)` order. A
@@ -509,6 +552,91 @@ mod tests {
                 BTreeMap::from([("guardrail_blocked".to_string(), 1)])
             )],
             "no row in a purged hour, and the kept hour's refusal in the map alone"
+        );
+    }
+
+    /// The hour a seven-day cutoff back from the cases' `now` falls half an hour into.
+    const SPLIT_HOUR: i64 = JANUARY_2026 + 13 * DAY_MS;
+
+    /// A rollup row's hour, rejected count and refusals map.
+    type HourFigures = (i64, u64, BTreeMap<String, u64>);
+
+    /// The ledger under a request retention of seven days and `rollup_retention_days` as the purge at `now` leaves it,
+    /// with a refusal received after the request cutoff inside `SPLIT_HOUR` and one inside the next hour. Answers the
+    /// pass's count and the rows' figures by hour.
+    fn refolded_past_a_seven_day_cutoff(rollup_retention_days: u32) -> (usize, Vec<HourFigures>) {
+        const HOUR_MS: i64 = 3_600_000;
+        let db = LedgerDb::open_in_memory().unwrap();
+        let now = SPLIT_HOUR + 7 * DAY_MS + HOUR_MS / 2;
+        let split = refusal("split", SPLIT_HOUR + 3 * HOUR_MS / 4);
+        let kept = refusal("kept", SPLIT_HOUR + HOUR_MS + 60_000);
+        for request in [&split, &kept] {
+            land(&db, request, &[]);
+        }
+        flag(&db, &["split", "kept"]);
+        let config = crate::LedgerConfig {
+            retention_days: 7,
+            rollup_retention_days,
+            ..crate::LedgerConfig::default()
+        };
+        crate::bodies::run_retention_blocking(&db, &config, now, &[]).unwrap();
+        let moved = refold_refusals(&db, &api_prices(), 7, rollup_retention_days, now).unwrap();
+        let rows = rows(&db)
+            .into_iter()
+            .map(|r| (r.hour, r.rejected, r.refusals))
+            .collect();
+        (moved, rows)
+    }
+
+    /// Under equal request and rollup retentions the rollup purge drops the hour the request cutoff splits while the
+    /// requests received after the cutoff stand. The guard finds no row of that hour holding the refusal received
+    /// there, so it writes no row into the hour, and the one in the next hour moves into the map.
+    #[test]
+    fn under_equal_retentions_the_refusal_in_the_hour_the_rollup_purge_dropped_writes_no_row_into_it(
+    ) {
+        let split_hour = crate::rollup::hour_of(SPLIT_HOUR);
+        let blocked = BTreeMap::from([("guardrail_blocked".to_string(), 1)]);
+        assert_eq!(
+            refolded_past_a_seven_day_cutoff(7),
+            (1, vec![(split_hour + 3_600, 0, blocked)]),
+            "the refusal in the next hour alone moved, and no row stands in the dropped hour"
+        );
+    }
+
+    /// Both refusals moved into the map, the split hour's and the next hour's, each hour's rejected count back to 0.
+    fn both_moved() -> (usize, Vec<HourFigures>) {
+        let split_hour = crate::rollup::hour_of(SPLIT_HOUR);
+        let blocked = BTreeMap::from([("guardrail_blocked".to_string(), 1)]);
+        (
+            2,
+            vec![
+                (split_hour, 0, blocked.clone()),
+                (split_hour + 3_600, 0, blocked),
+            ],
+        )
+    }
+
+    /// With the rollups kept for good the hour the request cutoff splits keeps its rows, so the refusal received there
+    /// after the cutoff moves into the map beside the next hour's.
+    #[test]
+    fn under_a_zero_rollup_retention_the_refusal_in_the_hour_the_request_cutoff_splits_moves_into_the_map(
+    ) {
+        assert_eq!(
+            refolded_past_a_seven_day_cutoff(0),
+            both_moved(),
+            "the split hour's rows stand, so its refusal moved"
+        );
+    }
+
+    /// A rollup retention longer than the request one keeps the hour the request cutoff splits, so the refusal received
+    /// there after the cutoff moves into the map beside the next hour's.
+    #[test]
+    fn under_a_longer_rollup_retention_the_refusal_in_the_hour_the_request_cutoff_splits_moves_into_the_map(
+    ) {
+        assert_eq!(
+            refolded_past_a_seven_day_cutoff(30),
+            both_moved(),
+            "the split hour's rows stand, so its refusal moved"
         );
     }
 

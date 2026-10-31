@@ -353,7 +353,9 @@ lasts `affinity_ttl_seconds` from its last use: while it is live and its account
 to that account, and stickiness wins over priority even across a later priority change. A pin outlives its account's
 membership and counts under the pool until it moves or expires. A pool with affinity off (`affinity_ttl_seconds` at `0`)
 keeps no pins at all. A keepalive probe holds while `affinity_ttl_seconds` is shorter than its recipe's due time, the
-cache TTL less the lead ([The five states](keepalive.md#the-five-states)).
+cache TTL less the lead ([The five states](keepalive.md#the-five-states)). A session's creation time, the `created_at`
+the Sessions view orders by, is the instant its main agent first placed a pin under the key, kept until the session's
+last pin leaves for good, so a failover, a move or a second pin leaves it alone.
 
 Narrowing then trims what is left. For a model with a week of its own (a canonical id containing `fable`), an account
 whose week or either shared window reads at or above 1 drops outright, unless the pool's overage policy is `allow` and
@@ -411,15 +413,17 @@ reset advanced by whole weeks, the 5-hour window's next reset named by the next 
 taken before the reset of the reading it replaces, stands under that reset and reads zero at it. One taken at or past
 that reset opens the next window and stands until the next reading, as does one where the reading it replaces names no
 reset to stand under. An API-key account's rate-limit buckets stand until their reset or, without one, for a minute. The
-share is priced through the account's stored tier: a tier change is read at the next profile refresh, within the hour,
-and applied when the router reloads, and a tier changed while the router was down is read at start. The newest reading
-per account and window is kept in the registry and loaded at startup, so a restart, and an account whose first poll the
-endpoint refuses, route from the last known windows. The router never fetches usage at a selection: use of an account
-outside the router shows in the next head or poll, so a decision can lag it by up to five minutes plus any backoff, and
-by up to one more interval after a failed poll or a restart. The [Quota view](console.md#quota) shows when the poll last
-asked the endpoint for each OAuth account and how it answered, and while an account backs off, since when and when its
-next attempt comes. The `poll_backoff` condition of the [`phoebis_attention` gauge](statistics.md#conditions-and-gauges)
-holds once an account has backed off for thirty minutes.
+share is priced through the account's stored tier: a tier change is read at the next profile refresh, within a quarter
+hour, and applied when the router reloads, and a tier changed while the router was down is read at start. The newest
+reading per account and window is kept in the registry and loaded at startup, so a restart, and an account whose first
+poll the endpoint refuses, route from the last known windows. A reading carries the plan and the tier the account held
+when it was taken, which the `window_reset` event names when its reset passes. The router never fetches usage at a
+selection: use of an account outside the router shows in the next head or poll, so a decision can lag it by up to five
+minutes plus any backoff, and by up to one more interval after a failed poll or a restart. The [Quota
+view](console.md#quota) shows when the poll last asked the endpoint for each OAuth account and how it answered, and
+while an account backs off, since when and when its next attempt comes. The `poll_backoff` condition of the
+[`phoebis_attention` gauge](statistics.md#conditions-and-gauges) holds once an account has backed off for thirty
+minutes.
 
 **Spent and cleared** A plan window read at 1.0 or above emits `window_spent` once per reset cycle, whether a head, a
 poll or the router's own prediction took it there. A window read under its limit again in the same reset cycle emits
@@ -442,8 +446,10 @@ and a model's own week's, is the earliest of five hours from now, its reset and 
 five hours ahead at most. A 5-hour reading past its reset with no new reset looks five hours ahead too, since the window
 opens with the next request. `burn_average_seconds` (default 1800) is the time constant of each session's burn average,
 the figure the projection carries forward (see **Burn**, below). A burn the cost model cannot price adds nothing, so an
-account whose plan the cost model does not price (a free, Team or Enterprise organization, or a tier the profile has not
-named) projects its prediction alone, and an API-key account has no plan window and no projection.
+account whose plan the cost model does not price (a free organization, a Team or Enterprise organization whose tier the
+cost model does not hold, or a tier the profile has not named) projects its prediction alone. An API-key account has no
+plan window and no projection, and neither has a usage-based seat, so the plan readings a seat kept from before it
+converted project nothing.
 
 **The demand** What the slow-down holds back is still wanted: a session held before each request burns less than it asks
 to, and the moment the hold lifts it burns at its own pace again, so the router keeps two readings of a session's burn.
@@ -545,31 +551,31 @@ onto a usage-based seat, which holds no plan quota.
 winding down. A warm one stays (see **Subscription end**, below).
 
 **Shed** With the pool's `load_shedding` on (the default), a request pinned to an account starts a shedding round there
-when one of the account's plan windows crosses its trigger. The windows are tested in the order `five_hour`,
-`seven_day`, then each model week a pin of the pool on the account draws, and the first that crosses fires and is the
-round's window. A weekly window, and the 5-hour window of a pool whose `slow_down` is off, crosses when the account's
-projection on it reads over `window_ceiling` at the window's horizon (see **The projection**, above) at a pinned
-selection and still reads over at a pinned selection a wait later, a quarter of the time from the first reading over to
-the window's horizon and at most `shed_dwell_seconds`, since one large turn's charge moves the prediction before the
-burn average has absorbed it. The wait's stamp, the first reading over, belongs to the window whose reset it was set
-under, so a reading whose reset lies an hour or more from that one, earlier or later, opens a new window whose wait
-starts at that reading, while a smaller move is the upstream's drift inside one window. The wait holds the round back
-and nothing else: the request is served as before, a mark already standing moves at its pin's next request, and a window
-inside its wait yields to the next in the order. The 5-hour window of a pool whose `slow_down` is on crosses when the
-stretch the slow-down reads has stood over `slow_down_stretch_seconds` for its safety wait, and the round's horizon
-moves earlier by the threshold (see [Slow-down](#slow-down), below). No 5-hour round fires while the window is younger
-than twice `burn_average_seconds` (an hour at the default), whatever fired the trigger, because each session's burn
-average still carries the previous window's last half hour over the reset and the projection would apply that rate to a
-horizon of up to five hours. While the hold runs, the routing log's record of the selection reads the shed rule `no`
-with the window's age (`age_five_hour`) against the hold (`hold_five_hour`), the stamp and the wait keep running, a
-weekly window past its wait fires in the 5-hour window's place, and a standing mark still moves. The weekly windows take
-no hold, since the same burst after a weekly reset is a small share of a week over a weekly horizon. A weekly window's
-horizon lies five hours ahead at most, so a weekly wall is shed only in its last five hours, when the gate also stops
-placing new sessions there. A round runs on an account at most once per `shed_dwell_seconds`, and a selection runs one
-round at most. The excess is the burn that, removed now, lands the fired window's projection on the ceiling at its
-horizon, the demand's projection at the moved horizon under the slow-down. The round's target is the lesser of the
-excess and `shed_cap` (default 0.5) of the burn of the round's pins on that window, so the excess sets the amount and
-the cap bounds it.
+when one of the account's plan windows crosses its trigger. No round fires on a usage-based seat, whose old plan
+readings project nothing (see **The projection**, above). The windows are tested in the order `five_hour`, `seven_day`,
+then each model week a pin of the pool on the account draws, and the first that crosses fires and is the round's window.
+A weekly window, and the 5-hour window of a pool whose `slow_down` is off, crosses when the account's projection on it
+reads over `window_ceiling` at the window's horizon (see **The projection**, above) at a pinned selection and still
+reads over at a pinned selection a wait later, a quarter of the time from the first reading over to the window's horizon
+and at most `shed_dwell_seconds`, since one large turn's charge moves the prediction before the burn average has
+absorbed it. The wait's stamp, the first reading over, belongs to the window whose reset it was set under, so a reading
+whose reset lies an hour or more from that one, earlier or later, opens a new window whose wait starts at that reading,
+while a smaller move is the upstream's drift inside one window. The wait holds the round back and nothing else: the
+request is served as before, a mark already standing moves at its pin's next request, and a window inside its wait
+yields to the next in the order. The 5-hour window of a pool whose `slow_down` is on crosses when the stretch the
+slow-down reads has stood over `slow_down_stretch_seconds` for its safety wait, and the round's horizon moves earlier by
+the threshold (see [Slow-down](#slow-down), below). No 5-hour round fires while the window is younger than twice
+`burn_average_seconds` (an hour at the default), whatever fired the trigger, because each session's burn average still
+carries the previous window's last half hour over the reset and the projection would apply that rate to a horizon of up
+to five hours. While the hold runs, the routing log's record of the selection reads the shed rule `no` with the window's
+age (`age_five_hour`) against the hold (`hold_five_hour`), the stamp and the wait keep running, a weekly window past its
+wait fires in the 5-hour window's place, and a standing mark still moves. The weekly windows take no hold, since the
+same burst after a weekly reset is a small share of a week over a weekly horizon. A weekly window's horizon lies five
+hours ahead at most, so a weekly wall is shed only in its last five hours, when the gate also stops placing new sessions
+there. A round runs on an account at most once per `shed_dwell_seconds`, and a selection runs one round at most. The
+excess is the burn that, removed now, lands the fired window's projection on the ceiling at its horizon, the demand's
+projection at the moved horizon under the slow-down. The round's target is the lesser of the excess and `shed_cap`
+(default 0.5) of the burn of the round's pins on that window, so the excess sets the amount and the cap bounds it.
 
 With `load_shedding` off no round runs and nothing is marked, and a mark already standing is released at the session's
 next request, which renews the pin in place. The destination gate, the reservations and `window_ceiling` on every move

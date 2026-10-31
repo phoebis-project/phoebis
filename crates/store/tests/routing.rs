@@ -1,8 +1,8 @@
 use phoebis_routing::lane_key;
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, CooldownRow, CreditsRow,
-    OverageRow, PinBurn, PinKey, PinRow, RekeyWrite, ResolutionRow, ShedRoundRow, StateCause,
-    StorageKey, Store, WindowRow,
+    AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, ApiKeyRow, CooldownRow,
+    CreditsRow, FirstSeenRow, OverageRow, PinBurn, PinKey, PinRow, PoolRow, RekeyWrite,
+    ResolutionRow, RulesMode, ShedRoundRow, StateCause, StorageKey, Store, WindowRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -41,6 +41,8 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         marked_at: None,
         marked_on: None,
         marked_window: None,
+        auxiliary_only: false,
+        effort: String::new(),
     }
 }
 
@@ -364,6 +366,383 @@ fn a_pins_entrypoint_survives_a_reopen_and_the_next_request_replaces_it() {
 }
 
 #[test]
+fn a_pins_auxiliary_mark_and_effort_survive_a_reopen_and_a_row_from_before_the_columns_reads_their_defaults(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let auxiliary = PinRow {
+        auxiliary_only: true,
+        effort: "high".into(),
+        ..pin("k", "s", "claude-opus-5-5", "a")
+    };
+    {
+        let store = Store::open(&path, &storage_key).unwrap();
+        seed_accounts(&store, &["a"]);
+        store.upsert_pin(&auxiliary).unwrap();
+    }
+    // Inserted without either column, so the row reads as a pin stored before the columns existed.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation) \
+         VALUES ('k', 'older', 'main', 'claude-opus-5-5', 'a', 1, 1, 1, 1, 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let marks = || {
+        Store::open(&path, &storage_key)
+            .unwrap()
+            .load_routing()
+            .unwrap()
+            .pins
+            .into_iter()
+            .map(|p| (p.session_id, p.auxiliary_only, p.effort))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        marks(),
+        [
+            ("older".to_string(), false, String::new()),
+            ("s".to_string(), true, "high".to_string())
+        ],
+        "the written mark and effort read back after a reopen, and the older row reads the columns' defaults"
+    );
+    Store::open(&path, &storage_key)
+        .unwrap()
+        .upsert_pin(&PinRow {
+            auxiliary_only: false,
+            effort: "low".into(),
+            ..auxiliary
+        })
+        .unwrap();
+    assert_eq!(
+        marks()[1],
+        ("s".to_string(), false, "low".to_string()),
+        "the renewal's mark and effort replace the stored ones"
+    );
+}
+
+#[test]
+fn a_windows_plan_and_tier_survive_a_reopen_and_a_reading_without_them_reads_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let priced = WindowRow {
+        plan: Some("max".into()),
+        tier: Some("max_20x".into()),
+        ..window_row("five_hour", 0.5, 1_000, 1)
+    };
+    let bare = window_row("seven_day", 0.25, 1_000, 1);
+    {
+        let store = Store::open(&path, &storage_key).unwrap();
+        seed_accounts(&store, &["a"]);
+        assert!(store.upsert_window(&priced).unwrap());
+        assert!(store.upsert_window(&bare).unwrap());
+    }
+    let store = Store::open(&path, &storage_key).unwrap();
+    assert_eq!(
+        store
+            .load_routing()
+            .unwrap()
+            .windows
+            .into_iter()
+            .map(|w| (w.window, w.plan, w.tier))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "five_hour".to_string(),
+                Some("max".to_string()),
+                Some("max_20x".to_string())
+            ),
+            ("seven_day".to_string(), None, None)
+        ],
+        "the pair reads back after a reopen, and a reading without it reads none twice"
+    );
+    let newer = WindowRow {
+        observed_at: 2_000,
+        plan: Some("pro".into()),
+        tier: None,
+        ..priced
+    };
+    assert!(store.upsert_window(&newer).unwrap());
+    assert_eq!(
+        store.load_routing().unwrap().windows[0],
+        newer,
+        "a newer reading replaces the pair with its own"
+    );
+}
+
+/// Key `id` under a pool of its own, so `delete_api_key` has a row to delete.
+fn seed_key(store: &Store, id: &str) {
+    let pool = format!("{id}-pool");
+    store
+        .insert_pool(&PoolRow::for_tests(&pool), "test")
+        .unwrap();
+    let secret = format!("phoebis-{id}-secret");
+    store
+        .insert_api_key(
+            &ApiKeyRow {
+                id: id.into(),
+                label: id.into(),
+                notes: None,
+                pool_id: pool,
+                enabled: true,
+                revoked_at: None,
+                expires_at: None,
+                model_rules: Vec::new(),
+                model_rules_mode: RulesMode::Extend,
+                long_context_twins: true,
+                keepalive_opt_out: false,
+                body_capture_hours: None,
+                secret_digest: store.api_key_digest(&secret).to_vec(),
+                prefix: phoebis_store::key_prefix(&secret),
+                incarnation: 1,
+                created_at: 1,
+                updated_at: 0,
+                rotated_at: None,
+                last_used_at: None,
+                retired_secret_last_used_at: None,
+                auto_mode_server: None,
+            },
+            "test",
+        )
+        .unwrap();
+}
+
+fn first_seen(key_id: &str, session_id: &str, agent_id: &str, first_seen_at: i64) -> FirstSeenRow {
+    FirstSeenRow {
+        key_id: key_id.into(),
+        session_id: session_id.into(),
+        agent_id: agent_id.into(),
+        first_seen_at,
+    }
+}
+
+#[test]
+fn the_first_seen_rows_keep_the_last_write_load_whole_and_leave_by_session_and_with_their_key() {
+    let store = store_with(&["a"]);
+    seed_key(&store, "k");
+    store
+        .insert_first_seen(&first_seen("k", "s", "main", 1_000))
+        .unwrap();
+    store
+        .insert_first_seen(&first_seen("k", "s", "main", 2_000))
+        .unwrap();
+    store
+        .insert_first_seen(&first_seen("k", "s", "sub-1", 1_500))
+        .unwrap();
+    store
+        .insert_first_seen(&first_seen("k", "t", "main", 3_000))
+        .unwrap();
+    store
+        .write_routing(|tx| tx.insert_first_seen(&first_seen("j", "s", "main", 4_000)))
+        .unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().first_seen,
+        [
+            first_seen("j", "s", "main", 4_000),
+            first_seen("k", "s", "main", 2_000),
+            first_seen("k", "s", "sub-1", 1_500),
+            first_seen("k", "t", "main", 3_000)
+        ],
+        "the load answers every row in key order, and a second write under one agent keeps its own instant"
+    );
+    assert_eq!(
+        store.delete_first_seen("k", "s").unwrap(),
+        2,
+        "every agent's row of the session leaves"
+    );
+    assert_eq!(
+        store.load_routing().unwrap().first_seen,
+        [
+            first_seen("j", "s", "main", 4_000),
+            first_seen("k", "t", "main", 3_000)
+        ],
+        "another session of the key and the session id under another key stay"
+    );
+    store
+        .upsert_pin(&pin("k", "t", "claude-opus-5-5", "a"))
+        .unwrap();
+    store
+        .upsert_pin(&pin("j", "s", "claude-opus-5-5", "a"))
+        .unwrap();
+    store.delete_api_key("k", "test").unwrap();
+    let load = store.load_routing().unwrap();
+    assert_eq!(
+        (
+            load.first_seen,
+            load.pins
+                .into_iter()
+                .map(|p| (p.key_id, p.session_id))
+                .collect::<Vec<_>>()
+        ),
+        (
+            vec![first_seen("j", "s", "main", 4_000)],
+            vec![("j".to_string(), "s".to_string())]
+        ),
+        "the key's deletion takes its rows with its pins and leaves another key's"
+    );
+    assert_eq!(
+        store
+            .write_routing(|tx| tx.delete_first_seen("j", "s"))
+            .unwrap(),
+        1
+    );
+    assert!(store.load_routing().unwrap().first_seen.is_empty());
+}
+
+/// A guard: the plain delete is a replacement's, a move's or a failover's, whose new row lands after it.
+#[test]
+fn delete_pin_of_a_sessions_last_pin_keeps_its_first_seen_rows() {
+    let store = store_with(&["a"]);
+    let only = pin("k", "s", "claude-opus-5-5", "a");
+    store.upsert_pin(&only).unwrap();
+    store
+        .insert_first_seen(&first_seen("k", "s", "main", 1_000))
+        .unwrap();
+    assert!(store.delete_pin(&only.key()).unwrap());
+    store.upsert_pin(&only).unwrap();
+    assert!(store
+        .write_routing(|tx| tx.delete_pin(&only.key()))
+        .unwrap());
+    let load = store.load_routing().unwrap();
+    assert_eq!(
+        (load.pins, load.first_seen),
+        (Vec::new(), vec![first_seen("k", "s", "main", 1_000)]),
+        "the pin leaves and the session's row stays"
+    );
+}
+
+#[test]
+fn end_pin_under_an_end_takes_the_sessions_first_seen_rows_written_at_or_before_it_and_keeps_a_later_one(
+) {
+    let store = store_with(&["a"]);
+    let ended = pin("k", "s", "claude-opus-5-5", "a");
+    store.upsert_pin(&ended).unwrap();
+    for row in [
+        first_seen("k", "s", "main", 1_000),
+        first_seen("k", "s", "sub-1", 3_000),
+        first_seen("k", "s", "sub-2", 3_001),
+        first_seen("k", "t", "main", 1_000),
+    ] {
+        store.insert_first_seen(&row).unwrap();
+    }
+    assert!(store.end_pin(&ended.key(), Some(3_000)).unwrap());
+    let load = store.load_routing().unwrap();
+    assert_eq!(
+        (load.pins, load.first_seen),
+        (
+            Vec::new(),
+            vec![
+                first_seen("k", "s", "sub-2", 3_001),
+                first_seen("k", "t", "main", 1_000)
+            ]
+        ),
+        "the session's rows up to the end leave with its pin, a later placement's row and another session's stay"
+    );
+    let other = pin("k", "t", "claude-opus-5-5", "a");
+    store.upsert_pin(&other).unwrap();
+    assert!(store
+        .write_routing(|tx| tx.end_pin(&other.key(), Some(1_000)))
+        .unwrap());
+    assert_eq!(
+        store.load_routing().unwrap().first_seen,
+        [first_seen("k", "s", "sub-2", 3_001)],
+        "the writer's transaction cascades as the single write does"
+    );
+    assert!(
+        !store.end_pin(&ended.key(), Some(3_001)).unwrap(),
+        "no pin row stands under the key"
+    );
+    assert!(
+        store.load_routing().unwrap().first_seen.is_empty(),
+        "an end whose pin already left still takes the session's rows"
+    );
+}
+
+/// A guard: memory carries no end on a pin whose session still holds another.
+#[test]
+fn end_pin_without_an_end_keeps_the_sessions_first_seen_rows() {
+    let store = store_with(&["a"]);
+    let main = pin("k", "s", "claude-opus-5-5", "a");
+    let sub = PinRow {
+        agent_id: "sub-1".into(),
+        ..main.clone()
+    };
+    store.upsert_pin(&main).unwrap();
+    store.upsert_pin(&sub).unwrap();
+    for row in [
+        first_seen("k", "s", "main", 1_000),
+        first_seen("k", "s", "sub-1", 2_000),
+    ] {
+        store.insert_first_seen(&row).unwrap();
+    }
+    assert!(store.end_pin(&sub.key(), None).unwrap());
+    let load = store.load_routing().unwrap();
+    assert_eq!(
+        (load.pins, load.first_seen),
+        (
+            vec![main],
+            vec![
+                first_seen("k", "s", "main", 1_000),
+                first_seen("k", "s", "sub-1", 2_000)
+            ]
+        )
+    );
+}
+
+/// A guard: a rekey deletes the pin under its spelling and writes it under the dated id in one transaction.
+#[test]
+fn a_rekey_moving_a_sessions_only_pin_keeps_its_first_seen_rows() {
+    let store = store_with(&["a"]);
+    store.upsert_pin(&spelling_pin()).unwrap();
+    store
+        .insert_first_seen(&first_seen("k", "s", "main", 1_000))
+        .unwrap();
+    store.rekey_resolution(&rekey_of_a()).unwrap();
+    let load = store.load_routing().unwrap();
+    assert_eq!(
+        (load.pins, load.first_seen),
+        (
+            rekey_of_a().upsert_pins,
+            vec![first_seen("k", "s", "main", 1_000)]
+        )
+    );
+}
+
+#[test]
+fn the_sweep_takes_the_first_seen_rows_of_a_session_whose_pins_an_accounts_deletion_cascaded_away()
+{
+    let store = store_with(&["a", "b"]);
+    store
+        .upsert_pin(&pin("k", "s", "claude-opus-5-5", "a"))
+        .unwrap();
+    store
+        .upsert_pin(&pin("k", "t", "claude-opus-5-5", "b"))
+        .unwrap();
+    for row in [
+        first_seen("k", "s", "main", 1_000),
+        first_seen("k", "s", "sub-1", 1_500),
+        first_seen("k", "t", "main", 2_000),
+    ] {
+        store.insert_first_seen(&row).unwrap();
+    }
+    store.delete_account("a", "test").unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().first_seen.len(),
+        3,
+        "the load sweeps nothing, so a reader during a failover's gap keeps the session's rows"
+    );
+    assert_eq!(store.sweep_first_seen().unwrap(), 2);
+    assert_eq!(
+        store.load_routing().unwrap().first_seen,
+        [first_seen("k", "t", "main", 2_000)],
+        "a session that still holds a pin keeps its rows"
+    );
+}
+
+#[test]
 fn a_pins_shed_reason_survives_a_reopen_and_a_rounds_move_stamps_its_own() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
@@ -462,7 +841,9 @@ fn window_row(window: &str, utilization: f64, observed_at: i64, incarnation: u64
         account_id: "a".into(),
         incarnation,
         observed_at,
+        plan: None,
         reset: Some(observed_at + 3_600_000),
+        tier: None,
         utilization,
         window: window.into(),
     }

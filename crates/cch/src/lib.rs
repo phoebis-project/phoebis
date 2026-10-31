@@ -355,9 +355,10 @@ pub fn array_member_span(body: &[u8], path: &[&str], index: usize) -> Option<(us
     Some((start, s.pos))
 }
 
-/// The position of the closing `]` of the array at `path` when it holds no element, or `None` when it holds one
-/// or `path` does not resolve to an array. `array_member_span` already covers an array with at least one
-/// element; this is the empty case it has nothing to return for.
+/// The position of the closing `]` of the array at `path` when it holds no element, or `None` when it holds one,
+/// when `path` does not resolve to an array, or when it resolves to one at the depth `value` refuses.
+/// `array_member_span` already covers an array with at least one element, and this is the empty case it has nothing
+/// to return for.
 pub fn empty_array_member_end(body: &[u8], path: &[&str]) -> Option<usize> {
     let mut s = Scanner {
         body,
@@ -368,13 +369,16 @@ pub fn empty_array_member_end(body: &[u8], path: &[&str]) -> Option<usize> {
     if !walk_to_last_segment(&mut s, path)? {
         return None;
     }
-    if !s.eat(b'[') {
+    if s.body.get(s.pos) != Some(&b'[') {
         return None;
     }
-    s.inside(|s| {
-        s.ws();
-        (s.body.get(s.pos) == Some(&b']')).then_some(s.pos)
-    })
+    // An empty array is a container like any other, so the 128th answers `None` where `value` refuses the body.
+    s.enter().ok()?;
+    s.pos += 1;
+    s.ws();
+    let end = (s.body.get(s.pos) == Some(&b']')).then_some(s.pos);
+    s.leave();
+    end
 }
 
 /// Raw span of the whole member (key quote to value end) at `path`, so a caller can insert a sibling before it.
@@ -1363,8 +1367,8 @@ mod tests {
         );
     }
 
-    /// The empty array's own walk reads no element, so the depth it counts decides nothing there, and the vector
-    /// reaches the empty array past an element its path skips.
+    /// The bound falls inside the element the path skips, so the walk gives up before it reaches the empty array,
+    /// whose own count the next case bounds.
     #[test]
     fn the_empty_array_end_behind_a_numeric_segment_counts_the_skipped_array_toward_the_depth_bound(
     ) {
@@ -1381,6 +1385,46 @@ mod tests {
         assert!(
             empty_array_member_end(&under_it, &["system", "1"]).is_some(),
             "one level less reads as serde reads it"
+        );
+    }
+
+    /// An empty array behind `walked` containers its path walks, objects and arrays in turn from the root object, with
+    /// the path that reaches it.
+    fn empty_array_behind(walked: usize) -> (Vec<u8>, Vec<&'static str>) {
+        let (mut open, mut close, mut path) = (String::new(), String::new(), Vec::new());
+        for level in 0..walked {
+            if level % 2 == 0 {
+                open.push_str(r#"{"k":"#);
+                close.insert(0, '}');
+                path.push("k");
+            } else {
+                open.push('[');
+                close.insert(0, ']');
+                path.push("0");
+            }
+        }
+        (format!("{open}[]{close}").into_bytes(), path)
+    }
+
+    #[test]
+    fn the_empty_array_end_answers_none_at_the_128th_container_and_its_position_at_the_127th() {
+        let (at_the_bound, path) = empty_array_behind(MAX_DEPTH - 1);
+        assert!(
+            !serde_reads(&at_the_bound),
+            "serde refuses the empty array as the 128th container counted with the root"
+        );
+        assert_eq!(
+            empty_array_member_end(&at_the_bound, &path),
+            None,
+            "the empty array counts toward the bound as any container does"
+        );
+        let (under_it, path) = empty_array_behind(MAX_DEPTH - 2);
+        assert!(serde_reads(&under_it));
+        let at = empty_array_member_end(&under_it, &path).expect("one level less reads");
+        assert_eq!(
+            &under_it[at - 1..=at],
+            b"[]",
+            "the position is the empty array's closing bracket"
         );
     }
 

@@ -77,8 +77,35 @@ impl Chains {
     }
 }
 
-/// `value` as canonical JSON: members in key order, no whitespace, every `cache_control` member removed.
+/// `value` as canonical JSON: members in key order, no whitespace, every `cache_control` member removed, and a
+/// protocol content array whose blocks are all text blocks with no member beyond `type`, `text` and `cache_control`
+/// cut to the blocks up to the last one carrying `cache_control`, a single remaining block as the string of its text,
+/// so the two shapes the client sends for one message hash alike and a message's hash names what the upstream cached.
+/// A protocol content array sits at one of two places alone: the `content` member of `value` itself (a message's) and
+/// the `content` member of a block that is a direct item of that array (a `tool_result` block's). A `content` member
+/// any deeper (inside a tool's input or a tool definition) and every other array keep their shape, so a tool input
+/// holding text blocks never hashes as one holding their text.
 pub fn canonical(value: &Value, out: &mut Vec<u8>) {
+    write_canonical(value, out, Place::Entry);
+}
+
+/// Where a value sits below the hashed entry, in depth order, which bounds where a content array collapses.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// The hashed entry itself.
+    Entry,
+    /// The value of the entry's `content` member.
+    EntryContent,
+    /// A block that is a direct item of the entry's content array.
+    Block,
+    /// The value of such a block's `content` member.
+    BlockContent,
+    /// Anywhere deeper than the places above.
+    Deeper,
+}
+
+/// `canonical` over `value` sitting at `place`.
+fn write_canonical(value: &Value, out: &mut Vec<u8>, place: Place) {
     match value {
         Value::Object(map) => {
             out.push(b'{');
@@ -94,22 +121,71 @@ pub fn canonical(value: &Value, out: &mut Vec<u8>) {
                 }
                 serde_json::to_writer(&mut *out, key).expect("a JSON key always encodes");
                 out.push(b':');
-                canonical(&map[*key], out);
+                let below = match (place, *key) {
+                    (Place::Entry, "content") => Place::EntryContent,
+                    (Place::Block, "content") => Place::BlockContent,
+                    _ => Place::Deeper,
+                };
+                write_canonical(&map[*key], out, below);
             }
             out.push(b'}');
         }
         Value::Array(items) => {
+            let kept = match place {
+                Place::EntryContent | Place::BlockContent => kept_text_blocks(items),
+                _ => None,
+            };
+            let items = match kept {
+                Some([only]) => return write_canonical(&only["text"], out, Place::Deeper),
+                Some(kept) => kept,
+                None => items.as_slice(),
+            };
+            let below = if place == Place::EntryContent {
+                Place::Block
+            } else {
+                Place::Deeper
+            };
             out.push(b'[');
             for (i, item) in items.iter().enumerate() {
                 if i > 0 {
                     out.push(b',');
                 }
-                canonical(item, out);
+                write_canonical(item, out, below);
             }
             out.push(b']');
         }
         scalar => serde_json::to_writer(&mut *out, scalar).expect("a JSON scalar always encodes"),
     }
+}
+
+/// The blocks a text-only content array keeps, read alone for an array at one of the two places `canonical` names,
+/// the entry's `content` or the `content` of a direct item of that array, and never deeper: those up to the last one
+/// carrying `cache_control`, every block where none does. `None` where a block is not a text block or carries another
+/// member, so the array keeps its shape.
+fn kept_text_blocks(items: &[Value]) -> Option<&[Value]> {
+    if items.is_empty() {
+        return None;
+    }
+    let text_only = items.iter().all(|item| {
+        item.as_object().is_some_and(|block| {
+            block.get("type").and_then(Value::as_str) == Some("text")
+                && block.get("text").is_some_and(Value::is_string)
+                && block
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "type" | "text" | "cache_control"))
+        })
+    });
+    if !text_only {
+        return None;
+    }
+    // The client appends its per-turn steering text after the marked block and drops it from the next request, and
+    // the marker bounds what the upstream cached, so the blocks past the last marker are no part of the message's
+    // cached prefix.
+    let end = items
+        .iter()
+        .rposition(|item| item.get("cache_control").is_some())
+        .map_or(items.len(), |last| last + 1);
+    Some(&items[..end])
 }
 
 /// One link of a chain: the digest of the previous boundary's bytes and the block's canonical form, plus the
@@ -218,6 +294,171 @@ mod tests {
             a.message_boundaries[1], b.message_boundaries[1],
             "boundary 1 must move too, since it chains over boundary 0 and not just message 1's own content"
         );
+    }
+
+    /// `value` canonicalized as the value of a message's `content` member.
+    fn canon(value: Value) -> Vec<u8> {
+        let mut out = Vec::new();
+        write_canonical(&value, &mut out, Place::EntryContent);
+        out
+    }
+
+    fn marked(text: &str) -> Value {
+        json!({"type": "text", "text": text, "cache_control": {"type": "ephemeral"}})
+    }
+
+    fn unmarked(text: &str) -> Value {
+        json!({"type": "text", "text": text})
+    }
+
+    /// Request N whose last message is `last`, and request N + 1 carrying `resent` at that index, an answer, and a new
+    /// last message with the marker, as the client sends the pair.
+    fn the_pair(last: Value, resent: Value) -> (Chains, Chains) {
+        let first = json!({"role": "user", "content": "hi"});
+        let answer = json!({"role": "assistant", "content": "hello"});
+        let n = read(json!({"messages": [first.clone(), answer.clone(), last]}));
+        let next = read(json!({"messages": [
+            first,
+            answer,
+            resent,
+            {"role": "assistant", "content": "done"},
+            {"role": "user", "content": [marked("b"), unmarked("steer")]},
+        ]}));
+        (n, next)
+    }
+
+    #[test]
+    fn a_marked_block_and_its_steering_text_hash_as_the_string_the_next_request_sends() {
+        let (n, next) = the_pair(
+            json!({"role": "user", "content": [marked("a"), unmarked("steer")]}),
+            json!({"role": "user", "content": "a"}),
+        );
+        let last = n.message_boundaries.last().unwrap();
+        assert!(
+            next.message_boundaries.contains(last),
+            "request N + 1 holds request N's last boundary"
+        );
+        assert_eq!(next.message_boundaries[2], *last);
+    }
+
+    #[test]
+    fn a_marked_one_block_message_hashes_as_the_string_the_next_request_sends() {
+        let (n, next) = the_pair(
+            json!({"role": "user", "content": [marked("a")]}),
+            json!({"role": "user", "content": "a"}),
+        );
+        assert!(next
+            .message_boundaries
+            .contains(n.message_boundaries.last().unwrap()));
+    }
+
+    #[test]
+    fn a_marked_first_block_followed_by_two_unmarked_blocks_hashes_as_its_string() {
+        assert_eq!(
+            canon(json!([marked("a"), unmarked("steer"), unmarked("more")])),
+            canon(json!("a"))
+        );
+    }
+
+    #[test]
+    fn two_marked_blocks_followed_by_an_unmarked_one_hash_as_the_two_blocks_without_markers() {
+        assert_eq!(
+            canon(json!([marked("a"), marked("b"), unmarked("steer")])),
+            canon(json!([unmarked("a"), unmarked("b")]))
+        );
+    }
+
+    #[test]
+    fn the_clients_first_message_keeps_its_nine_blocks_since_its_last_block_carries_the_marker() {
+        let mut blocks: Vec<Value> = (1..=8)
+            .map(|i| unmarked(&format!("<system-reminder>{i}</system-reminder>")))
+            .collect();
+        blocks.push(marked("hi"));
+        let message = canon(json!(blocks));
+        assert_ne!(
+            message,
+            canon(json!("<system-reminder>1</system-reminder>"))
+        );
+        assert_ne!(message, canon(json!("hi")));
+        assert_eq!(message.first(), Some(&b'['));
+    }
+
+    #[test]
+    fn an_unmarked_block_before_a_marked_one_keeps_the_array_apart_from_either_string() {
+        let message = canon(json!([unmarked("a"), marked("b")]));
+        assert_ne!(message, canon(json!("a")));
+        assert_ne!(message, canon(json!("b")));
+    }
+
+    #[test]
+    fn a_block_with_another_member_keeps_the_pair_apart() {
+        let (n, next) = the_pair(
+            json!({"role": "user", "content": [
+                {"type": "text", "text": "a", "citations": [], "cache_control": {"type": "ephemeral"}},
+                unmarked("steer"),
+            ]}),
+            json!({"role": "user", "content": "a"}),
+        );
+        assert!(!next
+            .message_boundaries
+            .contains(n.message_boundaries.last().unwrap()));
+    }
+
+    #[test]
+    fn a_non_text_block_among_the_blocks_keeps_the_arrays_shape() {
+        let image = json!({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AA=="}});
+        let message = canon(json!([marked("a"), image.clone(), unmarked("steer")]));
+        assert_eq!(
+            message,
+            canon(json!([unmarked("a"), image, unmarked("steer")]))
+        );
+        assert_ne!(message, canon(json!("a")));
+    }
+
+    fn tool_call(input: Value) -> Chains {
+        read(json!({"messages": [{
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "t1", "name": "x", "input": input}],
+        }]}))
+    }
+
+    #[test]
+    fn a_text_block_array_in_a_tool_input_hashes_apart_from_its_text() {
+        assert_ne!(
+            tool_call(json!([unmarked("x")])).message_boundaries,
+            tool_call(json!("x")).message_boundaries
+        );
+        assert_ne!(
+            tool_call(json!({"payload": [marked("x")]})).message_boundaries,
+            tool_call(json!({"payload": "x"})).message_boundaries
+        );
+    }
+
+    #[test]
+    fn a_content_member_in_a_tool_input_keeps_its_text_block_array_apart_from_its_text() {
+        assert_ne!(
+            tool_call(json!({"content": [unmarked("x")]})).message_boundaries,
+            tool_call(json!({"content": "x"})).message_boundaries
+        );
+    }
+
+    #[test]
+    fn a_tool_results_one_text_block_content_hashes_as_its_string() {
+        let result = |content: Value| {
+            read(json!({"messages": [{
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "t1", "content": content}],
+            }]}))
+        };
+        assert_eq!(
+            result(json!([marked("ok")])).message_boundaries,
+            result(json!("ok")).message_boundaries
+        );
+    }
+
+    #[test]
+    fn an_empty_content_array_stays_an_empty_array() {
+        assert_eq!(canon(json!([])), b"[]".to_vec());
     }
 
     #[test]

@@ -1307,7 +1307,7 @@
         "cost_equivalent": null,
         "share_reason": null,
         "estimated": false,
-        "tier": "default_claude_zero",
+        "tier": null,
         "phases": {
           "received_at": 1791717397600,
           "selected_at": 1791717397600,
@@ -1349,7 +1349,7 @@
               "stop_reason": "end_turn",
               "stop_sequence": null
             },
-            "tier": "default_claude_zero"
+            "tier": null
           }
         ],
         "held": null,

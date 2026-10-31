@@ -186,7 +186,7 @@
         "label": "Free",
         "enabled": true,
         "canceled": true,
-        "plan_ended_at": null,
+        "plan_ended_at": 1791030700000,
         "state": "ready",
         "funding_retry_at": null,
         "identity": {
@@ -203,7 +203,7 @@
           "quarantined": false
         },
         "lifecycle_generation": 1,
-        "revision": 4294967298,
+        "revision": 4294967299,
         "cooldowns": [],
         "overage": null,
         "profile": {

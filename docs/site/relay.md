@@ -220,14 +220,17 @@ for the ledger and never judged: every version is relayed the same way.
 
 ## The boundary chains
 
-The router reads two cumulative boundary-hash chains off every request body: a static chain over the tools array and
-the system blocks, and a message chain with one boundary per entry of `messages`. Both are computed on the client's own
+The router reads two cumulative boundary-hash chains off every request body: a static chain over the tools array and the
+system blocks, and a message chain with one boundary per entry of `messages`. Both are computed on the client's own
 bytes as canonical JSON with every `cache_control` member removed at every level, so a marker that moves changes no
 boundary, and the two chains start from different seeds so they never collide: an MCP server joining mid-session changes
-every static boundary and leaves every message boundary equal. Neither chain gates the request. Both ride with the
-observation and the selection, so a warm pin's continuation and a keepalive's guard read the same hashes: the session's
-pin compares its own hashes against a later request's to tell a continuation from a restart, and the keepalive engine
-reads them as its guard ([The guard field](keepalive.md#the-guard-field)).
+every static boundary and leaves every message boundary equal. A message's text-only content array, its `content` or a
+`tool_result` block's holding only text blocks with no member beyond `type`, `text` and `cache_control`, hashes as its
+blocks up to the last one carrying `cache_control`, a single remaining block as its text, and every other array keeps
+its shape. Neither chain gates the request. Both ride with the observation and the selection, so a warm pin's
+continuation and a keepalive's guard read the same hashes: the session's pin compares its own hashes against a later
+request's to tell a continuation from a restart, and the keepalive engine reads them as its guard ([The guard
+field](keepalive.md#the-guard-field)).
 
 ## Auto mode behind the router
 
@@ -381,9 +384,9 @@ carries `anthropic-beta: oauth-2025-04-20`. The interval is often enough that a 
 outside the router by about that long, longer while the endpoint rate-limits the poll, and rare enough that the poll
 alone never reaches the endpoint's per-account limit. No key or field turns the poll off.
 
-**The profile.** On every twelfth poll of an account, an hour apart, the router reads the account's profile again: a
-tier moves rarely, and the profile endpoint shares the usage endpoint's per-account limit. It rides on the poll and has
-no switch of its own.
+**The profile.** On every third poll of an account, a quarter hour apart, the router reads the account's profile again.
+The reads are that far apart because the profile endpoint shares the usage endpoint's per-account limit and a profile
+429 pauses the account's usage poll for up to fifteen minutes. It rides on the poll and has no switch of its own.
 
 **The catalog fetch.** The router reads each enabled account's model listing with `GET /v1/models?limit=1000`, its head
 measured from the one Claude Code release the profile records, every `routing.catalog_refresh_seconds` (default 21600,
@@ -447,8 +450,11 @@ from a save older than the release learns of it. A state the router holds wrongl
 holds is announced with `agent_start` and its state. An entry the router holds as `released` is skipped both ways, so a
 subagent the mod holds as parked stays released on the router until its next report starts it again with `agent_start`,
 which registers it anew where the record left one pool cache TTL after the release ([The five
-states](keepalive.md#the-five-states)). An agent the answer names while the mod's release of it still waits in the queue
-stays unannounced, so the agent's next run starts it again with `agent_start`.
+states](keepalive.md#the-five-states)). When a later answer omits an entry the router named `released` for a subagent
+the mod still holds, the subagent stays unannounced until its next report, so the record's departure frees its slot. If
+the mod releases it before then, it sends no report, since the router released it already. An agent the answer names
+while the mod's release of it still waits in the queue stays unannounced, so the agent's next run starts it again with
+`agent_start`.
 
 A refusal takes one of two shapes. A missing, malformed, ambiguous or refused key is answered the relay's way, the same
 `401` in Anthropic's error shape that `/v1/messages` answers, with `x-phoebis-error-code` naming an `auth_*` code

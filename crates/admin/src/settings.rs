@@ -68,6 +68,10 @@ pub(crate) struct Retention {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionsSettings {
     pub expire_after_seconds: u64,
+    /// `sessions.non_companion_idle_seconds`: how long a session no companion reports stays listed past its newest pin
+    /// use, its last request or its companion's end, and how long a line's pin stays listed on such a row past its last
+    /// use.
+    pub non_companion_idle_seconds: u64,
 }
 
 /// The two table paths null when their key is unset.
@@ -118,6 +122,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
         },
         sessions: SessionsSettings {
             expire_after_seconds: s.session_expire_after_seconds,
+            non_companion_idle_seconds: s.session_non_companion_idle_seconds,
         },
         storage: Storage {
             api_prices_path: s.api_prices_path.clone(),

@@ -94,6 +94,9 @@ after a predicted spent edge emits `window_cleared` as a stored reading's fall d
 condition the spent event built ([The windows the router works from](routing.md#the-windows-the-router-works-from)). A
 restored wall keeps its anchor across a restart, so within-margin readings after the start do not hold the account spent
 past the window's length ([The windows the router works from](routing.md#the-windows-the-router-works-from)).
+A session's creation time is its main agent's first placement, kept across a failover, a move and a second pin, so the
+Sessions view's order by creation is stable ([Routing](routing.md#selection)).
+A usage-based seat's old plan readings start no shedding round ([Routing](routing.md#moves)).
 
 With `keepalive.enabled` on a pool the router keeps a replayable copy of every eligible request a session sends and,
 shortly before the cache entry would expire, sends a probe that reads it ([Keepalive](keepalive.md)). The policy's
@@ -121,6 +124,15 @@ holder's lease is live and lets such a request take the session over once the le
 after its release, freeing its slot of the agent cap ([The five states](keepalive.md#the-five-states)). A failed or
 canceled request leaves the last answered recipe armed, and a probe's transient failure retries on a ladder bounded by
 the entry's expiry ([The five states](keepalive.md#the-five-states)).
+A message's text-only content array hashes as its blocks up to the last one carrying the cache marker, a single block as
+its text, an idle window counts a return on either of the last two message boundaries of the request before it, and a
+refreshing request whose chain holds neither boundary while its answer read the cache is logged and counted per client
+version, every chain hash of such a body moving once at the deploy, so the cache map and the anchors of running sessions
+start cold ([Keepalive](keepalive.md#the-return-rate-by-idle-age), [Relay](relay.md#the-boundary-chains)).
+The idle-return counters are kept by pool and UTC day, so the keepalive overview answers the return rate over the last 7
+or 30 days, the counters starting afresh at the deploy ([Keepalive](keepalive.md#the-return-rate-by-idle-age)).
+The keepalive mod keeps a subagent the router named released unannounced when a later answer omits it, until its next
+report, so a released record's departure frees its slot ([The keepalive protocol](relay.md#the-keepalive-protocol)).
 
 The admin listener serves the web console behind a login with the admin secret, with the views in the sidebar's order,
 Dashboard, Quota, Accounts, Pools, Keys, Guardrails, Requests, Analytics, Sessions and Settings, and under them the
@@ -144,9 +156,12 @@ shell](console.md#the-shell)). The unit legend takes the focus when it opens and
 closes on Escape, and the Settings view's Appearance rows wrap their controls under their labels at a phone's width
 ([The shell](console.md#the-shell), [Settings](console.md#settings)). A key's processed rules are read on `GET
 /admin/keys/{id}/models` and in the key dialog, and the model weight estimated attention item opens no page ([API
-reference](api-reference.md)). Each `GET /admin/sessions` row carries its pin's context window, the last prompt's share
-of it and the cached prefix, and a companion session's row lists them for every pin of its unreleased agents ([API
-reference](api-reference.md)). The admin API is documented by an OpenAPI document the router serves, with an interactive
+reference](api-reference.md)). Each `GET /admin/sessions` row reads from the main agent's conversation pin, or the
+newest conversation pin of another agent where main holds none, and lists the row's conversation pins as agent lines
+with their effort and their warmth, a session no companion reports leaving the list after the non-companion timeout of
+the sessions block ([API reference](api-reference.md), [Installation](installation.md#sessions),
+[Keepalive](keepalive.md#in-the-console)).
+The admin API is documented by an OpenAPI document the router serves, with an interactive
 reference page on the admin listener ([API reference](api-reference.md)). The account's `has_extra_usage_enabled` reads
 the stored profile's `organization` member, as its rate-limit tier does ([API reference](api-reference.md)). The account
 create and edit refuse a body that is not a JSON object with `body must be a JSON object`, and the pool members route
@@ -189,13 +204,13 @@ answer its `windows` empty, as they do for a disconnected account ([Pairing](pai
 plan ended closes an open usage-poll backoff run, so `poll_backoff` clears with the pause
 ([Statistics](statistics.md#conditions-and-gauges)). An account's plan reads as one word resolved from its profile's
 organization type first and its rate-limit tier second (`free`, `pro`, `max_5x`, `max_20x`, `max`, `team`, `enterprise`
-or `usage_based`), and a free, Team or Enterprise organization prices no capacity, so the router reads it as an untiered
-account ([Pairing](pairing.md#two-kinds-of-account), [API reference](api-reference.md)). An account's badge, its Plan
-row and the Accounts search read the plan the router resolved from the organization type and the tier, "Free" for a free
-organization and "Usage-based" for a seat, as do the Quota card's chip, the capacity rings and the routing log's
-candidates ([Accounts](console.md#accounts), [Dashboard](console.md#dashboard), [Quota](console.md#quota), [Routing
-log](console.md#routing-log)). An account's detail draws "Allowance left at reset", each weekly window's share left
-unused at its last four resets in the top bar's unit, a term's end counting as a reset marked "term ended"
+or `usage_based`), and a free organization or a usage-based seat prices no capacity, so the router reads it as an
+untiered account ([Pairing](pairing.md#two-kinds-of-account), [API reference](api-reference.md)). An account's badge,
+its Plan row and the Accounts search read the plan the router resolved from the organization type and the tier, "Free"
+for a free organization and "Usage-based" for a seat, as do the Quota card's chip, the capacity rings and the routing
+log's candidates ([Accounts](console.md#accounts), [Dashboard](console.md#dashboard), [Quota](console.md#quota),
+[Routing log](console.md#routing-log)). An account's detail draws "Allowance left at reset", each weekly window's share
+left unused at its last four resets in the top bar's unit, a term's end counting as a reset marked "term ended"
 ([Accounts](console.md#accounts)). An account's detail draws "Meter drift", the newest completed window of each kind
 against the table with the windows off the band in 30 days, opening the Meter view on the account
 ([Accounts](console.md#accounts)). An account's end editor names the browser's zone beside its field
@@ -294,11 +309,20 @@ behind the one on screen. A whole-day or whole-hour duration drops its zero part
 hour `1h`. Every data table alternates its row tone, with a hovered or selected row reading over it ([The
 console](console.md)). The page behind an open dialog holds still and keeps its scroll position. The embedded console
 builds on Node 26 or later, which the build script checks before npm runs ([Installation](installation.md#build)).
+A pool's change rows name each keepalive policy member they moved as `keepalive.<member>`, and a new pool's row lists
+the policy ([Console](console.md#routing-log)).
+A Team or Enterprise seat prices under its tier word where the cost table holds it, and the log says when it does not
+([Pairing](pairing.md#account-states)).
+A plan-ended account answers the plan and the tier its last profile named, its earlier readings keeping the plan they
+were priced under ([Pairing](pairing.md#account-states)).
+`POST /admin/keys` and the key edit refuse an unknown member with `400` as the pool routes do ([API
+reference](api-reference.md)).
 
 Every finished request lands in the ledger as one row for the client request, one per attempt and one per routing
 decision, folded into the hourly rollup the analytics read ([Statistics](statistics.md#the-ledger)). Each attempt
-carries its token counts and the serving account's tier, which a page or a route prices when it reads them
-([Pricing](statistics.md#pricing)). A subscription account's plan-side figures read as a share of its 5-hour and 7-day
+carries its token counts and the tier the router prices by, which a page or a route prices when it reads them, so a free
+organization's and a usage-based seat's requests read unpriced in every figure ([Pricing](statistics.md#pricing), [Plan
+meter](statistics.md#plan-meter)). A subscription account's plan-side figures read as a share of its 5-hour and 7-day
 windows ([Plan meter](statistics.md#plan-meter)). The metrics listener serves `/metrics` in Prometheus text format
 ([Metrics](statistics.md#metrics)), and the `phoebis_attention` gauge carries what needs an operator
 ([Conditions and gauges](statistics.md#conditions-and-gauges)). A failed credential refresh raises `refresh_failed` in
@@ -337,6 +361,17 @@ category, and the analytics answer the refused requests in range per category
 ([Refused requests](statistics.md#refused-requests)). The analytics answer the weekly allowance each subscription
 account left unused at its resets in range, from the stored window reset events
 ([Quota samples](statistics.md#quota-samples)).
+The reconciliation fold drops a dip in a window's readings that the next readings reverse past what the attempts
+predict, so a transient zero poll counts its window's rise once and holds no `meter_drift`
+([Statistics](statistics.md#conditions-and-gauges)).
+A window's reading carries the plan and the tier the account held when it was taken, and a window's reset event and the
+allowance route answer that pair ([Statistics](statistics.md#quota-samples)).
+A `poll_backoff_ended` event names its cause, a clean poll or the account's plan-ended pause
+([Statistics](statistics.md#conditions-and-gauges)).
+The profile is read again on every third usage poll, a quarter hour apart, so a tier or plan change reaches the router
+within a quarter hour ([Statistics](statistics.md#quota-samples)).
+A re-fold after a moved prompt-length threshold writes into no hour the rollup purge dropped
+([Statistics](statistics.md#retention)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
 the request arrived. The price table and the subscription cost model are revision lists keyed by effective date, the
@@ -400,6 +435,11 @@ The first start after the upgrade moves the stored refusals out of the counts in
 An attachment written from either dialog stamps every row whose list it changes, so a pool, key or guardrail save
 opened before it is refused as stale.
 The Attach box of the pool and key dialogs stays open while the operator picks.
+The refusal count narrows by the client and user agent patterns the analytics read and holds their group patterns to the
+same bound, and the request log and the routing log filter on an agent id
+([Statistics](statistics.md#refused-requests)).
+A guardrail block writes a `refused` decision row with the guardrail's name beside its request row, so the routing log
+shows the block ([Guardrails](guardrails.md#observe-then-enforce)).
 
 The router serves Claude Code alone: a request on the two Messages routes from any other client is refused `403`
 `client_not_allowed` before its body is read, under every key ([Clients](routing.md#clients)). The contract gained the

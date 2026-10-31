@@ -218,6 +218,8 @@ pub fn head_sample(
                             reset: unified.five_hour_reset,
                             observed_at,
                             source: WindowSource::Head,
+                            plan: None,
+                            tier: None,
                         },
                     );
                 }
@@ -229,6 +231,8 @@ pub fn head_sample(
                             reset: unified.seven_day_reset,
                             observed_at,
                             source: WindowSource::Head,
+                            plan: None,
+                            tier: None,
                         },
                     );
                 }
@@ -243,6 +247,8 @@ pub fn head_sample(
                             reset: unified.seven_day_oi_reset,
                             observed_at,
                             source: WindowSource::Head,
+                            plan: None,
+                            tier: None,
                         },
                     );
                 }
@@ -283,6 +289,8 @@ fn bucket_reading(bucket: Bucket, observed_at: i64) -> WindowReading {
         reset: bucket.reset,
         observed_at,
         source: WindowSource::Head,
+        plan: None,
+        tier: None,
     }
 }
 

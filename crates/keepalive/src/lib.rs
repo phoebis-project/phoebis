@@ -23,8 +23,8 @@ pub use config::{
 };
 pub use engine::{
     continues_prefix, guard, idle_age_bucket, spawn_observer, AgentState, AgentStatus, Engine,
-    EngineParts, EngineStats, Funding, Guard, IdleReturnBucket, IdleReturns, ParkKind, Reason,
-    SavingsUnit, SessionKey, Wasted, IDLE_AGE_BOUNDS_SECONDS, MAIN_AGENT,
+    EngineParts, EngineStats, Funding, Guard, IdleReturnBucket, IdleReturns, ParkKind,
+    PrefixAnchor, Reason, SavingsUnit, SessionKey, Wasted, IDLE_AGE_BOUNDS_SECONDS, MAIN_AGENT,
 };
 pub use events::{decode_json_event, Ack, AckAgent, Event, EventError, PROTOCOL};
 pub use probe::{ProbeOutcome, ProbeRecord, PROBE_DEADLINE};

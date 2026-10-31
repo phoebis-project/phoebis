@@ -258,10 +258,33 @@ CREATE TABLE IF NOT EXISTS guardrail_attachments (
 CREATE INDEX IF NOT EXISTS guardrail_attachments_subject ON guardrail_attachments (subject_kind, subject_id, position);
 "#;
 
+/// The pins carry the auxiliary-only mark, so a restart reads it from the row rather than deriving it from two
+/// stamps, and the effort of the request that placed or last renewed the pin, which the Sessions route answers.
+/// `session_first_seen` keeps when each agent of a session first placed a pin, a creation time a failover or a move
+/// leaves alone. The idle-return counters are kept per UTC day so the overview can answer a range, and the all-time
+/// rows leave with the old table, since a count with no day cannot be placed on one. The newest reading of each
+/// window keeps the plan and the tier it was taken under, so a reset prices a past week at that week's own tier.
+const V2: &str = r#"
+ALTER TABLE pins ADD COLUMN auxiliary_only INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN effort TEXT NOT NULL DEFAULT '';
+CREATE TABLE session_first_seen (
+  key_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, first_seen_at INTEGER NOT NULL,
+  PRIMARY KEY (key_id, session_id, agent_id)
+);
+DROP TABLE keepalive_idle_returns;
+CREATE TABLE keepalive_idle_returns (
+  pool_id TEXT NOT NULL, day INTEGER NOT NULL, bucket INTEGER NOT NULL, reached INTEGER NOT NULL,
+  returned INTEGER NOT NULL,
+  PRIMARY KEY (pool_id, day, bucket)
+);
+ALTER TABLE usage_windows ADD COLUMN plan TEXT;
+ALTER TABLE usage_windows ADD COLUMN tier TEXT;
+"#;
+
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or
 /// rebuild a table, so an older build refuses a newer registry rather than misreading it.
-pub const MIGRATIONS: &[(u32, &str)] = &[];
+pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2)];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;

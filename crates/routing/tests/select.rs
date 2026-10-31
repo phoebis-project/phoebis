@@ -14,9 +14,9 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
-    CooldownRow, Failover, OveragePolicy, PinBurn, PinKey, PinRow, PoolMember, PoolRow,
-    RegistryLoad, ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow, Shedding,
-    SlowDown, StateCause, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
+    CooldownRow, Failover, FirstSeenRow, OveragePolicy, PinBurn, PinKey, PinRow, PoolMember,
+    PoolRow, RegistryLoad, ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow,
+    Shedding, SlowDown, StateCause, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -442,6 +442,7 @@ fn select_request(
         fast: false,
         classifier: false,
         body_tokens: 0,
+        effort: None,
     }
 }
 
@@ -481,6 +482,8 @@ fn sample(five_hour: f64, seven_day: f64, observed_at: i64) -> UtilizationSample
             reset: None,
             observed_at,
             source: WindowSource::Poll,
+            plan: None,
+            tier: None,
         },
     )
     .with(
@@ -490,6 +493,8 @@ fn sample(five_hour: f64, seven_day: f64, observed_at: i64) -> UtilizationSample
             reset: None,
             observed_at,
             source: WindowSource::Poll,
+            plan: None,
+            tier: None,
         },
     )
 }
@@ -509,6 +514,8 @@ fn refreshing(
                 reset: Some(five_hour_reset),
                 observed_at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         )
         .with(
@@ -518,6 +525,8 @@ fn refreshing(
                 reset: Some(seven_day_reset),
                 observed_at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         )
 }
@@ -532,6 +541,8 @@ fn with_fable(base: UtilizationSample, fable: f64, fable_reset: Option<i64>) -> 
             reset: fable_reset,
             observed_at,
             source: WindowSource::Poll,
+            plan: None,
+            tier: None,
         },
     )
 }
@@ -706,6 +717,8 @@ fn pace_ranks_remaining_weekly_allowance_over_hours_to_reset_and_scores_an_unsam
                 reset: Some(reset_at),
                 observed_at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         )
     };
@@ -3993,6 +4006,8 @@ fn an_unknown_seven_day_reading_drops_nothing() {
                 reset: Some(9 * HOUR),
                 observed_at: 1_000,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -5896,6 +5911,8 @@ fn the_blocker_passes_an_api_key_candidate_while_its_bucket_holds_room() {
                 reset: Some(1_000 + MINUTE),
                 observed_at: 1_000,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         )
     };
@@ -6669,6 +6686,80 @@ fn after_a_return_to_plan_move_a_warm_entry_on_the_source_cannot_place_the_reque
     assert_eq!(
         sel.trace.placement, None,
         "a is not among the move's destinations, so rung 3 never considers its entry"
+    );
+}
+
+#[test]
+fn an_agents_first_placement_answers_its_first_seen_row_once_and_a_renewal_or_a_second_model_writes_none(
+) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let first_seen = |writes: &[StateWrite]| -> Vec<FirstSeenRow> {
+        writes
+            .iter()
+            .filter_map(|write| match write {
+                StateWrite::InsertFirstSeen(row) => Some(row.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let row = |agent: &str, at: i64| FirstSeenRow {
+        key_id: "k".into(),
+        session_id: "s1".into(),
+        agent_id: agent.into(),
+        first_seen_at: at,
+    };
+    let turn = |model: &str, agent: &str, at: i64| {
+        select_request(&s, "k", Some("s1"), model, agent, true, &[], at)
+    };
+    let (_, placed) = select(
+        &mut st,
+        &s,
+        &turn("claude-sonnet-5", "main", 1_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        first_seen(&placed),
+        [row("main", 1_000)],
+        "main's first placement writes its record"
+    );
+    let (_, renewed) = select(
+        &mut st,
+        &s,
+        &turn("claude-sonnet-5", "main", 2_000),
+        &mut rng(),
+    );
+    let (_, second) = select(
+        &mut st,
+        &s,
+        &turn("claude-opus-5", "main", 3_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        (first_seen(&renewed), first_seen(&second)),
+        (Vec::new(), Vec::new()),
+        "a renewal places nothing, and main's pin on a second model finds its record standing"
+    );
+    let (_, subagent) = select(
+        &mut st,
+        &s,
+        &turn("claude-sonnet-5", "worker-1", 4_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        first_seen(&subagent),
+        [row("worker-1", 4_000)],
+        "a subagent's first placement writes a record of its own"
+    );
+    assert_eq!(
+        (
+            st.first_seen("k", "s1", "main"),
+            st.first_seen("k", "s1", "worker-1")
+        ),
+        (Some(1_000), Some(4_000))
     );
 }
 
@@ -7607,6 +7698,8 @@ fn a_spent_seven_day_window_moves_the_pin_as_a_spent_five_hour_one_does() {
                 reset: Some(9 * HOUR),
                 observed_at: 1_500,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8283,6 +8376,8 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         marked_at: None,
         marked_on: None,
         marked_window: None,
+        auxiliary_only: false,
+        effort: String::new(),
     };
     st.record_overage("a", overage(true, 1_000, Some(1_999)));
     let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
@@ -8337,6 +8432,8 @@ fn pace_reads_the_window_map_and_ranks_an_api_key_account_by_its_worst_bucket() 
                 reset,
                 observed_at,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         )
     };
@@ -8386,6 +8483,8 @@ fn a_subscription_window_past_its_reset_scores_as_untouched_not_by_a_minutes_cla
                 reset: Some(999),
                 observed_at: 999,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8403,6 +8502,8 @@ fn a_subscription_window_past_its_reset_scores_as_untouched_not_by_a_minutes_cla
                 reset: Some(1_000 + HOUR),
                 observed_at: 1_000,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8602,6 +8703,8 @@ fn an_unread_window_is_skipped_for_a_placement_and_reads_least_bad_for_a_move() 
                     reset: Some(T + 3 * HOUR),
                     observed_at: T - 500,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             ),
         );
@@ -8722,6 +8825,8 @@ fn the_exhaustion_deadline_takes_each_spent_accounts_latest_dated_reset_past_an_
                 reset: Some(5 * HOUR),
                 observed_at: 1,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8758,6 +8863,8 @@ fn a_spent_pin_waits_only_when_every_spent_window_names_its_reset() {
                 reset: Some(T + 30_000),
                 observed_at: T - 500,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8800,6 +8907,8 @@ fn an_exhausted_bucket_of_one_model_is_refunded_at_its_reset_and_a_siblings_free
                 reset: Some(1_030),
                 observed_at: 1_000,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8816,6 +8925,8 @@ fn an_exhausted_bucket_of_one_model_is_refunded_at_its_reset_and_a_siblings_free
                 reset: None,
                 observed_at: 1_031,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8832,6 +8943,8 @@ fn an_exhausted_bucket_of_one_model_is_refunded_at_its_reset_and_a_siblings_free
                 reset: None,
                 observed_at: 1_000,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8873,6 +8986,8 @@ fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
                 reset: Some(1_000 + 96 * HOUR),
                 observed_at: 1_000,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -8885,6 +9000,8 @@ fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
                 reset: Some(1_000 + 24 * HOUR),
                 observed_at: 1_000,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -9414,6 +9531,8 @@ fn a_fable_spent_candidate_is_skipped_as_spent_whether_or_not_it_names_a_reset()
                 reset: Some(2_000),
                 observed_at: 1_000,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -9431,6 +9550,8 @@ fn a_fable_spent_candidate_is_skipped_as_spent_whether_or_not_it_names_a_reset()
                 reset: None,
                 observed_at: 1_000,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -9921,6 +10042,155 @@ fn a_main_turn_on_a_pin_only_auxiliary_requests_used_clears_its_flag_and_it_read
     );
 }
 
+/// The row the selection's `UpsertPin` write carries for session `session`'s main pin.
+fn upserted(writes: &[StateWrite], session: &str) -> PinRow {
+    writes
+        .iter()
+        .find_map(|w| match w {
+            StateWrite::UpsertPin(row) if row.session_id == session && row.agent_id == "main" => {
+                Some(row.clone())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the selection writes {session}'s pin: {writes:?}"))
+}
+
+/// The pin the selection handed out.
+fn handed_out(result: SelectResult) -> PinRef {
+    match result {
+        SelectResult::Selected(selection) => {
+            selection.pin.expect("a session's selection holds a pin")
+        }
+        other => panic!("expected a selection, got {other:?}"),
+    }
+}
+
+/// `req` naming `effort` as its effective effort.
+fn with_effort(req: SelectRequest, effort: Option<&str>) -> SelectRequest {
+    SelectRequest {
+        effort: effort.map(String::from),
+        ..req
+    }
+}
+
+#[test]
+fn a_placement_under_an_auxiliary_class_writes_its_row_flagged_and_a_refreshing_one_writes_it_clear(
+) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let (_, writes) = select(&mut st, &s, &classed(&s, "title", T), &mut rng());
+    assert!(
+        upserted(&writes, "s1").auxiliary_only,
+        "the title request's placement writes the flag on the row it persists"
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let (_, writes) = select(&mut st, &s, &classed(&s, "main", T), &mut rng());
+    assert!(
+        !upserted(&writes, "s1").auxiliary_only,
+        "a main turn's placement writes the row clear"
+    );
+}
+
+#[test]
+fn a_refreshing_renewal_of_a_row_stored_flagged_writes_it_clear_and_an_auxiliary_one_keeps_it() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    // A row a placement under an auxiliary class stored, as a restart loads it.
+    let mut st = loaded(vec![PinRow {
+        auxiliary_only: true,
+        ..seeded_pin("s1", "a", T)
+    }]);
+    let (_, writes) = select(&mut st, &s, &classed(&s, "quota", T), &mut rng());
+    assert!(
+        upserted(&writes, "s1").auxiliary_only,
+        "an auxiliary request renews the row with its flag"
+    );
+    let (_, writes) = select(&mut st, &s, &classed(&s, "main", T + 1_000), &mut rng());
+    assert!(
+        !upserted(&writes, "s1").auxiliary_only,
+        "the main turn's refresh writes the row clear"
+    );
+    assert!(
+        !st.auxiliary_only(&pin_key("s1")),
+        "the held row reads clear as well"
+    );
+}
+
+#[test]
+fn a_placement_stamps_the_requests_effort_on_its_row_and_its_pin_and_one_naming_none_stamps_none() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let (result, writes) = select(
+        &mut st,
+        &s,
+        &with_effort(classed(&s, "main", T), Some("high")),
+        &mut rng(),
+    );
+    assert_eq!(
+        (upserted(&writes, "s1").effort, handed_out(result).effort),
+        ("high".to_string(), Some("high".to_string())),
+        "the word the request named, on the stored row and on the pin the selection hands out"
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let (result, writes) = select(&mut st, &s, &classed(&s, "main", T), &mut rng());
+    assert_eq!(
+        (upserted(&writes, "s1").effort, handed_out(result).effort),
+        (String::new(), None),
+        "a request that named no effort stamps none"
+    );
+}
+
+#[test]
+fn a_renewal_restamps_the_effort_a_client_request_names_and_a_probes_renewal_keeps_the_stored_one()
+{
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &with_effort(classed(&s, "main", T), Some("high")),
+        &mut rng(),
+    );
+    let (result, writes) = select(
+        &mut st,
+        &s,
+        &with_effort(classed(&s, "main", T + 1_000), Some("low")),
+        &mut rng(),
+    );
+    assert_eq!(
+        (upserted(&writes, "s1").effort, handed_out(result).effort),
+        ("low".to_string(), Some("low".to_string())),
+        "a client request naming another word restamps the row and the pin it hands out"
+    );
+    let probe = SelectRequest {
+        probe: true,
+        ..with_effort(classed(&s, "main", T + 2_000), Some("max"))
+    };
+    let (result, writes) = select(&mut st, &s, &probe, &mut rng());
+    assert_eq!(
+        (upserted(&writes, "s1").effort, handed_out(result).effort),
+        ("low".to_string(), Some("low".to_string())),
+        "a probe replays another request's body, so the row keeps the word its own requests stamped"
+    );
+    let (result, writes) = select(&mut st, &s, &classed(&s, "main", T + 3_000), &mut rng());
+    assert_eq!(
+        (upserted(&writes, "s1").effort, handed_out(result).effort),
+        (String::new(), None),
+        "a client request naming none restamps none"
+    );
+}
+
 #[test]
 fn a_fresh_placement_under_main_or_with_no_class_leaves_the_new_pins_flag_clear() {
     let s = snapshot(Pool {
@@ -9980,41 +10250,44 @@ fn a_main_turn_on_another_lane_keeps_the_flag_of_a_pin_only_auxiliary_requests_u
 }
 
 #[test]
-fn a_loaded_pin_whose_last_refresh_is_its_creation_is_flagged_and_reads_warm_by_its_last_use() {
-    // Both created an hour before `T` and used a second before it.
+fn a_loaded_pin_whose_last_refresh_is_its_creation_reads_as_a_conversation_pin_unless_its_row_is_flagged(
+) {
+    // Both created an hour before `T`, last refreshed at their placement and used a second before it.
     let st = loaded(vec![
         PinRow {
             last_refresh_at: T - HOUR,
             ..seeded_pin("s1", "a", T)
         },
         PinRow {
-            last_refresh_at: T - HOUR + 1_000,
+            last_refresh_at: T - HOUR,
+            auxiliary_only: true,
             ..seeded_pin("s2", "a", T)
         },
     ]);
     assert!(
-        st.auxiliary_only(&pin_key("s1")),
-        "no refreshing turn moved the stamp since the placement"
+        !st.auxiliary_only(&pin_key("s1")),
+        "the row carries no flag, whatever its two stamps read"
     );
     assert!(
-        !st.auxiliary_only(&pin_key("s2")),
-        "a refreshing turn moved the stamp a second after the placement"
+        st.auxiliary_only(&pin_key("s2")),
+        "the row carries the flag"
     );
     assert!(
-        st.pin_warm(&pinned(&st, "s1"), T),
+        !st.pin_warm(&pinned(&st, "s1"), T),
+        "refreshed an hour ago, the conversation pin is cold"
+    );
+    assert!(
+        st.pin_warm(&pinned(&st, "s2"), T),
         "used a second ago, the flagged pin is warm"
-    );
-    assert!(
-        !st.pin_warm(&pinned(&st, "s2"), T),
-        "refreshed an hour ago, the other pin is cold"
     );
 }
 
-/// Both pins placed an hour before `T` and used a second before it: `flagged` last refreshed at its placement, so a
-/// load flags it, and `clear` a second after it.
+/// Both pins placed an hour before `T` and used a second before it: `flagged` last refreshed at its placement and
+/// stored with the flag, and `clear` refreshed a second after it.
 fn a_flagged_and_a_clear_pin(flagged_burn: f64, clear_burn: f64) -> (PinRow, PinRow) {
     let flagged = PinRow {
         last_refresh_at: T - HOUR,
+        auxiliary_only: true,
         ..burning("flagged", "a", flagged_burn, true, T)
     };
     let clear = PinRow {
@@ -11393,12 +11666,14 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
         marked_at: None,
         marked_on: None,
         marked_window: None,
+        auxiliary_only: false,
+        effort: String::new(),
     }
 }
 
 /// `seeded_pin` burning `burn` input tokens a second in both copies, warm or cold: the default tables price it
-/// at `burn`. A cold pin was last refreshed half an hour ago, after its placement, so a load leaves it unflagged and
-/// its use a second ago keeps it no warmer.
+/// at `burn`. A cold pin was last refreshed half an hour ago and its row carries no flag, so its use a second ago
+/// keeps it no warmer.
 fn burning(session: &str, account: &str, burn: f64, warm: bool, now: i64) -> PinRow {
     let rates = input_rate(burn);
     PinRow {
@@ -12365,6 +12640,8 @@ fn an_api_key_sibling_with_a_full_bucket_reads_least_bad_and_a_fitting_one_takes
                 reset: Some(T + MINUTE),
                 observed_at: T + 500,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -12419,6 +12696,8 @@ fn an_api_key_sibling_fits_while_its_bucket_holds_room() {
                     reset: Some(T + MINUTE),
                     observed_at: T + 500,
                     source: WindowSource::Head,
+                    plan: None,
+                    tier: None,
                 },
             ),
         );
@@ -12856,6 +13135,8 @@ fn a_usage_based_seats_plan_week_read_before_the_class_holds_no_request_and_refu
             reset: Some(T + 5 * 24 * HOUR),
             observed_at: T - 500,
             source: WindowSource::Poll,
+            plan: None,
+            tier: None,
         },
     );
     let lone = snapshot_with_terms(
@@ -13057,6 +13338,33 @@ fn a_usage_based_seats_candidate_facts_list_its_spend_entry_and_no_plan_window_w
         windows("a"),
         [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE],
         "the plan member lists its three plan windows"
+    );
+}
+
+#[test]
+fn a_usage_based_seats_weekly_reading_from_before_the_class_projects_nothing_so_no_shed_round_fires_on_it(
+) {
+    // The pool's lone member, so no plan sibling draws the cold pin off the seat before the shed rule reads it.
+    let s = spend_pool(vec![("b", 0)]);
+    let mut st = loaded(vec![burning("s1", "b", 4.0, false, T)]);
+    // The week the seat read past the ceiling before it converted, which the routing state keeps until its reset.
+    st.record_sample("b", weekly(0.1, 0.99, 4, T - 500));
+    past_the_wait(&mut st, &s, "p", "b", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), None),
+        "the pin renews on the seat"
+    );
+    assert_eq!(d.shed_round, None, "no round ran on the seat");
+    assert_eq!(st.last_shed("p", "b"), None);
+    let shed = line(&d.record, "move:shed");
+    assert!(
+        shed.facts
+            .iter()
+            .all(|f| !f.key.starts_with("projection_") && f.key != "trigger" && f.key != "round"),
+        "the shed line reads no projection and no round: {:?}",
+        shed.facts
     );
 }
 
@@ -13396,6 +13704,8 @@ fn weekly(
             reset: Some(T + WEEK_MS * remaining_tenths / 10),
             observed_at,
             source: WindowSource::Poll,
+            plan: None,
+            tier: None,
         },
     )
 }
@@ -13415,6 +13725,8 @@ fn a_five_hour_window_whose_projection_stays_under_the_ceiling_at_its_reset_does
                 reset: Some(T + HOUR),
                 observed_at: T - 500,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -13875,6 +14187,7 @@ fn a_pin_that_fails_over_off_its_account_leaves_its_mark_with_the_row() {
                     epoch: current.epoch,
                     lane: current.lane,
                     entrypoint: String::new(),
+                    effort: None,
                 },
                 account,
             )
@@ -14823,6 +15136,8 @@ fn the_fit_table_reads_an_api_key_member_by_its_worst_bucket_alone() {
                 reset: Some(T + MINUTE),
                 observed_at: T + 500,
                 source: WindowSource::Head,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -19673,6 +19988,8 @@ fn an_api_key_candidate_fits_with_no_runway_under_a_full_bucket_and_reads_least_
                     reset: Some(T + MINUTE),
                     observed_at: T - 500,
                     source: WindowSource::Head,
+                    plan: None,
+                    tier: None,
                 },
             ),
         );
@@ -19747,6 +20064,8 @@ fn a_candidate_without_a_reading_on_a_drawn_window_or_without_a_tier_reads_least
                 reset: Some(T + 3 * HOUR),
                 observed_at: T - 500,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -20292,6 +20611,8 @@ fn windows_with_resets(
                 reset: Some(five_hour.1),
                 observed_at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         )
         .with(
@@ -20301,6 +20622,8 @@ fn windows_with_resets(
                 reset: Some(seven_day.1),
                 observed_at,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         )
 }
@@ -20669,6 +20992,44 @@ fn a_renewal_on_an_account_whose_pins_draw_no_fable_week_names_no_fable_week() {
             "the Fable week is no window the account's pins draw"
         );
     }
+}
+
+#[test]
+fn a_renewal_on_a_usage_based_seat_names_the_idle_age_where_a_plan_members_week_would_cross_the_ceiling(
+) {
+    // A hundred tokens a second take the week's 0.93 to 0.96 at its horizon, over the ceiling, so a plan member's
+    // renewal names the week. On a usage-based seat of the same tier the reading is one kept from before it converted,
+    // and no round reads a seat's plan week, so its renewal names the idle age.
+    let renew = |s: &RegistrySnapshot| {
+        let mut st = priced(vec![burning("s1", "a", 100.0, true, T)]);
+        st.record_sample("a", sample(0.1, 0.93, T - 500));
+        decide(&mut st, s, &auxiliary(s, "s1", T), &mut rng())
+    };
+    let pool = || Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    };
+    let d = renew(&tiered(pool()));
+    assert_eq!(d.record.outcome.kind, "renewed");
+    assert_eq!(
+        summary_facts(&d),
+        vec![(SEVEN_DAY, FactValue::Number(0.93), Some("percent"))],
+        "on a plan member the week's projection crosses the ceiling"
+    );
+    let seat = snapshot_with_terms(
+        pool(),
+        vec![SubscriptionTerm {
+            tier: Some(TIER.into()),
+            ..usage_based_seat("a")
+        }],
+    );
+    let d = renew(&seat);
+    assert_eq!(d.record.outcome.kind, "renewed");
+    assert_eq!(
+        summary_facts(&d),
+        vec![("idle", FactValue::Int(1_000), Some("ms"))],
+        "the seat's renewal names its idle age, never the old week's utilization"
+    );
 }
 
 /// The 5-hour projection's source for the round cases: `a` at 0.80 with the reset an hour out and its pins burning
@@ -21624,6 +21985,8 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
         reset: Some(reset),
         observed_at: T,
         source: WindowSource::Poll,
+        plan: None,
+        tier: None,
     };
     let alder_fable_reset = T + 6 * DAY + 272 * MINUTE;
     st.record_sample(
@@ -22868,6 +23231,7 @@ fn a_shed_move_and_a_failover_landing_keep_the_pins_cycle_under_its_key() {
                 epoch: current.epoch,
                 lane: current.lane.clone(),
                 entrypoint: String::new(),
+                effort: None,
             },
             "a",
         )
@@ -23690,6 +24054,8 @@ fn over_the_week_on_a(st: &mut RoutingState, at: i64) {
                     reset: Some(at + 2 * HOUR),
                     observed_at: at,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             )
             .with(
@@ -23699,6 +24065,8 @@ fn over_the_week_on_a(st: &mut RoutingState, at: i64) {
                     reset: Some(at + 72 * HOUR),
                     observed_at: at,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             )
     };
@@ -24227,6 +24595,7 @@ fn a_failover_landing_on_another_account_leaves_the_sources_deadline_and_keeps_t
                 epoch: current.epoch,
                 lane: current.lane.clone(),
                 entrypoint: String::new(),
+                effort: None,
             },
             "a",
         )
@@ -25363,6 +25732,8 @@ fn the_weekly_trigger_fires_on_the_achieved_burn_under_the_slow_down() {
                     reset: Some(T + 2 * HOUR),
                     observed_at: T - 500,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             )
             .with(
@@ -25372,6 +25743,8 @@ fn the_weekly_trigger_fires_on_the_achieved_burn_under_the_slow_down() {
                     reset: Some(T + 72 * HOUR),
                     observed_at: T - 500,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             )
     };
@@ -26420,6 +26793,8 @@ fn the_cedar_window_replay_ends_at_a_zero_factor_with_the_subagent_held_and_no_r
         reset: Some(reset),
         observed_at: T,
         source: WindowSource::Poll,
+        plan: None,
+        tier: None,
     };
     let cedar_reset = T + 5 * HOUR;
     let alder_fable_reset = T + 6 * DAY + 272 * MINUTE;
@@ -26633,6 +27008,8 @@ fn three_pins_over_the_week(five_hour: f64) -> RoutingState {
                 reset: Some(T + 72 * HOUR),
                 observed_at: T,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );
@@ -27227,6 +27604,8 @@ fn a_weekly_window_fires_in_the_place_of_a_five_hour_window_inside_the_hold() {
                 reset: Some(T + 72 * HOUR),
                 observed_at: T,
                 source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
         ),
     );

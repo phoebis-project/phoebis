@@ -165,3 +165,91 @@ async fn a_speed_switch_reads_the_pin_cold_and_stamps_the_lane_on_the_pin_and_th
         "another per-turn level under the beta keeps the session warm"
     );
 }
+
+/// Reads the answer to its end, so the stream's renewal report carries the turn's own instant before the case moves
+/// the clock to the next one.
+async fn answered(resp: axum::response::Response) {
+    assert_eq!(resp.status(), 200);
+    axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn the_pin_carries_the_effort_its_turn_named_by_the_newest_control_entry_or_the_top_level_member(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let catalog_up = FakeUpstream::start(undated_listing()).await;
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let h = harness_with_store_and_catalog(
+        store.clone(),
+        &up,
+        catalog_up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let per_turn = |body: &[u8]| {
+        let mut req = turn(body);
+        let betas = req.headers()["anthropic-beta"]
+            .to_str()
+            .unwrap()
+            .to_string();
+        set_header(
+            &mut req,
+            "anthropic-beta",
+            &format!("{betas},per-turn-control-2026-07-01"),
+        );
+        req
+    };
+    let continued = |body: &[u8], text: &str| {
+        let mut value: serde_json::Value = serde_json::from_slice(body).unwrap();
+        let messages = value["messages"].as_array_mut().unwrap();
+        messages.push(serde_json::json!({"role": "assistant", "content": "done"}));
+        messages.push(serde_json::json!({"role": "user", "content": text}));
+        serde_json::to_vec(&value).unwrap()
+    };
+
+    // The profile body carries no `output_config` and no control entry.
+    let first = body(BodyFixture::Oauth).to_vec();
+    answered(h.app.clone().oneshot(turn(&first)).await.unwrap()).await;
+    assert_eq!(
+        pin_at(&store, NOW).await.effort,
+        "",
+        "a turn naming no effort stamps none"
+    );
+
+    let low = with_control_entry(&continued(&first, "next"), "low");
+    let low_at = h.clock.fetch_add(1_000, Ordering::SeqCst) + 1_000;
+    answered(h.app.clone().oneshot(per_turn(&low)).await.unwrap()).await;
+    assert_eq!(
+        pin_at(&store, low_at).await.effort,
+        "low",
+        "a control entry names the turn's effort"
+    );
+
+    let high = with_control_entry(&continued(&low, "and now"), "high");
+    let high_at = h.clock.fetch_add(1_000, Ordering::SeqCst) + 1_000;
+    answered(h.app.clone().oneshot(per_turn(&high)).await.unwrap()).await;
+    assert_eq!(
+        pin_at(&store, high_at).await.effort,
+        "high",
+        "the newest control entry wins over the one before it"
+    );
+
+    let mut top_level: serde_json::Value =
+        serde_json::from_slice(&continued(&first, "plainly")).unwrap();
+    top_level["output_config"] = serde_json::json!({"effort": "medium"});
+    let top_level = serde_json::to_vec(&top_level).unwrap();
+    let top_level_at = h.clock.fetch_add(1_000, Ordering::SeqCst) + 1_000;
+    answered(h.app.clone().oneshot(turn(&top_level)).await.unwrap()).await;
+    assert_eq!(
+        pin_at(&store, top_level_at).await.effort,
+        "medium",
+        "with no control entry the top-level member names the effort"
+    );
+}

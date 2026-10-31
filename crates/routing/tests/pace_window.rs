@@ -123,6 +123,7 @@ fn request(s: &RegistrySnapshot, model: &str, now: i64) -> SelectRequest {
         fast: false,
         classifier: false,
         body_tokens: 0,
+        effort: None,
     }
 }
 
@@ -132,6 +133,8 @@ fn reading(utilization: f64, reset: Option<i64>, observed_at: i64) -> WindowRead
         reset,
         observed_at,
         source: WindowSource::Poll,
+        plan: None,
+        tier: None,
     }
 }
 

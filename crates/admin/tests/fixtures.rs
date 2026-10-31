@@ -557,6 +557,12 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .store
         .set_canceled("free-org", true, Some(free_end))
         .unwrap();
+    // The profile read a quarter hour after the end found the free document stored above and flagged the account, as
+    // the poll does. No event is recorded, so the routing log's ids stand.
+    assert!(parts
+        .store
+        .set_plan_ended("free-org", free_end + 900_000)
+        .unwrap());
     // A cap under a quarter, so the pool answers one warning and the console draws a non-empty list.
     post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"shed_cap":0.2,"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0},{"account_id":"usage-seat","priority":2}],"keepalive":{"enabled":true},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
     let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","model_rules":[{"pattern":"claude-opus-*","not":true}],"model_rules_mode":"extend"}"#, Some(&cookie)).await).await;
@@ -633,6 +639,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             fast: false,
             classifier: false,
             body_tokens: 0,
+            effort: None,
         })
         .await
         .unwrap();
@@ -732,6 +739,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             fast: false,
             classifier: false,
             body_tokens: 0,
+            effort: None,
         })
         .await
         .unwrap();
@@ -975,6 +983,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
         reset: Some(now + 30_000),
         observed_at: now - 5_000,
         source: phoebis_routing::WindowSource::Head,
+        plan: None,
+        tier: None,
     };
     parts
         .router
@@ -1032,8 +1042,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
         request_id: Some("r-failover".into()),
     }));
     // Two weeks of `business`'s 7-day window, one reset the clock walk found, and one Fable week, so the unused
-    // allowance capture carries both `observed` words. Days back, so the routing log's hour and the failover's window
-    // hold none of them.
+    // allowance capture carries both `observed` words and each reset's pair, the seeded profile's. Days back, so the
+    // routing log's hour and the failover's window hold none of them.
     for (window, utilization_before, at, observed) in [
         ("seven_day", 0.62, now - 7 * DAY, "sample"),
         ("seven_day", 0.85, now - 14 * DAY, "clock"),
@@ -1043,7 +1053,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             at,
             kind: "window_reset".into(),
             account_id: Some("business".into()),
-            detail: Some(j!({ "window": window, "utilization_before": utilization_before, "reset_at": at, "next_reset": at + 7 * DAY, "observed": observed }).to_string()),
+            detail: Some(j!({ "window": window, "utilization_before": utilization_before, "plan": "max_20x", "tier": "default_claude_max_20x", "reset_at": at, "next_reset": at + 7 * DAY, "observed": observed }).to_string()),
             ..Default::default()
         }));
     }
@@ -1349,16 +1359,37 @@ async fn every_route_is_captured_and_holds_its_shape() {
             },
         )
         .unwrap();
-    // The companion session's main pin and a pin of each of its two agents, each renewed with a prompt and holding one
-    // live cache-map entry rooted at the session, so `sessions.json` carries the row's context figures and its agents'
-    // lines. Each selection is narrowed to one member, so no two pins share an account and a model and their cached
-    // prefixes read apart, and each entry lands on its selection's decision, so the ledger counts no orphan for it. The
-    // pins are placed a minute before the routing log's hour, which holds the routing stories alone.
+    // The companion session's main pin and a pin of each of its two agents, each placed under an effort word, renewed
+    // with a prompt and holding one live cache-map entry rooted at the session, so `sessions.json` carries the row's
+    // prompt and effort and the lines of main and its agents. Each selection is narrowed to one member, so no two pins
+    // share an account and a model, and each entry lands on its selection's decision, so the ledger counts no orphan
+    // for it. The pins are placed a minute before the routing log's hour, which holds the routing stories alone.
     let placed_at = hour_ago - 60_000;
-    for (agent, model, account, prompt, prefix_tokens) in [
-        ("main", "claude-sonnet-5-5", "business", 52_000, 41_000),
-        ("worker-1", "claude-sonnet-5", "business", 31_000, 24_000),
-        ("worker-2", "claude-sonnet-5-5", "direct", 18_500, 12_000),
+    for (agent, model, account, effort, prompt, prefix_tokens) in [
+        (
+            "main",
+            "claude-sonnet-5-5",
+            "business",
+            "high",
+            52_000,
+            41_000,
+        ),
+        (
+            "worker-1",
+            "claude-sonnet-5",
+            "business",
+            "low",
+            31_000,
+            24_000,
+        ),
+        (
+            "worker-2",
+            "claude-sonnet-5-5",
+            "direct",
+            "low",
+            18_500,
+            12_000,
+        ),
     ] {
         let request_id = format!("r-s1-{agent}");
         let candidates = phoebis_routing::resolve(&snapshot, &key_row, model, model)
@@ -1405,6 +1436,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 fast: false,
                 classifier: false,
                 body_tokens: 0,
+                effort: Some(effort.into()),
             })
             .await
             .unwrap();
@@ -1459,6 +1491,36 @@ async fn every_route_is_captured_and_holds_its_shape() {
             ))
             .await;
     }
+    // One auxiliary request of main on a second model, naming no effort, so `sessions.json` reads the row from main's
+    // conversation pin beside a pin only auxiliary requests have used, which draws no line. It is placed at the pins'
+    // instant, before the routing log's hour, and renewed at its answer's end as theirs are, inside the pool's TTL.
+    let auxiliary = parts
+        .router
+        .select(phoebis_routing::SelectRequest {
+            now: placed_at,
+            received_at: placed_at,
+            request_class: Some("auxiliary".into()),
+            ..asked(&parts, key_generation, "r-s1-auxiliary", 1, Some("s1"))
+        })
+        .await
+        .unwrap();
+    let selection = match &auxiliary.result {
+        phoebis_routing::SelectResult::Selected(selection) => selection.clone(),
+        other => panic!("the auxiliary request is placed, not {other:?}"),
+    };
+    drop(auxiliary);
+    parts
+        .router
+        .report(phoebis_routing::Report::PinRenewed {
+            pin: selection.pin.expect("a session's selection holds a pin"),
+            now,
+            usage: None,
+            origin: "client",
+            cache_ttl_ms: 300_000,
+            fast: false,
+            classifier: false,
+        })
+        .await;
     // The two agents register and each sends one turn, so the keepalive's view carries their recipes and the row lists
     // their lines. Main's later `state` event takes a sequence past theirs.
     for (sequence, agent, model, account) in [
@@ -2045,9 +2107,15 @@ async fn every_route_is_captured_and_holds_its_shape() {
             .map(|k| k.to_string())
             .collect::<std::collections::BTreeSet<_>>()
     };
+    // The guardrail block's record is try-sent, so the capture waits for it beside the kinds.
     let log = wait_json(app, &log_route, &cookie, |log| {
         kinds_of(log, "decision") == named(phoebis_ledger::DECISION_KINDS)
             && kinds_of(log, "event") == named(phoebis_ledger::EVENT_KINDS)
+            && log["rows"].as_array().unwrap().iter().any(|row| {
+                row["type"] == "decision"
+                    && row["kind"] == "refused"
+                    && row["refusal"]["kind"] == "guardrail"
+            })
     })
     .await;
     assert!(
@@ -2219,6 +2287,7 @@ fn asked(
         fast: false,
         classifier: false,
         body_tokens: 0,
+        effort: None,
     }
 }
 
@@ -2487,6 +2556,8 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
                     reset: Some(now + 3_600_000),
                     observed_at: now,
                     source: phoebis_routing::WindowSource::Head,
+                    plan: None,
+                    tier: None,
                 },
             ),
             incarnation: 1,
@@ -2615,6 +2686,36 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
         .await
         .unwrap();
     assert!(matches!(refused.result, SelectResult::Refused(_)));
+
+    // The `r-blocked` request row sits 0.6 s before the captured hour, and a refusal's `received_at` is its `at`, so
+    // the block's record takes the hour's first instant to land in the log.
+    parts.router.record_refusal(
+        phoebis_routing::RefusedRequest {
+            request_id: "r-blocked".into(),
+            attempt: 1,
+            seq: 1,
+            at: hour_ago,
+            key_id: "desktop".into(),
+            key_generation,
+            agent_id: "main".into(),
+            parent_agent_id: None,
+            session_id: None,
+            request_class: Some("auxiliary".into()),
+            canonical_model: "claude-sonnet-5-5".into(),
+            lane: Default::default(),
+            flags: Default::default(),
+            chain: Default::default(),
+            attempted: Vec::new(),
+            holds: Vec::new(),
+            client: ClientClass::ClaudeCode,
+            client_version: Some("2.1.310".into()),
+        },
+        phoebis_routing::RefusalFacts {
+            kind: "guardrail",
+            code: "guardrail_blocked",
+            reason: "Large auxiliary requests".into(),
+        },
+    );
 
     // The kinds no report or route of this harness writes, each as its writer builds it: the harness's router prices
     // no burn, so it marks no pin, books no reservation and slows no account, and the round, its mark leaving with the
@@ -2750,6 +2851,8 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             observed: "sample",
             restored: false,
             at: at(5),
+            plan: Some("max_20x".into()),
+            tier: Some("default_claude_max_20x".into()),
         },
         RouterEvent::SlowDownStarted {
             account_id: "business".into(),
@@ -2794,6 +2897,18 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             since: at(6),
             attempts: 2,
             resumed_at: at(8),
+            cause: phoebis_oauth::BackoffEndCause::CleanPoll,
+        },
+    ));
+    // The plan-ended pause closes a run at the flag's instant, so this close shares the `plan_ended` row's minute.
+    parts.ledger.record(phoebis_ledger::poll_backoff(
+        &phoebis_oauth::BackoffEdge::Ended {
+            account_id: "business".into(),
+            at: at(2),
+            since: at(1),
+            attempts: 1,
+            resumed_at: at(2),
+            cause: phoebis_oauth::BackoffEndCause::PlanEnded,
         },
     ));
     parts.ledger.record(phoebis_ledger::poll_failed(
@@ -2895,8 +3010,11 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             actor: Some("admin".into()),
             pool_id: Some("main".into()),
             detail: Some(
-                j!({ "kind": "pool_updated", "target": "main", "diff": { "in_flight_cap": { "from": 16, "to": 1 } } })
-                    .to_string(),
+                j!({ "kind": "pool_updated", "target": "main", "diff": {
+                    "in_flight_cap": { "from": 16, "to": 1 },
+                    "keepalive.max_idle_seconds": { "from": 3600, "to": 86400 },
+                } })
+                .to_string(),
             ),
             ..written(17, "registry_changed")
         },

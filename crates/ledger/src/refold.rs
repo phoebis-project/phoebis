@@ -81,9 +81,10 @@ struct Cursor {
 /// `(received_at, id)`, one transaction per page carrying the page's rows and its cursor, the mark rewritten and the
 /// cursor cleared in the last page's transaction. Answers how many requests moved: 0 on a first start (which writes
 /// the mark with `since` and moves nothing) and on an unchanged file. Rows older than the retention cutoff and rows
-/// received before `since` keep their split. Under a request retention of 0 the walk reads every request, and one
-/// received before the first hour the rollup purge keeps moves only where its hour still holds the rows it folded
-/// into, so an hour the purge removed stays empty and an hour it kept for a budgeted member moves.
+/// received before `since` keep their split. Under a request retention of 0 the walk reads every request. A request
+/// received before the first hour boundary at or after the retention cutoff, or under a request retention of 0 before
+/// the first hour the rollup purge keeps, moves only where its hour still holds the rows it folded into, so an hour
+/// the purge removed stays empty and an hour it kept for a budgeted member moves.
 pub fn refold_bands(
     db: &LedgerDb,
     prices: &PriceRevisions,
@@ -93,20 +94,20 @@ pub fn refold_bands(
 ) -> Result<usize, LedgerError> {
     let loaded = thresholds_of(prices);
     // Each purge's own arithmetic, a zero keeping its rows for good. A nonzero request retention bounds the walk,
-    // since the configuration holds a nonzero rollup retention at least as long as the request one. Under a request
-    // retention of 0 the first hour the rollup purge keeps guards each request before it rather than bounding the
-    // walk, since the purge keeps a budgeted member's hours from its period's start, before that hour, and
-    // `member_spends` prices them by band.
+    // since the configuration holds a nonzero rollup retention at least as long as the request one, so the rollup
+    // purge drops at most the hour the request cutoff splits. The first hour boundary at or after the request cutoff
+    // guards each request before it rather than bounding the walk, since that hour's rows stand for every member under
+    // a rollup retention of 0 or a longer one, and a budgeted member's under an equal one too. Under a request
+    // retention of 0 the first hour the rollup purge keeps guards each request before it rather than bounding the walk,
+    // since the purge keeps a budgeted member's hours from its period's start, before that hour, and `member_spends`
+    // prices them by band.
     let (cutoff, guard) = match (retention_days, rollup_retention_days) {
         (0, 0) => (None, None),
-        (0, days) => {
-            // The rollup purge cuts in seconds and drops every hour that starts before its cutoff.
-            let cutoff = now / 1_000 - i64::from(days) * DAY_S;
-            let hour = cutoff.div_euclid(HOUR_S) * HOUR_S;
-            let first_kept = if hour < cutoff { hour + HOUR_S } else { hour };
-            (None, Some(first_kept * 1_000))
-        }
-        (days, _) => (Some(now - i64::from(days) * DAY_MS), None),
+        (0, days) => (None, Some(first_kept_hour(now, days))),
+        (days, _) => (
+            Some(now - i64::from(days) * DAY_MS),
+            Some(first_kept_hour(now, days)),
+        ),
     };
     let mut moved = 0;
     let (mark, cursor) = db.write(|c| {
@@ -237,6 +238,15 @@ fn pass(
             return Ok(moved);
         }
     }
+}
+
+/// The first hour the rollup purge keeps under a retention of `days` at `now`, in milliseconds. The purge cuts in
+/// seconds and drops every hour that starts before its cutoff.
+fn first_kept_hour(now: i64, days: u32) -> i64 {
+    let cutoff = now / 1_000 - i64::from(days) * DAY_S;
+    let hour = cutoff.div_euclid(HOUR_S) * HOUR_S;
+    let first_kept = if hour < cutoff { hour + HOUR_S } else { hour };
+    first_kept * 1_000
 }
 
 /// Whether the row each delta names stands.
@@ -835,6 +845,108 @@ mod tests {
             spent.iter().map(|s| s.spent_usd).collect::<Vec<_>>(),
             [at_band(Band::Standard)],
             "the month's spend prices the kept hour at the new band"
+        );
+    }
+
+    const HOUR: i64 = 3_600_000;
+    /// The hour a seven-day cutoff back from `SPLIT_NOW` falls half an hour into.
+    const SPLIT_HOUR: i64 = NEW_YEAR + 13 * DAY;
+    const SPLIT_NOW: i64 = SPLIT_HOUR + 7 * DAY + HOUR / 2;
+    /// A request received inside the split hour after the cutoff, and one inside the next hour.
+    const IN_THE_SPLIT_HOUR: i64 = SPLIT_HOUR + 3 * HOUR / 4;
+    const IN_THE_NEXT_HOUR: i64 = SPLIT_HOUR + HOUR + 60_000;
+
+    /// The ledger under a request retention of seven days and `rollup_retention_days` as the purge at `SPLIT_NOW`
+    /// leaves it, the `budgeted` members' periods kept, re-folded once the threshold moves. Answers how many requests
+    /// moved and the rows' bands.
+    fn refolded_past_a_seven_day_cutoff(
+        rollup_retention_days: u32,
+        budgeted: &[BudgetedMember],
+    ) -> (usize, Vec<(i64, String, u64, u64)>) {
+        let db = LedgerDb::open_in_memory().unwrap();
+        assert_eq!(
+            refold_bands(
+                &db,
+                &list(Some(1_000)),
+                7,
+                rollup_retention_days,
+                NEW_YEAR + DAY
+            )
+            .unwrap(),
+            0,
+            "the first start writes the mark"
+        );
+        land(
+            &db,
+            &haiku("split", IN_THE_SPLIT_HOUR, 1_500),
+            &list(Some(1_000)),
+        );
+        land(
+            &db,
+            &haiku("next", IN_THE_NEXT_HOUR, 1_500),
+            &list(Some(1_000)),
+        );
+        purge(&db, 7, rollup_retention_days, SPLIT_NOW, budgeted);
+        let moved =
+            refold_bands(&db, &list(Some(2_000)), 7, rollup_retention_days, SPLIT_NOW).unwrap();
+        (moved, bands(&db))
+    }
+
+    fn standard(received_at: i64) -> (i64, String, u64, u64) {
+        (
+            crate::rollup::hour_of(received_at),
+            STANDARD_BAND.to_string(),
+            1,
+            1_500,
+        )
+    }
+
+    /// Under equal request and rollup retentions the rollup purge drops the hour the request cutoff splits while the
+    /// requests received after the cutoff stand: the re-fold writes no row back into that hour, and the request in the
+    /// next hour moves.
+    #[test]
+    fn under_equal_retentions_the_hour_the_rollup_purge_dropped_at_the_request_cutoff_stays_empty_through_the_refold(
+    ) {
+        assert_eq!(
+            refolded_past_a_seven_day_cutoff(7, &[]),
+            (1, vec![standard(IN_THE_NEXT_HOUR)]),
+            "the dropped hour gets no row back"
+        );
+    }
+
+    /// Under equal retentions the purge keeps a monthly budgeted member's hour at the request cutoff, so the request
+    /// received there after the cutoff moves with the threshold beside the one in the next hour.
+    #[test]
+    fn under_equal_retentions_a_budgeted_members_kept_hour_at_the_request_cutoff_moves_with_the_threshold(
+    ) {
+        let budgeted = [BudgetedMember {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            period: phoebis_store::BudgetPeriod::Month,
+            metered_only: false,
+        }];
+        assert_eq!(
+            refolded_past_a_seven_day_cutoff(7, &budgeted),
+            (
+                2,
+                vec![standard(IN_THE_SPLIT_HOUR), standard(IN_THE_NEXT_HOUR)]
+            ),
+            "the kept hour moved"
+        );
+    }
+
+    /// With the rollups kept for good the hour the request cutoff splits keeps its rows, so the request received there
+    /// after the cutoff moves with the threshold.
+    #[test]
+    fn under_a_zero_rollup_retention_the_request_in_the_hour_the_request_cutoff_splits_moves_with_the_threshold(
+    ) {
+        assert_eq!(
+            refolded_past_a_seven_day_cutoff(0, &[]),
+            (
+                2,
+                vec![standard(IN_THE_SPLIT_HOUR), standard(IN_THE_NEXT_HOUR)]
+            ),
+            "the split hour's rows stand, so its request moved"
         );
     }
 

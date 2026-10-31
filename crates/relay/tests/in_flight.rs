@@ -2023,6 +2023,8 @@ async fn slowed_harness(up: &FakeUpstream) -> Harness {
                     reset: Some(NOW + 10_000 + 3_600_000),
                     observed_at: NOW - back,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             ),
             incarnation: 1,
@@ -2223,6 +2225,8 @@ async fn moved_harness(up: &FakeUpstream, accounts: &[TestAccount]) -> Harness {
         reset: Some(reset),
         observed_at: NOW,
         source: WindowSource::Poll,
+        plan: None,
+        tier: None,
     };
     h.router
         .report(Report::Sample {

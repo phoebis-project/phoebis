@@ -121,7 +121,10 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
                 "rollup_retention_days",
             ],
         ),
-        ("sessions", &["expire_after_seconds"]),
+        (
+            "sessions",
+            &["expire_after_seconds", "non_companion_idle_seconds"],
+        ),
         (
             "storage",
             &[
@@ -152,10 +155,17 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         (
             settings["retention"]["body_capture_max_hours"].as_u64(),
             settings["sessions"]["expire_after_seconds"].as_u64(),
+            settings["sessions"]["non_companion_idle_seconds"].as_u64(),
             settings["listeners"]["metrics"].as_str(),
             settings["listeners"]["proxy_tls"].as_bool(),
         ),
-        (Some(72), Some(86_400), Some("127.0.0.1:9464"), Some(false))
+        (
+            Some(72),
+            Some(86_400),
+            Some(3_600),
+            Some("127.0.0.1:9464"),
+            Some(false)
+        )
     );
     assert_eq!(
         (
@@ -1696,6 +1706,8 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
                 marked_at: None,
                 marked_on: None,
                 marked_window: None,
+                auxiliary_only: false,
+                effort: String::new(),
             })
             .unwrap();
     }
@@ -1794,6 +1806,8 @@ async fn the_sessions_route_prices_from_the_snapshots_tier_so_a_failed_store_tie
             marked_at: None,
             marked_on: None,
             marked_window: None,
+            auxiliary_only: false,
+            effort: String::new(),
         })
         .unwrap();
     let parts = common::admin_parts_full_on(store).await;
@@ -2452,6 +2466,177 @@ async fn the_refusal_count_route_answers_the_range_and_its_categories_under_the_
     );
 }
 
+/// Four refusals on `business` inside the default range, each with its caller's client label and user agent: version
+/// 2.1.310 under the `cli` and the `sdk-cli` entrypoint, 2.1.311 under `cli`, and 2.1.309 under `claude-vscode`.
+async fn refused_callers(parts: &common::Full, cookie: &str) {
+    let now = common::NOW;
+    let callers = [
+        (
+            "cli-310",
+            "claude-code/cli",
+            "claude-cli/2.1.310 (external, cli)",
+            Some("harmful_request"),
+        ),
+        (
+            "sdk-310",
+            "claude-code/sdk-cli",
+            "claude-cli/2.1.310 (external, sdk-cli)",
+            Some("harmful_request"),
+        ),
+        (
+            "cli-311",
+            "claude-code/cli",
+            "claude-cli/2.1.311 (external, cli)",
+            Some("restricted_topic"),
+        ),
+        (
+            "vscode-309",
+            "claude-code/claude-vscode",
+            "claude-cli/2.1.309 (external, claude-vscode)",
+            None,
+        ),
+    ];
+    for (hours, (id, client, user_agent, category)) in (1..).zip(callers) {
+        let Record::Request {
+            mut request,
+            mut attempts,
+            bodies,
+        } = record(id, now - hours * HOUR, "claude-sonnet-5", "s1")
+        else {
+            unreachable!("record writes a request")
+        };
+        request.client = Some(client.into());
+        request.user_agent = Some(user_agent.into());
+        attempts[0].stop_reason = Some("refusal".into());
+        attempts[0].refusal_category = category.map(String::from);
+        parts.ledger.record(Record::Request {
+            request,
+            attempts,
+            bodies,
+        });
+    }
+    wait_json(
+        &parts.app,
+        &format!("/admin/requests?from={}", now - 24 * HOUR),
+        cookie,
+        |v| v["requests"].as_array().is_some_and(|rows| rows.len() == 4),
+    )
+    .await;
+}
+
+/// The count route's rows under `query`, each its category and its count.
+async fn refusal_rows(parts: &common::Full, cookie: &str, query: &str) -> Vec<(String, u64)> {
+    let body = json(
+        get(
+            &parts.app,
+            &format!("/admin/analytics/refusal_categories?{query}"),
+            Some(cookie),
+        )
+        .await,
+    )
+    .await;
+    body["rows"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a list of rows: {body}"))
+        .iter()
+        .map(|r| {
+            (
+                r["category"].as_str().unwrap().to_string(),
+                r["requests"].as_u64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+fn category_counts(rows: &[(&str, u64)]) -> Vec<(String, u64)> {
+    rows.iter().map(|(c, n)| (c.to_string(), *n)).collect()
+}
+
+/// The console joins a list's patterns with a newline (`%0A`), since a raw agent carries a comma.
+#[tokio::test]
+async fn the_refusal_count_route_narrows_by_newline_joined_client_and_user_agent_patterns() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    refused_callers(&parts, &cookie).await;
+    assert_eq!(
+        refusal_rows(
+            &parts,
+            &cookie,
+            "clients=claude-code/sdk-cli%0Aclaude-code/claude-vscode"
+        )
+        .await,
+        category_counts(&[("-", 1), ("harmful_request", 1)]),
+        "the rows either client pattern matches, the two `cli` rows left out"
+    );
+    assert_eq!(
+        refusal_rows(
+            &parts,
+            &cookie,
+            "user_agents=claude-cli/2.1.311%0Aclaude-cli/2.1.309"
+        )
+        .await,
+        category_counts(&[("-", 1), ("restricted_topic", 1)]),
+        "the rows either version matches, the two 2.1.310 rows left out"
+    );
+    assert_eq!(
+        refusal_rows(&parts, &cookie, "user_agents=claude-cli/2.1.310").await,
+        category_counts(&[("harmful_request", 2)]),
+        "a version picked from the breakdown counts its refusals under both entrypoints"
+    );
+    assert_eq!(
+        refusal_rows(
+            &parts,
+            &cookie,
+            "clients=claude-code/cli&user_agents=claude-cli/2.1.310"
+        )
+        .await,
+        category_counts(&[("harmful_request", 1)]),
+        "the two lists conjoin"
+    );
+}
+
+/// The groups partition the series' rows, a row no pattern matches falling under `other`, so they narrow nothing on
+/// the count.
+#[tokio::test]
+async fn the_refusal_count_route_narrows_nothing_by_user_agent_groups() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    refused_callers(&parts, &cookie).await;
+    assert_eq!(
+        refusal_rows(
+            &parts,
+            &cookie,
+            "user_agent_groups=claude-cli/2.1.311%0Aclaude-cli/2.1.309"
+        )
+        .await,
+        category_counts(&[("harmful_request", 2), ("-", 1), ("restricted_topic", 1)]),
+        "every refusal in range counts, the groups' patterns matching two of the four"
+    );
+}
+
+#[tokio::test]
+async fn the_refusal_count_route_refuses_a_pattern_list_past_the_bounds_in_each_of_its_three_lists()
+{
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for name in ["clients", "user_agent_groups", "user_agents"] {
+        for patterns in [vec!["claude-cli/*"; 33].join("%0A"), "a".repeat(257)] {
+            let refused = get(
+                &parts.app,
+                &format!("/admin/analytics/refusal_categories?{name}={patterns}"),
+                Some(&cookie),
+            )
+            .await;
+            assert_eq!(refused.status(), 400, "{name}");
+            assert_eq!(
+                json(refused).await["error"],
+                "patterns are at most 256 characters, at most 32 of them",
+                "{name}"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn the_unused_allowance_route_groups_each_subscription_accounts_weekly_resets_over_thirty_days(
 ) {
@@ -2567,6 +2752,8 @@ async fn the_unused_allowance_route_groups_each_subscription_accounts_weekly_res
             "share_left": share_left,
             "observed_at": observed_at,
             "source": source,
+            "plan": null,
+            "tier": null,
         })
     };
     let business = serde_json::json!({
@@ -2658,6 +2845,137 @@ async fn the_unused_allowance_route_groups_each_subscription_accounts_weekly_res
 }
 
 #[tokio::test]
+async fn the_unused_allowance_route_answers_each_resets_plan_and_tier_and_null_on_a_term_end() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    const DAY: i64 = 24 * HOUR;
+    // The account holds Max 20x now, and the week before last ran under Max 5x.
+    set_max_20x(&parts).await;
+    let end = now - DAY;
+    parts
+        .store
+        .set_canceled("business", true, Some(end))
+        .unwrap();
+    parts.router.reload().await.unwrap();
+    for (utilization_before, at, observed, pair) in [
+        (
+            0.62,
+            now - 3 * DAY,
+            "sample",
+            Some(("max_20x", "default_claude_max_20x")),
+        ),
+        (
+            0.4,
+            now - 10 * DAY,
+            "clock",
+            Some(("max_5x", "default_claude_max_5x")),
+        ),
+        (0.3, now - 17 * DAY, "sample", None),
+    ] {
+        let mut detail = serde_json::json!({
+            "window": "seven_day",
+            "utilization_before": utilization_before,
+            "reset_at": at,
+            "next_reset": at + 7 * DAY,
+            "observed": observed,
+        });
+        if let Some((plan, tier)) = pair {
+            detail["plan"] = plan.into();
+            detail["tier"] = tier.into();
+        }
+        parts
+            .db
+            .insert_event(&EventRecord {
+                at,
+                kind: "window_reset".into(),
+                account_id: Some("business".into()),
+                detail: Some(detail.to_string()),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    parts
+        .db
+        .insert_samples(
+            &[phoebis_ledger::QuotaSampleRecord {
+                account_id: "business".into(),
+                bucket: phoebis_ledger::bucket_of(end - DAY),
+                window: "seven_day".into(),
+                utilization: Some(0.8),
+                reset_at: Some(end + 2 * DAY),
+                source: "poll".into(),
+                observed_at: Some(end - DAY),
+            }],
+            None,
+        )
+        .unwrap();
+    let answer = json(
+        get(
+            &parts.app,
+            "/admin/analytics/unused_allowance?accounts=business",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let resets = &answer["accounts"][0]["windows"][0]["resets"];
+    let pairs: Vec<_> = resets
+        .as_array()
+        .expect("the week's resets")
+        .iter()
+        .map(|reset| {
+            (
+                reset["source"].as_str().unwrap_or_default(),
+                reset["plan"].clone(),
+                reset["tier"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            ("term_ended", serde_json::Value::Null, serde_json::Value::Null),
+            (
+                "sample",
+                serde_json::json!("max_20x"),
+                serde_json::json!("default_claude_max_20x")
+            ),
+            (
+                "clock",
+                serde_json::json!("max_5x"),
+                serde_json::json!("default_claude_max_5x")
+            ),
+            ("sample", serde_json::Value::Null, serde_json::Value::Null),
+        ],
+        "each reset answers its event's pair, null where the event names none and on the term end: {answer}"
+    );
+    assert_eq!(
+        keys_in_order(&resets[1]),
+        [
+            "reset_at",
+            "share_left",
+            "observed_at",
+            "source",
+            "plan",
+            "tier"
+        ],
+        "{answer}"
+    );
+    assert_eq!(
+        (
+            &answer["accounts"][0]["plan"],
+            &answer["accounts"][0]["tier"]
+        ),
+        (
+            &serde_json::json!("max_20x"),
+            &serde_json::json!("default_claude_max_20x")
+        ),
+        "the account entry keeps the account's current pair"
+    );
+}
+
+#[tokio::test]
 async fn a_trial_end_that_passed_in_range_ends_a_week_only_where_the_plan_ended_flag_followed_it() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -2738,6 +3056,8 @@ async fn a_trial_end_that_passed_in_range_ends_a_week_only_where_the_plan_ended_
             "share_left": share_left,
             "observed_at": observed_at,
             "source": source,
+            "plan": null,
+            "tier": null,
         })
     };
     let carried_on = read().await;
@@ -2860,6 +3180,8 @@ async fn a_term_end_before_the_range_still_drops_the_resets_after_it() {
                     "share_left": 1.0 - 0.8,
                     "observed_at": end - DAY,
                     "source": "term_ended",
+                    "plan": null,
+                    "tier": null,
                 }],
                 "total_share_left": 1.0 - 0.8,
                 "resets_counted": 1,
@@ -2944,6 +3266,8 @@ async fn a_canceled_end_still_ahead_of_now_ends_no_week_in_a_range_that_reaches_
                     "share_left": 1.0 - 0.5,
                     "observed_at": reset_at,
                     "source": "sample",
+                    "plan": null,
+                    "tier": null,
                 }],
                 "total_share_left": 1.0 - 0.5,
                 "resets_counted": 1,
@@ -5147,6 +5471,7 @@ fn select_request(
         fast: false,
         classifier: false,
         body_tokens: 0,
+        effort: None,
     }
 }
 
@@ -5639,6 +5964,78 @@ async fn an_empty_kinds_reads_as_every_kind() {
 }
 
 #[tokio::test]
+async fn the_routing_log_keeps_one_agents_decisions_and_events_under_agent_id() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    routed(&parts, &cookie).await;
+    let now = common::NOW;
+    // The selection runs for the main agent, so its decision and its placement's `pin_created` event both name `main`.
+    decide(&parts, "r1", 1, 1, now - 3_000).await;
+    // A subagent's release, and a prefix expiry, which names the conversation and no agent.
+    for (at, kind, agent) in [
+        (now - 2_000, "pin_released", Some("agent-7")),
+        (now - 1_000, "warm_prefix_expired", None),
+    ] {
+        parts.ledger.record(Record::Event(EventRecord {
+            at,
+            kind: kind.into(),
+            account_id: Some("direct".into()),
+            session_id: Some("s-r1".into()),
+            agent_id: agent.map(String::from),
+            ..Default::default()
+        }));
+    }
+    // The window closes a millisecond before `now`, the instant the store stamped the pool and the key with, so
+    // their registry rows stay off the page.
+    let window = format!("from={}&to={}", now - 10_000, now - 1);
+    wait_json(
+        &parts.app,
+        &format!("/admin/routing-log?{window}"),
+        &cookie,
+        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 4),
+    )
+    .await;
+    let rows_of = |agent_id: &'static str| {
+        let app = parts.app.clone();
+        let cookie = cookie.clone();
+        let window = window.clone();
+        async move {
+            let page = json(
+                get(
+                    &app,
+                    &format!("/admin/routing-log?{window}&agent_id={agent_id}"),
+                    Some(&cookie),
+                )
+                .await,
+            )
+            .await;
+            page["rows"]
+                .as_array()
+                .unwrap_or_else(|| panic!("a page of rows: {page}"))
+                .iter()
+                .map(|row| {
+                    (
+                        row["type"].as_str().unwrap().to_string(),
+                        row["kind"].as_str().unwrap().to_string(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        }
+    };
+    let pair = |kind_of_row: &str, kind: &str| (kind_of_row.to_string(), kind.to_string());
+    assert_eq!(
+        rows_of("main").await,
+        [pair("decision", "placed"), pair("event", "pin_created")],
+        "the main agent's decision and event, the subagent's event and the session-level event left out"
+    );
+    assert_eq!(
+        rows_of("agent-7").await,
+        [pair("event", "pin_released")],
+        "the subagent's own event alone"
+    );
+}
+
+#[tokio::test]
 async fn the_routing_log_refuses_a_filter_outside_its_keys() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -5723,6 +6120,8 @@ async fn the_sessions_route_and_a_decision_record_name_why_the_pin_was_stamped()
             marked_at: None,
             marked_on: None,
             marked_window: None,
+            auxiliary_only: false,
+            effort: String::new(),
         })
         .unwrap();
     let parts = common::admin_parts_full_on(seed.store.clone()).await;
@@ -5931,6 +6330,7 @@ async fn select_s1(
             fast: false,
             classifier: false,
             body_tokens: 0,
+            effort: None,
         })
         .await
         .unwrap()

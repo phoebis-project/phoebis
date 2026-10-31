@@ -28,8 +28,8 @@ const HOUR_MS: i64 = 3_600_000;
 /// The view's URL keys, alphabetical. A key outside them is refused rather than ignored, so a link built for another
 /// view never reads as a filter that took.
 const KEYS: &[&str] = &[
-    "accounts", "cursor", "from", "keys", "kinds", "limit", "models", "pools", "request",
-    "session", "to",
+    "accounts", "agent_id", "cursor", "from", "keys", "kinds", "limit", "models", "pools",
+    "request", "session", "to",
 ];
 
 /// A value that parses as an integer is Unix milliseconds, else an RFC 3339 instant.
@@ -269,9 +269,12 @@ pub(crate) struct SummaryExhaustion {
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SummaryRefusal {
+    /// The refusal's kind: `key` for the router's own refusals, a resolve refusal among them, `client` for the relay's
+    /// drift and contract refusals, `guardrail` for a guardrail's block.
     pub kind: String,
     /// The refusal's structured word: a key refusal's variant in snake case, `model_not_allowed` for a resolve
-    /// refusal, `drift` for the relay's refusal of a drifted client.
+    /// refusal, `contract` for the relay's refusal of a Claude Code request that lacks an item of the contract, `drift`
+    /// for the relay's refusal of a drifted client, `guardrail_blocked` for a guardrail's block.
     pub code: String,
     pub reason: String,
 }
@@ -344,8 +347,10 @@ pub(crate) struct DecisionRecord {
     ///
     /// A refusal's `request` block reads what the refusal site held. A refusal of the router's own carries the
     /// request's `parent_agent_id`, `request_class`, `lane`, `flags` (a keepalive probe's `flags.probe` among
-    /// them), `chain`, `attempted` and `holds`. The relay's client-drift refusal, made before any selection, leaves
-    /// the seven at their empty values.
+    /// them), `chain`, `attempted` and `holds`. The relay records three refusals before any selection: a client drift
+    /// leaves `request_class` and `flags` at their empty values, a missing contract item and a guardrail's block
+    /// carry the request's `request_class` and `flags.count` and `flags.probe`, and each of the three leaves
+    /// `parent_agent_id`, `lane`, `chain`, `attempted` and `holds` at their empty values.
     #[schema(value_type = Object)]
     pub request: Value,
     /// The pin as the selection found it: `found` (`live`, `expired_idle`, `left_pool` or `none`), `account_id`,
@@ -448,6 +453,9 @@ pub(crate) struct DecisionRecord {
 pub(crate) struct RoutingLogQuery {
     /// A comma list of ids. Matches a move's source as well as the account a decision placed on.
     pub accounts: Option<String>,
+    /// The decisions and the events whose agent id equals the value, literally, so an event that names no agent is
+    /// left out. Combines with `session` and every other filter.
+    pub agent_id: Option<String>,
     /// The `next_cursor` of the page before, `<at>:<rank>:<id>`.
     pub cursor: Option<String>,
     /// An RFC 3339 instant such as `2026-09-16T14:15:00.000Z` or Unix milliseconds, a value that reads as an
@@ -537,6 +545,7 @@ pub(crate) async fn list(
         // An emptied field in the view's bar narrows nothing, as an absent one.
         request: q.get("request").filter(|r| !r.is_empty()).cloned(),
         session: q.get("session").filter(|s| !s.is_empty()).cloned(),
+        agent_id: q.get("agent_id").filter(|a| !a.is_empty()).cloned(),
         keys: list_param(&q, "keys"),
         pools: list_param(&q, "pools"),
         accounts: list_param(&q, "accounts"),
@@ -692,9 +701,11 @@ mod tests {
             ));
             decisions += matches!(typed, Row::Decision(_)) as usize;
         }
+        // The fifteenth is the guardrail block's `refused` decision row, the seed's last row.
         assert_eq!(
-            decisions, 14,
-            "the fixture's 14 decision rows round-trip through DecisionRow and its summary mirrors"
+            decisions, 15,
+            "the fixture's 15 decision rows, the guardrail block's among them, round-trip through \
+             DecisionRow and its summary mirrors"
         );
     }
 }

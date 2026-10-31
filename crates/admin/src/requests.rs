@@ -163,7 +163,7 @@ pub(crate) struct RequestSummary {
     /// Whether `cost_shares` or `cost_equivalent` priced a window at the weight of the model tier's latest weighted
     /// model, for a model the cost model does not weight.
     pub estimated: bool,
-    /// The serving attempt's account tier as the registry held it when the request landed, null as on the attempt.
+    /// The serving attempt's account tier the router priced by when the request landed, null as on the attempt.
     pub tier: Option<String>,
     pub phases: RequestPhases,
     pub attempts: Vec<Attempt>,
@@ -282,9 +282,9 @@ pub(crate) struct Attempt {
     #[schema(value_type = Option<Object>)]
     pub selection: Option<Value>,
     pub response: AttemptResponse,
-    /// The serving account's rate-limit tier as the registry held it when the request landed, null for an api_key
-    /// account, for an oauth account whose profile had not been read, and for an attempt recorded before the router
-    /// kept it.
+    /// The serving account's rate-limit tier the router priced by when the request landed, null for an api_key
+    /// account, for an oauth account whose profile had not been read, for a plan the router does not price (a free
+    /// organization, a usage-based seat), and for an attempt recorded before the router kept it.
     pub tier: Option<String>,
 }
 
@@ -383,8 +383,8 @@ pub(crate) struct Event {
     /// - `plan_restored`: the account's plan-ended flag cleared, with its `source` (`profile` for a profile read that
     ///   found a plan, `pairing` for a pairing confirm) and the profile's `organization_type`, `rate_limit_tier` and
     ///   `subscription_status`.
-    /// - `poll_backoff_ended`: the usage poll's backoff on an account ended with a clean answer or at the account's
-    ///   plan-ended pause, with `duration_ms`.
+    /// - `poll_backoff_ended`: the usage poll's backoff on an account ended, with `duration_ms` and `cause`,
+    ///   `clean_poll` where a clean answer ended it or `plan_ended` where the account's plan-ended pause closed it.
     /// - `poll_backoff_started`: the usage or the profile endpoint (`endpoint`) rate-limited an account, starting
     ///   the usage poll's backoff, with `next_attempt_at` and `last_clean_poll_at`, when the last clean answer
     ///   before it was read.
@@ -440,7 +440,8 @@ pub(crate) struct Event {
     ///   same reset, with the figure before, the reading's or the prediction's, the reading after and the unchanged
     ///   reset, so the history no longer keeps the window spent.
     /// - `window_reset`: a plan window's reset passed, seen by a sample naming a later reset, or naming none once
-    ///   read past it (`sample`), or by the clock (`clock`), once per reset.
+    ///   read past it (`sample`), or by the clock (`clock`), once per reset, with the `plan` and the `tier` of the
+    ///   reading whose reset passed, each null where that reading names none.
     /// - `window_spent`: a plan window's reading reached 1.0 from under it, with the head's request when a head
     ///   read it. A window first seen at 1.0, with no stored reading before it, reads as spent.
     #[schema(example = "account_state_changed")]
@@ -838,6 +839,8 @@ pub(crate) struct RequestsQuery {
     pub request: Option<String>,
     /// The requests whose session id equals the value, literally. Combines with `text` and every other filter.
     pub session: Option<String>,
+    /// The requests whose agent id equals the value, literally. Combines with `session` and every other filter.
+    pub agent_id: Option<String>,
     /// Unix milliseconds. Only the rows the ledger wrote after this instant, for a poll that passes back the
     /// `landed_through` of its last answer, beside the other filters.
     pub landed_after: Option<i64>,
@@ -938,6 +941,7 @@ pub(crate) async fn list(
         // An empty value narrows nothing, as an absent one, since the ledger drops it as it drops an empty `text`.
         request: q.get("request").cloned(),
         session: q.get("session").cloned(),
+        agent_id: q.get("agent_id").cloned(),
         landed_after,
         keys: list_param(&q, "keys"),
         pools: list_param(&q, "pools"),
@@ -948,6 +952,8 @@ pub(crate) async fn list(
         outcomes: list_param(&q, "outcomes"),
         user_agent: q.get("user_agent").cloned(),
         client: q.get("client").cloned(),
+        clients: Vec::new(),
+        user_agents: Vec::new(),
         agent_types: list_param(&q, "agent_types"),
         turn_origins: list_param(&q, "turn_origins"),
         speeds: list_param(&q, "speeds"),

@@ -612,10 +612,13 @@ pub struct ExhaustionFacts {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct RefusalFacts {
+    /// The refusal's kind: `key` for the router's own refusals, a resolve refusal among them, `client` for the relay's
+    /// drift and contract refusals, `guardrail` for a guardrail's block.
     pub kind: &'static str,
     /// The refusal's structured word, which the console keys its labels on: a key refusal's variant in snake case,
     /// `model_not_allowed` for a resolve refusal, `contract` for the relay's refusal of a Claude Code request that
-    /// lacks an item of the contract, `drift` for the relay's refusal of a drifted client.
+    /// lacks an item of the contract, `drift` for the relay's refusal of a drifted client, `guardrail_blocked` for a
+    /// guardrail's block.
     pub code: &'static str,
     pub reason: String,
 }
@@ -776,11 +779,12 @@ pub struct CacheMapEntry {
     pub account_id: String,
 }
 
-/// The identity a refused request has before any selection: what the relay holds at its own refusal site and what
-/// the task reads off a `SelectRequest` at its three. `attempt` and `seq` are 1 for the relay's refusal, the
-/// request's one decision, and `at` and the client's version are as the relay read them. The relay refuses a drifted
-/// client before it builds a selection, so its refusal leaves the parent agent, the class, the lane, the flags, the
-/// chains, the accounts attempted and the holds at their empty values, a keepalive probe's flag among them.
+/// The identity a refused request has before any selection: what the relay holds at its own refusal sites and what
+/// the task reads off a `SelectRequest` at its three. `attempt` and `seq` are 1 for a relay refusal, the request's
+/// one decision, and `at` and the client's version are as the relay read them. The relay records three refusals before
+/// it builds a selection: a client drift leaves the class and the flags at their empty values, a missing contract item
+/// and a guardrail's block carry the class and the `count` and `probe` flags they read, and each of the three leaves
+/// the parent agent, the lane, the chains, the accounts attempted and the holds at their empty values.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RefusedRequest {
     pub request_id: String,
@@ -833,8 +837,9 @@ impl DecisionRecord {
     /// pin block (`pin_reason` `not_looked_up`, since the refusal precedes the lookup), the settings when the key and
     /// its pool are still in the snapshot and `None` otherwise, no candidate, a two-line walk (`admission` `refused`
     /// with the reason, `selection` `not_run`) and a `refused` outcome carrying `refusal`. The summary reads `by`
-    /// `refusal` and one fact: `client`, the client's version, for a drift refusal, whose reason names its trigger
-    /// alone, and `key` for a key or a resolve refusal, whose reason is the refusal's `Display`.
+    /// `refusal` and one fact: `client`, the client's version, for the kind `client`, a drift or a contract refusal,
+    /// whose reason names its trigger or its missing item alone, and `key` for a key, a resolve or a guardrail
+    /// refusal, whose reason is the refusal's `Display` or the guardrail's name as the block answers it.
     pub fn refused(
         request: &RefusedRequest,
         snapshot: &RegistrySnapshot,
@@ -947,7 +952,7 @@ impl DecisionRecord {
     }
 }
 
-/// A key or resolve refusal's summary fact: the key it turned away, drawn as a link.
+/// A key, resolve or guardrail refusal's summary fact: the key it turned away, drawn as a link.
 pub(crate) fn key_fact(key_id: &str) -> SummaryFact {
     SummaryFact {
         key: "key",

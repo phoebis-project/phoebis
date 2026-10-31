@@ -263,6 +263,13 @@ pub(crate) struct RefusalCategoriesQuery {
     pub models: Option<String>,
     /// A comma-separated list.
     pub kinds: Option<String>,
+    /// Newline-separated patterns over the agent's first product token, the grammar the Analytics tag describes.
+    pub user_agents: Option<String>,
+    /// Newline-separated patterns, held to the bound `/breakdown` holds them to (at most 32 patterns of at most 256
+    /// characters, a `400` past it) and grouping nothing here.
+    pub user_agent_groups: Option<String>,
+    /// Newline-separated patterns over the client class, the grammar the Analytics tag describes.
+    pub clients: Option<String>,
     /// `true`/`1`.
     pub include_probes: Option<bool>,
 }
@@ -1145,7 +1152,7 @@ pub(crate) struct RefusalCategoryRow {
     params(RefusalCategoriesQuery),
     responses(
         (status = 200, description = "The rows over the range.", body = RefusalCategories),
-        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\n`patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -1163,9 +1170,20 @@ pub(crate) async fn refusal_categories(
         accounts: list(&q, "accounts"),
         models: list(&q, "models"),
         kinds: list(&q, "kinds"),
+        user_agents: agent_list(&q, "user_agents"),
+        clients: agent_list(&q, "clients"),
         include_probes: flag(&q, "include_probes"),
         ..Default::default()
     };
+    // The groups partition the series' rows, a row no pattern matches falling under `other`, so they narrow no count:
+    // the route holds them to the bound and reads nothing more of them, as `placements` does.
+    let user_agent_groups = agent_list(&q, "user_agent_groups");
+    if !phoebis_ledger::patterns_within_bounds(&filter.user_agents)
+        || !phoebis_ledger::patterns_within_bounds(&user_agent_groups)
+        || !phoebis_ledger::patterns_within_bounds(&filter.clients)
+    {
+        return failure(StatusCode::BAD_REQUEST, phoebis_ledger::PATTERNS_TOO_LONG);
+    }
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
     let rows = match state
         .ledger
@@ -1238,6 +1256,12 @@ pub(crate) struct UnusedAllowanceReset {
     /// interval old), `term_ended` for the account's term ending inside the week.
     #[schema(example = "sample")]
     pub source: String,
+    /// The resolved plan word the reading carried when the reset was observed: the event's for a `sample` or `clock`
+    /// reset, null for a reset whose event carries none and for a `term_ended` row.
+    pub plan: Option<String>,
+    /// The stored rate-limit tier the reading carried when the reset was observed: the event's for a `sample` or
+    /// `clock` reset, null for a reset whose event carries none and for a `term_ended` row.
+    pub tier: Option<String>,
 }
 
 /// Read the weekly allowance each subscription account left unused.
@@ -1313,6 +1337,8 @@ pub(crate) async fn unused_allowance(
                 share_left: row.share_left,
                 observed_at: row.observed_at,
                 source: row.source,
+                plan: row.plan,
+                tier: row.tier,
             });
     }
     let accounts = by_account

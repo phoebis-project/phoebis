@@ -233,7 +233,16 @@ reports idle or parked, from the idle window's start above, and two counters per
 
 - `reached`, the windows that lasted to the bucket's start.
 - `returned`, the windows whose next request from the main conversation continued the conversation inside the bucket:
-  one of the request's message boundaries is the last one of the request before the window opened.
+  one of the request's message boundaries is either of the last two of the request before the window opened.
+
+The router hashes a content array of text blocks as its blocks up to the last one carrying the cache marker, a single
+remaining block as its text, so the last message the client sends again in the next request holds its boundary (see [The
+boundary chains](relay.md#the-boundary-chains)). A main conversation's request of class `main` or `subagent`, neither a
+compaction nor the first request after one, whose chain holds neither of the last two boundaries of main's previous
+admitted request while its answer read at least nine tenths of that request's prompt from the cache contradicts the
+router's chain model. The router logs it at warn once per client version per hour, naming the version, the session and
+the two token counts, counts each one in `phoebis_keepalive_chain_contradictions_total` by client version, and changes
+no return counter and no recipe for it.
 
 The ten buckets run 0 to 5, 5 to 15, 15 to 30 and 30 to 60 minutes, then 1 to 2, 2 to 4, 4 to 8, 8 to 16 and 16 to 32
 hours, and above. Windows are counted whether or not a recipe is retained, so one that outlives the idle window still
@@ -250,6 +259,12 @@ opens none.
 
 No rule reads the counters: the idle window is the pool's `max_idle_seconds`, taken as set. The pool dialog shows them
 by bucket.
+
+The counters are kept per pool and UTC day. A bucket counts as reached on the day a tick or the request that ends the
+window reached it. A return counts on the day its bucket was reached, so a window that returns after midnight in a
+bucket it reached before midnight counts the return on the earlier day, and no day shows a bucket with more returns than
+windows that reached it. The pool dialog reads the counters over its range of 7 or 30 days, the current UTC day and the
+6 or 29 before it, and the router drops a day older than 30 days.
 
 ## The five states
 
@@ -412,7 +427,8 @@ found it had missed bus events. Each gap discarded every observation still open,
 request while an armed recipe keeps its schedule.
 
 Prometheus carries `phoebis_keepalive_agents`, the agents holding a recipe by the mod's lifecycle word,
-`phoebis_keepalive_probes_total` by pool and outcome (`landed`, `cold`, `failed` or `held`), and
+`phoebis_keepalive_chain_contradictions_total`, the [chain contradictions](#the-return-rate-by-idle-age) by client
+version, `phoebis_keepalive_probes_total` by pool and outcome (`landed`, `cold`, `failed` or `held`), and
 `phoebis_keepalive_skipped_total`, the withheld probes by pool and recipe state (see [Metrics](statistics.md#metrics)).
 
 ## In the console
@@ -423,6 +439,10 @@ row's expanded detail reads each agent's state and cause with the sentence of ea
 `keepalive` chip, and the pool dialog's Keepalive group reads, under each field, the break-even a ceiling left off
 resolves to and the figure in effect under one switched on past it (see [Pools](console.md#pools)). The Analytics view's
 Cache warming tab draws the probes by outcome and the wasted probes by reason (see [Analytics](console.md#analytics)).
+
+A session's row reads main's conversation pin, the newest by last use where main holds two, else the newest conversation
+pin of another agent of the session, else no pin, and never a pin only auxiliary requests have used, such as the one a
+title or a quota call placed on a model of its own.
 
 The state's cause on the Sessions view reads a label in place of the engine's id, and the table maps the two.
 

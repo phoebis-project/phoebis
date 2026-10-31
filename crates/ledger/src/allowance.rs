@@ -28,6 +28,10 @@ pub struct AllowanceReset {
     pub observed_at: i64,
     /// `clock`, `sample` or `term_ended`.
     pub source: String,
+    /// The event's pair for a `sample` or `clock` reset, `None` where the event carries none and on a `term_ended`
+    /// row.
+    pub plan: Option<String>,
+    pub tier: Option<String>,
 }
 
 /// The members of a `window_reset` row's detail the read takes.
@@ -37,6 +41,9 @@ struct ResetDetail {
     utilization_before: f64,
     reset_at: i64,
     observed: String,
+    // A row written before the detail named the pair lacks both members, which read as none.
+    plan: Option<String>,
+    tier: Option<String>,
 }
 
 fn is_weekly(window: &str) -> bool {
@@ -119,6 +126,8 @@ pub fn unused_allowance(
             share_left: share_left(detail.utilization_before),
             observed_at: at,
             source: detail.observed,
+            plan: detail.plan,
+            tier: detail.tier,
         });
     }
     // The primary key holds one row per bucket and window, so the newest qualifying bucket is one reading.
@@ -164,6 +173,8 @@ pub fn unused_allowance(
                     share_left: share_left(utilization),
                     observed_at,
                     source: "term_ended".into(),
+                    plan: None,
+                    tier: None,
                 }),
         );
     }

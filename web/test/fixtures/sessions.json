@@ -26,6 +26,7 @@
         "speed": null,
         "cycle_ms": null,
         "last_input_tokens": 0,
+        "effort": null,
         "last_refresh_at": 1791721000000,
         "shed_from": null,
         "shed_reason": null,
@@ -40,10 +41,19 @@
           "state": null
         },
         "presence_age_seconds": null,
-        "context_window_tokens": null,
-        "context_share": null,
-        "cached_prefix_tokens": null,
-        "agent_contexts": null,
+        "agent_contexts": [
+          {
+            "agent_id": "main",
+            "model": "claude-sonnet-5",
+            "account_id": "business",
+            "effort": null,
+            "last_input_tokens": 0,
+            "cache_ttl_ms": 300000,
+            "last_used_at": 1791721000000,
+            "warm": true,
+            "created_at": 1791721000000
+          }
+        ],
         "forked_from": null,
         "fork_depth": null
       },
@@ -71,6 +81,7 @@
         "speed": null,
         "cycle_ms": null,
         "last_input_tokens": 0,
+        "effort": null,
         "last_refresh_at": 1791721000000,
         "shed_from": null,
         "shed_reason": null,
@@ -85,10 +96,19 @@
           "state": null
         },
         "presence_age_seconds": null,
-        "context_window_tokens": null,
-        "context_share": null,
-        "cached_prefix_tokens": null,
-        "agent_contexts": null,
+        "agent_contexts": [
+          {
+            "agent_id": "main",
+            "model": "claude-sonnet-5-5",
+            "account_id": "direct",
+            "effort": null,
+            "last_input_tokens": 0,
+            "cache_ttl_ms": 300000,
+            "last_used_at": 1791721000000,
+            "warm": true,
+            "created_at": 1791721000000
+          }
+        ],
         "forked_from": null,
         "fork_depth": null
       },
@@ -116,6 +136,7 @@
         "speed": null,
         "cycle_ms": null,
         "last_input_tokens": 52000,
+        "effort": "high",
         "last_refresh_at": 1791717340000,
         "shed_from": null,
         "shed_reason": null,
@@ -130,25 +151,39 @@
         },
         "presence_age_seconds": null,
         "historical": false,
-        "context_window_tokens": 200000,
-        "context_share": 0.26,
-        "cached_prefix_tokens": 41000,
         "agent_contexts": [
+          {
+            "agent_id": "main",
+            "model": "claude-sonnet-5-5",
+            "account_id": "business",
+            "effort": "high",
+            "last_input_tokens": 52000,
+            "cache_ttl_ms": 300000,
+            "last_used_at": 1791721000000,
+            "warm": true,
+            "created_at": 1791717340000
+          },
           {
             "agent_id": "worker-1",
             "model": "claude-sonnet-5",
+            "account_id": "business",
+            "effort": "low",
             "last_input_tokens": 31000,
-            "context_window_tokens": 200000,
-            "context_share": 0.155,
-            "cached_prefix_tokens": 24000
+            "cache_ttl_ms": 300000,
+            "last_used_at": 1791721000000,
+            "warm": true,
+            "created_at": 1791717340000
           },
           {
             "agent_id": "worker-2",
             "model": "claude-sonnet-5-5",
+            "account_id": "direct",
+            "effort": "low",
             "last_input_tokens": 18500,
-            "context_window_tokens": 200000,
-            "context_share": 0.093,
-            "cached_prefix_tokens": 12000
+            "cache_ttl_ms": 300000,
+            "last_used_at": 1791721000000,
+            "warm": true,
+            "created_at": 1791717340000
           }
         ],
         "forked_from": "s0",
@@ -176,6 +211,7 @@
         "runway_bounded": null,
         "cache_ttl_ms": null,
         "last_input_tokens": null,
+        "effort": null,
         "speed": null,
         "cycle_ms": null,
         "last_refresh_at": null,
@@ -192,10 +228,7 @@
           "state": null
         },
         "presence_age_seconds": null,
-        "context_window_tokens": null,
-        "context_share": null,
-        "cached_prefix_tokens": null,
-        "agent_contexts": null,
+        "agent_contexts": [],
         "forked_from": null,
         "fork_depth": null
       },
@@ -221,6 +254,7 @@
         "runway_bounded": null,
         "cache_ttl_ms": null,
         "last_input_tokens": null,
+        "effort": null,
         "speed": null,
         "cycle_ms": null,
         "last_refresh_at": null,
@@ -237,10 +271,7 @@
           "state": null
         },
         "presence_age_seconds": null,
-        "context_window_tokens": null,
-        "context_share": null,
-        "cached_prefix_tokens": null,
-        "agent_contexts": null,
+        "agent_contexts": [],
         "forked_from": null,
         "fork_depth": null
       },
@@ -266,6 +297,7 @@
         "runway_bounded": null,
         "cache_ttl_ms": null,
         "last_input_tokens": null,
+        "effort": null,
         "speed": null,
         "cycle_ms": null,
         "last_refresh_at": null,
@@ -282,10 +314,7 @@
           "state": null
         },
         "presence_age_seconds": null,
-        "context_window_tokens": null,
-        "context_share": null,
-        "cached_prefix_tokens": null,
-        "agent_contexts": null,
+        "agent_contexts": [],
         "forked_from": null,
         "fork_depth": null
       }

@@ -243,8 +243,6 @@ pub(crate) struct AffinityFacts {
     pub router: RouterHandle,
     /// Where the report's sequence is filed for the conversation's next turn to wait on.
     pub pending: Arc<PendingReports>,
-    /// The request's own session id, which its next turn waits on.
-    pub session_id: Option<String>,
     pub account_id: String,
     pub incarnation: u64,
     pub key_id: String,
@@ -319,11 +317,7 @@ impl AffinityFacts {
             + cached(|u| u.cache_write_5m_tokens)
             + cached(|u| u.cache_write_1h_tokens);
         // The identifier the next turn's wait reads this conversation by.
-        let ids: Vec<String> = self
-            .session_id
-            .iter()
-            .map(|id| format!("session:{id}"))
-            .collect();
+        let ids = vec![format!("session:{}", self.root)];
         let (router, pending, key_id, key_generation) = (
             self.router,
             self.pending,

@@ -845,9 +845,9 @@ async fn writer(
 /// retried and its records replayed or parked without a copy.
 type Batch = Arc<Vec<Record>>;
 
-/// Each account's tier as the registry snapshot held it when the batch was taken, read before the blocking write so
-/// the write holds no registry type: `None` for an api_key account and for an oauth account whose profile has not been
-/// read.
+/// Each account's priced tier as the registry snapshot held it when the batch was taken, read before the blocking write
+/// so the write holds no registry type: `None` for an api_key account, for an oauth account whose profile has not been
+/// read, and for a plan the router never prices (a free organization, a usage-based seat), so their rows price no share.
 type AccountTiers = HashMap<String, Option<String>>;
 
 /// The tiers of the accounts the batch's attempts name, read once per batch.
@@ -861,7 +861,7 @@ fn batch_tiers(snapshot: &RegistrySnapshot, batch: &[Record]) -> AccountTiers {
         .map(|a| {
             (
                 a.account_id.clone(),
-                snapshot.tier(&a.account_id).map(String::from),
+                snapshot.priced_tier(&a.account_id).map(String::from),
             )
         })
         .collect()
@@ -872,7 +872,7 @@ fn batch_tiers(snapshot: &RegistrySnapshot, batch: &[Record]) -> AccountTiers {
 fn registry_tiers(snapshot: &RegistrySnapshot) -> AccountTiers {
     snapshot
         .accounts()
-        .map(|a| (a.id.clone(), snapshot.tier(&a.id).map(String::from)))
+        .map(|a| (a.id.clone(), snapshot.priced_tier(&a.id).map(String::from)))
         .collect()
 }
 

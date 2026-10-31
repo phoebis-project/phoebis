@@ -656,6 +656,8 @@ fn every_registered_family_renders_and_nothing_else_does() {
     metrics.observe_probe("night", "failed");
     metrics.observe_skipped("main", "held");
     metrics.observe_skipped("main", "ended");
+    metrics.observe_chain_contradiction("2.1.305");
+    metrics.observe_chain_contradiction("2.1.310");
     let gauges = RoutingGauges {
         keepalive_agents: phoebis_ledger::KeepaliveAgents {
             busy: 2,
@@ -686,6 +688,8 @@ fn every_registered_family_renders_and_nothing_else_does() {
         r#"phoebis_keepalive_agents{state="busy"} 2"#,
         r#"phoebis_keepalive_agents{state="idle"} 1"#,
         r#"phoebis_keepalive_agents{state="parked"} 0"#,
+        r#"phoebis_keepalive_chain_contradictions_total{client_version="2.1.305"} 1"#,
+        r#"phoebis_keepalive_chain_contradictions_total{client_version="2.1.310"} 1"#,
         r#"phoebis_keepalive_probes_total{outcome="cold",pool="main"} 1"#,
         r#"phoebis_keepalive_probes_total{outcome="failed",pool="night"} 1"#,
         r#"phoebis_keepalive_probes_total{outcome="held",pool="main"} 1"#,

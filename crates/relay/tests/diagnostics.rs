@@ -1910,6 +1910,8 @@ async fn a_client_member_is_detached_on_the_first_turn_after_a_spent_move() {
         reset: Some(reset),
         observed_at: NOW,
         source: WindowSource::Poll,
+        plan: None,
+        tier: None,
     };
     h.router
         .report(Report::Sample {

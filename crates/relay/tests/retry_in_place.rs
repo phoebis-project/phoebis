@@ -427,6 +427,8 @@ async fn a_reset_that_moves_during_the_wait_moves_the_pin_rather_than_holding_th
         reset: Some(reset),
         observed_at: read_at + 1,
         source: WindowSource::Poll,
+        plan: None,
+        tier: None,
     };
     h.router
         .report(Report::Sample {
@@ -520,6 +522,8 @@ async fn a_reset_wait_the_request_deadline_would_outlast_is_refused_and_the_sibl
         reset: Some(reset),
         observed_at: NOW,
         source: WindowSource::Poll,
+        plan: None,
+        tier: None,
     };
     h.router
         .report(Report::Sample {
@@ -598,6 +602,8 @@ async fn spent_under_a_short_head_timeout(up: &FakeUpstream, reset_in: i64) -> H
         reset: Some(reset),
         observed_at: NOW,
         source: WindowSource::Poll,
+        plan: None,
+        tier: None,
     };
     h.router
         .report(Report::Sample {
@@ -1065,6 +1071,8 @@ async fn priced_harness(up: &FakeUpstream, accounts: &[TestAccount]) -> Harness 
                         reset: None,
                         observed_at: NOW - 1_000,
                         source: WindowSource::Poll,
+                        plan: None,
+                        tier: None,
                     },
                 ),
                 incarnation: 1,
@@ -1255,6 +1263,8 @@ async fn five_hour_at(h: &Harness, account: &str, utilization: f64, reset: i64, 
                     reset: Some(reset),
                     observed_at: at,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             ),
             incarnation: 1,

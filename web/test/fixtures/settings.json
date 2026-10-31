@@ -308,7 +308,8 @@
       "rollup_retention_days": 365
     },
     "sessions": {
-      "expire_after_seconds": 86400
+      "expire_after_seconds": 86400,
+      "non_companion_idle_seconds": 3600
     },
     "storage": {
       "api_prices_path": null,

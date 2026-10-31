@@ -235,6 +235,10 @@ impl serde::Serialize for Reason {
     }
 }
 
+/// The share of the previous main prompt a completion must read from the cache, under a chain that holds neither
+/// anchor boundary, for the engine to read a contradiction between its chain model and the upstream's.
+pub const CHAIN_CONTRADICTION_COVERAGE: f64 = 0.9;
+
 const DAY_MS: i64 = 86_400_000;
 
 /// The UTC day `ms` falls on, counted from the epoch. The day counters and their reader both go through it, so the
@@ -329,16 +333,35 @@ pub struct IdleReturns {
 pub(crate) struct IdleEpisode {
     pub started: i64,
     pub bucket: Option<usize>,
-    pub anchor: Option<(String, String)>,
+    pub anchor: Option<PrefixAnchor>,
     pub prompt_at: Option<i64>,
     pub pool_key: String,
+    /// The UTC day the episode's highest counted bucket was reached, where its return counts, so a day never
+    /// answers a return without its reach. `None` until a bucket is counted, and on a window restored from a row saved
+    /// without it, whose reach is held under no day, so its return counts nothing unless the request raises a bucket.
+    pub bucket_day: Option<i64>,
 }
 
-/// Whether a request continues the prefix `anchor` names: one of its message boundaries equals the anchor's tail hash.
-/// The chain is the only evidence, and the request's class is none: a refreshing class whose chain lacks the tail
-/// hash answers false where `guard` re-arms it, as do a request with no chain and an absent anchor.
-pub fn continues_prefix(anchor: Option<(&str, &str)>, boundaries: &[String]) -> bool {
-    anchor.is_some_and(|(_, tail)| boundaries.iter().any(|boundary| boundary == tail))
+/// The prefix an idle window judges a return against: the request's static hash, its last message boundary and
+/// the one before it, `None` for a one-message chain. A return holds either boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrefixAnchor {
+    pub static_hash: String,
+    pub last: String,
+    pub before_last: Option<String>,
+}
+
+/// Whether a request continues the prefix `anchor` names: one of its message boundaries equals the anchor's last
+/// boundary or the one before it, so a return counts when the client re-sent the last message in a shape the
+/// canonical form does not restore and the message before it held. The chain is the only evidence, and the request's
+/// class is none: a refreshing class whose chain holds neither answers false where `guard` re-arms it, as do a request
+/// with no chain and an absent anchor.
+pub fn continues_prefix(anchor: Option<&PrefixAnchor>, boundaries: &[String]) -> bool {
+    anchor.is_some_and(|anchor| {
+        boundaries.iter().any(|boundary| {
+            *boundary == anchor.last || anchor.before_last.as_ref() == Some(boundary)
+        })
+    })
 }
 
 /// Raises `reached` in the buckets after `counted` up to `bucket`. A tick and the request that ends a window both
@@ -391,6 +414,7 @@ pub(crate) fn open_idle_episode(main: &mut Agent, snapshot: &RegistrySnapshot) -
         anchor: main.last_prefix.clone(),
         prompt_at: None,
         pool_key,
+        bucket_day: None,
     });
     true
 }
@@ -551,9 +575,13 @@ pub(crate) struct Agent {
     /// A close that restarts the window on purpose (a request, presence, a park's end, a revival) clears it: the
     /// floor orders starts, and a clock that stepped back before the restart is no ordering.
     pub idle_window_floor: Option<i64>,
-    /// The static and tail hash of main's last admitted request, retained or not, which the next idle window judges a
-    /// return against.
-    pub last_prefix: Option<(String, String)>,
+    /// The static hash and the last two message boundaries of main's last admitted request, retained or not, which the
+    /// next idle window judges a return against and the chain watch reads the next request's chain against.
+    pub last_prefix: Option<PrefixAnchor>,
+    /// The previous main request's prompt as its completion reported it: uncached input, cache reads and both
+    /// cache writes, set by every pending main completion and every marked one, so a refused recipe's unmarked
+    /// request leaves it as it was. What the watch reads the next completion's cache reads against.
+    pub last_prompt_tokens: Option<u64>,
     pub generation: u64,
     pub current: Option<Observation>,
     /// Never saved: a restart keeps the current observation alone.
@@ -662,6 +690,7 @@ impl Agent {
             idle_episode: None,
             idle_window_floor: None,
             last_prefix: None,
+            last_prompt_tokens: None,
             generation: 0,
             current: None,
             aside: None,
@@ -1102,6 +1131,13 @@ pub(crate) struct Observation {
     pub in_overage: bool,
 }
 
+/// A main request whose chain held neither anchor boundary at its arrival, kept until its completion.
+pub(crate) struct ChainMark {
+    pub session: SessionKey,
+    pub previous_prompt: u64,
+    pub arrived_at: i64,
+}
+
 /// The recipe a real request's arrival put aside, with the schedule and the error count it stood on and the model and
 /// account it was armed under, restored where the request fails or is canceled and dropped where it succeeds, is
 /// rejected, or the entry expired meanwhile. Its body stays counted in `Inner::retained` while it lives.
@@ -1315,6 +1351,11 @@ pub(crate) struct Inner {
     /// A compaction's request id to the agent it is open on, read before `pending` by every request event, so the
     /// observation's paths never see a compaction.
     pub compactions: HashMap<String, (SessionKey, String)>,
+    /// The marks by request id, inserted before the arrival's refusals and taken at the completion before the
+    /// `pending` lookup, a mark older than an hour dropped at the next insert. Never saved.
+    pub contradiction_marks: HashMap<String, ChainMark>,
+    /// The instant of the last contradiction line per client version, so one prints per version per hour.
+    pub chain_warned: HashMap<String, i64>,
     pub reasons: BTreeMap<Reason, u64>,
     /// Every body in memory, a recipe an arrival set aside beside the current ones, since `max_retained_bytes` bounds
     /// memory.
@@ -1338,9 +1379,15 @@ pub(crate) struct Inner {
     pub next_incarnation: u64,
     /// The engine's timing, copied onto every agent it creates.
     pub timing: KeepaliveTiming,
-    /// The idle-age counters by pool id. Never pruned while the engine runs, so a pool that leaves keeps the counts
-    /// it already took until the restart.
-    pub idle_returns: BTreeMap<String, IdleReturns>,
+    /// The idle-age counters by pool id and UTC day. A day older than the timing's `idle_return_retention_days` leaves
+    /// at the day roll. Nothing prunes by pool: a pool that leaves keeps its days until they age out, since a range the
+    /// overview reads may still cover them.
+    pub idle_returns: BTreeMap<String, BTreeMap<i64, IdleReturns>>,
+    /// The UTC day the idle-age counters last counted under, `i64::MIN` until the first count, which rolls.
+    pub idle_returns_day: i64,
+    /// The cutoff of the days the last roll dropped, for the next save to purge from the registry, cleared once a save
+    /// that carried it lands.
+    pub purge_counters_before: Option<i64>,
     /// The rows changed or removed since their last acknowledged save, each under the revision of its latest change.
     pub dirty: Dirty,
     /// Bumped by every touch, so a save that lands after a newer change still knows which change it carried.
@@ -1424,9 +1471,30 @@ impl Engine {
         self.lock().reasons.clone()
     }
 
-    /// The counters per pool id, for the overview and the flush.
-    pub fn idle_returns(&self) -> BTreeMap<String, IdleReturns> {
+    /// The counters per pool id and UTC day, read by the tests.
+    pub fn idle_returns(&self) -> BTreeMap<String, BTreeMap<i64, IdleReturns>> {
         self.lock().idle_returns.clone()
+    }
+
+    /// The counters per pool id summed over the UTC day of `now` and the `days - 1` before it, for the overview, so
+    /// the day fold stays the engine's.
+    pub fn idle_returns_over(&self, now: i64, days: u32) -> BTreeMap<String, IdleReturns> {
+        let last = utc_day(now);
+        let first = last - i64::from(days) + 1;
+        self.lock()
+            .idle_returns
+            .iter()
+            .map(|(pool, by_day)| {
+                let mut sum = IdleReturns::default();
+                for counters in by_day.range(first..last + 1).map(|(_, counters)| counters) {
+                    for (total, bucket) in sum.buckets.iter_mut().zip(&counters.buckets) {
+                        total.reached += bucket.reached;
+                        total.returned += bucket.returned;
+                    }
+                }
+                (pool.clone(), sum)
+            })
+            .collect()
     }
 
     pub fn stats(&self) -> EngineStats {
@@ -1532,6 +1600,8 @@ impl Inner {
             sessions: BTreeMap::new(),
             pending: HashMap::new(),
             compactions: HashMap::new(),
+            contradiction_marks: HashMap::new(),
+            chain_warned: HashMap::new(),
             reasons: BTreeMap::new(),
             retained: 0,
             agents: 0,
@@ -1545,6 +1615,8 @@ impl Inner {
             next_incarnation: 0,
             timing,
             idle_returns: BTreeMap::new(),
+            idle_returns_day: i64::MIN,
+            purge_counters_before: None,
             dirty: Dirty::default(),
             revision: 0,
             persist_failing: false,
@@ -2115,11 +2187,40 @@ impl Inner {
         self.touch_agent(key, agent_id);
     }
 
+    /// Drops the days the retention no longer keeps once `now` falls past the UTC day the counters last counted under,
+    /// and records the cutoff for the next save, which takes the registry's rows of those days. The two sites that
+    /// count call it, as `Agent::roll_counters_day` is called, and the tick is one of them, so a day leaves within a
+    /// tick of the midnight that ages it out.
+    fn roll_idle_returns_day(&mut self, now: i64) {
+        let day = utc_day(now);
+        if day <= self.idle_returns_day {
+            return;
+        }
+        self.idle_returns_day = day;
+        let retention = self.timing.idle_return_retention_days;
+        if retention == 0 {
+            return;
+        }
+        let cutoff = day - (i64::from(retention) - 1);
+        let mut dropped = false;
+        for days in self.idle_returns.values_mut() {
+            let kept = days.split_off(&cutoff);
+            dropped |= !days.is_empty();
+            *days = kept;
+        }
+        self.idle_returns.retain(|_, days| !days.is_empty());
+        if dropped {
+            self.purge_counters_before = Some(cutoff);
+        }
+    }
+
     /// Advances main's idle window on every attended session: opens one where none is counted and raises `reached`
     /// up to the window's current bucket. It reads the sessions, never the retained recipes, so a session whose
     /// recipe a ceiling discarded, or that never sent a request, still reaches the later buckets. A busy main keeps
     /// its window and counts nothing, and a window whose return a prompt announced waits for the request.
     pub(crate) fn advance_idle_episodes(&mut self, snapshot: &RegistrySnapshot, now: i64) {
+        self.roll_idle_returns_day(now);
+        let day = utc_day(now);
         let mut opened: Vec<SessionKey> = Vec::new();
         let mut raised: Vec<(SessionKey, String)> = Vec::new();
         for (key, session) in self.sessions.iter_mut() {
@@ -2145,18 +2246,23 @@ impl Inner {
                 continue;
             }
             let bucket = idle_age_bucket(now - episode.started);
-            // Only a window that crossed into a new bucket is written, so an idle session costs no save per tick.
-            if episode.bucket.is_none_or(|counted| bucket > counted) {
-                raised.push((key.clone(), episode.pool_key.clone()));
+            // Only a window that crossed into a new bucket is counted and written, so an idle session costs no save
+            // per tick and a day holds no empty counters.
+            if episode.bucket.is_some_and(|counted| bucket <= counted) {
+                continue;
             }
+            raised.push((key.clone(), episode.pool_key.clone()));
             raise_reached(
                 self.idle_returns
                     .entry(episode.pool_key.clone())
+                    .or_default()
+                    .entry(day)
                     .or_default(),
                 episode.bucket,
                 bucket,
             );
-            episode.bucket = Some(episode.bucket.map_or(bucket, |counted| counted.max(bucket)));
+            episode.bucket = Some(bucket);
+            episode.bucket_day = Some(day);
         }
         for key in opened {
             self.touch_agent(&key, MAIN_AGENT);
@@ -2172,6 +2278,7 @@ impl Inner {
     /// runs to the prompt that announced the request, when one did, since the user came back then however many ticks
     /// pass before the request arrives.
     pub(crate) fn end_idle_episode(&mut self, key: &SessionKey, boundaries: &[String], now: i64) {
+        self.roll_idle_returns_day(now);
         let Some(main) = self
             .sessions
             .get_mut(key)
@@ -2185,24 +2292,81 @@ impl Inner {
         // Never below the fence: the window already counted as reaching it, so its return is read there.
         let bucket = idle_age_bucket(episode.prompt_at.unwrap_or(now) - episode.started)
             .max(episode.bucket.unwrap_or(0));
-        let counters = self
-            .idle_returns
-            .entry(episode.pool_key.clone())
-            .or_default();
+        let today = utc_day(now);
         let raised = episode.bucket.is_none_or(|counted| bucket > counted);
-        raise_reached(counters, episode.bucket, bucket);
-        let anchor = episode
-            .anchor
-            .as_ref()
-            .map(|(static_hash, tail)| (static_hash.as_str(), tail.as_str()));
-        let returned = continues_prefix(anchor, boundaries);
-        if returned {
-            counters.buckets[bucket].returned += 1;
+        // The return's bucket is the highest the window counted, so the return counts on the day that bucket was
+        // reached (today where this request raised it), and no day answers a return without its reach. Where that
+        // day has left at the roll, or a window restored from a row saved without it holds its reach under no day,
+        // the return leaves with its reach and counts nothing.
+        let retention = i64::from(self.timing.idle_return_retention_days);
+        let return_day = if raised {
+            Some(today)
+        } else {
+            episode
+                .bucket_day
+                .filter(|day| retention == 0 || *day >= self.idle_returns_day - (retention - 1))
+        }
+        .filter(|_| continues_prefix(episode.anchor.as_ref(), boundaries));
+        if raised || return_day.is_some() {
+            let days = self
+                .idle_returns
+                .entry(episode.pool_key.clone())
+                .or_default();
+            if raised {
+                raise_reached(days.entry(today).or_default(), episode.bucket, bucket);
+            }
+            if let Some(day) = return_day {
+                days.entry(day).or_default().buckets[bucket].returned += 1;
+            }
         }
         self.touch_agent(key, MAIN_AGENT);
-        if raised || returned {
+        if raised || return_day.is_some() {
             self.touch_pool(&episode.pool_key);
         }
+    }
+
+    /// Marks main's refreshing request whose chain holds neither boundary of main's last prefix, for its completion to
+    /// read against the previous prompt. A compaction and the first request after one rewrite the context the chain
+    /// hashes, so their chains move with no contradiction to read.
+    fn mark_chain(&mut self, key: &SessionKey, observed: &RequestObserved, now: i64) {
+        let refreshing = observed
+            .client
+            .request_class
+            .as_deref()
+            .is_some_and(|class| {
+                class != "compaction" && phoebis_routing::REFRESHING_CLASSES.contains(&class)
+            });
+        if !refreshing
+            || observed.client.compaction.is_some()
+            || observed.client.context_compacted.is_some()
+        {
+            return;
+        }
+        let Some(main) = self
+            .sessions
+            .get(key)
+            .and_then(|s| s.agents.get(MAIN_AGENT))
+        else {
+            return;
+        };
+        let (Some(anchor), Some(previous_prompt)) =
+            (main.last_prefix.as_ref(), main.last_prompt_tokens)
+        else {
+            return;
+        };
+        if continues_prefix(Some(anchor), &observed.boundaries) {
+            return;
+        }
+        self.contradiction_marks
+            .retain(|_, mark| now - mark.arrived_at <= ONE_HOUR_MS);
+        self.contradiction_marks.insert(
+            observed.request_id.clone(),
+            ChainMark {
+                session: key.clone(),
+                previous_prompt,
+                arrived_at: now,
+            },
+        );
     }
 
     pub(crate) fn incarnation(&mut self) -> u64 {
@@ -2742,6 +2906,12 @@ impl Engine {
         // One touch for everything below: the lock is held to the end, so the flush reads the agent as this request
         // leaves it.
         inner.touch_agent(&key, &agent_id);
+        // Ahead of every refusal below, so a request whose recipe the engine refuses or cannot hold still reaches the
+        // watch at its completion, and ahead of the store of this request's own prefix, since the mark reads the one
+        // before it.
+        if agent_id == MAIN_AGENT {
+            inner.mark_chain(&key, &observed, now);
+        }
         // Ahead of the return below, so a foreign request on a new prefix ends the window too. The return is judged
         // against the prefix the window opened on, never on the verdict, which re-arms on any chain once a ceiling
         // has discarded the recipe.
@@ -2829,7 +2999,16 @@ impl Engine {
                 .last_prefix = observed
                 .static_hash
                 .clone()
-                .zip(observed.boundaries.last().cloned());
+                .zip(observed.boundaries.last().cloned())
+                .map(|(static_hash, last)| PrefixAnchor {
+                    static_hash,
+                    last,
+                    before_last: observed
+                        .boundaries
+                        .len()
+                        .checked_sub(2)
+                        .map(|at| observed.boundaries[at].clone()),
+                });
         }
         // A turn still pending here had no completion observed, since a success takes it off `pending` and a failure
         // ends the observation, and `set_aside` below ends it, or sets it aside, without one. It counts as the turn
@@ -3169,6 +3348,9 @@ impl Engine {
             self.book_credit(inner, credit, &complete);
             return;
         }
+        if let Some(mark) = inner.contradiction_marks.remove(&complete.request_id) {
+            self.read_chain_mark(&mut inner, mark, &complete, now);
+        }
         let Some((key, agent_id)) = inner.pending.get(&complete.request_id).cloned() else {
             return;
         };
@@ -3179,6 +3361,17 @@ impl Engine {
             return;
         }
         inner.touch_agent(&key, &agent_id);
+        if agent_id == MAIN_AGENT {
+            if let Some(prompt) = reported_prompt(complete.usage.as_ref()) {
+                if let Some(main) = inner
+                    .sessions
+                    .get_mut(&key)
+                    .and_then(|s| s.agents.get_mut(MAIN_AGENT))
+                {
+                    main.last_prompt_tokens = Some(prompt);
+                }
+            }
+        }
         let read = complete
             .usage
             .as_ref()
@@ -3367,6 +3560,56 @@ impl Engine {
         self.book_credit(inner, credit, &complete);
     }
 
+    /// The chain watch: a marked request whose completion read the cache at or above `CHAIN_CONTRADICTION_COVERAGE` of
+    /// the previous main prompt contradicts the router's chain model, since the upstream read as a continuation what
+    /// the chain called a new prefix. Every contradiction counts, one line per client version per hour names it, and
+    /// the completion's own prompt becomes the one the next mark reads.
+    fn read_chain_mark(
+        &self,
+        inner: &mut Inner,
+        mark: ChainMark,
+        complete: &RequestComplete,
+        now: i64,
+    ) {
+        let read = complete
+            .usage
+            .as_ref()
+            .and_then(|u| u.cache_read_tokens)
+            .unwrap_or(0);
+        if read as f64 >= mark.previous_prompt as f64 * CHAIN_CONTRADICTION_COVERAGE {
+            let version = complete.client_version.as_deref().unwrap_or("unknown");
+            self.parts.metrics.observe_chain_contradiction(version);
+            let printed = inner
+                .chain_warned
+                .get(version)
+                .is_some_and(|at| now - at < ONE_HOUR_MS);
+            if !printed {
+                inner.chain_warned.insert(version.to_string(), now);
+                tracing::warn!(
+                    client_version = %version,
+                    session = %mark.session.1,
+                    cache_read_tokens = read,
+                    previous_prompt_tokens = mark.previous_prompt,
+                    "a refreshing request's chain holds neither anchor boundary while its completion read the cache as a continuation would"
+                );
+            }
+        }
+        // After the quiesce the last save holds the agent as it stood then.
+        if inner.closed {
+            return;
+        }
+        if let Some(prompt) = reported_prompt(complete.usage.as_ref()) {
+            if let Some(main) = inner
+                .sessions
+                .get_mut(&mark.session)
+                .and_then(|s| s.agents.get_mut(MAIN_AGENT))
+            {
+                main.last_prompt_tokens = Some(prompt);
+            }
+            inner.touch_agent(&mark.session, MAIN_AGENT);
+        }
+    }
+
     /// Books the credit a completion earned and releases the lock on the way.
     fn book_credit(
         &self,
@@ -3374,15 +3617,16 @@ impl Engine {
         credit: Option<Credit>,
         complete: &RequestComplete,
     ) {
-        // The serving account's tier as the store names it, as a settlement reads it, so the credit keys the tier its
-        // request row does. Read under the lock the once-only warning keeps its set behind.
+        // The tier the router prices the serving account by, as the store's term resolves it and a settlement reads it,
+        // so the credit files under the tier its request row does, none for a free organization or a usage-based
+        // seat. Read under the lock the once-only warning keeps its set behind.
         let tier = credit
             .as_ref()
             .and_then(|credit| credit.account.as_deref())
-            .and_then(|account| match self.parts.store.subscription(account) {
-                Ok(row) => {
+            .and_then(|account| match self.parts.store.subscription_term(account) {
+                Ok(term) => {
                     inner.unreadable_tiers.remove(account);
-                    row.and_then(|s| s.tier)
+                    term.and_then(|t| t.priced_tier().map(String::from))
                 }
                 Err(error) => {
                     if inner.unreadable_tiers.insert(account.to_string()) {
@@ -3530,6 +3774,22 @@ impl Inner {
     }
 }
 
+/// The prompt a completion reported: its uncached input, cache reads and both cache writes, `None` for an answer that
+/// reported none of the four, which leaves the previous prompt in place.
+fn reported_prompt(usage: Option<&phoebis_bus::Usage>) -> Option<u64> {
+    let usage = usage?;
+    let members = [
+        usage.input_tokens,
+        usage.cache_read_tokens,
+        usage.cache_write_5m_tokens,
+        usage.cache_write_1h_tokens,
+    ];
+    members
+        .iter()
+        .any(Option::is_some)
+        .then(|| members.iter().flatten().sum())
+}
+
 fn recipe_reason(reason: &str) -> Reason {
     match reason {
         "escaped_key" => Reason::InvalidRequest,
@@ -3633,9 +3893,8 @@ impl Engine {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
         // The five asks behind `router_view` (canonicals, pins, cooldowns, overages, member spends) are a round
-        // trip apiece, plus one `store.subscription` read per OAuth account; a tick with nothing due pays none of
-        // them. `drop_sessions_of_dead_keys` reads the snapshot alone, which `RouterHandle::snapshot` answers
-        // without a command.
+        // trip apiece, and a tick with nothing due pays none of them. `drop_sessions_of_dead_keys` reads the snapshot
+        // alone, which `RouterHandle::snapshot` answers without a command.
         let retained_models = {
             let mut inner = self.lock();
             if inner.closed {

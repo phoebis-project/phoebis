@@ -253,6 +253,32 @@ pub async fn admin_parts_full_on_priced(store: Arc<Store>, prices: PriceRevision
     )
 }
 
+/// The full harness over a store the caller holds, its sessions route bounded by `session_expiry` and
+/// `non_companion_idle` rather than the defaults' 24 hours and one hour.
+pub async fn admin_parts_full_on_bounded(
+    store: Arc<Store>,
+    session_expiry: Duration,
+    non_companion_idle: Duration,
+) -> Full {
+    full_from(
+        build_app_bounded(
+            None,
+            ACCOUNT_UUID,
+            false,
+            Some(store),
+            None,
+            None,
+            None,
+            None,
+            RouterConfig::default(),
+            LedgerConfig::default(),
+            session_expiry,
+            non_companion_idle,
+        )
+        .await,
+    )
+}
+
 fn full_from(parts: Parts) -> Full {
     Full {
         app: parts.app,
@@ -895,6 +921,40 @@ async fn build_app_routed(
     routing: RouterConfig,
     ledger_config: LedgerConfig,
 ) -> Parts {
+    build_app_bounded(
+        identity,
+        upstream_uuid,
+        tls,
+        store,
+        accounting,
+        prices,
+        tls_reload,
+        costs,
+        routing,
+        ledger_config,
+        Duration::from_secs(86_400),
+        Duration::from_secs(3_600),
+    )
+    .await
+}
+
+/// `build_app_routed` with the sessions route bounded by `session_expiry` and `non_companion_idle`, which the settings
+/// view mirrors.
+#[allow(clippy::too_many_arguments)]
+async fn build_app_bounded(
+    identity: Option<Identity>,
+    upstream_uuid: &str,
+    tls: bool,
+    store: Option<Arc<Store>>,
+    accounting: Option<AccountingSource>,
+    prices: Option<PriceRevisions>,
+    tls_reload: Option<Arc<dyn TlsReload>>,
+    costs: Option<PlanTables>,
+    routing: RouterConfig,
+    ledger_config: LedgerConfig,
+    session_expiry: Duration,
+    non_companion_idle: Duration,
+) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_310_linux_x64();
     let clock_cell = Arc::new(AtomicI64::new(NOW));
@@ -1105,7 +1165,8 @@ async fn build_app_routed(
         proxy_tls: tls,
         retention_days: ledger_config.retention_days,
         rollup_retention_days: ledger_config.rollup_retention_days,
-        session_expire_after_seconds: 86_400,
+        session_expire_after_seconds: session_expiry.as_secs(),
+        session_non_companion_idle_seconds: non_companion_idle.as_secs(),
         storage_path: "test".into(),
         subscription_costs_path: None,
     });
@@ -1140,7 +1201,8 @@ async fn build_app_routed(
         router: router_handle.clone(),
         catalog,
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
-        session_expiry: Duration::from_secs(86_400),
+        session_expiry,
+        non_companion_idle,
         bus: bus.clone(),
         ledger: ledger.clone(),
         metrics: metrics.clone(),

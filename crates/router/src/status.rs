@@ -1882,9 +1882,10 @@ mod tests {
             false,
         );
         let lines: Vec<&str> = screen.lines().collect();
+        // The fixture's Free account carries the plan-ended flag, so the block shows the word beside `ready`.
         assert_eq!(
             block(&lines, "accounts in no pool"),
-            ["  Direct  ready", "  Free    ready"],
+            ["  Direct  ready", "  Free    ready, plan ended"],
             "{screen}"
         );
     }

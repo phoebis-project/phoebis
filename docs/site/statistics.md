@@ -62,9 +62,9 @@ id and message id, the outcome, the cooldown the attempt set, the stop reason, t
 differs from the one the router resolved, the speed, the region inference ran in, the tokens a context edit cleared, and
 a refusal's category and recommended model. It carries the five token counts, with the thinking share of the output and
 the web search and fetch calls the answer made, the cache miss reason the diagnostics beta reports, the unified
-rate-limit window readings, overage, and the serving account's rate-limit tier as the router held it when the request
-landed. No dollar is stored: every price is computed when it is read, from these counts, at the price revision in force
-when the request arrived.
+rate-limit window readings, overage, and the serving account's rate-limit tier where the router prices by it (none for a
+free organization, a usage-based seat or an account with no plan). No dollar is stored: every price is computed when it
+is read, from these counts, at the price revision in force when the request arrived.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens. A `content`
 placement, by the conversation's own messages, is a hit when the response read the prefix the entry promised. A
@@ -110,18 +110,26 @@ request, outcome, cache, latency or error figure, nor in the slow-down's held co
 rollups, the Dashboard, the Analytics views, the pool cards and the key usage, leaves them out without a rule of its
 own, and the scrape's request counter skips a flagged request by a rule of its own. The refused requests show on the
 Dashboard's Refused tile, the Analytics view's Refused column and "Refusals by code" card, the Guardrails card for a
-block, the Requests view and a session's request list, and in `phoebis_refusals_total` ([Metrics](#metrics)). The first
-start after the upgrade sets the flag on the stored rows and moves each one's share out of its hour's counts into the
-map, in pages, resumed after a stopped start, and an hour whose rows the retention purge already removed keeps its old
-counts. With `stats.retention_days` at 0, which keeps the requests for good, the move starts at the first hour
+block, the Requests view and a session's request list, and in `phoebis_refusals_total` ([Metrics](#metrics)). A
+guardrail block (kind `guardrail`, code `guardrail_blocked`), a client drift, a missing contract item, and a key or
+model refusal the router makes at selection, for a request admitted under an older registry, each also write a `refused`
+decision row beside the request row, which the routing log lists ([Routing log](console.md#routing-log)), and every
+other refusal above stays on the request row alone, the relay's own `model_not_allowed` among them. The first start
+after the upgrade sets the flag on the stored rows and moves each one's share out of its hour's counts into the map, in
+pages, resumed after a stopped start, and an hour whose rows the retention purge already removed keeps its old counts.
+With `stats.retention_days` at 0, which keeps the requests for good, the move starts at the first hour
 `stats.rollup_retention_days` keeps, so a refusal in an hour the rollup purge removed writes no row into it.
 
 An upstream's refusal is a served request: the serving attempt records the answer's `stop_reason` `refusal` with the
 `refusal_category` and the recommended model its `stop_details` named, the request's outcome stays `succeeded`, and the
 figures count it as any served request. `GET /admin/requests` filters on `stop_reasons` and `refusal_categories`, each
-read off the serving attempt with `-` for a request whose serving attempt carries none or that no attempt served, and
-`GET /admin/analytics/refusal_categories` counts the refused requests in range per category, `-` for a refusal with
-none, read off the attempts at the request.
+read off the serving attempt with `-` for a request whose serving attempt carries none or that no attempt served, and on
+`agent_id`, which keeps one agent's requests, as `GET /admin/routing-log` keeps one agent's decisions and events and
+leaves out a session-level event, which names no agent. `GET /admin/analytics/refusal_categories` counts the refused
+requests in range per category, `-` for a refusal with none, read off the attempts at the request. It narrows by
+`clients` and `user_agents` as the analytics series do, over the client label and the agent's first product token, so a
+version picked from a breakdown counts that version's refusals, and it holds `user_agent_groups` to the two lists' bound
+and narrows nothing by its patterns.
 
 ## Quota samples
 
@@ -150,8 +158,8 @@ accepts requests and bounded by `routing.startup_fetch_seconds`, so selection ho
 request after a restart. An account whose first answer is a 429 serves from the windows kept in the registry from its
 last run, predicted forward, and its backoff starts at once. One whose first answer is a transport failure or another
 error serves from them too and keeps the cadence. The poll counts that read as its own: it next reads each account five
-minutes after the startup step, on the account's phase, or when its hold ends after a 429, and its profile an hour
-after, on every twelfth poll. A pairing's confirm and the Quota view's Refresh read the endpoint at once, outside the
+minutes after the startup step, on the account's phase, or when its hold ends after a 429, and its profile a quarter
+hour after, on every third poll. A pairing's confirm and the Quota view's Refresh read the endpoint at once, outside the
 cadence, and hand the reading to the router and the ledger as a scheduled read does, under the same hold and coalescing,
 and the card draws the reading the refresh took the moment it answers, its time the reading's own instant, and the
 Accounts view shows the first reading once the poll lands, a few seconds after the confirm.
@@ -162,12 +170,16 @@ five-minute slot when the hold is shorter. Each 429 is logged as a warning namin
 answered it, `the {endpoint} endpoint rate-limited the account`, and the next clean answer returns the account to the
 five minutes. A transport failure or another error keeps the cadence. The other accounts keep theirs throughout.
 
-The router announces a plan window's reset as a `window_reset` event with the utilization the window held before it and
-whether a sample showed the reset or the clock walk found it, and `GET /admin/analytics/unused_allowance` reads those
-events for the weekly windows, `seven_day` and each model week, as the share of the allowance each subscription account
-left unused at its resets in range (the default range 30 days), with an account's term end inside a week read as a reset
-of that week from its last reading before the end. The history reaches as far as the events the hourly purge still
-holds, which `stats.retention_days` bounds, so a longer retention shows more weeks.
+Each reading the router keeps carries the plan and the rate-limit tier the account held when the reading was taken. The
+router announces a plan window's reset as a `window_reset` event with the utilization the window held before it, whether
+a sample showed the reset or the clock walk found it, and the plan and the tier of the reading whose reset passed. A
+profile read that moves the account between a reading and its reset therefore leaves the old week under the plan it ran
+under. `GET /admin/analytics/unused_allowance` reads those events for the weekly windows, `seven_day` and each model
+week, as the share of the allowance each subscription account left unused at its resets in range (the default range 30
+days). Each reset answers the plan and the tier its event names, null where the event names none. An account's term end
+inside a week reads as a reset of that week from its last reading before the end, with the plan and the tier null. The
+history reaches as far as the events the hourly purge still holds, which `stats.retention_days` bounds, so a longer
+retention shows more weeks.
 
 ## Pricing
 
@@ -293,9 +305,11 @@ alphabet (ASCII lowercase letters, digits, hyphens and underscores). `sdk-cli` a
 price at the base rows, as does a request from a client other than Claude Code, which carries no entrypoint. An
 unmeasured entrypoint prices at the base rows because they charge more, so the router sheds early rather than late.
 
-The account's tier is recorded on each attempt when it lands, as the router held it, and carried into the hourly
-rollups, so a share reads under the tier the account had when it served the request, and a tier change lands on new rows
-only.
+The tier the router prices the account by is recorded on each attempt when it lands and carried into the hourly rollups,
+so a share reads under the tier the account had when it served the request, and a tier change lands on new rows only. A
+plan the router does not price records no tier, so the requests of a free organization, a usage-based seat or an account
+with no plan take no share of a plan window, while a Team or Enterprise seat records its tier word whether or not the
+cost model holds it and prices no share until it does.
 
 The weights of the same file, in units per plain input token, each with the date the plan meter measured it, and the
 share of a Max 20x window one million input tokens spend outside the band, derived from the weight over the capacity:
@@ -434,15 +448,17 @@ its own read, so a 400-day range holds one day of rows in memory and the reader 
 A prompt-length threshold that moves re-folds the hours whose attempts the ledger still holds at the next start, and the
 older hours keep their split. Where the request retention is 0 the re-fold reads every request, and a request received
 before the first hour the rollup purge keeps moves only where its hour's rows still stand, so an hour the purge removed
-stays empty and one it kept for a budgeted member moves with the threshold. The re-fold moves the request rows alone. A
-wasted probe's counts and a probe the keepalive still holds keep the band they settled or were recorded in, so the waste
-of a probe whose prompt falls between the old and the new threshold inside the retained window stays priced at that
-band.
+stays empty and one it kept for a budgeted member moves with the threshold. Under a request retention of some days the
+same guard holds for a request received before the first hour boundary at or after the retention's cutoff, since under
+an equal rollup retention the purge drops the hour that cutoff splits: that hour stays empty, and one the purge kept for
+a budgeted member moves. The re-fold moves the request rows alone. A wasted probe's counts and a probe the keepalive
+still holds keep the band they settled or were recorded in, so the waste of a probe whose prompt falls between the old
+and the new threshold inside the retained window stays priced at that band.
 
 ## Metrics
 
 `stats.metrics_listen` (`127.0.0.1:9464` by default) serves `/metrics` in Prometheus text format and nothing else. It
-speaks plain HTTP and asks for no credential, so it belongs behind a network only the scraper can reach. Twenty-four
+speaks plain HTTP and asks for no credential, so it belongs behind a network only the scraper can reach. Twenty-five
 families are rendered, each with a `# TYPE` line and no `# HELP` line:
 
 | Metric | Type | Labels |
@@ -455,6 +471,7 @@ families are rendered, each with a `# TYPE` line and no `# HELP` line:
 | `phoebis_bus_dropped_total` | counter | `subscriber` |
 | `phoebis_bus_subscriber_panics_total` | counter | `subscriber` |
 | `phoebis_keepalive_agents` | gauge | `state` |
+| `phoebis_keepalive_chain_contradictions_total` | counter | `client_version` |
 | `phoebis_keepalive_probes_total` | counter | `outcome`, `pool` |
 | `phoebis_keepalive_skipped_total` | counter | `pool`, `state` |
 | `phoebis_ledger_behind_refusals_total` | counter | none |
@@ -661,7 +678,8 @@ id with nothing to open. The item dates from the oldest row, and the detail coun
 **`poll_backoff`** holds once the usage poll has been backing off from the endpoint's 429 answers on the account for
 thirty minutes, counted from the run's first 429. The condition clears with the account's plan-ended pause as well,
 since the paused poll sends no clean answer. The detail gives when the run started, when the next attempt comes, and how
-many 429s the endpoint answered in a row.
+many 429s the endpoint answered in a row. The `poll_backoff_ended` event that closes a run names its `cause`,
+`clean_poll` for a clean answer or `plan_ended` for the pause.
 
 **`model_unweighted`** holds while a model the cost model does not weigh has served plan-funded requests since the
 start, each priced at the weight of the latest weighed model of its model tier and marked estimated wherever its figure
@@ -678,15 +696,17 @@ smaller priced share reads far off. The ledger reconciles each account's complet
 hour, prices the plan-funded attempts inside them under each attempt's regime, and keeps the rows for 30 days, which the
 [Meter](console.md#meter) view lists. The condition reads only a window that ended inside the last eight days while the
 view keeps its rows for 30, so an account that serves nothing leaves the condition within eight days of its newest
-window's end. A window's rise is read between two readings of one source, the
-poll's where the window saw two or more polls and the head's otherwise, since the head truncates the percent the poll
-rounds, and the attempts priced are those completed between the two. A fall inside a window splits its run, except a
-head at most one percent under the poll before it, and the parts' rises and priced shares sum into the window's one row.
-A window whose reset slid, a later reading naming a later reset while its own still lay ahead, writes no row. The
-subject is the account, and the item dates from the oldest off window's end. The detail names the off windows with their
-ratios, the cost model's source and the revision in force, since the fix is the cost model file. The dashboard's line
-reads it under the label "Meter drift against the table" as `acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`,
-and it opens the Meter view on the account.
+window's end. A window's rise is read between two readings of one source, the poll's where the window saw two or more
+polls and the head's otherwise, since the head truncates the percent the poll rounds, and the attempts priced are those
+completed between the two. A fall inside a window splits its run, except a head at most one percent under the poll
+before it, and the parts' rises and priced shares sum into the window's one row. A dip the next readings reverse past
+what the attempts between its ends predict, a climb that reaches 5% and exceeds 1.25 times their priced share, leaves
+the run as a fault of the readings, while a dip that never closes or whose climb the attempts predict is a free reset
+and keeps its split. A window whose reset slid, a later reading naming a later reset while its own still lay ahead,
+writes no row. The subject is the account, and the item dates from the oldest off window's end. The detail names the off
+windows with their ratios, the cost model's source and the revision in force, since the fix is the cost model file. The
+dashboard's line reads it under the label "Meter drift against the table" as `acct-a: 5h charged 2.0x the table, 7d
+1.3x, since 14:20`, and it opens the Meter view on the account.
 
 **`wall_reached`** holds while a window of the account read spent in the last 24 hours: a `window_spent` event of any
 source, the prediction's among them, so a wall the router predicted counts before a head or the poll reads it. A wall is

@@ -140,6 +140,9 @@ pub struct SelectRequest {
     /// The relay's estimate of the body's prompt tokens from its bytes (canonical bytes over four, the byte
     /// estimate the static affinity entries carry): a fresh session's rewrite, since it has no pin to read one from.
     pub body_tokens: u64,
+    /// The effective effort of the request as the relay read it (the newest per-turn control entry over the
+    /// top-level `output_config.effort`), the word as the client sent it, `None` where the request named none.
+    pub effort: Option<String>,
 }
 
 /// The account that issued a fallback credit token, under the incarnation that answered the refusal: a holder created
@@ -2320,6 +2323,7 @@ fn run(
         );
         let lane = row.lane.clone();
         let entrypoint = row.entrypoint.clone();
+        let effort = Some(row.effort.clone()).filter(|effort| !effort.is_empty());
         rec.pin_written = Some(PinWritten {
             action: if migrated.is_some() {
                 "moved"
@@ -2333,7 +2337,6 @@ fn run(
         });
         replace_expired(state, expired.take(), &mut writes);
         state.put_pin(row.clone());
-        state.set_auxiliary_only(&row.key(), placed_auxiliary_only(request));
         // The landing writes the destination's cache, so the pin's next requests wait for this request's head.
         if left.is_some() {
             state.mark_head(
@@ -2343,7 +2346,9 @@ fn run(
                 request.now,
             );
         }
+        let first_seen = state.note_first_seen(&row, request.now);
         writes.push(StateWrite::UpsertPin(row));
+        writes.extend(first_seen.map(StateWrite::InsertFirstSeen));
         PinRef {
             key_id: request.key_id.clone(),
             session_id: session.to_string(),
@@ -2352,6 +2357,7 @@ fn run(
             epoch,
             lane,
             entrypoint,
+            effort,
         }
     });
     let mut trace_skipped: Vec<Skipped> = obstacles
@@ -2480,6 +2486,8 @@ fn fresh_pin(
         marked_at: None,
         marked_on: None,
         marked_window: None,
+        auxiliary_only: placed_auxiliary_only(request),
+        effort: request.effort.clone().unwrap_or_default(),
     };
     stamp_hashes(&mut row, request);
     row
@@ -2621,8 +2629,9 @@ pub(crate) enum BurnRead {
 }
 
 /// The projections of `account_id` on the plan windows it holds a reading of, from one read of its burn as `read`
-/// names it: empty for an api_key account, which has no plan window. An unknown tier prices no burn, so an untiered
-/// account projects its prediction alone. The burn leaves the row under `own` out (`in_pool_without`).
+/// names it: empty for an api_key account or a usage-based seat, neither of which has a plan window. An unknown tier
+/// prices no burn, so an untiered account projects its prediction alone. The burn leaves the row under `own` out
+/// (`in_pool_without`).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn projections_of(
     state: &RoutingState,
@@ -2634,7 +2643,11 @@ pub(crate) fn projections_of(
     read: BurnRead,
     own: Option<&PinKey>,
 ) -> BTreeMap<String, Projection> {
-    if snapshot.account(account_id).map(|a| a.kind) == Some(AccountKind::ApiKey) {
+    // A usage-based seat holds no plan quota. The plan readings it kept from before it converted stand until their
+    // reset, and a projection on them would fire a shedding round on a window the seat no longer draws.
+    if snapshot.account(account_id).map(|a| a.kind) == Some(AccountKind::ApiKey)
+        || snapshot.usage_based(account_id)
+    {
         return BTreeMap::new();
     }
     let keep = in_pool_without(snapshot, pool, own);
@@ -2811,7 +2824,7 @@ impl Banded {
 }
 
 /// The projection of `account_id` on `window` at its horizon on the burn `read` names: `None` for an account with no
-/// reading of the window or an api_key account.
+/// reading of the window, an api_key account or a usage-based seat.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn projection_of(
     state: &RoutingState,
@@ -5312,10 +5325,7 @@ fn renew(
     match verdict {
         Warmth::Refresh => {
             renewed.last_refresh_at = now;
-            // Guarded, so a renewal of an unflagged pin builds no key for it.
-            if auxiliary_only {
-                state.clear_auxiliary_only(&current.key());
-            }
+            renewed.auxiliary_only = false;
         }
         Warmth::Cold => renewed.last_refresh_at = 0,
         Warmth::Untouched => {}
@@ -5326,12 +5336,15 @@ fn renew(
             stamp_hashes(&mut renewed, request);
         }
     }
-    // A probe replays another request's headers, so the row keeps the entrypoint its own requests stamped.
+    // A probe replays another request's headers and body, so the row keeps the entrypoint and the effort its own
+    // requests stamped.
     if !request.probe {
         renewed.entrypoint = request.entrypoint.clone().unwrap_or_default();
+        renewed.effort = request.effort.clone().unwrap_or_default();
     }
     let lane = renewed.lane.clone();
     let entrypoint = renewed.entrypoint.clone();
+    let effort = Some(renewed.effort.clone()).filter(|effort| !effort.is_empty());
     let (refresh_stamped, hashes_stamped) = (
         verdict == Warmth::Refresh,
         verdict != Warmth::Untouched && chained,
@@ -5383,6 +5396,7 @@ fn renew(
             epoch: current.epoch,
             lane,
             entrypoint,
+            effort,
         }),
         migrated: None,
         in_overage: state.in_overage(&current.account_id, now, fallback_ms),
@@ -7683,6 +7697,8 @@ mod banded_tests {
                     reset: Some(T + HOUR),
                     observed_at: T,
                     source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
                 },
             ),
         );
@@ -7736,6 +7752,7 @@ mod banded_tests {
             fast: false,
             classifier: false,
             body_tokens: 0,
+            effort: None,
         };
         let read = fit_of(
             &state,
@@ -7832,6 +7849,8 @@ mod banded_tests {
                         reset: Some(T + HOUR),
                         observed_at: T,
                         source: WindowSource::Poll,
+                        plan: None,
+                        tier: None,
                     },
                 ),
             );

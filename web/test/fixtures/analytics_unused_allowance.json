@@ -16,13 +16,17 @@
                 "reset_at": 1791116200000,
                 "share_left": 0.38,
                 "observed_at": 1791116200000,
-                "source": "sample"
+                "source": "sample",
+                "plan": "max_20x",
+                "tier": "default_claude_max_20x"
               },
               {
                 "reset_at": 1790511400000,
                 "share_left": 0.15000000000000002,
                 "observed_at": 1790511400000,
-                "source": "clock"
+                "source": "clock",
+                "plan": "max_20x",
+                "tier": "default_claude_max_20x"
               }
             ],
             "total_share_left": 0.53,
@@ -35,7 +39,9 @@
                 "reset_at": 1790857000000,
                 "share_left": 0.6,
                 "observed_at": 1790857000000,
-                "source": "sample"
+                "source": "sample",
+                "plan": "max_20x",
+                "tier": "default_claude_max_20x"
               }
             ],
             "total_share_left": 0.6,
@@ -55,7 +61,9 @@
                 "reset_at": 1791029800000,
                 "share_left": 0.7,
                 "observed_at": 1790770600000,
-                "source": "term_ended"
+                "source": "term_ended",
+                "plan": null,
+                "tier": null
               }
             ],
             "total_share_left": 0.7,

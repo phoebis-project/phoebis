@@ -238,7 +238,7 @@ impl RegistrySnapshot {
     }
     /// The rate-limit tier the account's stored profile names, `None` before the first profile read and for an api_key
     /// account. The router prices its own use of the windows by `priced_tier`, which withholds the tier of a plan the
-    /// cost table does not price.
+    /// cost table never prices.
     pub fn tier(&self, account_id: &str) -> Option<&str> {
         self.terms.get(account_id).and_then(|t| t.tier.as_deref())
     }
@@ -247,14 +247,12 @@ impl RegistrySnapshot {
     pub fn plan(&self, account_id: &str) -> Option<&str> {
         self.terms.get(account_id).and_then(|t| t.plan.as_deref())
     }
-    /// The stored tier where the resolved plan is one the cost table prices (`pro`, `max_5x`, `max_20x`, or `max`,
-    /// whose tier the table may hold), `None` for `free`, `team`, `enterprise`, `usage_based` and an account with no
-    /// plan: what every pricing read keys its capacity by, so a free organization reads as an untiered account.
+    /// The stored tier where the resolved plan is one the cost table may price (`pro`, `max_5x`, `max_20x`, `max`,
+    /// `team` or `enterprise`), the table's capacity rows judging the word, `None` for `free`, `usage_based` and an
+    /// account with no plan: what every pricing read keys its capacity by. The term's own rule, which the keepalive's
+    /// rows read from the store too.
     pub fn priced_tier(&self, account_id: &str) -> Option<&str> {
-        match self.plan(account_id)? {
-            "pro" | "max_5x" | "max_20x" | "max" => self.tier(account_id),
-            _ => None,
-        }
+        self.terms.get(account_id)?.priced_tier()
     }
     /// The term row's class flag, false for an account with no term row.
     pub fn usage_based(&self, account_id: &str) -> bool {

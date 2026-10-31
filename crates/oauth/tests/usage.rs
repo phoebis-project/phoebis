@@ -168,8 +168,8 @@ fn a_null_alias_key_without_limits_yields_no_fable_window() {
 mod service {
     use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
     use phoebis_oauth::{
-        BackoffEdge, Clock, CredentialManager, PollFault, PollIssue, PollOutcome, Refused,
-        UsageError, UsageService,
+        BackoffEdge, BackoffEndCause, Clock, CredentialManager, PollFault, PollIssue, PollOutcome,
+        Refused, UsageError, UsageService,
     };
     use phoebis_profile::{
         claude_code_2_1_310_linux_x64,
@@ -653,6 +653,12 @@ mod service {
             2,
             "two 429s in a row"
         );
+        // Set after the run's two 429s, so the hook sees the run's end alone.
+        let edges = Arc::new(Mutex::new(Vec::new()));
+        service.set_on_backoff(Arc::new({
+            let edges = edges.clone();
+            move |edge: BackoffEdge| edges.lock().unwrap().push(edge)
+        }));
         now.store(1_360_000, Ordering::SeqCst);
         assert!(service.poll("a").await.unwrap().error.is_none());
         let status = service.poll_status("a").unwrap();
@@ -668,6 +674,18 @@ mod service {
             "the clean answer ends the run"
         );
         assert_eq!(service.held_for("a"), None);
+        assert_eq!(
+            *edges.lock().unwrap(),
+            [BackoffEdge::Ended {
+                account_id: "a".into(),
+                at: 1_360_000,
+                since: 1_000_000,
+                attempts: 2,
+                resumed_at: 1_360_000,
+                cause: BackoffEndCause::CleanPoll,
+            }],
+            "the run's end reaches the hook, from its first 429 to the clean answer, which it names"
+        );
 
         up.set_rule_after(
             3,
@@ -746,8 +764,9 @@ mod service {
                 since: 1_000_000,
                 attempts: 2,
                 resumed_at: 1_200_000,
+                cause: BackoffEndCause::PlanEnded,
             }],
-            "the run's end reaches the hook, from its first 429 to the pause"
+            "the run's end reaches the hook, from its first 429 to the pause, which it names"
         );
 
         service.plan_ended("a");

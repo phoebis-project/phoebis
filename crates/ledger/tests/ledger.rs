@@ -2414,6 +2414,96 @@ fn the_stop_reason_and_refusal_category_filters_read_the_serving_attempt_and_das
     );
 }
 
+/// Writes request `id` of session `s1` at `received_at` from agent `agent_id`, the caller's `User-Agent` header kept as
+/// sent, `None` where the request names none.
+fn plant_agent_request(
+    db: &LedgerDb,
+    id: &str,
+    received_at: i64,
+    agent_id: Option<&str>,
+    user_agent: Option<&str>,
+) {
+    let request = RequestRecord {
+        id: id.into(),
+        received_at,
+        session_id: Some("s1".into()),
+        agent_id: agent_id.map(String::from),
+        user_agent: user_agent.map(String::from),
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "exhausted".into(),
+        ..Default::default()
+    };
+    db.insert_request(&request, &[], None).unwrap();
+}
+
+#[test]
+fn the_request_log_keeps_one_agents_requests_under_agent_id() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_agent_request(&db, "from-main", 3, Some("main"), None);
+    plant_agent_request(&db, "from-agent", 2, Some("agent-7"), None);
+    plant_agent_request(&db, "from-none", 1, None, None);
+    let listed = |agent_id: &str| {
+        listed_ids(
+            &db,
+            &RequestFilter {
+                agent_id: Some(agent_id.into()),
+                ..Default::default()
+            },
+        )
+    };
+    assert_eq!(
+        listed("agent-7"),
+        ["from-agent"],
+        "the agent's own request, the main agent's and the one that names no agent left out"
+    );
+    assert_eq!(listed("main"), ["from-main"]);
+    assert_eq!(
+        listed("agent"),
+        Vec::<String>::new(),
+        "the value matches in full, never as a prefix"
+    );
+    assert_eq!(
+        listed(""),
+        ["from-main", "from-agent", "from-none"],
+        "an empty value narrows nothing, as an absent one"
+    );
+}
+
+/// The request log reads its singular `user_agent` against the header as sent, so a label spelled in full with its
+/// parentheses, comma and spaces names that label and not its sibling under another entrypoint.
+#[test]
+fn the_request_logs_user_agent_spelled_in_full_lists_that_label_and_not_its_sdk_cli_sibling() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_agent_request(
+        &db,
+        "cli",
+        2,
+        Some("main"),
+        Some("claude-cli/2.1.310 (external, cli)"),
+    );
+    plant_agent_request(
+        &db,
+        "sdk",
+        1,
+        Some("main"),
+        Some("claude-cli/2.1.310 (external, sdk-cli)"),
+    );
+    let listed = |agent: &str| {
+        listed_ids(
+            &db,
+            &RequestFilter {
+                user_agent: Some(agent.into()),
+                ..Default::default()
+            },
+        )
+    };
+    assert_eq!(listed("claude-cli/2.1.310 (external, cli)"), ["cli"]);
+    assert_eq!(listed("claude-cli/2.1.310 (external, sdk-cli)"), ["sdk"]);
+}
+
 /// A row's own `landed_at`, as the ledger wrote it.
 fn landed_at(db: &LedgerDb, id: &str) -> Option<i64> {
     db.read_blocking(|c| {
@@ -4189,7 +4279,8 @@ fn set_tier(store: &Store, account: &str, tier: &str) {
 }
 
 /// The landing writes the serving account's tier as the registry snapshot holds it on every attempt: the profile's
-/// tier for an oauth account, none for an api_key account, and a tier that changes later lands on the new rows alone.
+/// tier for an oauth account on a plan the router prices, none for an api_key account, and a tier that changes later
+/// lands on the new rows alone.
 #[tokio::test]
 async fn the_landing_records_the_serving_accounts_tier_as_the_registry_holds_it() {
     let up = FakeUpstream::start(vec![]).await;
@@ -4232,6 +4323,150 @@ async fn the_landing_records_the_serving_accounts_tier_as_the_registry_holds_it(
             Some("default_claude_max_20x".to_string())
         ),
         "the new tier lands on the new row and the earlier row keeps the tier it was written with"
+    );
+    up.shutdown().await;
+}
+
+/// The price-key case's subscription cost model: a capacity row for every tier word its documents name, so a
+/// plan-funded row that keeps its tier prices a share and only a tier the landing leaves off keeps it unpriced. The
+/// seat's row files under its own funding, which prices no share whatever its tier, so its half of the shares
+/// assertion is a guard and the tier assertion carries its rule.
+const PRICE_KEY_COSTS: &str = "\
+revisions:
+  - effective: 1970-01-01
+    unit:
+      defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
+      units_per_window: 100
+    capacity:
+      default_claude_ai:      {five_hour: 100, seven_day: 1000}
+      default_claude_max_20x: {five_hour: 100, seven_day: 1000}
+      default_claude_zero:    {five_hour: 100, seven_day: 1000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 1, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-sonnet-5: 1
+    model_windows: {}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-sonnet-5: sonnet
+";
+
+/// Stores `organization` as the account's profile document with its tier, as the quota poll stores a read.
+fn set_document(store: &Store, account: &str, organization: &str, tier: &str) {
+    store
+        .set_profile(
+            account,
+            &format!(r#"{{"organization":{organization}}}"#),
+            &phoebis_store::SubscriptionRow {
+                tier: Some(tier.into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+/// The landing records the tier the router prices the serving account by: none for a free organization and for a
+/// usage-based seat, whatever tier their documents name, so neither row prices a share of a plan window, while a Max
+/// account's attempt records its tier and prices as before.
+#[tokio::test]
+async fn the_landing_records_no_tier_for_a_free_organization_or_a_usage_based_seat_and_neither_prices_a_share(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(
+        &up,
+        &[
+            oauth("max", A, 0),
+            oauth("free", B, 1),
+            oauth("seat", "sk-ant-oat01-SEAT", 2),
+        ],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    set_document(
+        &h.store,
+        "max",
+        r#"{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}"#,
+        "default_claude_max_20x",
+    );
+    set_document(
+        &h.store,
+        "free",
+        r#"{"organization_type":"claude_free","rate_limit_tier":"default_claude_ai"}"#,
+        "default_claude_ai",
+    );
+    set_document(
+        &h.store,
+        "seat",
+        r#"{"organization_type":"claude_enterprise","rate_limit_tier":"default_claude_zero","seat_tier":"enterprise_usage_based"}"#,
+        "default_claude_zero",
+    );
+    h.router.reload().await.unwrap();
+    for (id, account) in [("r-max", "max"), ("r-free", "free"), ("r-seat", "seat")] {
+        h.ledger
+            .record_request(Record::Request {
+                request: finished_row(id),
+                attempts: vec![AttemptRecord {
+                    account_id: account.into(),
+                    account_kind: "oauth".into(),
+                    // The selection stamps the seat's class, as it does on a request the relay serves.
+                    usage_based: account == "seat",
+                    ..serving_attempt(id, true)
+                }],
+                bodies: None,
+            })
+            .await;
+    }
+    let mut tiers = Vec::new();
+    for id in ["r-max", "r-free", "r-seat"] {
+        tiers.push(ledgered(&h, id).await.1[0].tier.clone());
+    }
+    assert_eq!(
+        tiers,
+        [Some("default_claude_max_20x".to_string()), None, None],
+        "the Max attempt records its tier, and the free organization's and the seat's record none"
+    );
+    let tables = PlanTables {
+        revisions: phoebis_ledger::CostRevisions::from_yaml(PRICE_KEY_COSTS)
+            .expect("the price-key cost model parses"),
+        path: None,
+        source: "test".into(),
+    };
+    let rows =
+        h.db.read(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+            .await
+            .unwrap();
+    let shares = |account: &str| {
+        let row = rows
+            .iter()
+            .find(|r| r.account_id == account)
+            .unwrap_or_else(|| panic!("no rollup row of {account}"));
+        let key = phoebis_ledger::RowKey {
+            model: &row.canonical_model,
+            speed: Speed::of(Some(row.speed.as_str())),
+            band: phoebis_ledger::Band::of_rollup(&row.band),
+            funding: phoebis_ledger::Funding::of_rollup(&row.funding),
+            kind: &row.kind,
+            tier: (row.tier != UNATTRIBUTED).then_some(row.tier.as_str()),
+            entrypoint: None,
+            classifier: false,
+            at: row.hour * 1_000,
+            band_at: None,
+        };
+        phoebis_ledger::price_row(&PriceRevisions::shipped(), &tables, &key, row.usage())
+            .shares
+            .is_some()
+    };
+    assert_eq!(
+        (shares("max"), shares("free"), shares("seat")),
+        (true, false, false),
+        "the Max row prices a share of its windows and the free organization's prices none, the seat's none as a guard"
     );
     up.shutdown().await;
 }
@@ -7375,6 +7610,74 @@ fn an_absent_kinds_lists_every_kind_and_kinds_names_exactly_its_set() {
     );
 }
 
+/// The summary keeps a refusal's words as the router wrote them, so a guardrail's block lists under `refused` with
+/// its own kind and code.
+#[test]
+fn a_guardrails_refusal_reads_back_through_the_routing_log_with_its_kind_and_code() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let snapshot = phoebis_routing::RegistrySnapshot::from_load(
+        phoebis_store::RegistryLoad::default(),
+        [0; 32],
+        0,
+        1,
+    );
+    let (record, summary) = phoebis_routing::DecisionRecord::refused(
+        &phoebis_routing::RefusedRequest {
+            request_id: "r-blocked".into(),
+            attempt: 1,
+            seq: 1,
+            at: 100,
+            key_id: "desktop".into(),
+            key_generation: 0,
+            agent_id: "main".into(),
+            parent_agent_id: None,
+            session_id: Some("s1".into()),
+            request_class: Some("auxiliary".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            lane: Default::default(),
+            flags: Default::default(),
+            chain: Default::default(),
+            attempted: Vec::new(),
+            holds: Vec::new(),
+            client: phoebis_routing::ClientClass::ClaudeCode,
+            client_version: Some("2.1.310".into()),
+        },
+        &snapshot,
+        &phoebis_routing::RefusalFacts {
+            kind: "guardrail",
+            code: "guardrail_blocked",
+            reason: "Large auxiliary requests".into(),
+        },
+    );
+    put_decision(&db, &DecisionRow::of(summary, record, 100));
+    let refused = phoebis_ledger::RoutingLogFilter {
+        kinds: Some(vec!["refused".into()]),
+        ..log_filter()
+    };
+    let page = db
+        .read_blocking(|c| phoebis_ledger::list_routing_log(c, &refused, None, 25))
+        .unwrap();
+    let [phoebis_ledger::RoutingLogRow::Decision(row)] = page.rows.as_slice() else {
+        panic!("{:?}", page.rows)
+    };
+    assert_eq!(
+        (
+            row.request_id.as_str(),
+            row.kind.as_str(),
+            &row.summary["refusal"]
+        ),
+        (
+            "r-blocked",
+            "refused",
+            &serde_json::json!({
+                "kind": "guardrail",
+                "code": "guardrail_blocked",
+                "reason": "Large auxiliary requests"
+            })
+        )
+    );
+}
+
 #[test]
 fn counts_answer_under_a_request_filter_alone() {
     let db = LedgerDb::open_in_memory().unwrap();
@@ -7435,6 +7738,48 @@ fn a_session_prefix_matches() {
         ["e:pin_created@300", "d:r1/1"]
     );
     assert_eq!(log_ids(&db, &session("abc-1")), ["d:r1/1"]);
+}
+
+#[test]
+fn an_agent_id_keeps_the_agents_decisions_and_events_and_leaves_a_session_level_event_out() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (n, agent) in [(1, "agent-7"), (2, "main")] {
+        let mut row = logged(&format!("r{n}"), 1, 1, 100 * n as i64, "placed");
+        row.agent_id = Some(agent.into());
+        put_decision(&db, &row);
+    }
+    db.insert_event(&EventRecord {
+        session_id: Some("s1".into()),
+        agent_id: Some("agent-7".into()),
+        ..logged_event(300, "pin_created")
+    })
+    .unwrap();
+    // A prefix expiry names the conversation and no agent.
+    db.insert_event(&EventRecord {
+        session_id: Some("s1".into()),
+        ..logged_event(400, "warm_prefix_expired")
+    })
+    .unwrap();
+    let agent = |a: &str| phoebis_ledger::RoutingLogFilter {
+        agent_id: Some(a.into()),
+        ..log_filter()
+    };
+    assert_eq!(
+        log_ids(&db, &log_filter()),
+        [
+            "e:warm_prefix_expired@400",
+            "e:pin_created@300",
+            "d:r2/1",
+            "d:r1/1"
+        ],
+        "without the filter, every row"
+    );
+    assert_eq!(
+        log_ids(&db, &agent("agent-7")),
+        ["e:pin_created@300", "d:r1/1"],
+        "the agent's decision and its own event, the main agent's decision and the session-level event left out"
+    );
+    assert_eq!(log_ids(&db, &agent("main")), ["d:r2/1"]);
 }
 
 #[test]

@@ -881,6 +881,7 @@ async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<Stri
         QuotaPoll::refresh_profile(
             &state.store,
             &state.usage,
+            &state.tables,
             &state.ledger,
             &state.router,
             &row,
@@ -893,6 +894,7 @@ async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<Stri
     match QuotaPoll::poll_account(
         &state.store,
         &state.usage,
+        &state.tables,
         &state.ledger,
         Some(&state.router),
         &row,
@@ -1590,6 +1592,7 @@ async fn pairing_confirm(
                         let _ = QuotaPoll::poll_account(
                             &polled.store,
                             &polled.usage,
+                            &polled.tables,
                             &polled.ledger,
                             Some(&polled.router),
                             &committed,
@@ -2200,10 +2203,10 @@ pub(crate) struct Account {
     /// Set only on an `oauth` account. An `api_key` account always reads false.
     pub canceled: bool,
     /// Epoch milliseconds: when a profile read found the account's organization holding no plan, null while a plan
-    /// stands. While it is set the usage poll sends the account no usage request and reads its profile hourly, the
-    /// routing reads the account as past its end, the row keeps the last plan's `profile.organization_type`,
-    /// `profile.billing_type` and `subscription.tier`, and a profile read that finds a plan, or a pairing confirm,
-    /// clears it.
+    /// stands. While it is set the usage poll sends the account no usage request and reads its profile every third
+    /// poll, a quarter hour apart, the routing reads the account as past its end, the row answers the document the read
+    /// found (`subscription.plan` `free`, and its `profile.organization_type`, `profile.billing_type` and
+    /// `subscription.tier`), and a profile read that finds a plan, or a pairing confirm, clears it.
     pub plan_ended_at: Option<i64>,
     /// `disconnected`, `funding_required`, `reauth_required`, `ready` or `unpaired`.
     #[schema(example = "disconnected")]
@@ -2907,7 +2910,7 @@ fn held_windows(
             } else {
                 name.as_str()
             };
-            (key.to_string(), *reading, lead)
+            (key.to_string(), reading.clone(), lead)
         })
         .collect()
 }

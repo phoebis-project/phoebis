@@ -488,6 +488,7 @@ async fn select_main(r: &Rig) -> SelectResult {
             fast: false,
             classifier: false,
             body_tokens: 0,
+            effort: None,
         })
         .await
         .unwrap()
@@ -759,6 +760,7 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
             fast: false,
             classifier: false,
             body_tokens: 0,
+            effort: None,
         })
         .await
         .unwrap();
@@ -1211,6 +1213,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
                 epoch: pin.epoch,
                 lane: pin.lane.clone(),
                 entrypoint: String::new(),
+                effort: None,
             }),
             lifecycle_generation: 1,
             credential_generation: 1,
@@ -1271,6 +1274,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
                 fast: false,
                 classifier: false,
                 body_tokens: 0,
+                effort: None,
             })
             .await
             .unwrap();

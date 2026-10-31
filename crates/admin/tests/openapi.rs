@@ -85,7 +85,7 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("guardrail_show", &[404, 500]),
     ("guardrail_patch", &[400, 404, 409, 500, 503]),
     ("guardrail_delete", &[404, 500, 503]),
-    ("keepalive_overview", &[500]),
+    ("keepalive_overview", &[400, 500]),
     ("keepalive_recipes", &[]),
     ("keys_list", &[500]),
     ("keys_create", &[400, 404, 409, 500, 503]),
@@ -251,6 +251,7 @@ const CORPUS: &[(&str, Option<(&str, u16)>)] = &[
 const QUERY_MODULES: &[(&str, &str)] = &[
     ("accounts", include_str!("../src/accounts.rs")),
     ("analytics", include_str!("../src/analytics.rs")),
+    ("keepalive", include_str!("../src/keepalive.rs")),
     ("pools", include_str!("../src/pools.rs")),
     ("requests", include_str!("../src/requests.rs")),
     ("routing_log", include_str!("../src/routing_log.rs")),
@@ -1055,22 +1056,37 @@ async fn the_request_detail_answers_stream_cut_as_null_or_the_cuts_six_members()
 }
 
 #[tokio::test]
-async fn a_session_row_answers_its_context_figures_and_agent_lines_as_null_or_their_values() {
+async fn a_session_row_answers_its_effort_and_its_agent_lines_and_no_context_window() {
     let (_app, _up, document) = document().await;
     let schemas = &document["components"]["schemas"];
+    let session = &schemas["Session"];
     for member in [
-        "agent_contexts",
         "cached_prefix_tokens",
         "context_share",
         "context_window_tokens",
     ] {
         assert!(
-            admits_null(&schemas["Session"]["properties"][member]),
-            "Session.{member}: a row with no figure answers null: {}",
-            schemas["Session"]
+            session["properties"].get(member).is_none(),
+            "Session.{member}: the row answers no context window: {session}"
         );
     }
-    let properties: BTreeSet<&str> = schemas["AgentContext"]["properties"]
+    assert!(
+        admits_null(&session["properties"]["effort"]),
+        "Session.effort: a row with no pin answers null: {session}"
+    );
+    let lines = &session["properties"]["agent_contexts"];
+    assert!(
+        lines["type"] == "array" && !admits_null(lines),
+        "Session.agent_contexts: every row answers a list, empty where no line draws: {lines}"
+    );
+    assert!(
+        session["required"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|m| m == "agent_contexts")),
+        "every row carries its lines: {session}"
+    );
+    let line = &schemas["AgentContext"];
+    let properties: BTreeSet<&str> = line["properties"]
         .as_object()
         .unwrap()
         .keys()
@@ -1079,24 +1095,58 @@ async fn a_session_row_answers_its_context_figures_and_agent_lines_as_null_or_th
     assert_eq!(
         properties,
         BTreeSet::from([
+            "account_id",
             "agent_id",
-            "cached_prefix_tokens",
-            "context_share",
-            "context_window_tokens",
+            "cache_ttl_ms",
+            "created_at",
+            "effort",
             "last_input_tokens",
-            "model"
+            "last_used_at",
+            "model",
+            "warm"
         ])
     );
-    for member in [
-        "cached_prefix_tokens",
-        "context_share",
-        "context_window_tokens",
-    ] {
+    for member in ["created_at", "effort"] {
         assert!(
-            admits_null(&schemas["AgentContext"]["properties"][member]),
-            "AgentContext.{member}: a line with no turn answers null"
+            admits_null(&line["properties"][member]),
+            "AgentContext.{member}: a line answers null where the pin holds none: {line}"
         );
     }
+    assert_eq!(
+        line["properties"]["warm"]["type"], "boolean",
+        "AgentContext.warm: {line}"
+    );
+}
+
+#[tokio::test]
+async fn the_rows_and_the_lines_creation_times_say_whose_first_placement_each_reads() {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    let description = |schema: &str| {
+        schemas[schema]["properties"]["created_at"]["description"]
+            .as_str()
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+    };
+    assert_eq!(
+        description("Session").as_deref(),
+        Some(
+            "The first placement of the session's main agent under the key and session, kept until the session's last pin leaves for good, so a failover, a move or a second pin leaves it alone. Null where main never placed a pin."
+        ),
+        "Session.created_at: {}",
+        schemas["Session"]
+    );
+    assert_eq!(
+        description("AgentContext").as_deref(),
+        Some(
+            "The first placement of the pin's agent under the key and session, null where no record stands."
+        ),
+        "AgentContext.created_at: {}",
+        schemas["AgentContext"]
+    );
+    assert!(
+        admits_null(&schemas["Session"]["properties"]["created_at"]),
+        "a row whose main never placed a pin answers null"
+    );
 }
 
 #[tokio::test]
@@ -1197,6 +1247,30 @@ async fn the_account_subscription_declares_the_resolved_plan_and_its_example_rea
         "max_20x",
         "the account example reads the seed's Max 20x organization"
     );
+}
+
+#[tokio::test]
+async fn an_unused_allowance_reset_declares_the_plan_and_the_tier_its_reading_carried_nullable() {
+    let (_app, _up, document) = document().await;
+    let reset = &document["components"]["schemas"]["UnusedAllowanceReset"];
+    for member in ["plan", "tier"] {
+        let property = &reset["properties"][member];
+        assert!(
+            admits_null(property),
+            "UnusedAllowanceReset.{member}: {reset}"
+        );
+        let description = property["description"]
+            .as_str()
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+        assert!(
+            description.as_deref().is_some_and(|text| {
+                text.contains("carried when the reset was observed")
+                    && text.contains("`sample` or `clock` reset")
+                    && text.contains("`term_ended` row")
+            }),
+            "UnusedAllowanceReset.{member} names whose pair it answers and where it reads null: {property}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1387,6 +1461,23 @@ async fn the_account_windows_doc_says_a_disconnected_reauth_required_or_plan_end
 }
 
 #[tokio::test]
+async fn the_event_kind_doc_names_the_cause_a_backoff_s_end_carries() {
+    let (_app, _up, document) = document().await;
+    let kind = &document["components"]["schemas"]["Event"]["properties"]["kind"];
+    let description = kind["description"]
+        .as_str()
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+    assert!(
+        description.as_deref().is_some_and(|text| text.contains(
+            "- `poll_backoff_ended`: the usage poll's backoff on an account ended, with `duration_ms` and `cause`, \
+             `clean_poll` where a clean answer ended it or `plan_ended` where the account's plan-ended pause closed \
+             it."
+        )),
+        "{kind}"
+    );
+}
+
+#[tokio::test]
 async fn the_guardrail_counts_describe_the_range_on_the_body_and_one_row_per_guardrail_on_its_member(
 ) {
     let (_app, _up, document) = document().await;
@@ -1423,6 +1514,61 @@ async fn the_pool_policy_inputs_are_closed_as_their_parsers_refuse_an_unknown_fi
             "{name}: the parser refuses an unknown field"
         );
     }
+}
+
+#[tokio::test]
+async fn the_key_input_is_closed_and_both_key_routes_name_the_unknown_field_in_their_400() {
+    let (_app, _up, document) = document().await;
+    let input = &document["components"]["schemas"]["KeyInput"];
+    assert!(input.is_object(), "KeyInput is a component");
+    assert_eq!(
+        input["additionalProperties"], false,
+        "KeyInput: the parser refuses an unknown field"
+    );
+    for operation_id in ["keys_create", "key_patch"] {
+        let (_, _, operation) = operations(&document)
+            .into_iter()
+            .find(|(_, _, operation)| operation["operationId"] == operation_id)
+            .unwrap_or_else(|| panic!("no operation is {operation_id}"));
+        let refusals = operation["responses"]["400"]["description"]
+            .as_str()
+            .unwrap_or_default();
+        assert_eq!(
+            refusals.lines().next(),
+            Some(
+                "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past \
+                 its field's type"
+            ),
+            "{operation_id}: the pool routes' clause"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_decision_rows_refusal_names_its_three_kinds_and_a_guardrails_code() {
+    let (_app, _up, document) = document().await;
+    let refusal = &document["components"]["schemas"]["SummaryRefusal"]["properties"];
+    let description = |member: &str| {
+        refusal[member]["description"]
+            .as_str()
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+    };
+    assert_eq!(
+        (description("kind").as_deref(), description("code").as_deref()),
+        (
+            Some(
+                "The refusal's kind: `key` for the router's own refusals, a resolve refusal among them, `client` \
+                 for the relay's drift and contract refusals, `guardrail` for a guardrail's block."
+            ),
+            Some(
+                "The refusal's structured word: a key refusal's variant in snake case, `model_not_allowed` for a \
+                 resolve refusal, `contract` for the relay's refusal of a Claude Code request that lacks an item of \
+                 the contract, `drift` for the relay's refusal of a drifted client, `guardrail_blocked` for a \
+                 guardrail's block."
+            )
+        ),
+        "{refusal}"
+    );
 }
 
 /// Whether a rendered schema admits null. Under OpenAPI 3.1 a nullable value is a `type` array naming `null`, and a
@@ -1803,8 +1949,8 @@ async fn the_burn_operation_declares_the_account_filter_and_the_agent_groups_it_
     );
 }
 
-/// The query check compares names per module, and the breakdown's query declares the same seven names, so it would pass
-/// a refusal count operation that left its own query out of the document.
+/// The query check compares names per module, and the breakdown's query declares the same ten names, so it would pass a
+/// refusal count operation that left its own query out of the document.
 #[tokio::test]
 async fn the_refusal_count_operation_declares_the_range_and_the_filters_it_reads() {
     let (_app, _up, document) = document().await;
@@ -1819,15 +1965,48 @@ async fn the_refusal_count_operation_declares_the_range_and_the_filters_it_reads
         names,
         BTreeSet::from([
             "accounts",
+            "clients",
             "include_probes",
             "keys",
             "kinds",
             "models",
             "pools",
-            "range"
+            "range",
+            "user_agent_groups",
+            "user_agents"
         ]),
         "the refusal count operation's query"
     );
+}
+
+/// The query check proves each name is declared, and the console reads what the filter keeps from the document alone.
+#[tokio::test]
+async fn the_request_log_and_the_routing_log_declare_the_agent_id_filter() {
+    let (_app, _up, document) = document().await;
+    for (path, text) in [
+        (
+            "/admin/requests",
+            "The requests whose agent id equals the value, literally. Combines with `session` and every other filter.",
+        ),
+        (
+            "/admin/routing-log",
+            "The decisions and the events whose agent id equals the value, literally, so an event that names no agent \
+             is left out. Combines with `session` and every other filter.",
+        ),
+    ] {
+        let parameters = document["paths"][path]["get"]["parameters"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{path}'s parameters"));
+        let agent_id = parameters
+            .iter()
+            .find(|parameter| parameter["name"] == "agent_id")
+            .unwrap_or_else(|| panic!("{path} declares agent_id: {parameters:?}"));
+        assert_eq!(agent_id["in"], "query", "{agent_id}");
+        let description = agent_id["description"]
+            .as_str()
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+        assert_eq!(description.as_deref(), Some(text), "{path}");
+    }
 }
 
 /// The query check compares names per module, and the other analytics queries declare `range` and `accounts`, so it
@@ -1858,6 +2037,35 @@ async fn the_unused_allowance_operation_declares_the_account_filter_and_the_rang
             .as_str()
             .is_some_and(|text| text.contains("Default `30d`")),
         "{range}"
+    );
+}
+
+/// The query check compares names per module, so it would pass an overview operation that left `range` out of the
+/// document, and the console reads the two words and the refusal from the document alone.
+#[tokio::test]
+async fn the_keepalive_overview_declares_its_range_and_the_refusal_of_another_word() {
+    let (_app, _up, document) = document().await;
+    let operation = &document["paths"]["/admin/keepalive/overview"]["get"];
+    let parameters = operation["parameters"]
+        .as_array()
+        .expect("the overview's parameters");
+    let names: BTreeSet<&str> = parameters
+        .iter()
+        .filter_map(|parameter| parameter["name"].as_str())
+        .collect();
+    assert_eq!(names, BTreeSet::from(["range"]), "the overview's query");
+    let range = &parameters[0];
+    assert_eq!(range["in"], "query", "{range}");
+    assert!(
+        range["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("`7d`") && text.contains("`30d`")),
+        "{range}"
+    );
+    assert_eq!(
+        operation["responses"]["400"]["content"]["application/json"]["example"],
+        serde_json::json!({ "error": "range is 7d or 30d" }),
+        "{operation}"
     );
 }
 

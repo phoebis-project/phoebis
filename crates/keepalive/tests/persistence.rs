@@ -4,7 +4,7 @@
 
 mod common;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -13,7 +13,7 @@ use fake_upstream::Respond;
 use phoebis_bus::{Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
     Ack, AgentState, CompanionState, Engine, Event, EventError, KeepaliveLimits, KeepalivePolicy,
-    Reason, LEASE_MS,
+    KeepaliveTiming, Reason, LEASE_MS,
 };
 use phoebis_ledger::{hour_of, read_rollups, KeepaliveDelta, Record, RollupSelect};
 use phoebis_store::{KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
@@ -422,6 +422,14 @@ async fn an_ended_session_and_an_expired_recipe_are_dropped_at_the_load_under_ex
     );
 }
 
+/// The next turn of the rig's conversation.
+fn next_turn() -> String {
+    BODY.replace(
+        r#"{"role":"user","content":"hello"}]"#,
+        r#"{"role":"user","content":"hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"and then"}]"#,
+    )
+}
+
 #[tokio::test]
 async fn the_idle_age_counters_round_trip() {
     // Keepalive off, so no recipe is retained and the ticks probe nothing: the counters count all the same.
@@ -430,29 +438,361 @@ async fn the_idle_age_counters_round_trip() {
         ..on_disk()
     })
     .await;
+    let today = NOW / DAY;
     r.observe("main").await;
     r.state("main", "idle");
     r.advance_attended(6 * MINUTE);
     r.step().await;
     // The next turn of the same conversation, six minutes into the window.
-    let next_turn = BODY.replace(
-        r#"{"role":"user","content":"hello"}]"#,
-        r#"{"role":"user","content":"hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"and then"}]"#,
-    );
-    r.observe_with("main", &next_turn).await;
-    let counters = r.engine.idle_returns();
+    r.observe_with("main", &next_turn()).await;
     assert_eq!(
-        counters["main"].buckets[..2]
+        r.engine.idle_returns()["main"][&today].buckets[..2]
             .iter()
             .map(|b| (b.reached, b.returned))
             .collect::<Vec<_>>(),
         vec![(1, 0), (1, 1)],
         "a window six minutes old reached the first two buckets and returned in the second"
     );
+    // The window open from that return reaches its later buckets on the next UTC day.
+    r.state("main", "idle");
+    r.advance_attended(DAY);
+    r.step().await;
+    let counters = r.engine.idle_returns();
+    assert_eq!(
+        counters["main"].keys().copied().collect::<Vec<_>>(),
+        vec![today, today + 1],
+        "a day apiece"
+    );
     r.engine.flush_persisted().await;
     let second = r.restart().await;
     second.load_persisted().await;
     assert_eq!(second.idle_returns(), counters);
+}
+
+/// The rows of each UTC day the registry holds.
+fn saved_days(r: &Rig) -> BTreeSet<i64> {
+    r.h.store
+        .load_keepalive()
+        .unwrap()
+        .2
+        .into_iter()
+        .map(|row| row.day)
+        .collect()
+}
+
+/// The roll at the first tick of a day drops the day the retention no longer keeps while no pool and no row is dirty,
+/// and the next save carries the purge alone, so the registry loses that day's rows.
+#[tokio::test]
+async fn a_save_after_the_roll_carries_the_purge_while_no_pool_is_dirty() {
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy::default(),
+        timing: KeepaliveTiming {
+            idle_return_retention_days: 1,
+            ..RigSpec::default().timing
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    r.state("main", "idle");
+    r.advance_attended(6 * MINUTE);
+    r.step().await;
+    r.observe_with("main", &next_turn()).await;
+    r.engine.flush_persisted().await;
+    assert_eq!(saved_days(&r), BTreeSet::from([NOW / DAY]));
+    r.advance_attended(DAY);
+    // The heartbeats' rows go first, so the tick that rolls is the one change the next save carries.
+    r.engine.flush_persisted().await;
+    r.step().await;
+    assert!(
+        r.engine.idle_returns().is_empty(),
+        "the roll dropped the only day"
+    );
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        saved_days(&r),
+        BTreeSet::new(),
+        "the save carried the purge"
+    );
+}
+
+/// The tick a minute before midnight counts the open window's ninth bucket on the rig's day, and the save carries that
+/// day with the window, so the return a restart later reads after midnight counts on it.
+#[tokio::test]
+async fn an_open_windows_bucket_day_round_trips() {
+    let mut r = rig(RigSpec::default()).await;
+    let today = NOW / DAY;
+    r.observe("main").await;
+    r.state("main", "idle");
+    r.advance_attended((today + 1) * DAY - MINUTE - r.now());
+    r.step().await;
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        saved_field(&r, "session", "main", "idle_episode")["bucket_day"],
+        today
+    );
+    let second = r.restart().await;
+    second.load_persisted().await;
+    r.advance(2 * MINUTE);
+    let (static_hash, boundaries) = chain_of(BODY);
+    second.observe(r.observed_with(
+        "back",
+        "main",
+        None,
+        Some(&static_hash),
+        &[&boundaries[0], "next"],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    let days = &second.idle_returns()["main"];
+    assert_eq!(
+        days.get(&today)
+            .map(|counters| counters.buckets[8].returned),
+        Some(1),
+        "the reach's day"
+    );
+    assert!(
+        days.get(&(today + 1))
+            .is_none_or(|counters| counters.buckets.iter().all(|bucket| bucket.returned == 0)),
+        "the closing day"
+    );
+}
+
+/// A saved open window whose row carries no day for its reached bucket loads, and its return, which raises no bucket,
+/// counts nothing: the reach it would answer beside is held under no day.
+#[tokio::test]
+async fn a_return_of_a_window_loaded_without_its_buckets_day_counts_nothing() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.state("main", "idle");
+    r.advance_attended(6 * MINUTE);
+    r.step().await;
+    r.engine.flush_persisted().await;
+    let conn = registry(&r);
+    let payload: String = conn
+        .query_row(
+            "SELECT payload FROM keepalive_agents WHERE agent_id = 'main'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    payload["idle_episode"]
+        .as_object_mut()
+        .unwrap()
+        .remove("bucket_day");
+    let rewritten = conn
+        .execute(
+            "UPDATE keepalive_agents SET payload = ?1 WHERE agent_id = 'main'",
+            [payload.to_string()],
+        )
+        .unwrap();
+    assert_eq!(rewritten, 1);
+    let second = r.restart().await;
+    second.load_persisted().await;
+    let (static_hash, boundaries) = chain_of(BODY);
+    second.observe(r.observed_with(
+        "back",
+        "main",
+        None,
+        Some(&static_hash),
+        &[&boundaries[0], "next"],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    let returned: Vec<u64> = second.idle_returns()["main"]
+        .values()
+        .flat_map(|counters| counters.buckets.iter().map(|bucket| bucket.returned))
+        .collect();
+    assert!(
+        returned.iter().all(|count| *count == 0),
+        "no return counted: {returned:?}"
+    );
+}
+
+/// A guard: an agent row saved before the timing carried the idle-return retention loads with its agent, since the
+/// member reads its default.
+#[tokio::test]
+async fn an_agent_row_whose_timing_lacks_the_idle_return_retention_loads_with_its_agent() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    let conn = registry(&r);
+    let payload: String = conn
+        .query_row(
+            "SELECT payload FROM keepalive_agents WHERE agent_id = 'main'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    payload["timing"]
+        .as_object_mut()
+        .unwrap()
+        .remove("idle_return_retention_days");
+    let rewritten = conn
+        .execute(
+            "UPDATE keepalive_agents SET payload = ?1 WHERE agent_id = 'main'",
+            [payload.to_string()],
+        )
+        .unwrap();
+    assert_eq!(rewritten, 1);
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!((second.stats().sessions, second.stats().agents), (1, 1));
+}
+
+/// Main's request on two messages, so its prefix holds a boundary before the last.
+fn two_messages() -> String {
+    BODY.replace(
+        r#"{"role":"user","content":"hello"}]"#,
+        r#"{"role":"user","content":"hello"},{"role":"user","content":"and then"}]"#,
+    )
+}
+
+/// The static hash and the message boundaries the relay reads off `body`.
+fn chain_of(body: &str) -> (String, Vec<String>) {
+    let chains = phoebis_relay::Chains::read(&serde_json::from_str(body).unwrap()).unwrap();
+    (
+        chains.static_hash().unwrap().to_string(),
+        chains.message_boundaries.to_vec(),
+    )
+}
+
+/// The rig's clock past the five-minute entry of main's recipe, so the next load discards it as lapsed and saves
+/// main's row again from what it read.
+fn lapse_while_down(r: &Rig) {
+    r.advance(400_000);
+}
+
+#[tokio::test]
+async fn the_anchor_pair_round_trips_in_the_last_prefix_and_the_open_windows_anchor() {
+    let mut r = rig(on_disk()).await;
+    r.observe_with("main", &two_messages()).await;
+    r.state("main", "idle");
+    let (static_hash, boundaries) = chain_of(&two_messages());
+    let pair = serde_json::json!([static_hash, boundaries[1], boundaries[0]]);
+    r.engine.flush_persisted().await;
+    assert_eq!(saved_field(&r, "session", "main", "last_prefix"), pair);
+    assert_eq!(
+        saved_field(&r, "session", "main", "idle_episode")["anchor"],
+        pair
+    );
+    lapse_while_down(&r);
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!(
+        second.reasons().get(&Reason::ExpiredAtRestart).copied(),
+        Some(1),
+        "the load saved main's row again"
+    );
+    assert_eq!(
+        saved_field(&r, "session", "main", "last_prefix"),
+        pair,
+        "the loaded pair"
+    );
+    assert_eq!(
+        saved_field(&r, "session", "main", "idle_episode")["anchor"],
+        pair,
+        "the loaded window's pair"
+    );
+}
+
+#[tokio::test]
+async fn the_previous_prompt_round_trips() {
+    let mut r = rig(on_disk()).await;
+    // The standing answer reads 2,000 tokens from the cache and nothing else.
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        saved_field(&r, "session", "main", "last_prompt_tokens"),
+        2_000
+    );
+    lapse_while_down(&r);
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!(
+        second.reasons().get(&Reason::ExpiredAtRestart).copied(),
+        Some(1),
+        "the load saved main's row again"
+    );
+    assert_eq!(
+        saved_field(&r, "session", "main", "last_prompt_tokens"),
+        2_000
+    );
+}
+
+/// A row saved with the static hash and the tail alone loads, its window judging a return on the tail, and saves
+/// again with no boundary before the last.
+#[tokio::test]
+async fn a_row_saved_with_the_static_hash_and_tail_pair_loads_with_no_boundary_before_the_last() {
+    let mut r = rig(on_disk()).await;
+    r.observe_with("main", &two_messages()).await;
+    r.state("main", "idle");
+    r.engine.flush_persisted().await;
+    let (static_hash, boundaries) = chain_of(&two_messages());
+    let tail_pair = serde_json::json!([static_hash, boundaries[1]]);
+    let conn = registry(&r);
+    let payload: String = conn
+        .query_row(
+            "SELECT payload FROM keepalive_agents WHERE agent_id = 'main'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    payload["last_prefix"] = tail_pair.clone();
+    payload["idle_episode"]["anchor"] = tail_pair.clone();
+    let rewritten = conn
+        .execute(
+            "UPDATE keepalive_agents SET payload = ?1 WHERE agent_id = 'main'",
+            [payload.to_string()],
+        )
+        .unwrap();
+    assert_eq!(rewritten, 1);
+    lapse_while_down(&r);
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!((second.stats().sessions, second.stats().agents), (1, 1));
+    assert_eq!(
+        second.reasons().get(&Reason::ExpiredAtRestart).copied(),
+        Some(1),
+        "the load saved main's row again"
+    );
+    for (field, saved) in [
+        (
+            "last_prefix",
+            saved_field(&r, "session", "main", "last_prefix"),
+        ),
+        (
+            "anchor",
+            saved_field(&r, "session", "main", "idle_episode")["anchor"].clone(),
+        ),
+    ] {
+        assert_eq!(
+            (saved.get(0), saved.get(1)),
+            (tail_pair.get(0), tail_pair.get(1)),
+            "{field}"
+        );
+        assert!(
+            saved.get(2).is_none_or(serde_json::Value::is_null),
+            "{field}: {saved}"
+        );
+    }
+    second.observe(r.observed_with(
+        "back",
+        "main",
+        None,
+        Some(&static_hash),
+        &[&boundaries[0], &boundaries[1], "next"],
+        two_messages().as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    assert_eq!(
+        second.idle_returns()["main"][&(NOW / DAY)].buckets[1].returned,
+        1,
+        "the loaded window counts a return on its tail"
+    );
 }
 
 #[tokio::test]

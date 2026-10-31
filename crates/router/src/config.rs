@@ -191,6 +191,11 @@ pub struct RoutingConfig {
 pub struct SessionsConfig {
     #[serde(default = "default_session_expiry")]
     pub expire_after_seconds: u64,
+    /// How long a session no companion reports stays listed past its newest pin use, its last request or its
+    /// companion's end, and how long a line's pin stays listed on such a row past its last use. Bounded by
+    /// `expire_after_seconds`.
+    #[serde(default = "default_non_companion_idle")]
+    pub non_companion_idle_seconds: u64,
     /// Entries the in-process session memory holds at most; past it the least recently seen entry goes to
     /// disk and out of memory.
     #[serde(default = "default_memory_cap")]
@@ -277,6 +282,8 @@ pub enum ConfigError {
     MissingSecret { name: String },
     #[error("routing.model_rejection_seconds must be between 1 and 604800, not {value}")]
     ModelRejectionOutOfRange { value: u64 },
+    #[error("sessions.non_companion_idle_seconds must be between 60 and 31536000, not {value}")]
+    NonCompanionIdleOutOfRange { value: u64 },
     #[error("environment variable {name} still holds the example placeholder")]
     PlaceholderSecret { name: String },
     #[error("cannot read {path}")]
@@ -351,6 +358,7 @@ impl Default for SessionsConfig {
     fn default() -> Self {
         SessionsConfig {
             expire_after_seconds: default_session_expiry(),
+            non_companion_idle_seconds: default_non_companion_idle(),
             memory_cap: default_memory_cap(),
             memory_idle_seconds: default_memory_idle(),
             memory_retention_days: default_memory_retention(),
@@ -454,6 +462,11 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
     }
     if config.sessions.expire_after_seconds < 60 {
         return Err(ConfigError::SessionExpiryTooShort);
+    }
+    if !(60..=31_536_000).contains(&config.sessions.non_companion_idle_seconds) {
+        return Err(ConfigError::NonCompanionIdleOutOfRange {
+            value: config.sessions.non_companion_idle_seconds,
+        });
     }
     // A million entries is a few hundred megabytes at the sizes `identity` and `facts` bound a record to, and
     // the most a host should be asked to hold for this; a zero cap would drop every entry on its next write.
@@ -653,6 +666,10 @@ fn default_rollup_retention_days() -> u32 {
 
 fn default_session_expiry() -> u64 {
     86_400
+}
+
+fn default_non_companion_idle() -> u64 {
+    3_600
 }
 
 fn default_startup_fetch() -> u64 {
@@ -1282,6 +1299,36 @@ mod tests {
             ),
             (1024, 7)
         );
+    }
+
+    #[test]
+    fn the_non_companion_timeout_defaults_to_an_hour_and_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
+        let config = load(&file(dir.path(), "defaults", "")).unwrap();
+        assert_eq!(config.sessions.non_companion_idle_seconds, 3_600);
+        for (name, body, expected) in [
+            (
+                "idle-low",
+                "sessions:\n  non_companion_idle_seconds: 59\n",
+                "sessions.non_companion_idle_seconds must be between 60 and 31536000, not 59",
+            ),
+            (
+                "idle-high",
+                "sessions:\n  non_companion_idle_seconds: 31536001\n",
+                "sessions.non_companion_idle_seconds must be between 60 and 31536000, not 31536001",
+            ),
+        ] {
+            let error = load(&file(dir.path(), name, body)).unwrap_err();
+            assert_eq!(error.to_string(), expected, "{name}");
+        }
+        let custom = load(&file(
+            dir.path(),
+            "custom",
+            "sessions:\n  non_companion_idle_seconds: 600\n",
+        ))
+        .unwrap();
+        assert_eq!(custom.sessions.non_companion_idle_seconds, 600);
     }
 
     #[test]

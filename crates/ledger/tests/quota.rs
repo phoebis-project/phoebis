@@ -12,8 +12,8 @@ use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{
-    hourly_window_samples, lead_over_pace, HourlyWindowSample, LedgerConfig, LedgerDb, QuotaPoll,
-    QuotaSampleRecord, Sampled, POLL_INTERVAL, PROFILE_EVERY_POLLS,
+    hourly_window_samples, lead_over_pace, HourlyWindowSample, LedgerConfig, LedgerDb, PlanTables,
+    QuotaPoll, QuotaSampleRecord, Sampled, POLL_INTERVAL,
 };
 use phoebis_oauth::PollOutcome;
 use phoebis_routing::{EvidenceSource, FIVE_HOUR};
@@ -124,6 +124,7 @@ async fn start_polling(h: &Harness, up: &FakeUpstream) -> Paused {
             .expect("the harness was built with the poll"),
         h.ledger.clone(),
         h.router.clone(),
+        Arc::new(PlanTables::shipped()),
     ));
     for _ in 0..8 {
         tokio::task::yield_now().await;
@@ -538,28 +539,15 @@ async fn every_polled_account_is_read_once_per_interval_on_its_own_phase_and_rep
         "the poll's overage evidence reached the router"
     );
 
-    // With the startup step's read as the first, the twelfth scheduled poll of each account reads the profile
-    // again, an hour after the startup step.
+    // With the startup step's read as the first, the third scheduled poll of each account reads the profile
+    // again, a quarter hour after the startup step.
     let interval = POLL_INTERVAL.as_secs();
-    step_to(&h, &up, &paused, secs(452 + 10 * interval)).await;
-    assert_eq!(
-        (usage_asked(&up, A), usage_asked(&up, OAUTH_C)),
-        (
-            PROFILE_EVERY_POLLS as usize - 1,
-            PROFILE_EVERY_POLLS as usize - 1
-        )
-    );
-    assert_eq!(profiles(&up), 0, "none before the twelfth poll");
-    step_to(&h, &up, &paused, secs(452 + 11 * interval)).await;
-    assert_eq!(
-        (usage_asked(&up, A), usage_asked(&up, OAUTH_C)),
-        (PROFILE_EVERY_POLLS as usize, PROFILE_EVERY_POLLS as usize)
-    );
-    assert_eq!(
-        profiles(&up),
-        2,
-        "the twelfth poll of each reads the profile"
-    );
+    step_to(&h, &up, &paused, secs(452 + interval)).await;
+    assert_eq!((usage_asked(&up, A), usage_asked(&up, OAUTH_C)), (2, 2));
+    assert_eq!(profiles(&up), 0, "none before the third poll");
+    step_to(&h, &up, &paused, secs(452 + 2 * interval)).await;
+    assert_eq!((usage_asked(&up, A), usage_asked(&up, OAUTH_C)), (3, 3));
+    assert_eq!(profiles(&up), 2, "the third poll of each reads the profile");
     assert_eq!(usage_asked(&up, B), 0);
     assert!(
         h.store.profile_json("b").unwrap().is_none(),
@@ -997,6 +985,7 @@ async fn the_scheduler_reaps_its_attempts_and_the_ledger_tracks_none_of_them() {
         h.usage.clone().unwrap(),
         h.ledger.clone(),
         h.router.clone(),
+        Arc::new(PlanTables::shipped()),
         Duration::from_secs(2),
     )
     .await;
@@ -1021,7 +1010,11 @@ async fn the_scheduler_reaps_its_attempts_and_the_ledger_tracks_none_of_them() {
         (11, 11),
         "the startup read and ten slots each"
     );
-    assert_eq!(profiles(), 2, "the startup step's profile reads alone");
+    assert_eq!(
+        profiles(),
+        8,
+        "the startup step's two reads and the third, sixth and ninth slots of each"
+    );
     assert_eq!(
         h.ledger.tracked(),
         before,
@@ -1047,6 +1040,7 @@ async fn the_startup_step_counts_an_account_the_endpoint_refused_as_failed() {
         h.usage.clone().unwrap(),
         h.ledger.clone(),
         h.router.clone(),
+        Arc::new(PlanTables::shipped()),
         Duration::from_secs(2),
     )
     .await;
@@ -1115,6 +1109,7 @@ async fn a_poll_whose_refresh_lands_a_reauth_mark_reports_it_to_routing_at_once(
     let answer = QuotaPoll::poll_account(
         &h.store,
         h.usage.as_ref().unwrap(),
+        &PlanTables::shipped(),
         &h.ledger,
         Some(&h.router),
         &row,
@@ -1140,6 +1135,7 @@ async fn a_profile_refresh_whose_refresh_lands_a_reauth_mark_reports_it_to_routi
     QuotaPoll::refresh_profile(
         &h.store,
         h.usage.as_ref().unwrap(),
+        &PlanTables::shipped(),
         &h.ledger,
         &h.router,
         &row,
@@ -1191,6 +1187,7 @@ async fn a_profile_refresh_whose_seat_tier_alone_moves_the_class_reloads_the_rou
     QuotaPoll::refresh_profile(
         &h.store,
         h.usage.as_ref().unwrap(),
+        &PlanTables::shipped(),
         &h.ledger,
         &h.router,
         &row,
@@ -1245,6 +1242,7 @@ async fn a_profile_refresh_whose_organization_type_alone_moves_the_plan_reloads_
     QuotaPoll::refresh_profile(
         &h.store,
         h.usage.as_ref().unwrap(),
+        &PlanTables::shipped(),
         &h.ledger,
         &h.router,
         &row,
@@ -1296,6 +1294,7 @@ async fn the_startup_step_records_and_reports_one_sample_per_polled_account() {
             .expect("the harness was built with the poll"),
         h.ledger.clone(),
         h.router.clone(),
+        Arc::new(PlanTables::shipped()),
         Duration::from_secs(2),
     )
     .await;
@@ -1372,6 +1371,7 @@ async fn a_usage_endpoint_that_hangs_ends_the_startup_step_at_its_bound() {
             .expect("the harness was built with the poll"),
         h.ledger.clone(),
         h.router.clone(),
+        Arc::new(PlanTables::shipped()),
         Duration::from_millis(300),
     )
     .await;
@@ -1413,6 +1413,7 @@ async fn a_profile_read_that_names_a_new_tier_reloads_the_router() {
             .expect("the harness was built with the poll"),
         h.ledger.clone(),
         h.router.clone(),
+        Arc::new(PlanTables::shipped()),
         Duration::from_secs(2),
     )
     .await;
@@ -1438,6 +1439,7 @@ async fn a_profile_endpoint_that_hangs_holds_no_reported_sample_back() {
             .expect("the harness was built with the poll"),
         h.ledger.clone(),
         h.router.clone(),
+        Arc::new(PlanTables::shipped()),
         Duration::from_millis(300),
     )
     .await;
@@ -1471,6 +1473,7 @@ async fn a_stalled_startup_fetch_is_aborted_by_ledger_shutdown_and_makes_no_furt
             .expect("the harness was built with the poll"),
         h.ledger.clone(),
         h.router.clone(),
+        Arc::new(PlanTables::shipped()),
         Duration::from_millis(300),
     )
     .await;
@@ -1871,6 +1874,7 @@ async fn a_profile_500_writes_poll_failed_naming_the_profile_endpoint_and_logs_o
     QuotaPoll::refresh_profile(
         &h.store,
         h.usage.as_ref().unwrap(),
+        &PlanTables::shipped(),
         &h.ledger,
         &h.router,
         &row,
@@ -1920,6 +1924,7 @@ async fn a_usage_transport_failure_writes_poll_failed_with_transport_set_and_no_
     let answer = QuotaPoll::poll_account(
         &h.store,
         h.usage.as_ref().unwrap(),
+        &PlanTables::shipped(),
         &h.ledger,
         Some(&h.router),
         &row,
@@ -2001,7 +2006,7 @@ fn plan_ended_at(h: &Harness, id: &str) -> Option<i64> {
 }
 
 #[tokio::test]
-async fn a_profile_reporting_no_plan_flags_the_account_and_its_slots_read_the_profile_hourly_and_no_usage(
+async fn a_profile_reporting_no_plan_flags_the_account_and_its_slots_read_the_profile_every_third_poll_and_no_usage(
 ) {
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
     up.add_credential_rule(A, "/api/oauth/profile", no_plan_profile());
@@ -2013,6 +2018,7 @@ async fn a_profile_reporting_no_plan_flags_the_account_and_its_slots_read_the_pr
     QuotaPoll::refresh_profile(
         &h.store,
         h.usage.as_ref().unwrap(),
+        &PlanTables::shipped(),
         &h.ledger,
         &h.router,
         &row,
@@ -2022,11 +2028,12 @@ async fn a_profile_reporting_no_plan_flags_the_account_and_its_slots_read_the_pr
     let term = h.store.subscription_term("a").unwrap().unwrap();
     assert_eq!(
         (
+            term.plan.as_deref(),
             term.tier.as_deref(),
             h.store.account("a").unwrap().unwrap().state
         ),
-        (Some("default_claude_max_20x"), AccountState::Ready),
-        "the last plan's tier keeps pricing the windows and the state stands"
+        (Some("free"), Some("default_claude_ai"), AccountState::Ready),
+        "the account answers the found document's plan and tier and the state stands"
     );
     assert_eq!(
         h.router.snapshot().term("a").and_then(|t| t.plan_ended_at),
@@ -2070,22 +2077,270 @@ async fn a_profile_reporting_no_plan_flags_the_account_and_its_slots_read_the_pr
     );
 
     let paused = start_polling(&h, &up).await;
-    step_to(&h, &up, &paused, secs(3_599)).await;
+    step_to(&h, &up, &paused, secs(899)).await;
     assert_eq!(
         (usage_asked(&up, A), profile_asked(&up, A)),
         (0, 1),
-        "no usage request while the flag stands, and no profile read before the hour"
+        "no usage request while the flag stands, and no profile read before the third slot"
     );
-    step_to(&h, &up, &paused, secs(3_602)).await;
+    step_to(&h, &up, &paused, secs(902)).await;
     assert_eq!(
         (usage_asked(&up, A), profile_asked(&up, A)),
         (0, 2),
-        "the hourly slot reads the profile alone"
+        "the third slot reads the profile alone"
     );
     assert_eq!(
         resumed(rows_of(&h, "plan_ended")).await.len(),
         1,
         "a flag that stands writes no second row"
+    );
+    up.shutdown().await;
+}
+
+/// The no-plan branch stores the document it found before it flags the account, so the flag's reload brings the free
+/// plan and the found tier to the routing, and the `plan_ended` row names the found document's words.
+#[tokio::test]
+async fn a_profile_reporting_no_plan_is_stored_before_the_flag_so_the_reload_reads_the_free_plan() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/profile", no_plan_profile());
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    store_max_20x(&h.store, "a");
+    h.router.reload().await.unwrap();
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::refresh_profile(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &PlanTables::shipped(),
+        &h.ledger,
+        &h.router,
+        &row,
+    )
+    .await;
+    let stored: serde_json::Value =
+        serde_json::from_str(&h.store.profile_json("a").unwrap().unwrap()).unwrap();
+    let found: serde_json::Value = serde_json::from_slice(NO_PLAN_PROFILE).unwrap();
+    assert_eq!(stored, found, "the read stores the document it found");
+    let snapshot = h.router.snapshot();
+    assert_eq!(
+        (
+            snapshot.plan("a"),
+            snapshot.tier("a"),
+            snapshot.term("a").and_then(|t| t.plan_ended_at)
+        ),
+        (Some("free"), Some("default_claude_ai"), Some(NOW)),
+        "the flag's reload reads the stored document beside the flag"
+    );
+    let ended = wait_for_async(Duration::from_secs(5), || async {
+        rows_of(&h, "plan_ended").await.pop()
+    })
+    .await;
+    assert_eq!(
+        ended.2,
+        serde_json::json!({
+            "source": "profile",
+            "organization_type": "claude_free",
+            "rate_limit_tier": "default_claude_ai",
+            "subscription_status": "canceled",
+        }),
+        "the row names the found document's words"
+    );
+    up.shutdown().await;
+}
+
+/// Under a flag that already stands, a read whose found document moves the stored plan and tier reloads the router, so
+/// the snapshot reads what the account view answers, and a read that repeats the stored document reloads nothing.
+#[tokio::test]
+async fn under_a_standing_flag_a_read_that_moves_the_stored_term_reloads_the_router_and_a_repeat_does_not(
+) {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/profile", no_plan_profile());
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    store_max_20x(&h.store, "a");
+    assert!(h.store.set_plan_ended("a", NOW - 60_000).unwrap());
+    h.router.reload().await.unwrap();
+    let row = h.store.account("a").unwrap().unwrap();
+    let tables = PlanTables::shipped();
+    let read = || {
+        QuotaPoll::refresh_profile(
+            &h.store,
+            h.usage.as_ref().unwrap(),
+            &tables,
+            &h.ledger,
+            &h.router,
+            &row,
+        )
+    };
+    read().await;
+    let moved = h.router.snapshot();
+    assert_eq!(
+        (moved.plan("a"), moved.tier("a")),
+        (Some("free"), Some("default_claude_ai")),
+        "the read that moved the stored term reloads the router"
+    );
+    read().await;
+    assert!(
+        Arc::ptr_eq(&moved, &h.router.snapshot()),
+        "a read that repeats the stored document reloads nothing"
+    );
+    assert_eq!(
+        plan_ended_at(&h, "a"),
+        Some(NOW - 60_000),
+        "the flag keeps its instant"
+    );
+    up.shutdown().await;
+}
+
+/// The warn case's subscription cost model: `default_claude_max_20x` holds a capacity row and no other word does.
+const ONE_TIER_COSTS: &str = "\
+revisions:
+  - effective: 1970-01-01
+    unit:
+      defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
+      units_per_window: 100
+    capacity:
+      default_claude_max_20x: {five_hour: 100, seven_day: 1000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 1, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-sonnet-5: 1
+    model_windows: {}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-sonnet-5: sonnet
+";
+
+/// A profile answer whose organization is `organization`.
+fn organization_profile(organization: &str) -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: format!(
+            r#"{{"account":{{"uuid":"00000000-0000-4000-8000-000000000100","email":"a@example.invalid"}},"organization":{organization}}}"#
+        )
+        .into_bytes(),
+    }
+}
+
+/// A Team document whose tier word the cost model holds no row for logs one warning per account and word: a second
+/// read of the word logs nothing, a word the model holds logs nothing, another unheld word logs again, and a
+/// usage-based Enterprise seat's document never warns. The account ids are this case's alone, since the set of warned
+/// pairs is the process's.
+#[tokio::test]
+async fn a_team_document_whose_tier_the_cost_model_lacks_warns_once_per_account_and_word() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("subscription_costs.yaml");
+    std::fs::write(&path, ONE_TIER_COSTS).unwrap();
+    let tables = PlanTables::load(Some(&path)).unwrap();
+    let team = |tier: &str| {
+        organization_profile(&format!(
+            r#"{{"uuid":"o","organization_type":"claude_team","rate_limit_tier":"{tier}"}}"#
+        ))
+    };
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    for tier in [
+        "team_word_unheld",
+        "team_word_unheld",
+        "default_claude_max_20x",
+        "team_word_other",
+    ] {
+        up.push_credential_rule(A, "/api/oauth/profile", team(tier));
+    }
+    up.add_credential_rule(
+        B,
+        "/api/oauth/profile",
+        organization_profile(
+            r#"{"uuid":"e","organization_type":"claude_enterprise","rate_limit_tier":"default_claude_zero","seat_tier":"enterprise_usage_based"}"#,
+        ),
+    );
+    let h = harness_with_poll(
+        &up,
+        &[oauth("warned-team", A, 0), oauth("quiet-seat", B, 1)],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    let (lines, _sink) = capture_tracing();
+    let read = |id: &'static str| {
+        let (h, tables) = (&h, &tables);
+        async move {
+            let row = h.store.account(id).unwrap().unwrap();
+            QuotaPoll::refresh_profile(
+                &h.store,
+                h.usage.as_ref().unwrap(),
+                tables,
+                &h.ledger,
+                &h.router,
+                &row,
+            )
+            .await;
+        }
+    };
+    let warned = |id: &str| {
+        lines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.contains(&format!("account={id} ")) && l.contains("no capacity row"))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    read("warned-team").await;
+    assert_eq!(
+        warned("warned-team").len(),
+        1,
+        "the first read of an unheld word warns"
+    );
+    assert!(
+        warned("warned-team")[0].contains("rate_limit_tier=team_word_unheld"),
+        "the line names the word: {:?}",
+        warned("warned-team")
+    );
+    read("warned-team").await;
+    assert_eq!(
+        warned("warned-team").len(),
+        1,
+        "a second read of the same word logs nothing"
+    );
+    read("warned-team").await;
+    assert_eq!(
+        warned("warned-team").len(),
+        1,
+        "a word the cost model holds logs nothing"
+    );
+    read("warned-team").await;
+    let lines_of_team = warned("warned-team");
+    assert_eq!(
+        lines_of_team.len(),
+        2,
+        "another unheld word warns again: {lines_of_team:?}"
+    );
+    assert!(lines_of_team[1].contains("rate_limit_tier=team_word_other"));
+    let team_term = h.store.subscription_term("warned-team").unwrap().unwrap();
+    assert_eq!(
+        (team_term.plan.as_deref(), team_term.tier.as_deref()),
+        (Some("team"), Some("team_word_other")),
+        "every read stored its document"
+    );
+    read("quiet-seat").await;
+    assert_eq!(
+        h.store
+            .subscription_term("quiet-seat")
+            .unwrap()
+            .unwrap()
+            .plan
+            .as_deref(),
+        Some("usage_based"),
+        "the seat's document is stored and resolves usage-based"
+    );
+    assert!(
+        warned("quiet-seat").is_empty(),
+        "a usage-based Enterprise seat never warns"
     );
     up.shutdown().await;
 }
@@ -2133,15 +2388,17 @@ async fn a_profile_reporting_no_plan_ends_the_open_backoff_run_with_its_row() {
             ended.2,
             ended.3["attempts"].as_u64(),
             ended.3["duration_ms"].as_i64(),
-            ended.3["resumed_at"].as_i64()
+            ended.3["resumed_at"].as_i64(),
+            ended.3["cause"].as_str()
         ),
         (
             flagged_at,
             Some(1),
             Some(flagged_at - started.2),
-            Some(flagged_at)
+            Some(flagged_at),
+            Some("plan_ended")
         ),
-        "the run lasted from its first 429 to the flag's instant"
+        "the run lasted from its first 429 to the flag's instant, and its end names the pause"
     );
     up.shutdown().await;
 }
@@ -2157,6 +2414,7 @@ async fn a_usage_403_naming_the_refusal_reads_the_profile_in_the_same_poll_and_f
     QuotaPoll::poll_account(
         &h.store,
         h.usage.as_ref().unwrap(),
+        &PlanTables::shipped(),
         &h.ledger,
         Some(&h.router),
         &row,
@@ -2191,6 +2449,7 @@ async fn a_usage_403_naming_the_refusal_on_an_account_whose_profile_reports_a_pl
     QuotaPoll::poll_account(
         &h.store,
         h.usage.as_ref().unwrap(),
+        &PlanTables::shipped(),
         &h.ledger,
         Some(&h.router),
         &row,
@@ -2226,6 +2485,7 @@ async fn a_profile_with_a_plan_clears_the_flag_stores_its_tier_and_the_next_slot
     QuotaPoll::refresh_profile(
         &h.store,
         h.usage.as_ref().unwrap(),
+        &PlanTables::shipped(),
         &h.ledger,
         &h.router,
         &row,
@@ -2276,9 +2536,16 @@ async fn a_run_of_usage_429s_flags_nothing_and_writes_no_poll_failed_row() {
     let row = h.store.account("a").unwrap().unwrap();
     for step in 0..3 {
         h.clock.store(NOW + step * 900_000, Ordering::SeqCst);
-        QuotaPoll::poll_account(&h.store, usage, &h.ledger, Some(&h.router), &row)
-            .await
-            .unwrap();
+        QuotaPoll::poll_account(
+            &h.store,
+            usage,
+            &PlanTables::shipped(),
+            &h.ledger,
+            Some(&h.router),
+            &row,
+        )
+        .await
+        .unwrap();
     }
     assert_eq!(
         usage_asked(&up, A),
@@ -2322,6 +2589,7 @@ async fn a_backoff_run_open_at_the_restore_closes_at_the_first_clean_poll() {
     resumed(QuotaPoll::refresh_profile(
         &h.store,
         h.usage.as_ref().unwrap(),
+        &PlanTables::shipped(),
         &h.ledger,
         &h.router,
         &row,
@@ -2354,9 +2622,14 @@ async fn a_backoff_run_open_at_the_restore_closes_at_the_first_clean_poll() {
         "the run the 429 opened closes at the first clean poll"
     );
     assert_eq!(
-        (after_restore, rows[1].3["attempts"].as_u64()),
-        (Some((1, true)), Some(1)),
-        "the restore leaves the run's count and start to the clean poll, whose end row counts the run's 429s"
+        (
+            after_restore,
+            rows[1].3["attempts"].as_u64(),
+            rows[1].3["cause"].as_str()
+        ),
+        (Some((1, true)), Some(1), Some("clean_poll")),
+        "the restore leaves the run's count and start to the clean poll, whose end row counts the run's 429s and \
+         names the clean poll"
     );
     up.shutdown().await;
 }
@@ -2378,6 +2651,7 @@ async fn the_startup_step_reads_a_flagged_accounts_profile_alone_and_counts_it_p
         h.usage.clone().unwrap(),
         h.ledger.clone(),
         h.router.clone(),
+        Arc::new(PlanTables::shipped()),
         Duration::from_secs(2),
     )
     .await;
@@ -2414,6 +2688,7 @@ async fn a_poll_whose_403_read_the_profile_reads_it_no_second_time() {
         h.usage.clone().unwrap(),
         h.ledger.clone(),
         h.router.clone(),
+        Arc::new(PlanTables::shipped()),
         Duration::from_secs(2),
     )
     .await;

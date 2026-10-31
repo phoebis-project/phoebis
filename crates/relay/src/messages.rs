@@ -1822,6 +1822,41 @@ impl Relay {
                 guardrail = %id,
                 "a guardrail blocked the request"
             );
+            // Unlike the auth, body, route and client-gate faults, which the relay answers before it parses the
+            // request or resolves a key, a block holds the facts a decision record needs, so it records one as the
+            // drift and contract refusals do. The record is try-sent, so a full router queue drops it rather than
+            // delaying the 403.
+            self.router.record_refusal(
+                RefusedRequest {
+                    request_id: trace.request_id.clone(),
+                    attempt: 1,
+                    seq: 1,
+                    at: (self.clock)(),
+                    key_id: key.id.clone(),
+                    key_generation: key.created_at,
+                    agent_id: identity.agent_id.clone(),
+                    parent_agent_id: None,
+                    session_id: identity.session_id.clone(),
+                    request_class: request_class.clone(),
+                    canonical_model: identity.canonical_model.clone(),
+                    lane: LaneFacts::default(),
+                    flags: RequestFlags {
+                        count: trace.kind == Kind::CountTokens,
+                        probe: trace.kind == Kind::Probe,
+                        ..RequestFlags::default()
+                    },
+                    chain: ChainFacts::default(),
+                    attempted: Vec::new(),
+                    holds: Vec::new(),
+                    client: identity.class,
+                    client_version: client_version.clone(),
+                },
+                RefusalFacts {
+                    kind: "guardrail",
+                    code: "guardrail_blocked",
+                    reason: name.clone(),
+                },
+            );
             return self
                 .refused(
                     &trace,
@@ -2191,6 +2226,7 @@ impl Relay {
                     fast: admitted.fast,
                     classifier: admitted.classifier,
                     body_tokens,
+                    effort: facts.shape.effort.clone(),
                 })
                 .await
             {
@@ -3885,7 +3921,6 @@ impl Relay {
         Some(AffinityFacts {
             router: self.router.clone(),
             pending: self.pending_reports.clone(),
-            session_id: ctx.identity.session_id.clone(),
             account_id: ctx.account.id.clone(),
             incarnation: ctx.account.incarnation,
             key_id: ctx.key.id.clone(),
