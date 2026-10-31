@@ -5,8 +5,7 @@
 # client page skipped, a row the proxy listener does not serve, and a handler call it cannot consume. Every
 # checker case runs against a throwaway tree, never the real site. The five content checks run against throwaway
 # files in the same way: a page list short a line the binary prints, a code with no row, a quoted example that
-# drifted, a quoted unit that drifted, and prose that breaks a rule. The favicon case at the end reads the real
-# tree.
+# drifted, a quoted unit that drifted, and prose that breaks a rule. The favicon case at the end reads the real tree.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
