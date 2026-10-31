@@ -1227,8 +1227,10 @@ mod tests {
             mem.previous(&a, "acct", "claude-sonnet-4-5").request_id,
             None
         );
+        // Taken inside a's retention, so the snapshot retires nothing itself and lists a only if the restore left it
+        // in the overlay.
         let unsaved: std::collections::HashSet<MemoryKey> = mem
-            .snapshot_dirty(5_000)
+            .snapshot_dirty(1_000)
             .into_iter()
             .map(|(k, _, _)| k)
             .collect();

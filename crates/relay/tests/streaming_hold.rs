@@ -235,6 +235,8 @@ async fn a_stream_that_never_commits_is_relayed_as_received_after_the_hold_timeo
     };
     let h = harness_with(&up, &[oauth("a", A, 0)], PoolSpec::default(), limits).await;
     // On the paused clock the hold's 200 ms bound and the ten-second ones read apart whatever the machine's load.
+    // The harness's 20 ms catalog refresh tick bounds every automatic step, so a step taken while the handshake waits
+    // on its socket cannot carry the clock to a ten-second bound or past the two seconds asserted below.
     tokio::time::pause();
     let started = tokio::time::Instant::now();
     let resp = h

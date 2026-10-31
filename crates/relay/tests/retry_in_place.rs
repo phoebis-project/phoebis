@@ -994,7 +994,8 @@ async fn a_throttle_the_request_deadline_would_outlast_fails_over_at_once_and_on
     )
     .await;
     // On the paused clock the one-second Retry-After passes only as the runtime steps the clock to the relay's
-    // sleep, so the wait reads off the clock whatever the machine's load.
+    // sleep, so the wait reads off the clock whatever the machine's load. The harness's 20 ms catalog refresh tick
+    // bounds every automatic step, so the steps taken while a handshake waits on its socket stay far below the floor.
     tokio::time::pause();
     let started = tokio::time::Instant::now();
     let resp = h
