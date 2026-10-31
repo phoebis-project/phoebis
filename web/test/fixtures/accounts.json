@@ -42,6 +42,7 @@
           "has_extra_usage_enabled": true,
           "organization_name": "Biz Org",
           "organization_type": "claude_max",
+          "plan_display_name": "Ultra",
           "rate_limit_tier": "default_claude_max_20x"
         },
         "subscription": {
@@ -212,6 +213,7 @@
           "has_extra_usage_enabled": false,
           "organization_name": "Free Org",
           "organization_type": "claude_free",
+          "plan_display_name": null,
           "rate_limit_tier": "default_claude_ai"
         },
         "subscription": {
@@ -272,6 +274,7 @@
           "has_extra_usage_enabled": true,
           "organization_name": "Enterprise Org",
           "organization_type": "claude_enterprise",
+          "plan_display_name": null,
           "rate_limit_tier": "default_claude_zero"
         },
         "subscription": {

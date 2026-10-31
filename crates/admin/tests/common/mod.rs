@@ -237,6 +237,23 @@ pub async fn admin_parts_full_costed(costs: PlanTables) -> Full {
 }
 
 /// The same over a store the caller holds (the router task loads its pins at spawn, so a pin is written first).
+pub async fn admin_parts_full_on_costed(store: Arc<Store>, costs: PlanTables) -> Full {
+    full_from(
+        build_app(
+            None,
+            ACCOUNT_UUID,
+            false,
+            Some(store),
+            None,
+            None,
+            None,
+            Some(costs),
+        )
+        .await,
+    )
+}
+
+/// The same over a store the caller holds (the router task loads its pins at spawn, so a pin is written first).
 pub async fn admin_parts_full_on_priced(store: Arc<Store>, prices: PriceRevisions) -> Full {
     full_from(
         build_app(

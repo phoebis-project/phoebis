@@ -41,17 +41,21 @@ pub(crate) struct Session {
     pub requests: Option<u64>,
     pub pinned: bool,
     /// The pin's typed burn per hour, decayed to the read with its pool's `burn_average_seconds` as a shedding round
-    /// decays it, priced in `burn_unit`: the share of the account's own 5-hour window on plan quota, dollars
-    /// otherwise, null when the account's tier is unknown, when the model has no weight on the 5-hour window, or when
+    /// decays it, priced in `burn_unit`: the share of the account's own window `burn_window` names on plan quota,
+    /// dollars otherwise, null when the account's tier is unknown, when the model has no weight on the window, or when
     /// the account tier has no capacity on it. Null as well on a pinned row whose account has left the registry.
     pub burn: Option<f64>,
     /// `window_share` or `usd`, also null when the pin's account has left the registry, with no kind left to pick
     /// a unit from.
     #[schema(example = "window_share")]
     pub burn_unit: Option<String>,
-    /// The burn per hour on plan quota as the share of a Max 20x account's 5-hour window, whatever account tier the
-    /// pin sits on, null where `burn_unit` is not `window_share` and where the model has no weight on the 5-hour
-    /// window.
+    /// `five_hour` where the account's shared window set has it, `seven_day` otherwise, null where `burn_unit` is not
+    /// `window_share`.
+    #[schema(example = "five_hour")]
+    pub burn_window: Option<String>,
+    /// The burn per hour on plan quota as the Pro-week figure, the share of the Pro 7-day window a Pro account would
+    /// spend on it, whatever account tier the pin sits on, null where `burn_unit` is not `window_share` and where the
+    /// model has no weight on the window.
     pub burn_equivalent: Option<f64>,
     /// The instant the served burn is decayed to, the read's own, so a reader that decays it again from here adds
     /// nothing at the read. Null for a pin never renewed with usage, whose burn has nothing to decay.
@@ -213,6 +217,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         Err(e) => return Err(crate::routes::store_failure(e)),
     };
     let overages = state.router.overages().await.unwrap_or_default();
+    let reported = crate::routes::reported_samples(state).await;
     let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     let cutoff = now - state.session_expiry.as_millis() as i64;
     // Grouped by the client's own session, which the router keys pins under, so a request shows on the row of the
@@ -242,9 +247,10 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         std::collections::BTreeMap::new();
     // A pin's burn is typed tokens a second, priced here on the account it sits on: dollars through the table
     // in force at the set the pin's last prompt length selects, its fast usage at the fast cells beside it and its
-    // unmetered usage at that same set, or the share of the account's own 5-hour window through the model's anchor
-    // rates over its tier's capacity ratio, both under the pin's regime. The anchor rates alone are the 20x equivalent.
-    // Each account's tier is read once per request.
+    // unmetered usage at that same set, or the share of the account's own window its shared window set picks, the
+    // 5-hour window where the set has it and the 7-day window otherwise, through the model's anchor rates on that
+    // window over its tier's capacity ratio there, both under the pin's regime. The 7-day anchor rates alone are the
+    // Pro-week figure. Each account's tier and window set are read once per request.
     let revisions = state.pricing.revisions();
     let prices = revisions.in_force(now);
     let rates = BurnRates {
@@ -320,8 +326,17 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                     .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
                 BurnUnit::of(kind, snapshot.usage_based(&p.account_id), in_overage)
             });
+        let window = if reported
+            .get(&p.account_id)
+            .is_none_or(|sample| sample.has_window(FIVE_HOUR))
+        {
+            FIVE_HOUR
+        } else {
+            SEVEN_DAY
+        };
+        let burn_window = (unit == Some(BurnUnit::WindowShare)).then_some(window);
         let equivalent = (unit == Some(BurnUnit::WindowShare))
-            .then(|| rates.price_pin(BurnUnit::WindowShare, p, FIVE_HOUR))
+            .then(|| rates.price_pin(BurnUnit::WindowShare, p, SEVEN_DAY))
             .flatten()
             .map(|b| b * 3_600.0);
         let burn = match unit {
@@ -339,12 +354,12 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 let tier = tiers.get(&p.account_id).and_then(Option::as_deref);
                 // An account tier the cost model does not size prices nothing, as does a model without a weight, so
                 // the figure reads null rather than a guess.
-                tier.and_then(|t| {
-                    state
-                        .tables
-                        .tier_factor(t, FIVE_HOUR, entrypoint_of(p), now)
-                })
-                .and_then(|factor| equivalent.map(|b| b / factor))
+                tier.and_then(|t| state.tables.tier_factor(t, window, entrypoint_of(p), now))
+                    .and_then(|factor| {
+                        rates
+                            .price_pin(BurnUnit::WindowShare, p, window)
+                            .map(|b| b * 3_600.0 / factor)
+                    })
             }
         };
         let created_at = created.get(&key).copied();
@@ -353,8 +368,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             json!({
                 "key_id": p.key_id, "key_generation": generation, "session_id": p.session_id, "agent_id": p.agent_id, "model": p.model, "account_id": p.account_id, "epoch": p.epoch,
                 "created_at": created_at, "last_used_at": p.last_used_at, "last_request_at": null, "requests": null, "pinned": true,
-                "burn": burn, "burn_unit": unit, "burn_equivalent": equivalent, "burn_at": p.burn_at,
-                "runway_ms": standing.runway_ms, "runway_bounded": standing.runway_bounded,
+                "burn": burn, "burn_unit": unit, "burn_window": burn_window, "burn_equivalent": equivalent,
+                "burn_at": p.burn_at, "runway_ms": standing.runway_ms, "runway_bounded": standing.runway_bounded,
                 "cache_ttl_ms": p.cache_ttl_ms,
                 "speed": standing.speed,
                 "cycle_ms": standing.cycle_ms,
@@ -372,7 +387,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 json!({
                     "key_id": a.key_id, "key_generation": a.key_generation, "session_id": a.session_id, "agent_id": null, "model": a.model, "account_id": null, "epoch": null,
                     "created_at": created_at, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
-                    "burn": null, "burn_unit": null, "burn_equivalent": null, "burn_at": null, "runway_ms": null,
+                    "burn": null, "burn_unit": null, "burn_window": null, "burn_equivalent": null,
+                    "burn_at": null, "runway_ms": null,
                     "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
                     "speed": null,
                     "cycle_ms": null,
@@ -403,7 +419,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             json!({
                 "key_id": key.0, "key_generation": key.1, "session_id": key.2, "agent_id": null, "model": null, "account_id": null, "epoch": null,
                 "created_at": created.get(key), "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
-                "burn": null, "burn_unit": null, "burn_equivalent": null, "burn_at": null, "runway_ms": null,
+                "burn": null, "burn_unit": null, "burn_window": null, "burn_equivalent": null,
+                "burn_at": null, "runway_ms": null,
                 "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
                 "speed": null,
                 "cycle_ms": null,

@@ -40,6 +40,7 @@
       "has_extra_usage_enabled": true,
       "organization_name": "Biz Org",
       "organization_type": "claude_max",
+      "plan_display_name": "Ultra",
       "rate_limit_tier": "default_claude_max_20x"
     },
     "subscription": {

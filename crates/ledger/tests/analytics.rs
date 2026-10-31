@@ -984,10 +984,10 @@ fn a_group_of_keepalive_credits_alone_stays_in_the_default_breakdown() {
         .find(|g| g.key == UNATTRIBUTED)
         .expect("a group of keepalive credits alone stays in the default breakdown");
     assert_eq!(group.kept_warm.requests, 1);
-    // The group a route answers carries the saving's three members beside its probe cost.
+    // The group a route answers carries the saving's two members beside its probe cost.
     let answered = serde_json::to_value(group).unwrap();
     assert!(
-        ["saving_equivalent", "saving_shares", "saving_usd"]
+        ["saving_equivalent", "saving_usd"]
             .iter()
             .all(|member| answered.get(member).is_some()),
         "{answered}"
@@ -2225,8 +2225,7 @@ fn fable_shares(tables: &PlanTables, usage: PinUsage) -> WindowShares {
 }
 
 #[tokio::test]
-async fn a_breakdown_row_under_the_account_grouping_sums_its_plan_rows_shares_and_a_cached_row_s_read_and_write(
-) {
+async fn a_breakdown_row_under_the_account_grouping_sums_its_plan_rows_shares() {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
     let plain = usage(1_000, 100);
     let cached = PinUsage {
@@ -2287,39 +2286,6 @@ async fn a_breakdown_row_under_the_account_grouping_sums_its_plan_rows_shares_an
             "the two plan rows' shares sum on {window}: {cost:?} vs {want}"
         );
     }
-    let cache = a.cache_shares.as_ref().expect("the cache shares");
-    let read = fable_shares(
-        &tables,
-        PinUsage {
-            cache_read: 2_000,
-            ..PinUsage::default()
-        },
-    )[SEVEN_DAY]
-        .unwrap();
-    let write = fable_shares(
-        &tables,
-        PinUsage {
-            write_5m: 300,
-            ..PinUsage::default()
-        },
-    )[SEVEN_DAY]
-        .unwrap();
-    assert!(
-        read > 0.0
-            && cache.get(SEVEN_DAY).is_some_and(|s| {
-                (s.read - read).abs() < 1e-12 && (s.write - write).abs() < 1e-12
-            }),
-        "the cached row's read and write shares, the plain row adding nothing: {cache:?} vs {read} and {write}"
-    );
-    let probes = a.probe_shares.as_ref().expect("the probe shares");
-    let probe_cost = fable_shares(&tables, probe)[FIVE_HOUR].unwrap();
-    assert!(
-        probes
-            .get(FIVE_HOUR)
-            .is_some_and(|s| (s.cost - probe_cost).abs() < 1e-12 && s.wasted.is_none()),
-        "the probe row's share apart from the request side, and no waste while no wasted probe is recorded: \
-         {probes:?} vs {probe_cost}"
-    );
     assert_eq!(
         (a.plan_requests, a.plan_output_tokens),
         (Some(2), Some(150)),
@@ -3078,6 +3044,7 @@ async fn the_probe_inclusion_rule_governs_the_request_shares() {
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
     let inference_share = fable_shares(&tables, inference)[FIVE_HOUR].unwrap();
     let probe_share = fable_shares(&tables, probe)[FIVE_HOUR].unwrap();
+    let probe_figure = equivalent_of("claude-fable-5-1", probe, WEEKDAY_OFF_PEAK);
     let read = |filter: RollupFilter| {
         let db = db.clone();
         async move {
@@ -3089,10 +3056,7 @@ async fn the_probe_inclusion_rule_governs_the_request_shares() {
                     .and_then(|m| m.get(FIVE_HOUR))
                     .copied(),
                 a.plan_requests,
-                a.probe_shares
-                    .as_ref()
-                    .and_then(|m| m.get(FIVE_HOUR))
-                    .map(|s| s.cost),
+                a.probe_equivalent.as_ref().map(|p| p.cost),
             )
         }
     };
@@ -3102,8 +3066,8 @@ async fn the_probe_inclusion_rule_governs_the_request_shares() {
         "with probes left out the request shares read the inference row alone: {cost:?}, {requests:?}"
     );
     assert!(
-        close(probe_cost.as_ref(), probe_share),
-        "while the probe share reads the probe row: {probe_cost:?} vs {probe_share}"
+        close(probe_cost.as_ref(), probe_figure),
+        "while the probe figure reads the probe row: {probe_cost:?} vs {probe_figure}"
     );
     let (cost, requests, probe_cost) = read(with_probes()).await;
     assert!(
@@ -3111,8 +3075,8 @@ async fn the_probe_inclusion_rule_governs_the_request_shares() {
         "with probes counted the probe row joins the request shares: {cost:?}, {requests:?}"
     );
     assert!(
-        close(probe_cost.as_ref(), probe_share),
-        "and the probe share stays the probe row's: {probe_cost:?}"
+        close(probe_cost.as_ref(), probe_figure),
+        "and the probe figure stays the probe row's: {probe_cost:?}"
     );
     let (cost, requests, _) = read(RollupFilter {
         kinds: vec!["probe".into()],
@@ -3122,81 +3086,6 @@ async fn the_probe_inclusion_rule_governs_the_request_shares() {
     assert!(
         close(cost.as_ref(), probe_share) && requests == Some(1),
         "under a probe kind filter the request shares read the probe row: {cost:?}, {requests:?}"
-    );
-}
-
-/// A settlement carries the wasted probe's own counts, so the wasted part of a window is those counts priced on it:
-/// a quarter of the probe's cache read is a quarter of the probe's share.
-#[tokio::test]
-async fn the_wasted_probe_share_prices_the_settlements_own_counts_on_the_window() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
-    let probe = PinUsage {
-        cache_read: 2_000,
-        ..PinUsage::default()
-    };
-    plant_share(
-        &db,
-        ShareRow {
-            id: "r-probe",
-            kind: "probe",
-            usage: probe,
-            client: Some("claude-code/cli"),
-            ..ShareRow::default()
-        },
-    );
-    // The engine writes a settlement's waste as a row of its own, here in the next hour.
-    let next_hour = WEEKDAY_OFF_PEAK + 3_600_000;
-    let credit = |at: i64| KeepaliveDelta {
-        at,
-        key_id: "k".into(),
-        pool_id: "p".into(),
-        account_id: "a".into(),
-        canonical_model: "claude-fable-5-1".into(),
-        kind: "probe".into(),
-        tier: Some("test_tier".into()),
-        ..Default::default()
-    };
-    db.write(|c| {
-        let tx = c.transaction()?;
-        fold_keepalive(
-            &tx,
-            &KeepaliveDelta {
-                wasted_probes: 1,
-                wasted_cache_read_tokens: probe.cache_read / 4,
-                ..credit(next_hour)
-            },
-        )?;
-        tx.commit()?;
-        Ok(())
-    })
-    .unwrap();
-    let tables = share_tables();
-    let pricing = SharePricing { tables: &tables };
-    let (from, _) = hour_range(WEEKDAY_OFF_PEAK);
-    let (credits_from, credits_to) = hour_range(next_hour);
-    let groups = account_groups(&db, &with_probes(), from, credits_to, Some(pricing)).await;
-    let probes = group(&groups, "a")
-        .probe_shares
-        .as_ref()
-        .expect("the probe shares");
-    let cost = fable_shares(&tables, probe)[FIVE_HOUR].unwrap();
-    assert!(
-        probes.get(FIVE_HOUR).is_some_and(|s| {
-            (s.cost - cost).abs() < 1e-12
-                && s.wasted
-                    .is_some_and(|w| w > 0.0 && (w - cost / 4.0).abs() < 1e-12)
-        }),
-        "the wasted part is the settlement's counts priced on the window: {probes:?} vs {cost}"
-    );
-    let credits =
-        account_groups(&db, &with_probes(), credits_from, credits_to, Some(pricing)).await;
-    let probes = group(&credits, "a")
-        .probe_shares
-        .as_ref()
-        .expect("the credit rows' group still prices in shares");
-    assert!(
-        !probes.contains_key(FIVE_HOUR),
-        "no probe request row priced into the hour, so there is no share to read a waste off: {probes:?}"
     );
 }
 
@@ -3241,7 +3130,7 @@ async fn an_overage_row_and_an_api_key_group_add_to_no_share() {
     );
     let k = group(&groups, "k");
     assert!(
-        k.cost_shares.is_none() && k.cache_shares.is_none() && k.probe_shares.is_none(),
+        k.cost_shares.is_none(),
         "an api_key group answers no share: {k:?}"
     );
     assert_eq!(
@@ -3776,8 +3665,8 @@ async fn a_group_whose_rows_recorded_no_tier_answers_no_share_and_a_dropped_acco
     let groups = account_groups(&db, &RollupFilter::default(), from, to, Some(pricing)).await;
     let t = group(&groups, "t");
     assert!(
-        t.cost_shares.is_none() && t.cache_shares.is_none() && t.probe_shares.is_none(),
-        "the tierless group answers the three shares null: {t:?}"
+        t.cost_shares.is_none(),
+        "the tierless group answers its shares null: {t:?}"
     );
     assert_eq!(
         (t.plan_requests, t.plan_output_tokens),
@@ -3828,7 +3717,7 @@ fn equivalent_of(model: &str, usage: PinUsage, at: i64) -> f64 {
         .expect("the shipped cost model weighs the model")
 }
 
-/// The owner's reading: one request of a Pro account sits next to one of a Max 20x account in the one unit, so the
+/// The owner's reading: one request of a Pro account sits next to one of an Ultra account in the one unit, so the
 /// equivalent adds across accounts and account tiers under a grouping that spans them, where the shares cannot.
 #[tokio::test]
 async fn the_equivalent_under_the_model_grouping_adds_two_accounts_of_two_tiers_into_one_figure() {
@@ -3874,7 +3763,7 @@ async fn the_equivalent_under_the_model_grouping_adds_two_accounts_of_two_tiers_
         "the two accounts' rows add into one figure: {fable:?} vs {want}"
     );
     assert!(
-        fable.cost_shares.is_none() && fable.cache_shares.is_none() && fable.probe_shares.is_none(),
+        fable.cost_shares.is_none(),
         "two accounts' own windows do not add, so the group answers no share: {fable:?}"
     );
     assert_eq!(
@@ -4978,7 +4867,7 @@ fn a_banded_week_weighs_the_seven_day_share_by_the_band_at_the_rows_hour() {
             .unwrap()
     };
     // The test model: Opus 5.5 weighs 2 and an input token multiplies by 1, so 1,000 input tokens are 2,000 units
-    // of the Max 20x week's 1,000; inside the band the week holds the 0.5 this test sets.
+    // of the Ultra week's 1,000, and inside the band the week holds the 0.5 this test sets.
     assert!(
         (week_at(WEEKDAY_OFF_PEAK) - 2.0).abs() < 1e-12,
         "{}",
@@ -5066,12 +4955,12 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_
         peak.five_hour_share,
         base * factor
     );
-    // The figure prices on the anchor tier's week, so a Max 20x row's figure is its 7-day share times Max 20x's
+    // The figure prices on the anchor tier's week, so an Ultra row's figure is its 7-day share times Ultra's
     // 7-day capacity over the anchor's, band and all.
     for (point, at) in [(peak, WEEKDAY_PEAK), (off_peak, WEEKDAY_OFF_PEAK)] {
         let ratio = tables
             .tier_factor(MAX_20X, SEVEN_DAY, None, at)
-            .expect("the tables size Max 20x");
+            .expect("the tables size Ultra");
         let want = point.seven_day_share.unwrap() * ratio;
         assert!(
             (point.equivalent.unwrap() - want).abs() <= 1e-9 * want,
@@ -5231,7 +5120,7 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
     assert!(
         (max.five_hour_share.unwrap() - share(FIVE_HOUR, MAX_20X)).abs() < 1e-9
             && (max.seven_day_share.unwrap() - share(SEVEN_DAY, MAX_20X)).abs() < 1e-9,
-        "a million Opus 5.5 input tokens read their share of each Max 20x window off the band: {max:?}"
+        "a million Opus 5.5 input tokens read their share of each Ultra window off the band: {max:?}"
     );
     assert_eq!(max.usd, 0.0, "a subscription spends no dollars");
     let pro = point_of("pro");
@@ -5272,8 +5161,8 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
         ),
         "an api_key row keeps its estimated dollars and reads no window"
     );
-    // The Pro-week figure reads no account tier: one Opus 5.5 request on Pro reads the same figure as on Max 20x or
-    // with no tier at all, so a Pro account's request compares to a Max 20x account's.
+    // The Pro-week figure reads no account tier: one Opus 5.5 request on Pro reads the same figure as on Ultra or
+    // with no tier at all, so a Pro account's request compares to an Ultra account's.
     let figure = price_equivalent(&tables, None, "claude-opus-5-5", million, hour, hour, NOW);
     assert!(figure.is_some(), "the shipped model weighs Opus 5.5");
     for point in [&max, &pro, &tierless] {
@@ -5286,7 +5175,7 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
     );
 }
 
-/// One request in the off-band weekday hour on `account`, a Max 20x subscription, its one attempt carrying `input`
+/// One request in the off-band weekday hour on `account`, an Ultra subscription, its one attempt carrying `input`
 /// uncached tokens. `None` books a failed request, whose rollup row carries no token.
 fn plant_in_the_off_band_hour(
     db: &LedgerDb,
@@ -5334,7 +5223,7 @@ fn plant_in_the_off_band_hour(
     .unwrap();
 }
 
-/// The off-band hour's burn point of `account`, a Max 20x subscription.
+/// The off-band hour's burn point of `account`, an Ultra subscription.
 fn off_band_point_on_max_20x(db: &LedgerDb, account: &str) -> phoebis_ledger::BurnPoint {
     let tables = PlanTables::shipped();
     let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
@@ -5356,7 +5245,7 @@ fn off_band_point_on_max_20x(db: &LedgerDb, account: &str) -> phoebis_ledger::Bu
 fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_and_counts_every_token(
 ) {
     let db = LedgerDb::open_in_memory().unwrap();
-    // The same hour on Max 20x: a million input tokens of a model the table prices and a million Mystery 2 tokens of
+    // The same hour on Ultra: a million input tokens of a model the table prices and a million Mystery 2 tokens of
     // a tier it does not place, and a partial sum would read as the hour's share. The rollups read in model order, so
     // Mystery 2 comes before Opus 5.5 and after Fable 5.1, and each order is taken once.
     for (account, priced) in [("a", "claude-opus-5-5"), ("b", "claude-fable-5-1")] {
@@ -5592,11 +5481,11 @@ fn a_session_attempt_weighs_its_five_hour_share_by_the_band_at_its_completion() 
         (point.seven_day_share.unwrap() - week).abs() < 1e-6,
         "the 7-day share is priced too: {point:?} vs {week}"
     );
-    // The figure prices on the anchor tier's week, so the attempt's figure is its 7-day share times Max 20x's 7-day
+    // The figure prices on the anchor tier's week, so the attempt's figure is its 7-day share times Ultra's 7-day
     // capacity over the anchor's, banded at its completion.
     let ratio = tables
         .tier_factor(MAX_20X, SEVEN_DAY, None, started)
-        .expect("the tables size Max 20x");
+        .expect("the tables size Ultra");
     let want = point.seven_day_share.unwrap() * ratio;
     assert!(
         (point.equivalent.unwrap() - want).abs() <= 1e-9 * want,
@@ -5876,7 +5765,7 @@ fn plant_burn(db: &LedgerDb, id: &str, account: &str, tier: &str, model: &str, s
     .unwrap();
 }
 
-/// The burn groups by every dimension the breakdown knows, each group's 20x equivalent adding across accounts and
+/// The burn groups by every dimension the breakdown knows, each group's Pro-week figure adding across accounts and
 /// account tiers, and answers the own-window shares only where each group holds one account's rows.
 #[tokio::test]
 async fn the_burn_groups_by_every_breakdown_dimension_and_answers_the_shares_where_one_account_is_named(
@@ -6424,7 +6313,7 @@ fn the_burn_series_over_one_read_matches_a_read_per_scope() {
                 _ => {}
             }
         }
-        // Account a is a Max 20x subscription and c a Pro one, recorded on each attempt as the landing would.
+        // Account a is an Ultra subscription and c a Pro one, recorded on each attempt as the landing would.
         for attempt in &mut attempts {
             attempt.tier = match attempt.account_id.as_str() {
                 "a" => Some(MAX_20X.into()),
@@ -7951,7 +7840,7 @@ fn a_peak_hour_beside_a_quiet_one_prices_the_totals_equivalent_at_each_hours_fac
 }
 
 /// Two rows of one hour, account tier and model, one Opus 5.5 input token each, one from an entrypoint the test regime
-/// lists and one from an entrypoint it leaves out: each prices under its own regime, 2 / 200 and 2 / 100 of the Max 20x
+/// lists and one from an entrypoint it leaves out: each prices under its own regime, 2 / 200 and 2 / 100 of the Ultra
 /// 5-hour window, where one price over the group would read the base 0.04, and the Pro-week figure 2 / 62.5 and 2 / 50.
 /// A session attempt from the listed entrypoint reads the regime's share. 04:00 in Los Angeles, before the band, in the
 /// first cost entry.

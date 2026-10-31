@@ -1022,7 +1022,7 @@ async fn the_analytics_group_by_client_and_narrow_to_client_patterns() {
     );
 }
 
-/// One plan-funded request marked as the client's classifier call and one unmarked, both served on the Max 20x tier
+/// One plan-funded request marked as the client's classifier call and one unmarked, both served on the Ultra tier
 /// of the test cost model, which sizes both shared windows and weighs the model, so the unmarked one prices above
 /// zero without a figure read from the shipped files.
 async fn classifier_pair() -> common::Full {

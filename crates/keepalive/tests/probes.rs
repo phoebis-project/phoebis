@@ -2506,7 +2506,7 @@ fn settlement_keys(rows: &[phoebis_ledger::RollupRow]) -> Vec<(&str, &str, &str)
 
 /// A wasted probe files beside its own request row, at the speed its answer reported: a fast recipe the upstream
 /// served at standard speed on an account without overage settles as `plan` under the account's tier, so its waste
-/// prices at the standard cells and reads in the plan's probe share beside the probe's cost.
+/// prices at the standard cells and reads in the plan's probe figure beside the probe's cost.
 #[tokio::test]
 async fn a_fast_recipe_served_standard_settles_its_waste_as_plan_at_the_standard_cells() {
     let (mut r, standard) = fast_probe_served("standard", phoebis_ledger::Speed::Standard).await;
@@ -2532,16 +2532,14 @@ async fn a_fast_recipe_served_standard_settles_its_waste_as_plan_at_the_standard
         &r.tables,
         r.now(),
     );
-    let share = groups
+    let figure = groups
         .iter()
-        .find_map(|group| group.probe_shares.as_ref()?.get(phoebis_routing::SEVEN_DAY))
-        .expect("the plan-funded probe's share of the 7-day window");
+        .find(|group| group.key == "o")
+        .and_then(|group| group.probe_equivalent.as_ref())
+        .expect("the plan-funded probe's Pro-week figure");
     assert!(
-        share.cost > 0.0
-            && share
-                .wasted
-                .is_some_and(|wasted| (wasted - share.cost).abs() < 1e-12),
-        "the whole probe wasted in the plan's share: {share:?}"
+        figure.cost > 0.0 && (figure.wasted - figure.cost).abs() < 1e-12,
+        "the whole probe wasted in the plan's figure: {figure:?}"
     );
 }
 

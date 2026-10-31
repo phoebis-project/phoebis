@@ -26,7 +26,7 @@ use phoebis_oauth::{
 use phoebis_relay::DiscoveryError;
 use phoebis_routing::{
     is_plan_window, AccountProjection, MemberSpend, OverageEvidence, ReloadError, SpendResetSource,
-    SpendWindow, UtilizationSample, WindowReading, SEVEN_DAY_FABLE,
+    SpendWindow, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, CooldownRow, Identity,
@@ -2017,6 +2017,33 @@ pub(crate) struct AccountContext {
     pub week: BTreeMap<String, phoebis_ledger::Totals>,
 }
 
+/// The shared windows `account`'s set lacks as the router holds it now, which a route strips from an own-window share
+/// member it answers for that one account. Empty for an account the router holds no sample of and for one the
+/// registry no longer lists, whose row keeps its shares as priced.
+pub(crate) fn windows_lacked(
+    reported: &BTreeMap<String, UtilizationSample>,
+    account: &str,
+) -> Vec<&'static str> {
+    reported.get(account).map_or_else(Vec::new, |sample| {
+        [FIVE_HOUR, SEVEN_DAY]
+            .into_iter()
+            .filter(|window| !sample.has_window(window))
+            .collect()
+    })
+}
+
+/// The router's samples per account as the poll or a head reported them, the sets `windows_lacked` reads. A router
+/// that answers none reads as holding no sample, so every account keeps both shared windows.
+pub(crate) async fn reported_samples(state: &AdminState) -> BTreeMap<String, UtilizationSample> {
+    state
+        .router
+        .reported_samples()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
 /// One `projections` ask per pool with members, each account keeping its own pool's answer: the registry holds an
 /// account in one pool, and every figure reads that pool's settings.
 async fn projections_by_account(
@@ -2302,7 +2329,7 @@ pub(crate) struct Overage {
     pub observed_at: i64,
 }
 
-/// Six values read off the stored profile document as they are.
+/// Seven values read off the stored profile document as they are.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AccountProfile {
@@ -2317,6 +2344,9 @@ pub(crate) struct AccountProfile {
     pub organization_name: Value,
     /// Usually a string, null when the document lacks it.
     pub organization_type: Value,
+    /// Usually a string (`Ultra` on the `default_claude_max_20x` tier), read from the document's `organization`, null
+    /// when the document lacks it there.
+    pub plan_display_name: Value,
     /// Usually a string, null when the document lacks it.
     pub rate_limit_tier: Value,
 }
@@ -2326,7 +2356,8 @@ pub(crate) struct AccountProfile {
 pub(crate) struct AccountSubscription {
     /// The plan the stored profile resolves to: `free`, `pro`, `max_5x`, `max_20x`, `max` (a Max organization whose
     /// tier names neither size), `team`, `enterprise` or `usage_based`, read from the organization type first and the
-    /// rate-limit tier second, null while no stored document and no tier the table names stand.
+    /// rate-limit tier second, null while no stored document and no tier the table names stand. The console labels
+    /// `max_20x` Ultra, `max_5x` Max and `max` Max (tier unknown).
     pub plan: Option<String>,
     /// Null when the profile lacks it.
     pub tier: Option<String>,
@@ -2585,6 +2616,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             has_extra_usage_enabled: p["organization"]["has_extra_usage_enabled"].clone(),
             organization_name: p["organization"]["name"].clone(),
             organization_type: p["organization"]["organization_type"].clone(),
+            plan_display_name: p["organization"]["plan_display_name"].clone(),
             rate_limit_tier: p["organization"]["rate_limit_tier"].clone(),
         });
     // The stored flag and end read through this alone, with no profile join, so a canceled account answers

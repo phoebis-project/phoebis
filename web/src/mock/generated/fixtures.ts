@@ -49,6 +49,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "has_extra_usage_enabled": true,
         "organization_name": "Biz Org",
         "organization_type": "claude_max",
+        "plan_display_name": "Ultra",
         "rate_limit_tier": "default_claude_max_20x"
       },
       "subscription": {
@@ -334,6 +335,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "has_extra_usage_enabled": true,
             "organization_name": "Biz Org",
             "organization_type": "claude_max",
+            "plan_display_name": "Ultra",
             "rate_limit_tier": "default_claude_max_20x"
           },
           "subscription": {
@@ -504,6 +506,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "has_extra_usage_enabled": false,
             "organization_name": "Free Org",
             "organization_type": "claude_free",
+            "plan_display_name": null,
             "rate_limit_tier": "default_claude_ai"
           },
           "subscription": {
@@ -564,6 +567,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "has_extra_usage_enabled": true,
             "organization_name": "Enterprise Org",
             "organization_type": "claude_enterprise",
+            "plan_display_name": null,
             "rate_limit_tier": "default_claude_zero"
           },
           "subscription": {
@@ -1114,8 +1118,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "wasted_probe_usd": 0,
           "wasted_probe_reasons": {},
           "cost_shares": null,
-          "cache_shares": null,
-          "probe_shares": null,
           "plan_requests": 8,
           "plan_output_tokens": 800,
           "cost_equivalent": null,
@@ -1125,7 +1127,6 @@ export const FIXTURES: Record<string, Fixture> = {
             "wasted": 0
           },
           "saving_usd": 0,
-          "saving_shares": null,
           "saving_equivalent": 0,
           "billed_usd": 0.01425,
           "billed": {
@@ -1490,8 +1491,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "wasted_probe_usd": 0,
           "wasted_probe_reasons": {},
           "cost_shares": null,
-          "cache_shares": null,
-          "probe_shares": null,
           "plan_requests": 1,
           "plan_output_tokens": 100,
           "cost_equivalent": 0.0000235,
@@ -1504,7 +1503,6 @@ export const FIXTURES: Record<string, Fixture> = {
             "wasted": 0
           },
           "saving_usd": 0,
-          "saving_shares": null,
           "saving_equivalent": 0,
           "billed_usd": 0,
           "billed": {
@@ -1886,8 +1884,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "wasted_probe_usd": 0,
           "wasted_probe_reasons": {},
           "cost_shares": {},
-          "cache_shares": {},
-          "probe_shares": {},
           "plan_requests": 9,
           "plan_output_tokens": 900,
           "cost_equivalent": null,
@@ -1897,7 +1893,6 @@ export const FIXTURES: Record<string, Fixture> = {
             "wasted": 0
           },
           "saving_usd": 0,
-          "saving_shares": {},
           "saving_equivalent": 0,
           "billed_usd": 0.0071,
           "billed": {
@@ -2260,8 +2255,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "wasted_probe_usd": 0,
           "wasted_probe_reasons": {},
           "cost_shares": null,
-          "cache_shares": null,
-          "probe_shares": null,
           "plan_requests": 0,
           "plan_output_tokens": 0,
           "cost_equivalent": 0,
@@ -2274,7 +2267,6 @@ export const FIXTURES: Record<string, Fixture> = {
             "wasted": 0
           },
           "saving_usd": 0,
-          "saving_shares": null,
           "saving_equivalent": 0,
           "billed_usd": 0.0036,
           "billed": {
@@ -2643,8 +2635,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "wasted_probe_usd": 0,
           "wasted_probe_reasons": {},
           "cost_shares": null,
-          "cache_shares": null,
-          "probe_shares": null,
           "plan_requests": 0,
           "plan_output_tokens": 0,
           "cost_equivalent": 0,
@@ -2657,7 +2647,6 @@ export const FIXTURES: Record<string, Fixture> = {
             "wasted": 0
           },
           "saving_usd": 0,
-          "saving_shares": null,
           "saving_equivalent": 0,
           "billed_usd": 0,
           "billed": {
@@ -3025,8 +3014,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "wasted_probe_usd": 0,
           "wasted_probe_reasons": {},
           "cost_shares": null,
-          "cache_shares": null,
-          "probe_shares": null,
           "plan_requests": 0,
           "plan_output_tokens": 0,
           "cost_equivalent": 0,
@@ -3039,7 +3026,6 @@ export const FIXTURES: Record<string, Fixture> = {
             "wasted": 0
           },
           "saving_usd": 0,
-          "saving_shares": null,
           "saving_equivalent": 0,
           "billed_usd": 0.00355,
           "billed": {
@@ -3417,8 +3403,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "wasted_probe_usd": 0,
           "wasted_probe_reasons": {},
           "cost_shares": null,
-          "cache_shares": null,
-          "probe_shares": null,
           "plan_requests": 0,
           "plan_output_tokens": 0,
           "cost_equivalent": 0,
@@ -3431,7 +3415,6 @@ export const FIXTURES: Record<string, Fixture> = {
             "wasted": 0
           },
           "saving_usd": 0,
-          "saving_shares": null,
           "saving_equivalent": 0,
           "billed_usd": 0.00355,
           "billed": {
@@ -3806,8 +3789,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "wasted_probe_usd": 0,
           "wasted_probe_reasons": {},
           "cost_shares": null,
-          "cache_shares": null,
-          "probe_shares": null,
           "plan_requests": 9,
           "plan_output_tokens": 900,
           "cost_equivalent": null,
@@ -3817,7 +3798,6 @@ export const FIXTURES: Record<string, Fixture> = {
             "wasted": 0
           },
           "saving_usd": 0,
-          "saving_shares": null,
           "saving_equivalent": 0,
           "billed_usd": 0.010700000000000001,
           "billed": {
@@ -6050,8 +6030,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "wasted_probe_usd": 0,
               "wasted_probe_reasons": {},
               "cost_shares": null,
-              "cache_shares": null,
-              "probe_shares": null,
               "plan_requests": 5,
               "plan_output_tokens": 500,
               "cost_equivalent": 0.000094,
@@ -6064,7 +6042,6 @@ export const FIXTURES: Record<string, Fixture> = {
                 "wasted": 0
               },
               "saving_usd": 0,
-              "saving_shares": null,
               "saving_equivalent": 0,
               "billed_usd": 0.01065,
               "billed": {
@@ -6434,8 +6411,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "wasted_probe_usd": 0,
               "wasted_probe_reasons": {},
               "cost_shares": null,
-              "cache_shares": null,
-              "probe_shares": null,
               "plan_requests": 1,
               "plan_output_tokens": 100,
               "cost_equivalent": 0.0000235,
@@ -6448,7 +6423,6 @@ export const FIXTURES: Record<string, Fixture> = {
                 "wasted": 0
               },
               "saving_usd": 0,
-              "saving_shares": null,
               "saving_equivalent": 0,
               "billed_usd": 0,
               "billed": {
@@ -6825,8 +6799,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "wasted_probe_usd": 0,
               "wasted_probe_reasons": {},
               "cost_shares": null,
-              "cache_shares": null,
-              "probe_shares": null,
               "plan_requests": 3,
               "plan_output_tokens": 300,
               "cost_equivalent": null,
@@ -6836,7 +6808,6 @@ export const FIXTURES: Record<string, Fixture> = {
                 "wasted": 0
               },
               "saving_usd": 0,
-              "saving_shares": null,
               "saving_equivalent": 0,
               "billed_usd": 0.0036,
               "billed": {
@@ -7312,17 +7283,6 @@ export const FIXTURES: Record<string, Fixture> = {
                 "five_hour": 0.00004406250000000001,
                 "seven_day": 0.00001175
               },
-              "cache_shares": {
-                "five_hour": {
-                  "read": 3.1249999999999997e-7,
-                  "write": 0.00000625
-                },
-                "seven_day": {
-                  "read": 8.333333333333334e-8,
-                  "write": 0.0000016666666666666667
-                }
-              },
-              "probe_shares": {},
               "plan_requests": 6,
               "plan_output_tokens": 600,
               "cost_equivalent": 0.0001175,
@@ -7335,7 +7295,6 @@ export const FIXTURES: Record<string, Fixture> = {
                 "wasted": 0
               },
               "saving_usd": 0,
-              "saving_shares": {},
               "saving_equivalent": 0,
               "billed_usd": 0.0071,
               "billed": {
@@ -7704,8 +7663,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "wasted_probe_usd": 0,
               "wasted_probe_reasons": {},
               "cost_shares": null,
-              "cache_shares": null,
-              "probe_shares": null,
               "plan_requests": 0,
               "plan_output_tokens": 0,
               "cost_equivalent": 0,
@@ -7718,7 +7675,6 @@ export const FIXTURES: Record<string, Fixture> = {
                 "wasted": 0
               },
               "saving_usd": 0,
-              "saving_shares": null,
               "saving_equivalent": 0,
               "billed_usd": 0,
               "billed": {
@@ -8086,8 +8042,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "wasted_probe_usd": 0,
               "wasted_probe_reasons": {},
               "cost_shares": null,
-              "cache_shares": null,
-              "probe_shares": null,
               "plan_requests": 0,
               "plan_output_tokens": 0,
               "cost_equivalent": 0,
@@ -8100,7 +8054,6 @@ export const FIXTURES: Record<string, Fixture> = {
                 "wasted": 0
               },
               "saving_usd": 0,
-              "saving_shares": null,
               "saving_equivalent": 0,
               "billed_usd": 0.00355,
               "billed": {
@@ -8476,8 +8429,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "wasted_probe_usd": 0,
               "wasted_probe_reasons": {},
               "cost_shares": {},
-              "cache_shares": {},
-              "probe_shares": {},
               "plan_requests": 3,
               "plan_output_tokens": 300,
               "cost_equivalent": null,
@@ -8487,7 +8438,6 @@ export const FIXTURES: Record<string, Fixture> = {
                 "wasted": 0
               },
               "saving_usd": 0,
-              "saving_shares": {},
               "saving_equivalent": 0,
               "billed_usd": 0,
               "billed": {
@@ -8850,8 +8800,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "wasted_probe_usd": 0,
               "wasted_probe_reasons": {},
               "cost_shares": null,
-              "cache_shares": null,
-              "probe_shares": null,
               "plan_requests": 0,
               "plan_output_tokens": 0,
               "cost_equivalent": 0,
@@ -8864,7 +8812,6 @@ export const FIXTURES: Record<string, Fixture> = {
                 "wasted": 0
               },
               "saving_usd": 0,
-              "saving_shares": null,
               "saving_equivalent": 0,
               "billed_usd": 0.0036,
               "billed": {
@@ -16174,6 +16121,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": true,
           "burn": 0,
           "burn_unit": "window_share",
+          "burn_window": "five_hour",
           "burn_equivalent": 0,
           "burn_at": null,
           "runway_ms": null,
@@ -16228,6 +16176,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": true,
           "burn": 0,
           "burn_unit": "usd",
+          "burn_window": null,
           "burn_equivalent": null,
           "burn_at": null,
           "runway_ms": null,
@@ -16282,7 +16231,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": true,
           "burn": 0.00104,
           "burn_unit": "window_share",
-          "burn_equivalent": 0.0208,
+          "burn_window": "five_hour",
+          "burn_equivalent": 0.0017333333333333335,
           "burn_at": 1791721000000,
           "runway_ms": null,
           "runway_bounded": null,
@@ -16358,6 +16308,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": false,
           "burn": null,
           "burn_unit": null,
+          "burn_window": null,
           "burn_equivalent": null,
           "burn_at": null,
           "runway_ms": null,
@@ -16400,6 +16351,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": false,
           "burn": null,
           "burn_unit": null,
+          "burn_window": null,
           "burn_equivalent": null,
           "burn_at": null,
           "runway_ms": null,
@@ -16442,6 +16394,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": false,
           "burn": null,
           "burn_unit": null,
+          "burn_window": null,
           "burn_equivalent": null,
           "burn_at": null,
           "runway_ms": null,

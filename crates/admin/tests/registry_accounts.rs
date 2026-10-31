@@ -1214,6 +1214,11 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
     );
     assert_eq!(listed["profile"]["display_name"], "Biz");
     assert_eq!(
+        listed["profile"].get("plan_display_name"),
+        Some(&serde_json::Value::Null),
+        "a Max 5x document carries no display name of its plan: {listed}"
+    );
+    assert_eq!(
         listed["subscription"],
         serde_json::json!({
             "plan": "max_5x",
@@ -1280,6 +1285,33 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
             .to_string()
             .contains("PLACEHOLDER"),
         "no credential in the list"
+    );
+    let ultra_document = serde_json::json!({
+        "account": {"uuid": "u", "email": "business@example.invalid"},
+        "organization": {
+            "organization_type": "claude_max",
+            "plan_display_name": "Ultra",
+            "rate_limit_tier": "default_claude_max_20x",
+        },
+    });
+    parts
+        .store
+        .set_profile(
+            "business",
+            &ultra_document.to_string(),
+            &SubscriptionRow {
+                plan: Some("max".into()),
+                tier: Some("default_claude_max_20x".into()),
+                since: None,
+                trial_ends_at: None,
+            },
+        )
+        .unwrap();
+    let ultra = json(get(&parts.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        ultra["profile"]["plan_display_name"].as_str(),
+        Some("Ultra"),
+        "the upstream's own name of the plan, read off the stored document as it is: {ultra}"
     );
 }
 

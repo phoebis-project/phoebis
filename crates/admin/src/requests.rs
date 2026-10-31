@@ -15,13 +15,13 @@ use phoebis_ledger::{
     LiveKeys, PlanTables, PriceRevisions, RequestFilter, RequestRecord, Speed, WindowShares,
     SHARE_REASON_CLIENT_CLASSIFIER,
 };
-use phoebis_routing::PinUsage;
+use phoebis_routing::{PinUsage, UtilizationSample};
 use serde_json::Value;
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
 use crate::openapi::{ErrorBody, LedgerFailure};
-use crate::routes::failure;
+use crate::routes::{failure, reported_samples, windows_lacked};
 use crate::AdminState;
 
 const DEFAULT_LIMIT: usize = 50;
@@ -158,9 +158,10 @@ pub(crate) struct RequestSummary {
     /// Else an object keyed by the account's window ids, `five_hour`, `seven_day` and the model's own week where it
     /// has one, each the serving attempt's share of that window under the account tier the attempt recorded, priced
     /// at read time on the cost revision in force at the request's receipt with the peak band read at the attempt's
-    /// finish, or null where the account tier has no capacity on that window or the model has no weight there. An
-    /// empty object for an attempt that recorded no account tier. A free call under `share_reason` lists the windows
-    /// its account tier sizes alone, each at zero.
+    /// finish, or null where the account tier has no capacity on that window or the model has no weight there.
+    /// Bounded by the serving account's shared window set as the router holds it now: a shared window the set lacks is
+    /// absent from the map, the model's own week staying. An empty object for an attempt that recorded no account
+    /// tier. A free call under `share_reason` lists the windows its account tier sizes alone, each at zero.
     pub cost_shares: Option<BTreeMap<String, Option<f64>>>,
     /// Null for a request billed in dollars, as `cost_shares`, and for a plan-funded request the cost model cannot
     /// price, a model without a weight. Else the serving attempt's usage as the share of the Pro 7-day window, the
@@ -688,6 +689,22 @@ fn plan_figures(
     })
 }
 
+/// `summary` with the shared windows its serving account's set lacks taken out of `cost_shares`, since a share of a
+/// window the account no longer has measures nothing. The stored row keeps pricing by tier, so the bound is the read's.
+fn bounded(
+    mut summary: RequestSummary,
+    reported: &BTreeMap<String, UtilizationSample>,
+) -> RequestSummary {
+    if let (Some(shares), Some(account)) =
+        (summary.cost_shares.as_mut(), summary.account_id.as_deref())
+    {
+        for window in windows_lacked(reported, account) {
+            shares.remove(window);
+        }
+    }
+    summary
+}
+
 /// `{}` for an attempt that recorded no account tier, since the burn route prices no share without one.
 fn cost_shares_json(plan: &PlanFigures) -> BTreeMap<String, Option<f64>> {
     plan.shares
@@ -995,6 +1012,7 @@ pub(crate) async fn list(
     }
     let shares = ShareContext::read(&state);
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
+    let reported = reported_samples(&state).await;
     match state
         .ledger
         .db()
@@ -1005,7 +1023,7 @@ pub(crate) async fn list(
             requests: page
                 .rows
                 .iter()
-                .map(|(r, a)| request_summary(r, a, &shares))
+                .map(|(r, a)| bounded(request_summary(r, a, &shares), &reported))
                 .collect(),
             next_cursor: page.next,
             landed_through: page.landed_through,
@@ -1030,6 +1048,7 @@ pub(crate) async fn list(
 )]
 pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     let shares = ShareContext::read(&state);
+    let reported = reported_samples(&state).await;
     let found = state
         .ledger
         .db()
@@ -1043,7 +1062,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<St
         .await;
     match found {
         Ok(Some((r, a, events))) => Json(RequestDetail {
-            request: request_summary(&r, &a, &shares),
+            request: bounded(request_summary(&r, &a, &shares), &reported),
             events: events.iter().map(event_json).collect(),
             stream_cut: stream_cut(&r.id, &events),
         })

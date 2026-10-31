@@ -11,16 +11,16 @@ use phoebis_ledger::{
     breakdown_paged, bucket_seconds, burn_groups_paged, guardrail_counts, held_series, hour_ceil,
     hour_of, hourly_window_samples, lead_over_pace, moves_by_reason_and_fit, names_one_account,
     parse_range, read_account_rollups, read_reconciliations, rewrite_series, series_paged,
-    session_burn_series, AccountRollupRow, FundingFilter, HourlyWindowSample, LedgerError,
-    LiveKeys, RequestFilter, RollupFilter, SeriesFilter, SharePricing, GROUP_BYS,
+    session_burn_series, AccountRollupRow, FundingFilter, GroupRow, HourlyWindowSample,
+    LedgerError, LiveKeys, RequestFilter, RollupFilter, SeriesFilter, SharePricing, GROUP_BYS,
 };
-use phoebis_routing::{term, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
+use phoebis_routing::{term, UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, SubscriptionTerm};
 use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, LedgerFailure, RouterUnavailable};
-use crate::routes::{failure, store_failure};
+use crate::routes::{failure, reported_samples, store_failure, windows_lacked};
 use crate::AdminState;
 
 /// `session` beside the page's group-by dimensions: only the burn answers it, from the attempts, since the hourly
@@ -230,7 +230,8 @@ pub(crate) struct BurnQuery {
     /// tokens over the range, since the hourly rollups carry no session dimension. The rest read the hourly rollups the
     /// way `breakdown` and `series` do.
     pub group_by: Option<String>,
-    /// A comma-separated list. Naming exactly one account answers `unit` and the shares under any grouping.
+    /// A comma-separated list. Naming exactly one account answers `unit` and the shares under any grouping, with
+    /// `five_hour_share` null where the account's shared window set lacks the window.
     pub accounts: Option<String>,
     /// Newline-separated patterns, each naming a group under `group_by=user_agent` as the Analytics tag describes.
     pub user_agent_groups: Option<String>,
@@ -294,9 +295,8 @@ pub(crate) fn ledger_failure(error: phoebis_ledger::LedgerError) -> Response {
 }
 
 /// The series bucketed to the range. Under `group_by=key` a point's `groups` entries carry `key` in the same form
-/// as the breakdown route's key row. Each entry carries the breakdown row's `cost_shares`, `cache_shares`,
-/// `probe_shares`, `saving_shares`, `plan_requests` and `plan_output_tokens` under the same rules, summed over the
-/// bucket's rows, and its `unpriced` and `probe_unpriced` read off the bucket's rows alone.
+/// as the breakdown route's key row. Each entry carries the breakdown row's `cost_shares`, `plan_requests` and
+/// `plan_output_tokens` under the same rules, summed over the bucket's rows.
 // `GroupRow` serializes alone, so the series does too and the test-only `SeriesTwin` carries the round trip.
 #[derive(serde::Serialize, ToSchema)]
 pub(crate) struct Series {
@@ -337,7 +337,7 @@ pub(crate) async fn series(
     let pricing = Some(SharePricing {
         tables: &state.tables,
     });
-    let points = match series_paged(
+    let mut points = match series_paged(
         state.ledger.db(),
         &filter,
         &live,
@@ -357,6 +357,10 @@ pub(crate) async fn series(
         Err(e @ LedgerError::Yaml(_)) => return failure(StatusCode::BAD_REQUEST, &e.to_string()),
         Err(e) => return ledger_failure(e),
     };
+    let reported = reported_samples(&state).await;
+    for point in &mut points {
+        bound_shares(&mut point.groups, &group_by, &filter.accounts, &reported);
+    }
     Json(Series {
         from,
         to,
@@ -406,7 +410,7 @@ pub(crate) async fn breakdown(
     let pricing = Some(SharePricing {
         tables: &state.tables,
     });
-    let rows = match breakdown_paged(
+    let mut rows = match breakdown_paged(
         state.ledger.db(),
         &filter,
         &live,
@@ -423,6 +427,12 @@ pub(crate) async fn breakdown(
         Ok(rows) => rows,
         Err(e) => return ledger_failure(e),
     };
+    bound_shares(
+        &mut rows,
+        &group_by,
+        &filter.accounts,
+        &reported_samples(&state).await,
+    );
     Json(Breakdown {
         from,
         to,
@@ -430,6 +440,31 @@ pub(crate) async fn breakdown(
         rows,
     })
     .into_response()
+}
+
+/// Takes out of each row's `cost_shares` the shared windows its one account's set lacks: the account the group key
+/// names under `group_by=account`, else the one account the filter names. The ledger prices a share by the tier each
+/// row recorded and knows no set, so the bound lands here after the pricing.
+fn bound_shares(
+    rows: &mut [GroupRow],
+    group_by: &str,
+    accounts: &[String],
+    reported: &BTreeMap<String, UtilizationSample>,
+) {
+    let one_account = names_one_account(accounts).then(|| accounts[0].as_str());
+    for row in rows {
+        let account = if group_by == "account" {
+            Some(row.key.as_str())
+        } else {
+            one_account
+        };
+        let (Some(account), Some(shares)) = (account, row.cost_shares.as_mut()) else {
+            continue;
+        };
+        for window in windows_lacked(reported, account) {
+            shares.shift_remove(window);
+        }
+    }
 }
 
 /// One row per budgeted period of a pool member.
@@ -861,7 +896,8 @@ pub(crate) struct BurnPoint {
     /// the window, not a percentage. Null under every grouping but `account` unless the `accounts` filter names
     /// exactly one account, for an API key account, one whose tier is unknown, a bucket with no row the cost model
     /// prices, such as an idle hour, or a bucket holding a row the cost model cannot price (a model without a weight,
-    /// or a tier it has no capacity for on that window), so a partial figure never reads as the bucket's share.
+    /// or a tier it has no capacity for on that window), so a partial figure never reads as the bucket's share. Null
+    /// as well where the account's shared window set lacks the window.
     pub five_hour_share: Option<f64>,
     /// The same tokens over the 7-day window, weighed by the week's own band factor, 1 in the shipped model. Null
     /// in the same cases.
@@ -968,6 +1004,7 @@ pub(crate) async fn burn(
         Err(e) => return ledger_failure(e),
     };
     let snapshot = state.router.snapshot();
+    let reported = reported_samples(&state).await;
     let points = series
         .into_iter()
         .flat_map(|(group, points)| {
@@ -987,12 +1024,16 @@ pub(crate) async fn burn(
                     AccountKind::ApiKey => "usd",
                 })
             });
+            // The ledger prices the share by the tier each row recorded, so a 5-hour window the account's set no
+            // longer holds is taken out here.
+            let five_hour_lacked = account
+                .is_some_and(|account| windows_lacked(&reported, account).contains(&FIVE_HOUR));
             points.into_iter().map(move |p| BurnPoint {
                 at: p.at,
                 group: group.clone(),
                 unit: unit.map(String::from),
                 usd: p.usd,
-                five_hour_share: p.five_hour_share,
+                five_hour_share: p.five_hour_share.filter(|_| !five_hour_lacked),
                 seven_day_share: p.seven_day_share,
                 model_week_share: p.model_week_share,
                 equivalent: p.equivalent,

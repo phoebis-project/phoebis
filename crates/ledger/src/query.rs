@@ -1879,8 +1879,6 @@ pub struct GroupRow {
     /// group whose profile was not read, the rows folded before the tier was recorded) and wherever the read's
     /// groups do not each hold one account's rows.
     pub cost_shares: Option<IndexMap<&'static str, f64>>,
-    pub cache_shares: Option<IndexMap<&'static str, CacheShare>>,
-    pub probe_shares: Option<IndexMap<&'static str, ProbeShare>>,
     /// The plan-funded requests and output tokens the shares and the equivalent are summed over, the denominators
     /// of a figure per request and per 1k output tokens. Answered under every grouping.
     pub plan_requests: Option<u64>,
@@ -1896,9 +1894,6 @@ pub struct GroupRow {
     /// The kept-warm requests' saving, gross of the probes: the write each count avoided at its TTL's rate less the
     /// read it paid, summed over the group's rows.
     pub saving_usd: f64,
-    /// The saving as a share of the account tier's windows, under the rules `probe_shares` follows (the account
-    /// grouping, or the one named account), else `None`.
-    pub saving_shares: Option<IndexMap<&'static str, f64>>,
     /// The saving in the Pro-week figure, under every grouping, `None` where a kept-warm count priced nothing.
     pub saving_equivalent: Option<f64>,
     /// The dollars of the billed rows alone (`fast`, `overage`, `billed`).
@@ -2210,7 +2205,7 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         plan,
         ..
     } = group;
-    let shares = shares.map_or_else(GroupShares::default, ShareSums::finish);
+    let cost_shares = shares.map(ShareSums::finish);
     let equivalent = plan.equivalent.finish(plan.split);
     let expired = sum
         .cache_miss_reasons
@@ -2292,16 +2287,13 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         wasted_probes: probes.wasted_probes,
         wasted_probe_usd: dollars.wasted_usd,
         wasted_probe_reasons: probes.wasted_probe_reasons.clone(),
-        cost_shares: shares.cost_shares,
-        cache_shares: shares.cache_shares,
-        probe_shares: shares.probe_shares,
+        cost_shares,
         plan_requests: Some(plan.requests),
         plan_output_tokens: Some(plan.output_tokens),
         cost_equivalent: equivalent.cost,
         cache_equivalent: equivalent.cache,
         probe_equivalent: equivalent.probe,
         saving_usd: dollars.saving_usd,
-        saving_shares: shares.saving_shares,
         saving_equivalent: equivalent.saving,
         billed_usd: dollars.billed.total(),
         billed: cost_split_json(&dollars.billed),
@@ -2326,24 +2318,6 @@ impl WindowSum {
     }
 }
 
-/// The read and write halves of one window's cache share, latched together: both are priced under the one tier,
-/// model and hour, so neither can be unpriced without the other.
-#[derive(Default)]
-struct CacheSum {
-    read: f64,
-    write: f64,
-    unpriced: bool,
-}
-
-/// The four share members of a `GroupRow`, folded from a group's `ShareSums` or all `None`.
-#[derive(Default)]
-struct GroupShares {
-    cost_shares: Option<IndexMap<&'static str, f64>>,
-    cache_shares: Option<IndexMap<&'static str, CacheShare>>,
-    probe_shares: Option<IndexMap<&'static str, ProbeShare>>,
-    saving_shares: Option<IndexMap<&'static str, f64>>,
-}
-
 /// The five equivalent members of a `GroupRow`, folded from a group's `EquivalentSums` and its split.
 struct GroupEquivalent {
     cost: Option<f64>,
@@ -2359,24 +2333,12 @@ struct GroupEquivalent {
 #[derive(Default)]
 struct ShareSums {
     cost: IndexMap<&'static str, WindowSum>,
-    cache: IndexMap<&'static str, CacheSum>,
-    probe_cost: IndexMap<&'static str, WindowSum>,
-    /// The wasted probes' own counts priced on each window. A settlement files under the funding its probe's own
-    /// row took, so an overage probe's waste files under `overage`, a fast answer's under `fast`, and neither
-    /// reaches the plan's windows.
-    wasted: IndexMap<&'static str, WindowSum>,
-    /// The wasted probes the group's plan-funded rows count: while none is recorded, `ProbeShare.wasted` reads `None`
-    /// rather than a zero no settlement stands behind.
-    plan_wasted_probes: u64,
-    /// The kept-warm counts' saving on each window, the write they avoided less the read they paid, both halves
-    /// priced under the one tier, model and hour as the cache halves are.
-    saving: IndexMap<&'static str, WindowSum>,
 }
 
 impl ShareSums {
-    /// Folds one plan-funded row in: the request side's shares when `counted`, as the request dollars take the row,
-    /// and the probe cost when the row is a probe's, each window priced at the row's own hour under `tier` and the
-    /// regime the row's `client` names, so a group that mixes clients prices each row under its own.
+    /// Folds one plan-funded row in when `counted`, as the request dollars take the row, each window priced at the
+    /// row's own hour under `tier` and the regime the row's `client` names, so a group that mixes clients prices each
+    /// row under its own.
     fn add(&mut self, row: &RollupRow, tier: &str, tables: &PlanTables, counted: bool) {
         let free = row.classifier == Classifier::Client.as_str();
         self.add_priced(row, counted, |usage| {
@@ -2397,7 +2359,7 @@ impl ShareSums {
         });
     }
 
-    /// `add` with the pricer passed in, so a test can count the pricings a row costs.
+    /// `add` with the pricer passed in.
     fn add_priced(
         &mut self,
         row: &RollupRow,
@@ -2405,129 +2367,23 @@ impl ShareSums {
         price: impl Fn(PinUsage) -> WindowShares,
     ) {
         let usage = row.usage();
-        if row.kind == PROBE_KIND {
-            self.plan_wasted_probes += row.wasted_probes;
-            let wasted = row.wasted_usage();
-            if tokens_of(wasted) > 0 {
-                for (window, share) in price(wasted) {
-                    self.wasted.entry(window).or_default().add(share);
-                }
-            }
-        }
-        // Priced ahead of the return below: a credit's row carries no request token, since it keys the reserved agent,
-        // class and effort apart from its request's own row.
-        let kept = row.kept_warm_usage();
-        if tokens_of(kept) > 0 {
-            let read = price(PinUsage {
-                cache_read: kept.cache_read,
-                ..PinUsage::default()
-            });
-            let write = price(PinUsage {
-                write_5m: kept.write_5m,
-                write_1h: kept.write_1h,
-                ..PinUsage::default()
-            });
-            for ((window, read), (_, write)) in read.into_iter().zip(write) {
-                self.saving
-                    .entry(window)
-                    .or_default()
-                    .add(read.zip(write).map(|(read, write)| write - read));
-            }
-        }
         // A failed request books a row with no token and an accounting row carries the wasted counts alone, while the
         // model refuses a model it has no weight for before it reads the usage: such a row would null a priced window
         // for a charge of nothing.
-        if tokens_of(usage) == 0 {
+        if !counted || tokens_of(usage) == 0 {
             return;
         }
-        let priced = price(usage);
-        if counted {
-            for (window, share) in &priced {
-                self.cost.entry(*window).or_default().add(*share);
-            }
-            let read = price(PinUsage {
-                cache_read: usage.cache_read,
-                ..PinUsage::default()
-            });
-            let write = price(PinUsage {
-                write_5m: usage.write_5m,
-                write_1h: usage.write_1h,
-                ..PinUsage::default()
-            });
-            for ((window, read), (_, write)) in read.into_iter().zip(write) {
-                let sum = self.cache.entry(window).or_default();
-                match (read, write) {
-                    (Some(read), Some(write)) => {
-                        sum.read += read;
-                        sum.write += write;
-                    }
-                    _ => sum.unpriced = true,
-                }
-            }
-        }
-        if row.kind == "probe" {
-            for (window, share) in priced {
-                self.probe_cost.entry(window).or_default().add(share);
-            }
+        for (window, share) in price(usage) {
+            self.cost.entry(window).or_default().add(share);
         }
     }
 
-    fn finish(self) -> GroupShares {
-        let probed = self.plan_wasted_probes > 0;
-        let wasted = self.wasted;
-        // A window no wasted count reached wasted nothing on it, and one a wasted count could not be priced on reads
-        // `None`, as a latched window does.
-        let wasted_on = |window: &str| match wasted.get(window) {
-            None => Some(0.0),
-            Some(sum) if sum.unpriced => None,
-            Some(sum) => Some(sum.sum),
-        };
-        GroupShares {
-            cost_shares: Some(
-                self.cost
-                    .into_iter()
-                    .filter(|(_, s)| !s.unpriced)
-                    .map(|(w, s)| (w, s.sum))
-                    .collect(),
-            ),
-            cache_shares: Some(
-                self.cache
-                    .into_iter()
-                    .filter(|(_, s)| !s.unpriced)
-                    .map(|(w, s)| {
-                        (
-                            w,
-                            CacheShare {
-                                read: s.read,
-                                write: s.write,
-                            },
-                        )
-                    })
-                    .collect(),
-            ),
-            probe_shares: Some(
-                self.probe_cost
-                    .into_iter()
-                    .filter(|(_, s)| !s.unpriced)
-                    .map(|(w, s)| {
-                        (
-                            w,
-                            ProbeShare {
-                                cost: s.sum,
-                                wasted: if probed { wasted_on(w) } else { None },
-                            },
-                        )
-                    })
-                    .collect(),
-            ),
-            saving_shares: Some(
-                self.saving
-                    .into_iter()
-                    .filter(|(_, s)| !s.unpriced)
-                    .map(|(w, s)| (w, s.sum))
-                    .collect(),
-            ),
-        }
+    fn finish(self) -> IndexMap<&'static str, f64> {
+        self.cost
+            .into_iter()
+            .filter(|(_, s)| !s.unpriced)
+            .map(|(w, s)| (w, s.sum))
+            .collect()
     }
 }
 
@@ -5107,52 +4963,6 @@ mod tests {
     /// 2026-01-15 00:00 UTC in seconds, inside the test cost model's effective range.
     const HOUR: i64 = 1_768_435_200;
     const TIER: &str = "default_claude_max_20x";
-
-    /// A counted probe row is one usage for both sides, so it is priced once and the request side's cost and the
-    /// probe side's cost read the same shares.
-    #[test]
-    fn a_counted_probe_row_is_priced_once_for_its_cost_and_its_probe_cost() {
-        let tables = crate::test_tables::subscription_costs();
-        let model = "claude-sonnet-5-5";
-        let mut row = RollupRow::key(
-            HOUR, "k", 0, "p", "a", model, "probe", "-", "-", "-", "-", "standard", "plan",
-            "standard", "-", "-",
-        );
-        row.requests = 1;
-        row.input_tokens = 1_000;
-        row.output_tokens = 100;
-        let usage = PinUsage {
-            input: 1_000,
-            output: 100,
-            ..PinUsage::default()
-        };
-        let whole = std::cell::Cell::new(0);
-        let mut sums = ShareSums::default();
-        sums.add_priced(&row, true, |priced| {
-            if priced == usage {
-                whole.set(whole.get() + 1);
-            }
-            let entrypoint = entrypoint_of_client(&row.client);
-            price_shares(
-                &tables,
-                entrypoint,
-                TIER,
-                model,
-                priced,
-                HOUR * 1_000,
-                HOUR * 1_000,
-            )
-        });
-        assert_eq!(whole.get(), 1, "the row's usage is priced once");
-        let sums_of = |windows: &IndexMap<&'static str, WindowSum>| {
-            windows
-                .iter()
-                .map(|(window, sum)| (*window, sum.sum, sum.unpriced))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(sums_of(&sums.cost), sums_of(&sums.probe_cost));
-        assert_eq!(sums.cost.len(), 2, "both shared windows priced");
-    }
 
     /// A plan row's figure over its whole usage is the one `price_row` answered on its counts, so the group's sums
     /// price only its cache halves again.

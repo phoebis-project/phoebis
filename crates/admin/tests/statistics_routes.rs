@@ -1498,7 +1498,7 @@ async fn a_plan_request_on_a_model_the_cost_model_does_not_weight_reads_a_null_f
                 .is_some(),
         "the shipped cost model has no weight for Opus 4.7 and weighs a model of its model tier"
     );
-    // The landing records the account's Max 20x tier on each attempt. One request on the plan, one answered in
+    // The landing records the account's Ultra tier on each attempt. One request on the plan, one answered in
     // overage.
     set_max_20x(&parts).await;
     let plan = record("opus-plan", now - HOUR, "claude-opus-4-7", "s0");
@@ -1706,7 +1706,7 @@ async fn the_sessions_route_prices_from_the_snapshots_tier_so_a_failed_store_tie
         .unwrap();
     let parts = common::admin_parts_full_on(store).await;
     let cookie = login(&parts.app, "admin-secret").await;
-    // The snapshot takes Max 20x before the column goes, so the pin's zero burn reads a share of 0, where an account
+    // The snapshot takes Ultra before the column goes, so the pin's zero burn reads a share of 0, where an account
     // with no tier reads null.
     set_max_20x(&parts).await;
     // Every store read of the tier names the column, so it fails from here on.
@@ -1729,7 +1729,7 @@ async fn the_sessions_route_prices_from_the_snapshots_tier_so_a_failed_store_tie
     assert_eq!(
         (&row["burn_unit"], &row["burn"]),
         (&serde_json::json!("window_share"), &serde_json::json!(0.0)),
-        "the pin prices as a share of the snapshot's Max 20x window: {row}"
+        "the pin prices as a share of the snapshot's Ultra window: {row}"
     );
 }
 
@@ -1754,7 +1754,7 @@ fn null_field(point: &serde_json::Value, field: &str) -> bool {
     point.get(field) == Some(&serde_json::Value::Null)
 }
 
-/// Stores the Max 20x tier on `business`, as a profile read does, and reloads the router, whose registry snapshot the
+/// Stores the Ultra tier on `business`, as a profile read does, and reloads the router, whose registry snapshot the
 /// landing records each attempt's tier from: a row landed before the reload keeps the tier it recorded.
 async fn set_max_20x(parts: &common::Full) {
     parts
@@ -1858,7 +1858,7 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     let five_hour = share(phoebis_routing::FIVE_HOUR);
     assert!(
         (point["five_hour_share"].as_f64().unwrap() - five_hour).abs() < 1e-9,
-        "a million Opus 5.5 input tokens read the model's 5-hour share on Max 20x: {point} against {five_hour}"
+        "a million Opus 5.5 input tokens read the model's 5-hour share on Ultra: {point} against {five_hour}"
     );
     let seven_day = share(phoebis_routing::SEVEN_DAY);
     assert!(
@@ -2724,7 +2724,7 @@ async fn the_unused_allowance_route_answers_each_resets_plan_and_tier_and_null_o
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
     const DAY: i64 = 24 * HOUR;
-    // The account holds Max 20x now, and the week before last ran under Max 5x.
+    // The account holds Ultra now, and the week before last ran under Max 5x.
     set_max_20x(&parts).await;
     let end = now - DAY;
     parts
@@ -3342,22 +3342,10 @@ fn request_counts(body: &serde_json::Value) -> Vec<(String, u64)> {
         .collect()
 }
 
-const SHARE_MEMBERS: [&str; 6] = [
-    "cache_shares",
-    "cost_shares",
-    "plan_output_tokens",
-    "plan_requests",
-    "probe_shares",
-    "saving_shares",
-];
+const SHARE_MEMBERS: [&str; 3] = ["cost_shares", "plan_output_tokens", "plan_requests"];
 
-/// The share members alone: the plan-funded counts beside them answer under every grouping.
-const SHARES: [&str; 4] = [
-    "cache_shares",
-    "cost_shares",
-    "probe_shares",
-    "saving_shares",
-];
+/// The share member alone: the plan-funded counts beside it answer under every grouping.
+const SHARES: [&str; 1] = ["cost_shares"];
 
 fn positive(v: &serde_json::Value) -> bool {
     v.as_f64().is_some_and(|x| x > 0.0)
@@ -3384,15 +3372,6 @@ async fn the_breakdown_answers_shares_for_an_oauth_group_under_the_account_group
                 .is_some_and(|m| m.len() == 2),
         "a Sonnet account prices the two shared windows and no week of its own: {business}"
     );
-    assert!(
-        positive(&business["cache_shares"]["five_hour"]["read"]),
-        "the cached row's read share: {business}"
-    );
-    assert!(
-        positive(&business["probe_shares"]["five_hour"]["cost"])
-            && business["probe_shares"]["five_hour"]["wasted"].is_null(),
-        "the probe's share with no waste recorded: {business}"
-    );
     assert_eq!(
         business["kept_warm"].as_object().map(|kept| kept
             .keys()
@@ -3409,10 +3388,8 @@ async fn the_breakdown_answers_shares_for_an_oauth_group_under_the_account_group
         "the kept-warm requests and their tokens per TTL, each beside its plan-funded part, with no sum: {business}"
     );
     assert!(
-        business["saving_usd"].is_number()
-            && business["saving_shares"].is_object()
-            && business["saving_equivalent"].is_number(),
-        "the saving's three members beside the probe cost: {business}"
+        business["saving_usd"].is_number() && business["saving_equivalent"].is_number(),
+        "the saving's two members beside the probe cost: {business}"
     );
     assert_eq!(
         (&business["plan_requests"], &business["plan_output_tokens"]),

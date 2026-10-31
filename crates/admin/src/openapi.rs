@@ -601,14 +601,10 @@ pub(crate) struct BreakdownRow {
     /// the model's own week where the model has one), the probe rows joining under the `include_probes` rule, and a
     /// window absent where a row could not be priced on it. Null for a group whose rows recorded no tier (an API key
     /// account's group, a subscription account whose profile was not yet read), and under every grouping but
-    /// `account` without such a filter, since shares of different accounts' windows do not add.
+    /// `account` without such a filter, since shares of different accounts' windows do not add. Bounded by the
+    /// account's shared window set as the router holds it now: a shared window the set lacks is absent from the map,
+    /// the model's own week staying.
     pub cost_shares: Option<BTreeMap<String, f64>>,
-    /// Each `read` and `write`, keyed and summed as `cost_shares` and null under the same rule, the probe rows
-    /// joining under the `include_probes` rule.
-    pub cache_shares: Option<BTreeMap<String, CacheShareView>>,
-    /// Each `cost` and `wasted`, keyed and summed as `cost_shares` and null under the same rule, the probe rows
-    /// always joining.
-    pub probe_shares: Option<BTreeMap<String, ProbeShareView>>,
     /// The plan-funded requests the shares and the equivalent were summed over, under every grouping.
     pub plan_requests: Option<u64>,
     /// The plan-funded output tokens the shares and the equivalent were summed over, under every grouping.
@@ -625,9 +621,6 @@ pub(crate) struct BreakdownRow {
     /// The kept-warm requests' saving, gross of the probes: the write each count avoided at its TTL's rate less the
     /// read it paid, summed over the group's rows.
     pub saving_usd: f64,
-    /// The saving as a share of the account tier's windows, keyed and summed as `cost_shares` and null under the same
-    /// rule.
-    pub saving_shares: Option<BTreeMap<String, f64>>,
     /// The saving in the Pro-week figure, under every grouping, null where a kept-warm count priced nothing.
     pub saving_equivalent: Option<f64>,
     /// The dollars of the billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part of
@@ -707,24 +700,6 @@ pub(crate) struct KeptWarmView {
     pub plan_tokens_5m: u64,
     /// Their cache reads, a part of `tokens_1h`.
     pub plan_tokens_1h: u64,
-}
-
-/// The read and write halves of a window's cache share, as fractions of the window.
-#[derive(Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct CacheShareView {
-    pub read: f64,
-    pub write: f64,
-}
-
-/// The probe rows' share of a window and the wasted probes' part of it.
-#[derive(Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ProbeShareView {
-    pub cost: f64,
-    /// The wasted probes' part of the probe share, by the group's wasted-probe dollars over its plan-funded
-    /// probe-cost dollars, null while those dollars are zero.
-    pub wasted: Option<f64>,
 }
 
 /// The read and write halves of a group's cache in the Pro-week figure.
@@ -1030,9 +1005,9 @@ pub(crate) mod round_trip {
 #[cfg(test)]
 mod tests {
     use super::round_trip::{round_trips, round_trips_source};
-    use super::{ModelTtlView, OverrideView, ProbeShareView, TypeOverrideView};
+    use super::{ModelTtlView, OverrideView, TypeOverrideView};
     use indexmap::IndexMap;
-    use phoebis_ledger::{Override, ProbeShare, TypeOverride};
+    use phoebis_ledger::{Override, TypeOverride};
     use phoebis_relay::{CacheTtl, ModelTtl};
 
     fn every_cell() -> TypeOverride {
@@ -1093,14 +1068,6 @@ mod tests {
             "the five cells of TypeOverride, each set here"
         );
         round_trips_source::<_, TypeOverrideView>(every_cell());
-    }
-
-    #[test]
-    fn a_probe_share_with_every_field_set_round_trips_through_its_mirror() {
-        round_trips_source::<_, ProbeShareView>(ProbeShare {
-            cost: 0.25,
-            wasted: Some(0.4),
-        });
     }
 
     #[test]

@@ -4510,11 +4510,12 @@ async fn a_usage_based_seats_kept_warm_credit_files_under_no_tier_as_its_request
 }
 
 /// A credit files beside its request's own row: a Haiku 5.5 request in January whose prompt passes that month's
-/// long-context threshold, kept warm on a Max 20x account, keys the credit under `long` and the account's tier, so the
-/// saving prices at the long-context cells and reaches the account's window shares. The test cost model weighs no
-/// Haiku 5.5, and a model without a weight prices nothing, so the case weighs it as the model weighs Haiku 4.5.
+/// long-context threshold, kept warm on an Ultra account, keys the credit under `long` and the account's tier, so the
+/// saving prices at the long-context cells and reaches the account's saving in the Pro-week figure. The test cost
+/// model weighs no Haiku 5.5, and a model without a weight prices nothing, so the case weighs it as the model weighs
+/// Haiku 4.5.
 #[tokio::test]
-async fn a_credit_keys_its_requests_tier_and_band_and_reaches_the_saving_shares() {
+async fn a_credit_keys_its_requests_tier_and_band_and_reaches_the_saving_figure() {
     const HAIKU: &str = "claude-haiku-5-5";
     let costs = phoebis_ledger::test_tables::SUBSCRIPTION_COSTS
         .replace(
@@ -4590,8 +4591,8 @@ async fn a_credit_keys_its_requests_tier_and_band_and_reaches_the_saving_shares(
     let saving = groups
         .iter()
         .find(|group| group.key == "o")
-        .and_then(|group| group.saving_shares.clone())
-        .expect("the account grouping answers the account's saving shares");
+        .and_then(|group| group.saving_equivalent)
+        .expect("the account grouping answers the account's saving in the Pro-week figure");
     let key = phoebis_ledger::RowKey {
         model: &credit.canonical_model,
         speed: phoebis_ledger::Speed::of(Some(credit.speed.as_str())),
@@ -4605,31 +4606,25 @@ async fn a_credit_keys_its_requests_tier_and_band_and_reaches_the_saving_shares(
         band_at: None,
         now: r.now(),
     };
-    let shares = |usage: PinUsage| {
+    let figure = |usage: PinUsage| {
         phoebis_ledger::price_row(&r.pricing, &r.tables, &key, usage)
-            .shares
-            .expect("the tier's windows price the credit")
+            .equivalent
+            .expect("the Pro week prices the credit")
     };
-    let write = shares(PinUsage {
+    let write = figure(PinUsage {
         write_5m: credit.kept_warm_5m_tokens,
         write_1h: credit.kept_warm_1h_tokens,
         ..PinUsage::default()
     });
-    let read = shares(PinUsage {
+    let read = figure(PinUsage {
         cache_read: credit.kept_warm_5m_tokens + credit.kept_warm_1h_tokens,
         ..PinUsage::default()
     });
-    assert!(!saving.is_empty(), "the credit priced on the windows");
-    for (window, saved) in &saving {
-        let (Some(write), Some(read)) = (write[window], read[window]) else {
-            panic!("{window} priced both halves");
-        };
-        assert_eq!(
-            *saved,
-            write - read,
-            "{window}: the write's share less the read's at the credit's own key"
-        );
-    }
+    assert_eq!(
+        saving,
+        write - read,
+        "the write's figure less the read's at the credit's own key"
+    );
 }
 
 /// A credit keys the hour and the band its request's own row keys, read at the relay's receipt: a Haiku 5.5 request

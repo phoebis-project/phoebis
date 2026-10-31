@@ -365,8 +365,6 @@
         "wasted_probe_usd": 0.0,
         "wasted_probe_reasons": {},
         "cost_shares": null,
-        "cache_shares": null,
-        "probe_shares": null,
         "plan_requests": 8,
         "plan_output_tokens": 800,
         "cost_equivalent": null,
@@ -376,7 +374,6 @@
           "wasted": 0.0
         },
         "saving_usd": 0.0,
-        "saving_shares": null,
         "saving_equivalent": 0.0,
         "billed_usd": 0.01425,
         "billed": {
@@ -741,8 +738,6 @@
         "wasted_probe_usd": 0.0,
         "wasted_probe_reasons": {},
         "cost_shares": null,
-        "cache_shares": null,
-        "probe_shares": null,
         "plan_requests": 1,
         "plan_output_tokens": 100,
         "cost_equivalent": 0.0000235,
@@ -755,7 +750,6 @@
           "wasted": 0.0
         },
         "saving_usd": 0.0,
-        "saving_shares": null,
         "saving_equivalent": 0.0,
         "billed_usd": 0.0,
         "billed": {

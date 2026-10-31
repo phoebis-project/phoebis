@@ -5180,7 +5180,7 @@ fn name_the_tier(store: &phoebis_store::Store, account: &str, tier: &str) {
         .unwrap();
 }
 
-/// The pool `main` over `business` (subscription, Max 20x) and `direct` (api_key) behind key `desktop`, seeded
+/// The pool `main` over `business` (subscription, Ultra) and `direct` (api_key) behind key `desktop`, seeded
 /// through one harness with `pins` and handed to a second one: the router task loads its pins at spawn.
 async fn sessions_harness_with(pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>) -> common::Full {
     sessions_harness_priced(phoebis_ledger::PriceRevisions::shipped(), pins).await
@@ -5271,7 +5271,7 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = |sessions: &serde_json::Value, session: &str| session_row(sessions, session);
     // The banded copy priced at the fixed clock, which the peak band never covers, so the shipped model's plain
-    // Opus 5.5 share on Max 20x; the plain copy at the shipped Opus 5 input price.
+    // Opus 5.5 share on `default_claude_max_20x`, and the plain copy at the shipped Opus 5 input price.
     let share_per_hour = phoebis_ledger::PlanTables::shipped()
         .share_at(
             phoebis_routing::FIVE_HOUR,
@@ -5325,11 +5325,11 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
     );
     let equivalent_per_hour = phoebis_ledger::PlanTables::shipped()
         .equivalent_at(
-            phoebis_routing::FIVE_HOUR,
+            phoebis_routing::SEVEN_DAY,
             None,
             "claude-opus-5-5",
             phoebis_routing::PinUsage {
-                input: 145,
+                input: 100,
                 ..phoebis_routing::PinUsage::default()
             },
             now,
@@ -5341,7 +5341,7 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
     let (s1, s2) = (row(&sessions, "s1"), row(&sessions, "s2"));
     assert!(
         close(s1["burn_equivalent"].as_f64(), equivalent_per_hour) && s1.get("estimated").is_none(),
-        "the plan pin's banded copy as its 20x 5-hour equivalent per hour, on a weighted model: {s1}"
+        "the plan pin's plain copy as its Pro-week figure per hour, on a weighted model: {s1}"
     );
     assert_eq!(
         (s2.get("burn_equivalent"), s2.get("estimated")),
@@ -5600,14 +5600,14 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
     let (burn, unit) = burn_of(&renewed, "s1");
     assert!(
         close(burn, on_max_20x) && unit.as_deref() == Some("window_share"),
-        "a million Opus 5.5 input tokens over the window, as a share of Max 20x's 5-hour window per hour: {:?} \
+        "a million Opus 5.5 input tokens over the window, as a share of Ultra's 5-hour window per hour: {:?} \
          against {on_max_20x}",
         (burn, unit)
     );
-    // The 20x equivalent reads no account tier, so the same figure on every tier the account moves to below.
+    // The Pro-week figure reads no account tier, so the same figure on every tier the account moves to below.
     let equivalent = tables
         .equivalent_at(
-            phoebis_routing::FIVE_HOUR,
+            phoebis_routing::SEVEN_DAY,
             None,
             "claude-opus-5-5",
             million,
@@ -5625,10 +5625,10 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
             row.get("estimated").cloned(),
         )
     };
-    let (on_20x, estimated) = equivalent_of(&renewed);
+    let (on_ultra, estimated) = equivalent_of(&renewed);
     assert!(
-        close(on_20x, equivalent) && estimated.is_none(),
-        "the burn as the 20x 5-hour equivalent per hour: {on_20x:?} against {equivalent}"
+        close(on_ultra, equivalent) && estimated.is_none(),
+        "the burn as the Pro-week figure per hour: {on_ultra:?} against {equivalent}"
     );
     name_the_tier(&parts.store, "business", "default_claude_ai");
     parts.router.reload().await.unwrap();
@@ -5671,7 +5671,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
     );
     assert!(
         close(equivalent_of(&on_team).0, equivalent),
-        "while the 20x equivalent still reads on a tier the cost model does not size: {:?} against {equivalent}",
+        "while the Pro-week figure still reads on a tier the cost model does not size: {:?} against {equivalent}",
         equivalent_of(&on_team)
     );
 }
@@ -6468,6 +6468,383 @@ async fn a_pin_on_a_model_without_a_weight_reads_a_null_burn() {
         (Some(&serde_json::Value::Null), None),
         "the dollars are the price table's own: {row}"
     );
+}
+
+/// A cost model whose `default_claude_max_20x` tier holds 20 times Pro's 5-hour window and 40 times Pro's week, so a
+/// burn read on one window through the other window's tier factor reads apart from the right figure.
+const UNEQUAL_FACTORS_COSTS: &str = "\
+unit: {tier: default_claude_ai, window: seven_day}
+revisions:
+  - effective: 2026-01-01
+    capacity:
+      default_claude_ai:      {five_hour: 5000000, seven_day: 50000000}
+      default_claude_max_20x: {five_hour: 100000000, seven_day: 2000000000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 1, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-opus-5-5: 2
+    model_windows: {}
+    overrides: {}
+    tier_order: [opus]
+    model_tier:
+      claude-opus-5-5: opus
+";
+
+/// `sessions_harness_with` reading the subscription cost model `costs` rather than the shipped one.
+async fn sessions_harness_costed(
+    costs: phoebis_ledger::PlanTables,
+    pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
+) -> common::Full {
+    let seed = sessions_seed(pins).await;
+    common::admin_parts_full_on_costed(seed.store.clone(), costs).await
+}
+
+#[tokio::test]
+async fn a_pin_whose_account_lacks_the_five_hour_window_reads_its_burn_on_the_week() {
+    use common::{get, json, login};
+    use phoebis_routing::{PinUsage, UtilizationSample, WindowReading, WindowSource};
+    use phoebis_routing::{FIVE_HOUR, SEVEN_DAY};
+    let now = common::NOW;
+    let tables = phoebis_ledger::PlanTables {
+        revisions: phoebis_ledger::CostRevisions::from_yaml(UNEQUAL_FACTORS_COSTS)
+            .expect("the cost model with unequal factors parses"),
+        path: None,
+        source: "test".to_string(),
+    };
+    // One hundred input tokens a second plain and 145 banded: the 5-hour window reads the banded copy, the week the
+    // plain one.
+    let parts = sessions_harness_costed(tables.clone(), |generation| {
+        vec![phoebis_store::PinRow {
+            model: "claude-opus-5-5".into(),
+            ..burning_opus_pin("s1", "business", generation, now, 100.0, 145.0)
+        }]
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let input = |input: u64| PinUsage {
+        input,
+        ..PinUsage::default()
+    };
+    let share_per_hour = |window: &str, usage: PinUsage| {
+        tables
+            .share_at(
+                window,
+                None,
+                "default_claude_max_20x",
+                "claude-opus-5-5",
+                usage,
+                now,
+            )
+            .unwrap()
+            * 3_600.0
+    };
+    let pro_week_per_hour = tables
+        .equivalent_at(
+            SEVEN_DAY,
+            None,
+            "claude-opus-5-5",
+            input(100),
+            now,
+            now,
+            now,
+        )
+        .unwrap()
+        * 3_600.0;
+    let read = |sessions: &serde_json::Value| {
+        let row = session_row(sessions, "s1");
+        (
+            row["burn_window"].as_str().map(String::from),
+            row["burn"].as_f64(),
+            row["burn_equivalent"].as_f64(),
+        )
+    };
+    let five_hour_burn = share_per_hour(FIVE_HOUR, input(145));
+    let (window, burn, equivalent) =
+        read(&json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await);
+    assert!(
+        window.as_deref() == Some(FIVE_HOUR)
+            && close(burn, five_hour_burn)
+            && close(equivalent, pro_week_per_hour),
+        "before any poll the account has both windows, so the burn reads the 5-hour window and the figure the Pro \
+         week: {:?} against {five_hour_burn} and {pro_week_per_hour}",
+        (window, burn, equivalent)
+    );
+    parts
+        .router
+        .report(phoebis_routing::Report::Sample {
+            account_id: "business".into(),
+            sample: UtilizationSample {
+                observed_at: now,
+                poll: true,
+                ..UtilizationSample::default()
+            }
+            .with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.3,
+                    reset: Some(now + 3 * 86_400_000),
+                    observed_at: now,
+                    source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
+                },
+            ),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    fake_upstream::wait_for_async(std::time::Duration::from_secs(2), || {
+        let router = parts.router.clone();
+        async move {
+            router
+                .reported_samples()
+                .await
+                .unwrap()
+                .iter()
+                .any(|(id, sample)| id == "business" && sample.polled.is_some())
+                .then_some(())
+        }
+    })
+    .await;
+    let week_burn = share_per_hour(SEVEN_DAY, input(100));
+    let (window, burn, equivalent) =
+        read(&json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await);
+    assert!(
+        window.as_deref() == Some(SEVEN_DAY)
+            && close(burn, week_burn)
+            && close(equivalent, pro_week_per_hour),
+        "a poll that carried the week alone moves the burn to the plain copy's share of the account's own week: \
+         {:?} against {week_burn} and {pro_week_per_hour}",
+        (window, burn, equivalent)
+    );
+}
+
+/// A clean poll of `business` at `observed_at` carrying `windows`, each at a third of its allowance.
+fn poll_of(windows: &[&str], observed_at: i64) -> phoebis_routing::Report {
+    let mut sample = phoebis_routing::UtilizationSample {
+        observed_at,
+        poll: true,
+        ..phoebis_routing::UtilizationSample::default()
+    };
+    for window in windows {
+        sample = sample.with(
+            window,
+            phoebis_routing::WindowReading {
+                utilization: 0.3,
+                reset: Some(observed_at + 3_600_000),
+                observed_at,
+                source: phoebis_routing::WindowSource::Poll,
+                plan: None,
+                tier: None,
+            },
+        );
+    }
+    phoebis_routing::Report::Sample {
+        account_id: "business".into(),
+        sample,
+        incarnation: 1,
+        source_request_id: None,
+    }
+}
+
+/// Waits until the router holds `windows`, sorted, as `business`'s shared window set.
+async fn polled_set(router: &phoebis_routing::RouterHandle, windows: &[&str]) {
+    fake_upstream::wait_for_async(std::time::Duration::from_secs(2), || async {
+        router
+            .reported_samples()
+            .await
+            .unwrap()
+            .iter()
+            .any(|(id, sample)| {
+                id == "business"
+                    && sample.polled.as_ref().is_some_and(|set| {
+                        set.iter().map(String::as_str).eq(windows.iter().copied())
+                    })
+            })
+            .then_some(())
+    })
+    .await
+}
+
+/// Every reader that names `business` alone over request `r-fable` and its session `s1`: each share map it answers,
+/// then each burn point of the account with tokens.
+async fn named_account_reads(
+    app: &axum::Router,
+    cookie: &str,
+) -> (
+    Vec<(&'static str, serde_json::Value)>,
+    Vec<(&'static str, serde_json::Value)>,
+) {
+    use common::{get, json};
+    let read = |path: &'static str| async move { json(get(app, path, Some(cookie)).await).await };
+    let row = |body: &serde_json::Value, key: &str| {
+        body["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["key"] == key)
+            .unwrap_or_else(|| panic!("a row for {key}: {body}"))["cost_shares"]
+            .clone()
+    };
+    let burn_point = |body: &serde_json::Value, group: &str| {
+        body["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["group"] == group && p["tokens"].as_u64().is_some_and(|t| t > 0))
+            .unwrap_or_else(|| panic!("a point of {group} with tokens: {body}"))
+            .clone()
+    };
+    let list = read("/admin/requests").await;
+    let listed = list["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "r-fable")
+        .unwrap_or_else(|| panic!("the request is listed: {list}"))["cost_shares"]
+        .clone();
+    let detail = read("/admin/requests/r-fable").await;
+    let filtered =
+        read("/admin/analytics/breakdown?range=24h&group_by=model&accounts=business").await;
+    let by_account = read("/admin/analytics/breakdown?range=24h&group_by=account").await;
+    let series = read("/admin/analytics/series?range=24h&group_by=account").await;
+    let series_group = series["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|p| p["groups"].as_array().unwrap().iter())
+        .find(|g| g["key"] == "business")
+        .unwrap_or_else(|| panic!("a bucket carries business: {series}"))["cost_shares"]
+        .clone();
+    let account_burn = read("/admin/analytics/burn?range=24h").await;
+    let session_burn =
+        read("/admin/analytics/burn?range=24h&group_by=session&accounts=business").await;
+    (
+        vec![
+            ("the request list", listed),
+            (
+                "the request detail",
+                detail["request"]["cost_shares"].clone(),
+            ),
+            (
+                "the breakdown under the filter",
+                row(&filtered, "claude-fable-5-1"),
+            ),
+            (
+                "the breakdown under the account grouping",
+                row(&by_account, "business"),
+            ),
+            ("the series under the account grouping", series_group),
+        ],
+        vec![
+            (
+                "the account's burn point",
+                burn_point(&account_burn, "business"),
+            ),
+            ("the session's burn point", burn_point(&session_burn, "s1")),
+        ],
+    )
+}
+
+#[tokio::test]
+async fn a_named_accounts_shares_leave_out_the_window_its_set_lacks() {
+    use common::login;
+    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
+    let now = common::NOW;
+    let parts =
+        common::admin_parts_full_costed(phoebis_ledger::test_tables::subscription_costs()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // The landing records the attempt's tier off the router's registry snapshot, so the tier lands first.
+    name_the_tier(&parts.store, "business", "default_claude_max_20x");
+    parts.router.reload().await.unwrap();
+    // Fable carries a week of its own, which stays whatever the shared set holds.
+    let at = now - 3_600_000;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "r-fable".into(),
+            received_at: at,
+            finished_at: Some(at + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: Some("s1".into()),
+            model: "claude-fable-5-1".into(),
+            canonical_model: "claude-fable-5-1".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: "r-fable".into(),
+            attempt: 1,
+            account_id: "business".into(),
+            account_kind: "oauth".into(),
+            started_at: at,
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000),
+            output_tokens: Some(100),
+            ..Default::default()
+        }],
+        bodies: None,
+    });
+    fake_upstream::wait_for_async(std::time::Duration::from_secs(5), || async {
+        parts.db.request("r-fable").await.unwrap()
+    })
+    .await;
+    let keys = |shares: &serde_json::Value| {
+        let mut keys: Vec<String> = shares
+            .as_object()
+            .unwrap_or_else(|| panic!("a share map: {shares}"))
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    };
+    parts
+        .router
+        .report(poll_of(&["five_hour", "seven_day"], now - 60_000))
+        .await;
+    polled_set(&parts.router, &["five_hour", "seven_day"]).await;
+    let (shares, points) = named_account_reads(&parts.app, &cookie).await;
+    for (reader, map) in &shares {
+        assert_eq!(
+            keys(map),
+            ["five_hour", "seven_day", "seven_day_fable"],
+            "an account whose set holds both windows keeps its 5-hour share on {reader}: {map}"
+        );
+    }
+    for (reader, point) in &points {
+        assert!(
+            point["five_hour_share"].is_number() && point["seven_day_share"].is_number(),
+            "an account whose set holds both windows keeps its 5-hour share on {reader}: {point}"
+        );
+    }
+    parts.router.report(poll_of(&["seven_day"], now)).await;
+    polled_set(&parts.router, &["seven_day"]).await;
+    let (shares, points) = named_account_reads(&parts.app, &cookie).await;
+    for (reader, map) in &shares {
+        assert_eq!(
+            keys(map),
+            ["seven_day", "seven_day_fable"],
+            "the poll dropped the 5-hour window, so {reader} answers no 5-hour share and keeps the model week: \
+             {map}"
+        );
+    }
+    for (reader, point) in &points {
+        assert!(
+            point["five_hour_share"].is_null() && point["seven_day_share"].is_number(),
+            "the poll dropped the 5-hour window, so {reader} answers its 5-hour share null beside the week's: \
+             {point}"
+        );
+    }
 }
 
 #[tokio::test]

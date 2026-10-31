@@ -1245,7 +1245,7 @@ async fn the_account_subscription_declares_the_resolved_plan_and_its_example_rea
     assert_eq!(
         example_of(operation, &status, "account")["subscription"]["plan"],
         "max_20x",
-        "the account example reads the seed's Max 20x organization"
+        "the account example reads the seed's Ultra organization"
     );
 }
 

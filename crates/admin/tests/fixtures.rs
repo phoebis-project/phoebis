@@ -442,7 +442,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .unwrap();
     parts.store.set_profile(
         "business",
-        r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz","has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_20x","has_extra_usage_enabled":true,"subscription_created_at":"2026-03-14T10:00:00Z"}}"#,
+        r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz","has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_20x","has_extra_usage_enabled":true,"plan_display_name":"Ultra","subscription_created_at":"2026-03-14T10:00:00Z"}}"#,
         &SubscriptionRow {
             plan: Some("max".into()),
             tier: Some("default_claude_max_20x".into()),
