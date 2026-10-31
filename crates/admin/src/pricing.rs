@@ -61,7 +61,9 @@ pub struct Envelope<T: ToSchema> {
     pub revisions: Vec<Revision<T>>,
 }
 
-/// The cost model's envelope: `Envelope<T>`'s members with the file's one `unit`, which no revision's content carries.
+/// The subscription cost model's envelope: the date and source of the revision in force, the file's one `unit`,
+/// `content` the revision in force as loaded, key for key, and `revisions` every revision the file lists, ascending by
+/// date, each in the shape of `content`. No revision's content carries the unit.
 #[derive(serde::Serialize, ToSchema)]
 pub struct SubscriptionCostsEnvelope {
     /// The date of the revision in force.

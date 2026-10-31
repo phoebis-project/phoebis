@@ -1043,12 +1043,20 @@ pub struct CostRevisions {
 // `new` refuses an empty list, so a list never reads empty.
 #[allow(clippy::len_without_is_empty)]
 impl CostRevisions {
-    /// Sorts, refuses an empty list and two entries dated the same, and computes the instants. `unit` is the file's
-    /// one unit, so a caller that builds a list from loaded revisions passes the unit of the tables it copies.
+    /// Sorts, refuses an empty list and two entries dated the same, and computes the instants. Each revision takes
+    /// `unit`, the file's one unit, so the unit the envelope reports is the one every pricer reads its anchor off,
+    /// whoever builds the list.
     pub fn new(
         unit: Unit,
         revisions: Vec<SubscriptionCosts>,
     ) -> Result<CostRevisions, LedgerError> {
+        let revisions: Vec<SubscriptionCosts> = revisions
+            .into_iter()
+            .map(|revision| SubscriptionCosts {
+                unit: unit.clone(),
+                ..revision
+            })
+            .collect();
         let dates: Vec<&str> = revisions.iter().map(|r| r.effective.as_str()).collect();
         let instants = crate::pricing::sorted_instants(&dates).map_err(refuse)?;
         let (instants, revisions) = crate::pricing::by_instant(instants, revisions);

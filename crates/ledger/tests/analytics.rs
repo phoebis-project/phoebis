@@ -4989,17 +4989,20 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_
         peak.five_hour_share,
         base * factor
     );
-    // The shipped Max 20x rows hold twenty of the anchor Pro's 5-hour windows and ten of its weeks, so the equivalent
-    // of its own rows is their share times those ratios, band and all.
-    for point in [peak, off_peak] {
-        for (equivalent, share, ratio) in [
-            (point.five_hour_equivalent, point.five_hour_share, 20.0),
-            (point.seven_day_equivalent, point.seven_day_share, 10.0),
+    // The equivalent prices on the anchor tier, so a Max 20x row's equivalent is its share times Max 20x's capacity
+    // over the anchor's on the window, band and all.
+    for (point, at) in [(peak, WEEKDAY_PEAK), (off_peak, WEEKDAY_OFF_PEAK)] {
+        for (window, equivalent, share) in [
+            (FIVE_HOUR, point.five_hour_equivalent, point.five_hour_share),
+            (SEVEN_DAY, point.seven_day_equivalent, point.seven_day_share),
         ] {
+            let ratio = tables
+                .tier_factor(MAX_20X, window, None, at)
+                .expect("the tables size Max 20x");
             let want = share.unwrap() * ratio;
             assert!(
                 (equivalent.unwrap() - want).abs() <= 1e-9 * want,
-                "{point:?}"
+                "{window}: {point:?}"
             );
         }
     }
@@ -5540,16 +5543,19 @@ fn a_session_attempt_weighs_its_five_hour_share_by_the_band_at_its_completion() 
         (point.seven_day_share.unwrap() - week).abs() < 1e-6,
         "the 7-day share is priced too: {point:?} vs {week}"
     );
-    // The shipped Max 20x rows hold twenty of the anchor Pro's 5-hour windows and ten of its weeks, so the attempt's
-    // equivalent reads its share times those ratios, banded at its completion.
-    for (equivalent, share, ratio) in [
-        (point.five_hour_equivalent, point.five_hour_share, 20.0),
-        (point.seven_day_equivalent, point.seven_day_share, 10.0),
+    // The equivalent prices on the anchor tier, so the attempt's equivalent is its share times Max 20x's capacity over
+    // the anchor's on the window, banded at its completion.
+    for (window, equivalent, share) in [
+        (FIVE_HOUR, point.five_hour_equivalent, point.five_hour_share),
+        (SEVEN_DAY, point.seven_day_equivalent, point.seven_day_share),
     ] {
+        let ratio = tables
+            .tier_factor(MAX_20X, window, None, started)
+            .expect("the tables size Max 20x");
         let want = share.unwrap() * ratio;
         assert!(
             (equivalent.unwrap() - want).abs() <= 1e-9 * want,
-            "{point:?}"
+            "{window}: {point:?}"
         );
     }
 }

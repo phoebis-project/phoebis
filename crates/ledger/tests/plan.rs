@@ -502,9 +502,10 @@ fn the_tables_price_at_the_revision_in_force_at_the_instant_and_hold_the_next_on
     assert_eq!(tables.revisions.pending(OUT_OF_BAND), None);
     assert!(tables.priced(FIVE_HOUR, None, MAX_20X, OPUS, JANUARY_2026));
     assert!(tables.measured(SEVEN_DAY_FABLE, JANUARY_2026));
+    // Max 20x's 5-hour row of 100 over the anchor's 5.
     assert_eq!(
-        tables.tier_factor(PRO, FIVE_HOUR, None, JANUARY_2026),
-        Some(1.0)
+        tables.tier_factor(MAX_20X, FIVE_HOUR, None, JANUARY_2026),
+        Some(20.0)
     );
     assert_eq!(tables.band_factor(FIVE_HOUR, None, IN_BAND), 2.0);
     // The second revision's Opus 5.5 weight of 4 over the anchor's 5-hour row of 5.
