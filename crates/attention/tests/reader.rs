@@ -2356,6 +2356,36 @@ async fn a_weighted_model_and_a_billed_request_raise_no_item_and_a_model_of_no_w
 }
 
 #[tokio::test]
+async fn a_model_weighted_on_the_5_hour_window_alone_raises_its_item() {
+    // The first entry, in force at the rig's clock, weighs `claude-opus-5` on the 5-hour window alone, so its 5-hour
+    // share prices while its Pro-week figure stays null.
+    let five_hour_only = COSTS.replacen(
+        "    overrides:\n",
+        "    overrides:\n      claude-opus-5: {weight_by_window: {five_hour: 2}}\n",
+        1,
+    );
+    let rig = rig_with_tables(tables_of(&five_hour_only)).await;
+    let (attention, _arm) = rig.attention(None);
+    for record in [
+        on_model("r-five-hour", "claude-opus-5", "business", NOW, 1),
+        // Lands behind it, so the read that sees its item sees whatever the first landing recorded.
+        on_model("r-marker", "claude-sonnet-5", "business", NOW, 1),
+    ] {
+        rig.ledger.record_request(record).await;
+    }
+    let conditions = read_counting(&attention, NOW, "claude-sonnet-5", 1).await;
+    assert_eq!(
+        conditions
+            .iter()
+            .filter(|c| c.kind == Kind::ModelUnpriced)
+            .map(|c| c.subject.id.as_str())
+            .collect::<Vec<_>>(),
+        ["claude-opus-5", "claude-sonnet-5"],
+        "a weight on the 5-hour window leaves the Pro-week figure unpriced, so the model raises its item"
+    );
+}
+
+#[tokio::test]
 async fn a_held_unpriced_model_has_its_series_and_ranks_after_every_degraded_state() {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
