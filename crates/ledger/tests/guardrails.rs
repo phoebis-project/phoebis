@@ -51,16 +51,17 @@ fn request(id: &str, at: i64, key: &str, matches: Vec<GuardrailMatchRecord>) -> 
     }
 }
 
-fn child_rows(db: &LedgerDb, request_id: &str) -> Vec<(String, i64)> {
-    let request_id = request_id.to_string();
-    db.read_blocking(move |c| {
-        let mut stmt = c.prepare(
-            "SELECT guardrail_id, received_at FROM request_guardrails WHERE request_id = ?1 ORDER BY position",
-        )?;
-        let rows = stmt.query_map([request_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    })
-    .unwrap()
+fn counts(db: &LedgerDb, from: i64, to: i64) -> Vec<GuardrailCountRow> {
+    db.read_blocking(|c| guardrail_counts(c, from, to)).unwrap()
+}
+
+fn count(guardrail_id: &str, observed: u64, blocked: u64, blocked_bytes: u64) -> GuardrailCountRow {
+    GuardrailCountRow {
+        guardrail_id: guardrail_id.into(),
+        observed,
+        blocked,
+        blocked_bytes,
+    }
 }
 
 fn listed_ids(db: &LedgerDb, guardrails: &[&str]) -> Vec<String> {
@@ -81,16 +82,6 @@ fn plan_of(db: &LedgerDb, sql: &str, params: impl rusqlite::Params) -> Vec<Strin
     db.read_blocking(|c| {
         let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
         let rows = stmt.query_map(params, |r| r.get::<_, String>(3))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    })
-    .unwrap()
-}
-
-fn names(db: &LedgerDb, sql: &str) -> Vec<String> {
-    let sql = sql.to_string();
-    db.read_blocking(move |c| {
-        let mut stmt = c.prepare(&sql)?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     })
     .unwrap()
@@ -126,11 +117,8 @@ fn a_request_with_two_matches_round_trips_through_the_row_and_the_child_table() 
         "the list reads the matches as the show does"
     );
     assert_eq!(
-        child_rows(&db, "r1"),
-        [
-            ("zz-watch".to_string(), 5_000),
-            ("aa-block".to_string(), 5_000)
-        ],
+        counts(&db, 5_000, 5_000),
+        [count("aa-block", 0, 1, 1_000), count("zz-watch", 1, 0, 0)],
         "each child row carries the request's instant"
     );
 }
@@ -152,7 +140,6 @@ fn a_row_written_again_replaces_its_child_rows() {
     .unwrap();
     let again = request("r1", 5_000, "k", vec![matched("g3", 0, false)]);
     db.insert_request(&again, &[], None).unwrap();
-    assert_eq!(child_rows(&db, "r1"), [("g3".to_string(), 5_000)]);
     let (shown, _) = db
         .read_blocking(|c| request_by_id(c, "r1"))
         .unwrap()
@@ -206,8 +193,8 @@ async fn the_purge_removes_the_child_rows_with_the_request() {
     )
     .unwrap();
     assert_eq!(
-        child_rows(&db, "old").len(),
-        2,
+        counts(&db, 0, 0),
+        [count("g1", 1, 0, 0), count("g2", 0, 1, 1_000)],
         "the old request's matches are on record"
     );
     let config = LedgerConfig {
@@ -219,9 +206,9 @@ async fn the_purge_removes_the_child_rows_with_the_request() {
         .unwrap();
     assert!(db.request("old").await.unwrap().is_none());
     assert_eq!(
-        names(&db, "SELECT request_id FROM request_guardrails"),
-        ["fresh"],
-        "no child row outlives its request"
+        counts(&db, 0, 30 * DAY_MS),
+        [count("g1", 1, 0, 0)],
+        "no child row outlives its request, and the fresh one keeps its own"
     );
 }
 

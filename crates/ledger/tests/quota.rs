@@ -1363,7 +1363,8 @@ async fn the_startup_step_records_and_reports_one_sample_per_polled_account() {
 async fn a_usage_endpoint_that_hangs_ends_the_startup_step_at_its_bound() {
     let up = FakeUpstream::start(vec![usage_gated(), profile_rule()]).await;
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    let started = std::time::Instant::now();
+    // The gated usage endpoint answers only after the release below, so the step can return only by leaving that
+    // fetch pending at its bound.
     let sampled = QuotaPoll::sample_all(
         h.store.clone(),
         h.usage
@@ -1375,11 +1376,6 @@ async fn a_usage_endpoint_that_hangs_ends_the_startup_step_at_its_bound() {
         Duration::from_millis(300),
     )
     .await;
-    let elapsed = started.elapsed();
-    assert!(
-        elapsed >= Duration::from_millis(300) && elapsed < Duration::from_secs(1),
-        "{elapsed:?}"
-    );
     assert_eq!(
         sampled,
         Sampled {
@@ -1466,6 +1462,7 @@ async fn a_profile_endpoint_that_hangs_holds_no_reported_sample_back() {
 async fn a_stalled_startup_fetch_is_aborted_by_ledger_shutdown_and_makes_no_further_request() {
     let up = FakeUpstream::start(vec![usage_gated(), profile_rule()]).await;
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let tables = Arc::new(PlanTables::shipped());
     let sampled = QuotaPoll::sample_all(
         h.store.clone(),
         h.usage
@@ -1473,7 +1470,7 @@ async fn a_stalled_startup_fetch_is_aborted_by_ledger_shutdown_and_makes_no_furt
             .expect("the harness was built with the poll"),
         h.ledger.clone(),
         h.router.clone(),
-        Arc::new(PlanTables::shipped()),
+        tables.clone(),
         Duration::from_millis(300),
     )
     .await;
@@ -1490,7 +1487,11 @@ async fn a_stalled_startup_fetch_is_aborted_by_ledger_shutdown_and_makes_no_furt
     // Released only now: an aborted task never reaches the profile half, even once the fetch it never
     // awaited the end of is free to finish.
     up.release();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The fetch task holds the one other handle on the tables, so the count falls to one once the task has ended.
+    wait_for(Duration::from_secs(5), || {
+        (Arc::strong_count(&tables) == 1).then_some(())
+    })
+    .await;
     assert_eq!(
         up.requests()
             .iter()

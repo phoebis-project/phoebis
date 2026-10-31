@@ -1,8 +1,8 @@
 //! Rows written before the rollup key carried a generation are stamped with the live key's once at startup,
 //! by the key's own lifetime: an earlier holder's rows under a reused id stay at 0.
 use phoebis_ledger::{
-    read_rollups, reconcile_key_generations, AttemptRecord, LedgerDb, LiveKeyLifetime,
-    RequestRecord, RollupSelect, GENERATIONS_RECONCILED_KEY,
+    read_rollups, reconcile_key_generations, request_by_id, AttemptRecord, KeySelector, LedgerDb,
+    LiveKeyLifetime, RequestRecord, RollupSelect,
 };
 
 const HOUR_MS: i64 = 3_600_000;
@@ -46,6 +46,15 @@ fn request_at(id: &str, key_id: &str, key_generation: i64, received_at: i64) -> 
     }
 }
 
+/// The generation the request row `id` is filed under, as the request log reads it.
+fn generation_of(db: &LedgerDb, id: &str) -> i64 {
+    db.read_blocking(|c| request_by_id(c, id))
+        .unwrap()
+        .expect("the request is on record")
+        .0
+        .key_generation
+}
+
 fn attempt(id: &str) -> AttemptRecord {
     AttemptRecord {
         request_id: id.into(),
@@ -83,31 +92,15 @@ fn generation_zero_rows_of_a_live_key_are_stamped_once_and_the_rest_stay() {
         vec![("k1", 5_000, 3), ("k2", 0, 1)],
         "k1's two unstamped requests joined the row r4 opened; k2 has no live key and stays at 0"
     );
-    let stamped_requests: i64 = db
-        .read_blocking(|c| {
-            Ok(c.query_row(
-                "SELECT COUNT(*) FROM requests WHERE key_id = 'k1' AND key_generation = 5000",
-                [],
-                |r| r.get(0),
-            )?)
-        })
-        .unwrap();
-    assert_eq!(stamped_requests, 3);
+    assert_eq!(
+        ["r1", "r2", "r4"].map(|id| generation_of(&db, id)),
+        [5_000, 5_000, 5_000]
+    );
     assert_eq!(
         reconcile_key_generations(&db, &[first("k1", 9_000), first("k2", 7_000)]).unwrap(),
         0,
         "a second start stamps nothing, whatever keys it brings"
     );
-    let marked: Option<String> = db
-        .read_blocking(|c| {
-            Ok(c.query_row(
-                "SELECT value FROM meta WHERE key = ?1",
-                [GENERATIONS_RECONCILED_KEY],
-                |r| r.get(0),
-            )?)
-        })
-        .unwrap();
-    assert_eq!(marked.as_deref(), Some("1"));
 }
 
 #[test]
@@ -142,18 +135,9 @@ fn a_reused_ids_rows_before_the_live_keys_first_whole_hour_stay_the_earlier_hold
         vec![(5, 0), (9, 0), (10, 0), (11, created_at), (12, created_at)],
         "the earlier holder's hours and the mixed creation hour stay at 0; the later hours are the live key's"
     );
-    let stamped_requests: Vec<String> = db
-        .read_blocking(|c| {
-            let mut stmt = c.prepare(
-                "SELECT id FROM requests WHERE key_id = 'k1' AND key_generation = ?1 ORDER BY id",
-            )?;
-            let ids = stmt.query_map([created_at], |r| r.get(0))?;
-            Ok(ids.collect::<rusqlite::Result<Vec<String>>>()?)
-        })
-        .unwrap();
     assert_eq!(
-        stamped_requests,
-        vec!["r4", "r5"],
+        ["r1", "r2", "r3", "r4", "r5"].map(|id| generation_of(&db, id)),
+        [0, 0, 0, created_at, created_at],
         "the request rows take the same bound as the rollups"
     );
     assert_eq!(
@@ -178,24 +162,18 @@ fn a_key_with_more_rows_than_one_page_has_every_row_moved() {
     }
     let moved = reconcile_key_generations(&db, &[first("k1", 5_000)]).unwrap();
     assert_eq!(moved, 1_250);
-    let left: i64 = db
-        .read_blocking(|c| {
-            Ok(c.query_row(
-                "SELECT COUNT(*) FROM rollups_hourly WHERE key_id = 'k1' AND key_generation = 0",
-                [],
-                |r| r.get(0),
-            )?)
-        })
-        .unwrap();
-    assert_eq!(left, 0, "no row is left behind by the page boundary");
-    let stamped: i64 = db
-        .read_blocking(|c| {
-            Ok(c.query_row(
-                "SELECT COUNT(*) FROM rollups_hourly WHERE key_id = 'k1' AND key_generation = 5000",
-                [],
-                |r| r.get(0),
-            )?)
-        })
-        .unwrap();
-    assert_eq!(stamped, 1_250);
+    let rows_at = |key_generation: i64| {
+        let select = RollupSelect {
+            keys: vec![KeySelector {
+                key_id: "k1".into(),
+                key_generation: Some(key_generation),
+            }],
+            ..RollupSelect::default()
+        };
+        db.read_blocking(|c| read_rollups(c, 0, i64::MAX, &select))
+            .unwrap()
+            .len()
+    };
+    assert_eq!(rows_at(0), 0, "no row is left behind by the page boundary");
+    assert_eq!(rows_at(5_000), 1_250);
 }

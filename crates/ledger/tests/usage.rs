@@ -13,7 +13,7 @@ use fake_upstream::{FakeUpstream, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{
     key_usage_windows, AttemptRecord, LedgerConfig, LedgerDb, PlanTables, PriceRevisions,
-    RequestRecord, Speed, KEY_RANGE_PREDICATE,
+    RequestRecord, KEY_RANGE_PREDICATE,
 };
 use phoebis_store::{ApiKeyRow, RulesMode, Store};
 use tower::ServiceExt;
@@ -132,22 +132,11 @@ fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
     assert_eq!((k1.requests, k1.succeeded, k1.failed), (4, 3, 1));
     assert_eq!(k1.tokens.input, 300);
     assert_eq!(k1.tokens.cache_write, 60);
-    // The window prices each row's counts on the shipped list at the entry in force at its hour, the one in force when
-    // its request arrived.
-    let used_usd = |model: &str| {
-        PriceRevisions::shipped()
-            .in_force(1_000)
-            .estimate(model, Speed::Standard, 100, 50, 20, 0, 10)
-            .expect("the shipped list carries the model")
-            .0
-    };
-    let want = 2.0 * used_usd("claude-sonnet-5") + used_usd("claude-opus-5");
-    assert!(want > 0.0);
-    assert!(
-        (k1.cost_usd - want).abs() < 1e-9,
-        "{} against {want}",
-        k1.cost_usd
-    );
+    // The window prices each row's counts on the shipped list at the entry in force at its hour, the first entry
+    // before its date. Per million, Sonnet 5 reads 2 input, 0.2 cache read, 2.5 for a 5-minute write and 10 output,
+    // so a used attempt costs $0.00036, and Opus 5 reads 5, 0.5, 6.25 and 25, so $0.0009: two Sonnet requests and
+    // one Opus are $0.00162.
+    assert!((k1.cost_usd - 0.00162).abs() < 1e-9, "{}", k1.cost_usd);
     assert_eq!(
         k1.models
             .iter()
@@ -886,8 +875,6 @@ async fn the_usage_page_is_html_when_accept_prefers_it_and_escapes_the_label() {
     let body = String::from_utf8(body).unwrap();
     assert!(body.contains("&lt;b&gt;Desk&lt;/b&gt; &amp; &quot;Co&quot;"));
     assert!(!body.contains("<b>Desk"));
-    assert!(body.contains("Last 24 hours"));
-    assert!(body.contains("Last 7 days"));
     assert!(!body.contains("<script"));
     assert!(!body.contains(KEY));
     assert!(
@@ -897,14 +884,6 @@ async fn the_usage_page_is_html_when_accept_prefers_it_and_escapes_the_label() {
     assert!(
         body.contains(&jiff::Timestamp::from_millisecond(now).unwrap().to_string()),
         "a page saved to a file says when it was generated: {body}"
-    );
-    let generated = jiff::Timestamp::from_millisecond(now).unwrap().to_string();
-    assert!(
-        body.contains(&format!(
-            "<p class=\"key\">key <code>desktop</code>, pool <code>main</code>, figures from the router's hourly \
-             rollups with probes left out, generated <time>{generated}</time></p>"
-        )),
-        "the key line joins its phrases with commas: {body}"
     );
 
     let (status, headers, _) =

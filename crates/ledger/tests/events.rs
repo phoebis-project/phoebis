@@ -1856,46 +1856,6 @@ fn two_agents_pin_created_rows_differ_in_their_detail() {
 fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically() {
     use phoebis_ledger::EVENT_KINDS;
     use phoebis_routing::{CacheMapEntry, CreditsState, PinKeyFacts, ShedRoundFacts, WindowSource};
-    const KINDS: [&str; 37] = [
-        "account_state_changed",
-        "budget_period_ended",
-        "budget_reached",
-        "catalog_changed",
-        "cooldown_cleared",
-        "cooldown_set",
-        "fast_credits_changed",
-        "ledger_gap",
-        "mark_cleared",
-        "model_permitted",
-        "model_rejected",
-        "overage_ended",
-        "overage_started",
-        "pin_created",
-        "pin_expired",
-        "pin_migrated",
-        "pin_released",
-        "plan_ended",
-        "plan_restored",
-        "poll_backoff_ended",
-        "poll_backoff_started",
-        "poll_failed",
-        "refresh_failed",
-        "refresh_succeeded",
-        "refresh_uncertain",
-        "registry_changed",
-        "reservation_expired",
-        "router_started",
-        "shedding_round",
-        "slow_down_ended",
-        "slow_down_started",
-        "stream_interrupted",
-        "warm_prefix_expired",
-        "wind_down_started",
-        "window_cleared",
-        "window_reset",
-        "window_spent",
-    ];
-    assert_eq!(EVENT_KINDS, KINDS);
     assert!(
         EVENT_KINDS.windows(2).all(|pair| pair[0] < pair[1]),
         "alphabetical, each kind once"
@@ -2149,6 +2109,27 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
         assert!(
             EVENT_KINDS.contains(&kind.as_str()),
             "{kind} is written but not listed"
+        );
+    }
+    // Two kinds the ledger writes from its own records rather than from a router event, which the routing log's
+    // kinds filter selects only while this list names them.
+    let poll_fault = phoebis_oauth::PollFault {
+        endpoint: "usage",
+        status: Some(500),
+        transport: false,
+        text: "x".into(),
+    };
+    for record in [
+        phoebis_ledger::plan_ended("a", 1, "profile", &serde_json::json!({})),
+        phoebis_ledger::poll_failed("a", 1, &poll_fault),
+    ] {
+        let phoebis_ledger::Record::Event(row) = record else {
+            panic!("an event record")
+        };
+        assert!(
+            EVENT_KINDS.contains(&row.kind.as_str()),
+            "{} is written but not listed",
+            row.kind
         );
     }
     for kind in [

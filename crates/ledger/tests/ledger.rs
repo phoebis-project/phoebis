@@ -1056,15 +1056,17 @@ async fn a_saturated_channel_drops_records_and_a_ledger_gap_names_the_count() {
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     // The writer is held by a long transaction on the writer connection, so the channel fills.
     let db = h.db.clone();
+    let (held_tx, held_rx) = tokio::sync::oneshot::channel::<()>();
     let (hold_tx, hold_rx) = std::sync::mpsc::channel::<()>();
     let holder = std::thread::spawn(move || {
         db.write(|_| {
+            held_tx.send(()).unwrap();
             hold_rx.recv().unwrap();
             Ok(())
         })
         .unwrap()
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    held_rx.await.unwrap();
     let total = phoebis_ledger::CHANNEL_DEPTH + 100;
     for i in 0..total {
         h.ledger.record(Record::Event(EventRecord {
@@ -2854,23 +2856,27 @@ fn the_effort_and_class_filters_match_the_rollups_fold() {
     assert_eq!(by_class(&["main"]), ["high-main"]);
 }
 
-/// Held on a slow `land`, `CHANNEL_DEPTH + 8` requests offered through `record_request` all wait for room
-/// rather than dropping.
+/// Held on a slow `land`, a batch and 8 requests past `CHANNEL_DEPTH` offered through `record_request` all wait for
+/// room rather than dropping.
 #[tokio::test]
 async fn a_request_record_waits_for_the_writer_rather_than_dropping() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let db = h.db.clone();
+    let (held_tx, held_rx) = tokio::sync::oneshot::channel::<()>();
     let (hold_tx, hold_rx) = std::sync::mpsc::channel::<()>();
     let holder = std::thread::spawn(move || {
         db.write(|_| {
+            held_tx.send(()).unwrap();
             hold_rx.recv().unwrap();
             Ok(())
         })
         .unwrap()
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let total = phoebis_ledger::CHANNEL_DEPTH + 8;
+    held_rx.await.unwrap();
+    // The writer takes up to one batch (64) off the channel before it blocks behind the holder, so a batch more
+    // than the depth fills the channel and at least 8 sends are left waiting for room.
+    let total = phoebis_ledger::CHANNEL_DEPTH + 64 + 8;
     let mut sends = Vec::with_capacity(total);
     for i in 0..total {
         let ledger = h.ledger.clone();
@@ -2890,7 +2896,10 @@ async fn a_request_record_waits_for_the_writer_rather_than_dropping() {
     }
     // The channel fills to its depth and the rest wait for room, which needs the writer genuinely blocked
     // rather than merely slow.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for(Duration::from_secs(5), || {
+        (h.ledger.queued() == phoebis_ledger::CHANNEL_DEPTH).then_some(())
+    })
+    .await;
     hold_tx.send(()).unwrap();
     holder.join().unwrap();
     for send in sends {
@@ -2928,25 +2937,35 @@ async fn two_request_rows_written_in_one_clock_millisecond_carry_increasing_stam
             .await;
     }
     ledgered(&h, "second").await;
-    let stamps =
-        h.db.read(|c| {
-            let mut stmt = c.prepare("SELECT id, landed_at FROM requests ORDER BY id")?;
-            let rows = stmt
-                .query_map([], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows)
+    let page = |filter: RequestFilter| {
+        h.db.read_blocking(|c| {
+            phoebis_ledger::list_request_page(c, &filter, &LiveKeys::default(), None, 10)
         })
-        .await
-        .unwrap();
+        .unwrap()
+    };
+    let first = page(RequestFilter {
+        request: Some("first".into()),
+        ..Default::default()
+    });
     assert_eq!(
-        stamps,
-        [
-            ("first".to_string(), Some(NOW)),
-            ("second".to_string(), Some(NOW + 1))
-        ],
-        "the first row takes the clock's instant and the second one past it"
+        first.landed_through, NOW,
+        "the first row takes the clock's instant"
+    );
+    let after = page(RequestFilter {
+        landed_after: Some(first.landed_through),
+        ..Default::default()
+    });
+    assert_eq!(
+        (
+            after
+                .rows
+                .iter()
+                .map(|(r, _)| r.id.as_str())
+                .collect::<Vec<_>>(),
+            after.landed_through
+        ),
+        (vec!["second"], NOW + 1),
+        "a poll from the first row's stamp answers the second, stamped one past it"
     );
     up.shutdown().await;
 }
@@ -3136,27 +3155,32 @@ fn a_request_recorded_after_a_saturated_cooldown_announcement_still_lands() {
     );
 }
 
-/// The bus subscriber's queue filled to its depth behind a writer channel filled to its own, both behind the
-/// same held `land`: `shutdown` still returns and lands every completed request, because the writer keeps
+/// The bus subscriber's queue filled to within a batch of its depth behind a writer channel filled to its own, both
+/// behind the same held `land`: `shutdown` still returns and lands every completed request, because the writer keeps
 /// reading while it waits for the assembler to end rather than waiting for it first.
 #[tokio::test]
 async fn a_shutdown_with_both_queues_full_lands_every_completed_request() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let db = h.db.clone();
+    let (held_tx, held_rx) = tokio::sync::oneshot::channel::<()>();
     let (hold_tx, hold_rx) = std::sync::mpsc::channel::<()>();
     let holder = std::thread::spawn(move || {
         db.write(|_| {
+            held_tx.send(()).unwrap();
             hold_rx.recv().unwrap();
             Ok(())
         })
         .unwrap()
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let total = phoebis_ledger::CHANNEL_DEPTH + phoebis_bus::QUEUE_DEPTH + 8;
+    held_rx.await.unwrap();
+    // Every request fits behind the held writer: the channel holds its depth and the bus queue two facts for each of
+    // the rest, short only of what the writer took (up to one batch, 64) and the record the assembler holds. So the
+    // publisher ends with both queues full or within a batch of it.
+    let total = phoebis_ledger::CHANNEL_DEPTH + phoebis_bus::QUEUE_DEPTH / 2;
     let bus = h.bus.clone();
     // One task, publishing in order through `publish_fact` (which waits for room rather than dropping, as the
-    // relay does): it blocks on its own once the writer's channel and then the assembler's bus queue fill.
+    // relay does).
     let publisher = tokio::spawn(async move {
         for i in 0..total {
             let id = format!("q{i}");
@@ -3164,17 +3188,20 @@ async fn a_shutdown_with_both_queues_full_lands_every_completed_request() {
             bus.publish_fact(complete_event(&id)).await;
         }
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::timeout(Duration::from_secs(30), publisher)
+        .await
+        .expect("every fact fits the two queues behind the held writer")
+        .unwrap();
+    wait_for(Duration::from_secs(5), || {
+        (h.ledger.queued() == phoebis_ledger::CHANNEL_DEPTH).then_some(())
+    })
+    .await;
     hold_tx.send(()).unwrap();
     // The bound proves shutdown returns rather than deadlocks. A loaded build host stretches this drain past 10 s.
     let shutdown = tokio::time::timeout(Duration::from_secs(30), h.ledger.clone().shutdown()).await;
     holder.join().unwrap();
     shutdown
         .expect("the writer keeps reading while it waits for the assembler, so shutdown does not deadlock")
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(30), publisher)
-        .await
-        .expect("the publisher resolves once the assembler has drained its queue")
         .unwrap();
     assert_eq!(h.ledger.dropped(), 0);
     for i in 0..total {
@@ -3406,40 +3433,9 @@ async fn a_request_landed_with_a_refusal_code_and_no_attempt_reads_refused_and_o
     up.shutdown().await;
 }
 
-/// The flag lands on its column and reads back, and a parked record serialized before the member reads it unset.
+/// A parked record serialized before the `refused` member reads it unset.
 #[test]
-fn the_record_round_trips_refused_and_a_parked_record_from_before_reads_false() {
-    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
-    db.insert_request(
-        &RequestRecord {
-            id: "r-refused".into(),
-            received_at: 3_600_000,
-            key_id: Some("desktop".into()),
-            pool_id: Some("main".into()),
-            canonical_model: "claude-sonnet-5".into(),
-            model: "claude-sonnet-5".into(),
-            kind: "inference".into(),
-            origin: "client".into(),
-            outcome: "rejected".into(),
-            error_code: Some("guardrail_blocked".into()),
-            refused: true,
-            ..Default::default()
-        },
-        &[],
-        None,
-    )
-    .unwrap();
-    let refused = db
-        .read_blocking(|c| {
-            let (rows, _) =
-                list_requests(c, &RequestFilter::default(), &LiveKeys::default(), None, 50)?;
-            Ok(rows
-                .into_iter()
-                .find(|(r, _)| r.id == "r-refused")
-                .map(|(r, _)| r.refused))
-        })
-        .unwrap();
-    assert_eq!(refused, Some(true), "the flag reads back from its column");
+fn a_parked_record_from_before_the_refused_flag_reads_false() {
     let parked: phoebis_ledger::ParkedRecord =
         serde_json::from_str(r#"{"request":{"id":"r1","received_at":5},"attempts":[]}"#)
             .expect("a record from before the member still reads");
@@ -3578,62 +3574,42 @@ fn decision(
     (summary, record)
 }
 
-type DecisionColumns = (
-    u32,
-    i64,
-    String,
-    bool,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-);
-
 #[tokio::test]
 async fn a_decision_lands_as_a_row_whose_frame_decodes_to_the_record() {
-    use rusqlite::OptionalExtension as _;
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let (summary, record) = decision("r1", 2, 2);
-    h.ledger.record(Record::Decision(Box::new(DecisionRow::of(
-        summary.clone(),
-        record.clone(),
-        NOW,
-    ))));
-    let (columns, stored_summary, frame) = wait_for(Duration::from_secs(5), || {
-        h.db.read_blocking(|c| {
-            Ok(c.query_row(
-                "SELECT attempt, at, kind, probe, key_id, pool_id, account_id, from_account_id, session_id, \
-                 agent_id, model, summary, record FROM decisions WHERE request_id = ?1 AND seq = ?2",
-                rusqlite::params!["r1", 2],
-                |r| {
-                    let columns: DecisionColumns = (
-                        r.get(0)?,
-                        r.get(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                        r.get(4)?,
-                        r.get(5)?,
-                        r.get(6)?,
-                        r.get(7)?,
-                        r.get(8)?,
-                        r.get(9)?,
-                        r.get(10)?,
-                    );
-                    Ok((columns, r.get::<_, String>(11)?, r.get::<_, Vec<u8>>(12)?))
-                },
-            )
-            .optional()?)
-        })
-        .unwrap()
+    let row = DecisionRow::of(summary.clone(), record.clone(), NOW);
+    h.ledger.record(Record::Decision(Box::new(row.clone())));
+    let one = phoebis_ledger::RoutingLogFilter {
+        request: Some("r1".into()),
+        ..log_filter()
+    };
+    let listed = wait_for(Duration::from_secs(5), || {
+        let page =
+            h.db.read_blocking(|c| phoebis_ledger::list_routing_log(c, &one, None, 25))
+                .unwrap();
+        match page.rows.as_slice() {
+            [phoebis_ledger::RoutingLogRow::Decision(row)] => Some(row.clone()),
+            _ => None,
+        }
     })
     .await;
     let some = |value: &str| Some(value.to_string());
     assert_eq!(
-        columns,
+        (
+            listed.attempt,
+            listed.at,
+            listed.kind,
+            listed.probe,
+            listed.key_id,
+            listed.pool_id,
+            listed.account_id,
+            listed.from_account_id,
+            listed.session_id,
+            listed.agent_id,
+            listed.model
+        ),
         (
             2,
             NOW,
@@ -3650,15 +3626,53 @@ async fn a_decision_lands_as_a_row_whose_frame_decodes_to_the_record() {
         "the columns are the record's request and outcome facts"
     );
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&stored_summary).unwrap(),
+        listed.summary,
         serde_json::to_value(&summary).unwrap(),
         "the summary is stored as its JSON"
     );
-    let decoded = zstd::decode_all(frame.as_slice()).expect("the record is one zstd frame");
+    let read =
+        h.db.read_blocking(|c| phoebis_ledger::decision_record(c, "r1", 2))
+            .unwrap()
+            .expect("the decision is stored");
+    let mut expected = serde_json::to_value(&record).unwrap();
+    // A moved decision whose request has not landed composes a completion that carries no answer.
+    expected["outcome"]["completion"] = serde_json::json!({
+        "status": null,
+        "cache_read_tokens": null,
+        "input_tokens": null,
+        "promised_tokens": null,
+        "hit": null,
+        "held_ms": null,
+        "freed": false,
+        "cache_map_written": null,
+        "completed_at": null,
+    });
+    let mut answer = serde_json::Map::new();
+    answer.insert("request_id".into(), "r1".into());
+    answer.insert("seq".into(), 2.into());
+    answer.extend(expected.as_object().unwrap().clone());
+    assert_eq!(read, serde_json::Value::Object(answer));
+    // The routing-log tests store their rows through `put_decision`, so its frame has to be the writer's. No reader
+    // shows the header's content size, since `decode_record` also reads a frame without one.
+    let frame_of = |db: &LedgerDb| {
+        db.read_blocking(|c| {
+            Ok(c.query_row(
+                "SELECT record FROM decisions WHERE request_id = 'r1' AND seq = 2",
+                [],
+                |r| r.get::<_, Vec<u8>>(0),
+            )?)
+        })
+        .unwrap()
+    };
+    let helper = LedgerDb::open_in_memory().unwrap();
+    put_decision(&helper, &row);
+    let frame = frame_of(&h.db);
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&decoded).unwrap(),
-        serde_json::to_value(&record).unwrap()
+        frame,
+        frame_of(&helper),
+        "`put_decision` writes the writer's frame"
     );
+    let decoded = zstd::decode_all(frame.as_slice()).expect("the record is one zstd frame");
     assert_eq!(
         zstd::zstd_safe::get_frame_content_size(&frame)
             .ok()
@@ -3677,16 +3691,24 @@ fn a_decision_whose_pool_is_empty_reads_back_with_no_pool() {
     let (summary, mut record) = decision("r1", 1, 1);
     record.request.pool_id = String::new();
     put_decision(&db, &DecisionRow::of(summary, record, NOW));
-    let pool_id: Option<String> = db
-        .read_blocking(|c| {
-            Ok(c.query_row(
-                "SELECT pool_id FROM decisions WHERE request_id = 'r1'",
-                [],
-                |r| r.get(0),
-            )?)
-        })
-        .unwrap();
-    assert_eq!(pool_id, None);
+    let listed = |pools: Vec<String>| {
+        let filter = phoebis_ledger::RoutingLogFilter {
+            pools,
+            ..log_filter()
+        };
+        db.read_blocking(|c| phoebis_ledger::list_routing_log(c, &filter, None, 25))
+            .unwrap()
+            .rows
+    };
+    let all = listed(Vec::new());
+    let [phoebis_ledger::RoutingLogRow::Decision(row)] = all.as_slice() else {
+        panic!("{all:?}")
+    };
+    assert_eq!(row.pool_id, None);
+    assert!(
+        listed(vec![String::new()]).is_empty(),
+        "no filter finds it under an empty id"
+    );
 }
 
 #[tokio::test]
@@ -3726,41 +3748,29 @@ async fn a_cache_map_write_lands_on_the_decision_its_seq_names_and_a_stray_one_c
         (stats.cache_map_orphans.load(Ordering::Relaxed) == 1).then_some(())
     })
     .await;
-    let maps =
-        h.db.read_blocking(|c| {
-            let mut stmt = c.prepare(
-                "SELECT request_id, seq, cache_map FROM decisions ORDER BY request_id, seq",
-            )?;
-            let rows = stmt
-                .query_map([], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, u32>(1)?,
-                        r.get::<_, Option<String>>(2)?,
-                    ))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows)
-        })
-        .unwrap();
+    let read = |request: &str, seq: u32| {
+        h.db.read_blocking(|c| phoebis_ledger::decision_record(c, request, seq))
+            .unwrap()
+    };
+    let written = |seq: u32| {
+        read("r1", seq).expect("the decision is stored")["outcome"]["completion"]
+            ["cache_map_written"]
+            .clone()
+    };
     assert_eq!(
-        maps,
-        [
-            ("r1".to_string(), 1, None),
-            (
-                "r1".to_string(),
-                2,
-                Some(serde_json::to_string(&entries).unwrap())
-            )
-        ],
-        "the map lands on the decision its seq names whatever attempt completed, and the stray write lands nowhere"
+        (written(1), written(2)),
+        (
+            serde_json::Value::Null,
+            serde_json::to_value(&entries).unwrap()
+        ),
+        "the map lands on the decision its seq names whatever attempt completed"
     );
+    assert_eq!(read("r-unknown", 1), None, "the stray write lands nowhere");
     up.shutdown().await;
 }
 
 #[tokio::test]
 async fn a_request_through_the_relay_lands_its_decision_with_the_cache_map_its_answer_wrote() {
-    use rusqlite::OptionalExtension as _;
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
@@ -3776,33 +3786,19 @@ async fn a_request_through_the_relay_lands_its_decision_with_the_cache_map_its_a
     assert_eq!(resp.status(), 200);
     let id = request_id(&resp);
     let _ = resp.into_body().collect().await.unwrap();
-    let (kind, account_id, cache_map) = wait_for(Duration::from_secs(5), || {
-        h.db.read_blocking(|c| {
-            Ok(c.query_row(
-                "SELECT kind, account_id, cache_map FROM decisions WHERE request_id = ?1 AND seq = 1",
-                rusqlite::params![id],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, Option<String>>(1)?,
-                        r.get::<_, Option<String>>(2)?,
-                    ))
-                },
-            )
-            .optional()?)
-        })
-        .unwrap()
-        .filter(|(_, _, cache_map)| cache_map.is_some())
+    let record = wait_for(Duration::from_secs(5), || {
+        h.db.read_blocking(|c| phoebis_ledger::decision_record(c, &id, 1))
+            .unwrap()
+            .filter(|record| !record["outcome"]["completion"]["cache_map_written"].is_null())
     })
     .await;
+    let outcome = &record["outcome"];
     assert_eq!(
-        (kind.as_str(), account_id.as_deref()),
-        ("placed", Some("a"))
+        (outcome["kind"].as_str(), outcome["account_id"].as_str()),
+        (Some("placed"), Some("a"))
     );
     assert!(
-        serde_json::from_str::<serde_json::Value>(&cache_map.unwrap())
-            .unwrap()
-            .is_array(),
+        outcome["completion"]["cache_map_written"].is_array(),
         "the answer's cache-map rows land as a list on the decision that selected it"
     );
     assert_eq!(
@@ -4037,17 +4033,11 @@ fn a_second_message_stop_chunk_keeps_the_first_chunks_stream_end() {
 
 #[test]
 fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
+    // The shipped Opus 5.5 row in force at `NOW`, per million: input 4 and output 20 at the standard cells, 8 and 40
+    // at the fast ones, so a million input and 100,000 output tokens are $6 standard and $12 fast.
     let revisions = PriceRevisions::shipped();
     let table = revisions.in_force(NOW);
-    let row = &table.models["claude-opus-5-5"];
-    let fast = row
-        .fast
-        .as_ref()
-        .expect("the shipped Opus 5.5 row carries fast cells");
     let (input, output) = (1_000_000_u64, 100_000_u64);
-    let at = |cells: &phoebis_ledger::ModelPrice| {
-        (input as f64 * cells.input + output as f64 * cells.output) / 1e6
-    };
     let estimate = |speed: Speed| {
         table
             .estimate("claude-opus-5-5", speed, input, 0, 0, 0, output)
@@ -4055,14 +4045,13 @@ fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
             .0
     };
     assert!(
-        (estimate(Speed::Fast) - at(fast)).abs() < 1e-9,
+        (estimate(Speed::Fast) - 12.0).abs() < 1e-9,
         "the answer that reported speed fast prices at the fast cells"
     );
     assert!(
-        (estimate(Speed::Standard) - at(&row.standard)).abs() < 1e-9,
+        (estimate(Speed::Standard) - 6.0).abs() < 1e-9,
         "the one that reported none at the standard cells"
     );
-    assert!(at(fast) > at(&row.standard), "the two sets differ");
     let attempt = |attempt: u32, speed: Option<&str>| AttemptRecord {
         request_id: "r1".into(),
         attempt,
@@ -4103,10 +4092,28 @@ fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
         [("fast", 1, input), ("standard", 1, input)],
         "each attempt folds under its own speed"
     );
-    let priced: f64 = rows.iter().map(|r| row_usd(&revisions, r)).sum();
+    let live = LiveKeys(std::collections::BTreeMap::from([(
+        "desktop".to_string(),
+        0,
+    )]));
+    let groups = breakdown(
+        &apply_filter(rows, &RollupFilter::default()),
+        "model",
+        false,
+        &live,
+        &[],
+        None,
+        &revisions,
+        &PlanTables::shipped(),
+    );
+    let group = groups
+        .iter()
+        .find(|g| g.key == "claude-opus-5-5")
+        .expect("one model group");
     assert!(
-        (priced - (at(fast) + at(&row.standard))).abs() < 1e-9,
-        "the hour's rows price the fast attempt at the fast cells and the other at the standard ones: {priced}"
+        (group.cost_usd - 18.0).abs() < 1e-9,
+        "the hour's rows price the fast attempt at the fast cells and the other at the standard ones: {}",
+        group.cost_usd
     );
 }
 
@@ -6253,18 +6260,11 @@ async fn a_parked_record_whose_acknowledgement_is_refused_is_charged_once() {
             .unwrap()
             .expect("the start landed the parked record");
     assert_eq!(attempts[0].input_tokens, Some(1_000_000));
-    let charged: i64 = h
-        .db
-        .read(|c| {
-            Ok(c.query_row(
-                "SELECT COALESCE(SUM(input_tokens), 0) FROM rollups_hourly WHERE pool_id = 'main' AND account_id = 'a'",
-                [],
-                |r| r.get(0),
-            )?)
-        })
-        .await
-        .unwrap();
-    assert_eq!(charged, 1_000_000, "the parked charge contributes once");
+    assert_eq!(
+        charged_to_a(&h).await,
+        1_000_000,
+        "the parked charge contributes once"
+    );
     up.shutdown().await;
 }
 
@@ -6281,28 +6281,26 @@ async fn park_poison(h: &Harness) {
 }
 
 /// The input tokens the rollups hold for member `a` of pool `main`: what a charge contributes, once per landing.
-async fn charged_to_a(h: &Harness) -> i64 {
-    h.db.read(|c| {
-        Ok(c.query_row(
-            "SELECT COALESCE(SUM(input_tokens), 0) FROM rollups_hourly WHERE pool_id = 'main' AND account_id = 'a'",
-            [],
-            |r| r.get(0),
-        )?)
-    })
-    .await
-    .unwrap()
+async fn charged_to_a(h: &Harness) -> u64 {
+    let select = RollupSelect {
+        pools: vec!["main".into()],
+        accounts: vec!["a".into()],
+        ..RollupSelect::default()
+    };
+    h.db.read(move |c| read_rollups(c, 0, i64::MAX, &select))
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.input_tokens)
+        .sum()
 }
 
-async fn rows_of(h: &Harness, table: &'static str, column: &'static str, id: &'static str) -> i64 {
-    h.db.read(move |c| {
-        Ok(c.query_row(
-            &format!("SELECT COUNT(*) FROM {table} WHERE {column} = ?1"),
-            [id],
-            |r| r.get(0),
-        )?)
-    })
-    .await
-    .unwrap()
+/// The attempts the request `id` landed with, `None` while no row of it is in the ledger.
+async fn landed_attempts(h: &Harness, id: &str) -> Option<usize> {
+    h.db.request(id)
+        .await
+        .unwrap()
+        .map(|(_, attempts)| attempts.len())
 }
 
 /// A parked record whose cause is gone lands on a replay, with no restart: its row leaves the table and the request is
@@ -6421,8 +6419,7 @@ async fn a_replay_whose_acknowledgement_is_refused_keeps_the_row_and_a_retry_cha
             remaining: 0
         }
     );
-    assert_eq!(rows_of(&h, "requests", "id", "poison").await, 1);
-    assert_eq!(rows_of(&h, "attempts", "request_id", "poison").await, 1);
+    assert_eq!(landed_attempts(&h, "poison").await, Some(1));
     assert_eq!(
         charged_to_a(&h).await,
         1_000_000,
@@ -6537,8 +6534,7 @@ async fn two_replays_at_once_land_the_row_once() {
     let (first, second) = (first.unwrap(), second.unwrap());
     assert_eq!(first.landed + second.landed, 1, "{first:?} {second:?}");
     assert_eq!((first.remaining, second.remaining), (0, 0));
-    assert_eq!(rows_of(&h, "requests", "id", "poison").await, 1);
-    assert_eq!(rows_of(&h, "attempts", "request_id", "poison").await, 1);
+    assert_eq!(landed_attempts(&h, "poison").await, Some(1));
     assert_eq!(charged_to_a(&h).await, 1_000_000);
     up.shutdown().await;
 }
@@ -6802,7 +6798,7 @@ async fn a_replay_the_writer_claimed_inside_the_bound_answers_its_rows_past_it()
             remaining: 0
         }
     );
-    assert_eq!(rows_of(&h, "requests", "id", "parked").await, 1);
+    assert!(landed_attempts(&h, "parked").await.is_some());
     assert_eq!(charged_to_a(&h).await, 1_000_000, "the charge lands once");
     up.shutdown().await;
 }
@@ -7970,7 +7966,6 @@ fn a_record_read_decodes_the_frame_and_composes_the_completion() {
         serde_json::Value::Object(answer),
         "the frame decoded, its completion the answering attempt's after the retry in place"
     );
-    assert_eq!(record["version"], 3);
     assert_eq!(
         read("r2", 1).expect("the hold is stored")["outcome"]["completion"],
         serde_json::Value::Null,

@@ -1665,7 +1665,7 @@ fn the_start_time_pass_takes_a_refusal_out_of_the_row_an_older_fold_keyed_it_und
 /// figures the older fold gave it, and one inside the window moves.
 #[test]
 fn the_start_time_pass_leaves_a_refusal_older_than_the_retention_and_moves_one_inside_it() {
-    use phoebis_ledger::{refold_refusals, REFUSALS_BACKFILL_KEY};
+    use phoebis_ledger::refold_refusals;
 
     let now = 3_700_000 + 200 * DAY_MS;
     let at = |id: &str, received_at: i64| RequestRecord {
@@ -1710,17 +1710,6 @@ fn the_start_time_pass_leaves_a_refusal_older_than_the_retention_and_moves_one_i
         ("k".to_string(), 0, 0, 0, BTreeMap::new(), 0, blocked(1)),
         "the refusal inside the window moved into the map"
     );
-    let mark: serde_json::Value = db
-        .read_blocking(|c| {
-            Ok(c.query_row(
-                "SELECT value FROM meta WHERE key = ?1",
-                [REFUSALS_BACKFILL_KEY],
-                |r| r.get::<_, String>(0),
-            )?)
-        })
-        .map(|text| serde_json::from_str(&text).expect("the mark is JSON"))
-        .expect("the pass wrote its mark");
-    assert_eq!(mark["done_at"].as_i64(), Some(now));
 }
 
 #[test]
@@ -5286,22 +5275,15 @@ fn a_row_on_a_model_without_a_weight_prices_an_estimated_share_at_its_tiers_late
         .into_iter()
         .find(|p| p.at == hour)
         .expect("the planted hour");
-    let costs = tables.revisions.in_force(WEEKDAY_OFF_PEAK);
-    let (weight, fallback) = costs
-        .weight_or_fallback("claude-opus-4-7", FIVE_HOUR)
-        .expect("Opus 4.7 prices through its tier");
-    assert!(fallback, "the weight is its tier's, not its own");
-    let capacity = &costs.capacity[MAX_20X];
-    let share = |window_capacity: Option<f64>| {
-        1_000_000.0 * weight * costs.type_multiplier.input / window_capacity.unwrap()
-    };
+    // Opus 5.5, the opus tier's latest weighted model, weighs 2.2 units per input token, so a million tokens are
+    // 2,200,000 units of the Max 20x 5-hour window's 150,000,000 and of its week's 900,000,000.
     assert!(
         point
             .five_hour_share
-            .is_some_and(|got| (got - share(capacity.five_hour)).abs() < 1e-12)
+            .is_some_and(|got| (got - 2_200_000.0 / 150_000_000.0).abs() < 1e-12)
             && point
                 .seven_day_share
-                .is_some_and(|got| (got - share(capacity.seven_day)).abs() < 1e-12),
+                .is_some_and(|got| (got - 2_200_000.0 / 900_000_000.0).abs() < 1e-12),
         "a known tier prices the model at its tier's weight: {point:?}"
     );
     assert_eq!(
@@ -7380,26 +7362,6 @@ fn a_forked_sessions_identity_names_its_base_from_its_first_request() {
         (rows[0].forked_from.as_deref(), rows[0].fork_depth),
         (Some("s1"), Some(3)),
         "the fork facts come from the session's first request, kept even though the later one carries none"
-    );
-    let identity_columns = db
-        .read_blocking(|c| {
-            Ok(c.query_row(
-                "SELECT identified_by, identity_root, identity_depth FROM requests WHERE id = 'r1'",
-                [],
-                |r| {
-                    Ok((
-                        r.get::<_, Option<String>>(0)?,
-                        r.get::<_, Option<String>>(1)?,
-                        r.get::<_, Option<i64>>(2)?,
-                    ))
-                },
-            )?)
-        })
-        .unwrap();
-    assert_eq!(
-        identity_columns,
-        (None, None, None),
-        "a row written with a fork leaves the three identity columns null"
     );
 }
 

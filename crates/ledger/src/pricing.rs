@@ -1102,34 +1102,33 @@ mod tests {
     #[test]
     fn the_fallback_rates_are_the_dearest_listed_standard_cell_of_each_type_in_the_revision_in_force(
     ) {
+        // The test table's dearest standard row is Opus 5.5 in both entries: input, cache read, the two writes and
+        // output at 10, 1, 12.5, 20 and 50 per million in January, each doubled in February. Its January fast
+        // cells are dearer still, at 20 input, and the fallback leaves them out.
         let revisions = crate::test_tables::api_prices();
-        let dearest = |at: i64, cell: fn(&ModelPrice) -> f64| {
-            revisions
-                .in_force(at)
-                .models
-                .values()
-                .map(|row| cell(&row.standard))
-                .fold(0.0, f64::max)
-                / 1_000_000.0
-        };
-        let cells = |at: i64| {
-            [
-                dearest(at, |p| p.input),
-                dearest(at, |p| p.cache_read),
-                dearest(at, |p| p.cache_write_5m),
-                dearest(at, |p| p.cache_write_1h),
-                dearest(at, |p| p.output),
-            ]
-        };
         let rates = |at: i64| {
             let r = revisions.fallback_rates(at);
             [r.input, r.cache_read, r.write_5m, r.write_1h, r.output].map(Option::unwrap)
         };
-        assert_eq!(rates(JANUARY_2026), cells(JANUARY_2026));
-        assert_eq!(rates(FEBRUARY_2026), cells(FEBRUARY_2026));
+        assert_eq!(
+            rates(JANUARY_2026),
+            [
+                10.0 / 1_000_000.0,
+                1.0 / 1_000_000.0,
+                12.5 / 1_000_000.0,
+                20.0 / 1_000_000.0,
+                50.0 / 1_000_000.0
+            ]
+        );
         assert_eq!(
             rates(FEBRUARY_2026),
-            cells(JANUARY_2026).map(|cell| cell * 2.0),
+            [
+                20.0 / 1_000_000.0,
+                2.0 / 1_000_000.0,
+                25.0 / 1_000_000.0,
+                40.0 / 1_000_000.0,
+                100.0 / 1_000_000.0
+            ],
             "the second entry doubles every standard cell"
         );
     }

@@ -574,18 +574,24 @@ mod tests {
             kind: "probe",
             ..plan_row()
         };
-        for at in [JANUARY_2026, FEBRUARY_2026] {
-            let rates = api_prices().fallback_rates(at);
-            let cell = |tokens: u64, rate: Option<f64>| tokens as f64 * rate.unwrap();
-            let want = CostSplit {
-                input_usd: cell(counts.input, rates.input),
-                cache_read_usd: cell(counts.cache_read, rates.cache_read),
-                cache_write_usd: cell(counts.write_5m, rates.write_5m)
-                    + cell(counts.write_1h, rates.write_1h),
-                output_usd: cell(counts.output, rates.output),
-            };
+        // The test table's dearest standard cells are Opus 5.5's: 10 input, 1 cache read, 12.5 and 20 for the two
+        // writes and 50 output per million in January, each doubled in February.
+        for (at, [input_usd, cache_read_usd, cache_write_usd, output_usd]) in [
+            (JANUARY_2026, [0.01, 0.002, 0.01175, 0.0025]),
+            (FEBRUARY_2026, [0.02, 0.004, 0.0235, 0.005]),
+        ] {
             let priced = price(&RowKey { at, ..probe }, counts);
-            assert_eq!(priced.usd, Some(want), "{at}");
+            let usd = priced
+                .usd
+                .as_ref()
+                .expect("a probe row prices at the fallback");
+            assert!(
+                close(Some(usd.input_usd), input_usd)
+                    && close(Some(usd.cache_read_usd), cache_read_usd)
+                    && close(Some(usd.cache_write_usd), cache_write_usd)
+                    && close(Some(usd.output_usd), output_usd),
+                "{at}: {usd:?}"
+            );
             assert!(
                 windows(&priced.equivalent)
                     .iter()

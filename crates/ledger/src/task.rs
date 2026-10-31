@@ -2072,7 +2072,7 @@ mod tests {
         assert_eq!(utc_stamp(i64::MAX), i64::MAX.to_string());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_request_record_waits_for_room_in_the_channel_rather_than_drop() {
         let (ledger, mut rx) = stalled();
         ledger.record(Record::Event(EventRecord::default()));
@@ -2085,6 +2085,8 @@ mod tests {
             }];
             async move { land_all(&ledger, records).await }
         });
+        // The paused clock moves only once every other task is parked, so the sleep ends with the landing run up
+        // to its send.
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(ledger.dropped(), 0, "the record was not dropped");
         assert!(
