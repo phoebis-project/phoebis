@@ -9930,7 +9930,8 @@ const WITH_TIER_PAIR: (Option<&str>, Option<&str>) = (Some("max_5x"), Some(TIER)
 const UPGRADED_PAIR: (Option<&str>, Option<&str>) =
     (Some("max_20x"), Some("default_claude_max_20x"));
 
-/// A profile read that found `account` on Max 20x, stored as the quota poll stores it.
+/// A profile read that found `account` on the Ultra tier (`default_claude_max_20x`), stored as the quota poll
+/// stores it.
 fn upgraded(store: &Store, account: &str) {
     store
         .set_profile(

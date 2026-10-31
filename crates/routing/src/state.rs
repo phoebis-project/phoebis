@@ -813,8 +813,8 @@ impl BurnUnit {
 
     /// The table `rates` prices this unit's copy through: under `WindowShare` the table of `window` for the regime
     /// `entrypoint` names, the base one for `None`, the 5-hour table on `five_hour` and the 7-day table on every other
-    /// window, since a model week reads its shared window's row. Dollars cost the same whatever the entrypoint and the
-    /// window.
+    /// window. On a model week that table answers the pin's Pro-week figure, without the week's factor, since no caller
+    /// asks for the week's own share. Dollars cost the same whatever the entrypoint and the window.
     pub fn table<'a>(
         self,
         rates: &'a BurnRates,
@@ -3013,8 +3013,9 @@ impl RoutingState {
     /// The pins of `account_id` that `keep` admits, each priced in `unit` through `rates` and decayed to `now`, and
     /// the sum over the priced pins. `keep` is the account's current pool, built by the caller from the snapshot
     /// this state does not hold, so a pin a former pool left on the account is outside the round. Under
-    /// `WindowShare` a burn is the subscription cost model's anchor share of `window` per second, and under `Usd` the
-    /// pin's fast usage and the usage of the client's own classifier calls count beside its row's copy, as
+    /// `WindowShare` a burn is the subscription cost model's anchor share of `window` per second, and on a model week
+    /// the Pro-week figure through the 7-day row, since no caller asks for the week's own share. Under `Usd` the pin's
+    /// fast usage and the usage of the client's own classifier calls count beside its row's copy, as
     /// `BurnRates::price_pin` sums them, whatever `window` names. `None` for a pin burning a type its row cannot price.
     #[allow(clippy::too_many_arguments)]
     pub fn burn_of(

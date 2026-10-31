@@ -13722,8 +13722,9 @@ fn rounding(pins: Vec<PinRow>) -> RoutingState {
 /// hour, a sixth of that of the 7-day window and a third of the Fable week, whatever its model, and a cache-write token
 /// prices as `ratio_pricer`'s. The entrypoint `desk`, the cases' own regime, prices half the 5-hour figure, and no
 /// entrypoint or any other one the base. A model spelled `guess` or `unpriced`, or the unlisted `claude-opus-4-8`,
-/// prices nothing. The Max 20x equivalent of a window prices a write as the share on `TIER` does, whatever the
-/// destination's tier, so a rewrite's Fable-week equivalent is twice its 7-day one.
+/// prices nothing. Its Pro share of a window, the figure `with_equivalent` answers, prices a write as the share on
+/// `TIER` does, whatever the destination's tier, so a rewrite's Fable-week share is twice its 7-day one, the
+/// Pro-week figure.
 fn hourly_pricer() -> SharePricer {
     fn per_token(window: &str, entrypoint: Option<&str>, tier: &str, model: &str) -> Option<f64> {
         if tier != TIER
@@ -18071,7 +18072,7 @@ fn tiered(pool: Pool) -> RegistrySnapshot {
 /// One five-minute cache-write token a ten-millionth of the 5-hour window, a sixty-millionth of the 7-day window
 /// and a thirty-millionth of the Fable week on `TIER`, a one-hour write token twice that, the same ratios per input
 /// token a second for a burn, and nothing for a model spelled `unpriced`, so a case can hold a pin the tables do not
-/// weight. The Max 20x equivalent of a window is the write's share of it on `TIER`.
+/// weight. The Pro share of a window is the write's share of it on `TIER`.
 fn ratio_pricer() -> SharePricer {
     fn ratio(window: &str, tier: &str, model: &str, tokens: f64) -> Option<f64> {
         if tier != TIER || model.contains("unpriced") {
@@ -22039,8 +22040,8 @@ const CACHE_READ_WEIGHT: f64 = 0.005;
 
 /// The replay's pricer on `TIER`, out of band: one cache-write token a ten-millionth of the 5-hour window, a
 /// sixty-millionth of the 7-day window and twice that of the Fable week, the same ratios per token a second for a
-/// burn, and a cache-read token at `CACHE_READ_WEIGHT` of a write. The Max 20x equivalent of a window is the write's
-/// share of it on `TIER`.
+/// burn, and a cache-read token at `CACHE_READ_WEIGHT` of a write. The Pro share of a window is the write's share
+/// of it on `TIER`.
 fn replay_pricer() -> SharePricer {
     fn per_token(window: &str, tier: &str) -> Option<f64> {
         if tier != TIER {
@@ -23064,8 +23065,8 @@ fn pro_tier_pricer() -> SharePricer {
 
 #[test]
 fn a_free_organization_on_the_pro_tier_prices_no_capacity_and_reads_as_an_untiered_account() {
-    // The account under test is a free organization on the Pro tier, a term with no tier or a Max 20x term, beside a
-    // Max 20x sibling, under a pricer that prices the Pro tier.
+    // The account under test is a free organization on the Pro tier, a term with no tier or an Ultra term, beside an
+    // Ultra sibling, under a pricer that prices the Pro tier.
     let term = |id: &str, tier: Option<&str>, plan: Option<&str>| SubscriptionTerm {
         account_id: id.into(),
         tier: tier.map(String::from),
@@ -23123,7 +23124,7 @@ fn a_free_organization_on_the_pro_tier_prices_no_capacity_and_reads_as_an_untier
         ),
         ("least_bad", "least_bad", "fits"),
         "the free organization prices no rewrite, so the move reads it least bad as it reads an untiered sibling, \
-         while the Max 20x sibling prices the rewrite and fits"
+         while the Ultra sibling prices the rewrite and fits"
     );
     assert_eq!(
         line(&on_free.record, "fit"),
@@ -23163,7 +23164,7 @@ fn a_free_organization_on_the_pro_tier_prices_no_capacity_and_reads_as_an_untier
     assert_eq!(
         (free_entry, untiered_entry, max_entry),
         (false, false, true),
-        "the slow-down writes an entry on the Max 20x account alone"
+        "the slow-down writes an entry on the Ultra account alone"
     );
     assert_eq!(
         line(&free_turn.record, "move:shed"),
@@ -23178,7 +23179,7 @@ fn a_free_organization_on_the_pro_tier_prices_no_capacity_and_reads_as_an_untier
     assert!(
         candidate(&free_turn.record, "a").burn.is_empty()
             && !candidate(&max_turn.record, "a").burn.is_empty(),
-        "the free organization prices no burn, the Max 20x account its own: {:?} against {:?}",
+        "the free organization prices no burn, the Ultra account its own: {:?} against {:?}",
         candidate(&free_turn.record, "a").burn,
         candidate(&max_turn.record, "a").burn
     );
@@ -26650,8 +26651,8 @@ fn a_pick_between_a_fable_pin_and_an_opus_pin_of_one_prompt_size_marks_the_opus_
     assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
 }
 
-/// `hourly_pricer` with a second tier, `pro`, whose shares and burns read five times those on `TIER`, while the Max
-/// 20x equivalent is `hourly_pricer`'s whatever the tier.
+/// `hourly_pricer` with a second tier, `pro`, whose shares and burns read five times those on `TIER`, while the Pro
+/// share is `hourly_pricer`'s whatever the tier.
 fn two_tier_pricer() -> SharePricer {
     fn on_pro(tier: &str) -> (&str, f64) {
         if tier == "pro" {
@@ -26734,7 +26735,7 @@ fn a_covering_pins_rewrite_reads_one_figure_whatever_the_destinations_tier() {
         on_max
             .zip(on_pro)
             .is_some_and(|(max, pro)| (max - pro).abs() < 1e-12),
-        "the figure is the pin's alone, the same on a Max 20x and a Pro destination: {on_max:?} against {on_pro:?}"
+        "the figure is the pin's alone, the same on an Ultra and a Pro destination: {on_max:?} against {on_pro:?}"
     );
     assert_eq!(
         (window_on_max, window_on_pro),
