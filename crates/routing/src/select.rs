@@ -738,13 +738,14 @@ pub(crate) fn rewrite_write(request: &SelectRequest, pin: Option<&PinRow>) -> Pi
 /// The rewrite per plan window (`rewrite_write`'s write on `tier` at the band of `now`) and the burn per plan window
 /// (the pin's own decayed burn over its account's speed, or for a fresh session the decayed burn of the row a failover
 /// took off its source over that source's speed, else the median of the pool's priced warm pins, each over its
-/// account's speed, absent with none, which reads as zero), on the windows the request's model draws. A window nothing
-/// prices is absent from both. The destination gate's fit and the shedding round read it. The third member is the
-/// entrypoint the burn is priced under (the pin's, the failed-over row's, or the request's for the median), whose band
-/// a reader that weighs the burn over a span reads it under.
+/// account's speed, absent with none, which reads as zero), on the windows the request's model draws that the
+/// destination `account_id` has. A window nothing prices is absent from both. The destination gate's fit and the
+/// shedding round read it. The third member is the entrypoint the burn is priced under (the pin's, the failed-over
+/// row's, or the request's for the median), whose band a reader that weighs the burn over a span reads it under.
 pub(crate) fn pin_figures<'a>(
     state: &RoutingState,
     pool: &PoolRow,
+    account_id: &str,
     request: &'a SelectRequest,
     figures: Figures<'a>,
     tier: &str,
@@ -772,7 +773,7 @@ pub(crate) fn pin_figures<'a>(
     };
     let mut rewrite = BTreeMap::new();
     let mut burn = BTreeMap::new();
-    for window in plan_windows(model) {
+    for window in plan_windows(model).filter(|window| state.has_window(account_id, window)) {
         // Nothing priced, or a share of nothing, is nothing to book.
         if let Some(share) = share
             .price(
@@ -2267,6 +2268,7 @@ fn run(
             let (rewrite, burn, regime) = pin_figures(
                 state,
                 pool,
+                &chosen.account_id,
                 request,
                 Figures::of(moving.as_ref(), &prior),
                 tier,
@@ -3114,7 +3116,7 @@ pub(crate) fn fit_of(
         return read;
     }
     let (rewrite, pin_burn, pin_regime) = tier
-        .map(|tier| pin_figures(state, pool, request, figures, tier, now))
+        .map(|tier| pin_figures(state, pool, candidate, request, figures, tier, now))
         .unwrap_or_default();
     let share = state.share();
     let projections = projections_of(
@@ -3392,8 +3394,8 @@ pub fn elapsed_share_at(window: &str, reset_at: Option<i64>, end: Option<i64>, a
 
 /// Whether the account's allowance is known: a paid source (an api_key account or a usage-based seat) has no plan
 /// window to read, and a subscription account holds a prediction of every window `holds_allowance` reads for the
-/// request: the model's own week and both shared windows for a model with a week of its own, both shared windows
-/// otherwise.
+/// request that the account has: the model's own week and each shared window of the account's set for a model with
+/// a week of its own, each shared window of the set otherwise.
 fn allowance_known(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -3402,11 +3404,13 @@ fn allowance_known(
     now: i64,
 ) -> bool {
     let known = |name: &str| state.predicted(account_id, name, now).is_some();
+    // A shared window the account's newest clean poll lacked has no reading to wait for.
+    let shared = |name: &str| !state.has_window(account_id, name) || known(name);
     paid_source(snapshot, account_id)
         || if window != SEVEN_DAY {
-            known(window) && known(FIVE_HOUR) && known(SEVEN_DAY)
+            known(window) && shared(FIVE_HOUR) && shared(SEVEN_DAY)
         } else {
-            known(FIVE_HOUR) && known(SEVEN_DAY)
+            shared(FIVE_HOUR) && shared(SEVEN_DAY)
         }
 }
 
@@ -4965,8 +4969,15 @@ fn shed_round(
             return (read, None);
         };
         let destination_tier = snapshot.priced_tier(&destination).unwrap_or_default();
-        let (rewrite, pin_burn, regime) =
-            pin_figures(state, pool, &req, Figures::Pin(p), destination_tier, now);
+        let (rewrite, pin_burn, regime) = pin_figures(
+            state,
+            pool,
+            &destination,
+            &req,
+            Figures::Pin(p),
+            destination_tier,
+            now,
+        );
         read.runway_ms = fit.runway_ms;
         let model = req.canonical_model.as_str();
         // The move's cost is the share the rewrite spends on the scarce weekly windows, since the 5-hour window
@@ -7701,6 +7712,7 @@ mod banded_tests {
                     tier: None,
                 },
             ),
+            T,
         );
         // A tenth of the window an hour each, booked at T, out of the band.
         let y = 0.1 / 3_600.0;
@@ -7853,6 +7865,7 @@ mod banded_tests {
                         tier: None,
                     },
                 ),
+                T,
             );
             slow_down_of(&state, &snapshot, pool, "b", tier, T).expect("a read")
         };

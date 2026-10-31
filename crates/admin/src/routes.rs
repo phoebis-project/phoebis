@@ -2237,9 +2237,9 @@ pub(crate) struct Account {
     /// canceled.
     pub subscription: Option<AccountSubscription>,
     /// The account's quota windows: the router's reported sample first and the ledger's samples of the last day for
-    /// the rest, the ledger's alone for an `api_key` account. Empty for an account with no reading, and for an `oauth`
-    /// account in the `disconnected` or `reauth_required` state or flagged `plan_ended_at`, whose last reading the view
-    /// no longer answers.
+    /// the rest, the ledger's alone for an `api_key` account. A ledger sample of a shared window the account's window
+    /// set lacks is left out. Empty for an account with no reading, and for an `oauth` account in the `disconnected` or
+    /// `reauth_required` state or flagged `plan_ended_at`, whose last reading the view no longer answers.
     pub windows: Vec<AccountWindow>,
     /// The account's slow-down entry in force as the router reads it, null on an api_key account, an untiered account
     /// or one with no 5-hour reading, an account in no pool, a pool with the slow-down off, and an account no pinned
@@ -2662,6 +2662,8 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 !reported
                     .is_some_and(|s| is_plan_window(&q.window) && s.reading(&q.window).is_some())
             })
+            // A row the ledger kept from before the poll that dropped its window is no window of the account.
+            .filter(|q| reported.is_none_or(|s| s.has_window(&q.window)))
             .map(|q| {
                 let id = account_window_id(&q.window);
                 let (projection, horizon, burn) = window_projection(ctx, &row.id, id);

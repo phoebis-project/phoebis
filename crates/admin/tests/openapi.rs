@@ -1448,9 +1448,10 @@ async fn the_account_windows_doc_says_a_disconnected_reauth_required_or_plan_end
         description.as_deref(),
         Some(
             "The account's quota windows: the router's reported sample first and the ledger's samples of the last day \
-             for the rest, the ledger's alone for an `api_key` account. Empty for an account with no reading, and \
-             for an `oauth` account in the `disconnected` or `reauth_required` state or flagged `plan_ended_at`, \
-             whose last reading the view no longer answers."
+             for the rest, the ledger's alone for an `api_key` account. A ledger sample of a shared window the \
+             account's window set lacks is left out. Empty for an account with no reading, and for an `oauth` \
+             account in the `disconnected` or `reauth_required` state or flagged `plan_ended_at`, whose last reading \
+             the view no longer answers."
         ),
         "{windows}"
     );

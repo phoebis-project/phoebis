@@ -11,6 +11,7 @@ fk pool_members 0 0 accounts account_id id NO ACTION CASCADE
 fk pool_members 1 0 pools pool_id id NO ACTION CASCADE
 fk shed_rounds 0 0 accounts account_id id NO ACTION CASCADE
 fk usage_credits 0 0 accounts account_id id NO ACTION CASCADE
+fk usage_window_sets 0 0 accounts account_id id NO ACTION CASCADE
 fk usage_windows 0 0 accounts account_id id NO ACTION CASCADE
 index accounts_identity_uuid CREATE UNIQUE INDEX accounts_identity_uuid ON accounts(json_extract(identity_json,'$.account_uuid'))WHERE identity_json IS NOT NULL
 index affinity_written_at CREATE INDEX affinity_written_at ON affinity(written_at)
@@ -50,4 +51,5 @@ table session_first_seen CREATE TABLE session_first_seen(key_id TEXT NOT NULL,se
 table session_memory CREATE TABLE "session_memory"(key_id TEXT NOT NULL,key_generation INTEGER NOT NULL,session_id TEXT NOT NULL,agent_id TEXT NOT NULL,record_version INTEGER NOT NULL,payload TEXT NOT NULL,last_seen INTEGER NOT NULL,PRIMARY KEY(key_id,key_generation,session_id,agent_id))
 table shed_rounds CREATE TABLE shed_rounds(pool_id TEXT NOT NULL,account_id TEXT NOT NULL REFERENCES accounts(id)ON DELETE CASCADE,incarnation INTEGER NOT NULL,round_at INTEGER NOT NULL,PRIMARY KEY(pool_id,account_id))
 table usage_credits CREATE TABLE usage_credits(account_id TEXT PRIMARY KEY REFERENCES accounts(id)ON DELETE CASCADE,enabled INTEGER NOT NULL,disabled_reason TEXT,utilization REAL,observed_at INTEGER NOT NULL,incarnation INTEGER NOT NULL)
+table usage_window_sets CREATE TABLE usage_window_sets(account_id TEXT PRIMARY KEY REFERENCES accounts(id)ON DELETE CASCADE,windows TEXT NOT NULL,observed_at INTEGER NOT NULL,incarnation INTEGER NOT NULL)
 table usage_windows CREATE TABLE usage_windows(account_id TEXT NOT NULL REFERENCES accounts(id)ON DELETE CASCADE,window TEXT NOT NULL,utilization REAL NOT NULL,reset INTEGER,observed_at INTEGER NOT NULL,incarnation INTEGER NOT NULL DEFAULT 0,plan TEXT,tier TEXT,PRIMARY KEY(account_id,window))

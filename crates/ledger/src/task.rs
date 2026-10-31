@@ -1697,6 +1697,7 @@ enum Observation {
     },
     Samples {
         quota: Vec<QuotaSampleRecord>,
+        poll: bool,
     },
 }
 
@@ -1787,10 +1788,11 @@ async fn land_acknowledging(
                             attempts,
                         });
                     }
-                    Record::Samples { quota, extra } => {
+                    Record::Samples { quota, extra, poll } => {
                         insert_samples_in(&tx, quota, extra.as_ref())?;
                         observations.push(Observation::Samples {
                             quota: quota.clone(),
+                            poll: *poll,
                         });
                     }
                     Record::Decision(row) => {
@@ -1885,7 +1887,7 @@ async fn land_acknowledging(
                             &attempts,
                         );
                     }
-                    Observation::Samples { quota } => metrics.observe_samples(&quota),
+                    Observation::Samples { quota, poll } => metrics.observe_samples(&quota, poll),
                 }
             }
             Landed::Written

@@ -49,6 +49,9 @@ pub enum Record {
     Samples {
         quota: Vec<QuotaSampleRecord>,
         extra: Option<ExtraUsageSampleRecord>,
+        /// True from the poll loop, false from the head path: a poll's samples settle which shared windows the account
+        /// has, so a window it lacks loses its gauge series.
+        poll: bool,
     },
     Decision(Box<DecisionRow>),
     CacheMap(CacheMapWrite),
@@ -277,7 +280,11 @@ impl Assembler {
                             attempt.usage_based,
                         );
                         if !quota.is_empty() || extra.is_some() {
-                            records.push(Record::Samples { quota, extra });
+                            records.push(Record::Samples {
+                                quota,
+                                extra,
+                                poll: false,
+                            });
                         }
                     }
                 }

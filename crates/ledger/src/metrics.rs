@@ -12,7 +12,7 @@ use axum::routing::get;
 use axum::Router;
 use phoebis_bus::{Bus, SubscriberStats};
 use phoebis_oauth::Clock;
-use phoebis_routing::{RouterHandle, WriterStatus};
+use phoebis_routing::{RouterHandle, WriterStatus, FIVE_HOUR, SEVEN_DAY};
 
 use crate::histogram::{bucket_edges, bucket_index, top_edge, BUCKET_COUNT};
 use crate::pricing::{PriceTable, Pricing};
@@ -81,6 +81,13 @@ impl Metrics {
     fn set(&self, name: &'static str, labels: Labels, value: f64) {
         let mut inner = self.inner.lock().expect(LOCK_POISONED);
         inner.gauges.entry(name).or_default().insert(labels, value);
+    }
+
+    fn remove(&self, name: &'static str, labels: Labels) {
+        let mut inner = self.inner.lock().expect(LOCK_POISONED);
+        if let Some(series) = inner.gauges.get_mut(name) {
+            series.remove(&labels);
+        }
     }
 
     pub fn observe_request(
@@ -161,7 +168,11 @@ impl Metrics {
         }
     }
 
-    pub fn observe_samples(&self, quota: &[QuotaSampleRecord]) {
+    /// Sets each sample's series and, under `poll`, removes the `phoebis_account_ratelimit_utilization` series of a
+    /// shared window the account's samples lack where they carry at least one shared window, so a dropped window's
+    /// series leaves with it. A head removes nothing.
+    pub fn observe_samples(&self, quota: &[QuotaSampleRecord], poll: bool) {
+        let mut carried: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
         for q in quota {
             if let Some(u) = q.utilization {
                 self.set(
@@ -172,6 +183,25 @@ impl Metrics {
                     ],
                     u,
                 );
+                carried.entry(&q.account_id).or_default().insert(&q.window);
+            }
+        }
+        if !poll {
+            return;
+        }
+        // A poll that carried neither shared window is no reading of the account, so its series stand as the
+        // router's windows do.
+        for (account, windows) in carried {
+            if !windows.contains(FIVE_HOUR) && !windows.contains(SEVEN_DAY) {
+                continue;
+            }
+            for window in [FIVE_HOUR, SEVEN_DAY] {
+                if !windows.contains(window) {
+                    self.remove(
+                        "phoebis_account_ratelimit_utilization",
+                        vec![("account", account.to_string()), ("window", window.into())],
+                    );
+                }
             }
         }
     }

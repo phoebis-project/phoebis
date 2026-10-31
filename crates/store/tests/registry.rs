@@ -95,17 +95,17 @@ fn rename(
 }
 
 #[test]
-fn a_fresh_registry_is_at_version_two_and_a_second_open_changes_nothing() {
+fn a_fresh_registry_is_at_version_three_and_a_second_open_changes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 2);
+    assert_eq!(store.schema_version().unwrap(), 3);
     drop(store);
     let again = Store::open(&path, &key).unwrap();
     assert_eq!(
         again.schema_version().unwrap(),
-        2,
+        3,
         "a second open runs no migration and keeps the version"
     );
     assert!(again.pools().unwrap().is_empty());
@@ -128,7 +128,7 @@ fn columns_of(conn: &rusqlite::Connection, table: &str) -> Vec<String> {
 }
 
 #[test]
-fn a_version_one_registry_opens_at_two_with_the_new_columns_at_their_defaults_and_no_all_time_counters(
+fn a_version_one_registry_opens_at_three_with_the_new_columns_at_their_defaults_and_no_all_time_counters(
 ) {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
@@ -187,7 +187,7 @@ fn a_version_one_registry_opens_at_two_with_the_new_columns_at_their_defaults_an
             })
             .unwrap());
     }
-    // The file as a version-1 build left it: the step's columns and tables taken back, the counters' table in the
+    // The file as a version-1 build left it: the steps' columns and tables taken back, the counters' table in the
     // baseline's shape with an all-time row, and the marker at 1.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
@@ -196,6 +196,7 @@ fn a_version_one_registry_opens_at_two_with_the_new_columns_at_their_defaults_an
          ALTER TABLE usage_windows DROP COLUMN plan;
          ALTER TABLE usage_windows DROP COLUMN tier;
          DROP TABLE session_first_seen;
+         DROP TABLE usage_window_sets;
          DROP TABLE keepalive_idle_returns;
          CREATE TABLE IF NOT EXISTS keepalive_idle_returns (
            pool_id TEXT NOT NULL, bucket INTEGER NOT NULL, reached INTEGER NOT NULL, returned INTEGER NOT NULL,
@@ -207,7 +208,7 @@ fn a_version_one_registry_opens_at_two_with_the_new_columns_at_their_defaults_an
     .unwrap();
     drop(conn);
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 2);
+    assert_eq!(store.schema_version().unwrap(), 3);
     assert!(
         store.load_keepalive().unwrap().2.is_empty(),
         "the all-time counters leave with their table"

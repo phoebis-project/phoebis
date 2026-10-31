@@ -184,15 +184,18 @@ fn gauges_come_from_the_routing_state_and_drops_are_counted_per_table() {
     metrics.observe_drop("requests");
     metrics.observe_drop("requests");
     metrics.observe_drop("events");
-    metrics.observe_samples(&[phoebis_ledger::QuotaSampleRecord {
-        account_id: "a".into(),
-        bucket: 0,
-        window: "five_hour".into(),
-        utilization: Some(0.42),
-        reset_at: None,
-        source: "head".into(),
-        observed_at: None,
-    }]);
+    metrics.observe_samples(
+        &[phoebis_ledger::QuotaSampleRecord {
+            account_id: "a".into(),
+            bucket: 0,
+            window: "five_hour".into(),
+            utilization: Some(0.42),
+            reset_at: None,
+            source: "head".into(),
+            observed_at: None,
+        }],
+        false,
+    );
     let gauges = RoutingGauges {
         cooldowns: vec![
             ("a".into(), "account".into(), 120),
@@ -712,20 +715,23 @@ fn every_registered_family_renders_and_nothing_else_does() {
 #[test]
 fn a_deleted_accounts_utilization_series_leaves_the_gauge() {
     let metrics = Metrics::new();
-    metrics.observe_samples(&[
-        QuotaSampleRecord {
-            account_id: "a".into(),
-            window: "five_hour".into(),
-            utilization: Some(0.4),
-            ..Default::default()
-        },
-        QuotaSampleRecord {
-            account_id: "b".into(),
-            window: "five_hour".into(),
-            utilization: Some(0.9),
-            ..Default::default()
-        },
-    ]);
+    metrics.observe_samples(
+        &[
+            QuotaSampleRecord {
+                account_id: "a".into(),
+                window: "five_hour".into(),
+                utilization: Some(0.4),
+                ..Default::default()
+            },
+            QuotaSampleRecord {
+                account_id: "b".into(),
+                window: "five_hour".into(),
+                utilization: Some(0.9),
+                ..Default::default()
+            },
+        ],
+        false,
+    );
     let gauges = RoutingGauges {
         live_accounts: BTreeSet::from(["a".to_string()]),
         ..RoutingGauges::default()
@@ -740,6 +746,52 @@ fn a_deleted_accounts_utilization_series_leaves_the_gauge() {
     assert!(
         !text.contains("account=\"b\""),
         "a deleted account's last reading does not scrape forever: {text}"
+    );
+}
+
+#[test]
+fn a_polls_samples_lacking_five_hour_remove_its_series_and_a_heads_remove_nothing() {
+    let sample = |window: &str, utilization: f64| QuotaSampleRecord {
+        account_id: "a".into(),
+        window: window.into(),
+        utilization: Some(utilization),
+        ..Default::default()
+    };
+    let gauges = RoutingGauges {
+        live_accounts: BTreeSet::from(["a".to_string()]),
+        ..RoutingGauges::default()
+    };
+    let scraped = |metrics: &Metrics, window: &str| {
+        metrics.render(&gauges, &[], 0).contains(&format!(
+            r#"phoebis_account_ratelimit_utilization{{account="a",window="{window}"}}"#
+        ))
+    };
+    let both_set = || {
+        let metrics = Metrics::new();
+        metrics.observe_samples(&[sample("five_hour", 0.4), sample("seven_day", 0.2)], true);
+        metrics
+    };
+
+    let metrics = both_set();
+    metrics.observe_samples(&[sample("seven_day", 0.3)], true);
+    assert!(
+        !scraped(&metrics, "five_hour"),
+        "a poll without the 5-hour window takes its series"
+    );
+    assert!(scraped(&metrics, "seven_day"));
+
+    let metrics = both_set();
+    metrics.observe_samples(&[sample("seven_day", 0.3)], false);
+    assert!(
+        scraped(&metrics, "five_hour") && scraped(&metrics, "seven_day"),
+        "a head carries some windows only, so it removes nothing"
+    );
+
+    let metrics = both_set();
+    metrics.observe_samples(&[sample("seven_day_fable", 0.5)], true);
+    assert!(
+        scraped(&metrics, "five_hour") && scraped(&metrics, "seven_day"),
+        "a poll that carried the model week alone is no reading of the shared windows"
     );
 }
 

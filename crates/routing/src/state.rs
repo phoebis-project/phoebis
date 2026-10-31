@@ -2,13 +2,13 @@
 //! newest utilization sample per account with the router's own charges since it, and the in-flight counts per key
 //! and per account. Every mutation reports whether it changed anything so the task knows what to write through.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use phoebis_store::{
     AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CreditsRow, FirstSeenRow,
     OverageRow, PinBurn, PinKey, PinRow, PoolMember, PoolRow, RekeyWrite, ResolutionRow,
-    RoutingLoad, StateCause, WindowRow,
+    RoutingLoad, StateCause, WindowRow, WindowSetRow,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -299,12 +299,37 @@ fn is_bucket_window(window: &str) -> bool {
 pub struct UtilizationSample {
     pub windows: BTreeMap<String, WindowReading>,
     pub observed_at: i64,
+    /// True for the sample a clean poll body built, false for a head's, which carries some windows only. A poll's
+    /// sample settles the shared window set and a head's never touches it.
+    pub poll: bool,
+    /// The shared windows the newest clean poll carried, `None` before the first clean poll, when both are of the
+    /// set. Covers `five_hour` and `seven_day` alone: a model week is read and booked whatever the set holds.
+    pub polled: Option<BTreeSet<String>>,
+    /// The `observed_at` of the poll that named `polled`, `None` with it: a poll older than it neither drops a
+    /// window nor rewrites the set, so two polls that drain out of age order settle on the newer.
+    pub polled_at: Option<i64>,
+}
+
+/// What `record_sample` did: the windows whose reading moved and, under a poll, the shared windows it dropped.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Recorded {
+    pub moved: Vec<String>,
+    pub dropped: Vec<String>,
 }
 
 impl UtilizationSample {
     /// The stored reading as it arrived.
     pub fn reading(&self, window: &str) -> Option<WindowReading> {
         self.windows.get(window).cloned()
+    }
+
+    /// Whether the account has `window`: a model week always, a shared window where `polled` is unset or names it.
+    pub fn has_window(&self, window: &str) -> bool {
+        (window != FIVE_HOUR && window != SEVEN_DAY)
+            || self
+                .polled
+                .as_ref()
+                .is_none_or(|polled| polled.contains(window))
     }
 
     /// The worst api_key bucket still standing at `now`: its reset ahead, or read within `BUCKET_LIFE_MS` when it
@@ -354,6 +379,12 @@ pub enum StateWrite {
     DeleteAffinity(Vec<(String, String)>),
     DeleteCooldown(String, String),
     DeletePin(PinKey),
+    /// A shared window a clean poll dropped: its stored reading leaves, fenced by the incarnation.
+    DeleteWindow {
+        account_id: String,
+        window: String,
+        incarnation: u64,
+    },
     /// A session's end alone: its first-seen rows written at or before `ended`, the pins untouched. The deferred fold
     /// holds one beside each `EndPin` that carries an end, so a pin upsert that replaces the pin's deletion leaves
     /// the cascade standing.
@@ -372,7 +403,7 @@ pub enum StateWrite {
     PurgeShedRounds {
         before: i64,
     },
-    /// The purge tick's sweep of window and credits rows no current holder of their id wrote.
+    /// The purge tick's sweep of window, window set and credits rows no current holder of their id wrote.
     PurgeStaleWindows,
     /// One resolution landing, committed as one transaction so the store never holds moved rows without the
     /// spelling row that finds them after a restart.
@@ -391,6 +422,8 @@ pub enum StateWrite {
     UpsertOverage(OverageRow),
     UpsertPin(PinRow),
     UpsertWindow(WindowRow),
+    /// The set a clean poll settled, written on every clean poll that settles it.
+    UpsertWindowSet(WindowSetRow),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1357,6 +1390,12 @@ impl RoutingState {
                 },
             );
         }
+        // Restored before the first poll answers, so a restart prices no shared window the account had lost.
+        for row in load.window_sets {
+            let sample = samples.entry(row.account_id).or_default();
+            sample.polled = Some(row.windows.split(',').map(String::from).collect());
+            sample.polled_at = Some(row.observed_at);
+        }
         RoutingState {
             accounting_degraded: false,
             affinity: Arc::new(RwLock::new(affinity_map)),
@@ -2161,18 +2200,41 @@ impl RoutingState {
         Some(evidence.reset.unwrap_or(evidence.observed_at + fallback_ms))
     }
 
-    /// Folds `sample` in window by window and answers the names of the windows it moved, empty when none. A
-    /// reading lands only when it is newer than the one already stored for that name, so an api_key head that
-    /// carries one model's buckets never erases another model's. A moved plan window's charges observed at or
-    /// before the new reading are dropped, since the reading carries them. Past `MAX_BUCKETS_PER_ACCOUNT` bucket
-    /// windows the oldest readings leave, and a window that left is not reported as moved.
-    pub fn record_sample(&mut self, account_id: &str, sample: UtilizationSample) -> Vec<String> {
+    /// Folds `sample` in window by window. A reading lands only when it is newer than the one already stored for that
+    /// name, so an api_key head that carries one model's buckets never erases another model's, and a shared window
+    /// the set lacks lands only from the poll that puts it back in the set. A moved plan window's charges observed at
+    /// or before the new reading are dropped, since the reading carries them. Past `MAX_BUCKETS_PER_ACCOUNT` bucket
+    /// windows the oldest readings leave, and a window that left is not reported as moved. Then, under `poll` with at
+    /// least one shared window in the sample and the sample newer than `polled_at`, drops each shared window the
+    /// sample lacks (its reading, its charges, its slow-down entries with their `Ended` edge at `now`) and sets
+    /// `polled` to the shared windows the sample carries and `polled_at` to its `observed_at`. A head, and a poll
+    /// older than the set, drop nothing and write no set.
+    pub fn record_sample(
+        &mut self,
+        account_id: &str,
+        sample: UtilizationSample,
+        now: i64,
+    ) -> Recorded {
         if sample.windows.is_empty() {
-            return Vec::new();
+            return Recorded::default();
         }
+        let carried: BTreeSet<String> = [FIVE_HOUR, SEVEN_DAY]
+            .into_iter()
+            .filter(|window| sample.windows.contains_key(*window))
+            .map(String::from)
+            .collect();
         let current = self.samples.entry(account_id.to_string()).or_default();
+        // A body with no shared window is no reading of the account, so it settles nothing, and a poll that drains
+        // after a newer one would delete a reading the newer one carries.
+        let settles = sample.poll
+            && !carried.is_empty()
+            && current.polled_at.is_none_or(|at| sample.observed_at > at);
         let mut moved = Vec::new();
         for (window, reading) in sample.windows {
+            // The set the newest clean poll named bounds what a head, or a poll older than it, lands.
+            if !settles && !current.has_window(&window) {
+                continue;
+            }
             let newer = current
                 .windows
                 .get(&window)
@@ -2210,7 +2272,20 @@ impl RoutingState {
                 moved.retain(|w| *w != window);
             }
         }
-        if !moved.is_empty() {
+        let mut dropped = Vec::new();
+        if settles {
+            for window in [FIVE_HOUR, SEVEN_DAY] {
+                if !carried.contains(window) && current.windows.remove(window).is_some() {
+                    if let Some(charges) = self.charges.get_mut(account_id) {
+                        charges.0.remove(window);
+                    }
+                    dropped.push(window.to_string());
+                }
+            }
+            current.polled = Some(carried);
+            current.polled_at = Some(sample.observed_at);
+        }
+        if !moved.is_empty() || !dropped.is_empty() {
             current.observed_at = current
                 .windows
                 .values()
@@ -2218,7 +2293,22 @@ impl RoutingState {
                 .max()
                 .unwrap_or(0);
         }
-        moved
+        // A slow-down reads the 5-hour window, so its spans end with the window rather than at the purge an hour on.
+        if dropped.iter().any(|window| window == FIVE_HOUR) {
+            let mut ended: Vec<(String, String)> = self
+                .slow_downs
+                .keys()
+                .filter(|(_, account)| account == account_id)
+                .cloned()
+                .collect();
+            ended.sort();
+            for key in ended {
+                if let Some(entry) = self.slow_downs.remove(&key) {
+                    self.end_slow_down(&key, &entry, now);
+                }
+            }
+        }
+        Recorded { moved, dropped }
     }
 
     /// Books the shares on their windows at `at`; a window with no entry keeps its reading. A charge lives until a
@@ -2365,6 +2455,29 @@ impl RoutingState {
 
     pub fn sample(&self, account_id: &str) -> Option<&UtilizationSample> {
         self.samples.get(account_id)
+    }
+
+    /// `UtilizationSample::has_window` on the account's stored sample, true for an account without one.
+    pub fn has_window(&self, account_id: &str, window: &str) -> bool {
+        self.samples
+            .get(account_id)
+            .is_none_or(|sample| sample.has_window(window))
+    }
+
+    /// The row of the account's set for the writer, `None` while the set is unset.
+    pub fn window_set_row(&self, account_id: &str, incarnation: u64) -> Option<WindowSetRow> {
+        let sample = self.samples.get(account_id)?;
+        let windows = sample.polled.as_ref()?;
+        Some(WindowSetRow {
+            account_id: account_id.to_string(),
+            incarnation,
+            observed_at: sample.polled_at?,
+            windows: windows
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(","),
+        })
     }
 
     /// The row that persists `state` for `account_id`.
@@ -3048,10 +3161,11 @@ impl RoutingState {
         shares
     }
 
-    /// Folds `add` over each kept pin's decayed rate at `now` on every plan window its model draws, with the pin's
-    /// entrypoint, in the pin map's order. A priced pin alone reaches `add`. `keep` decides which rows count, beside
-    /// the skip of a row a live booking names, with no idle test: a row idle past the TTL stands until its placement
-    /// replaces it or the purge takes it, and a placement's own reads leave the request's own row out through `keep`.
+    /// Folds `add` over each kept pin's decayed rate at `now` on every plan window its model draws that the account's
+    /// set has, with the pin's entrypoint, in the pin map's order, so every fold over it names the set's windows
+    /// alone. A priced pin alone reaches `add`. `keep` decides which rows count, beside the skip of a row a live
+    /// booking names, with no idle test: a row idle past the TTL stands until its placement replaces it or the purge
+    /// takes it, and a placement's own reads leave the request's own row out through `keep`.
     fn pin_rates<'a>(
         &'a self,
         account_id: &str,
@@ -3079,7 +3193,9 @@ impl RoutingState {
             if !reserved.is_empty() && reserved.contains(&pin.key()) {
                 continue;
             }
-            for window in plan_windows(&pin.model) {
+            for window in
+                plan_windows(&pin.model).filter(|window| self.has_window(account_id, window))
+            {
                 // The plain average, since the banded copy weighs past renewals' bands and the rate reads the band
                 // of now. Every type decays by one factor, so decaying the share equals pricing the decayed rates.
                 if let Some(rate) =
@@ -3652,24 +3768,29 @@ impl RoutingState {
             .into_iter()
             .filter_map(|key| self.slow_downs.remove(&key).map(|entry| (key, entry)))
             .collect();
-        // No start stands without its end: a dropped span ends at the factor's return, at the passed reset of the
-        // window it slowed for where that reset dropped it, or at the last read where the factor never returned.
-        for ((pool_id, account_id), entry) in &dropped {
-            if let Some(since) = entry.slowed_since {
-                let end = span_end(entry, self.stale_reset(account_id, entry, now));
-                self.slow_down_edges.push((
-                    pool_id.clone(),
-                    account_id.clone(),
-                    SlowDownEdge::Ended {
-                        since,
-                        duration_ms: end - since,
-                        factor_min: entry.factor_min,
-                        held_ms: entry.held_ms,
-                    },
-                ));
-            }
+        for (key, entry) in &dropped {
+            self.end_slow_down(key, entry, now);
         }
         dropped
+    }
+
+    /// Records the `Ended` edge of a removed entry's open span, keyed by pool id and account id.
+    fn end_slow_down(&mut self, key: &(String, String), entry: &SlowDownState, now: i64) {
+        // No start stands without its end: a dropped span ends at the factor's return, at the passed reset of the
+        // window it slowed for where that reset dropped it, or at the last read where the factor never returned.
+        if let Some(since) = entry.slowed_since {
+            let end = span_end(entry, self.stale_reset(&key.1, entry, now));
+            self.slow_down_edges.push((
+                key.0.clone(),
+                key.1.clone(),
+                SlowDownEdge::Ended {
+                    since,
+                    duration_ms: end - since,
+                    factor_min: entry.factor_min,
+                    held_ms: entry.held_ms,
+                },
+            ));
+        }
     }
 
     /// The projection stamps no test reads: every stamp of a pool whose shedding is off or that left the registry, the
@@ -4525,6 +4646,7 @@ mod tests {
                 ..Default::default()
             }
             .with("itpm:x", reading(0.4, 2_000)),
+            2_000,
         );
         state.record_sample(
             "a",
@@ -4533,6 +4655,7 @@ mod tests {
                 ..Default::default()
             }
             .with("itpm:y", reading(0.6, 2_100)),
+            2_100,
         );
         let stored = state.sample("a").expect("a sample was recorded");
         assert_eq!(
@@ -4549,9 +4672,10 @@ mod tests {
                 ..Default::default()
             }
             .with("itpm:x", reading(0.9, 1_000)),
+            2_100,
         );
         assert!(
-            moved.is_empty(),
+            moved.moved.is_empty(),
             "1_000 is older than the 2_000 x already carries"
         );
         assert_eq!(
@@ -4570,8 +4694,9 @@ mod tests {
                 ..Default::default()
             }
             .with("itpm:x", reading(0.1, 3_000)),
+            3_000,
         );
-        assert!(!moved.is_empty());
+        assert!(!moved.moved.is_empty());
         assert_eq!(
             state
                 .sample("a")
@@ -4640,16 +4765,19 @@ mod tests {
         state.record_sample(
             "a",
             UtilizationSample::default().with(FIVE_HOUR, reading(1_000)),
+            1_000,
         );
         for i in 0..MAX_BUCKETS_PER_ACCOUNT as i64 {
             state.record_sample(
                 "a",
                 UtilizationSample::default().with(&format!("rpm:model-{i}"), reading(2_000 + i)),
+                2_000 + i,
             );
         }
         state.record_sample(
             "a",
             UtilizationSample::default().with("rpm:model-64", reading(3_000)),
+            3_000,
         );
         let sample = state.sample("a").unwrap();
         assert!(
@@ -4737,6 +4865,7 @@ mod tests {
                     tier: None,
                 },
             ),
+            at,
         );
     }
 
@@ -4825,8 +4954,9 @@ mod tests {
                     tier: None,
                 },
             ),
+            2_500,
         );
-        assert_eq!(moved, vec![FIVE_HOUR.to_string()]);
+        assert_eq!(moved.moved, vec![FIVE_HOUR.to_string()]);
         assert!(
             (utilization(&state, FIVE_HOUR, 3_000) - 0.55).abs() < CLOSE,
             "the newer reading carries the charge, so the charge is gone"
@@ -5152,8 +5282,8 @@ mod tests {
     fn a_reservation_counts_in_the_prediction_until_it_is_released_and_a_second_booking_replaces_the_first(
     ) {
         let mut state = RoutingState::from_load(RoutingLoad::default());
-        state.record_sample("a", five_hour_reading(0.5, 1_000));
-        state.record_sample("b", five_hour_reading(0.2, 1_000));
+        state.record_sample("a", five_hour_reading(0.5, 1_000), 1_000);
+        state.record_sample("b", five_hour_reading(0.2, 1_000), 1_000);
         let five_hour = |state: &RoutingState, account: &str| {
             state
                 .predicted(account, FIVE_HOUR, 2_000)
@@ -5956,7 +6086,221 @@ mod tests {
         );
 
         let mut state = fresh();
+        read(&mut state, FIVE_HOUR, 0.0, None, R - HOUR_MS);
+        let entry = written(&mut state, None, R - 30 * MINUTE);
+        assert!(
+            !state.slow_down_stale("a", &entry, R + MINUTE),
+            "neither the reading nor the entry names a reset"
+        );
+    }
+
+    /// `a`'s sample at `at` reading each of `windows` at `utilization`, a clean poll's where `poll` is set.
+    fn sampled(windows: &[&str], utilization: f64, at: i64, poll: bool) -> UtilizationSample {
+        windows.iter().fold(
+            UtilizationSample {
+                observed_at: at,
+                poll,
+                ..Default::default()
+            },
+            |sample, window| {
+                sample.with(
+                    window,
+                    WindowReading {
+                        utilization,
+                        reset: None,
+                        observed_at: at,
+                        source: if poll {
+                            WindowSource::Poll
+                        } else {
+                            WindowSource::Head
+                        },
+                        plan: None,
+                        tier: None,
+                    },
+                )
+            },
+        )
+    }
+
+    fn polled(state: &RoutingState) -> (Option<BTreeSet<String>>, Option<i64>) {
+        let sample = state.sample("a").expect("a sample was recorded");
+        (sample.polled.clone(), sample.polled_at)
+    }
+
+    fn set_of(windows: &[&str]) -> Option<BTreeSet<String>> {
+        Some(windows.iter().map(|window| window.to_string()).collect())
+    }
+
+    #[test]
+    fn a_clean_poll_without_five_hour_drops_the_reading_its_charges_and_settles_the_set() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.record_sample(
+            "a",
+            sampled(&[FIVE_HOUR, SEVEN_DAY], 0.5, 1_000, true),
+            1_000,
+        );
+        state.charge("a", 1_500, &[(FIVE_HOUR, 0.1), (SEVEN_DAY, 0.1)]);
+        let recorded = state.record_sample("a", sampled(&[SEVEN_DAY], 0.6, 2_000, true), 2_000);
+        assert_eq!(
+            state.predicted("a", FIVE_HOUR, 2_000),
+            None,
+            "the poll carried no 5-hour window, so the reading left"
+        );
+        assert_eq!(polled(&state), (set_of(&[SEVEN_DAY]), Some(2_000)));
+        assert_eq!(recorded.dropped, [FIVE_HOUR]);
+        // A restoring reading taken before the charge would carry the charge, had the drop kept it.
+        let mut restore = sampled(&[FIVE_HOUR, SEVEN_DAY], 0.5, 3_000, true);
+        restore.windows.get_mut(FIVE_HOUR).unwrap().observed_at = 1_200;
+        state.record_sample("a", restore, 3_000);
+        assert_eq!(
+            state
+                .predicted("a", FIVE_HOUR, 3_000)
+                .map(|r| r.utilization),
+            Some(0.5),
+            "the window's charges left with its reading"
+        );
+    }
+
+    #[test]
+    fn a_head_drops_nothing_and_lands_no_shared_window_the_set_lacks() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.record_sample(
+            "a",
+            sampled(&[FIVE_HOUR, SEVEN_DAY], 0.5, 1_000, false),
+            1_000,
+        );
+        state.record_sample("a", sampled(&[SEVEN_DAY], 0.6, 2_000, false), 2_000);
+        assert_eq!(polled(&state), (None, None), "a head never settles the set");
+        assert!(
+            state.predicted("a", FIVE_HOUR, 2_000).is_some(),
+            "a head carries some windows only, so the 5-hour reading stands"
+        );
+
+        state.record_sample("a", sampled(&[SEVEN_DAY], 0.6, 3_000, true), 3_000);
+        let recorded = state.record_sample(
+            "a",
+            sampled(&[FIVE_HOUR, SEVEN_DAY], 1.0, 4_000, false),
+            4_000,
+        );
+        assert_eq!(
+            state.predicted("a", FIVE_HOUR, 4_000),
+            None,
+            "the set the poll named bounds what a head lands"
+        );
+        assert_eq!(
+            recorded.moved,
+            [SEVEN_DAY],
+            "the set's own window still lands"
+        );
+    }
+
+    #[test]
+    fn a_later_poll_with_five_hour_restores_the_window_to_the_set() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.record_sample(
+            "a",
+            sampled(&[FIVE_HOUR, SEVEN_DAY], 0.5, 1_000, true),
+            1_000,
+        );
+        state.record_sample("a", sampled(&[SEVEN_DAY], 0.6, 2_000, true), 2_000);
+        state.record_sample(
+            "a",
+            sampled(&[FIVE_HOUR, SEVEN_DAY], 0.2, 3_000, true),
+            3_000,
+        );
+        assert_eq!(
+            state
+                .predicted("a", FIVE_HOUR, 3_000)
+                .map(|r| r.utilization),
+            Some(0.2),
+            "the poll that carries the window lands its reading"
+        );
+        assert_eq!(
+            polled(&state),
+            (set_of(&[FIVE_HOUR, SEVEN_DAY]), Some(3_000))
+        );
+    }
+
+    #[test]
+    fn an_older_poll_after_a_newer_one_neither_drops_a_window_nor_rewrites_the_set() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.record_sample("a", sampled(&[SEVEN_DAY_FABLE], 0.3, 500, true), 500);
+        state.record_sample(
+            "a",
+            sampled(&[FIVE_HOUR, SEVEN_DAY], 0.5, 2_000, true),
+            2_000,
+        );
+        state.record_sample(
+            "a",
+            sampled(&[SEVEN_DAY, SEVEN_DAY_FABLE], 0.7, 1_000, true),
+            2_100,
+        );
+        assert_eq!(
+            state
+                .predicted("a", FIVE_HOUR, 2_100)
+                .map(|r| r.utilization),
+            Some(0.5),
+            "the newer poll carried the 5-hour window"
+        );
+        assert_eq!(
+            polled(&state),
+            (set_of(&[FIVE_HOUR, SEVEN_DAY]), Some(2_000))
+        );
+        assert_eq!(
+            state
+                .predicted("a", SEVEN_DAY_FABLE, 2_100)
+                .map(|r| r.utilization),
+            Some(0.7),
+            "a reading newer than the stored one lands by its own age"
+        );
+    }
+
+    #[test]
+    fn a_poll_carrying_no_shared_window_drops_nothing_and_leaves_the_set() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.record_sample(
+            "a",
+            sampled(&[FIVE_HOUR, SEVEN_DAY], 0.5, 1_000, true),
+            1_000,
+        );
+        let before = polled(&state);
+        state.record_sample("a", sampled(&[SEVEN_DAY_FABLE], 0.4, 3_000, true), 3_000);
+        assert_eq!(
+            state
+                .predicted("a", FIVE_HOUR, 3_000)
+                .map(|r| r.utilization),
+            Some(0.5),
+            "a body with no shared window is no reading of the shared windows"
+        );
+        assert_eq!(polled(&state), before);
+    }
+
+    #[test]
+    fn a_clean_poll_without_five_hour_ends_the_accounts_slow_down_entries_at_the_drop() {
+        const MINUTE: i64 = 60_000;
+        const R: i64 = 10 * HOUR_MS;
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        read(&mut state, FIVE_HOUR, 0.5, Some(R), R - HOUR_MS);
+        read(&mut state, SEVEN_DAY, 0.5, Some(R + WEEK_MS), R - HOUR_MS);
         let entry = written(&mut state, Some(R), R - 30 * MINUTE);
+        let at = R - 20 * MINUTE;
+        state.record_sample("a", sampled(&[SEVEN_DAY], 0.5, at, true), at);
+        assert_eq!(
+            state.slow_down_state("p", "a"),
+            None,
+            "the entry ends at the drop, before its own reset and the purge's hour"
+        );
+        let ended: Vec<SlowDownEdge> = state
+            .take_slow_down_edges(at)
+            .into_iter()
+            .map(|(_, _, edge)| edge)
+            .filter(|edge| matches!(edge, SlowDownEdge::Ended { .. }))
+            .collect();
+        assert!(
+            matches!(ended.as_slice(), [SlowDownEdge::Ended { since, .. }] if Some(*since) == entry.slowed_since),
+            "one span ends, from the entry's own start: {ended:?}"
+        );
+        // An entry with no 5-hour reading under it is one the drop left, and its own reset is its stale test.
         assert!(
             !state.slow_down_stale("a", &entry, R - MINUTE),
             "no reading, and its own reset lies ahead"
@@ -5964,14 +6308,6 @@ mod tests {
         assert!(
             state.slow_down_stale("a", &entry, R + MINUTE),
             "no reading, and its own reset passed"
-        );
-
-        let mut state = fresh();
-        read(&mut state, FIVE_HOUR, 0.0, None, R - HOUR_MS);
-        let entry = written(&mut state, None, R - 30 * MINUTE);
-        assert!(
-            !state.slow_down_stale("a", &entry, R + MINUTE),
-            "neither the reading nor the entry names a reset"
         );
     }
 

@@ -2978,7 +2978,7 @@ async fn a_usage_based_attempts_head_row_carries_the_share_and_the_reset_with_no
     ] {
         for event in events {
             for record in assembler.observe(event) {
-                if let phoebis_ledger::Record::Samples { quota, extra } = record {
+                if let phoebis_ledger::Record::Samples { quota, extra, .. } = record {
                     db.insert_samples(&quota, extra.as_ref()).unwrap();
                 }
             }

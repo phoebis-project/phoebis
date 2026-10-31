@@ -723,8 +723,8 @@ fn pace_ranks_remaining_weekly_allowance_over_hours_to_reset_and_scores_an_unsam
         )
     };
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.record_sample("a", reading(0.5, 1_000 + 24 * HOUR, 1));
-    st.record_sample("b", reading(0.2, 1_000 + 96 * HOUR, 1));
+    st.record_sample("a", reading(0.5, 1_000 + 24 * HOUR, 1), 0);
+    st.record_sample("b", reading(0.2, 1_000 + 96 * HOUR, 1), 0);
     // `c` stays unsampled: untouched, remaining 1 over the full week.
     let req = || request(&s, None, "claude-sonnet-5", true, &[], 1_000);
     for seed in 0..8u64 {
@@ -734,7 +734,7 @@ fn pace_ranks_remaining_weekly_allowance_over_hours_to_reset_and_scores_an_unsam
             "0.5 used resetting in 24h (0.0208) outranks 0.2 used resetting in 96h (0.0083) and an untouched account (1/168)"
         );
     }
-    st.record_sample("a", reading(0.9, 1_000 + 24 * HOUR, 2));
+    st.record_sample("a", reading(0.9, 1_000 + 24 * HOUR, 2), 0);
     for seed in 0..8u64 {
         assert_eq!(
             picked(&select(&mut st, &s, &req(), &mut StdRng::seed_from_u64(seed)).0),
@@ -760,7 +760,7 @@ fn pace_ranks_remaining_weekly_allowance_over_hours_to_reset_and_scores_an_unsam
     );
     let mut two_tied = RoutingState::from_load(RoutingLoad::default());
     // Far below the untouched score, so `b` never wins the draw between the two accounts that tie for it.
-    two_tied.record_sample("b", reading(0.99, 1_000 + 168 * HOUR, 1));
+    two_tied.record_sample("b", reading(0.99, 1_000 + 168 * HOUR, 1), 0);
     let mut seen = std::collections::HashSet::new();
     for i in 0..40u64 {
         let (result, _) = select(
@@ -786,8 +786,8 @@ fn pace_ranks_remaining_weekly_allowance_over_hours_to_reset_and_scores_an_unsam
     });
     let burned = |pins: Vec<PinRow>| {
         let mut st = priced(pins);
-        st.record_sample("a", reading(0.3, 1_000 + 24 * HOUR, 1));
-        st.record_sample("b", reading(0.6, 1_000 + 24 * HOUR, 1));
+        st.record_sample("a", reading(0.3, 1_000 + 24 * HOUR, 1), 0);
+        st.record_sample("b", reading(0.6, 1_000 + 24 * HOUR, 1), 0);
         st
     };
     let fresh = request(&spare, None, "claude-sonnet-5", true, &[], 1_000);
@@ -834,14 +834,17 @@ fn a_fable_request_skips_a_spent_fable_window_under_every_strategy_and_orders_by
     st.record_sample(
         "a",
         with_fable(refreshing(0.1, HOUR, HOUR, 1), 1.0, Some(4 * HOUR)),
+        0,
     );
     st.record_sample(
         "b",
         with_fable(refreshing(0.5, HOUR, 2 * HOUR, 1), 0.5, Some(9 * HOUR)),
+        0,
     );
     st.record_sample(
         "c",
         with_fable(refreshing(0.6, HOUR, 8 * HOUR, 1), 0.2, Some(3 * HOUR)),
+        0,
     );
     for strategy in [Strategy::Pace, Strategy::Priority, Strategy::RoundRobin] {
         let s = snapshot(Pool {
@@ -905,14 +908,17 @@ fn a_fable_request_with_every_window_spent_is_exhausted_at_the_earliest_fable_re
     st.record_sample(
         "a",
         with_fable(refreshing(0.1, HOUR, HOUR, 1), 1.0, Some(4 * HOUR)),
+        0,
     );
     st.record_sample(
         "b",
         with_fable(refreshing(0.1, HOUR, 2 * HOUR, 1), 1.0, Some(9 * HOUR)),
+        0,
     );
     st.record_sample(
         "c",
         with_fable(refreshing(0.1, HOUR, 8 * HOUR, 1), 2.0, Some(3 * HOUR)),
+        0,
     );
     let (result, writes) = select(
         &mut st,
@@ -934,6 +940,7 @@ fn a_fable_request_with_every_window_spent_is_exhausted_at_the_earliest_fable_re
         blind.record_sample(
             account,
             with_fable(refreshing(0.1, HOUR, HOUR, 1), 1.0, None),
+            0,
         );
     }
     assert_eq!(
@@ -972,9 +979,9 @@ fn the_no_fit_partition_drops_an_account_without_runway_and_falls_back_when_none
         // The 200 000 token body rewrites 0.02 of the 5-hour window on the ratio pricer, which a at 0.95 has no room
         // for, while b and c fit with nothing burning. `a` refreshes first, so the refresh order would reach for it.
         let mut st = priced(Vec::new());
-        st.record_sample("a", refreshing(0.95, HOUR, HOUR, 1));
-        st.record_sample("b", refreshing(0.5, HOUR, 2 * HOUR, 1));
-        st.record_sample("c", refreshing(0.6, HOUR, 8 * HOUR, 1));
+        st.record_sample("a", refreshing(0.95, HOUR, HOUR, 1), 0);
+        st.record_sample("b", refreshing(0.5, HOUR, 2 * HOUR, 1), 0);
+        st.record_sample("c", refreshing(0.6, HOUR, 8 * HOUR, 1), 0);
         let req = || SelectRequest {
             body_tokens: 200_000,
             ..request(&s, None, "claude-sonnet-5", true, &[], 1_000)
@@ -1005,8 +1012,8 @@ fn the_no_fit_partition_drops_an_account_without_runway_and_falls_back_when_none
             );
         }
         // b and c within the rewrite of the ceiling: no account has room for it.
-        st.record_sample("b", refreshing(0.94, HOUR, 2 * HOUR, 2));
-        st.record_sample("c", refreshing(0.96, HOUR, 8 * HOUR, 2));
+        st.record_sample("b", refreshing(0.94, HOUR, 2 * HOUR, 2), 0);
+        st.record_sample("c", refreshing(0.96, HOUR, 8 * HOUR, 2), 0);
         let expected = match strategy {
             Strategy::Pace => Some("a"),
             Strategy::Priority | Strategy::RoundRobin => None,
@@ -1042,11 +1049,11 @@ fn a_fitting_placement_row_names_the_window_with_the_least_runway() {
     // A warm pin on a burning 100 input tokens a second gives the fresh prior a burn: a hundred-thousandth of the
     // 5-hour window and a six-hundred-thousandth of the week a second on the ratio pricer.
     let mut st = priced(vec![burning("h1", "a", 100.0, true, T)]);
-    st.record_sample("a", sample(0.96, 0.1, T - 500));
+    st.record_sample("a", sample(0.96, 0.1, T - 500), 0);
     // b's 5-hour window at 0.3 leaves 0.63 past the body's 0.02 rewrite, 63 000 s of the prior's burn, and its week
     // at 0.9 leaves 0.0467 past the rewrite, 28 000 s. Both reach the five hours to their horizons, so b fits and the
     // week, the shorter runway, binds.
-    st.record_sample("b", sample(0.3, 0.9, T - 500));
+    st.record_sample("b", sample(0.3, 0.9, T - 500), 0);
     let d = decide(&mut st, &s, &placing(&s, "r-2", "fresh", T), &mut rng());
     assert_eq!(picked(&d.result), "b");
     let b = candidate(&d.record, "b");
@@ -1068,8 +1075,8 @@ fn a_pin_on_a_depleted_account_is_renewed_rather_than_moved() {
     });
     let mut st = priced(Vec::new());
     // No reset on either reading, so Pace falls back to the full week for both and ranks on remaining alone.
-    st.record_sample("a", sample(0.1, 0.1, 1));
-    st.record_sample("b", sample(0.5, 0.5, 1));
+    st.record_sample("a", sample(0.1, 0.1, 1), 0);
+    st.record_sample("b", sample(0.5, 0.5, 1), 0);
     let (opening, _) = select(
         &mut st,
         &s,
@@ -1081,7 +1088,7 @@ fn a_pin_on_a_depleted_account_is_renewed_rather_than_moved() {
         SelectResult::Selected(sel) => sel.pin.as_ref().unwrap().epoch,
         other => panic!("expected a selection, got {other:?}"),
     };
-    st.record_sample("a", refreshing(0.95, HOUR, HOUR, 2));
+    st.record_sample("a", refreshing(0.95, HOUR, HOUR, 2), 0);
     let (result, _) = select(
         &mut st,
         &s,
@@ -1118,8 +1125,8 @@ fn credit_pool() -> (RegistrySnapshot, RoutingState) {
         ..Pool::default()
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.record_sample("a", sample(0.1, 0.1, 1));
-    st.record_sample("b", sample(0.5, 0.5, 1));
+    st.record_sample("a", sample(0.1, 0.1, 1), 0);
+    st.record_sample("b", sample(0.5, 0.5, 1), 0);
     (s, st)
 }
 
@@ -1304,9 +1311,9 @@ fn a_credit_token_hands_a_live_pin_on_another_account_to_the_issuing_account() {
     // the issuer among the rule's destinations.
     let state = || {
         let mut st = loaded(vec![old.clone()]);
-        st.record_sample("a", sample(1.0, 0.1, T - 500));
-        st.record_sample("b", sample(0.5, 0.5, T - 500));
-        st.record_sample("c", sample(0.2, 0.2, T - 500));
+        st.record_sample("a", sample(1.0, 0.1, T - 500), 0);
+        st.record_sample("b", sample(0.5, 0.5, T - 500), 0);
+        st.record_sample("c", sample(0.2, 0.2, T - 500), 0);
         st
     };
     let req = request(&s, Some("s-handed"), CREDIT_MODEL, true, &[], T + 1_000);
@@ -1380,15 +1387,15 @@ fn a_credit_token_naming_an_issuer_created_again_under_its_id_leaves_the_walk_as
 fn a_credit_token_naming_the_live_pins_account_renews_the_pin_with_the_moves_not_run() {
     let (s, mut st) = credit_pool();
     // `b` leads at the opening, so the session's pin lands there, and `a` leads from then on.
-    st.record_sample("a", sample(0.5, 0.5, 2));
-    st.record_sample("b", sample(0.1, 0.1, 2));
+    st.record_sample("a", sample(0.5, 0.5, 2), 0);
+    st.record_sample("b", sample(0.1, 0.1, 2), 0);
     let opening = request(&s, Some("s-renewed"), CREDIT_MODEL, true, &[], 1_000);
     let SelectResult::Selected(placed) = select(&mut st, &s, &opening, &mut rng()).0 else {
         panic!("expected a selection")
     };
     assert_eq!(placed.account.id, "b");
-    st.record_sample("a", sample(0.1, 0.1, 3));
-    st.record_sample("b", sample(0.5, 0.5, 3));
+    st.record_sample("a", sample(0.1, 0.1, 3), 0);
+    st.record_sample("b", sample(0.5, 0.5, 3), 0);
     let fresh = request(&s, None, CREDIT_MODEL, true, &[], 2_000);
     assert_eq!(
         picked(&select(&mut st, &s, &fresh, &mut rng()).0),
@@ -1460,8 +1467,8 @@ fn a_round_with_no_fitting_destination_marks_nothing_and_records_no_runway() {
         burning("s1", "a", 40.0, false, T),
         burning("s0", "a", 10.0, false, T),
     ]);
-    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("b", sample(0.95, 0.3, T - 500));
+    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("b", sample(0.95, 0.3, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
@@ -1510,7 +1517,7 @@ fn a_round_with_no_fitting_destination_marks_nothing_and_records_no_runway() {
     assert_eq!(st.last_shed("p", "a"), Some(T));
     assert!(!marked(&st, "s1") && !marked(&st, "s0"));
     // Past the dwell b has room, so the next round marks s1 and it moves to the fitting sibling.
-    st.record_sample("b", sample(0.1, 0.3, T + 500));
+    st.record_sample("b", sample(0.1, 0.3, T + 500), 0);
     let later = T + 901_000;
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", later), &mut rng());
     assert_eq!(
@@ -1656,7 +1663,7 @@ fn a_spent_fable_window_stops_excluding_once_the_reset_it_named_passes() {
         ..Pool::default()
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.record_sample("a", with_fable(sample(0.1, 0.1, 1), 1.0, Some(2 * HOUR)));
+    st.record_sample("a", with_fable(sample(0.1, 0.1, 1), 1.0, Some(2 * HOUR)), 0);
     assert_eq!(
         select(
             &mut st,
@@ -1693,7 +1700,7 @@ fn a_spent_fable_window_that_dated_no_reset_keeps_excluding_until_a_newer_readin
         ..Pool::default()
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.record_sample("a", with_fable(sample(0.1, 0.1, 1_000), 1.0, None));
+    st.record_sample("a", with_fable(sample(0.1, 0.1, 1_000), 1.0, None), 0);
     assert_eq!(
         select(
             &mut st,
@@ -1712,7 +1719,7 @@ fn a_spent_fable_window_that_dated_no_reset_keeps_excluding_until_a_newer_readin
         SelectResult::Exhausted(Exhaustion::Untimed),
         "a full reading that names no reset stands however old it is"
     );
-    st.record_sample("a", with_fable(sample(0.1, 0.1, 2_000), 0.5, None));
+    st.record_sample("a", with_fable(sample(0.1, 0.1, 2_000), 0.5, None), 0);
     assert_eq!(
         picked(
             &select(
@@ -1744,9 +1751,9 @@ fn a_staged_migration_keeps_the_pin_when_no_destination_holds_fable_allowance() 
     let mut st = RoutingState::from_load(RoutingLoad::default());
     // The opening pick is a fable request, so it is the fable reading Pace ranks by; no reset on any of the
     // three, so Pace falls back to the full week for all and ranks on remaining alone.
-    st.record_sample("a", with_fable(sample(0.1, 0.1, 1), 0.1, None));
-    st.record_sample("b", with_fable(sample(0.5, 0.3, 1), 0.3, None));
-    st.record_sample("c", with_fable(sample(0.6, 0.4, 1), 0.4, None));
+    st.record_sample("a", with_fable(sample(0.1, 0.1, 1), 0.1, None), 0);
+    st.record_sample("b", with_fable(sample(0.5, 0.3, 1), 0.3, None), 0);
+    st.record_sample("c", with_fable(sample(0.6, 0.4, 1), 0.4, None), 0);
     assert_eq!(
         picked(
             &select(
@@ -1760,9 +1767,9 @@ fn a_staged_migration_keeps_the_pin_when_no_destination_holds_fable_allowance() 
         "a"
     );
     st.record_overage("a", overage(true, 1_500, Some(9 * HOUR)));
-    st.record_sample("a", with_fable(sample(0.1, 0.1, 2), 0.5, Some(9 * HOUR)));
-    st.record_sample("b", with_fable(sample(0.5, 0.1, 2), 1.0, Some(9 * HOUR)));
-    st.record_sample("c", with_fable(sample(0.6, 0.1, 2), 1.0, Some(9 * HOUR)));
+    st.record_sample("a", with_fable(sample(0.1, 0.1, 2), 0.5, Some(9 * HOUR)), 0);
+    st.record_sample("b", with_fable(sample(0.5, 0.1, 2), 1.0, Some(9 * HOUR)), 0);
+    st.record_sample("c", with_fable(sample(0.6, 0.1, 2), 1.0, Some(9 * HOUR)), 0);
     let (result, writes) = select(
         &mut st,
         &s,
@@ -1789,7 +1796,7 @@ fn a_staged_migration_keeps_the_pin_when_no_destination_holds_fable_allowance() 
         !writes.iter().any(|w| matches!(w, StateWrite::DeletePin(_))),
         "so nothing deleted it on the way"
     );
-    st.record_sample("b", with_fable(sample(0.5, 0.1, 3), 0.2, Some(9 * HOUR)));
+    st.record_sample("b", with_fable(sample(0.5, 0.1, 3), 0.2, Some(9 * HOUR)), 0);
     let (result, writes) = select(
         &mut st,
         &s,
@@ -2353,8 +2360,8 @@ fn a_fast_request_neither_releases_nor_moves_its_pin_for_a_spent_window_or_plan_
     let mut st = RoutingState::from_load(RoutingLoad::default());
     let at = |now: i64| fast(request(&s, Some("s1"), "claude-sonnet-5", true, &[], now));
     assert_eq!(picked(&select(&mut st, &s, &at(1_000), &mut rng()).0), "a");
-    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
-    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500), 0);
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500), 0);
     st.record_overage("a", overage(true, 1_500, Some(9 * HOUR)));
     let pin = pinned(&st, "s1");
     assert_eq!(
@@ -3138,7 +3145,7 @@ fn a_tier_of_nan_samples_still_selects() {
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
     for account in ["a", "b", "c"] {
-        st.record_sample(account, sample(f64::NAN, f64::NAN, 1));
+        st.record_sample(account, sample(f64::NAN, f64::NAN, 1), 0);
     }
     let (result, _) = select(
         &mut st,
@@ -3396,9 +3403,9 @@ fn a_rounds_fitting_destinations_order_by_the_strategy_and_then_by_the_longest_r
             burning("s1", "a", 4.0, false, T),
             burning("s0", "a", 1.0, false, T),
         ]);
-        st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500));
-        st.record_sample("b", b);
-        st.record_sample("c", c);
+        st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500), 0);
+        st.record_sample("b", b, 0);
+        st.record_sample("c", c, 0);
         past_the_wait(&mut st, s, "p", "a", T);
         decide(&mut st, s, &auxiliary(s, "s1", T), &mut rng())
     };
@@ -3499,9 +3506,9 @@ fn a_rounds_plan_under_round_robin_names_the_cohorts_turn_the_move_then_takes() 
         burning("s1", "a", 4.0, false, T),
         burning("s0", "a", 1.0, false, T),
     ]);
-    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("b", sample(0.3, 0.3, T - 500));
-    st.record_sample("c", sample(0.3, 0.3, T - 500));
+    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("b", sample(0.3, 0.3, T - 500), 0);
+    st.record_sample("c", sample(0.3, 0.3, T - 500), 0);
     // A fresh session placed while a sits at its cap takes the first turn of the cohort b, c and passes the turn on.
     let held: Vec<_> = (0..cap)
         .map(|_| st.in_flight().dispatched("a", T - 1_000))
@@ -3562,7 +3569,7 @@ fn a_pin_on_a_spent_five_hour_window_moves_to_a_sibling_with_allowance_and_stays
         )
     };
     assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
-    st.record_sample("a", refreshing(0.97, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("a", refreshing(0.97, 9 * HOUR, 9 * HOUR, 1_500), 0);
     let SelectResult::Selected(sel) = pick(&mut st, 2_000).0 else {
         panic!()
     };
@@ -3571,8 +3578,8 @@ fn a_pin_on_a_spent_five_hour_window_moves_to_a_sibling_with_allowance_and_stays
         ("a", None),
         "a fresh sample under 1.0 still holds allowance, so the pin renews where it is"
     );
-    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 2_500));
-    st.record_sample("b", refreshing(1.0, 9 * HOUR, 9 * HOUR, 2_500));
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 2_500), 0);
+    st.record_sample("b", refreshing(1.0, 9 * HOUR, 9 * HOUR, 2_500), 0);
     let SelectResult::Selected(sel) = pick(&mut st, 3_000).0 else {
         panic!()
     };
@@ -3581,7 +3588,7 @@ fn a_pin_on_a_spent_five_hour_window_moves_to_a_sibling_with_allowance_and_stays
         ("a", None),
         "spent with no sibling holding allowance: the pin stays and the upstream's answer decides"
     );
-    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 3_500));
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 3_500), 0);
     let (result, writes) = pick(&mut st, 4_000);
     let SelectResult::Selected(sel) = result else {
         panic!()
@@ -3608,10 +3615,10 @@ fn a_pin_on_a_spent_five_hour_window_moves_to_a_sibling_with_allowance_and_stays
         )
     };
     let now = 9 * HOUR + 1_000;
-    st.record_sample("a", refreshing(0.3, 9 * HOUR, 9 * HOUR, 4_000));
+    st.record_sample("a", refreshing(0.3, 9 * HOUR, 9 * HOUR, 4_000), 0);
     assert_eq!(picked(&pick2(&mut st, now).0), "a");
-    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 4_500));
-    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 4_500));
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 4_500), 0);
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 4_500), 0);
     let SelectResult::Selected(sel) = pick2(&mut st, now).0 else {
         panic!()
     };
@@ -3623,8 +3630,8 @@ fn a_pin_on_a_spent_five_hour_window_moves_to_a_sibling_with_allowance_and_stays
     // The no-reset branch: absent a reset, a full reading stands until the next reading. Continuing s2's pin on
     // a with a no-reset spent reading: the account cannot serve, so the pin moves.
     let t = now + 1_000;
-    st.record_sample("a", sample(1.0, 0.1, t));
-    st.record_sample("b", refreshing(0.2, 9 * HOUR, 9 * HOUR, t));
+    st.record_sample("a", sample(1.0, 0.1, t), 0);
+    st.record_sample("b", refreshing(0.2, 9 * HOUR, 9 * HOUR, t), 0);
     let SelectResult::Selected(sel) = pick2(&mut st, t + 1_000).0 else {
         panic!()
     };
@@ -3663,10 +3670,12 @@ fn a_spent_fable_window_moves_a_fable_pin_and_leaves_a_sonnet_pin_on_the_same_ac
     st.record_sample(
         "a",
         with_fable(sample(0.2, 0.1, 1_500), 1.0, Some(9 * HOUR)),
+        0,
     );
     st.record_sample(
         "b",
         with_fable(sample(0.3, 0.1, 1_500), 0.5, Some(9 * HOUR)),
+        0,
     );
     let SelectResult::Selected(sel) = fable(&mut st, 2_000).0 else {
         panic!()
@@ -3709,10 +3718,12 @@ fn a_fable_pin_moves_off_an_account_whose_five_hour_window_is_spent_though_its_f
             0.5,
             Some(9 * HOUR),
         ),
+        0,
     );
     st.record_sample(
         "b",
         with_fable(sample(0.2, 0.1, 1_500), 0.5, Some(9 * HOUR)),
+        0,
     );
     let SelectResult::Selected(sel) = fable(&mut st, "s1", 2_000).0 else {
         panic!()
@@ -3757,10 +3768,12 @@ fn under_allow_a_spent_model_week_places_behind_a_plan_funded_sibling_unless_ext
         st.record_sample(
             "a",
             with_fable(sample(0.2, 0.1, 1_000), 1.0, Some(9 * HOUR)),
+            0,
         );
         st.record_sample(
             "b",
             with_fable(sample(0.3, 0.1, 1_000), 0.5, Some(9 * HOUR)),
+            0,
         );
         st.record_credits("a", credits(true, None, Some(0.2), 1_000));
         let fable = |st: &mut RoutingState, now: i64| {
@@ -3807,6 +3820,7 @@ fn under_allow_a_spent_model_week_places_behind_a_plan_funded_sibling_unless_ext
         unread.record_sample(
             "a",
             with_fable(sample(0.2, 0.1, 1_000), 1.0, Some(9 * HOUR)),
+            0,
         );
         unread.record_cooldown(cooled(
             "b",
@@ -3832,7 +3846,7 @@ fn spent_under_allow(spent: UtilizationSample, window: &str) {
         ..Pool::default()
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.record_sample("a", spent);
+    st.record_sample("a", spent, 0);
     let fable = |st: &mut RoutingState, now: i64| {
         select(
             st,
@@ -3900,10 +3914,12 @@ fn under_never_a_spent_model_week_drops_its_account_whatever_the_credits_read() 
     st.record_sample(
         "a",
         with_fable(sample(0.2, 0.1, 1_000), 1.0, Some(9 * HOUR)),
+        0,
     );
     st.record_sample(
         "b",
         with_fable(sample(0.3, 0.1, 1_000), 0.5, Some(9 * HOUR)),
+        0,
     );
     st.record_credits("a", credits(true, None, Some(0.2), 1_000));
     let fable = |st: &mut RoutingState, now: i64| {
@@ -3965,7 +3981,7 @@ fn a_seven_day_opus_reading_at_its_limit_is_kept_in_the_sample_and_drops_nothing
         },
         1,
     );
-    st.record_sample("a", sample);
+    st.record_sample("a", sample, 0);
     assert_eq!(
         st.sample("a")
             .and_then(|s| s.reading("seven_day_opus"))
@@ -4010,6 +4026,7 @@ fn an_unknown_seven_day_reading_drops_nothing() {
                 tier: None,
             },
         ),
+        0,
     );
     for model in ["claude-fable-5-1", "claude-sonnet-5"] {
         assert_eq!(
@@ -4040,8 +4057,12 @@ fn a_spent_window_moves_a_pin_back_to_the_account_that_shed_it_inside_the_dwell(
         burning("s1", "a", 4.0, false, T),
         burning("s0", "a", 1.0, false, T),
     ]);
-    st.record_sample("a", refreshing(0.85, T + 4 * HOUR, T + 9 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.3, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    st.record_sample(
+        "a",
+        refreshing(0.85, T + 4 * HOUR, T + 9 * HOUR, T - 500),
+        0,
+    );
+    st.record_sample("b", refreshing(0.3, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
@@ -4049,8 +4070,8 @@ fn a_spent_window_moves_a_pin_back_to_the_account_that_shed_it_inside_the_dwell(
     );
     // Inside the dwell, b's window is spent and a has recovered. a shed the pin and ran a round of its own, so
     // no round sends the pin back; the spent move reads neither.
-    st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
-    st.record_sample("a", refreshing(0.2, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
+    st.record_sample("a", refreshing(0.2, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
     let (result, writes) = select(&mut st, &s, &auxiliary(&s, "s1", T + 1_000), &mut rng());
     assert_eq!(landed(result), ("a".into(), Some(MigrateReason::Spent)));
     assert!(writes.iter().any(|w| matches!(w, StateWrite::DeletePin(_))));
@@ -4074,8 +4095,8 @@ fn a_spent_pin_stays_when_its_only_sibling_is_cooled() {
     assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
     // b holds allowance and is the only sibling, but its cooldown takes it out of the eligible set before
     // the spent block looks for a destination.
-    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
-    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500), 0);
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500), 0);
     st.record_cooldown(cooled(
         "b",
         "account",
@@ -4123,8 +4144,8 @@ fn a_pin_on_a_cooled_account_whose_window_is_spent_still_moves_with_reason_spent
         "five_hour",
         "rate_limit",
     ));
-    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
-    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500), 0);
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500), 0);
     let SelectResult::Selected(sel) = pick(&mut st, 2_000).0 else {
         panic!()
     };
@@ -4162,7 +4183,7 @@ fn the_release_reasons_name_every_fact_against_the_pinned_account_in_the_selecti
         "five_hour",
         "rate_limit",
     ));
-    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500), 0);
     assert_eq!(
         release_reasons(&st, &s, &pin, &req(2_000, &[])),
         vec!["cooldown", "spent"]
@@ -5614,7 +5635,11 @@ fn pins_a_former_pool_left_on_an_account_stay_out_of_its_new_pools_round() {
         "the purge keeps the pins p1 left on a, since their key and pool stand"
     );
     over_a_fitting_b(&mut st, moved);
-    st.record_sample("c", refreshing(0.1, moved + HOUR, moved + 72 * HOUR, moved));
+    st.record_sample(
+        "c",
+        refreshing(0.1, moved + HOUR, moved + 72 * HOUR, moved),
+        0,
+    );
     past_the_wait(&mut st, &after, "p2", "a", moved);
     let req = select_request(
         &after,
@@ -5719,14 +5744,14 @@ fn the_shed_move_takes_the_fitting_siblings_whatever_their_runway_and_drops_one_
             burning("s1", "a", 4.0, false, T),
             burning("s0", "a", 1.0, false, T),
         ]);
-        st.record_sample("a", sample(0.9, 0.3, T - 500));
-        st.record_sample("b", sample(0.1, 0.1, T - 500));
+        st.record_sample("a", sample(0.9, 0.3, T - 500), 0);
+        st.record_sample("b", sample(0.1, 0.1, T - 500), 0);
         let c_five_hour = if c_reads == "shorter_runway" {
             0.2
         } else {
             0.1
         };
-        st.record_sample("c", sample(c_five_hour, 0.1, T - 500));
+        st.record_sample("c", sample(c_five_hour, 0.1, T - 500), 0);
         let _held: Vec<_> = if c_reads == "at_cap" {
             (0..cap)
                 .map(|_| st.in_flight().dispatched("c", T))
@@ -5804,7 +5829,7 @@ fn the_blocker_passes_an_account_far_ahead_of_its_weekly_pace_and_keeps_its_othe
             ..Pool::default()
         },
         &|st| {
-            st.record_sample("a", sample(0.0, 0.8, 1_000));
+            st.record_sample("a", sample(0.0, 0.8, 1_000), 0);
         },
         "a",
         "a week far ahead of its pace is no refusal",
@@ -5816,7 +5841,7 @@ fn the_blocker_passes_an_account_far_ahead_of_its_weekly_pace_and_keeps_its_othe
             ..Pool::default()
         },
         &|st| {
-            st.record_sample("a", sample(0.96, 0.0, 1_000));
+            st.record_sample("a", sample(0.96, 0.0, 1_000), 0);
         },
         "b",
         "no runway on the 5-hour window refuses a",
@@ -5828,7 +5853,7 @@ fn the_blocker_passes_an_account_far_ahead_of_its_weekly_pace_and_keeps_its_othe
             ..Pool::default()
         },
         &|st| {
-            st.record_sample("a", sample(0.0, 0.96, 1_000));
+            st.record_sample("a", sample(0.0, 0.96, 1_000), 0);
         },
         "b",
         "no runway on the week refuses a",
@@ -5840,7 +5865,7 @@ fn the_blocker_passes_an_account_far_ahead_of_its_weekly_pace_and_keeps_its_othe
             ..Pool::default()
         },
         &|st| {
-            st.record_sample("a", sample(1.0, 1.0, 1_000));
+            st.record_sample("a", sample(1.0, 1.0, 1_000), 0);
         },
         "b",
         "a spent window refuses a",
@@ -5918,21 +5943,21 @@ fn the_blocker_passes_an_api_key_candidate_while_its_bucket_holds_room() {
     };
     scenario(
         &|st| {
-            st.record_sample("a", bucket(0.95));
+            st.record_sample("a", bucket(0.95), 0);
         },
         "a",
         "a holds room, so rung 4 places the request on its warm prefix though b outranks it",
     );
     scenario(
         &|st| {
-            st.record_sample("a", bucket(1.0));
+            st.record_sample("a", bucket(1.0), 0);
         },
         "b",
         "an exhausted bucket leaves a no fit, which blocks it at rung 4",
     );
     scenario(
         &|st| {
-            st.record_sample("a", bucket(0.95));
+            st.record_sample("a", bucket(0.95), 0);
             st.record_cooldown(cooled(
                 "a",
                 "account",
@@ -6010,8 +6035,8 @@ fn the_blocker_reads_each_candidate_itself_when_narrow_kept_the_wider_set() {
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
     // Neither account has runway, so `no_fit` falls through to both.
-    st.record_sample("a", sample(0.96, 0.0, 1_000));
-    st.record_sample("b", sample(0.96, 0.0, 1_000));
+    st.record_sample("a", sample(0.96, 0.0, 1_000), 0);
+    st.record_sample("b", sample(0.96, 0.0, 1_000), 0);
     seed_affinity(
         &st,
         vec![affinity_row(
@@ -6589,7 +6614,7 @@ fn a_tail_match_bypasses_no_fit_and_the_wind_down() {
         },
         tier_terms(&["a", "b"]),
         &|st| {
-            st.record_sample("a", sample(0.96, 0.0, 1_000));
+            st.record_sample("a", sample(0.96, 0.0, 1_000), 0);
         },
         "no_fit",
         "least_bad",
@@ -6640,7 +6665,7 @@ fn a_tail_match_bypasses_no_fit_and_the_wind_down() {
         },
         terms,
         &|st| {
-            st.record_sample("b", sample(0.96, 0.0, 1_000));
+            st.record_sample("b", sample(0.96, 0.0, 1_000), 0);
         },
         "winding_down",
         "ending",
@@ -7588,9 +7613,9 @@ fn a_pin_both_in_overage_and_spent_records_spent_and_lands_where_both_allow() {
     // a is in overage past the grace and spent; b is out of overage with allowance; c is out of overage and
     // spent.
     st.record_overage("a", overage(true, 1_500, Some(9 * HOUR)));
-    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
-    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
-    st.record_sample("c", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500), 0);
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500), 0);
+    st.record_sample("c", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500), 0);
     let SelectResult::Selected(sel) = pick(&mut st, 2_000).0 else {
         panic!()
     };
@@ -7619,8 +7644,8 @@ fn a_spent_pin_under_prefer_plan_stays_rather_than_moving_onto_a_sibling_in_over
     assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
     // a's five-hour window stands full while b holds allowance by a fresh sample and is in known overage.
     // Moving the pin there would hand it straight back on the next request.
-    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
-    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500), 0);
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500), 0);
     st.record_overage("b", overage(true, 1_500, Some(9 * HOUR)));
     for now in [2_000, 3_000] {
         let SelectResult::Selected(sel) = pick(&mut st, now).0 else {
@@ -7651,8 +7676,8 @@ fn a_spent_pin_under_allow_moves_onto_a_sibling_in_overage_once_and_is_not_moved
         )
     };
     assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
-    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
-    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500), 0);
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500), 0);
     st.record_overage("b", overage(true, 1_500, Some(9 * HOUR)));
     let SelectResult::Selected(sel) = pick(&mut st, 2_000).0 else {
         panic!()
@@ -7702,8 +7727,9 @@ fn a_spent_seven_day_window_moves_the_pin_as_a_spent_five_hour_one_does() {
                 tier: None,
             },
         ),
+        0,
     );
-    st.record_sample("b", sample(0.2, 0.2, 1_500));
+    st.record_sample("b", sample(0.2, 0.2, 1_500), 0);
     let (result, writes) = pick(&mut st, 2_000);
     let SelectResult::Selected(sel) = result else {
         panic!()
@@ -8437,8 +8463,8 @@ fn pace_reads_the_window_map_and_ranks_an_api_key_account_by_its_worst_bucket() 
             },
         )
     };
-    st.record_sample("a", bucket(0.3, Some(5_000), 1_000));
-    st.record_sample("b", bucket(0.6, Some(1_000_000), 1_000));
+    st.record_sample("a", bucket(0.3, Some(5_000), 1_000), 0);
+    st.record_sample("b", bucket(0.6, Some(1_000_000), 1_000), 0);
     let req = || request(&s, None, "claude-sonnet-5", true, &[], 1_000);
     for seed in 0..8u64 {
         assert_eq!(
@@ -8449,8 +8475,8 @@ fn pace_reads_the_window_map_and_ranks_an_api_key_account_by_its_worst_bucket() 
     }
 
     // Two at the same utilization with different resets draw at random over a seeded rng, both seen.
-    st.record_sample("a", bucket(0.5, Some(5_000), 2_000));
-    st.record_sample("b", bucket(0.5, Some(9_000_000), 2_000));
+    st.record_sample("a", bucket(0.5, Some(5_000), 2_000), 0);
+    st.record_sample("b", bucket(0.5, Some(9_000_000), 2_000), 0);
     let mut seen = std::collections::HashSet::new();
     for seed in 0..16u64 {
         seen.insert(
@@ -8487,6 +8513,7 @@ fn a_subscription_window_past_its_reset_scores_as_untouched_not_by_a_minutes_cla
                 tier: None,
             },
         ),
+        0,
     );
     // b holds real remaining allowance resetting soon, which would lose to a's clamp-inflated score.
     st.record_sample(
@@ -8506,6 +8533,7 @@ fn a_subscription_window_past_its_reset_scores_as_untouched_not_by_a_minutes_cla
                 tier: None,
             },
         ),
+        0,
     );
     let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
     assert_eq!(
@@ -8525,9 +8553,9 @@ fn an_account_without_runway_is_passed_over_under_pace_while_a_fitting_one_serve
     let mut st = priced(Vec::new());
     // a: its 5-hour window at the ceiling leaves no runway, but it has the best Pace score (almost nothing used on the
     // week).
-    st.record_sample("a", sample(0.95, 0.01, 1_000));
+    st.record_sample("a", sample(0.95, 0.01, 1_000), 0);
     // b: room to its horizon but a worse Pace score (more used).
-    st.record_sample("b", sample(0.5, 0.5, 1_000));
+    st.record_sample("b", sample(0.5, 0.5, 1_000), 0);
     let req = SelectRequest {
         body_tokens: 200_000,
         ..request(&s, None, "claude-sonnet-5", true, &[], 1_000)
@@ -8547,7 +8575,7 @@ fn an_account_without_runway_is_passed_over_under_pace_while_a_fitting_one_serve
         ..Pool::default()
     });
     let mut st2 = priced(Vec::new());
-    st2.record_sample("a", sample(0.95, 0.01, 1_000));
+    st2.record_sample("a", sample(0.95, 0.01, 1_000), 0);
     let req2 = SelectRequest {
         body_tokens: 200_000,
         ..request(&solo, None, "claude-sonnet-5", true, &[], 1_000)
@@ -8604,7 +8632,7 @@ fn an_account_inside_its_wind_down_takes_no_placement_while_another_serves() {
     terms.push(ending("a", 1_000 + 10 * MINUTE));
     let s = snapshot_with_terms(pool(), terms);
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.record_sample("b", sample(0.96, 0.0, 1_000));
+    st.record_sample("b", sample(0.96, 0.0, 1_000), 0);
     let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
     let d = decide(&mut st, &s, &req, &mut rng());
     assert_eq!(picked(&d.result), "b");
@@ -8654,8 +8682,8 @@ fn rung_four_passes_over_a_warm_static_prefix_on_an_account_without_runway() {
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
     // a holds the warm prefix and outranks b, but its 5-hour window sits past the ceiling.
-    st.record_sample("a", sample(0.96, 0.1, 1_000));
-    st.record_sample("b", sample(0.3, 0.1, 1_000));
+    st.record_sample("a", sample(0.96, 0.1, 1_000), 0);
+    st.record_sample("b", sample(0.3, 0.1, 1_000), 0);
     seed_affinity(&st, vec![static_row(&s, "s1", "a", 20_000)]);
     let d = decide(&mut st, &s, &static_req(&s, &["s1"]), &mut rng());
     let SelectResult::Selected(sel) = &d.result else {
@@ -8689,7 +8717,7 @@ fn an_unread_window_is_skipped_for_a_placement_and_reads_least_bad_for_a_move() 
             last_input_tokens: 500_000,
             ..burning("cold", "a", 100.0, false, T)
         }]);
-        st.record_sample("a", sample(0.3, 0.1, T - 500));
+        st.record_sample("a", sample(0.3, 0.1, T - 500), 0);
         st.record_sample(
             "b",
             UtilizationSample {
@@ -8707,8 +8735,13 @@ fn an_unread_window_is_skipped_for_a_placement_and_reads_least_bad_for_a_move() 
                     tier: None,
                 },
             ),
+            0,
         );
-        st.record_sample("c", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+        st.record_sample(
+            "c",
+            refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+            0,
+        );
         st
     };
     // A move needs a reading of every window its model draws: b reads least bad for the week it never read, and the
@@ -8756,7 +8789,7 @@ fn a_placement_after_a_move_the_cap_stopped_reads_its_candidates_again() {
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
     // a is spent until a reset past the retry bound and cooled until then, so the spent rule reads its gate and step
     // 5 cannot renew the pin there.
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
     st.record_cooldown(cooled(
         "a",
         "account",
@@ -8764,8 +8797,16 @@ fn a_placement_after_a_move_the_cap_stopped_reads_its_candidates_again() {
         "five_hour",
         "rate_limit",
     ));
-    st.record_sample("b", refreshing(0.96, T + 3 * HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("c", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample(
+        "b",
+        refreshing(0.96, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
+    st.record_sample(
+        "c",
+        refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
     let on_b = st.in_flight().dispatched("b", T - 500);
     let on_c = st.in_flight().dispatched("c", T - 500);
     let d = decide(
@@ -8812,9 +8853,9 @@ fn the_exhaustion_deadline_takes_each_spent_accounts_latest_dated_reset_past_an_
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
     // a: the 5-hour window spent with no reset beside a Fable week that resets at 4 h.
-    st.record_sample("a", with_fable(sample(1.0, 0.1, 1), 1.0, Some(4 * HOUR)));
+    st.record_sample("a", with_fable(sample(1.0, 0.1, 1), 1.0, Some(4 * HOUR)), 0);
     // b: the Fable week alone, at 9 h.
-    st.record_sample("b", with_fable(sample(0.1, 0.1, 1), 1.0, Some(9 * HOUR)));
+    st.record_sample("b", with_fable(sample(0.1, 0.1, 1), 1.0, Some(9 * HOUR)), 0);
     // c: the Fable week at 3 h and the 7-day window at 5 h, so c serves again at 5 h.
     st.record_sample(
         "c",
@@ -8829,6 +8870,7 @@ fn the_exhaustion_deadline_takes_each_spent_accounts_latest_dated_reset_past_an_
                 tier: None,
             },
         ),
+        0,
     );
     let (result, _) = select(
         &mut st,
@@ -8867,8 +8909,13 @@ fn a_spent_pin_waits_only_when_every_spent_window_names_its_reset() {
                 tier: None,
             },
         ),
+        0,
     );
-    st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample(
+        "b",
+        refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
     assert_eq!(
         landed(
             select(
@@ -8911,6 +8958,7 @@ fn an_exhausted_bucket_of_one_model_is_refunded_at_its_reset_and_a_siblings_free
                 tier: None,
             },
         ),
+        0,
     );
     st.record_sample(
         "a",
@@ -8929,6 +8977,7 @@ fn an_exhausted_bucket_of_one_model_is_refunded_at_its_reset_and_a_siblings_free
                 tier: None,
             },
         ),
+        0,
     );
     st.record_sample(
         "b",
@@ -8947,6 +8996,7 @@ fn an_exhausted_bucket_of_one_model_is_refunded_at_its_reset_and_a_siblings_free
                 tier: None,
             },
         ),
+        0,
     );
     let req = request(&s, None, "claude-sonnet-5", true, &[], 1_031);
     assert_eq!(
@@ -8990,6 +9040,7 @@ fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
                 tier: None,
             },
         ),
+        0,
     );
     st.record_sample(
         "b",
@@ -9004,6 +9055,7 @@ fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
                 tier: None,
             },
         ),
+        0,
     );
     let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
     assert_eq!(
@@ -9405,9 +9457,9 @@ fn the_cap_binds_before_the_fit_so_a_free_account_without_runway_takes_the_place
         ..Pool::default()
     });
     let mut st = priced(Vec::new());
-    st.record_sample("a", sample(0.2, 0.1, 1_000));
+    st.record_sample("a", sample(0.2, 0.1, 1_000), 0);
     // b has no room for the body's rewrite.
-    st.record_sample("b", sample(0.94, 0.1, 1_000));
+    st.record_sample("b", sample(0.94, 0.1, 1_000), 0);
     let on_a = st.in_flight().dispatched("a", 1_000);
     let req = || SelectRequest {
         body_tokens: 200_000,
@@ -9480,8 +9532,8 @@ fn a_move_whose_every_destination_is_at_its_cap_is_not_made_and_the_pin_renews_i
     assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
     let epoch = st.pin(&pin_key("s1")).unwrap().epoch;
     // a's window is spent and b holds allowance, so the spent move is due; b is at its cap.
-    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
-    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500), 0);
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500), 0);
     let on_b = st.in_flight().dispatched("b", 1_500);
     let (result, writes) = pick(&mut st, 2_000);
     let SelectResult::Selected(sel) = result else {
@@ -9535,6 +9587,7 @@ fn a_fable_spent_candidate_is_skipped_as_spent_whether_or_not_it_names_a_reset()
                 tier: None,
             },
         ),
+        0,
     );
     // b: spent with no reset, the case the trace carried nothing for at all.
     st.record_sample(
@@ -9554,6 +9607,7 @@ fn a_fable_spent_candidate_is_skipped_as_spent_whether_or_not_it_names_a_reset()
                 tier: None,
             },
         ),
+        0,
     );
     let req = request(&s, None, "claude-fable-5-1", true, &[], 1_000);
     let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
@@ -10311,7 +10365,7 @@ fn a_fresh_sessions_prior_counts_a_flagged_pin_warm_by_its_last_use_and_leaves_o
     let mut st = loaded(vec![flagged.clone(), clear.clone()]);
     assert!(st.auxiliary_only(&flagged.key()) && !st.auxiliary_only(&clear.key()));
     st.set_share(ratio_pricer());
-    st.record_sample("a", sample(0.5, 0.1, T));
+    st.record_sample("a", sample(0.5, 0.1, T), 0);
     let fresh = SelectRequest {
         body_tokens: 1_000,
         ..request(&s, Some("s9"), "claude-sonnet-5", true, &[], T)
@@ -11857,7 +11911,7 @@ fn the_spent_toggle_gates_the_spent_move_and_a_destination_needs_a_reading_of_th
         ..Pool::default()
     };
     let spent_a = |st: &mut RoutingState| {
-        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
     };
     let s = snapshot(pool(true, vec![]));
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -11884,6 +11938,7 @@ fn the_spent_toggle_gates_the_spent_move_and_a_destination_needs_a_reading_of_th
     st.record_sample(
         "b",
         refreshing(0.2, T + 9 * HOUR, T + 9 * HOUR, T + 1_000 - HOUR),
+        0,
     );
     assert_eq!(
         landed(
@@ -11908,7 +11963,7 @@ fn the_spent_toggle_gates_the_spent_move_and_a_destination_needs_a_reading_of_th
         &mut rng(),
     );
     spent_a(&mut st);
-    st.record_sample("b", sample(0.2, 0.2, T + 500));
+    st.record_sample("b", sample(0.2, 0.2, T + 500), 0);
     assert_eq!(
         landed(
             select(
@@ -11947,14 +12002,94 @@ fn the_spent_toggle_gates_the_spent_move_and_a_destination_needs_a_reading_of_th
     );
 }
 
+/// A sample at `observed_at` reading each of `windows` at `utilization` with no reset, a clean poll's where `poll` is
+/// set.
+fn sample_of(
+    windows: &[&str],
+    utilization: f64,
+    observed_at: i64,
+    poll: bool,
+) -> UtilizationSample {
+    windows.iter().fold(
+        UtilizationSample {
+            observed_at,
+            poll,
+            ..Default::default()
+        },
+        |sample, window| {
+            sample.with(
+                window,
+                WindowReading {
+                    utilization,
+                    reset: None,
+                    observed_at,
+                    source: if poll {
+                        WindowSource::Poll
+                    } else {
+                        WindowSource::Head
+                    },
+                    plan: None,
+                    tier: None,
+                },
+            )
+        },
+    )
+}
+
+#[test]
+fn an_account_whose_set_is_the_week_alone_is_known_on_its_week_and_takes_the_spent_move() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        shedding: Shedding {
+            migrate_when_spent: true,
+            ..Shedding::default()
+        },
+        ..Pool::default()
+    });
+    let spent_a = |st: &mut RoutingState| {
+        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
+    };
+    let turn = |st: &mut RoutingState, at: i64| {
+        landed(
+            select(
+                st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], at),
+                &mut rng(),
+            )
+            .0,
+        )
+    };
+
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    turn(&mut st, T);
+    spent_a(&mut st);
+    st.record_sample("b", sample_of(&[SEVEN_DAY], 0.2, T + 600, true), T + 600);
+    assert_eq!(
+        turn(&mut st, T + 1_000),
+        ("b".into(), Some(MigrateReason::Spent)),
+        "a poll that carried the week alone makes it the account's one shared window, and its prediction is known"
+    );
+
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    turn(&mut st, T);
+    spent_a(&mut st);
+    st.record_sample("b", sample_of(&[SEVEN_DAY], 0.2, T + 600, false), T + 600);
+    assert_eq!(
+        turn(&mut st, T + 1_000),
+        ("a".into(), None),
+        "before its first poll an account needs both shared windows, so a 7-day reading alone leaves it unknown"
+    );
+}
+
 #[test]
 fn a_spent_sibling_whose_reading_passed_its_reset_holds_allowance_and_the_shed_trigger_reads_zero_after_a_reset(
 ) {
     let s = tiered(shedding_pool(Shedding::default()));
     let mut st = loaded(vec![burning("s1", "b", 4.0, false, T)]);
     // a read its 5-hour window full an hour ago, and that window reset a minute ago; b is spent until its reset.
-    st.record_sample("a", refreshing(1.0, T - MINUTE, T + 9 * HOUR, T - HOUR));
-    st.record_sample("b", refreshing(1.0, T + HOUR, T + 9 * HOUR, T - 1_000));
+    st.record_sample("a", refreshing(1.0, T - MINUTE, T + 9 * HOUR, T - HOUR), 0);
+    st.record_sample("b", refreshing(1.0, T + HOUR, T + 9 * HOUR, T - 1_000), 0);
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
         ("a".into(), Some(MigrateReason::Spent)),
@@ -11969,7 +12104,7 @@ fn a_spent_sibling_whose_reading_passed_its_reset_holds_allowance_and_the_shed_t
         None,
         "the shed trigger reads zero after the reset, so no round ran on a"
     );
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 9 * HOUR, T + 1_500));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 9 * HOUR, T + 1_500), 0);
     assert_eq!(
         picked(
             &select(
@@ -12050,8 +12185,8 @@ fn the_overage_move_lands_only_on_a_sibling_holding_allowance() {
             &mut rng(),
         );
         st.record_overage("a", overage(true, T + 500, Some(T + 40 * MINUTE)));
-        st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
-        st.record_sample("c", sample(0.2, 0.2, T + 500));
+        st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
+        st.record_sample("c", sample(0.2, 0.2, T + 500), 0);
         (s, st)
     };
     let (s, mut st) = placed(vec![("a", 0), ("b", 1), ("c", 2)]);
@@ -12144,7 +12279,11 @@ fn on_the_metered_member() -> RoutingState {
         },
     ]);
     // b's own window resets soon, and the return names no grace, so nothing reads that reset.
-    st.record_sample("b", refreshing(0.3, T + 10 * MINUTE, T + 9 * HOUR, T - 500));
+    st.record_sample(
+        "b",
+        refreshing(0.3, T + 10 * MINUTE, T + 9 * HOUR, T - 500),
+        0,
+    );
     st
 }
 
@@ -12453,8 +12592,8 @@ fn b_outranks_c_pool(kinds: Vec<(&'static str, AccountKind)>) -> Pool {
 
 /// `b` reads near the ceiling and still holds allowance, so a rule without the gate would take it, and `c` has room.
 fn b_filled_c_free(st: &mut RoutingState, at: i64) {
-    st.record_sample("b", sample(0.9, 0.3, at));
-    st.record_sample("c", sample(0.1, 0.1, at));
+    st.record_sample("b", sample(0.9, 0.3, at), 0);
+    st.record_sample("c", sample(0.1, 0.1, at), 0);
 }
 
 /// `s1` placed on `a`, then `a` spent with its reset hours out and `b` and `c` read as given: the spent move of a
@@ -12473,9 +12612,9 @@ fn spent_move_from_a(
         &request(s, Some("s1"), "claude-sonnet-5", true, &[], T),
         &mut rng(),
     );
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
-    st.record_sample("b", b);
-    st.record_sample("c", c);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
+    st.record_sample("b", b, 0);
+    st.record_sample("c", c, 0);
     decide(
         st,
         s,
@@ -12594,8 +12733,8 @@ fn a_spent_move_lands_on_an_untiered_sibling_that_reads_least_bad() {
         &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
         &mut rng(),
     );
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
-    st.record_sample("b", sample(0.9, 0.3, T + 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
+    st.record_sample("b", sample(0.9, 0.3, T + 500), 0);
     let d = decide(
         &mut st,
         &s,
@@ -12624,7 +12763,7 @@ fn an_api_key_sibling_with_a_full_bucket_reads_least_bad_and_a_fitting_one_takes
         &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
         &mut rng(),
     );
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
     // b reads no plan window at all; its worst live bucket is exhausted, which says it has no room.
     st.record_sample(
         "b",
@@ -12643,8 +12782,9 @@ fn an_api_key_sibling_with_a_full_bucket_reads_least_bad_and_a_fitting_one_takes
                 tier: None,
             },
         ),
+        0,
     );
-    st.record_sample("c", sample(0.1, 0.1, T + 500));
+    st.record_sample("c", sample(0.1, 0.1, T + 500), 0);
     let d = decide(
         &mut st,
         &s,
@@ -12681,7 +12821,7 @@ fn an_api_key_sibling_fits_while_its_bucket_holds_room() {
             &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
             &mut rng(),
         );
-        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
         st.record_sample(
             "b",
             UtilizationSample {
@@ -12699,8 +12839,9 @@ fn an_api_key_sibling_fits_while_its_bucket_holds_room() {
                     tier: None,
                 },
             ),
+            0,
         );
-        st.record_sample("c", sample(0.1, 0.1, T + 500));
+        st.record_sample("c", sample(0.1, 0.1, T + 500), 0);
         if cooling {
             st.record_cooldown(cooled(
                 "b",
@@ -12868,7 +13009,7 @@ fn a_usage_based_seat_is_traced_with_no_window_and_no_pace_figure_and_reads_the_
         vec![usage_based_seat("b")],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.record_sample("a", refreshing(0.2, T + HOUR, T + 24 * HOUR, T - 500));
+    st.record_sample("a", refreshing(0.2, T + HOUR, T + 24 * HOUR, T - 500), 0);
     let d = decide(
         &mut st,
         &s,
@@ -12981,8 +13122,8 @@ fn a_shedding_rounds_destination_read_fits_a_usage_based_seat_as_it_fits_an_api_
         burning("s1", "a", 4.0, false, T),
         burning("s0", "a", 1.0, false, T),
     ]);
-    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("c", weekly(0.3, 0.5, 4, T - 500));
+    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("c", weekly(0.3, 0.5, 4, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     let fit = line(&d.record, "fit");
@@ -13010,7 +13151,7 @@ fn the_spent_move_lands_a_pin_on_a_usage_based_seat_with_no_reading_as_on_an_api
         &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
         &mut rng(),
     );
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
     let d = decide(
         &mut st,
         &s,
@@ -13148,7 +13289,7 @@ fn a_usage_based_seats_plan_week_read_before_the_class_holds_no_request_and_refu
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.record_credits("b", credits(true, None, Some(0.2), T - 500));
-    st.record_sample("b", spent_week.clone());
+    st.record_sample("b", spent_week.clone(), 0);
     let d = decide(
         &mut st,
         &lone,
@@ -13171,7 +13312,7 @@ fn a_usage_based_seats_plan_week_read_before_the_class_holds_no_request_and_refu
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.record_credits("b", credits(true, None, Some(0.2), T - 500));
-    st.record_sample("b", spent_week);
+    st.record_sample("b", spent_week, 0);
     seed_affinity(
         &st,
         vec![affinity_row(
@@ -13312,8 +13453,8 @@ fn a_usage_based_seats_candidate_facts_list_its_spend_entry_and_no_plan_window_w
     let plan_readings = || with_fable(sample(0.2, 0.3, T - 500), 0.4, None);
     let s = spend_pool(vec![("a", 0), ("b", 1)]);
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.record_sample("a", plan_readings());
-    st.record_sample("b", plan_readings());
+    st.record_sample("a", plan_readings(), 0);
+    st.record_sample("b", plan_readings(), 0);
     st.record_credits("b", credits(true, None, Some(0.4), T - 500));
     let d = decide(
         &mut st,
@@ -13347,7 +13488,7 @@ fn a_usage_based_seats_weekly_reading_from_before_the_class_projects_nothing_so_
     let s = spend_pool(vec![("b", 0)]);
     let mut st = loaded(vec![burning("s1", "b", 4.0, false, T)]);
     // The week the seat read past the ceiling before it converted, which the routing state keeps until its reset.
-    st.record_sample("b", weekly(0.1, 0.99, 4, T - 500));
+    st.record_sample("b", weekly(0.1, 0.99, 4, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "b", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
@@ -13464,7 +13605,7 @@ fn a_fitting_sibling_at_its_cap_is_passed_over_for_a_least_bad_one_under_it() {
         &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
         &mut rng(),
     );
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
     b_filled_c_free(&mut st, T + 500);
     let on_c = st.in_flight().dispatched("c", T + 500);
     let d = decide(
@@ -13566,8 +13707,8 @@ fn shedding_pool(shedding: Shedding) -> Pool {
 /// between them take its projection over the ceiling, and `b` at 0.1 on both windows, fitting every pin of these cases
 /// to its horizon. Both weeks read 0.1, far under the ceiling at their horizons.
 fn over_a_fitting_b(st: &mut RoutingState, at: i64) {
-    st.record_sample("a", refreshing(0.94, at + HOUR, at + 72 * HOUR, at));
-    st.record_sample("b", refreshing(0.1, at + HOUR, at + 72 * HOUR, at));
+    st.record_sample("a", refreshing(0.94, at + HOUR, at + 72 * HOUR, at), 0);
+    st.record_sample("b", refreshing(0.1, at + HOUR, at + 72 * HOUR, at), 0);
 }
 
 /// `loaded` with the round pricer set, so a round prices its pins' burn and its marks' rewrites.
@@ -13710,6 +13851,29 @@ fn weekly(
 }
 
 #[test]
+fn the_banded_shares_of_an_account_whose_set_lacks_the_five_hour_window_name_no_such_window() {
+    // A Fable pin draws both shared windows and its week, and the pricer prices its burn on all three.
+    let fable = PinRow {
+        model: "claude-fable-5-1".into(),
+        ..burning("s1", "a", 4.0, true, T)
+    };
+    let mut st = loaded(vec![fable]);
+    st.set_share(hourly_pricer());
+    st.record_sample(
+        "a",
+        sample_of(&[SEVEN_DAY, SEVEN_DAY_FABLE], 0.2, T - 500, true),
+        T - 500,
+    );
+    assert_eq!(
+        st.banded_shares("a", &|_| true, TIER, T, HOUR, 0.5, &|_| Some(T + HOUR))
+            .into_keys()
+            .collect::<Vec<_>>(),
+        [SEVEN_DAY, SEVEN_DAY_FABLE],
+        "a horizon on the 5-hour window adds no 5-hour share the set lacks"
+    );
+}
+
+#[test]
 fn a_five_hour_window_whose_projection_stays_under_the_ceiling_at_its_reset_does_not_shed() {
     let s = tiered(shedding_pool(Shedding::default()));
     let mut st = two_pins_on_a();
@@ -13728,8 +13892,9 @@ fn a_five_hour_window_whose_projection_stays_under_the_ceiling_at_its_reset_does
                 tier: None,
             },
         ),
+        0,
     );
-    st.record_sample("b", sample(0.1, 0.1, T - 500));
+    st.record_sample("b", sample(0.1, 0.1, T - 500), 0);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
         landed(d.result.clone()),
@@ -13797,7 +13962,7 @@ fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leav
     assert!(marked(&st, "sonnet") && !st.shed_marked(&opus_key));
     // a drops under the ceiling, so the sonnet's next request heals its mark: a standing mark would count as removed
     // in the next round and leave the opus pin the last one.
-    st.record_sample("a", refreshing(0.5, T + HOUR, T + 72 * HOUR, T + 500));
+    st.record_sample("a", refreshing(0.5, T + HOUR, T + 72 * HOUR, T + 500), 0);
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "sonnet", T + 1_000), &mut rng()).0),
         ("a".into(), None)
@@ -14004,7 +14169,7 @@ fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place(
     // c reads 0.92, so the spent move below finds the rewrite fitting on a and c alone and takes a, whose runway is
     // the longer. c then drops to 0.1 and fits, so a mark that outlived the move would find it a destination.
     over_a_fitting_b(&mut st, T - 500);
-    st.record_sample("c", sample(0.92, 0.1, T - 500));
+    st.record_sample("c", sample(0.92, 0.1, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
@@ -14016,14 +14181,14 @@ fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place(
         d.record.outcome.mark_cleared.as_ref().map(|m| m.reason),
         Some("moved")
     );
-    st.record_sample("a", sample(0.9, 0.3, T + 500));
-    st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    st.record_sample("a", sample(0.9, 0.3, T + 500), 0);
+    st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 1_000), &mut rng()).0),
         ("a".into(), Some(MigrateReason::Spent)),
         "b spends its window and the spent move takes s1 back to a, inside a's dwell"
     );
-    st.record_sample("c", sample(0.1, 0.1, T + 1_500));
+    st.record_sample("c", sample(0.1, 0.1, T + 1_500), 0);
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 2_000), &mut rng()).0),
         ("a".into(), None),
@@ -14165,7 +14330,7 @@ fn a_pin_that_fails_over_off_its_account_leaves_its_mark_with_the_row() {
     // s0's request runs a's round, which marks s1 with b as its planned destination and leaves s1 where it is until
     // its own next request. c reads full, so no mark finds it a destination yet.
     over_a_fitting_b(&mut st, T - 500);
-    st.record_sample("c", sample(0.9, 0.3, T - 500));
+    st.record_sample("c", sample(0.9, 0.3, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s0", T), &mut rng()).0),
@@ -14213,7 +14378,7 @@ fn a_pin_that_fails_over_off_its_account_leaves_its_mark_with_the_row() {
         "a's cooldown has ended, so the session pins to a again inside a's dwell"
     );
     // c now reads low, so a mark that outlived the fail-over would find a destination.
-    st.record_sample("c", sample(0.1, 0.1, T + 6_500));
+    st.record_sample("c", sample(0.1, 0.1, T + 6_500), 0);
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 7_000), &mut rng()).0),
         ("a".into(), None),
@@ -14319,8 +14484,8 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
             })
             .collect(),
     );
-    st.record_sample("a", refreshing(0.96, T + HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(0.96, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     let guess = |session: &str| PinKey {
         model: "claude-guess".into(),
         ..pin_key(session)
@@ -14537,8 +14702,8 @@ fn a_shed_pin_never_returns_to_the_account_that_shed_it_within_the_dwell_even_wh
         })
         .collect();
     let mut st = rounding(pins);
-    st.record_sample("a", sample(0.1, 0.1, at));
-    st.record_sample("b", sample(0.9, 0.3, at));
+    st.record_sample("a", sample(0.1, 0.1, at), 0);
+    st.record_sample("b", sample(0.9, 0.3, at), 0);
     let crossed = T + 3_000;
     past_the_wait(&mut st, &s, "p", "b", crossed);
     let d = decide(&mut st, &s, &auxiliary(&s, "p4", crossed), &mut rng());
@@ -15186,8 +15351,9 @@ fn the_shed_line_names_the_projection_and_horizon_of_every_window_the_trigger_re
         st.record_sample(
             "a",
             with_fable(sample(0.1, 0.93, T - 500), 0.97, Some(T + 96 * HOUR)),
+            0,
         );
-        st.record_sample("b", sample(0.1, 0.1, T - 500));
+        st.record_sample("b", sample(0.1, 0.1, T - 500), 0);
         past_the_wait(&mut st, &s, "p", "a", T);
         decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng())
     };
@@ -15282,8 +15448,8 @@ fn a_round_fires_on_the_seven_day_projection_over_the_ceiling_and_prices_its_pin
     let mut st = two_pins_on_a();
     // The 5-hour window at 0.1 with no reset projects 0.35 at its horizon, under the ceiling. The week at 0.93 takes
     // the pins' 0.05 / 6 an hour over the five hours to its horizon to 0.9717, over it, so the round reads the week.
-    st.record_sample("a", sample(0.1, 0.93, T - 500));
-    st.record_sample("b", sample(0.1, 0.1, T - 500));
+    st.record_sample("a", sample(0.1, 0.93, T - 500), 0);
+    st.record_sample("b", sample(0.1, 0.1, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
@@ -15415,8 +15581,8 @@ fn with_both_windows_over_the_ceiling_the_five_hour_window_fires_and_the_round_r
     let mut st = two_pins_on_a();
     // No reset on either window, so both horizons sit five hours out: the 5-hour window at 0.9 projects 1.15, the week
     // at 0.93 projects 0.9717, both over the ceiling. The 5-hour window is tested first and fires.
-    st.record_sample("a", sample(0.9, 0.93, T - 500));
-    st.record_sample("b", sample(0.1, 0.1, T - 500));
+    st.record_sample("a", sample(0.9, 0.93, T - 500), 0);
+    st.record_sample("b", sample(0.1, 0.1, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
@@ -15480,10 +15646,12 @@ fn a_model_week_over_its_ceiling_fires_a_round_that_marks_a_fable_pin_and_leaves
     st.record_sample(
         "a",
         with_fable(sample(0.1, 0.1, T - 500), 0.93, Some(T + 96 * HOUR)),
+        0,
     );
     st.record_sample(
         "b",
         with_fable(sample(0.1, 0.1, T - 500), 0.1, Some(T + 96 * HOUR)),
+        0,
     );
     let req = with_facts(
         request(&s, Some("o1"), "claude-opus-5", true, &[], T),
@@ -15620,10 +15788,12 @@ fn a_lone_fable_pin_beside_two_opus_pins(
     st.record_sample(
         "a",
         with_fable(sample(0.1, 0.1, T - 500), 0.93, Some(T + 96 * HOUR)),
+        0,
     );
     st.record_sample(
         "b",
         with_fable(sample(0.1, 0.1, T - 500), b_fable_week, Some(T + 96 * HOUR)),
+        0,
     );
     let req = with_facts(
         request(&s, Some("o1"), "claude-opus-5", true, &[], T),
@@ -15753,10 +15923,12 @@ fn a_round_that_walks_no_pin_reads_off_window_where_a_pin_it_left_out_is_off_the
     st.record_sample(
         "a",
         with_fable(sample(0.1, 0.1, T - 500), 0.93, Some(T + 96 * HOUR)),
+        0,
     );
     st.record_sample(
         "b",
         with_fable(sample(0.1, 0.1, T - 500), 0.1, Some(T + 96 * HOUR)),
+        0,
     );
     let req = with_facts(
         request(&s, Some("o1"), "claude-opus-5", true, &[], T),
@@ -15839,10 +16011,12 @@ fn a_dollar_round_on_the_fable_week_leaves_an_opus_pin_off_the_window_and_keeps_
     st.record_sample(
         "a",
         with_fable(sample(0.1, 0.1, T - 500), 0.93, Some(T + 96 * HOUR)),
+        0,
     );
     st.record_sample(
         "b",
         with_fable(sample(0.1, 0.1, T - 500), 0.1, Some(T + 96 * HOUR)),
+        0,
     );
     st.record_overage("a", overage(true, T - 500, Some(T + 10 * MINUTE)));
     let req = with_facts(
@@ -15892,8 +16066,8 @@ fn a_source_ending_inside_the_weeks_horizon_projects_to_its_end_and_runs_no_roun
             burning("s1", "a", 4.0, true, T),
             burning("s0", "a", 1.0, true, T),
         ]);
-        st.record_sample("a", sample(0.1, 0.93, T - 500));
-        st.record_sample("b", sample(0.1, 0.1, T - 500));
+        st.record_sample("a", sample(0.1, 0.93, T - 500), 0);
+        st.record_sample("b", sample(0.1, 0.1, T - 500), 0);
         past_the_wait(&mut st, &s, "p", "a", T);
         let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
         let last_shed = st.last_shed("p", "a");
@@ -16531,6 +16705,7 @@ fn the_candidate_table_fills_tier_pace_and_budget_for_every_member() {
         st.record_sample(
             id,
             refreshing(five_hour, T + 2 * HOUR, T + 72 * HOUR, T - 500),
+            0,
         );
     }
     st.record_member_spend(
@@ -16673,10 +16848,12 @@ fn a_spent_model_member_s_tier_reads_the_partition_beside_a_plan_funded_sibling(
         st.record_sample(
             "a",
             with_fable(sample(0.2, 0.1, 1_000), 1.0, Some(9 * HOUR)),
+            0,
         );
         st.record_sample(
             "b",
             with_fable(sample(0.3, 0.1, 1_000), 0.5, Some(9 * HOUR)),
+            0,
         );
         st.record_credits("a", credits(true, None, Some(0.2), 1_000));
         let d = decide(
@@ -16859,6 +17036,7 @@ fn a_four_member_record_serializes_under_twelve_kilobytes() {
                 0.3,
                 Some(T + 96 * HOUR),
             ),
+            0,
         );
     }
     st.record_member_spend(
@@ -16926,8 +17104,8 @@ fn a_session_pin_placement_and_a_cohort_hold_name_no_strategy_score() {
         ..seeded_pin("s1", "b", T)
     }]);
     // Pace alone would pick a, the account with the more of its week left.
-    st.record_sample("a", sample(0.1, 0.1, T - 500));
-    st.record_sample("b", sample(0.1, 0.6, T - 500));
+    st.record_sample("a", sample(0.1, 0.1, T - 500), 0);
+    st.record_sample("b", sample(0.1, 0.6, T - 500), 0);
     seed_affinity(
         &st,
         vec![AffinityRow {
@@ -16998,8 +17176,8 @@ fn a_cohort_hold_on_the_pick_s_own_account_reads_the_pick_s_tier_beside_its_scor
         ..seeded_pin("s1", "b", T)
     }]);
     // Pace alone picks b, the account with the more of its week left, and the cohort sits there too.
-    st.record_sample("a", sample(0.1, 0.6, T - 500));
-    st.record_sample("b", sample(0.1, 0.1, T - 500));
+    st.record_sample("a", sample(0.1, 0.6, T - 500), 0);
+    st.record_sample("b", sample(0.1, 0.1, T - 500), 0);
     seed_affinity(
         &st,
         vec![AffinityRow {
@@ -17098,8 +17276,8 @@ fn session_pin_at_cap() -> (RegistrySnapshot, RoutingState, [AccountTicket; 2]) 
         agent_id: "worker".into(),
         ..seeded_pin("s1", "b", T)
     }]);
-    st.record_sample("a", sample(0.1, 0.1, T - 500));
-    st.record_sample("b", sample(0.1, 0.6, T - 500));
+    st.record_sample("a", sample(0.1, 0.1, T - 500), 0);
+    st.record_sample("b", sample(0.1, 0.6, T - 500), 0);
     let tickets = [
         st.in_flight().dispatched("a", T - 1_000),
         st.in_flight().dispatched("b", T - 1_000),
@@ -17383,7 +17561,7 @@ fn a_pace_pick_names_its_gap_over_the_runner_up() {
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
     for (id, seven_day) in [("a", 0.1), ("b", 0.4), ("c", 0.7)] {
-        st.record_sample(id, sample(0.1, seven_day, T - 500));
+        st.record_sample(id, sample(0.1, seven_day, T - 500), 0);
     }
     let d = decide(
         &mut st,
@@ -17434,7 +17612,7 @@ fn a_pace_pick_names_its_gap_over_the_runner_up() {
     });
     let mut st = priced(vec![burning("h1", "a", 40.0, true, T)]);
     for (id, seven_day) in [("a", 0.1), ("b", 0.4), ("c", 0.7)] {
-        st.record_sample(id, sample(0.1, seven_day, T - 500));
+        st.record_sample(id, sample(0.1, seven_day, T - 500), 0);
     }
     let d = decide(
         &mut st,
@@ -17484,9 +17662,9 @@ fn a_move_whose_destination_failed_the_gate_reads_its_verdict_and_runway_on_the_
         &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
         &mut rng(),
     );
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
     for id in ["b", "c", "d"] {
-        st.record_sample(id, sample(0.9, 0.3, T + 500));
+        st.record_sample(id, sample(0.9, 0.3, T + 500), 0);
     }
     let d = decide(
         &mut st,
@@ -17562,11 +17740,13 @@ fn a_four_member_shed_move_serializes_under_twenty_kilobytes() {
     st.record_sample(
         "a",
         with_fable(weekly(0.1, 0.93, 9, T - 500), 0.4, Some(T + 96 * HOUR)),
+        0,
     );
     for (id, seven_day) in [("b", 0.3), ("c", 0.25), ("d", 0.2)] {
         st.record_sample(
             id,
             with_fable(weekly(0.1, seven_day, 4, T - 500), 0.4, Some(T + 96 * HOUR)),
+            0,
         );
     }
     st.record_member_spend(
@@ -17951,7 +18131,7 @@ fn a_placement_books_its_rewrite_on_the_destination_until_the_usage_replaces_it_
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.set_share(ratio_pricer());
-    st.record_sample("a", sample(0.5, 0.1, T));
+    st.record_sample("a", sample(0.5, 0.1, T), 0);
     let req = placing(&s, "r-1", "s1", T);
     assert_eq!(
         landed(select(&mut st, &s, &req, &mut rng()).0),
@@ -17999,7 +18179,7 @@ fn a_placement_books_its_rewrite_on_the_destination_until_the_usage_replaces_it_
         close(five_hour(&st, "a", T), 0.5),
         "and reads the reading once the booking leaves"
     );
-    st.record_sample("a", with_fable(sample(0.5, 0.1, T), 0.3, None));
+    st.record_sample("a", with_fable(sample(0.5, 0.1, T), 0.3, None), 0);
     let fable = SelectRequest {
         request_id: "r-2".into(),
         body_tokens: 200_000,
@@ -18033,7 +18213,7 @@ fn a_failover_to_a_destination_that_books_nothing_releases_the_sources_booking()
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.set_share(ratio_pricer());
-    st.record_sample("a", sample(0.5, 0.1, T));
+    st.record_sample("a", sample(0.5, 0.1, T), 0);
     let req = placing(&s, "r-1", "s1", T);
     assert_eq!(
         landed(select(&mut st, &s, &req, &mut rng()).0),
@@ -18090,8 +18270,8 @@ fn a_moving_pin_keeps_its_burn_and_its_last_prompt_on_the_new_row() {
         ..burning("s1", "a", 40_000.0, true, T)
     };
     let mut st = loaded(vec![old.clone()]);
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
-    st.record_sample("b", refreshing(0.2, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
+    st.record_sample("b", refreshing(0.2, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
     let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000);
     assert_eq!(
         landed(select(&mut st, &s, &req, &mut rng()).0),
@@ -18159,7 +18339,7 @@ fn a_fresh_session_takes_the_median_burn_of_the_pools_warm_priced_pins() {
         },
     ]);
     st.set_share(ratio_pricer());
-    st.record_sample("a", sample(0.5, 0.1, T));
+    st.record_sample("a", sample(0.5, 0.1, T), 0);
     let req = SelectRequest {
         body_tokens: 1_000,
         ..placing(&s, "r-1", "s9", T)
@@ -18182,7 +18362,7 @@ fn a_fresh_session_takes_the_median_burn_of_the_pools_warm_priced_pins() {
         burning("s4", "a", 90_000.0, true, T),
     ]);
     four.set_share(ratio_pricer());
-    four.record_sample("a", sample(0.5, 0.1, T));
+    four.record_sample("a", sample(0.5, 0.1, T), 0);
     select(&mut four, &s, &req, &mut rng());
     let booked = four.reservation("r-1").expect("the placement books");
     assert!(
@@ -18191,7 +18371,7 @@ fn a_fresh_session_takes_the_median_burn_of_the_pools_warm_priced_pins() {
     );
     let mut cold = loaded(vec![burning("s1", "a", 10_000.0, false, T)]);
     cold.set_share(ratio_pricer());
-    cold.record_sample("a", sample(0.5, 0.1, T));
+    cold.record_sample("a", sample(0.5, 0.1, T), 0);
     select(&mut cold, &s, &req, &mut rng());
     let booked = cold
         .reservation("r-1")
@@ -18211,7 +18391,7 @@ fn a_count_request_a_probe_and_a_renewal_book_nothing() {
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.set_share(ratio_pricer());
-    st.record_sample("a", sample(0.5, 0.1, T));
+    st.record_sample("a", sample(0.5, 0.1, T), 0);
     // Each absence is read beside a placement that books, so the case holds only once the booking exists.
     let placed = |st: &mut RoutingState, id: &str, session: &str| {
         let before = five_hour(st, "a", T);
@@ -18268,7 +18448,7 @@ fn a_fast_request_books_nothing_and_leaves_the_prediction_unchanged() {
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.set_share(ratio_pricer());
-    st.record_sample("a", sample(0.5, 0.1, T));
+    st.record_sample("a", sample(0.5, 0.1, T), 0);
     credits_on(&mut st, "a", T);
     assert_eq!(
         landed(select(&mut st, &s, &fast_request(&s, "r-1", "s1", T), &mut rng()).0),
@@ -18290,7 +18470,7 @@ fn a_fast_request_books_nothing_and_leaves_the_prediction_unchanged() {
     });
     let mut st = loaded(vec![burning("s2", "a", 40_000.0, false, T)]);
     st.set_share(ratio_pricer());
-    st.record_sample("b", sample(0.5, 0.1, T));
+    st.record_sample("b", sample(0.5, 0.1, T), 0);
     credits_on(&mut st, "b", T);
     assert_eq!(
         landed(select(&mut st, &s, &fast_request(&s, "r-2", "s2", T), &mut rng()).0),
@@ -18311,7 +18491,7 @@ fn a_classifier_request_books_nothing_and_takes_the_none_verdict_a_fast_request_
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.set_share(ratio_pricer());
-    st.record_sample("a", sample(0.5, 0.1, T));
+    st.record_sample("a", sample(0.5, 0.1, T), 0);
     let req = SelectRequest {
         classifier: true,
         ..placing(&s, "r-1", "s1", T)
@@ -18349,9 +18529,9 @@ fn a_classifier_request_with_a_nonzero_body_lands_on_the_account_its_body_would_
     // under the pool's 0.95 ceiling, while b and c fit with nothing burning. A classifier call takes no share of a
     // plan window, so its body is no rewrite and a fits.
     let mut st = priced(Vec::new());
-    st.record_sample("a", refreshing(0.94, HOUR, HOUR, 1));
-    st.record_sample("b", refreshing(0.5, HOUR, 2 * HOUR, 1));
-    st.record_sample("c", refreshing(0.6, HOUR, 8 * HOUR, 1));
+    st.record_sample("a", refreshing(0.94, HOUR, HOUR, 1), 0);
+    st.record_sample("b", refreshing(0.5, HOUR, 2 * HOUR, 1), 0);
+    st.record_sample("c", refreshing(0.6, HOUR, 8 * HOUR, 1), 0);
     let plain = || SelectRequest {
         request_id: "r-plain".into(),
         body_tokens: 200_000,
@@ -18509,8 +18689,8 @@ fn a_shed_round_reads_no_rewrite_for_a_pin_a_classifier_call_renewed_last() {
             ..burning("small", "a", 0.1, true, T)
         },
     ]);
-    st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
     let round = d.shed_round.expect("the round ran").facts;
@@ -18568,8 +18748,8 @@ fn classifier_renewed_round() -> RoutingState {
             ..burning("plain", "a", 0.4, true, T)
         },
     ]);
-    st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     st
 }
 
@@ -18651,7 +18831,7 @@ fn a_hold_books_nothing_and_the_selection_after_it_books_for_the_request() {
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.set_share(ratio_pricer());
-    st.record_sample("a", sample(0.5, 0.1, T));
+    st.record_sample("a", sample(0.5, 0.1, T), 0);
     let ticket = st.in_flight().dispatched("a", T);
     let req = placing(&s, "r-1", "s1", T);
     assert!(
@@ -18704,7 +18884,7 @@ fn a_fresh_sessions_prior_counts_a_pin_only_on_the_windows_its_model_draws() {
         burning("s2", "a", 30_000.0, true, T),
     ]);
     st.set_share(ratio_pricer());
-    st.record_sample("a", with_fable(sample(0.5, 0.1, T), 0.3, None));
+    st.record_sample("a", with_fable(sample(0.5, 0.1, T), 0.3, None), 0);
     let fable = SelectRequest {
         body_tokens: 1_000,
         ..request(&s, Some("s9"), "claude-fable-5-1", true, &[], T)
@@ -18745,7 +18925,7 @@ fn a_fresh_sessions_prior_leaves_out_the_warm_pins_a_former_pool_left_on_the_acc
         key_id: "k1".into(),
         ..burning("s1", "a", 100.0, true, T)
     }]);
-    st.record_sample("a", sample(0.5, 0.1, T));
+    st.record_sample("a", sample(0.5, 0.1, T), 0);
     let req = SelectRequest {
         body_tokens: 1_000,
         ..select_request(
@@ -18795,8 +18975,8 @@ fn a_spent_move_books_the_pins_last_prompt_as_its_rewrite_and_its_own_decayed_bu
     };
     let spent = |st: &mut RoutingState| {
         st.set_share(ratio_pricer());
-        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
-        st.record_sample("b", refreshing(0.2, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
+        st.record_sample("b", refreshing(0.2, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
     };
     let mut st = loaded(vec![pin]);
     spent(&mut st);
@@ -18908,9 +19088,9 @@ fn gated_pin(session: &str, account: &str, input: f64) -> PinRow {
 /// `a` spent with its reset hours out and `b` and `c` read at the given 5-hour utilizations with their resets three
 /// hours out, so the spent rule moves `s1`'s pin and the gate reads both siblings.
 fn gated_siblings(st: &mut RoutingState, b: f64, c: f64) {
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
-    st.record_sample("b", refreshing(b, T + 3 * HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("c", refreshing(c, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
+    st.record_sample("b", refreshing(b, T + 3 * HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("c", refreshing(c, T + 3 * HOUR, T + 72 * HOUR, T - 500), 0);
 }
 
 fn gate_pool() -> Pool {
@@ -18936,9 +19116,13 @@ fn a_move_takes_a_destination_the_pin_fits_to_the_horizon_before_any_other() {
     let s = tiered(gate_pool());
     // 100 input tokens a second burn a hundred-thousandth of the 5-hour window a second on TIER.
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("c", refreshing(0.9, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
+    st.record_sample(
+        "b",
+        refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
+    st.record_sample("c", refreshing(0.9, T + HOUR, T + 72 * HOUR, T - 500), 0);
     let d = decide(
         &mut st,
         &s,
@@ -19052,14 +19236,19 @@ fn with_no_fitting_destination_the_rewrite_only_candidate_with_the_longest_runwa
 fn a_rewrite_only_candidate_with_a_window_past_its_reset_keeps_the_longest_runways_move() {
     let s = tiered(gate_pool());
     let mut st = priced(vec![gated_pin("s1", "a", 1_000.0)]);
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
     // b's 5-hour window binds at 4 000 s, short of the 10 800 s to its reset, beside a week whose 50 500 s pass its
     // reset two hours out. c's 5-hour window binds at 3 000 s beside a week inside its reset.
     st.record_sample(
         "b",
         windows_with_resets((0.5, T + 3 * HOUR), (0.1, T + 2 * HOUR), T - 500),
+        0,
     );
-    st.record_sample("c", refreshing(0.6, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample(
+        "c",
+        refreshing(0.6, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
     let d = decide(
         &mut st,
         &s,
@@ -19184,15 +19373,20 @@ fn under_priority_a_runway_shown_unbounded_past_its_reset_still_breaks_the_tie_b
         ..gate_pool()
     });
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
     // b, first in the tie, reaches the ceiling past each window's reset: 35 000 s on the 5-hour window against its
     // reset three hours out, about 140 hours on the week against its reset 72 hours out. c's 60 000 s on the 5-hour
     // window pass its reset too, while its week's 85 000 s stay inside the 72 hours. b's computed runway is the
     // shorter.
-    st.record_sample("b", refreshing(0.55, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample(
+        "b",
+        refreshing(0.55, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
     st.record_sample(
         "c",
         windows_with_resets((0.3, T + 3 * HOUR), (0.8, T + 72 * HOUR), T - 500),
+        0,
     );
     let d = decide(
         &mut st,
@@ -19271,8 +19465,16 @@ fn a_candidate_without_a_read_keeps_its_place_in_the_ties() {
     let cap = s.pool("p").unwrap().failover.in_flight_cap;
     // A warm pin burning on b gives a fresh session's prior a burn, so b and c read different runways.
     let mut st = priced(vec![gated_pin("w", "b", 100.0)]);
-    st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("c", refreshing(0.5, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample(
+        "b",
+        refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
+    st.record_sample(
+        "c",
+        refreshing(0.5, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
     let _held: Vec<_> = ["b", "c"]
         .into_iter()
         .flat_map(|id| (0..cap).map(move |_| id))
@@ -19529,7 +19731,7 @@ fn a_failover_lands_on_the_invalidated_rows_burn_and_books_it() {
         gated_pin("w1", "b", 200.0),
         gated_pin("w2", "b", 400.0),
     ]);
-    st.record_sample("b", refreshing(0.3, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.3, T + HOUR, T + 72 * HOUR, T - 500), 0);
     let row = burning("s1", "a", 100.0, true, T);
     let cause = MoveCause::Cooldown {
         scope: "account".into(),
@@ -19595,8 +19797,8 @@ fn a_failover_landing_remembers_its_source_for_the_rounds_dwell() {
     let s = tiered(shedding_pool(Shedding::default()));
     // A second warm session on b, cooler than the one landing, so a round on b may mark the landed one first.
     let mut st = rounding(vec![burning("s0", "b", 1.0, true, T)]);
-    st.record_sample("a", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     let req = failing_over(
         &s,
         "a",
@@ -19618,8 +19820,8 @@ fn a_failover_landing_remembers_its_source_for_the_rounds_dwell() {
     // b crosses its ceiling under the session's burn while a sits far under its own: a round on b runs at the
     // session's next request, inside the dwell, and finds no destination but the account the session left.
     let at = T + 1_000;
-    st.record_sample("a", refreshing(0.1, at + HOUR, at + 72 * HOUR, at));
-    st.record_sample("b", refreshing(0.94, at + HOUR, at + 72 * HOUR, at));
+    st.record_sample("a", refreshing(0.1, at + HOUR, at + 72 * HOUR, at), 0);
+    st.record_sample("b", refreshing(0.94, at + HOUR, at + 72 * HOUR, at), 0);
     past_the_wait(&mut st, &s, "p", "b", T + 2_000);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T + 2_000), &mut rng());
     assert_eq!(
@@ -19680,8 +19882,8 @@ fn a_rounds_move_stamps_round_and_a_failovers_landing_stamps_its_word_on_the_row
     // A landing after a failover off a's cooldown, as `a_failover_landing_remembers_its_source_for_the_rounds_dwell`
     // builds it.
     let mut st = rounding(vec![burning("s0", "b", 1.0, true, T)]);
-    st.record_sample("a", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     let req = failing_over(
         &s,
         "a",
@@ -19991,6 +20193,7 @@ fn an_api_key_candidate_fits_with_no_runway_under_a_full_bucket_and_reads_least_
                     tier: None,
                 },
             ),
+            0,
         );
         decide(
             &mut st,
@@ -20048,7 +20251,7 @@ fn a_candidate_without_a_reading_on_a_drawn_window_or_without_a_tier_reads_least
         last_input_tokens: 500_000,
         ..burning("cold", "a", 100.0, false, T)
     }]);
-    st.record_sample("a", sample(0.3, 0.1, T - 500));
+    st.record_sample("a", sample(0.3, 0.1, T - 500), 0);
     // b reads its 5-hour window alone, c both shared windows.
     st.record_sample(
         "b",
@@ -20067,8 +20270,13 @@ fn a_candidate_without_a_reading_on_a_drawn_window_or_without_a_tier_reads_least
                 tier: None,
             },
         ),
+        0,
     );
-    st.record_sample("c", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample(
+        "c",
+        refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
     let d = decide(&mut st, &s, &auxiliary(&s, "cold", T), &mut rng());
     assert_eq!(
         landed(d.result.clone()),
@@ -20111,8 +20319,12 @@ fn a_spent_pin_waits_in_place_for_a_reset_inside_the_retry_bound_and_moves_past_
     });
     let spent = |reset: i64| {
         let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
-        st.record_sample("a", refreshing(1.0, reset, T + 72 * HOUR, T - 500));
-        st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+        st.record_sample("a", refreshing(1.0, reset, T + 72 * HOUR, T - 500), 0);
+        st.record_sample(
+            "b",
+            refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+            0,
+        );
         st
     };
     let mut st = spent(T + 30_000);
@@ -20283,8 +20495,12 @@ fn a_request_holds_for_a_reset_once_per_source_and_moves_when_the_reset_moved_du
     });
     let spent = || {
         let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
-        st.record_sample("a", refreshing(1.0, T + 30_000, T + 72 * HOUR, T - 500));
-        st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+        st.record_sample("a", refreshing(1.0, T + 30_000, T + 72 * HOUR, T - 500), 0);
+        st.record_sample(
+            "b",
+            refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+            0,
+        );
         st
     };
     let mut st = spent();
@@ -20300,7 +20516,11 @@ fn a_request_holds_for_a_reset_once_per_source_and_moves_when_the_reset_moved_du
     };
     // A newer sample read during the wait moves the reset to 45 s past the hold's end, inside the bound of the
     // selection that follows, and the wait cleared, so the account is held on and not attempted.
-    st.record_sample("a", refreshing(1.0, T + 75_000, T + 72 * HOUR, T + 29_000));
+    st.record_sample(
+        "a",
+        refreshing(1.0, T + 75_000, T + 72 * HOUR, T + 29_000),
+        0,
+    );
     let after = SelectRequest {
         seq: 2,
         holds: vec![HoldFacts {
@@ -20345,9 +20565,9 @@ fn the_shed_rule_takes_the_fitting_destination_the_strategy_ranks_first_or_none(
             },
             burning("s0", "a", 1.0, false, T),
         ]);
-        st.record_sample("a", sample(0.9, 0.3, T - 500));
-        st.record_sample("b", refreshing(b, T + 3 * HOUR, T + 72 * HOUR, T - 500));
-        st.record_sample("c", refreshing(c, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+        st.record_sample("a", sample(0.9, 0.3, T - 500), 0);
+        st.record_sample("b", refreshing(b, T + 3 * HOUR, T + 72 * HOUR, T - 500), 0);
+        st.record_sample("c", refreshing(c, T + 3 * HOUR, T + 72 * HOUR, T - 500), 0);
         past_the_wait(&mut st, &s, "p", "a", T);
         let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
         (st, d)
@@ -20414,11 +20634,19 @@ fn under_round_robin_the_cursor_picks_and_the_runway_never_speaks() {
         heavy("s2"),
         burning("s0", "a", 10.0, false, T),
     ]);
-    st.record_sample("a", sample(0.9, 0.3, T - 500));
+    st.record_sample("a", sample(0.9, 0.3, T - 500), 0);
     // b at 0.1 keeps the longer runway even once the first move books its rewrite and burn there, and c at 0.75
     // still fits the 10 800 s to the reset, so both moves find both siblings fitting.
-    st.record_sample("b", refreshing(0.1, T + 3 * HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("c", refreshing(0.75, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample(
+        "b",
+        refreshing(0.1, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
+    st.record_sample(
+        "c",
+        refreshing(0.75, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
     past_the_wait(&mut st, &s, "p", "a", T);
     let first = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
@@ -20475,8 +20703,12 @@ fn a_spent_pins_wait_runs_to_the_end_of_a_cooldown_that_outlasts_the_reset() {
     });
     let spent = |cooldown_until: i64| {
         let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
-        st.record_sample("a", refreshing(1.0, T + 30_000, T + 72 * HOUR, T - 500));
-        st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+        st.record_sample("a", refreshing(1.0, T + 30_000, T + 72 * HOUR, T - 500), 0);
+        st.record_sample(
+            "b",
+            refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+            0,
+        );
         // The 429 that spent the window cools the account a margin past the reset.
         st.record_cooldown(cooled(
             "a",
@@ -20557,8 +20789,12 @@ fn a_moved_row_reads_the_fired_rules_fit_step_when_an_earlier_rule_read_the_gate
     terms[1].ends_at = Some(T + 2 * HOUR);
     let s = snapshot_with_terms(wind_down_gate_pool(180), terms);
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
+    st.record_sample(
+        "b",
+        refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
     st.record_overage("a", overage(true, T - 500, Some(T + 40 * MINUTE)));
     let d = decide(
         &mut st,
@@ -20633,15 +20869,20 @@ fn the_binding_window_is_the_one_the_pin_reaches_first_among_those_it_overruns()
     // 2 000 input tokens a second burn two ten-thousandths of the 5-hour window a second and a sixth of that on
     // the week.
     let mut st = priced(vec![gated_pin("s1", "a", 2_000.0)]);
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
     // b overruns both windows: 0.4 of the 5-hour window left is 2 000 s against an hour to its reset, and 0.3417 of
     // the week left is 10 250 s against the five-hour horizon, so the larger shortfall sits on the longer runway.
     st.record_sample(
         "b",
         windows_with_resets((0.5, T + HOUR), (0.6, T + 72 * HOUR), T - 500),
+        0,
     );
     // c overruns the 5-hour window alone: 0.6 left is 3 000 s against three hours to its reset.
-    st.record_sample("c", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample(
+        "c",
+        refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
     let d = decide(
         &mut st,
         &s,
@@ -20679,12 +20920,13 @@ fn a_window_whose_runway_passes_its_reset_leaves_the_binding_to_the_window_insid
         ..Pool::default()
     });
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
     // b's 5-hour window leaves the pin 35 000 s against its reset three hours out, so the window resets before the
     // ceiling. Its week leaves 85 000 s, past the five-hour horizon and inside its reset 72 hours out, and binds.
     st.record_sample(
         "b",
         windows_with_resets((0.55, T + 3 * HOUR), (0.8, T + 72 * HOUR), T - 500),
+        0,
     );
     let d = decide(
         &mut st,
@@ -20740,12 +20982,13 @@ fn a_candidate_whose_every_runway_passes_its_reset_carries_no_runway_and_no_bind
         ..Pool::default()
     });
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
     // b leaves the pin 45 000 s on the 5-hour window against its reset two hours out and 265 000 s on the week against
     // its reset ten hours out: each window resets before the ceiling is reached.
     st.record_sample(
         "b",
         windows_with_resets((0.45, T + 2 * HOUR), (0.5, T + 10 * HOUR), T - 500),
+        0,
     );
     let d = decide(
         &mut st,
@@ -20801,12 +21044,13 @@ fn a_zero_runway_on_one_window_reads_none_whatever_another_window_allows() {
         ..Pool::default()
     });
     let mut st = priced(vec![gated_pin("s1", "a", 2_000.0)]);
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
     // The rewrite alone takes b's 5-hour window to the ceiling an hour from its reset, while its week leaves
     // 10 250 s of burn.
     st.record_sample(
         "b",
         windows_with_resets((0.95, T + HOUR), (0.6, T + 72 * HOUR), T - 500),
+        0,
     );
     let d = decide(
         &mut st,
@@ -20847,6 +21091,7 @@ fn a_renewal_names_the_first_window_whose_projection_at_its_horizon_reaches_the_
     st.record_sample(
         "a",
         refreshing(0.5, T + 144 * MINUTE, T + 72 * HOUR, T - 500),
+        0,
     );
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(d.record.outcome.kind, "renewed");
@@ -20859,7 +21104,7 @@ fn a_renewal_names_the_first_window_whose_projection_at_its_horizon_reaches_the_
     // at 0.1 projects 0.28: the week is the first window to reach the ceiling. The round on the one pin marks nothing,
     // so the pin renews.
     let mut st = priced(vec![burning("s2", "a", 100.0, true, T)]);
-    st.record_sample("a", sample(0.1, 0.93, T - 500));
+    st.record_sample("a", sample(0.1, 0.93, T - 500), 0);
     let d = decide(&mut st, &s, &auxiliary(&s, "s2", T), &mut rng());
     assert_eq!(d.record.outcome.kind, "renewed");
     assert_eq!(
@@ -20869,7 +21114,7 @@ fn a_renewal_names_the_first_window_whose_projection_at_its_horizon_reaches_the_
     );
     // Both reach it: the 5-hour window is read first.
     let mut st = priced(vec![burning("s3", "a", 100.0, true, T)]);
-    st.record_sample("a", sample(0.9, 0.93, T - 500));
+    st.record_sample("a", sample(0.9, 0.93, T - 500), 0);
     let d = decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng());
     assert_eq!(d.record.outcome.kind, "renewed");
     assert_eq!(
@@ -20895,6 +21140,7 @@ fn a_renewal_names_no_window_whose_projection_reads_the_ceiling_exactly() {
         st.record_sample(
             "a",
             refreshing(0.5, T + 144 * MINUTE, T + 72 * HOUR, T - 500),
+            0,
         );
         decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng())
     };
@@ -20932,6 +21178,7 @@ fn a_count_or_bound_renewal_names_the_window_whose_projection_reaches_the_ceilin
         st.record_sample(
             "a",
             refreshing(0.5, T + 144 * MINUTE, T + 72 * HOUR, T - 500),
+            0,
         );
         decide(&mut st, &s, &req, &mut rng())
     };
@@ -20982,6 +21229,7 @@ fn a_renewal_on_an_account_whose_pins_draw_no_fable_week_names_no_fable_week() {
         st.record_sample(
             "a",
             with_fable(sample(0.1, 0.1, T - 500), 0.96, Some(T + 96 * HOUR)),
+            0,
         );
         let d = decide(&mut st, &s, &req, &mut rng());
         assert_eq!(d.record.outcome.kind, "renewed");
@@ -21001,7 +21249,7 @@ fn a_renewal_on_a_usage_based_seat_names_the_idle_age_where_a_plan_members_week_
     // and no round reads a seat's plan week, so its renewal names the idle age.
     let renew = |s: &RegistrySnapshot| {
         let mut st = priced(vec![burning("s1", "a", 100.0, true, T)]);
-        st.record_sample("a", sample(0.1, 0.93, T - 500));
+        st.record_sample("a", sample(0.1, 0.93, T - 500), 0);
         decide(&mut st, s, &auxiliary(s, "s1", T), &mut rng())
     };
     let pool = || Pool {
@@ -21039,7 +21287,7 @@ fn three_pins_projecting_over() -> RoutingState {
         burning("s2", "a", 14.0, false, T),
         burning("s3", "a", 12.0, false, T),
     ]);
-    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T), 0);
     st
 }
 
@@ -21076,7 +21324,7 @@ fn a_five_hour_round_fires_on_the_projection_over_the_ceiling_and_marks_until_th
 ) {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
     let mut st = three_pins_projecting_over();
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng());
     assert_eq!(
@@ -21177,8 +21425,8 @@ fn a_desk_pin_and_a_base_pin() -> RoutingState {
         },
         burning("s1", "a", 20.0, false, T),
     ]);
-    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     st
 }
 
@@ -21247,8 +21495,8 @@ fn the_order_ranks_a_pin_by_the_rate_of_its_own_regime() {
 fn a_pin_with_no_entrypoint_prices_at_the_base_regime() {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
     let mut st = rounding(vec![burning("s1", "a", 20.0, false, T)]);
-    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     let shed = line(&d.record, "move:shed");
@@ -21279,7 +21527,7 @@ fn a_fresh_sessions_prior_prices_under_the_requests_regime_and_not_the_warm_pins
                 })
                 .collect(),
         );
-        st.record_sample("a", sample(0.5, 0.1, T));
+        st.record_sample("a", sample(0.5, 0.1, T), 0);
         let req = SelectRequest {
             body_tokens: 1_000,
             entrypoint: entrypoint.map(String::from),
@@ -21305,8 +21553,8 @@ fn a_round_counts_a_siblings_headroom_once_across_its_marks() {
     // b holds room for one pin's rewrite and burn to its horizon, c for one more.
     let with_c = projection_pool(vec![("a", 0), ("b", 1), ("c", 2)]);
     let mut st = three_pins_projecting_over();
-    st.record_sample("b", refreshing(0.70, T + HOUR, T + 72 * HOUR, T));
-    st.record_sample("c", refreshing(0.70, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.70, T + HOUR, T + 72 * HOUR, T), 0);
+    st.record_sample("c", refreshing(0.70, T + HOUR, T + 72 * HOUR, T), 0);
     past_the_wait(&mut st, &with_c, "p", "a", T);
     let d = decide(&mut st, &with_c, &auxiliary(&with_c, "s3", T), &mut rng());
     let round = d.shed_round.expect("the round ran").facts;
@@ -21327,7 +21575,7 @@ fn a_round_counts_a_siblings_headroom_once_across_its_marks() {
 
     let without_c = projection_pool(vec![("a", 0), ("b", 1)]);
     let mut st = three_pins_projecting_over();
-    st.record_sample("b", refreshing(0.70, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.70, T + HOUR, T + 72 * HOUR, T), 0);
     past_the_wait(&mut st, &without_c, "p", "a", T);
     let d = decide(
         &mut st,
@@ -21377,8 +21625,8 @@ fn a_standing_mark_counts_as_removed_and_is_skipped_standing() {
         burning("s2", "a", 14.0, false, T),
         burning("s3", "a", 12.0, false, T),
     ]);
-    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng());
     assert_eq!(landed(d.result.clone()), ("a".into(), None));
@@ -21430,8 +21678,8 @@ fn a_standing_mark_counts_as_removed_and_is_skipped_standing() {
             ..burning("s3", "a", 12.0, false, T)
         },
     ]);
-    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s2", T), &mut rng());
     assert_eq!(landed(d.result.clone()), ("a".into(), None));
@@ -21489,8 +21737,8 @@ fn a_pool_with_load_shedding_off_runs_no_round_releases_its_marks_and_still_move
             },
             burning("s0", "a", 1.0, false, T),
         ]);
-        st.record_sample("a", refreshing(five_hour, T + HOUR, T + 72 * HOUR, T));
-        st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+        st.record_sample("a", refreshing(five_hour, T + HOUR, T + 72 * HOUR, T), 0);
+        st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
         let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
         assert_eq!(
             landed(d.result.clone()),
@@ -21532,8 +21780,12 @@ fn a_pool_with_load_shedding_off_runs_no_round_releases_its_marks_and_still_move
 
     // The move off a spent account is its own toggle, so the switch leaves it running.
     let mut st = rounding(vec![burning("s1", "a", 4.0, false, T)]);
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample(
+        "a",
+        refreshing(1.0, T + 9 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
         landed(d.result.clone()),
@@ -21605,8 +21857,8 @@ fn a_mark_holds_past_the_dwell_heals_when_the_projection_reads_under_the_ceiling
 
     // The account's projection fell under the ceiling: the heal check clears the mark ahead of the move rules.
     let mut st = state();
-    st.record_sample("a", refreshing(0.5, T + HOUR, T + 72 * HOUR, T));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("a", refreshing(0.5, T + HOUR, T + 72 * HOUR, T), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(landed(d.result.clone()), ("a".into(), None));
     let pin = d.record.pin.as_ref().expect("the pin block");
@@ -21652,8 +21904,8 @@ fn a_mark_holds_past_the_dwell_heals_when_the_projection_reads_under_the_ceiling
 
     // Over the ceiling with no sibling that fits: the pin renews in place and its mark stands.
     let mut st = state();
-    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T));
-    st.record_sample("b", sample(0.95, 0.3, T));
+    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T), 0);
+    st.record_sample("b", sample(0.95, 0.3, T), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(landed(d.result.clone()), ("a".into(), None));
@@ -21702,8 +21954,8 @@ fn a_mark_on_the_week_heals_when_the_seven_day_projection_reads_under_the_ceilin
     // The week at 0.9 with no reset takes the pins' 0.04 / 6 an hour over the five hours to its horizon to 0.9333,
     // under the ceiling: the heal check clears the mark ahead of the move rules.
     let mut st = state(2.0);
-    st.record_sample("a", sample(0.1, 0.9, T - 500));
-    st.record_sample("b", sample(0.1, 0.1, T - 500));
+    st.record_sample("a", sample(0.1, 0.9, T - 500), 0);
+    st.record_sample("b", sample(0.1, 0.1, T - 500), 0);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(landed(d.result.clone()), ("a".into(), None));
     assert!(
@@ -21733,8 +21985,8 @@ fn a_mark_on_the_week_heals_when_the_seven_day_projection_reads_under_the_ceilin
     // The week at 0.95 with pins burning nothing projects 0.95, at the ceiling: the mark stands, since the heal reads
     // strictly under, and the trigger, strictly over, fires no round, so the pin renews in place with its mark.
     let mut st = state(0.0);
-    st.record_sample("a", sample(0.1, 0.95, T - 500));
-    st.record_sample("b", sample(0.1, 0.1, T - 500));
+    st.record_sample("a", sample(0.1, 0.95, T - 500), 0);
+    st.record_sample("b", sample(0.1, 0.1, T - 500), 0);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(landed(d.result.clone()), ("a".into(), None));
     assert!(d.record.pin.as_ref().is_some_and(|pin| pin.marked));
@@ -21992,16 +22244,19 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
         "cedar",
         with_fable(weekly(0.04, 0.3, 4, T), 0.73, Some(T + WEEK_MS * 4 / 10))
             .with(FIVE_HOUR, reading(0.04, cedar_reset)),
+        0,
     );
     st.record_sample(
         "birch",
         with_fable(weekly(0.40, 0.3, 5, T), 0.61, Some(T + WEEK_MS * 5 / 10))
             .with(FIVE_HOUR, reading(0.40, T + 3 * HOUR)),
+        0,
     );
     st.record_sample(
         "alder",
         with_fable(weekly(0.70, 0.5, 6, T), 0.97, Some(alder_fable_reset))
             .with(FIVE_HOUR, reading(0.70, T + 4 * HOUR)),
+        0,
     );
     // Books the charges of the minutes `from` to `to`, `to` excluded, as their usage lands.
     let charge = |st: &mut RoutingState, from: i64, to: i64| {
@@ -22228,6 +22483,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
             1.0,
             Some(alder_fable_reset),
         ),
+        0,
     );
     // T + 272 min, the second anchor: 0.96 used.
     charge(&mut st, 201, 272);
@@ -22435,7 +22691,7 @@ fn a_placement_or_a_move_that_books_nothing_records_reserve_none_with_the_accoun
     for (case, s, req) in placements {
         let mut st = RoutingState::from_load(RoutingLoad::default());
         st.set_share(ratio_pricer());
-        st.record_sample("a", sample(0.5, 0.1, T));
+        st.record_sample("a", sample(0.5, 0.1, T), 0);
         credits_on(&mut st, "a", T);
         let d = decide(&mut st, s, &req, &mut rng());
         assert_eq!(landed(d.result.clone()).0, "a", "{case}");
@@ -22484,6 +22740,7 @@ fn reading(st: &mut RoutingState, account: &str, five_hour: f64, reset_in: i64, 
     st.record_sample(
         account,
         refreshing(five_hour, at + reset_in, at + 72 * HOUR, at - 500),
+        0,
     );
 }
 
@@ -22597,8 +22854,8 @@ fn the_stretch_is_the_time_to_the_horizon_less_the_reach_rounded_once_to_the_mil
     // lasts 54,000 / 7 seconds, 7,714,285.71 milliseconds, which the reach rounds to 7,714,286. A reach cut short of
     // its fraction would read a stretch one millisecond longer.
     let mut st = rounding(vec![burning("s1", "a", 7.0, true, T)]);
-    st.record_sample("a", refreshing(0.80, T + 3 * HOUR, T + 72 * HOUR, T));
-    st.record_sample("b", refreshing(0.1, T + 3 * HOUR, T + 72 * HOUR, T));
+    st.record_sample("a", refreshing(0.80, T + 3 * HOUR, T + 72 * HOUR, T), 0);
+    st.record_sample("b", refreshing(0.1, T + 3 * HOUR, T + 72 * HOUR, T), 0);
     let d = decide(&mut st, &s, &main_turn(&s, "s1", T), &mut rng());
     let stretch_ms = 3 * HOUR - 7_714_286;
     assert_eq!(
@@ -22814,8 +23071,8 @@ fn a_free_organization_on_the_pro_tier_prices_no_capacity_and_reads_as_an_untier
             &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
             &mut rng(),
         );
-        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
-        st.record_sample("b", sample(0.1, 0.1, T + 500));
+        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
+        st.record_sample("b", sample(0.1, 0.1, T + 500), 0);
         let d = decide(
             &mut st,
             &s,
@@ -22967,7 +23224,7 @@ fn a_slowed_pins_figures_read_its_burn_over_its_sources_speed_at_a_destination()
     }));
     // s1 burns a ten-thousandth of a's 5-hour window a second and a is spent, so the spent rule moves it to b.
     let mut st = priced(vec![burning("s1", "a", 1_000.0, true, T)]);
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
     reading(&mut st, "b", 0.1, 3 * HOUR, T);
     st.write_slow_down("p", "a", &seeded_read(1.0, T), 0.5, T, AVERAGE_MS);
     let d = decide(&mut st, &s, &main_turn(&s, "s1", T), &mut rng());
@@ -23064,7 +23321,7 @@ fn the_fit_gate_and_the_spare_rate_read_the_demand_and_the_weekly_trigger_the_ac
     );
 
     // b spends its window, so the spent rule judges a for s2, on a's demand.
-    st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500), 0);
     let d = decide(&mut st, &s, &main_turn(&s, "s2", T + 1_000), &mut rng());
     assert_eq!(
         landed(d.result.clone()),
@@ -23328,8 +23585,12 @@ fn a_second_selection_after_any_hold_folds_no_gap_into_the_pins_cycle() {
     });
     // a's window is spent and resets 30 s out, inside the retry bound, so the pin's first paced request waits for it.
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
-    st.record_sample("a", refreshing(1.0, T + 30_000, T + 72 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(1.0, T + 30_000, T + 72 * HOUR, T - 500), 0);
+    st.record_sample(
+        "b",
+        refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
     let first = main_turn(&s, "s1", T);
     let SelectResult::Held { hold, .. } = select(&mut st, &s, &first, &mut rng()).0 else {
         panic!("the reset 30 s out holds the request")
@@ -23973,6 +24234,7 @@ fn a_move_verdict_holds_nothing_and_a_wait_verdict_is_answered_first() {
     st.record_sample(
         "a",
         refreshing(1.0, T + 50 * SECOND, T + 72 * HOUR, T + 15 * SECOND),
+        0,
     );
     let d = decide(
         &mut st,
@@ -24069,8 +24331,8 @@ fn over_the_week_on_a(st: &mut RoutingState, at: i64) {
                 },
             )
     };
-    st.record_sample("a", windows(0.87, 0.93));
-    st.record_sample("b", windows(0.1, 0.1));
+    st.record_sample("a", windows(0.87, 0.93), 0);
+    st.record_sample("b", windows(0.1, 0.1), 0);
 }
 
 #[test]
@@ -24659,6 +24921,7 @@ fn a_slow_down_hold_then_a_spent_window_inside_the_bound_is_held_for_the_reset()
         st.record_sample(
             "a",
             refreshing(1.0, until + 30 * SECOND, T + 72 * HOUR, until - SECOND),
+            0,
         );
         let again = SelectRequest {
             seq: 2,
@@ -25387,7 +25650,7 @@ fn stretch_pools(threshold_seconds: u32) -> (RegistrySnapshot, RegistrySnapshot)
 /// `three_pins_projecting_over` with `b` at 0.1 on both windows, so a round on `a` finds `b` for every pin.
 fn three_pins_and_a_fitting_b() -> RoutingState {
     let mut st = three_pins_projecting_over();
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     st
 }
 
@@ -25458,10 +25721,12 @@ fn a_reset_nearer_than_the_threshold_fires_no_round_however_long_the_stretch() {
     st.record_sample(
         "a",
         refreshing(0.99, T + 29 * MINUTE, T + 72 * HOUR, T - 400 * SECOND),
+        0,
     );
     st.record_sample(
         "b",
         refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 400 * SECOND),
+        0,
     );
     // Each pin comes back every five minutes, its cycle built with both switches off. At the factor of zero each would
     // wait the cap of two minutes, so the speed the demand divides by is 300 / 420 from the second read on.
@@ -25522,16 +25787,21 @@ fn a_stretch_at_the_threshold_stamps_no_over_since_and_fires_no_round_and_a_mill
         st.record_sample(
             "b",
             refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 2 * MINUTE),
+            0,
         );
         let reset = T + to_reset;
-        st.record_sample("a", refreshing(0.95, reset, T + 72 * HOUR, T - 2 * MINUTE));
+        st.record_sample(
+            "a",
+            refreshing(0.95, reset, T + 72 * HOUR, T - 2 * MINUTE),
+            0,
+        );
         decide(
             &mut st,
             &s,
             &auxiliary(&s, "s3", T - 2 * MINUTE),
             &mut rng(),
         );
-        st.record_sample("a", refreshing(0.95, reset, T + 72 * HOUR, T));
+        st.record_sample("a", refreshing(0.95, reset, T + 72 * HOUR, T), 0);
         let d = decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng());
         let over_since = st.slow_down_state("p", "a").and_then(|e| e.over_since);
         (d, over_since)
@@ -25671,7 +25941,7 @@ fn a_stretch_that_dips_under_the_threshold_restarts_the_wait() {
     );
     // A minute on a reads 0.5: the room under the ceiling outlasts the hour to the reset, the stretch reads nothing and
     // the wait's stamp clears.
-    st.record_sample("a", refreshing(0.5, T + HOUR, T + 72 * HOUR, T + MINUTE));
+    st.record_sample("a", refreshing(0.5, T + HOUR, T + 72 * HOUR, T + MINUTE), 0);
     let d = decide(&mut st, &s, &auxiliary(&s, "s3", T + MINUTE), &mut rng());
     let shed = line(&d.record, "move:shed");
     assert_eq!(fact(shed, "stretch_ms"), &FactValue::Int(0));
@@ -25690,6 +25960,7 @@ fn a_stretch_that_dips_under_the_threshold_restarts_the_wait() {
     st.record_sample(
         "a",
         refreshing(0.80, T + HOUR, T + 72 * HOUR, T + 2 * MINUTE),
+        0,
     );
     for (at, over_ms) in [(T + 2 * MINUTE, 0), (T + 3 * MINUTE, MINUTE)] {
         let d = decide(&mut st, &s, &auxiliary(&s, "s3", at), &mut rng());
@@ -25747,8 +26018,8 @@ fn the_weekly_trigger_fires_on_the_achieved_burn_under_the_slow_down() {
                 },
             )
     };
-    st.record_sample("a", windows(0.5, 0.93));
-    st.record_sample("b", windows(0.1, 0.1));
+    st.record_sample("a", windows(0.5, 0.93), 0);
+    st.record_sample("b", windows(0.1, 0.1), 0);
     // a's sessions run at half speed, as a slowed selection's write leaves the entry, so its demand reads twice its
     // achieved burn.
     st.write_slow_down("p", "a", &seeded_read(1.0, T), 0.5, T, AVERAGE_MS);
@@ -25828,7 +26099,7 @@ fn a_stretch_made_mark_heals_when_the_stretch_reads_under_the_threshold() {
     // At 0.15 of the window an hour the stretch reads an hour, over the threshold: the mark stands, and b at 0.9 fits
     // no pin, so the pin renews in place with its mark.
     let mut st = marked_s1(10.0, 5.0, 0.80);
-    st.record_sample("b", refreshing(0.9, T + 2 * HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.9, T + 2 * HOUR, T + 72 * HOUR, T), 0);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(landed(d.result.clone()), ("a".into(), None));
     assert_eq!(d.record.outcome.mark_cleared, None);
@@ -26107,8 +26378,8 @@ fn a_target_under_one_pins_burn_marks_the_cheapest_sufficient_pin() {
     // 0.747 plus the pins' 0.205 an hour over the hour to the reset projects 0.952, an excess of 0.002 an hour under
     // the cap's half of the burn: the target, a hundredth of heavy's burn and half of light's, over small's.
     let mut st = heavy_light_small();
-    st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
     assert_eq!(landed(d.result.clone()), ("a".into(), None));
@@ -26183,8 +26454,8 @@ fn a_target_under_one_pins_burn_marks_the_cheapest_sufficient_pin() {
         ..Pool::default()
     });
     let mut st = heavy_light_small();
-    st.record_sample("a", refreshing(0.96, T + HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(0.96, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &whole, "p", "a", T);
     let d = decide(&mut st, &whole, &auxiliary(&whole, "small", T), &mut rng());
     let round = d.shed_round.expect("the round ran").facts;
@@ -26216,8 +26487,8 @@ fn a_covering_pin_without_a_destination_leaves_the_pick_to_the_order() {
         burning("wide", "a", 50.0, false, T),
         burning("narrow", "a", 1.0, false, T),
     ]);
-    st.record_sample("a", refreshing(0.46, T + HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.9, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(0.46, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("b", refreshing(0.9, T + HOUR, T + 72 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "wide", T), &mut rng());
     assert_eq!(landed(d.result.clone()), ("a".into(), None));
@@ -26286,6 +26557,7 @@ fn fable_and_opus_of_one_prompt(s: &RegistrySnapshot) -> RoutingState {
             0.1,
             Some(T + 96 * HOUR),
         ),
+        0,
     );
     st.record_sample(
         "b",
@@ -26294,6 +26566,7 @@ fn fable_and_opus_of_one_prompt(s: &RegistrySnapshot) -> RoutingState {
             0.1,
             Some(T + 96 * HOUR),
         ),
+        0,
     );
     past_the_wait(&mut st, s, "p", "a", T);
     st
@@ -26406,8 +26679,12 @@ fn a_covering_pins_rewrite_reads_one_figure_whatever_the_destinations_tier() {
         );
         let mut st = heavy_light_small();
         st.set_share(two_tier_pricer());
-        st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500));
-        st.record_sample(sibling, refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+        st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500), 0);
+        st.record_sample(
+            sibling,
+            refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500),
+            0,
+        );
         past_the_wait(&mut st, &s, "p", "a", T);
         let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
         let round = d.shed_round.expect("the round ran").facts;
@@ -26449,8 +26726,8 @@ fn a_covering_pin_planned_on_an_api_key_sibling_reads_its_figure() {
     // which fits every pin before any pricing.
     let run = |s: &RegistrySnapshot| {
         let mut st = heavy_light_small();
-        st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500));
-        st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+        st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500), 0);
+        st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
         past_the_wait(&mut st, s, "p", "a", T);
         decide(&mut st, s, &auxiliary(s, "small", T), &mut rng())
             .shed_round
@@ -26541,8 +26818,8 @@ fn an_unsized_and_an_unpriced_covering_pin_cost_nothing_and_the_pick_takes_one_f
         },
     ]);
     st.set_share(unpriced_equivalent_pricer());
-    st.record_sample("a", refreshing(0.4, T + HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(0.4, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
     assert_eq!(landed(d.result.clone()), ("a".into(), None));
@@ -26610,8 +26887,8 @@ fn an_unsized_and_an_unpriced_covering_pin_cost_nothing_and_the_pick_takes_one_f
         },
     ]);
     st.set_share(unpriced_equivalent_pricer());
-    st.record_sample("a", refreshing(0.6, T + HOUR, T + 72 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(0.6, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
     let round = d.shed_round.expect("the second round ran").facts;
@@ -26801,16 +27078,19 @@ fn the_cedar_window_replay_ends_at_a_zero_factor_with_the_subagent_held_and_no_r
         "cedar",
         with_fable(weekly(0.04, 0.3, 4, T), 0.73, Some(T + WEEK_MS * 4 / 10))
             .with(FIVE_HOUR, reading(0.04, cedar_reset)),
+        0,
     );
     st.record_sample(
         "birch",
         with_fable(weekly(0.40, 0.3, 5, T), 0.61, Some(T + WEEK_MS * 5 / 10))
             .with(FIVE_HOUR, reading(0.40, T + 3 * HOUR)),
+        0,
     );
     st.record_sample(
         "alder",
         with_fable(weekly(0.70, 0.5, 6, T), 0.97, Some(alder_fable_reset))
             .with(FIVE_HOUR, reading(0.70, T + 4 * HOUR)),
+        0,
     );
     let charge = |st: &mut RoutingState, from: i64, to: i64| {
         for (minute, share) in CHARGES
@@ -26883,6 +27163,7 @@ fn the_cedar_window_replay_ends_at_a_zero_factor_with_the_subagent_held_and_no_r
             1.0,
             Some(alder_fable_reset),
         ),
+        0,
     );
     charge(&mut st, 201, 272);
     assert!(close(five_hour(&st, "cedar", T + 272 * MINUTE), 0.96));
@@ -27011,8 +27292,9 @@ fn three_pins_over_the_week(five_hour: f64) -> RoutingState {
                 tier: None,
             },
         ),
+        0,
     );
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     st
 }
 
@@ -27130,7 +27412,7 @@ fn a_projection_that_dips_under_the_ceiling_clears_the_stamp_and_waits_again() {
     decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng());
     assert_eq!(st.projection_over_since("p", "a", FIVE_HOUR), Some(T));
     // A reading of 0.3 a minute later projects about 0.70 at the reset, under the ceiling.
-    st.record_sample("a", refreshing(0.3, T + HOUR, T + 72 * HOUR, T + MINUTE));
+    st.record_sample("a", refreshing(0.3, T + HOUR, T + 72 * HOUR, T + MINUTE), 0);
     let d = decide(&mut st, &s, &auxiliary(&s, "s3", T + MINUTE), &mut rng());
     let shed = line(&d.record, "move:shed");
     assert!(no_fact(shed, "over_since_five_hour"), "{:?}", shed.facts);
@@ -27139,6 +27421,7 @@ fn a_projection_that_dips_under_the_ceiling_clears_the_stamp_and_waits_again() {
     st.record_sample(
         "a",
         refreshing(0.80, T + HOUR, T + 72 * HOUR, T + 2 * MINUTE),
+        0,
     );
     let d = decide(
         &mut st,
@@ -27239,8 +27522,8 @@ fn a_five_hour_stamp_from_before_a_reset_no_sample_followed_waits_again_in_the_n
         burning("s3", "a", 12.0, false, after),
     ]);
     // The last sample, at T, names the reset an hour out, and the stamp is the old window's.
-    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     st.stamp_projection_over("p", "a", FIVE_HOUR, T, Some(T + HOUR));
     let d = decide(&mut st, &s, &auxiliary(&s, "s3", after), &mut rng());
     let shed = line(&d.record, "move:shed");
@@ -27274,6 +27557,7 @@ fn a_stamp_under_a_reset_that_drifts_by_ten_minutes_stands_and_keeps_the_reset_i
     st.record_sample(
         "a",
         refreshing(0.80, reset + 55 * MINUTE, T + 72 * HOUR, T + MINUTE),
+        0,
     );
     decide(&mut st, &s, &auxiliary(&s, "s3", T + MINUTE), &mut rng());
     assert_eq!(
@@ -27324,6 +27608,7 @@ fn a_stamp_that_names_no_reset_adopts_the_readings_without_restarting() {
     st.record_sample(
         "a",
         refreshing(0.80, reset - HOUR, T + 72 * HOUR, T + MINUTE),
+        0,
     );
     decide(&mut st, &s, &auxiliary(&s, "s3", T + MINUTE), &mut rng());
     assert_eq!(
@@ -27391,7 +27676,7 @@ fn a_standing_mark_moves_at_its_pins_next_request_while_the_stretch_waits() {
     // s1 stands marked on the 5-hour window from a round whose dwell has passed, the stretch reads over the threshold
     // from this selection on, inside its safety wait, and b, an hour from its reset, fits s1's burn.
     let mut st = marked_s1(10.0, 5.0, 0.80);
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
         landed(d.result.clone()),
@@ -27421,7 +27706,7 @@ fn a_standing_mark_moves_at_its_pins_next_request_while_a_projection_window_wait
     // past the ceiling at its reset two hours out, first read at this selection, so the window waits a quarter of the
     // two hours, at most the dwell, and b, an hour from its reset, fits s1's burn.
     let mut st = marked_s1(10.0, 5.0, 0.80);
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     let dwell = shed_dwell_ms(s.pool("p").expect("the pool"));
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
@@ -27453,8 +27738,8 @@ fn three_pins_with_a(sample: UtilizationSample) -> RoutingState {
         burning("s2", "a", 14.0, false, T),
         burning("s3", "a", 12.0, false, T),
     ]);
-    st.record_sample("a", sample);
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("a", sample, 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     st
 }
 
@@ -27645,8 +27930,9 @@ fn a_standing_mark_moves_at_its_pins_next_request_inside_the_hold() {
     st.record_sample(
         "a",
         refreshing(0.80, T + 5 * HOUR - 20 * MINUTE, T + 72 * HOUR, T),
+        0,
     );
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     st.stamp_projection_over("p", "a", FIVE_HOUR, T - 20 * MINUTE, None);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     let shed = line(&d.record, "move:shed");
@@ -27781,6 +28067,7 @@ fn a_reading_past_its_reset_with_no_new_one_counts_the_hold_from_the_passed_rese
     st.record_sample(
         "a",
         refreshing(0.80, T + 5 * HOUR - 3 * SECOND, T + 72 * HOUR, T + MINUTE),
+        0,
     );
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T + MINUTE), &mut rng());
     let shed = line(&d.record, "move:shed");
@@ -27902,7 +28189,7 @@ fn a_reading_whose_reset_lies_more_than_a_window_ahead_reads_no_hold() {
 fn one_pin_under_a_band(band_from: i64, band_to: i64) -> RoutingState {
     let mut st = loaded(vec![burning("s1", "a", 10.0, false, T)]);
     st.set_share(banded_pricer(band_from, band_to));
-    st.record_sample("a", refreshing(0.5, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(0.5, T + HOUR, T + 72 * HOUR, T - 500), 0);
     st
 }
 
@@ -27977,8 +28264,12 @@ fn the_runway_on_a_crossing_span_reaches_the_room_earlier_than_one_rate_would() 
     // reset three hours out enters the band after half an hour.
     let mut st = loaded(vec![gated_pin("s1", "a", 36.0)]);
     st.set_share(banded_pricer(T + 30 * MINUTE, T + 10 * HOUR));
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
+    st.record_sample(
+        "b",
+        refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
     let d = decide(
         &mut st,
         &s,
@@ -28077,8 +28368,8 @@ fn three_pins_round_under_a_band(five_hour: f64, band_from: i64, band_to: i64) -
         burning("s3", "a", 12.0, false, T),
     ]);
     st.set_share(banded_pricer(band_from, band_to));
-    st.record_sample("a", refreshing(five_hour, T + HOUR, T + 72 * HOUR, T));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("a", refreshing(five_hour, T + HOUR, T + 72 * HOUR, T), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng())
 }
@@ -28198,8 +28489,8 @@ fn a_window_share_round_lists_its_pins_in_the_order_of_the_spans_average_it_pric
         burning("s1", "a", 8.0, false, T),
     ]);
     st.set_share(banded_pricer(T + 30 * MINUTE, T + 10 * HOUR));
-    st.record_sample("a", refreshing(0.90, T + HOUR, T + 72 * HOUR, T));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("a", refreshing(0.90, T + HOUR, T + 72 * HOUR, T), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     let round = d.shed_round.expect("the round ran").facts;
@@ -28241,8 +28532,8 @@ fn a_window_share_round_orders_its_pins_on_the_plain_copy_where_the_banded_copy_
         burning("s2", "a", 4.0, false, T),
     ]);
     st.set_share(banded_pricer(T + 30 * MINUTE, T + 10 * HOUR));
-    st.record_sample("a", refreshing(0.90, T + HOUR, T + 72 * HOUR, T));
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("a", refreshing(0.90, T + HOUR, T + 72 * HOUR, T), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     let round = d.shed_round.expect("the round ran").facts;
@@ -28327,8 +28618,12 @@ fn a_moved_pins_booking_names_the_regime_its_burn_was_priced_under_and_weighs_th
     // spent `a` onto `b` on a turn under `desk`. The band starts half an hour after T.
     let mut st = loaded(vec![gated_pin("s1", "a", 3.6)]);
     st.set_share(banded_pricer(T + 30 * MINUTE, T + 10 * HOUR));
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
-    st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
+    st.record_sample(
+        "b",
+        refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
     let desk_move = SelectRequest {
         entrypoint: Some("desk".into()),
         ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T)
@@ -28684,6 +28979,7 @@ fn standing_row_on_a() -> (RegistrySnapshot, RoutingState) {
                 STANDING_AT + 72 * HOUR,
                 STANDING_AT - 500,
             ),
+            0,
         );
     }
     (s, st)
@@ -28772,6 +29068,7 @@ fn rung_four_s_gate_reads_the_fit_without_the_session_s_own_row_on_the_account_i
                 STANDING_AT + 72 * HOUR,
                 STANDING_AT - 500,
             ),
+            0,
         );
     }
     seed_affinity(
@@ -28983,7 +29280,7 @@ fn a_renewal_keeps_the_mark_and_a_second_landing_replaces_it() {
         mark,
         "the renewal keeps the mark"
     );
-    st.record_sample("c", refreshing(0.1, T + HOUR, T + 72 * HOUR, moved_at));
+    st.record_sample("c", refreshing(0.1, T + HOUR, T + 72 * HOUR, moved_at), 0);
     st.record_cooldown(cooled(
         "b",
         "model:claude-sonnet-5",

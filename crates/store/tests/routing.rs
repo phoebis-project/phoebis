@@ -2,7 +2,7 @@ use phoebis_routing::lane_key;
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, ApiKeyRow, CooldownRow,
     CreditsRow, FirstSeenRow, OverageRow, PinBurn, PinKey, PinRow, PoolRow, RekeyWrite,
-    ResolutionRow, RulesMode, ShedRoundRow, StateCause, StorageKey, Store, WindowRow,
+    ResolutionRow, RulesMode, ShedRoundRow, StateCause, StorageKey, Store, WindowRow, WindowSetRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -902,6 +902,173 @@ fn usage_windows_survive_a_reopen_move_only_forward_and_leave_with_their_account
         store.purge_stale_windows().unwrap(),
         0,
         "the cascade took them, so the purge finds none"
+    );
+}
+
+fn window_set_row(windows: &str, observed_at: i64, incarnation: u64) -> WindowSetRow {
+    WindowSetRow {
+        account_id: "a".into(),
+        incarnation,
+        observed_at,
+        windows: windows.into(),
+    }
+}
+
+#[test]
+fn window_sets_survive_a_reopen_keep_the_newest_and_leave_with_their_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let row = window_set_row("seven_day", 1_000, 1);
+    {
+        let store = Store::open(&path, &storage_key).unwrap();
+        seed_accounts(&store, &["a"]);
+        assert!(store.upsert_window_set(&row).unwrap());
+    }
+    let store = Store::open(&path, &storage_key).unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().window_sets,
+        std::slice::from_ref(&row),
+        "the row reopens as written"
+    );
+    store
+        .upsert_window_set(&window_set_row("five_hour,seven_day", 900, 1))
+        .unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().window_sets,
+        [row],
+        "an older poll's set writes nothing"
+    );
+    let newer = window_set_row("five_hour,seven_day", 2_000, 1);
+    store.upsert_window_set(&newer).unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().window_sets,
+        [newer],
+        "a newer poll's set replaces the row"
+    );
+    store.delete_account("a", "test").unwrap();
+    assert!(
+        store.load_routing().unwrap().window_sets.is_empty(),
+        "the set leaves with its account"
+    );
+}
+
+#[test]
+fn a_re_paired_id_loads_no_old_window_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let store = Store::open(&path, &storage_key).unwrap();
+    seed_accounts(&store, &["a"]);
+    store.delete_account("a", "test").unwrap();
+    seed_accounts(&store, &["a"]);
+    assert!(
+        !store
+            .upsert_window_set(&window_set_row("seven_day", 1_000, 1))
+            .unwrap(),
+        "a write queued for the deleted holder lands nowhere"
+    );
+    drop(store);
+    // A row the replacement never wrote, as a write from before the incarnation fence would have left it.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT INTO usage_window_sets (account_id, windows, observed_at, incarnation) \
+         VALUES ('a', 'seven_day', 5000, 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &storage_key).unwrap();
+    assert!(
+        store.load_routing().unwrap().window_sets.is_empty(),
+        "the previous holder's set is never loaded"
+    );
+    let replacement = window_set_row("five_hour,seven_day", 3_000, 2);
+    assert!(
+        store.upsert_window_set(&replacement).unwrap(),
+        "the replacement's own set replaces the stale row however new its date"
+    );
+    assert_eq!(store.load_routing().unwrap().window_sets, [replacement]);
+}
+
+#[test]
+fn the_purge_drops_a_window_set_of_another_holder() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let store = Store::open(&path, &storage_key).unwrap();
+    seed_accounts(&store, &["a"]);
+    store.delete_account("a", "test").unwrap();
+    seed_accounts(&store, &["a"]);
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT INTO usage_window_sets (account_id, windows, observed_at, incarnation) \
+         VALUES ('a', 'seven_day', 1000, 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &storage_key).unwrap();
+    assert_eq!(store.purge_stale_windows().unwrap(), 1);
+    assert_eq!(
+        store.purge_stale_windows().unwrap(),
+        0,
+        "and the purge deleted it"
+    );
+}
+
+#[test]
+fn delete_window_removes_one_windows_row_and_leaves_the_others() {
+    let store = store_with(&["a"]);
+    let rows = [
+        window_row("five_hour", 0.5, 1_000, 1),
+        window_row("seven_day", 0.25, 1_000, 1),
+        window_row("seven_day_fable", 0.75, 1_000, 1),
+    ];
+    for row in &rows {
+        assert!(store.upsert_window(row).unwrap());
+    }
+    assert!(
+        !store.delete_window("a", "five_hour", 2).unwrap(),
+        "a delete for another holder of the id takes nothing"
+    );
+    assert!(store.delete_window("a", "five_hour", 1).unwrap());
+    assert_eq!(
+        store.load_routing().unwrap().windows,
+        rows[1..],
+        "the other windows stay"
+    );
+    assert!(
+        !store.delete_window("a", "five_hour", 1).unwrap(),
+        "a second delete finds no row"
+    );
+}
+
+#[test]
+fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let key = StorageKey::generate();
+    {
+        let store = Store::open(&path, &key).unwrap();
+        seed_accounts(&store, &["a"]);
+    }
+    // The file as a version-2 build left it.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "DROP TABLE usage_window_sets;
+         UPDATE meta SET value = '2' WHERE key = 'schema_version';",
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &key).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 3);
+    assert!(
+        store
+            .upsert_window_set(&window_set_row("seven_day", 1_000, 1))
+            .unwrap(),
+        "the migration created the table"
     );
 }
 

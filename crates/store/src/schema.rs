@@ -3,7 +3,7 @@
 //! `guardrail_tombstones`, `guardrails`, `keepalive_agents`, `keepalive_idle_returns`, `keepalive_sessions`,
 //! `model_resolutions`, `overage_state`, `pins`, `pool_members`, `pool_tombstones`, `pools`, `refresh_attempts`,
 //! `registry_changes`, `session_memory`, `shed_rounds`, `usage_credits` and `usage_windows`, plus `meta` for the schema
-//! marker.
+//! marker. Version 3 adds `usage_window_sets`.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -281,10 +281,19 @@ ALTER TABLE usage_windows ADD COLUMN plan TEXT;
 ALTER TABLE usage_windows ADD COLUMN tier TEXT;
 "#;
 
+/// The shared window set of an OAuth account as its newest clean poll settled it, so a restart prices no window the
+/// account lost before the next poll answers.
+const V3: &str = r#"
+CREATE TABLE usage_window_sets (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  windows TEXT NOT NULL, observed_at INTEGER NOT NULL, incarnation INTEGER NOT NULL
+);
+"#;
+
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or
 /// rebuild a table, so an older build refuses a newer registry rather than misreading it.
-pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2)];
+pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3)];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;

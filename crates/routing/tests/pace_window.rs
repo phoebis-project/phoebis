@@ -179,6 +179,7 @@ fn a_fable_request_scores_its_members_on_the_model_week_and_names_it() {
         st.record_sample(
             id,
             with_fable(sample(0.2, 0.3, 1_000), 0.4, Some(1_000 + 3 * HOUR)),
+            1_000,
         );
     }
     let d = decide(
@@ -203,7 +204,7 @@ fn a_haiku_request_scores_its_members_on_the_seven_day_window_and_names_it() {
     let s = snapshot();
     let mut st = RoutingState::from_load(RoutingLoad::default());
     for id in ["a", "b"] {
-        st.record_sample(id, sample(0.2, 0.3, 1_000));
+        st.record_sample(id, sample(0.2, 0.3, 1_000), 1_000);
     }
     let d = decide(
         &mut st,
@@ -231,6 +232,7 @@ fn an_api_key_member_names_no_window_since_its_worst_bucket_scores_it() {
             "itpm:claude-haiku-4-5",
             reading(0.3, Some(1_000 + 60_000), 1_000),
         ),
+        1_000,
     );
     let d = decide(
         &mut st,
@@ -252,7 +254,7 @@ fn a_fable_request_whose_member_has_not_read_the_model_week_scores_it_untouched_
     let s = snapshot();
     let mut st = RoutingState::from_load(RoutingLoad::default());
     for id in ["a", "b"] {
-        st.record_sample(id, sample(0.2, 0.3, 1_000));
+        st.record_sample(id, sample(0.2, 0.3, 1_000), 1_000);
     }
     let d = decide(
         &mut st,

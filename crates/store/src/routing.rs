@@ -141,6 +141,17 @@ pub struct WindowRow {
     pub window: String,
 }
 
+/// The shared window set of an OAuth account as its newest clean poll settled it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowSetRow {
+    pub account_id: String,
+    pub incarnation: u64,
+    /// The `observed_at` of the poll that settled the set, restored as the sample's `polled_at`.
+    pub observed_at: i64,
+    /// The set's ids comma-joined in the usage endpoint's spelling, `five_hour,seven_day` for both.
+    pub windows: String,
+}
+
 /// The poll's newest extra-usage state of an OAuth account: what the fast eligibility reads.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CreditsRow {
@@ -298,6 +309,7 @@ pub struct RoutingLoad {
     pub pins: Vec<PinRow>,
     pub resolutions: Vec<ResolutionRow>,
     pub shed_rounds: Vec<ShedRoundRow>,
+    pub window_sets: Vec<WindowSetRow>,
     pub windows: Vec<WindowRow>,
 }
 
@@ -351,6 +363,13 @@ impl Store {
                     pool_id: r.get(0)?, account_id: r.get(1)?, incarnation: r.get::<_, i64>(2)? as u64,
                     round_at: r.get(3)?,
                 }))?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+            // As with the windows, a previous holder's set is never loaded.
+            window_sets: tx.prepare("SELECT s.account_id, s.incarnation, s.observed_at, s.windows \
+                 FROM usage_window_sets s \
+                 JOIN accounts ON accounts.id = s.account_id AND accounts.incarnation = s.incarnation \
+                 ORDER BY s.account_id")?
+                .query_map([], |r| Ok(WindowSetRow { account_id: r.get(0)?, incarnation: r.get::<_, i64>(1)? as u64, observed_at: r.get(2)?, windows: r.get(3)? }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             // A row of a previous holder of the id is never loaded: the replacement starts with no windows.
             windows: tx.prepare("SELECT w.account_id, w.incarnation, w.observed_at, w.reset, w.utilization, w.window, w.plan, w.tier \
@@ -486,14 +505,30 @@ impl Store {
         self.routing_commit(|conn| upsert_window_on(conn, row))
     }
 
+    /// Written as `upsert_window` writes a window: for the account's current incarnation, and only when newer than the
+    /// stored row or when that row is a previous holder's. Answers whether a row was written.
+    pub fn upsert_window_set(&self, row: &WindowSetRow) -> Result<bool, StoreError> {
+        self.routing_commit(|conn| upsert_window_set_on(conn, row))
+    }
+
+    /// Removes one window's row under the account's current incarnation. Answers whether a row left.
+    pub fn delete_window(
+        &self,
+        account_id: &str,
+        window: &str,
+        incarnation: u64,
+    ) -> Result<bool, StoreError> {
+        self.routing_commit(|conn| delete_window_on(conn, account_id, window, incarnation))
+    }
+
     /// Written as `upsert_window` writes a window: only for the account's current incarnation, and only when
     /// newer than the stored row or when that row is a previous holder's. Answers whether a row was written.
     pub fn upsert_credits(&self, row: &CreditsRow) -> Result<bool, StoreError> {
         self.routing_commit(|conn| upsert_credits_on(conn, row))
     }
 
-    /// Drops every window and credits row whose incarnation is not its account's; the router's purge tick calls
-    /// it.
+    /// Drops every window, window set and credits row whose incarnation is not its account's. The router's purge
+    /// tick calls it.
     pub fn purge_stale_windows(&self) -> Result<usize, StoreError> {
         self.routing_commit(|conn| in_transaction(conn, |tx| purge_stale_windows_on(tx)))
     }
@@ -654,6 +689,19 @@ impl RoutingTx<'_> {
 
     pub fn upsert_window(&mut self, row: &WindowRow) -> Result<bool, StoreError> {
         upsert_window_on(self.tx, row)
+    }
+
+    pub fn upsert_window_set(&mut self, row: &WindowSetRow) -> Result<bool, StoreError> {
+        upsert_window_set_on(self.tx, row)
+    }
+
+    pub fn delete_window(
+        &mut self,
+        account_id: &str,
+        window: &str,
+        incarnation: u64,
+    ) -> Result<bool, StoreError> {
+        delete_window_on(self.tx, account_id, window, incarnation)
     }
 }
 
@@ -916,6 +964,37 @@ fn upsert_window_on(conn: &Connection, row: &WindowRow) -> Result<bool, StoreErr
     Ok(written > 0)
 }
 
+fn upsert_window_set_on(conn: &Connection, row: &WindowSetRow) -> Result<bool, StoreError> {
+    // The insert-select is the incarnation check, as `upsert_window_on`'s is.
+    let written = conn.execute(
+        "INSERT INTO usage_window_sets (account_id, windows, observed_at, incarnation) \
+         SELECT ?1, ?2, ?3, ?4 FROM accounts WHERE id = ?1 AND incarnation = ?4 \
+         ON CONFLICT(account_id) DO UPDATE SET windows = excluded.windows, \
+           observed_at = excluded.observed_at, incarnation = excluded.incarnation \
+         WHERE excluded.observed_at > usage_window_sets.observed_at \
+           OR excluded.incarnation <> usage_window_sets.incarnation",
+        params![
+            row.account_id,
+            row.windows,
+            row.observed_at,
+            row.incarnation as i64
+        ],
+    )?;
+    Ok(written > 0)
+}
+
+fn delete_window_on(
+    conn: &Connection,
+    account_id: &str,
+    window: &str,
+    incarnation: u64,
+) -> Result<bool, StoreError> {
+    Ok(conn.execute(
+        "DELETE FROM usage_windows WHERE account_id = ?1 AND window = ?2 AND incarnation = ?3",
+        params![account_id, window, incarnation as i64],
+    )? > 0)
+}
+
 fn upsert_credits_on(conn: &Connection, row: &CreditsRow) -> Result<bool, StoreError> {
     let written = conn.execute(
         "INSERT INTO usage_credits (account_id, enabled, disabled_reason, utilization, observed_at, incarnation) \
@@ -948,7 +1027,12 @@ fn purge_stale_windows_on(conn: &Connection) -> Result<usize, StoreError> {
          WHERE accounts.id = usage_credits.account_id AND accounts.incarnation = usage_credits.incarnation)",
         [],
     )?;
-    Ok(windows + credits)
+    let sets = conn.execute(
+        "DELETE FROM usage_window_sets WHERE NOT EXISTS (SELECT 1 FROM accounts \
+         WHERE accounts.id = usage_window_sets.account_id AND accounts.incarnation = usage_window_sets.incarnation)",
+        [],
+    )?;
+    Ok(windows + credits + sets)
 }
 
 fn replace_shed_round_on(

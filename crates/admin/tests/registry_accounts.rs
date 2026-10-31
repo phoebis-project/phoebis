@@ -1283,6 +1283,86 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
     );
 }
 
+#[tokio::test]
+async fn a_five_hour_ledger_sample_on_an_account_whose_set_lacks_the_window_draws_no_row() {
+    use phoebis_ledger::QuotaSampleRecord;
+    use phoebis_routing::{UtilizationSample, WindowReading, WindowSource, SEVEN_DAY};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    // The router's sample is the poll that carried the week alone, so the account's set is `seven_day`.
+    parts
+        .router
+        .report(phoebis_routing::Report::Sample {
+            account_id: "business".into(),
+            sample: UtilizationSample {
+                observed_at: now,
+                poll: true,
+                ..UtilizationSample::default()
+            }
+            .with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.3,
+                    reset: Some(now + 3 * 86_400_000),
+                    observed_at: now,
+                    source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
+                },
+            ),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    let bucket = phoebis_ledger::bucket_of(now - 60_000);
+    let ledger_sample = |window: &str, utilization: f64| QuotaSampleRecord {
+        account_id: "business".into(),
+        bucket,
+        window: window.into(),
+        utilization: Some(utilization),
+        reset_at: None,
+        source: "poll".into(),
+        observed_at: None,
+    };
+    parts
+        .db
+        .insert_samples(
+            &[
+                ledger_sample("five_hour", 0.62),
+                ledger_sample("seven_day_fable", 0.1),
+            ],
+            None,
+        )
+        .unwrap();
+    fake_upstream::wait_for_async(std::time::Duration::from_secs(2), || {
+        let router = parts.router.clone();
+        async move {
+            router
+                .reported_samples()
+                .await
+                .unwrap()
+                .iter()
+                .any(|(id, sample)| id == "business" && sample.polled.is_some())
+                .then_some(())
+        }
+    })
+    .await;
+    let account = json(get(&parts.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let mut ids: Vec<&str> = account["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["id"].as_str().unwrap())
+        .collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        ["seven_day", "seven_day_fable"],
+        "the ledger's 5-hour row predates the poll that dropped the window: {account}"
+    );
+}
+
 /// The reset of the five-hour sample the lead cases seed: an hour on, so four of the window's five hours have run.
 const FIVE_HOUR_RESET: i64 = common::NOW + 3_600_000;
 

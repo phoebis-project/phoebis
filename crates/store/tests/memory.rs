@@ -61,5 +61,5 @@ fn rows_outlive_a_reopen_of_the_on_disk_store() {
         store.load(&key("main")).unwrap(),
         Some(record(1, "{}", 1_000))
     );
-    assert_eq!(store.schema_version().unwrap(), 2);
+    assert_eq!(store.schema_version().unwrap(), 3);
 }

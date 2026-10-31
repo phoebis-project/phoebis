@@ -19,7 +19,7 @@ use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, FirstSeenRow,
     MemberWrite, ModelRule, OveragePolicy, OverageRow, PinBurn, PinKey, PinRow, PoolRow,
     RoutingLoad, RulesMode, Shedding, StateCause, StorageKey, Store, Strategy, SubscriptionRow,
-    WindowRow,
+    WindowRow, WindowSetRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -3546,6 +3546,87 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
 }
 
 #[tokio::test]
+async fn a_usage_report_charges_no_five_hour_share_on_an_account_whose_set_lacks_it() {
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(3_000));
+    // A tenth of a shared window per million input tokens, and twice that of the Fable week.
+    let share = SharePricer::new(|window, _, _, _, usage, _| {
+        let tenth = usage.input as f64 / 1_000_000.0 * 0.1;
+        Some(if window == SEVEN_DAY_FABLE {
+            2.0 * tenth
+        } else {
+            tenth
+        })
+    });
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            share,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let reading = |observed_at: i64| WindowReading {
+        utilization: 0.5,
+        reset: Some(10 * HOUR),
+        observed_at,
+        source: WindowSource::Poll,
+        plan: None,
+        tier: None,
+    };
+    let poll = |observed_at: i64, windows: &[&str], read_at: i64| {
+        observed(
+            "a",
+            windows.iter().fold(
+                UtilizationSample {
+                    poll: true,
+                    ..sample(observed_at)
+                },
+                |sample, window| sample.with(window, reading(read_at)),
+            ),
+        )
+    };
+    handle
+        .report(poll(1_000, &[SEVEN_DAY, SEVEN_DAY_FABLE], 1_000))
+        .await;
+    handle
+        .report(Report::Usage {
+            account_id: "a".into(),
+            at: 2_000,
+            canonical_model: "claude-fable-5".into(),
+            incarnation: 1,
+            usage: PinUsage {
+                input: 1_000_000,
+                ..PinUsage::default()
+            },
+            fast: false,
+            classifier: false,
+            request_id: "r-1".into(),
+            attempt: 1,
+            entrypoint: None,
+        })
+        .await;
+    // Read before the next poll is reported, since a pending poll drains ahead of a control fact queued before it.
+    let charged = read(&handle, "a", SEVEN_DAY).await;
+    assert!(
+        close(charged, 0.6),
+        "the 7-day window takes its charge beside the 5-hour window the set lacks: {charged:?}"
+    );
+    // A later poll puts the 5-hour window back with readings taken before the usage, so each keeps any charge the
+    // usage booked on its window and the prediction shows it.
+    handle
+        .report(poll(3_000, &[FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE], 1_500))
+        .await;
+    let five_hour = read(&handle, "a", FIVE_HOUR).await;
+    assert!(
+        close(five_hour, 0.5),
+        "the account had no 5-hour window when the usage landed, so it booked no 5-hour share: {five_hour:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_head_writes_the_windows_it_moved_and_a_restart_reads_them() {
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
@@ -3613,6 +3694,87 @@ async fn a_head_writes_the_windows_it_moved_and_a_restart_reads_them() {
             "a restart reads {window} back"
         );
     }
+}
+
+/// A clean poll's report of `a` at `observed_at` reading each of `windows` at 0.2.
+fn polled(observed_at: i64, windows: &[&str]) -> Report {
+    observed(
+        "a",
+        windows.iter().fold(
+            UtilizationSample {
+                poll: true,
+                ..sample(observed_at)
+            },
+            |sample, window| {
+                sample.with(
+                    window,
+                    WindowReading {
+                        utilization: 0.2,
+                        reset: None,
+                        observed_at,
+                        source: WindowSource::Poll,
+                        plan: None,
+                        tier: None,
+                    },
+                )
+            },
+        ),
+    )
+}
+
+fn set_row(windows: &str, observed_at: i64) -> WindowSetRow {
+    WindowSetRow {
+        account_id: "a".into(),
+        incarnation: 1,
+        observed_at,
+        windows: windows.into(),
+    }
+}
+
+#[tokio::test]
+async fn a_clean_poll_without_five_hour_writes_the_drop_and_the_set_and_a_restart_restores_them() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(2_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(polled(1_000, &[FIVE_HOUR, SEVEN_DAY])).await;
+    wait_for(WRITTEN, || {
+        (store.load_routing().unwrap().windows.len() == 2).then_some(())
+    })
+    .await;
+    handle.report(polled(2_000, &[SEVEN_DAY])).await;
+    let load = wait_for(WRITTEN, || {
+        let load = store.load_routing().unwrap();
+        (load.windows.len() == 1 && !load.window_sets.is_empty()).then_some(load)
+    })
+    .await;
+    assert_eq!(
+        load.windows
+            .iter()
+            .map(|row| (row.window.as_str(), row.observed_at))
+            .collect::<Vec<_>>(),
+        [(SEVEN_DAY, 2_000)],
+        "the dropped 5-hour row left the store"
+    );
+    assert_eq!(load.window_sets, [set_row(SEVEN_DAY, 2_000)]);
+    handle.shutdown().await.unwrap();
+
+    let again = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let (_, sample) = again
+        .reported_samples()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|(id, _)| id == "a")
+        .expect("the restart loads a's sample");
+    assert_eq!(
+        sample.polled,
+        Some(std::collections::BTreeSet::from([SEVEN_DAY.to_string()]))
+    );
+    assert_eq!(
+        sample.polled_at,
+        Some(2_000),
+        "the restart reads the set before the process's first poll"
+    );
 }
 
 #[tokio::test]
@@ -6127,6 +6289,43 @@ async fn two_pending_spend_heads_of_one_account_fold_to_the_newer() {
     drop(park);
     let row = credits_row_reads(&store, 0.7).await;
     assert_eq!(row.observed_at, 3_000);
+}
+
+#[tokio::test]
+async fn a_head_with_the_polls_window_names_does_not_replace_the_pending_poll() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(3_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let park = handle.park_loop().await;
+    // The head is the newer, so a slot both shared would keep it and lose the set the poll settles.
+    handle.report(polled(2_000, &[SEVEN_DAY])).await;
+    handle
+        .report(observed(
+            "a",
+            sample(3_000).with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.4,
+                    reset: None,
+                    observed_at: 3_000,
+                    source: WindowSource::Head,
+                    plan: None,
+                    tier: None,
+                },
+            ),
+        ))
+        .await;
+    drop(park);
+    let sets = wait_for(WRITTEN, || {
+        let sets = store.load_routing().unwrap().window_sets;
+        (!sets.is_empty()).then_some(sets)
+    })
+    .await;
+    assert_eq!(
+        sets,
+        [set_row(SEVEN_DAY, 2_000)],
+        "the poll drained beside the newer head and settled the set"
+    );
 }
 
 #[tokio::test]
@@ -11139,6 +11338,61 @@ async fn a_selection_books_a_reservation_the_usage_report_releases_before_its_ch
 }
 
 #[tokio::test]
+async fn a_reservation_on_a_destination_whose_set_lacks_the_five_hour_window_books_no_rewrite_or_burn_on_it(
+) {
+    use rand::SeedableRng;
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    // A warm pin burning on the account, so a fresh session's booking carries a burn as well as its rewrite.
+    let warm = PinRow {
+        last_refresh_at: AT - 1_000,
+        ..stored_pin(&store, "s1", "a", 1, 4.0)
+    };
+    let mut state = RoutingState::from_load(RoutingLoad {
+        pins: vec![warm],
+        ..RoutingLoad::default()
+    });
+    state.set_share(priced_config().share);
+    state.record_sample(
+        "a",
+        UtilizationSample {
+            poll: true,
+            ..sample_with(AT - 500, SEVEN_DAY, 0.2, Some(AT + 72 * HOUR))
+        },
+        AT - 500,
+    );
+    let decided = decide(
+        &mut state,
+        &handle.snapshot(),
+        &placement(&handle, "r-2", "s2", AT),
+        &mut rand::rngs::StdRng::seed_from_u64(7),
+    );
+    let reservation = state.reservation("r-2").expect("the placement booked on a");
+    let windows = |shares: &std::collections::BTreeMap<String, f64>| {
+        shares.keys().cloned().collect::<Vec<_>>()
+    };
+    assert_eq!(windows(&reservation.rewrite), [SEVEN_DAY]);
+    assert_eq!(
+        windows(&reservation.burn),
+        [SEVEN_DAY],
+        "the booking names the windows of the destination's set alone"
+    );
+    let facts = decided
+        .record
+        .candidates
+        .iter()
+        .find(|candidate| candidate.account_id == "a")
+        .expect("a is a candidate");
+    assert_eq!(
+        windows(&facts.burn),
+        [SEVEN_DAY],
+        "the candidate's burn lists no 5-hour share on an account without the window"
+    );
+}
+
+#[tokio::test]
 async fn a_request_that_ends_without_usage_releases_its_reservation_and_the_task_emits_reservation_expired(
 ) {
     use phoebis_routing::RouterEvent;
@@ -13165,7 +13419,11 @@ async fn a_quiet_accounts_slow_down_entry_and_a_gone_pins_pace_leave_at_the_purg
         pins: vec![s1.clone(), s2.clone()],
         ..RoutingLoad::default()
     });
-    state.record_sample("a", sample_with(AT - 500, FIVE_HOUR, 0.5, Some(AT + HOUR)));
+    state.record_sample(
+        "a",
+        sample_with(AT - 500, FIVE_HOUR, 0.5, Some(AT + HOUR)),
+        AT - 500,
+    );
     main_turn_on(&mut state, &handle, "s1", AT);
     main_turn_on(&mut state, &handle, "s2", AT);
     let entry = state

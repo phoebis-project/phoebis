@@ -32,7 +32,7 @@ use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
     entrypoint_of, is_plan_window, mark_holds, plan_windows, shed_dwell_ms, slow_down_hold_ms,
     spend_reset_estimate, AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight,
-    MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer,
+    MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, Recorded, RoutingState, SharePricer,
     SlowDownEdge, SpendWindow, StateWrite, UtilizationSample, WindowReading, WindowSource,
     FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
@@ -714,12 +714,14 @@ enum CoalesceKey {
         account_id: String,
         incarnation: u64,
     },
-    /// The window set, sorted, so a head sample over the plan windows and one over an api_key's buckets replace
-    /// each other only when they read the same windows.
+    /// The window set, sorted, and the source: a head over the plan windows and a poll over the same ones hold two
+    /// slots, since a head folded over a pending poll would lose the set the poll settles, and the `BTreeMap` drains
+    /// the head first.
     Sample {
         account_id: String,
         incarnation: u64,
         windows: Vec<String>,
+        poll: bool,
     },
     /// The members the head names, so a head that names the reset alone never replaces one that carries a share:
     /// each header is its own reading, which the fold's own age tests order.
@@ -795,6 +797,7 @@ impl Report {
                 account_id: account_id.clone(),
                 incarnation: *incarnation,
                 windows: sample.windows.keys().cloned().collect(),
+                poll: sample.poll,
             }),
             Report::SpendHead {
                 account_id,
@@ -826,7 +829,8 @@ impl Report {
     /// either side of a gap can read as one.
     fn merge_into(self, pending: &mut Report) {
         let replaces = match (&self, &*pending) {
-            // Two samples under one key read the same windows, so the sample's own age speaks for each of them.
+            // Two samples under one key read the same windows from the same source, so the sample's own age speaks for
+            // each of them.
             (Report::Sample { sample, .. }, Report::Sample { sample: held, .. }) => {
                 sample.observed_at >= held.observed_at
             }
@@ -2346,6 +2350,13 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
             StateWrite::DeletePin(key) => {
                 tx.delete_pin(key)?;
             }
+            StateWrite::DeleteWindow {
+                account_id,
+                window,
+                incarnation,
+            } => {
+                tx.delete_window(account_id, window, *incarnation)?;
+            }
             StateWrite::EndFirstSeen {
                 key_id,
                 session_id,
@@ -2382,6 +2393,9 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
             StateWrite::UpsertWindow(row) => {
                 tx.upsert_window(row)?;
             }
+            StateWrite::UpsertWindowSet(row) => {
+                tx.upsert_window_set(row)?;
+            }
         }
     }
     Ok(marks)
@@ -2414,6 +2428,13 @@ fn apply_one(store: &Store, write: &StateWrite) -> Result<Marks, StoreError> {
             store.delete_cooldown(account_id, scope).map(|_| none())
         }
         StateWrite::DeletePin(key) => store.delete_pin(key).map(|_| none()),
+        StateWrite::DeleteWindow {
+            account_id,
+            window,
+            incarnation,
+        } => store
+            .delete_window(account_id, window, *incarnation)
+            .map(|_| none()),
         StateWrite::EndFirstSeen {
             key_id,
             session_id,
@@ -2442,6 +2463,7 @@ fn apply_one(store: &Store, write: &StateWrite) -> Result<Marks, StoreError> {
         StateWrite::UpsertOverage(row) => store.upsert_overage(row).map(|_| none()),
         StateWrite::UpsertPin(row) => store.upsert_pin(row).map(|()| none()),
         StateWrite::UpsertWindow(row) => store.upsert_window(row).map(|_| none()),
+        StateWrite::UpsertWindowSet(row) => store.upsert_window_set(row).map(|_| none()),
     }
 }
 
@@ -4172,7 +4194,9 @@ impl Task {
                 // announced reaches the router here and nowhere else. Only a sample newer than the stored one
                 // answers for the account now: a head and a poll can cross, and the older one's reading is one
                 // the window has already moved past.
-                let moved = self.state.record_sample(&account_id, sample.clone());
+                let Recorded { moved, dropped } =
+                    self.state.record_sample(&account_id, sample.clone(), now);
+                let mut writes = Vec::new();
                 if !moved.is_empty() {
                     for row in self.state.recovered_cooldowns(&account_id, &sample, now) {
                         self.release_cooldown(row.account_id, row.scope, "recovered");
@@ -4195,8 +4219,41 @@ impl Task {
                         );
                     }
                     let rows = self.state.window_rows(&account_id, &windows, incarnation);
-                    self.write(rows.into_iter().map(StateWrite::UpsertWindow).collect());
+                    writes.extend(rows.into_iter().map(StateWrite::UpsertWindow));
                 }
+                // A settling poll can move nothing, as one that drains after a newer head does, so the drop and the
+                // set are written whatever moved.
+                for window in dropped {
+                    tracing::info!(
+                        account = %account_id,
+                        window,
+                        "a clean poll dropped the window, so its reading and charges leave the account"
+                    );
+                    writes.push(StateWrite::DeleteWindow {
+                        account_id: account_id.clone(),
+                        window,
+                        incarnation,
+                    });
+                }
+                // The set carries the instant of the poll that settled it, so a poll older than the set writes none.
+                let settled = sample.poll
+                    && sample
+                        .windows
+                        .keys()
+                        .any(|window| window == FIVE_HOUR || window == SEVEN_DAY)
+                    && self
+                        .state
+                        .sample(&account_id)
+                        .and_then(|stored| stored.polled_at)
+                        == Some(sample.observed_at);
+                if settled {
+                    writes.extend(
+                        self.state
+                            .window_set_row(&account_id, incarnation)
+                            .map(StateWrite::UpsertWindowSet),
+                    );
+                }
+                self.write(writes);
             }
             Report::Ended {
                 request_id,
@@ -4278,7 +4335,13 @@ impl Task {
                     )
                 };
                 let own = window_for(&canonical_model);
-                let mut shares = vec![(FIVE_HOUR, price(FIVE_HOUR)), (SEVEN_DAY, price(SEVEN_DAY))];
+                // A 5-hour window the account's set lacks takes no charge, so `predicted_spent` announces no wall
+                // on it.
+                let mut shares = Vec::new();
+                if self.state.has_window(&account_id, FIVE_HOUR) {
+                    shares.push((FIVE_HOUR, price(FIVE_HOUR)));
+                }
+                shares.push((SEVEN_DAY, price(SEVEN_DAY)));
                 if own != SEVEN_DAY {
                     // A model week the table does not measure is priced as the 7-day share once, until the cost
                     // table measures it; the share pricer says which.
@@ -5157,24 +5220,29 @@ enum DeferredKey {
         pool_id: String,
         account_id: String,
     },
+    /// A window's row: a held drop and a later held restore of the window keep the last write.
     Window {
         account_id: String,
         window: String,
     },
+    WindowSet {
+        account_id: String,
+    },
 }
 
 /// Writes the channel had no room for, the last write per row: a pin's last upsert, delete or end, an agent's
-/// first-seen record, a session's last end, a window's last upsert, a cooldown's last upsert or delete per scope, an
-/// overage, credits or account state per account, an affinity row's last upsert or delete per key, a pool's last
-/// round per account, one round purge, one stale-window sweep, and every rekey in order. A rekey closes the rows
-/// before it into a segment of their own, so a pin's write dated after a resolution never lands ahead of the rekey that
-/// moved its rows. A round may land on either side of the pin writes held beside it: a mark is read back only for the
-/// pin and the epoch its row names. A session's end drops the open segment's first-seen records of the session at or
-/// before its instant, since a segment lands in map order and such a record landing after the end's cascade would
-/// bring its row back. The end's cascade is held under the session as well as in the pin's end, since the session's
-/// return can replace that end with an upsert under the same key, and an earlier subagent's row, whose own end carried
-/// no cascade, would then outlive the session. The cascade may land on either side of the return's record: it takes
-/// rows at or before the end's instant, and a returning session's record is stamped after it.
+/// first-seen record, a session's last end, a window's last upsert or delete, a window set's last upsert per account,
+/// a cooldown's last upsert or delete per scope, an overage, credits or account state per account, an affinity row's
+/// last upsert or delete per key, a pool's last round per account, one round purge, one stale-window sweep, and every
+/// rekey in order. A rekey closes the rows before it into a segment of their own, so a pin's write dated after a
+/// resolution never lands ahead of the rekey that moved its rows. A round may land on either side of the pin writes
+/// held beside it: a mark is read back only for the pin and the epoch its row names. A session's end drops the open
+/// segment's first-seen records of the session at or before its instant, since a segment lands in map order and such
+/// a record landing after the end's cascade would bring its row back. The end's cascade is held under the session as
+/// well as in the pin's end, since the session's return can replace that end with an upsert under the same key, and an
+/// earlier subagent's row, whose own end carried no cascade, would then outlive the session. The cascade may land on
+/// either side of the return's record: it takes rows at or before the end's instant, and a returning session's record
+/// is stamped after it.
 #[derive(Default)]
 struct Deferred {
     /// Oldest first: each closed segment's rows and the rekey that closed it.
@@ -5304,6 +5372,21 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
         StateWrite::DeletePin(key) => {
             one(DeferredKey::Pin(key.clone()), StateWrite::DeletePin(key))
         }
+        StateWrite::DeleteWindow {
+            account_id,
+            window,
+            incarnation,
+        } => one(
+            DeferredKey::Window {
+                account_id: account_id.clone(),
+                window: window.clone(),
+            },
+            StateWrite::DeleteWindow {
+                account_id,
+                window,
+                incarnation,
+            },
+        ),
         StateWrite::EndFirstSeen {
             key_id,
             session_id,
@@ -5400,6 +5483,12 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             },
             StateWrite::UpsertWindow(row),
         ),
+        StateWrite::UpsertWindowSet(row) => one(
+            DeferredKey::WindowSet {
+                account_id: row.account_id.clone(),
+            },
+            StateWrite::UpsertWindowSet(row),
+        ),
     }
 }
 
@@ -5441,6 +5530,7 @@ pub fn sample_from_usage(
 ) -> (UtilizationSample, Option<OverageEvidence>) {
     let mut sample = UtilizationSample {
         observed_at: snapshot.fetched_at,
+        poll: true,
         ..Default::default()
     };
     let kept = snapshot
@@ -6142,6 +6232,7 @@ mod tests {
             }
             .with(FIVE_HOUR, reading(0.4, T + 2 * HOUR))
             .with(SEVEN_DAY, reading(0.3, T + 72 * HOUR)),
+            T,
         );
         // An entry in force at a realized speed of a half, so the demand reads the pin's burn at twice the achieved.
         state.write_slow_down(
