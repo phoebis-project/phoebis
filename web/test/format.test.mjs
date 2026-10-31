@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, forkLabel, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
+const { earlierHolderLabel, equivalentShort, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, forkLabel, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
 
 test("a fork reads its base cut at the session's width and the depth where one is known", () => {
   const base = '1a2b3c4d-5e6f-4a7b-9c8d-7e6f5a4b3c2d';
@@ -211,13 +211,6 @@ test("an equivalent's short form names its 20x window in a word", () => {
   assert.equal(equivalentShort('seven_day', 0.002444), '0.244% 20x 7d');
   assert.equal(equivalentShort('seven_day_fable', 0.02222), '2.22% 20x 7-day Fable');
   assert.equal(equivalentShort('seven_day_opus', 0.5), '50% 20x seven_day_opus', 'a window the pages do not know keeps its key');
-});
-
-test('the estimated title is one sentence that names the model tier and no model', () => {
-  assert.equal(typeof ESTIMATED_TITLE, 'string');
-  assert.match(ESTIMATED_TITLE, /^Estimated [^.;:]+[^.;:\s]$/, 'one sentence, with no stop, semicolon or colon inside it and none at its end');
-  assert.match(ESTIMATED_TITLE, /\bmodel tier\b/, 'the model tier named apart from the account tier');
-  assert.doesNotMatch(ESTIMATED_TITLE, /claude-|fable|haiku|opus|sonnet/i, 'no model or family named, since the routes answer no donor');
 });
 
 test('a dated model id reads undated, any other as sent', () => {

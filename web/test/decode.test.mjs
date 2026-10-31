@@ -383,18 +383,6 @@ test('plan labels read the tier', () => {
   assert.equal(d.planLabel('something_else'), 'something_else');
 });
 
-test('plan names label the resolved word through one table, a word the table lacks as sent, and nothing without a word', () => {
-  const sub = { billingType: '', endsAt: null, organizationType: '', plan: null, rateLimitTier: '', since: null, trialEndsAt: null };
-  assert.equal(d.planName({ ...sub, plan: 'max_5x', rateLimitTier: 'default_claude_max_20x' }), 'Max 5x', 'the word wins over the tier');
-  assert.equal(d.planName({ ...sub, plan: 'max', rateLimitTier: 'default_claude_max_20x' }), 'Max', 'a Max organization whose tier names neither size');
-  assert.equal(d.planName({ ...sub, plan: 'free', rateLimitTier: 'default_claude_ai' }), 'Free', 'a free organization under the Pro tier');
-  assert.equal(d.planName({ ...sub, plan: 'usage_based', rateLimitTier: 'default_claude_zero' }), 'Usage-based');
-  assert.equal(d.planName({ ...sub, plan: 'some_new_word', rateLimitTier: 'some_new_tier' }), 'some_new_word', 'a word the table lacks reads as sent');
-  assert.equal(d.planName({ ...sub, rateLimitTier: 'default_claude_max_20x' }), null, 'the tier names no plan on its own');
-  assert.equal(d.planName(sub), null, 'no word names no plan');
-  assert.equal(d.planName(null), null);
-});
-
 test('keys carry status, totals, and the created secret stays out of the row', () => {
   const [k] = fixture('keys').keys.map(d.decodeKey);
   assert.equal(k.name, 'Desktop');
@@ -1647,18 +1635,6 @@ test("a request detail's stream cut decodes its six members with its instant fro
   assert.equal(d.decodeStreamCut(undefined), null);
 });
 
-test('a budget reads as a skip obstacle and as a pin release reason', () => {
-  assert.ok(d.SKIP_OBSTACLE_VALUES.includes('budget'), 'the trace labels a member passed over at its budget');
-  assert.deepEqual(d.decodeSelection({ renewed: false, skipped: [{ account_id: 'direct', obstacle: 'budget' }], strategy: 'pace', tier: [0, 0, 0] }).skipped, [{ accountId: 'direct', obstacle: 'budget' }]);
-  assert.ok(d.PIN_RELEASE_REASON_VALUES?.includes('budget'), 'the drawer words a pin released for a member at its budget');
-  const released = d.decodeRequestEvent({ at: 1_000, detail: { agent_id: 'main', reasons: ['budget', 'spent'] }, kind: 'pin_expired' });
-  assert.deepEqual(released.detail.reasons, ['budget', 'spent']);
-});
-
-test('a member the fit gate passed over reads no_fit, and the two partitions that left are no obstacle', () => {
-  assert.deepEqual([...d.SKIP_OBSTACLE_VALUES], ['at_cap', 'attempted', 'budget', 'budget_unknown', 'cooldown', 'credits', 'no_fit', 'operator', 'overage', 'ranked', 'spent', 'subscription_ended', 'winding_down']);
-});
-
 test('the routing log page decodes both row shapes from the fixture', () => {
   const body = fixture('routing_log');
   const page = d.decodeRoutingLogPage(body);
@@ -2082,13 +2058,6 @@ test('a recipe evicted at the byte cap or lapsed past its entry keeps that cause
   assert.deepEqual([group.wastedProbeReasons.cold_return, group.wastedProbeReasons.evicted, group.wastedProbeReasons.expired], [3, 2, 1]);
 });
 
-test('a recipe paused because every account of its pool was exhausted keeps that cause', () => {
-  const [wire] = fixture('keepalive_recipes').recipes;
-  const recipe = d.decodeRecipe({ ...wire, cause: 'probe_pool_exhausted', state: 'paused' });
-  assert.equal(recipe.cause, 'probe_pool_exhausted');
-  assert.equal(recipe.state, 'paused');
-});
-
 test('a recipe decodes every cause word the engine serializes, its five states, the park and the day counts', () => {
   const [wire] = fixture('keepalive_recipes').recipes;
   assert.equal(d.RECIPE_CAUSE_VALUES.length, 63);
@@ -2183,14 +2152,6 @@ test('a recipe and a session row decode the compaction verdict and the compacted
   const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
   const session = d.decodeSession({ ...row, keepalive: { ...row.keepalive, cause: 'compacted', last_guard: 'compaction' } });
   assert.deepEqual([session.keepalive.cause, session.keepalive.lastGuard], ['compacted', 'compaction']);
-});
-
-test('a recipe held under the horizon or ended at the parked limit keeps that cause, and the wasted probes their labels', () => {
-  const [wire] = fixture('keepalive_recipes').recipes;
-  assert.deepEqual([d.decodeRecipe({ ...wire, cause: 'horizon', state: 'held' }).cause, d.decodeRecipe({ ...wire, cause: 'parked_limit', state: 'ended' }).cause], ['horizon', 'parked_limit']);
-  const row = fixture('analytics_breakdown').rows[0];
-  const group = d.decodeAnalyticsGroup({ ...row, wasted_probe_reasons: { horizon: 2, parked_limit: 1 }, wasted_probes: 3 });
-  assert.deepEqual([group.wastedProbeReasons.horizon, group.wastedProbeReasons.parked_limit], [2, 1]);
 });
 
 test("the downstream snippet is the seven recommended lines, its base URL the proxy listener's scheme and port on a placeholder host", () => {

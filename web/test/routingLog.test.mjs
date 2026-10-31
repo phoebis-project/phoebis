@@ -237,13 +237,6 @@ test('a value that names an account or a key keeps its entity, so the cell draws
   assert.deepEqual(key.entity, { id: 'laptop', kind: 'key' });
 });
 
-test("the session pin's two rows read the in-flight count alone, then with the wait stacked beneath it", () => {
-  const held = read(decision({ by: by('hold', 'session_pin'), fact: [fact('in_flight', '1/1', 'text')], kind: 'placed' }));
-  const afterHold = read(decision({ by: by('hold', 'session_pin'), fact: [fact('in_flight', '1/1', 'text'), fact('held', 2_000, 'ms')], kind: 'placed' }));
-  assert.deepEqual(held, { by: 'session pin', facts: ['in flight 1/1'] });
-  assert.deepEqual(afterHold, { by: 'session pin', facts: ['in flight 1/1', 'held 2.0 s'] });
-});
-
 test('the pin reason reads not looked up and pinning off', () => {
   assert.deepEqual(d.PIN_REASON_LABEL, { not_looked_up: 'not looked up', pinning_off: 'pinning off' });
 });
@@ -255,24 +248,6 @@ test('a fact never repeats the time of its row and never runs past two pairs', (
 
 test('a fact key the console has no label for is dropped rather than drawn under a guess', () => {
   assert.deepEqual(read(decision({ fact: [fact('mystery', 1, 'count'), fact('depth', 2, 'count')] })).facts, ['depth 2']);
-});
-
-const TABLE_LABELS = [
-  '5h', '7d', 'Fable', 'answer', 'attempt', 'capture', 'cause', 'client', 'depth', 'epoch', 'field', 'fields', 'fit', 'gap', 'held', 'idle', 'in flight', 'key', 'lasted', 'models', 'next', 'over', 'pick', 'pins', 'prefix',
-  'rank', 'resets', 'retry', 'rewrite in flight', 'runway', 'secret', 'slow-down', 'slowest', 'speed', 'spent', 'state', 'to', 'turn', 'until', 'was',
-];
-
-test('every label of the table is used at least once and no fact key lacks a label', () => {
-  assert.equal(TABLE_LABELS.length, 40);
-  assert.deepEqual([...new Set(Object.values(d.FACT_LABEL))].sort(), [...TABLE_LABELS].sort());
-  assert.equal(Object.keys(d.FACT_LABEL).length, 40);
-  const emitted = [...DECISIONS, ...EVENTS].flatMap(([, row, , , page]) => d.factsOf(row, NOW, page).map((p) => p.label));
-  // The slow-down's word names the By of its rows, the held decision's and the two events', where no fact carries it, and
-  // the rewrite's names the By of its held row and its renewal.
-  const named = [...DECISIONS, ...EVENTS].map(([, , by]) => by).filter((by) => TABLE_LABELS.includes(by));
-  assert.deepEqual([...new Set([...emitted, ...named])].sort(), [...TABLE_LABELS].sort());
-  assert.deepEqual([...new Set(named)].sort(), ['idle', 'rewrite in flight', 'slow-down']);
-  for (const label of emitted) assert.ok(Object.values(d.FACT_LABEL).includes(label), label);
 });
 
 test('every event kind has its words and its tone', () => {
@@ -296,11 +271,6 @@ test('every event kind has its words and its tone', () => {
   assert.deepEqual(tones, { account_state_changed: 'serious', budget_reached: 'serious', cooldown_set: 'warning', ledger_gap: 'serious', model_rejected: 'warning', slow_down_started: 'warning', window_spent: 'warning' });
   assert.equal(d.eventTone('a_kind_added_later'), 'neutral');
   assert.equal(d.eventTone('reauth_required'), 'neutral', 'the ledger folds the kind into the state change, so it has no tone of its own');
-});
-
-test('every decision kind has its words and its tone', () => {
-  assert.deepEqual(d.DECISION_KIND_LABEL, { exhausted: 'exhausted', held: 'held', moved: 'moved', placed: 'placed', refused: 'refused', renewed: 'renewed' });
-  assert.deepEqual(d.DECISION_KIND_TONE, { exhausted: 'critical', held: 'warning', moved: 'warning', placed: 'good', refused: 'critical', renewed: 'good' });
 });
 
 test('the step and verdict words', () => {

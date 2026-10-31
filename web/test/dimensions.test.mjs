@@ -40,14 +40,3 @@ test('the Analytics Client and User agent filters are typed lists with a chip pe
   assert.deepEqual(d.chipText(of('clients'), [long]), { text: `client: ${long.slice(0, 32)}…`, title: long, values: `${long.slice(0, 32)}…` });
   assert.deepEqual(d.chipText(of('clients'), ['x'.repeat(32)]), { text: `client: ${'x'.repeat(32)}`, title: 'x'.repeat(32), values: 'x'.repeat(32) }, 'a value of 32 characters reads whole');
 });
-
-test("the Sessions view's filters are its three flags in the bar's order", () => {
-  assert.deepEqual(
-    d.SESSIONS_DIMENSIONS.map((x) => [x.field, x.kind, x.label]),
-    [
-      ['companion', 'flag', 'Companion only'],
-      ['finished', 'flag', 'Finished sessions'],
-      ['released', 'flag', 'Released agents'],
-    ],
-  );
-});

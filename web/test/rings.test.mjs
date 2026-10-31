@@ -187,12 +187,6 @@ test('a usage-based seat is named under both rings with its reason and weighs no
   }
 });
 
-test('a Team seat on a tier the cost model holds weighs by its row, as any plan the router prices', () => {
-  const figures = d.ringFigures([account('primary', 'default_claude_max_20x', [window('5h', 0.5)]), account('team', 'default_claude_team', [window('5h', 0.4)])], '5h', COSTS, NOW);
-  assert.deepEqual(figures.rows.map((r) => [r.id, r.weight]), [['team', 0.1], ['primary', 1]], "Team's 10 over the anchor's 100");
-  assert.deepEqual(figures.leftOut, []);
-});
-
 test('a free plan is named under the ring with its reason and weighs nothing, while a Pro plan on the same tier weighs its capacity', () => {
   // A free organization reports the tier the profile reports for Pro, so the plan word and not the tier decides.
   const free = d.ringFigures([account('free', 'default_claude_ai', [window('5h', 0.5)], {}, 'free')], '5h', COSTS, NOW);

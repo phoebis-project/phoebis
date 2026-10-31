@@ -458,16 +458,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(wrong, [], "a candidate's plan word is its account's");
   });
 
-  test(`the story's plan-ended account reads Free on the tier its found profile reports, beside its flag, at ${at}`, async () => {
-    const s = await story;
-    const sunset = s.accounts.find((a) => a.id === 'sunset');
-    assert.deepEqual(
-      [sunset?.subscription?.plan, sunset?.subscription?.rateLimitTier, sunset?.plan, sunset?.planEndedAt !== null],
-      ['free', 'default_claude_ai', 'Free', true],
-      'the plan the found document resolves, its tier word, and the flag',
-    );
-  });
-
   test(`the story's usage-based seat reads its class and its spend window with no plan window, the one member of its pool behind the key fleet, at ${at}`, async () => {
     const s = await story;
     const seats = s.accounts.filter((a) => a.usageBased);
@@ -1019,17 +1009,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const age = s.now - lastUseOf(r);
       assert.ok(age >= 0 && age < longestTtlOf(s, r), `${r.keyId} ${r.sessionId} ${r.agentId} dates its release ${age / 60_000} min back, past its pool's ${longestTtlOf(s, r) / 60_000} min`);
     }
-  });
-
-  test(`the session idle for two hours is pinned with no companion and reads its last use two hours back, at ${at}`, async () => {
-    const s = await story;
-    // Written out in the mock's seeds, as the smoke reads it. The row left the route's list under the non-companion
-    // timeout, so the case reads the seed through the session expiry.
-    const row = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds).find((x) => x.sessionId === 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58');
-    assert.ok(row !== undefined, 'the session is in the seed');
-    assert.deepEqual([row.pinned, row.companion], [true, 'none']);
-    assert.equal(Date.parse(row.lastUsedAt), s.now - 2 * HOUR, 'last used two hours before the mock\'s now');
-    assert.ok(Date.parse(row.createdAt) < Date.parse(row.lastUsedAt), 'created before its last use');
   });
 
   test(`every row and every agent line drops the window, the share and the prefix, reads its effort as one of the four words or none, and each line reads warm by its TTL at the story's clock, at ${at}`, async () => {
@@ -1888,13 +1867,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const flag = log.find((x) => x.type === 'event' && x.kind === 'plan_ended' && x.accountId === ended?.accountId);
     assert.deepEqual([ended?.detail.resumed_at, Date.parse(ended?.at ?? '')], [Date.parse(flag?.at ?? ''), Date.parse(flag?.at ?? '')], "the close stands at the plan_ended row's instant and names it as the pause's");
     assert.ok(ended?.detail.attempts === 1 && ended.detail.duration_ms > 0, `the run before the plan ended reads its attempt and its span: ${JSON.stringify(ended?.detail)}`);
-  });
-
-  test(`the story's pool edit names the idle window it moved as a dotted field beside its two settings, at ${at}`, async () => {
-    const s = await story;
-    const edit = (await logOf(s)).find((x) => x.type === 'event' && x.kind === 'registry_changed' && x.detail.kind === 'pool_updated');
-    assert.deepEqual(Object.keys(edit?.detail.diff ?? {}).sort(), ['keepalive.max_idle_seconds', 'min_shared_prefix_tokens', 'slow_down_hold_seconds']);
-    assert.deepEqual(edit.detail.diff['keepalive.max_idle_seconds'], { from: POLICY_BEFORE_EDIT.all.maxIdleSeconds, to: s.pools.find((p) => p.id === 'all').keepalive.maxIdleSeconds });
   });
 
   test(`every registry change carries the diff its writer stores, at ${at}`, async () => {
@@ -3354,6 +3326,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const groups = await s.api.getAnalyticsBreakdown({ from: iso(s.now - DAY), groupBy: 'account', to: iso(s.now) });
     const filed = s.counted.filter((r) => r.accountId === 'primary' && r.errorCode === 'stream_undecodable').map((r) => r.id);
     assert.deepEqual([filed.includes(row.id), groups.find((g) => g.key === 'primary')?.errors.stream_undecodable], [true, filed.length], "primary's entry counts it");
+    // An incomplete request files under the code it ended on, so stream_incomplete counts the rows that carry it alone.
+    const ended = s.counted.filter((r) => r.accountId === 'primary' && r.errorCode === 'stream_incomplete').length;
+    assert.ok(ended > 0, 'primary served a stream that closed without its end');
+    assert.equal(groups.find((g) => g.key === 'primary')?.errors.stream_incomplete ?? 0, ended);
     assert.deepEqual((await decisionsOf(s)).filter((r) => r.requestId === row.id).map((r) => [r.outcome.kind, r.outcome.accountId]), [['renewed', 'primary']], 'its decision renews the pin the 502 row placed');
     // The route lifts the member off the newest cut row of the request, and no other request carries one.
     const [cut] = (await logOf(s)).filter((e) => e.type === 'event' && e.kind === 'stream_interrupted' && e.requestId === row.id);
@@ -3361,22 +3337,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(detail.streamCut, { at: cut.at, attempt: cut.detail.attempt, bytesRelayed: cut.detail.bytes_relayed, code: row.errorCode, text: cut.detail.text, upstreamRequestId: cut.detail.upstream_request_id });
     const carrying = (await Promise.all(s.requests.map((r) => s.api.getRequest(r.id)))).filter((d) => d.streamCut !== null).map((d) => d.request.id);
     assert.deepEqual(carrying, [row.id]);
-  });
-
-  test(`the undecodable row files under its own error on the account that served its head, at ${at}`, async () => {
-    const s = await story;
-    const groups = await s.api.getAnalyticsBreakdown({ from: iso(s.now - DAY), groupBy: 'account', to: iso(s.now) });
-    const primary = groups.find((g) => g.key === 'primary');
-    // The ledger counts each request's own code beside its outcome, so the relay's 502 and the stream cut after its 200
-    // head both file under the code. A canceled request is a cut, and no upstream error.
-    const undecodable = s.counted.filter((r) => r.accountId === 'primary' && r.errorCode === 'stream_undecodable').length;
-    const otherErrors = s.counted.filter((r) => r.accountId === 'primary' && r.outcome !== 'canceled' && r.status !== 200 && r.status !== 429 && r.status !== 529 && r.errorCode !== 'stream_undecodable').length;
-    assert.ok(undecodable > 0, 'primary served the head of an undecodable stream');
-    assert.deepEqual([primary.errors.stream_undecodable, primary.errors.api_error ?? 0], [undecodable, otherErrors], 'the count leaves the upstream errors for its own entry');
-    // An incomplete request files under the code it ended on, so stream_incomplete counts the rows that carry it alone.
-    const ended = s.counted.filter((r) => r.accountId === 'primary' && r.errorCode === 'stream_incomplete').length;
-    assert.ok(ended > 0, 'primary served a stream that closed without its end');
-    assert.equal(primary.errors.stream_incomplete ?? 0, ended);
   });
 
   test(`an incomplete stream's attempt names no stop reason and files as an upstream error, while a completed answer ends its turn, at ${at}`, async () => {

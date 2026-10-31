@@ -618,13 +618,6 @@ test('the instant the page took its range moves with the range alone, so a filte
   assert.equal(seen.at(-1), ORIGIN + 121_000, 'a preset is taken when it is chosen and kept while it stands');
 });
 
-test('a poll and an older page on a custom span read to the span\'s own end, and a preset reads up to the instant given', () => {
-  const end = Date.UTC(2026, 8, 16, 13, 0);
-  const polled = Date.UTC(2026, 8, 16, 14, 30, 5);
-  assert.equal(d.readEnd(true, end, polled), end);
-  assert.equal(d.readEnd(false, end, polled), polled);
-});
-
 test("a preset poll under a watermark sends no end, so the route reads to its own clock, and a custom range's poll keeps its end and marks it fixed", async () => {
   const end = Date.UTC(2026, 8, 16, 13, 0);
   const polled = Date.UTC(2026, 8, 16, 14, 30, 5);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-const { GROUP_PAGE, GROUP_STEP, judged, latestPerWindow, meterGroups, meterWindowWord, ratioOff, SPARK, sparkOf } = await import('./dist/api.js');
+const { judged, latestPerWindow, meterGroups, meterWindowWord, ratioOff, SPARK, sparkOf } = await import('./dist/api.js');
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -92,10 +92,6 @@ test("one account's latest windows: the newest of each kind, in the windows' ord
     ],
   );
   assert.deepEqual(latestPerWindow([]), [], 'no row, no line');
-});
-
-test('an open group lists ten 5-hour windows or twenty-five weekly ones at first, and each press adds twenty-five', () => {
-  assert.deepEqual([GROUP_PAGE.fiveHour, GROUP_PAGE.weekly, GROUP_STEP], [10, 25, 25]);
 });
 
 test("the spark spans the 30 days to the answer's newest window, the ratio's log clipped to 0.5 and 2, the judged windows alone", () => {

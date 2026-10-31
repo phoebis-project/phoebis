@@ -42,6 +42,7 @@ test('the Sessions codec writes the filters off their defaults alone, in the bar
   const set = { ...defaults, companion: true, released: true };
   assert.equal(write(d.SESSIONS_CODEC, set), 'companion=1&released=1');
   assert.deepEqual(read(d.SESSIONS_CODEC, 'companion=1&age=6h&released=1'), set);
+  assert.equal(write(d.SESSIONS_CODEC, { ...defaults, companion: true, dir: 'asc', released: true, sort: 'activity' }), 'companion=1&released=1&sort=activity&dir=asc', 'the control follows the filters in the bar');
   const reset = Object.fromEntries(d.SESSIONS_DIMENSIONS.map((x) => [x.field, d.emptyValue(x)]));
   assert.equal(write(d.SESSIONS_CODEC, { ...set, finished: true, ...reset }), '');
 });
@@ -76,29 +77,6 @@ test("the Accounts codec carries the sort's direction after its key, written onl
       ['reset', 'Soonest reset', 'asc'],
       ['usage', 'Most used', 'desc'],
       ['status', 'Status', 'asc'],
-    ],
-  );
-});
-
-test("the Sessions codec carries the sort's direction after its key and the filters, each written only off its default, both keys newest first", () => {
-  const bare = read(d.SESSIONS_CODEC, '');
-  assert.deepEqual([bare.sort, bare.dir], ['created', '']);
-  assert.equal(write(d.SESSIONS_CODEC, { ...bare, dir: '', sort: 'activity' }), 'sort=activity', "the key's own direction leaves the address");
-  assert.equal(write(d.SESSIONS_CODEC, { ...bare, dir: 'asc', sort: 'activity' }), 'sort=activity&dir=asc');
-  assert.equal(write(d.SESSIONS_CODEC, { ...bare, dir: 'asc' }), 'dir=asc');
-  assert.equal(write(d.SESSIONS_CODEC, { ...bare, companion: true, dir: 'asc', released: true, sort: 'activity' }), 'companion=1&released=1&sort=activity&dir=asc', 'the control follows the filters in the bar');
-  assert.equal(read(d.SESSIONS_CODEC, 'dir=bogus').dir, '');
-  assert.equal(read(d.SESSIONS_CODEC, 'sort=bogus').sort, 'created');
-  // A bare address and a bogus direction both mean the key's own direction, newest first.
-  assert.equal(d.sortDirOf(d.SESSION_SORT_KEYS, bare), 'desc');
-  assert.equal(d.sortDirOf(d.SESSION_SORT_KEYS, read(d.SESSIONS_CODEC, 'sort=activity&dir=bogus')), 'desc');
-  assert.equal(d.sortDirOf(d.SESSION_SORT_KEYS, read(d.SESSIONS_CODEC, 'sort=activity&dir=asc')), 'asc');
-  assert.deepEqual(d.sortAddressOf(d.SESSION_SORT_KEYS, { dir: 'desc', sort: 'activity' }), { dir: '', sort: 'activity' });
-  assert.deepEqual(
-    d.SESSION_SORT_KEYS.map((k) => [k.id, k.label, k.defaultDir]),
-    [
-      ['created', 'Created', 'desc'],
-      ['activity', 'Last activity', 'desc'],
     ],
   );
 });

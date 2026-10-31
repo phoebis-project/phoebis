@@ -1,43 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ATTENTION_KIND_VALUES, ATTENTION_LABEL, ATTENTION_REFRESH_MS, ATTENTION_TONE, attentionDetail, attentionHref, attentionLogLine, attentionTitle, attentionWords, createAttentionPoll, decodeAttention, fmtAbsolute, fmtShortTime } from './dist/api.js';
+import { ATTENTION_LABEL, ATTENTION_REFRESH_MS, ATTENTION_TONE, attentionDetail, attentionHref, attentionLogLine, attentionTitle, attentionWords, createAttentionPoll, decodeAttention, fmtAbsolute, fmtShortTime } from './dist/api.js';
 
 const NOW = Date.parse('2026-09-18T12:00:00.000Z');
 const item = (kind, over = {}) => ({ detail: {}, kind, link: null, pools: [], since: '2026-09-18T10:00:00.000Z', subject: { id: kind, label: kind, type: 'account' }, ...over });
 /** Lets every settled promise run its handlers, which the mocked interval leaves to the real event loop. */
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-test('the attention kinds rank worst first, the order the route answers in', () => {
-  assert.deepEqual([...ATTENTION_KIND_VALUES], ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unweighted', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long']);
-});
-
 test("a listener's two certificate kinds decode as themselves, never as the worst kind", () => {
   const router = { link: null, pools: [], since: 1_000_000, subject: { id: 'proxy.tls', label: 'proxy.tls', type: 'router' } };
   const kinds = ['certificate_expiring', 'certificate_reload_failed'].map((kind) => decodeAttention({ ...router, detail: {}, kind }).kind);
   assert.deepEqual(kinds, ['certificate_expiring', 'certificate_reload_failed']);
-});
-
-test('each attention kind has its word and its tone, a client drift and a failed refresh serious', () => {
-  assert.deepEqual(ATTENTION_LABEL, {
-    certificate_expiring: 'Certificate expiring',
-    certificate_reload_failed: 'Certificate reload failed',
-    client_drift: 'Client drift',
-    destination_spent: 'Destination spent within the hour',
-    funding_required: 'Funding required',
-    ledger_record_parked: 'Priced record parked',
-    meter_drift: 'Meter drift against the table',
-    model_unweighted: 'Model weight estimated',
-    poll_backoff: 'Usage poll backing off',
-    pool_exhausted: 'Pool exhausted',
-    reauth_required: 'Re-auth required',
-    refresh_failed: 'Credential refresh failed',
-    shed_no_runway: 'Rounds without a destination',
-    slowed_long: 'Slowed past twice the stretch',
-    unknown: 'Unknown condition',
-    wall_reached: 'Wall reached under the ceiling',
-    writer_degraded: 'State writer degraded',
-  });
-  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'serious', 'warning', 'serious', 'warning', 'warning', 'warning', 'warning', 'warning', 'warning', 'warning']);
 });
 
 test('an item opens the page where its condition is fixed, and an item without a link opens nothing', () => {

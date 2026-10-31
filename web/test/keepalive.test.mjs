@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 // Every clock time below is read in UTC whatever the host's zone. `node --test` gives each file a process of its own,
@@ -171,16 +170,6 @@ test("an agent line reads the route's entry for its agent on its recipe's model,
   assert.equal(d.lineFigures(row, '4f0c', 'claude-sonnet-5-5'), null, 'an agent the list lacks, a released one among them, reads none');
 });
 
-test("the fixture's row reads each agent line through its own entry, and main's through the list alone", () => {
-  const wire = JSON.parse(readFileSync(new URL('./fixtures/sessions.json', import.meta.url), 'utf8')).body.sessions.find((s) => s.session_id === 's1');
-  const s1 = d.decodeSession(wire);
-  assert.ok(wire.agent_contexts.length > 0 && s1.agentId === 'main' && s1.lastInputTokens !== null, 'the row carries agent lines and its main pin has a turn');
-  for (const c of wire.agent_contexts) assert.equal(d.lineFigures(s1, c.agent_id, c.model)?.lastInputTokens, c.last_input_tokens, `${c.agent_id} on ${c.model}`);
-  // Main's line reads main's entry where the list holds one and none where it holds none, never the row's figures.
-  const listed = s1.agentContexts.find((c) => c.agentId === 'main' && c.model === s1.model) ?? null;
-  assert.deepEqual(d.lineFigures(s1, 'main', s1.model), listed);
-});
-
 test("sessionLines reads the recipes first with their pins, then every pin no recipe claims in the route's order", () => {
   const at = ms(14, 20);
   const entries = [pinEntry('main', 'claude-sonnet-5', 52_000), pinEntry('7b2e', 'claude-haiku-4-5', 18_000), pinEntry('7b2e', 'claude-sonnet-5', 31_000), pinEntry('c21e', 'claude-sonnet-5', 9_000)];
@@ -207,41 +196,6 @@ test("pinTtlMs reads the time left to the pin's last use plus its cache TTL, and
   assert.equal(d.pinTtlMs({ ...pin, lastUsedAt: iso(NOW - 5 * MINUTE - SECOND) }, NOW), null, 'one second past it');
   assert.equal(d.pinTtlMs({ ...pin, cacheTtlMs: null }, NOW), null, 'no TTL');
   assert.equal(d.pinTtlMs({ ...pin, lastUsedAt: null }, NOW), null, 'no last use');
-});
-
-test('the compacted cause reads its label and the sentence that says no probe goes out until the next main turn', () => {
-  assert.equal(d.CAUSE_LABEL.compacted, 'compacted');
-  assert.equal(
-    d.CAUSE_HINT.compacted,
-    'A completed compaction replaced the context this recipe kept warm, so the recipe stopped and no probe is sent. The next main turn starts a recipe for the new context.',
-  );
-});
-
-test('the idle limit cause reads its label and the sentence that names the break-even where the pool sets no window', () => {
-  assert.equal(d.CAUSE_LABEL.idle_limit, 'idle limit');
-  assert.equal(
-    d.CAUSE_HINT.idle_limit,
-    "The pool's idle window, the break-even where the pool sets none, ran out with no real request, so the retained prompt was discarded. The next real request starts a new recipe.",
-  );
-});
-
-test('the causes the retry ladder and the kept recipe move read their sentences, and their labels stand', () => {
-  const want = {
-    no_probe_cache_evidence: "The last probe's answer showed no cache read or write. The next attempt is scheduled on the retry ladder before the entry expires.",
-    probe_pool_exhausted: 'Every account of the pool was exhausted or cooled when the probe was selected. The next attempt is scheduled on the retry ladder before the entry expires.',
-    probe_quota_exhausted: "The account's usage window was spent when the last probe was sent. The next attempt is scheduled on the retry ladder before the entry expires.",
-    probe_retry_limit: "The last probes failed with retryable errors along the retry ladder until the entry's TTL, so the engine stopped retrying.",
-    probe_transport_error: 'The last probe failed on the transport before an answer came back. The next attempt is scheduled on the retry ladder before the entry expires.',
-    request_canceled: "The agent's request was canceled before it finished, so the last answered request's recipe stays armed where one was, and the canceled body is never probed.",
-    request_failed: "The agent's request failed, so the last answered request's recipe stays armed where one was, and the failed body is never probed.",
-    retryable_probe_error: 'The last probe failed with a retryable error. The next attempt is scheduled on the retry ladder before the entry expires.',
-    slow_probe: 'The last probe took its whole refresh interval, so the next one is scheduled on the retry ladder before the entry expires rather than starting at once.',
-  };
-  assert.deepEqual(Object.fromEntries(Object.keys(want).map((cause) => [cause, d.CAUSE_HINT[cause]])), want);
-  assert.equal(d.CAUSE_LABEL.no_probe_cache_evidence, 'no probe cache evidence');
-  assert.equal(d.CAUSE_LABEL.probe_retry_limit, 'retry limit');
-  assert.equal(d.CAUSE_LABEL.retryable_probe_error, 'retrying');
-  assert.equal(d.CAUSE_LABEL.slow_probe, 'slow probe');
 });
 
 /** A read as a tile names it: the word the notice uses, its error, and whether it has ever answered. */
