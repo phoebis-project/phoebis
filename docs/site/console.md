@@ -834,16 +834,16 @@ the field under the rows, added on Enter, several picks matching any, a picked v
 agent list holds the range's product tokens. Include probes applies at once, and Session takes a session id, typed or
 pasted, which matches the session exactly. Each filter in force stands as a chip on a line under the bar, as on the
 Requests view, such as "client: claude-code*" or "include probes", each Client or User agent value a chip of its own,
-cut after 32 characters with the whole on hover. The Requests links of the reasons panel and the refusal card carry one
-client pattern, and read plain under several. The session chip prints the id's first eight characters, and its hover
-names the whole id with the key lifetime a link from the Sessions view carries ("under the key laptop@3"), which has no
-chip of its own and leaves when the session changes. "Group by" offers Account, Classifier, Client, Key, Effort, Kind,
-Model, Pool, Request class, Speed, User agent or "Session (Burn only)", the last the Burn section's own grouping. While
-it reads User agent, "Groups (N)" opens the "User agent groups" box with one pattern per line, N the patterns it holds,
-where each pattern names a group and every other agent groups under `other` (`claude-cli/2.1.*` and `claude-cli/2.0.*`
-as two groups). The user agent grouping reads the agent's first product token, `claude-cli/2.1.310` for
-`claude-cli/2.1.310 (external, cli)`. The classifier grouping lists the requests with no classifier call under `none`,
-as the Requests view's Classifier filter names them.
+cut after 32 characters with the whole on hover. The Requests links of the Misses by reason counts and the refusal card
+carry one client pattern, and read plain under several. The session chip prints the id's first eight characters, and its
+hover names the whole id with the key lifetime a link from the Sessions view carries ("under the key laptop@3"), which
+has no chip of its own and leaves when the session changes. "Group by" offers Account, Classifier, Client, Key, Effort,
+Kind, Model, Pool, Request class, Speed, User agent or "Session (Burn only)", the last the Burn section's own grouping.
+While it reads User agent, "Groups (N)" opens the "User agent groups" box with one pattern per line, N the patterns it
+holds, where each pattern names a group and every other agent groups under `other` (`claude-cli/2.1.*` and
+`claude-cli/2.0.*` as two groups). The user agent grouping reads the agent's first product token, `claude-cli/2.1.310`
+for `claude-cli/2.1.310 (external, cli)`. The classifier grouping lists the requests with no classifier call under
+`none`, as the Requests view's Classifier filter names them.
 
 Auto reload is at 5 s when the view opens, set on the split Refresh button's dropdown as on the Requests view and kept
 out of the page's address. At each interval it reads the account list again and, once a new bucket of the range has
@@ -1049,22 +1049,22 @@ columns wider than the card scrolls inside it. Context reads the main agent's co
 a session with no pin or no figure, and Effort the effort of its pin's last turn, `high`, with a dash for none, both
 from main's conversation pin (or, where main holds none, the newest conversation pin of another agent). The Model cell
 adds a "+N" badge where N agents of the session are pinned on another model, with or without a recipe, its hover naming
-each agent with its model and account in the lines' order. Runway reads the
-time until the projection of the pin's account reaches the ceiling on the window that binds, among those the pin's model
-draws: a span such as `6 h 55 min`, `none` where the runway is gone, `unbounded` where nothing burns or where the runway
-would pass the binding window's next reset, and a dash for an unpinned row or a pinned row with no projection. On a
-pinned row whose pin carries a cycle its hover reads `cycle 20 s`, the gap between the session's requests the
-slow-down's hold is sized from. The Session cell draws the speed chip after the id on a slowed session, with the Quota
-view's hover. The session cell cuts a long id with an ellipsis, whole on hover. A session that branched from another
-conversation at depth 2 or deeper carries a fork badge under its id, `fork, on another account` or `fork, same account`
-where the session it branched from is listed with a pinned account, and `fork at 3` otherwise, with the base, the depth
-and the base's account on hover, and a click on the badge scrolls to the base's row where the list holds it. Companion
-reads the mod's state, `reporting` with how long ago the person was last seen at the terminal, `silent` or `none`. Cache
-warming reads the pin state badge, `busy`, `idle`, `parked`, `released` or `unknown`, with the recipe summary, or "no
-recipe". Next probe reads the instant, "pending" or "not scheduled". Before the first session the card reads "No live
-sessions" with "A session appears here on its first request, or as soon as the keepalive mod registers it, and drops off
-once it passes the session expiry." While the filters hide every row the router lists, the card reads "No sessions kept
-by the filters" with `{k} sessions hidden by the filters.`
+each agent with its model and account in the lines' order. Runway reads the time until the projection of the pin's
+account reaches the ceiling on the window that binds, among those the pin's model draws: a span such as `6 h 55 min`,
+`none` where the runway is gone, `unbounded` where nothing burns or where the runway would pass the binding window's
+next reset, and a dash for an unpinned row or a pinned row with no projection. On a pinned row whose pin carries a cycle
+its hover reads `cycle 20 s`, the gap between the session's requests the slow-down's hold is sized from. The Session
+cell draws the speed chip after the id on a slowed session, with the Quota view's hover. The session cell cuts a long id
+with an ellipsis, whole on hover. A session that branched from another conversation at depth 2 or deeper carries a fork
+badge under its id, `fork, on another account` or `fork, same account` where the session it branched from is listed with
+a pinned account, and `fork at 3` otherwise, with the base, the depth and the base's account on hover, and a click on
+the badge scrolls to the base's row where the list holds it. Companion reads the mod's state, `reporting` with how long
+ago the person was last seen at the terminal, `silent` or `none`. Cache warming reads the pin state badge, `busy`,
+`idle`, `parked`, `released` or `unknown`, with the recipe summary, or "no recipe". Next probe reads the instant,
+"pending" or "not scheduled". Before the first session the card reads "No live sessions" with "A session appears here on
+its first request, or as soon as the keepalive mod registers it, and drops off once it passes the session expiry." While
+the filters hide every row the router lists, the card reads "No sessions kept by the filters" with `{k} sessions hidden
+by the filters.`
 
 A row's menu offers "View in analytics" and "View in requests" once the session has ledgered traffic, "View in routing
 log", which opens the log on that session's decisions an hour either side of its last request, and "Release". Release

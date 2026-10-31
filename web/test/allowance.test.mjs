@@ -134,7 +134,8 @@ test("a reset prices at the plan and the tier it ran under, and at the account's
     const bare = d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, unit);
     assert.deepEqual([bare.kind, bare.share], ['equivalent', 0.5], `${unit}: the anchor's own week`);
     assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, unit, NO_PAIR), bare, `${unit}: a reset the router recorded no pair for`);
-    // A reset built without the two keys reads as one the router recorded no pair for, the wire writing both or neither.
+    // A reset built without the two keys reads as one the router recorded no pair for, the wire writing both or
+    // neither.
     assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, unit, {}), bare, `${unit}: a reset without the keys`);
     const earlier = d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, unit, MAX_5X);
     assert.equal(earlier.kind, 'equivalent', unit);

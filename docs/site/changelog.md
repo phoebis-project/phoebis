@@ -295,20 +295,19 @@ classifier grouping the requests with no classifier call are labeled `none`, as 
 ([Analytics](console.md#analytics)). On the Sessions view a released subagent's record keeps its slot of the agent cap
 for one cache TTL after the release and then leaves the engine ([Sessions](console.md#sessions)). The Sessions row's
 "+N" badge counts every agent pinned on another model, a pin without a recipe among them
-([Sessions](console.md#sessions)). The Sessions view
-offers Companion only, Finished sessions (Show finished sessions) and Released agents (Show released agents) as filters
-in its address, hides a finished session by default, and counts the rows the filters keep on its tiles
-([Sessions](console.md#sessions)). The Sessions view orders its rows and their lines by the session's creation time,
-newest first, or by its last activity through the filter bar's sort control ([Sessions](console.md#sessions)). The
-Sessions view reads each row from main's conversation pin with an Effort column, draws a line for every pin of every
-session, main's among them, with Effort, Context and a warm or cold state on a pin no recipe stands on, links each
-line's agent to the request log and its account to the Accounts view, and lists the sessions the router lists within its
-non-companion timeout ([Sessions](console.md#sessions)). The Sessions view reads the context in tokens from main's
-conversation pin on every row and from each line's own pin, and the Requests column shows through the Columns control to
-make room ([Sessions](console.md#sessions)). The cost reference's Windows by tier draws the Interactive regime's rows
-first under a headline naming its clients and the base rows under Headless, its Peak band card says which traffic the
-band applies to, and Plan rates' Regime control reads Interactive and Headless ([The cost
-reference](console.md#the-cost-reference)). The Settings page's About card lists the session expiry and the
+([Sessions](console.md#sessions)). The Sessions view offers Companion only, Finished sessions (Show finished sessions)
+and Released agents (Show released agents) as filters in its address, hides a finished session by default, and counts
+the rows the filters keep on its tiles ([Sessions](console.md#sessions)). The Sessions view orders its rows and their
+lines by the session's creation time, newest first, or by its last activity through the filter bar's sort control
+([Sessions](console.md#sessions)). The Sessions view reads each row from main's conversation pin with an Effort column,
+draws a line for every pin of every session, main's among them, with Effort, Context and a warm or cold state on a pin
+no recipe stands on, links each line's agent to the request log and its account to the Accounts view, and lists the
+sessions the router lists within its non-companion timeout ([Sessions](console.md#sessions)). The Sessions view reads
+the context in tokens from main's conversation pin on every row and from each line's own pin, and the Requests column
+shows through the Columns control to make room ([Sessions](console.md#sessions)). The cost reference's Windows by tier
+draws the Interactive regime's rows first under a headline naming its clients and the base rows under Headless, its Peak
+band card says which traffic the band applies to, and Plan rates' Regime control reads Interactive and Headless ([The
+cost reference](console.md#the-cost-reference)). The Settings page's About card lists the session expiry and the
 non-companion timeout, the two keys of the `sessions` block, each as a duration with its seconds beside it and its hover
 naming the key ([Settings](console.md#settings)). The Settings page's About card names the bootstrap's body capture
 limit beside its two retention lines ([Settings](console.md#settings)). A decision card's cache-map row folds a record

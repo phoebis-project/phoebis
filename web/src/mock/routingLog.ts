@@ -1746,7 +1746,9 @@ const refusedFacts = (r: RequestLog, drift: boolean): Pick<RecordRequest, 'attem
   requestClass: drift ? null : r.requestClass,
 });
 
-/** A guardrail's block as the relay answers it: the stored name of the guardrail the request's matches mark blocking. */
+/**
+ * A guardrail's block as the relay answers it: the stored name of the guardrail the request's matches mark blocking.
+ */
 function blockOf(id: string): NonNullable<Spec['refusal']> {
   const blocking = requestById.get(id)?.guardrails.find((m) => m.blocked)?.id ?? '';
   return { code: 'guardrail_blocked', kind: 'guardrail', reason: GUARDRAILS.find((g) => g.id === blocking)?.name ?? blocking };
