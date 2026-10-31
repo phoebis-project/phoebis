@@ -1511,9 +1511,10 @@ async fn a_stamped_body_with_a_lone_surrogate_keeps_its_restoration_its_session_
     up.shutdown().await;
 }
 
-// The restoration by class: a headless Claude Code 2.1.302 session captured on the wire showed two of the six
-// requests below, a main turn and a classifier call. It sent no compaction request, subagent summary fork,
-// main-thread fork or side reply, so those four cases pin the table by class as read from the client's builder.
+// The restoration by class: a headless Claude Code 2.1.302 session captured on the wire showed a main turn, which
+// `cc_prev_req_names_the_previous_request_id_on_the_same_session_agent_and_account` pins, and a classifier call, one
+// of the five requests below. It sent no compaction request, subagent summary fork, main-thread fork or side reply, so
+// those four cases pin the table by class as read from the client's builder.
 
 /// A request of the reduced-shape fixture on `session` under `class`, with the contract's items in place: the
 /// session and class headers here, the line and `metadata.user_id` in the fixture's body.
