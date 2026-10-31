@@ -1031,10 +1031,10 @@ MiB`, "prompts kept for probes"), "Cache probes, 24h" (a bar by outcome and `{n}
 skipped, {n} failed`), "Expired between turns, 24h" ("misses cache warming exists to prevent") and "Bus gaps" ("times
 the keepalive engine missed bus events"). While the filters hide rows, the Sessions and Agents tiles name them on hover,
 `{k} sessions hidden by the filters`. A tile whose read failed draws a dash with the reason on hover, and Try again
-under the tiles reads them again. Auto reload starts at 5 s and reads the sessions, the recipes and the tiles at that
-one interval, and it waits while the Cost reference dialog, the Release question or a row's menu is open. The probes and
-the recipe are explained on [Keepalive](keepalive.md), the mod's words under [The mod](keepalive.md#the-mod) and the
-recipe's states under [The five states](keepalive.md#the-five-states).
+under the tiles reads them again. Auto reload starts at 5 s and reads the accounts, the recipes, the sessions and the
+tiles at that one interval, and it waits while the Cost reference dialog, the Release question or a row's menu is open.
+The probes and the recipe are explained on [Keepalive](keepalive.md), the mod's words under [The
+mod](keepalive.md#the-mod) and the recipe's states under [The five states](keepalive.md#the-five-states).
 
 The card "Sessions" ("One row per session. Open a row for the cache-warming recipe each agent carries") offers "Expand
 all" or "Collapse all". The Session column is always drawn, and the twelve others, which the bar's Columns control shows
