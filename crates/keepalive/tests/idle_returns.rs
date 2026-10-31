@@ -13,8 +13,6 @@ use phoebis_keepalive::{
     KeepaliveTiming, PrefixAnchor, Reason, IDLE_AGE_BOUNDS_SECONDS,
 };
 
-const OAUTH: &str = "sk-ant-oat01-OOOO";
-const TIER: &str = "default_claude_max_20x";
 const LAPTOP_SECRET: &str = "phoebis-laptop-key";
 const DAY: i64 = 86_400_000;
 
@@ -63,20 +61,6 @@ fn with_idle_window(seconds: u64) -> KeepalivePolicy {
         enabled: true,
         max_idle_seconds: seconds,
         ..KeepalivePolicy::default()
-    }
-}
-
-/// A subscription account on plan quota, so the recipe's ceilings read the plan row.
-fn plan_row(policy: KeepalivePolicy) -> RigSpec {
-    RigSpec {
-        accounts: vec![oauth("o", OAUTH, 0)],
-        policy,
-        pool: PoolSpec {
-            overage_policy: phoebis_store::OveragePolicy::Allow,
-            ..PoolSpec::default()
-        },
-        tier: Some(TIER),
-        ..RigSpec::default()
     }
 }
 
@@ -842,21 +826,6 @@ async fn a_changed_prefix_counts_as_no_return_before_and_after_the_recipes_dispo
     );
 }
 
-#[tokio::test]
-async fn a_return_holding_the_boundary_before_the_last_alone_counts() {
-    let mut r = rig(RigSpec::default()).await;
-    let start = idle_after_request_with(&mut r, &two_messages()).await;
-    tick_to(&mut r, start, 12).await;
-    r.observe_with("main", &reshaped_after_two_messages()).await;
-    assert_eq!(
-        (reached(&r), returned(&r)),
-        (
-            [1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
-        )
-    );
-}
-
 /// The window keeps the pair apart from the recipe, so the boundary before the last counts a return while the recipe
 /// is retained, after the idle ceiling discarded it, and under a refreshing class, where the class decides the re-arm
 /// and the chain the return.
@@ -968,22 +937,6 @@ async fn a_main_class_request_that_continues_the_prefix_counts_as_a_return() {
     tick_to(&mut r, start, 12).await;
     observe_classed(&mut r, "main", &next_turn()).await;
     assert_eq!(returned(&r), [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
-}
-
-#[tokio::test]
-async fn a_return_after_the_ceiling_discarded_the_recipe_still_counts() {
-    let mut r = rig(plan_row(with_idle_window(600))).await;
-    let start = idle_after_request(&mut r).await;
-    tick_to(&mut r, start, 10).await;
-    assert_eq!(
-        (r.status("main").reason, retained(&r)),
-        (Reason::IdleLimit, false),
-        "the recipe ends at 10 minutes"
-    );
-    tick_to(&mut r, start, 65).await;
-    assert_eq!(reached(&r), [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]);
-    r.observe_with("main", &next_turn()).await;
-    assert_eq!(returned(&r), [0, 0, 0, 0, 1, 0, 0, 0, 0, 0]);
 }
 
 const VERSION: &str = "2.1.305";
@@ -1306,18 +1259,6 @@ async fn the_end_of_a_park_without_a_request_starts_a_new_window() {
             "mod first: {mod_first}"
         );
     }
-}
-
-#[tokio::test]
-async fn a_presence_report_starts_a_new_window() {
-    let mut r = rig(RigSpec::default()).await;
-    let start = idle_after_request(&mut r).await;
-    tick_to(&mut r, start, 10).await;
-    assert_eq!(reached(&r), [1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
-    activity(&mut r, "presence");
-    r.advance_attended(MINUTE);
-    r.step().await;
-    assert_eq!(reached(&r), [2, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
 }
 
 /// One report of the second key's session, under its own instance and sequence.

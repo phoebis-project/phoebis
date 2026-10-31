@@ -1000,6 +1000,7 @@ async fn reason_counters_measure_the_gates_and_survive_close() {
         "close keeps the counters"
     );
     assert_eq!(r.engine.stats().retained_bytes, 0);
+    assert_eq!(r.engine.stats().agents, 0);
 }
 
 /// A gap drops one event and leaves the rest of the queue behind it. A request observed inside that backlog

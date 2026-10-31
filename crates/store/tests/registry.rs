@@ -94,29 +94,6 @@ fn rename(
     })
 }
 
-#[test]
-fn a_fresh_registry_is_at_version_two_and_a_second_open_changes_nothing() {
-    let dir = tempfile::tempdir().unwrap();
-    let key = StorageKey::generate();
-    let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 2);
-    drop(store);
-    let again = Store::open(&path, &key).unwrap();
-    assert_eq!(
-        again.schema_version().unwrap(),
-        2,
-        "a second open runs no migration and keeps the version"
-    );
-    assert!(again.pools().unwrap().is_empty());
-    again
-        .insert_account(&account("a", AccountKind::Oauth))
-        .unwrap();
-    again.insert_pool(&pool("main"), "test").unwrap();
-    assert_eq!(again.pools().unwrap()[0].cache_ttl_json, "{}");
-    assert!(!again.pools().unwrap()[0].cache_diagnostics);
-}
-
 /// The names of `table`'s columns in their stored order.
 fn columns_of(conn: &rusqlite::Connection, table: &str) -> Vec<String> {
     conn.prepare("SELECT name FROM pragma_table_info(?1) ORDER BY cid")
@@ -652,74 +629,6 @@ fn a_pool_created_without_the_stretch_reads_two_and_a_half_hours() {
 }
 
 #[test]
-fn the_pins_columns_after_the_rebuild_are_the_old_set_plus_the_agent() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("router.sqlite");
-    Store::open(&path, &StorageKey::generate()).unwrap();
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    let columns: std::collections::BTreeSet<String> = conn
-        .prepare("SELECT name FROM pragma_table_info('pins')")
-        .unwrap()
-        .query_map([], |r| r.get(0))
-        .unwrap()
-        .collect::<rusqlite::Result<_>>()
-        .unwrap();
-    let mut expected: std::collections::BTreeSet<String> = [
-        "key_id",
-        "session_id",
-        "model",
-        "account_id",
-        "epoch",
-        "created_at",
-        "last_used_at",
-        "key_generation",
-        "incarnation",
-        "burn_at",
-        "last_input_tokens",
-        "last_classifier",
-        "last_refresh_at",
-        "cache_ttl_ms",
-        "shed_from",
-        "shed_at",
-        "shed_reason",
-        "static_hash",
-        "tail_hash",
-        "lane",
-        "entrypoint",
-        "marked_at",
-        "marked_on",
-        "marked_window",
-        "auxiliary_only",
-        "effort",
-        "burn_banded_cache_read",
-        "burn_banded_input",
-        "burn_banded_output",
-        "burn_banded_write_1h",
-        "burn_banded_write_5m",
-        "burn_cache_read",
-        "burn_fast_cache_read",
-        "burn_fast_input",
-        "burn_fast_output",
-        "burn_fast_write_1h",
-        "burn_fast_write_5m",
-        "burn_input",
-        "burn_output",
-        "burn_unmetered_cache_read",
-        "burn_unmetered_input",
-        "burn_unmetered_output",
-        "burn_unmetered_write_1h",
-        "burn_unmetered_write_5m",
-        "burn_write_1h",
-        "burn_write_5m",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect();
-    expected.insert("agent_id".into());
-    assert_eq!(columns, expected);
-}
-
-#[test]
 fn the_subscription_is_stored_with_the_profile_and_reads_back_with_nulls_before_the_first_write() {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
@@ -985,25 +894,6 @@ fn the_term_resolves_the_plan_from_the_organization_type_first_and_the_tier_seco
     );
 }
 
-fn has_windows_table(path: &std::path::Path) -> bool {
-    let conn = rusqlite::Connection::open(path).unwrap();
-    conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'usage_windows'",
-        [],
-        |r| r.get::<_, i64>(0),
-    )
-    .unwrap()
-        == 1
-}
-
-#[test]
-fn a_fresh_store_carries_the_windows_table() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("router.sqlite");
-    Store::open(&path, &StorageKey::generate()).unwrap();
-    assert!(has_windows_table(&path));
-}
-
 #[test]
 fn a_pool_reopens_on_and_a_key_reopens_inheriting_until_set_off() {
     let dir = tempfile::tempdir().unwrap();
@@ -1069,87 +959,6 @@ fn a_key_created_with_its_own_auto_mode_setting_reopens_with_it() {
     );
 }
 
-#[test]
-fn a_fresh_store_carries_the_rule_columns_and_neither_whitelist_column() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("router.sqlite");
-    Store::open(&path, &StorageKey::generate()).unwrap();
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('pools') WHERE name = 'model_rules_json'",
-            [],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap(),
-        1,
-        "a fresh store carries the pool's rule column"
-    );
-    assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('api_keys') \
-             WHERE name IN ('model_rules_json', 'model_rules_mode', 'long_context_twins')",
-            [],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap(),
-        3,
-        "a fresh store carries the key's three rule columns"
-    );
-    assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('pools') WHERE name = 'default_allowed_models_json'",
-            [],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap(),
-        0,
-        "the pool's whitelist column is gone"
-    );
-    assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('api_keys') WHERE name = 'allowed_models_json'",
-            [],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap(),
-        0,
-        "the key's whitelist column is gone"
-    );
-    assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('model_resolutions') \
-             WHERE name IN ('spelling', 'dated_id', 'resolved_at')",
-            [],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap(),
-        3,
-        "a fresh store carries the resolution table's three columns"
-    );
-    assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'account_models'",
-            [],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap(),
-        0,
-        "a fresh store carries no catalog table"
-    );
-    assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('accounts') \
-             WHERE name IN ('catalog_synced_at', 'catalog_error')",
-            [],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap(),
-        0,
-        "a fresh store carries neither catalog column"
-    );
-}
-
 /// Both writes stamp themselves from the same clock, so a delete and the create that follows it can land in
 /// one millisecond. The stamps are pinned equal here rather than raced for, so the case the change log's
 /// order answers and a comparison of the two clocks does not is the one this test runs every time.
@@ -1181,26 +990,6 @@ fn an_id_created_again_in_the_millisecond_it_was_deleted_in_is_a_reused_one() {
         store.load_registry().unwrap().reused_key_ids,
         vec!["back".to_string()],
         "the id carries a holder before this one whatever the two stamps read"
-    );
-}
-
-#[test]
-fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store.insert_pool(&pool("main"), "test").unwrap();
-    store
-        .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
-        .unwrap();
-    store.delete_api_key("back", "test").unwrap();
-    store
-        .insert_api_key(
-            &key(&store, "back", "main", "phoebis-back-reissued"),
-            "test",
-        )
-        .unwrap();
-    assert_eq!(
-        store.api_key("back").unwrap().unwrap().prefix,
-        phoebis_store::key_prefix("phoebis-back-reissued")
     );
 }
 

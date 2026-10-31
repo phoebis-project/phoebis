@@ -443,6 +443,20 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
             code("invalid_event"),
         ),
         (
+            "a negative sequence",
+            Some(JSON),
+            json_body(heartbeat(json!({"sequence": -1}))),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "a repeated member",
+            Some(JSON),
+            br#"{"protocol":1,"event":"heartbeat","session_id":"session","instance_id":"instance","sequence":6,"sequence":7}"#.to_vec(),
+            400,
+            code("invalid_event"),
+        ),
+        (
             "a missing session id",
             Some(JSON),
             json_body(without(heartbeat(json!({})), "session_id")),
@@ -478,6 +492,13 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
             code("invalid_event"),
         ),
         (
+            "a body that is not an object",
+            Some(JSON),
+            b"[]".to_vec(),
+            400,
+            code("invalid_event"),
+        ),
+        (
             "a text/plain body",
             Some("text/plain"),
             json_body(heartbeat(json!({}))),
@@ -507,6 +528,19 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
                 "instance",
                 next,
                 json!({"agent_id": "main", "request_generation": 0}),
+            )),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "an agent event without its agent",
+            Some(JSON),
+            json_body(report(
+                "activity",
+                "session",
+                "instance",
+                next,
+                json!({"kind": "prompt"}),
             )),
             400,
             code("invalid_event"),
@@ -616,6 +650,24 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
             Some(JSON),
             json_body(main(
                 json!({"agent_id": "main", "state": "parked", "park_kind": "both", "deadline": 1, "request_generation": 0}),
+            )),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "a wake time that is not a whole number",
+            Some(JSON),
+            json_body(main(
+                json!({"agent_id": "main", "state": "parked", "park_kind": "scheduled", "wake_at": 1.5, "request_generation": 0}),
+            )),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "a deadline that is not a whole number",
+            Some(JSON),
+            json_body(main(
+                json!({"agent_id": "main", "state": "parked", "park_kind": "background", "deadline": 1.5, "request_generation": 0}),
             )),
             400,
             code("invalid_event"),

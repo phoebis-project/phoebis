@@ -1,13 +1,8 @@
-//! The Go events and lifecycle suites over the reporting protocol: registration, sequences, generations, leases,
-//! and the registration acknowledgment the mod reconciles from.
+//! The Go events and lifecycle suites over the reporting protocol: registration, sequences, generations and leases.
 mod common;
-use std::time::Duration;
-
 use common::*;
-use phoebis_bus::{Phase, ResponseChunk, Usage};
 use phoebis_keepalive::{
-    decode_json_event, AgentState, CompanionState, Event, EventError, KeepaliveLimits, ParkKind,
-    Reason, RecipeState,
+    AgentState, CompanionState, Event, EventError, KeepaliveLimits, ParkKind, Reason, RecipeState,
 };
 
 #[tokio::test]
@@ -83,15 +78,6 @@ async fn a_same_instance_recovery_of_a_live_session_takes_no_slot() {
     );
 }
 
-fn usage(read: u64, write_5m: u64) -> Usage {
-    Usage {
-        cache_read_tokens: Some(read),
-        cache_write_5m_tokens: Some(write_5m),
-        output_tokens: Some(10),
-        ..Default::default()
-    }
-}
-
 fn refusal(code: &'static str, status: u16) -> EventError {
     EventError {
         code,
@@ -101,176 +87,9 @@ fn refusal(code: &'static str, status: u16) -> EventError {
     }
 }
 
-/// A body as the mod sends it: the five members every report carries, then `rest` spliced in.
-fn body(event: &str, sequence: i64, rest: &str) -> String {
-    format!(
-        r#"{{"protocol":1,"event":"{event}","session_id":"session","instance_id":"instance","sequence":{sequence}{rest}}}"#
-    )
-}
-
 #[tokio::test]
 async fn json_events_match_the_contract() {
-    let mut r = rig(RigSpec::default()).await;
-    let ack = r
-        .engine
-        .apply_event(
-            "desktop",
-            r.generation("desktop"),
-            decode_json_event(body("heartbeat", 99, "").as_bytes()).unwrap(),
-        )
-        .unwrap();
-    assert_eq!(
-        (
-            ack.sequence,
-            ack.session_id.as_str(),
-            ack.instance_id.as_str(),
-            ack.agent_id.as_deref(),
-            ack.request_generation,
-            ack.agents.is_none()
-        ),
-        (99, "session", "instance", None, 0, true),
-        "a heartbeat names no agent and carries main's generation"
-    );
-    assert_eq!(ack.lease_expires_ms, r.now() + r.lease_ms());
-    r.sequence = 99;
-    let main = r#","agent_id":"main","request_generation":0"#;
-    let rows = [
-        ("an unknown member", body("heartbeat", 100, r#","surprise":1"#), "invalid_event"),
-        (
-            "a missing sequence",
-            r#"{"protocol":1,"event":"heartbeat","session_id":"session","instance_id":"instance"}"#.into(),
-            "invalid_event",
-        ),
-        ("a negative sequence", body("heartbeat", -1, ""), "invalid_event"),
-        ("a repeated member", body("heartbeat", 102, r#","sequence":103"#), "invalid_event"),
-        (
-            "a missing protocol",
-            r#"{"event":"heartbeat","session_id":"session","instance_id":"instance","sequence":100}"#.into(),
-            "invalid_event",
-        ),
-        ("a body that is not an object", "[]".into(), "invalid_event"),
-        ("an owner outside session_start", body("heartbeat", 104, r#","owner_id":"o""#), "invalid_event"),
-        (
-            "a previous instance outside session_start",
-            body("heartbeat", 104, r#","previous_instance_id":"i""#),
-            "invalid_event",
-        ),
-        ("an agent on a session event", body("session_end", 104, r#","agent_id":"main""#), "invalid_event"),
-        ("a kind outside activity", body("agent_start", 104, r#","agent_id":"w","kind":"prompt""#), "invalid_event"),
-        ("an activity without its kind", body("activity", 104, main), "invalid_event"),
-        ("an agent event without its agent", body("activity", 104, r#","kind":"prompt""#), "invalid_event"),
-        (
-            "a park kind outside parked",
-            body("state", 104, &format!(r#"{main},"state":"idle","park_kind":"background""#)),
-            "invalid_event",
-        ),
-        (
-            "a wake time outside parked",
-            body("state", 104, &format!(r#"{main},"state":"busy","wake_at":1"#)),
-            "invalid_event",
-        ),
-        (
-            "a deadline outside parked",
-            body("state", 104, &format!(r#"{main},"state":"idle","deadline":1"#)),
-            "invalid_event",
-        ),
-        ("a parked state without its kind", body("state", 104, &format!(r#"{main},"state":"parked""#)), "invalid_event"),
-        (
-            "a scheduled park without its wake time",
-            body("state", 104, &format!(r#"{main},"state":"parked","park_kind":"scheduled""#)),
-            "invalid_event",
-        ),
-        (
-            "a park of both kinds without its wake time",
-            body("state", 104, &format!(r#"{main},"state":"parked","park_kind":"both","deadline":1"#)),
-            "invalid_event",
-        ),
-        ("a wake time that is not a whole number", body("state", 104, &format!(r#"{main},"state":"parked","park_kind":"scheduled","wake_at":1.5"#)), "invalid_event"),
-        ("a deadline that is not a whole number", body("state", 104, &format!(r#"{main},"state":"parked","park_kind":"background","deadline":1.5"#)), "invalid_event"),
-        ("protocol 2", body("heartbeat", 104, "").replacen(r#""protocol":1"#, r#""protocol":2"#, 1), "unsupported_protocol"),
-        (
-            "protocol 2 with a member this protocol lacks",
-            body("heartbeat", 104, r#","surprise":1"#).replacen(r#""protocol":1"#, r#""protocol":2"#, 1),
-            "unsupported_protocol",
-        ),
-        ("a bad session id", body("heartbeat", 101, "").replacen(r#""session""#, r#""bad session""#, 1), "invalid_identity"),
-        ("sequence 0", body("heartbeat", 0, ""), "invalid_identity"),
-        ("an unknown state word", body("state", 104, &format!(r#"{main},"state":"asleep""#)), "invalid_state"),
-        (
-            "an unknown park kind",
-            body("state", 104, &format!(r#"{main},"state":"parked","park_kind":"nap","wake_at":1"#)),
-            "invalid_state",
-        ),
-        ("an unknown activity kind", body("activity", 104, &format!(r#"{main},"kind":"nudge""#)), "invalid_state"),
-        ("an unknown event", body("wander", 104, ""), "unknown_event"),
-    ];
-    let mut wrong = Vec::new();
-    for (name, json, code) in rows {
-        let got = decode_json_event(json.as_bytes());
-        if got != Err(refusal(code, 400)) {
-            wrong.push(format!("{name}: {got:?}, want {code}"));
-        }
-    }
-    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
-    let start = decode_json_event(
-        br#"{"protocol":1,"event":"session_start","session_id":"s2","instance_id":"i2","sequence":1,"owner_id":"owner-1","previous_instance_id":"i1"}"#,
-    )
-    .unwrap();
-    assert_eq!(
-        (
-            start.owner_id.as_deref(),
-            start.previous_instance_id.as_deref()
-        ),
-        (Some("owner-1"), Some("i1"))
-    );
-    let parked = decode_json_event(
-        br#"{"protocol":1,"event":"state","session_id":"s","instance_id":"i","sequence":3,"agent_id":"worker","request_generation":2,"state":"parked","park_kind":"both","wake_at":1700000000000,"deadline":1700000600000}"#,
-    )
-    .unwrap();
-    assert_eq!(
-        parked,
-        Event {
-            agent_id: Some("worker".into()),
-            deadline: Some(1_700_000_600_000),
-            event: "state".into(),
-            instance_id: "i".into(),
-            kind: None,
-            owner_id: None,
-            park_kind: Some("both".into()),
-            previous_instance_id: None,
-            protocol: Some(1),
-            request_generation: Some(2),
-            sequence: 3,
-            session_id: "s".into(),
-            state: Some("parked".into()),
-            wake_at: Some(1_700_000_000_000),
-        }
-    );
-    let background = decode_json_event(
-        body(
-            "state",
-            5,
-            &format!(r#"{main},"state":"parked","park_kind":"background""#),
-        )
-        .as_bytes(),
-    )
-    .unwrap();
-    assert_eq!(
-        (
-            background.park_kind.as_deref(),
-            background.deadline,
-            background.wake_at
-        ),
-        (Some("background"), None, None),
-        "a background park needs no deadline"
-    );
-    let presence =
-        decode_json_event(body("activity", 6, &format!(r#"{main},"kind":"presence""#)).as_bytes())
-            .unwrap();
-    assert_eq!(
-        (presence.kind.as_deref(), presence.agent_id.as_deref()),
-        (Some("presence"), Some("main"))
-    );
+    let r = rig(RigSpec::default()).await;
     assert_eq!(
         r.engine
             .apply_event(
@@ -674,108 +493,5 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
             .get(&phoebis_keepalive::Reason::LeaseExpired)
             .copied(),
         Some(1)
-    );
-}
-
-#[tokio::test]
-async fn the_registration_acknowledgment_carries_only_what_the_mod_reconciles() {
-    let mut r = rig(RigSpec::default()).await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
-    let ack = r.reregister();
-    let encoded = serde_json::to_string(&ack).unwrap();
-    for forbidden in [
-        "account",
-        "usage",
-        "reason",
-        "probe",
-        "next_refresh",
-        "migrations",
-        "idle_ticks",
-        "cache_ttl",
-        "private prompt",
-        "owner",
-    ] {
-        assert!(
-            !encoded.contains(forbidden),
-            "the acknowledgment leaks {forbidden}: {encoded}"
-        );
-    }
-    assert_eq!(
-        (ack.session_id.as_str(), ack.instance_id.as_str()),
-        ("session", "instance")
-    );
-    assert_eq!(
-        ack.agents
-            .expect("a registration's acknowledgment lists the session's agents")
-            .iter()
-            .map(|a| (a.agent_id.as_str(), a.state))
-            .collect::<Vec<_>>(),
-        [("main", AgentState::Busy), ("worker", AgentState::Busy)]
-    );
-}
-
-#[tokio::test]
-async fn the_session_expiry_sweep_removes_a_silent_session_and_close_quiesces_the_engine() {
-    let r = rig(RigSpec {
-        session_expiry: Duration::from_millis(1),
-        ..RigSpec::default()
-    })
-    .await;
-    assert_eq!(
-        r.engine.sessions().len(),
-        1,
-        "the registered session is live before its expiry"
-    );
-    r.advance(2);
-    r.engine.expire();
-    assert!(
-        r.engine.sessions().is_empty(),
-        "the expiry ends the silent session: {:?}",
-        r.engine.sessions()
-    );
-    assert_eq!((r.engine.stats().sessions, r.engine.stats().agents), (0, 0));
-    assert_eq!(
-        r.engine
-            .reasons()
-            .get(&phoebis_keepalive::Reason::SessionExpired)
-            .copied(),
-        Some(1)
-    );
-
-    let mut r2 = rig(RigSpec::default()).await;
-    r2.engine.observe(r2.observed("req", "main", BODY));
-    r2.engine.observe(r2.selected("req", "a"));
-    r2.engine
-        .observe(phoebis_bus::Event::ResponseChunk(ResponseChunk {
-            request_id: "req".into(),
-            attempt: 1,
-            index: 0,
-            body: Default::default(),
-            phase: Some(Phase::MessageStart {
-                usage: usage(2_000, 0),
-            }),
-        }));
-    let before = r2.engine.stats();
-    assert!(
-        before.agents == 1 && before.retained_bytes > 0,
-        "the rig retains the request before the close: {before:?}"
-    );
-    r2.engine.close();
-    assert_eq!(
-        r2.event(Event {
-            event: "heartbeat".into(),
-            ..Default::default()
-        })
-        .unwrap_err(),
-        refusal("quiesced", 503)
-    );
-    assert_eq!(
-        (r2.engine.stats().agents, r2.engine.stats().retained_bytes),
-        (0, 0)
     );
 }

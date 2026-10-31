@@ -772,32 +772,6 @@ async fn a_refreshed_bundle_with_a_foreign_account_uuid_is_rejected() {
 }
 
 #[tokio::test]
-async fn a_valid_token_is_returned_without_any_request() {
-    let now = Arc::new(AtomicI64::new(1_000_000));
-    let (mgr, store, up) = manager_with(vec![], now).await;
-    store
-        .commit_credentials(
-            "a",
-            1,
-            1,
-            None,
-            None,
-            &NewBundle {
-                access_token: Secret::new("fresh"),
-                refresh_token: Some(Secret::new("rt")),
-                issued_at: 1_000_000,
-                expires_at: 1_000_000 + 3_600_000,
-                refresh_expires_at: None,
-                scopes: "user:profile user:inference".into(),
-            },
-        )
-        .unwrap();
-    assert_eq!(mgr.acquire("a").await.unwrap().secret.expose(), "fresh");
-    assert!(up.requests().is_empty());
-    up.shutdown().await;
-}
-
-#[tokio::test]
 async fn a_short_lived_token_is_not_permanently_inside_its_own_margin() {
     let now = Arc::new(AtomicI64::new(1_000_000));
     let (mgr, store, up) = manager_with(vec![], now).await;

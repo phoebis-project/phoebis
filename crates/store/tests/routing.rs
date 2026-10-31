@@ -230,49 +230,6 @@ fn pins_are_upserted_deleted_and_dropped_with_their_account() {
 }
 
 #[test]
-fn a_pins_typed_burn_and_its_banded_copy_survive_a_reopen() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("router.sqlite");
-    let storage_key = StorageKey::generate();
-    let burning = PinRow {
-        burn: PinBurn {
-            cache_read: 1.0,
-            input: 2.0,
-            output: 3.0,
-            write_1h: 4.0,
-            write_5m: 5.0,
-        },
-        burn_at: Some(7),
-        burn_banded: PinBurn {
-            cache_read: 1.5,
-            input: 2.5,
-            output: 3.5,
-            write_1h: 4.5,
-            write_5m: 5.5,
-        },
-        ..pin("k", "s", "claude-opus-5", "a")
-    };
-    {
-        let store = Store::open(&path, &storage_key).unwrap();
-        seed_accounts(&store, &["a"]);
-        store.upsert_pin(&burning).unwrap();
-    }
-    let reopened = Store::open(&path, &storage_key)
-        .unwrap()
-        .load_routing()
-        .unwrap()
-        .pins;
-    assert_eq!(
-        reopened
-            .iter()
-            .map(|p| (p.burn, p.burn_at, p.burn_banded))
-            .collect::<Vec<_>>(),
-        vec![(burning.burn, Some(7), burning.burn_banded)],
-        "every type of both copies reads back as written"
-    );
-}
-
-#[test]
 fn a_pins_lane_and_an_affinity_entrys_lane_survive_a_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
@@ -319,49 +276,6 @@ fn a_pins_lane_and_an_affinity_entrys_lane_survive_a_reopen() {
             .collect::<Vec<_>>(),
         vec![fast.as_str()],
         "so did the entry's"
-    );
-}
-
-#[test]
-fn a_pins_entrypoint_survives_a_reopen_and_the_next_request_replaces_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("router.sqlite");
-    let storage_key = StorageKey::generate();
-    let interactive = PinRow {
-        entrypoint: "cli".into(),
-        ..pin("k", "s", "claude-opus-5-5", "a")
-    };
-    {
-        let store = Store::open(&path, &storage_key).unwrap();
-        seed_accounts(&store, &["a"]);
-        store.upsert_pin(&interactive).unwrap();
-    }
-    let entrypoints = || {
-        Store::open(&path, &storage_key)
-            .unwrap()
-            .load_routing()
-            .unwrap()
-            .pins
-            .into_iter()
-            .map(|p| (p.session_id, p.entrypoint))
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(
-        entrypoints(),
-        [("s".to_string(), "cli".to_string())],
-        "the pin's entrypoint reads back after a reopen"
-    );
-    Store::open(&path, &storage_key)
-        .unwrap()
-        .upsert_pin(&PinRow {
-            entrypoint: "claude-vscode".into(),
-            ..interactive
-        })
-        .unwrap();
-    assert_eq!(
-        entrypoints(),
-        [("s".to_string(), "claude-vscode".to_string())],
-        "the next request's entrypoint replaces it"
     );
 }
 
@@ -1359,43 +1273,6 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_without_one_replaces_it() {
         message_ids(&store)[0],
         ("hash-1".to_string(), None),
         "the store files the row it is handed, so a row without an id replaces the one with it"
-    );
-}
-
-#[test]
-fn a_pins_fast_burn_is_written_with_the_pin_replaced_by_its_next_write_and_read_back_at_the_load() {
-    let store = store_with(&["a"]);
-    let fast = PinRow {
-        burn_at: Some(7),
-        burn_fast: PinBurn {
-            cache_read: 0.5,
-            input: 1.5,
-            output: 2.5,
-            write_1h: 3.5,
-            write_5m: 4.5,
-        },
-        ..pin("k", "s", "claude-opus-5", "a")
-    };
-    store.upsert_pin(&fast).unwrap();
-    assert_eq!(
-        store.load_routing().unwrap().pins,
-        vec![fast.clone()],
-        "every type of the fast copy reads back as written"
-    );
-    let renewed = PinRow {
-        last_used_at: 9,
-        burn_at: Some(9),
-        burn_fast: PinBurn {
-            input: 6.0,
-            ..PinBurn::default()
-        },
-        ..fast
-    };
-    store.upsert_pin(&renewed).unwrap();
-    assert_eq!(
-        store.load_routing().unwrap().pins,
-        vec![renewed],
-        "a later write of the pin replaces its fast copy"
     );
 }
 

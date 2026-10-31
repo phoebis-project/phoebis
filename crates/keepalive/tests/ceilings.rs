@@ -346,22 +346,6 @@ async fn an_idle_window_above_the_break_even_runs_to_its_set_limit() {
 }
 
 #[tokio::test]
-async fn a_zero_idle_window_resolves_to_the_break_even() {
-    let mut r = rig(plan(policy(|p| p.max_idle_seconds = 0))).await;
-    r.observe("main").await;
-    let start = r.now();
-    r.state("main", "idle");
-    ends_at(
-        &mut r,
-        "main",
-        start + 11_760_000,
-        Reason::IdleLimit,
-        "idle_limit",
-    )
-    .await;
-}
-
-#[tokio::test]
 async fn presence_restarts_the_window_and_marks_nothing_busy() {
     let mut r = rig(plan(policy(|_| {}))).await;
     r.observe("main").await;

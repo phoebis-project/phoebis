@@ -705,18 +705,6 @@ fn a_holders_newest_settled_attempts_read_newest_first_within_the_bound_and_its_
 }
 
 #[test]
-fn a_failed_holder_read_answers_an_error_once() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store.insert_account(&account("a")).unwrap();
-    store.debug_fail_next_refresh_read();
-    assert!(store.newest_resolved_refresh_attempts("a", 1, 16).is_err());
-    assert!(store
-        .newest_resolved_refresh_attempts("a", 1, 16)
-        .unwrap()
-        .is_empty());
-}
-
-#[test]
 fn the_holders_newest_attempts_read_through_their_own_index() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");

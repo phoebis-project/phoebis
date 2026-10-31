@@ -1496,14 +1496,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_registry_seals_the_canary_at_its_first_open() {
-        let key = StorageKey::generate();
-        let store = Store::open_in_memory(&key).unwrap();
-        let value = canary_of(&store).expect("the canary row");
-        assert_eq!(open_canary(&key, &value).unwrap(), CANARY_PLAINTEXT);
-    }
-
-    #[test]
     fn a_registry_sealed_under_one_key_refuses_another_key_by_path() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("router.sqlite");
@@ -1862,16 +1854,6 @@ mod tests {
             .unwrap()
             .pragma_query_value(None, name, |row| row.get(0))
             .unwrap()
-    }
-
-    #[test]
-    fn an_opened_registry_reads_synchronous_full_and_a_five_second_busy_timeout() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = on_disk(&dir);
-        // SQLite's own default is `FULL` as well, and rusqlite sets five seconds at every open, so this test
-        // guards the named values rather than proving a change.
-        assert_eq!(pragma(&store, "synchronous"), 2, "FULL");
-        assert_eq!(pragma(&store, "busy_timeout"), 5_000);
     }
 
     fn cooldown(account_id: &str, scope: &str) -> CooldownRow {

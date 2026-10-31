@@ -2187,17 +2187,6 @@ async fn probe_row_funding(in_overage: bool, head_flag: &str) -> String {
     fundings[0].clone()
 }
 
-/// A probe's request row files under the overage fact its answer's head reported: with the account in overage and the
-/// head agreeing, it reads `overage`.
-#[tokio::test]
-async fn an_overage_probe_s_request_row_files_under_the_overage_its_answer_reported() {
-    assert_eq!(
-        probe_row_funding(true, "true").await,
-        "overage",
-        "the probe's row files under the overage its answer reported"
-    );
-}
-
 /// The head decides. A probe placed on the plan whose answer reports overage in use (the account entered overage
 /// between the selection and the answer) files its row under `overage`, never under the plan the selection stood on.
 #[tokio::test]

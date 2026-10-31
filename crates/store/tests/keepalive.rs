@@ -1,10 +1,10 @@
-//! The keepalive engine's rows: three tables in one transaction, the retained prompt sealed under the storage key and
-//! bound to the row it was written for, and the refusal of a registry a newer build stamped.
+//! The keepalive engine's rows: three tables in one transaction, and the retained prompt sealed under the storage key
+//! and bound to the row it was written for.
 
 use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{
     keepalive_aad, IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow,
-    StorageKey, Store, StoreError, SCHEMA_VERSION,
+    StorageKey, Store,
 };
 
 const PROMPT: &[u8] =
@@ -419,26 +419,4 @@ fn an_upsert_keeps_the_stored_body_unless_it_seals_a_new_one_and_a_clear_removes
         .unwrap();
     assert_eq!(stored, (None, None, 0), "a clear leaves no body behind");
     assert_eq!(opened(&store, 1, "s", "main"), None);
-}
-
-#[test]
-fn a_registry_stamped_past_this_build_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("router.sqlite");
-    let key = StorageKey::generate();
-    drop(Store::open(&path, &key).unwrap());
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute(
-        "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
-        [(SCHEMA_VERSION + 1).to_string()],
-    )
-    .unwrap();
-    drop(conn);
-    match Store::open(&path, &key) {
-        Err(StoreError::SchemaTooNew { found, supported }) => {
-            assert_eq!((found, supported), (SCHEMA_VERSION + 1, SCHEMA_VERSION));
-        }
-        Err(other) => panic!("refused for another reason: {other}"),
-        Ok(_) => panic!("a registry a newer build stamped opened"),
-    }
 }

@@ -357,27 +357,6 @@ async fn a_probe_built_from_a_placeholder_request_carries_the_placeholder_and_th
     );
 }
 
-/// The decoded `system[0].text` of `body`, its billing line.
-fn billing_line(body: &[u8]) -> String {
-    let root: serde_json::Value = serde_json::from_slice(body).unwrap();
-    root["system"][0]["text"].as_str().unwrap().to_string()
-}
-
-/// Signing a placeholder is the relay's call over a line it restored, never the recipe's, so the recipe keeps a
-/// client-sent placeholder line as the client wrote it. The relay's side is
-/// `a_client_sent_placeholder_on_a_full_shape_line_is_relayed_intact` in the relay's restoration suite.
-#[test]
-fn the_recipe_keeps_a_client_sent_placeholder_line() {
-    let body = placeholder_body();
-    let recipe =
-        phoebis_keepalive::make_recipe(&[], body.as_bytes(), "claude-sonnet-4-5", 1 << 20).unwrap();
-    assert_eq!(
-        billing_line(&recipe.body),
-        billing_line(body.as_bytes()),
-        "the recipe keeps the client's line"
-    );
-}
-
 #[tokio::test]
 async fn a_heartbeat_does_not_reset_idle_or_refresh() {
     let mut r = rig(RigSpec {
@@ -1263,120 +1242,6 @@ async fn a_rewrite_still_counts_toward_the_cold_probe_limit() {
     );
 }
 
-#[tokio::test]
-async fn probe_outcomes_are_classified() {
-    for (name, respond, reason, armed) in [
-        (
-            "missing_usage",
-            json(200, r#"{"id":"m","type":"message","content":[]}"#),
-            Reason::InvalidProbeUsage,
-            false,
-        ),
-        (
-            "output",
-            json(
-                200,
-                r#"{"id":"m","type":"message","content":[],"usage":{"cache_read_input_tokens":2000,"output_tokens":1}}"#,
-            ),
-            Reason::UnexpectedOutput,
-            false,
-        ),
-        (
-            "partial",
-            probe_answer(100, 0),
-            Reason::PartialCacheCoverage,
-            false,
-        ),
-        // The 503's first rung would land at the five-minute entry's expiry, so the ladder pauses at once.
-        (
-            "server",
-            json(
-                503,
-                r#"{"type":"error","error":{"type":"api_error","message":"x"}}"#,
-            ),
-            Reason::ProbeRetryLimit,
-            false,
-        ),
-        (
-            "unsupported",
-            json(
-                400,
-                r#"{"type":"error","error":{"type":"invalid_request_error","message":"x"}}"#,
-            ),
-            Reason::UnsupportedProbe,
-            false,
-        ),
-    ] {
-        let mut r = rig(RigSpec::default()).await;
-        r.observe("main").await;
-        r.up.push_credential_rule(A, "/v1/messages", respond);
-        r.advance(270_000);
-        r.step().await;
-        let status = r.status("main");
-        assert_eq!(
-            (name, status.reason, status.next_probe_at.is_some()),
-            (name, reason, armed),
-            "{status:?}"
-        );
-    }
-    // An upstream 401 never reaches the engine as a 401: the relay marks the account, fails over, and with no
-    // account left answers the untimed exhaustion 503 naming the mark, which pauses under the authentication
-    // reason.
-    let mut r = rig(RigSpec {
-        accounts: vec![api_key("a", A, 0)],
-        ..RigSpec::default()
-    })
-    .await;
-    r.observe("main").await;
-    r.up.push_credential_rule(
-        A,
-        "/v1/messages",
-        json(
-            401,
-            r#"{"type":"error","error":{"type":"authentication_error","message":"x"}}"#,
-        ),
-    );
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").reason, r.status("main").next_probe_at),
-        (Reason::ProbeAuthenticationError, None)
-    );
-    // A 429 on every account is the relay's exhaustion 429, read as a single 429 after failover is. Its first rung
-    // would land at the five-minute entry's expiry, so the ladder pauses at once.
-    let mut r = rig(RigSpec::default()).await;
-    r.observe("main").await;
-    r.up.push_credential_rule(
-        A,
-        "/v1/messages",
-        relay_common::json_429_unified(4_600, "five_hour"),
-    );
-    r.up.push_credential_rule(
-        B,
-        "/v1/messages",
-        relay_common::json_429_unified(4_600, "five_hour"),
-    );
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").reason, r.status("main").next_probe_at),
-        (Reason::ProbeRetryLimit, None)
-    );
-    r.advance(5_000_000);
-    r.step().await;
-    assert_eq!(
-        r.engine.reasons().get(&Reason::ProbeRetryLimit).copied(),
-        Some(1),
-        "no probe ran again after the ladder's pause"
-    );
-    r.observe("main").await;
-    assert_eq!(
-        r.status("main").reason,
-        Reason::Scheduled,
-        "a real request re-arms the agent"
-    );
-}
-
 /// The relay answers a probe without the session header with its 403 `client_contract`, which refuses the probe's
 /// own request shape rather than the credential, so the recipe pauses under `UnsupportedProbe` and not under the
 /// authentication reason the status alone would pick.
@@ -1479,6 +1344,12 @@ async fn a_probe_exhaustion_pauses_the_recipe_and_a_gate_hold_leaves_it_armed() 
     );
     // Past the accounts' reset the next real request selects one again.
     r.advance(5_000_000);
+    r.step().await;
+    assert_eq!(
+        r.engine.reasons().get(&Reason::ProbeRetryLimit).copied(),
+        Some(1),
+        "no probe ran again after the ladder's pause"
+    );
     r.observe("main").await;
     let status = r.status("main");
     assert_eq!(
@@ -1567,15 +1438,6 @@ async fn a_probe_on_a_pin_whose_subscription_ended_holds_the_agent_and_keeps_the
             .iter()
             .any(|p| p.session_id == "session" && p.account_id == "a"),
         "the pin still names a"
-    );
-}
-
-/// The word a stored probe row and the analytics read for a probe the engine's shutdown or quiesce ended.
-#[test]
-fn a_probe_the_engine_ended_in_flight_is_filed_under_the_word_canceled() {
-    assert_eq!(
-        phoebis_keepalive::ProbeOutcome::Canceled.as_str(),
-        "canceled"
     );
 }
 

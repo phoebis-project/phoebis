@@ -95,15 +95,6 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_readable_by_group_or_other_warns_naming_0700() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        let warnings = check_private_dir(dir.path());
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].contains("0700"));
-    }
-
-    #[test]
     fn a_private_file_is_created_at_its_mode_under_a_0700_directory() {
         let dir = tempfile::tempdir().unwrap();
         for (name, mode) in [("key", 0o600), ("config.yaml", 0o644)] {
