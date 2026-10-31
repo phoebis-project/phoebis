@@ -1290,16 +1290,7 @@ async fn a_window_sampled_without_an_end_leads_by_its_utilization_less_the_share
     let cookie = login(&parts.app, "admin-secret").await;
     seed_five_hour(&parts, Some(0.62));
     let window = five_hour_of(&parts, &cookie).await;
-    let elapsed =
-        phoebis_routing::elapsed_share_at("five_hour", Some(FIVE_HOUR_RESET), None, common::NOW);
     let lead = window["lead"].as_f64().expect("a lead to the reset");
-    assert_eq!(
-        lead,
-        0.62 - elapsed,
-        "the paced share runs to the reset: {window}"
-    );
-    // The figure on its own, so an error inside the shared arithmetic fails here too: 0.62 used with four of the
-    // window's five hours run.
     assert!(
         (lead - -0.18).abs() < 1e-9,
         "0.62 used four fifths of the way through the window leads by -0.18: {lead}"
@@ -1327,16 +1318,11 @@ async fn a_canceled_end_inside_the_window_answers_a_smaller_lead() {
         200
     );
     let window = five_hour_of(&parts, &cookie).await;
-    let elapsed = phoebis_routing::elapsed_share_at(
-        "five_hour",
-        Some(FIVE_HOUR_RESET),
-        Some(end),
-        common::NOW,
-    );
     let lead = window["lead"].as_f64().expect("a lead to the end");
-    assert_eq!(
-        lead,
-        0.62 - elapsed,
+    // The window started four hours ago and the end is half an hour on, so four of its four and a half hours have
+    // run: 0.62 less 8/9 is -0.26888...
+    assert!(
+        (lead - -0.26888888889).abs() < 1e-9,
         "the paced share runs to the end, half an hour before the reset: {window}"
     );
     assert!(
@@ -1674,9 +1660,13 @@ async fn a_combined_account_patch_lands_whole_in_one_revision() {
         .status(),
         201
     );
-    let revision = |id: &str| store.account(id).unwrap().unwrap().revision;
+    let account = |id: &'static str| {
+        let (app, cookie) = (&app, &cookie);
+        async move { json(get(app, &format!("/admin/accounts/{id}"), Some(cookie)).await).await }
+    };
+    let revision = |account: &serde_json::Value| account["revision"].as_u64().unwrap();
 
-    let before = revision("business");
+    let before = revision(&account("business").await);
     let labelled = patch(
         &app,
         "/admin/accounts/business",
@@ -1685,14 +1675,18 @@ async fn a_combined_account_patch_lands_whole_in_one_revision() {
     )
     .await;
     assert_eq!(labelled.status(), 200);
-    let row = store.account("business").unwrap().unwrap();
+    let row = account("business").await;
     assert_eq!(
-        (row.label.as_str(), row.enabled, row.revision),
-        ("Renamed", false, before + 1),
+        (
+            row["label"].as_str(),
+            row["enabled"].as_bool(),
+            revision(&row)
+        ),
+        (Some("Renamed"), Some(false), before + 1),
         "a label with enabled"
     );
 
-    let before = revision("direct");
+    let before = revision(&account("direct").await);
     let keyed = patch(
         &app,
         "/admin/accounts/direct",
@@ -1701,7 +1695,7 @@ async fn a_combined_account_patch_lands_whole_in_one_revision() {
     )
     .await;
     assert_eq!(keyed.status(), 200);
-    let row = store.account("direct").unwrap().unwrap();
+    let row = account("direct").await;
     assert_eq!(
         (
             store
@@ -1711,14 +1705,14 @@ async fn a_combined_account_patch_lands_whole_in_one_revision() {
                 .0
                 .expose()
                 .to_string(),
-            row.enabled,
-            row.revision
+            row["enabled"].as_bool(),
+            revision(&row)
         ),
-        ("sk-ant-api03-REPLACED".to_string(), false, before + 1),
+        ("sk-ant-api03-REPLACED".to_string(), Some(false), before + 1),
         "a verified secret with enabled"
     );
 
-    let before = revision("team");
+    let before = revision(&account("team").await);
     let canceled = patch(
         &app,
         "/admin/accounts/team",
@@ -1727,11 +1721,15 @@ async fn a_combined_account_patch_lands_whole_in_one_revision() {
     )
     .await;
     assert_eq!(canceled.status(), 200);
-    let row = store.account("team").unwrap().unwrap();
-    let term = store.subscription_term("team").unwrap().unwrap();
+    let row = account("team").await;
     assert_eq!(
-        (row.enabled, term.canceled, term.ends_at, row.revision),
-        (false, true, Some(2_000_000), before + 1),
+        (
+            row["enabled"].as_bool(),
+            row["canceled"].as_bool(),
+            row["subscription"]["ends_at"].as_i64(),
+            revision(&row)
+        ),
+        (Some(false), Some(true), Some(2_000_000), before + 1),
         "enabled with a cancellation and its end"
     );
 }
@@ -2256,17 +2254,11 @@ async fn the_account_view_warns_on_a_tier_it_cannot_read_and_answers_as_if_no_su
     let text = captured.text();
     let warned: Vec<&str> = text
         .lines()
-        .filter(|line| {
-            line.contains(
-                "the account's tier could not be read, so the view answers as if no subscription were stored",
-            )
-        })
+        .filter(|line| line.contains(" WARN ") && line.contains("account=business"))
         .collect();
     assert_eq!(warned.len(), 1, "{text}");
     assert!(
-        warned[0].contains(" WARN ")
-            && warned[0].contains("account=business")
-            && warned[0].contains("no such column: subscription_tier"),
+        warned[0].contains("no such column: subscription_tier"),
         "{}",
         warned[0]
     );

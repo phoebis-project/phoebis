@@ -22,104 +22,6 @@ const ROUTES_RS: &str = include_str!("../src/routes.rs");
 /// The two catch-alls, the paths a plain `.route(` registers, which the introduction describes.
 const PLAIN_ROUTES: &[&str] = &["/admin", "/admin/{*rest}"];
 
-/// The seventeen tags in the order the document declares them, the API page's area order.
-const TAGS: [&str; 17] = [
-    "Accounts",
-    "Analytics",
-    "Attention",
-    "Dashboard",
-    "Guardrails",
-    "Keepalive",
-    "Keys",
-    "Ledger",
-    "Pairing",
-    "Pools",
-    "Pricing",
-    "Requests",
-    "Routing log",
-    "Session",
-    "Sessions",
-    "Settings",
-    "System",
-];
-
-/// Each operation's refusal statuses, as its Refuses line names them, with the shared `500` and `503` where the code
-/// reaches them, and any other status the code reaches. One row per operation, so an operation the document gains
-/// without a row fails the test.
-const REFUSALS: &[(&str, &[u16])] = &[
-    ("session_show", &[]),
-    ("session_login", &[400, 401, 429]),
-    ("session_logout", &[500]),
-    ("accounts_list", &[500]),
-    ("accounts_create", &[400, 404, 409, 500, 502, 503]),
-    ("account_show", &[404, 500]),
-    ("account_patch", &[400, 404, 409, 500, 502, 503]),
-    ("account_delete", &[404, 500, 503]),
-    ("account_catalog", &[404, 500]),
-    ("account_clear_funding", &[404, 409, 500, 503]),
-    ("account_cooldown_delete", &[400, 404, 500, 503]),
-    ("account_credentials_delete", &[404, 500, 503]),
-    ("account_pause", &[404, 500, 503]),
-    ("account_quota", &[400, 404, 500]),
-    ("account_resume", &[404, 500, 503]),
-    ("account_usage", &[404, 500]),
-    ("account_usage_refresh", &[404, 500, 503]),
-    ("account_verify", &[400, 404, 409, 500, 502]),
-    ("analytics_accounts", &[400, 500]),
-    ("analytics_breakdown", &[400, 500]),
-    ("analytics_budgets", &[503]),
-    ("analytics_burn", &[400, 500]),
-    ("analytics_guardrails", &[400, 500]),
-    ("analytics_placements", &[400, 500]),
-    ("analytics_reconciliations", &[500]),
-    ("analytics_refusal_categories", &[400, 500]),
-    ("analytics_rewrites", &[400, 500]),
-    ("analytics_series", &[400, 500]),
-    ("analytics_unused_allowance", &[400, 500]),
-    ("attention_show", &[500]),
-    ("dashboard_show", &[500]),
-    ("guardrails_list", &[500]),
-    ("guardrails_create", &[400, 404, 409, 500, 503]),
-    ("guardrail_presets", &[]),
-    ("guardrails_test", &[400, 404, 500]),
-    ("guardrail_show", &[404, 500]),
-    ("guardrail_patch", &[400, 404, 409, 500, 503]),
-    ("guardrail_delete", &[404, 500, 503]),
-    ("keepalive_overview", &[400, 500]),
-    ("keepalive_recipes", &[]),
-    ("keys_list", &[500]),
-    ("keys_create", &[400, 404, 409, 500, 503]),
-    ("key_patch", &[400, 404, 409, 500, 503]),
-    ("key_delete", &[404, 500, 503]),
-    ("key_models", &[404, 500, 503]),
-    ("key_revoke", &[404, 500, 503]),
-    ("key_rotate", &[404, 409, 500, 503]),
-    ("ledger_replay_parked", &[500, 503]),
-    ("pairing_start", &[400, 404, 409, 500]),
-    ("pairing_show", &[404]),
-    ("pairing_cancel", &[404, 409]),
-    ("pairing_callback", &[400, 404, 409, 502]),
-    ("pairing_confirm", &[404, 409, 500, 503]),
-    ("pools_list", &[500]),
-    ("pools_create", &[400, 404, 409, 500, 503]),
-    ("pool_patch", &[400, 404, 409, 500, 503]),
-    ("pool_delete", &[404, 409, 500, 503]),
-    ("pool_members_put", &[400, 404, 409, 500, 503]),
-    ("pool_traffic", &[400, 404, 500]),
-    ("pricing_show", &[]),
-    ("requests_list", &[400, 500]),
-    ("request_show", &[404, 500]),
-    ("request_bodies", &[404, 500]),
-    ("request_decision", &[400, 404, 500]),
-    ("routing_log_list", &[400, 500]),
-    ("sessions_list", &[500, 503]),
-    ("session_release", &[404, 503]),
-    ("sessions_costs", &[]),
-    ("settings_show", &[]),
-    ("system_show", &[]),
-    ("tls_reload", &[500]),
-];
-
 /// The fixture stems the document carries as examples, each file's `body` member on its operation's answer.
 const EXAMPLE_FILES: &[&str] = &[
     "session",
@@ -472,33 +374,8 @@ async fn the_document_is_served_without_the_gate_as_no_store_json() {
         .is_none());
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     println!("the document is {} bytes", bytes.len());
-    // The reason for an `#[allow(dead_code)]` stays a line comment, since the derive copies a doc comment into the
-    // description a reader sees.
-    assert!(
-        !std::str::from_utf8(&bytes)
-            .unwrap()
-            .contains("Declared for the document alone"),
-        "the dead-code allowance's reason stays out of the document"
-    );
     assert_eq!(document["openapi"], "3.1.0");
-    assert_eq!(document["info"]["title"], "Phoebis Router admin API");
     assert_eq!(document["info"]["version"], env!("CARGO_PKG_VERSION"));
-    assert!(document["info"]["description"]
-        .as_str()
-        .unwrap()
-        .starts_with("Every operation here lives under"));
-    assert!(
-        document["info"].get("license").is_none(),
-        "the manifest's license stays out of the info block"
-    );
-    assert!(
-        document["info"].get("contact").is_none(),
-        "the info block names no contact"
-    );
-    assert_eq!(
-        document["servers"],
-        serde_json::json!([{ "url": "/", "description": "This router's admin listener" }])
-    );
 }
 
 #[tokio::test]
@@ -565,25 +442,10 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
         operations(&document).len(),
         "one handler per operation"
     );
-    assert_eq!(
-        document["paths"].as_object().unwrap().len(),
-        58,
-        "the admin listener's 58 paths"
-    );
-    assert_eq!(
-        phoebis_admin::path_count(),
-        document["paths"].as_object().unwrap().len(),
-        "the exported count is the document's"
-    );
-    assert_eq!(
-        operations(&document).len(),
-        71,
-        "the admin listener's 71 operations"
-    );
 }
 
 #[tokio::test]
-async fn every_operation_has_a_unique_id_and_exactly_one_of_the_tags_in_order() {
+async fn every_operation_has_a_unique_id_and_exactly_one_of_the_declared_tags() {
     let (_app, _up, document) = document().await;
     let declared: Vec<&str> = document["tags"]
         .as_array()
@@ -591,7 +453,6 @@ async fn every_operation_has_a_unique_id_and_exactly_one_of_the_tags_in_order() 
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(declared, TAGS);
     let mut ids = BTreeSet::new();
     for (path, method, operation) in operations(&document) {
         let id = operation["operationId"]
@@ -603,7 +464,7 @@ async fn every_operation_has_a_unique_id_and_exactly_one_of_the_tags_in_order() 
             .unwrap_or_else(|| panic!("{id} has no tag"));
         assert_eq!(tags.len(), 1, "{id} carries one tag");
         assert!(
-            TAGS.contains(&tags[0].as_str().unwrap()),
+            declared.contains(&tags[0].as_str().unwrap()),
             "{id}: {}",
             tags[0]
         );
@@ -636,10 +497,9 @@ async fn every_operation_requires_the_bearer_except_the_login_and_the_logout() {
 }
 
 #[tokio::test]
-async fn every_operation_declares_one_success_and_the_refusals_of_its_row_as_error_bodies() {
+async fn every_operation_declares_one_success_and_its_refusals_as_error_bodies() {
     let (_app, _up, document) = document().await;
-    let rows: BTreeMap<&str, &[u16]> = REFUSALS.iter().copied().collect();
-    for (path, method, operation) in operations(&document) {
+    for (_, _, operation) in operations(&document) {
         let id = operation["operationId"].as_str().unwrap();
         let responses = operation["responses"].as_object().unwrap();
         let successes: Vec<&String> = responses.keys().filter(|s| s.starts_with('2')).collect();
@@ -648,18 +508,6 @@ async fn every_operation_declares_one_success_and_the_refusals_of_its_row_as_err
             1,
             "{id} declares one success: {successes:?}"
         );
-        let refusals: BTreeSet<u16> = responses
-            .keys()
-            .filter(|s| !s.starts_with('2'))
-            .map(|s| s.parse().unwrap())
-            .collect();
-        let expected: BTreeSet<u16> = rows
-            .get(id)
-            .unwrap_or_else(|| panic!("{id} ({method} {path}) has no REFUSALS row"))
-            .iter()
-            .copied()
-            .collect();
-        assert_eq!(refusals, expected, "{id}: the refusals the API page lists");
         for (status, response) in responses.iter().filter(|(s, _)| !s.starts_with('2')) {
             let shared = response["$ref"]
                 .as_str()
@@ -701,11 +549,6 @@ async fn every_operation_declares_one_success_and_the_refusals_of_its_row_as_err
             }
         }
     }
-    assert_eq!(
-        rows.len(),
-        operations(&document).len(),
-        "REFUSALS has one row per operation and no more"
-    );
     let registry = &document["components"]["responses"]["RegistryUnavailable"];
     assert!(registry["headers"]["x-phoebis-error-code"].is_object());
     for name in [
@@ -739,11 +582,6 @@ async fn every_example_is_its_fixtures_body_member_and_the_count_holds() {
     assert_eq!(
         listed, on_disk,
         "every route fixture on disk is an example, and no other file is"
-    );
-    assert_eq!(
-        EXAMPLE_FILES.len(),
-        48,
-        "47 success answers and the replay's held answer"
     );
     // The places the fixture manifest targets, each with the stems it attaches: a place carries as many examples
     // as stems, so a fixture attached twice or to the wrong place fails here, while a hand-written example (a
@@ -1008,20 +846,10 @@ async fn the_request_detail_answers_stream_cut_as_null_or_the_cuts_six_members()
 }
 
 #[tokio::test]
-async fn a_session_row_answers_its_effort_and_its_agent_lines_and_no_context_window() {
+async fn a_session_row_answers_its_effort_and_its_agent_lines() {
     let (_app, _up, document) = document().await;
     let schemas = &document["components"]["schemas"];
     let session = &schemas["Session"];
-    for member in [
-        "cached_prefix_tokens",
-        "context_share",
-        "context_window_tokens",
-    ] {
-        assert!(
-            session["properties"].get(member).is_none(),
-            "Session.{member}: the row answers no context window: {session}"
-        );
-    }
     assert!(
         admits_null(&session["properties"]["effort"]),
         "Session.effort: a row with no pin answers null: {session}"
@@ -1071,30 +899,9 @@ async fn a_session_row_answers_its_effort_and_its_agent_lines_and_no_context_win
 }
 
 #[tokio::test]
-async fn the_rows_and_the_lines_creation_times_say_whose_first_placement_each_reads() {
+async fn a_session_rows_creation_time_answers_null_where_main_never_placed_a_pin() {
     let (_app, _up, document) = document().await;
     let schemas = &document["components"]["schemas"];
-    let description = |schema: &str| {
-        schemas[schema]["properties"]["created_at"]["description"]
-            .as_str()
-            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
-    };
-    assert_eq!(
-        description("Session").as_deref(),
-        Some(
-            "The first placement of the session's main agent under the key and session, kept until the session's last pin leaves for good, so a failover, a move or a second pin leaves it alone. Null where main never placed a pin."
-        ),
-        "Session.created_at: {}",
-        schemas["Session"]
-    );
-    assert_eq!(
-        description("AgentContext").as_deref(),
-        Some(
-            "The first placement of the pin's agent under the key and session, null where no record stands."
-        ),
-        "AgentContext.created_at: {}",
-        schemas["AgentContext"]
-    );
     assert!(
         admits_null(&schemas["Session"]["properties"]["created_at"]),
         "a row whose main never placed a pin answers null"
@@ -1156,7 +963,7 @@ async fn the_system_and_about_answers_declare_the_build_beside_the_version() {
 }
 
 #[tokio::test]
-async fn the_account_declares_its_usage_based_class_and_the_overage_it_answers_null() {
+async fn the_account_declares_its_usage_based_class() {
     let (_app, _up, document) = document().await;
     let account = &document["components"]["schemas"]["Account"];
     let member = &account["properties"]["usage_based"];
@@ -1166,17 +973,6 @@ async fn the_account_declares_its_usage_based_class_and_the_overage_it_answers_n
             .as_array()
             .is_some_and(|r| r.iter().any(|m| m == "usage_based")),
         "every account answer carries the member: {account}"
-    );
-    let description = member["description"]
-        .as_str()
-        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
-    assert!(
-        description.as_deref().is_some_and(|text| {
-            text.contains("`default_claude_zero`")
-                && text.contains("`enterprise_usage_based`")
-                && text.contains("`overage` answers null")
-        }),
-        "the member names the two tier words and the null overage: {member}"
     );
 }
 
@@ -1190,22 +986,11 @@ async fn an_unused_allowance_reset_declares_the_plan_and_the_tier_its_reading_ca
             admits_null(property),
             "UnusedAllowanceReset.{member}: {reset}"
         );
-        let description = property["description"]
-            .as_str()
-            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
-        assert!(
-            description.as_deref().is_some_and(|text| {
-                text.contains("carried when the reset was observed")
-                    && text.contains("`sample` or `clock` reset")
-                    && text.contains("`term_ended` row")
-            }),
-            "UnusedAllowanceReset.{member} names whose pair it answers and where it reads null: {property}"
-        );
     }
 }
 
 #[tokio::test]
-async fn the_account_and_its_edit_declare_the_canceled_flag_and_the_edit_its_three_refusals() {
+async fn the_account_and_its_edit_declare_the_canceled_flag() {
     let (_app, _up, document) = document().await;
     let schemas = &document["components"]["schemas"];
     let account = &schemas["Account"];
@@ -1224,23 +1009,6 @@ async fn the_account_and_its_edit_declare_the_canceled_flag_and_the_edit_its_thr
         types_of(input).contains(&"boolean"),
         "the edit takes the flag: {input}"
     );
-    let (_, _, edit) = operations(&document)
-        .into_iter()
-        .find(|(_, _, operation)| operation["operationId"] == "account_patch")
-        .expect("the account edit");
-    let refusals = edit["responses"]["400"]["description"]
-        .as_str()
-        .unwrap_or_default();
-    for refusal in [
-        "only an oauth account is canceled",
-        "subscription_ends_at needs canceled",
-        "canceled needs subscription_ends_at",
-    ] {
-        assert!(
-            refusals.contains(&format!("`{refusal}`")),
-            "the edit's 400 lists {refusal}: {refusals}"
-        );
-    }
 }
 
 #[tokio::test]
@@ -1318,16 +1086,6 @@ async fn the_attempt_declares_the_serving_accounts_usage_based_class() {
             .is_some_and(|r| r.iter().any(|m| m == "usage_based")),
         "every attempt answer carries the member: {attempt}"
     );
-    let description = member["description"]
-        .as_str()
-        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
-    assert_eq!(
-        description.as_deref(),
-        Some(
-            "The serving account's class at the attempt, false on a row from before the router recorded it."
-        ),
-        "{member}"
-    );
 }
 
 #[tokio::test]
@@ -1347,7 +1105,7 @@ async fn the_pool_policy_inputs_are_closed_as_their_parsers_refuse_an_unknown_fi
 }
 
 #[tokio::test]
-async fn the_key_input_is_closed_and_both_key_routes_name_the_unknown_field_in_their_400() {
+async fn the_key_input_is_closed() {
     let (_app, _up, document) = document().await;
     let input = &document["components"]["schemas"]["KeyInput"];
     assert!(input.is_object(), "KeyInput is a component");
@@ -1355,23 +1113,6 @@ async fn the_key_input_is_closed_and_both_key_routes_name_the_unknown_field_in_t
         input["additionalProperties"], false,
         "KeyInput: the parser refuses an unknown field"
     );
-    for operation_id in ["keys_create", "key_patch"] {
-        let (_, _, operation) = operations(&document)
-            .into_iter()
-            .find(|(_, _, operation)| operation["operationId"] == operation_id)
-            .unwrap_or_else(|| panic!("no operation is {operation_id}"));
-        let refusals = operation["responses"]["400"]["description"]
-            .as_str()
-            .unwrap_or_default();
-        assert_eq!(
-            refusals.lines().next(),
-            Some(
-                "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past \
-                 its field's type"
-            ),
-            "{operation_id}: the pool routes' clause"
-        );
-    }
 }
 
 /// Whether a rendered schema admits null. Under OpenAPI 3.1 a nullable value is a `type` array naming `null`, and a

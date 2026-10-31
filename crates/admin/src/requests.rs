@@ -1549,25 +1549,22 @@ revisions:
             &shares,
         );
         let equivalent = plan.cost_equivalent.expect("a plan request");
-        let one_input = PinUsage {
-            input: 1,
-            ..PinUsage::default()
-        };
-        let finished = WEEKDAY_OFF_PEAK + 400;
         assert_eq!(
             equivalent.keys().map(String::as_str).collect::<Vec<_>>(),
             ["five_hour", "seven_day", "seven_day_fable"],
             "the two shared windows and the model week"
         );
-        for (window, share) in &equivalent {
-            assert_eq!(
-                *share,
-                shares
-                    .tables
-                    .equivalent_at(window, None, "claude-fable-5-1", one_input, finished),
-                "{window}: the cost model's units over the anchor tier's capacity"
-            );
-        }
+        // One Fable input token is 10 units: over the anchor tier's 100 on the 5-hour window and 1000 on the week,
+        // and over half the week on the model week.
+        assert_eq!(
+            [
+                equivalent["five_hour"],
+                equivalent["seven_day"],
+                equivalent["seven_day_fable"]
+            ],
+            [Some(0.1), Some(0.01), Some(0.02)],
+            "the cost model's units over the anchor tier's capacity"
+        );
         let billed = serde_json::to_value(request_summary(
             &request_of("claude-fable-5-1"),
             &[attempt_of("api_key", None, None)],

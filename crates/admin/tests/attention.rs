@@ -461,12 +461,7 @@ async fn a_held_model_unweighted_condition_lists_on_the_route_after_every_degrad
         "the model's item lists after every degraded kind: {body}"
     );
     let item = &body["items"][1];
-    let costs = phoebis_ledger::test_tables::subscription_costs();
-    let weight_of = costs
-        .revisions
-        .in_force(common::NOW)
-        .latest_weighted("opus")
-        .expect("the test cost model weights an opus model");
+    // Opus 5.5 is the one model of the `opus` tier the test cost model weighs.
     assert_eq!(
         (
             &item["subject"],
@@ -480,7 +475,7 @@ async fn a_held_model_unweighted_condition_lists_on_the_route_after_every_degrad
             &j!(null),
             &j!([]),
             &j!(common::NOW),
-            &j!({ "model": "claude-opus-5", "requests": 1, "tier": "opus", "weight_of": weight_of }),
+            &j!({ "model": "claude-opus-5", "requests": 1, "tier": "opus", "weight_of": "claude-opus-5-5" }),
         ),
         "the item opens no page, belongs to no pool and dates from the request: {item}"
     );

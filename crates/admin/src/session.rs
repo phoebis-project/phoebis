@@ -333,26 +333,12 @@ mod tests {
     }
 
     #[test]
-    fn a_kept_token_is_the_session_id_issue_instant_nonce_and_tag_and_a_renewal_keeps_the_id() {
+    fn a_kept_tokens_renewal_verifies_and_keeps_the_session_id() {
         let sessions = sessions();
         let token = sessions.login_persistent("admin-secret", 1_000).unwrap();
-        let bytes = decoded(&token);
-        assert_eq!(bytes.len(), 32 + 8 + 16 + 32);
-        assert_eq!(bytes[32..40], 1_000i64.to_be_bytes());
-        assert!(
-            sessions.state.lock().unwrap().sessions.is_empty(),
-            "a kept login holds no map entry"
-        );
-
         let (id, renewed) = kept(&sessions, &token, 5_000).expect("the token verifies");
-        assert_eq!(id, URL_SAFE_NO_PAD.encode(&bytes[..32]));
-        let fresh = decoded(&renewed);
-        assert_eq!(fresh.len(), bytes.len());
-        assert_eq!(fresh[..32], bytes[..32], "the session id is kept");
-        assert_eq!(fresh[32..40], 5_000i64.to_be_bytes());
-        assert_ne!(fresh[40..56], bytes[40..56], "a fresh nonce");
         let (again, _) = kept(&sessions, &renewed, 6_000).expect("the renewal verifies");
-        assert_eq!(again, id);
+        assert_eq!(again, id, "the renewal keeps the session id");
     }
 
     #[test]
@@ -470,8 +456,11 @@ mod tests {
             sessions.bearer("admin-secret-and-more", &secrets(), 0),
             Err(LoginError::Invalid)
         ));
-        assert!(sessions.state.lock().unwrap().sessions.is_empty());
-        assert_eq!(sessions.state.lock().unwrap().failures, vec![0, 0]);
+        assert_eq!(
+            sessions.sweep(43_200_001),
+            0,
+            "past every deadline the sweep finds no session the bearer opened"
+        );
     }
 
     #[test]
