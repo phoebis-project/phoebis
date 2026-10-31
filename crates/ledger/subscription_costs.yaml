@@ -5,8 +5,7 @@
 # entrypoints it lists at its own capacity rows and band factor, every other entrypoint at the rows above. The unit
 # stays the base Max 20x 5-hour window, of which an interactive window holds 300,000,000. An account tier left out,
 # or set to null, is unpriced. A model without a weight prices at the weight of its model tier's latest weighted
-# model, as an estimate, and a model of no model tier, or of one with no weight, prices nothing. Written by the plan
-# meter's table_fit.py. Every value is a design constant it tested, except a row whose comment says it is assumed.
+# model, as an estimate, and a model of no model tier, or of one with no weight, prices nothing.
 revisions:
   - effective: 2026-10-05
 
@@ -29,17 +28,16 @@ revisions:
     type_multiplier: {cache_read: 0.025, cache_write_1h: 1.25, cache_write_5m: 1.25, input: 1, output: 5}
 
     model_weight:  # units per plain input token, by undated id, which a dated id reads too
-      # A Max 5x interactive rate converts times 2 for the regime, over 4 for the tier and times 1.5 for the unit.
-      claude-fable-5-1:   10    # 2026-09-30, Max 20x out of band, 6.647 +/- 0.012 percent per 1M input
-      claude-fable-5:     10    # 2026-10-29, Max 5x interactive, 13.365 +/- 0.087 percent per 1M input
-      claude-opus-5-5:    2.2   # 2026-10-04, Max 20x out of band, 1.467 +/- 0.0027 percent per 1M input
-      claude-opus-5:      2.75  # 2026-10-29, Max 5x interactive, 3.642 +/- 0.032 percent per 1M input
-      claude-opus-4-8:    3.25  # 2026-10-29, Max 5x interactive, 4.355 +/- 0.039 percent per 1M input
-      claude-sonnet-5-5:  1.5   # 2026-09-30, Max 20x out of band, 0.9998 +/- 0.0013 percent per 1M input
-      claude-sonnet-5:    1.5   # 2026-10-29, Max 5x interactive, 2.000 +/- 0.021 percent per 1M input
-      claude-sonnet-4-6:  3     # 2026-10-29, Max 5x interactive, 3.952 +/- 0.048 percent per 1M input
-      claude-haiku-5-5:   0.1   # 2026-10-08, Max 20x out of band, 0.06654 +/- 0.00051 percent per 1M input
-      claude-haiku-4-5:   1     # 2026-10-05, Max 20x out of band, 0.6658 +/- 0.001 percent per 1M input
+      claude-fable-5-1:   10
+      claude-fable-5:     10
+      claude-opus-5-5:    2.2
+      claude-opus-5:      2.75
+      claude-opus-4-8:    3.25
+      claude-sonnet-5-5:  1.5
+      claude-sonnet-5:    1.5
+      claude-sonnet-4-6:  3
+      claude-haiku-5-5:   0.1
+      claude-haiku-4-5:   1
 
     model_windows:  # a window only some models carry, sized against a shared one
       seven_day_fable: {of: seven_day, capacity_factor: 0.5}
