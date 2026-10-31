@@ -1652,6 +1652,26 @@
   font-size: 16px;
 }
 
+/* A phone's card holds the name, the status and the key count on one line but not the two buttons beside them, so the
+   buttons take a line of their own, still at the row's right. The empty break is a line too, so each row gap is half
+   the space between the two lines. */
+@media (max-width: 599px) {
+  .pool__title {
+    flex-wrap: wrap;
+    row-gap: 5px;
+  }
+
+  .pool__title::after {
+    flex-basis: 100%;
+    order: 1;
+    content: '';
+  }
+
+  .pool__title > .btn {
+    order: 2;
+  }
+}
+
 /*
  * The key count stands beside the status badge; without a key it reads in the warning ink, still a link. A failed
  * read takes the muted ink, since it says nothing about the pool's keys.
@@ -3043,8 +3063,10 @@
 
 /* The Meter view: a group line on the Sessions view's open-row pattern, an open group's windows in a nested table. The
    account is the group's name, so its fill keeps a floor of sixteen mono characters at a phone's width, and a set wider
-   than its card scrolls inside `.table-wrap`. */
-.meter-table .col-fill {
+   than its card scrolls inside `.table-wrap`. The floor targets the group table's own cells, so the nested windows
+   table's empty fill column keeps its own width. */
+.meter-table > thead > tr > .col-fill,
+.meter-table > tbody > tr > .col-fill {
   min-width: 132px;
 }
 
@@ -3227,6 +3249,13 @@
   gap: 8px;
   align-items: center;
   white-space: nowrap;
+}
+
+/* The sort popover's rule parts the keys from the directions. */
+.sort-popover__rule {
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--hairline);
 }
 
 /* The Groups popover's field keeps the box's 8 px inset, as the Custom range popover's fields do. */
@@ -3643,6 +3672,11 @@
   .setting-row {
     flex-wrap: wrap;
   }
+
+  /* A variable's name with its value is one unbroken word, wider than a phone's card, so it breaks where it must. */
+  .envdl dt {
+    overflow-wrap: anywhere;
+  }
 }
 
 /* About's retention label is its longest, so in a narrow card a max-content column would take the values' room. The
@@ -3720,6 +3754,10 @@
 }
 
 .wbars--compact .wbar__head {
+  font-size: 12px;
+}
+
+.wbar__none--compact {
   font-size: 12px;
 }
 
@@ -4060,7 +4098,7 @@
   background: var(--accent-soft);
 }
 
-.srow__account,
+.agents__account,
 .srow__pin {
   display: inline-flex;
   gap: 8px;
@@ -4078,42 +4116,33 @@
   color: var(--ink-2);
 }
 
-/* The session table keeps its cells on one line, and an agent line's narrow columns, its head and its cause's sentence
-   wrap inside the line instead. */
+/* `.agents` holds the eleven tracks for Agent, Model, Effort, Context, Account, TTL, Last request, Last probe, Next
+   probe, Probes / credited and State, and each line is a subgrid row of them, so a column's edge is one edge for the
+   head and every line. The Agent and Account tracks are as wide as the longest id and account with its chip among the
+   lines, which read whole, and the grid scrolls inside the card where they outgrow it. */
 .agents {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: max-content 76px 56px 56px max-content 44px 76px 68px 96px 64px minmax(130px, 1fr);
+  column-gap: 6px;
+  overflow-x: auto;
   white-space: normal;
   border-left: 2px solid var(--accent);
 }
 
-/* The floor gives a cause badge a cell to wrap in. */
 .agents__row {
   display: grid;
-  /* The first track holds a subagent id of the length Claude Code gives one, seventeen characters, whole in the
-     row's monospace size: the measured width, read in the browser pass. The tracks and gaps stay within the 910px an
-     expanded line has in a 990px card at 1280px. */
-  grid-template-columns: 124px 140px 84px 44px 76px 76px 112px 64px minmax(130px, 1fr);
-  gap: 4px 6px;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  row-gap: 4px;
   align-items: center;
   padding: 6px 12px;
-}
-
-/* A companion session's lines read Context and Prefix after Model, 132px with their gaps, which Model, Account, TTL,
-   Last probe, Next probe and State's floor give up, so the eleven tracks and ten gaps take 894px of the same 910px. */
-.agents--context .agents__row {
-  grid-template-columns: 124px 76px 80px 40px 72px 32px 76px 68px 96px 64px minmax(106px, 1fr);
 }
 
 .agents__row + .agents__row {
   border-top: 1px solid var(--hairline);
 }
 
-/* A longer id cuts with an ellipsis inside its track, and the whole id reads on the cell's title. */
 .agents__id {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -4818,17 +4847,23 @@
   line-height: 16px;
 }
 
-/* The Burn grid draws three plan cards beside the spend card, or two without a model week, so an odd last card spans
-   the row rather than leaving a half empty. The Traffic grid's eight cards pair off, and the rule spans its last card
-   should the count turn odd. */
-.burn-grid > .card:last-child:nth-child(odd),
+/* The Traffic grid's eight cards pair off, and its rule spans the last card should the count turn odd. The Burn grid
+   draws three plan cards beside the spend card, or two without a model week, and spans an odd last card where the grid
+   holds two columns at most: from 1344 px it holds three or more, so three cards share one row and the four-card band
+   below keeps its own rule. */
 .traffic-grid > .card:last-child:nth-child(odd) {
   grid-column: 1 / -1;
 }
 
+@media (max-width: 1343.98px) {
+  .burn-grid > .card:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+}
+
 /* Four burn cards (three plan cards and the spend card) sit two by two in the window widths where auto-fit draws three
    340 px columns, 1344 px to 1701 px, so no card sits alone at a third of the row, and from 1702 px the four share one
-   row. Three cards keep the odd rule above. */
+   row. Three cards share one row from 1344 px, where the odd rule above no longer spans the third. */
 @media (min-width: 1344px) and (max-width: 1701.98px) {
   .burn-grid--four {
     grid-template-columns: repeat(2, minmax(0, 1fr));

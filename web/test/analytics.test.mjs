@@ -328,20 +328,27 @@ test('a rollup counts an undecodable stream inside the upstream errors it is par
   for (const h of hours) assert.ok(h.requests.undecodable <= h.requests.upstream_error, `${h.hour} reads ${h.requests.undecodable} undecodable of ${h.requests.upstream_error} upstream errors`);
 });
 
-const sizedAccount = (id, rateLimitTier) => ({ id, kind: rateLimitTier === null ? 'api_key' : 'oauth', subscription: rateLimitTier === null ? null : { rateLimitTier } });
+// The plan word each tier resolves to on its own, so an account reads the plan the router would resolve for it and the
+// gate prices it by its tier. A case that needs another word passes it.
+const PLAN_OF_TIER = { claude_max_20x: 'max_20x', claude_team: 'team', default_claude_ai: 'pro', default_claude_max_20x: 'max_20x', default_claude_max_5x: 'max_5x', default_claude_zero: 'usage_based' };
+const sizedAccount = (id, rateLimitTier, plan = PLAN_OF_TIER[rateLimitTier] ?? null) => ({ id, kind: rateLimitTier === null ? 'api_key' : 'oauth', subscription: rateLimitTier === null ? null : { plan, rateLimitTier } });
 const SIZED_ACCOUNTS = [sizedAccount('stored', 'default_claude_max_20x'), sizedAccount('bare', 'claude_max_20x'), sizedAccount('team', 'claude_team'), sizedAccount('key', null)];
 const SIZED_COSTS = { ...EMPTY, capacity: { default_claude_max_20x: { fiveHour: 1, sevenDay: 1 } } };
 // Pro listed with a 7-day capacity alone, Max 5x with a 5-hour capacity alone.
 const ONE_WINDOW = { ...SIZED_COSTS, capacity: { ...SIZED_COSTS.capacity, default_claude_ai: { fiveHour: null, sevenDay: 1 }, default_claude_max_5x: { fiveHour: 1, sevenDay: null } } };
 const ONE_WINDOW_ACCOUNTS = [...SIZED_ACCOUNTS, sizedAccount('pro', 'default_claude_ai'), sizedAccount('max5', 'default_claude_max_5x')];
 
-test('an account is sized for the plan chart when the cost model lists its stored tier, whatever windows it has a capacity on', () => {
+test('an account is sized for the plan chart when the router prices its stored tier and the cost model lists it, whatever windows it has a capacity on', () => {
   assert.deepEqual([...d.sizedAccounts(SIZED_ACCOUNTS, SIZED_COSTS)].sort(), ['bare', 'stored']);
   assert.deepEqual(
     [...d.sizedAccounts(ONE_WINDOW_ACCOUNTS, ONE_WINDOW)].sort(),
     ['bare', 'max5', 'pro', 'stored'],
     'a listed tier with no capacity on a window draws that window as model unlisted, never as tier unknown',
   );
+  // Each tier is one the cost model lists, so the plan word alone leaves a free plan and a usage-based seat out and
+  // keeps a Team seat.
+  const gated = [sizedAccount('free', 'default_claude_ai', 'free'), sizedAccount('seat', 'default_claude_max_5x', 'usage_based'), sizedAccount('teamseat', 'default_claude_ai', 'team')];
+  assert.deepEqual([...d.sizedAccounts([...ONE_WINDOW_ACCOUNTS, ...gated], ONE_WINDOW)].sort(), ['bare', 'max5', 'pro', 'stored', 'teamseat']);
 });
 
 test('an account is sized on a window only when its listed tier has a capacity there, as the shed preview reads the 5-hour one', () => {
@@ -460,7 +467,7 @@ test('every burn read reads the accounts again, so a tier a profile refresh supp
     getAnalyticsBurn: async () => ({ bucketSeconds: 3_600, points: [] }),
     listAccounts: async () => {
       const rateLimitTier = reads.shift();
-      return [{ id: 'primary', kind: 'oauth', subscription: rateLimitTier === null ? null : { rateLimitTier } }];
+      return [{ id: 'primary', kind: 'oauth', subscription: rateLimitTier === null ? null : { plan: 'max_20x', rateLimitTier } }];
     },
   };
   const range = { from: new Date(0).toISOString(), to: new Date(HOUR).toISOString() };
@@ -582,6 +589,33 @@ test('the session fold groups a user agent under its first product token, as the
   assert.deepEqual(d.foldGroups(rows, 'user_agent').map((g) => [g.key, g.requests]).sort(), [['-', 1], ['claude-cli/2.1.310', 2], ['other', 1]], 'a header without a product token files under other, and one never sent under the reserved id');
   const named = d.foldGroups(rows, 'user_agent', { agentGroups: ['claude-cli/2.1.310'] });
   assert.deepEqual(named.map((g) => [g.key, g.requests]), [['claude-cli/2.1.310', 2], ['other', 2]], 'a pattern list names its groups by the token, as the breakdown route matches them');
+});
+
+test('the refusal count narrows by the client and user agent patterns, the agent folded to its product token and a request that named neither matched as -', () => {
+  const [row] = d.decodeRequestPage(fixture('requests')).requests;
+  const served = row.attempts.at(-1);
+  // Each row refused under a category of its own, so the categories read back name the rows the count kept.
+  const refused = (category, client, userAgent) => ({ ...row, attempts: [{ ...served, response: { ...served.response, refusalCategory: category, stopReason: 'refusal' } }], client, id: `r-${category}`, kind: 'inference', userAgent });
+  const rows = [refused('cli-new', 'claude-code/cli', 'claude-cli/2.1.3 (external, cli)'), refused('cli-old', 'claude-code/cli', 'claude-cli/2.0.9 (external, cli)'), refused('sdk-new', 'claude-code/sdk-cli', 'claude-cli/2.1.3 (external, sdk-cli)'), refused('unnamed', null, null)];
+  const at = Date.parse(row.at);
+  const kept = (lists) =>
+    d
+      .refusalCategoriesOf(rows, { from: new Date(at - HOUR).toISOString(), groupBy: 'all', to: new Date(at + HOUR).toISOString(), ...lists })
+      .rows.map((r) => r.category)
+      .sort();
+  assert.deepEqual(kept({}), ['cli-new', 'cli-old', 'sdk-new', 'unnamed'], 'no pattern keeps every refusal');
+  assert.deepEqual(kept({ clients: ['claude-code/cli'] }), ['cli-new', 'cli-old']);
+  assert.deepEqual(kept({ userAgents: ['claude-cli/2.1.*'] }), ['cli-new', 'sdk-new']);
+  assert.deepEqual(kept({ userAgents: ['claude-cli/2.1.3'] }), ['cli-new', 'sdk-new'], 'the token names one build under both client labels');
+  assert.deepEqual(kept({ userAgents: ['claude-cli/2.1.3 (external, cli)'] }), [], 'the whole header matches no folded token');
+  assert.deepEqual(kept({ clients: ['claude-code/cli'], userAgents: ['claude-cli/2.1.*'] }), ['cli-new'], 'the two lists narrow together');
+  assert.deepEqual(kept({ clients: ['no-such-client'] }), []);
+  assert.deepEqual(kept({ userAgents: ['no-such-agent/*'] }), []);
+  for (const pattern of ['*', '-']) {
+    assert.ok(kept({ clients: [pattern] }).includes('unnamed'), `the request with no client counts under the client pattern ${pattern}`);
+    assert.ok(kept({ userAgents: [pattern] }).includes('unnamed'), `the request with no user agent counts under the user agent pattern ${pattern}`);
+  }
+  assert.deepEqual(kept({ clients: ['-'], userAgents: ['-'] }), ['unnamed'], 'the dash names the request that named neither, and no other');
 });
 
 test('the session fold keys an effort and a request class as the rollups fold them', () => {

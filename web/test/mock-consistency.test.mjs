@@ -142,11 +142,17 @@ async function logOf(s) {
 
 /** The members the store's `pool_diff` names, whose changed ones a pool edit carries as pairs. */
 const POOL_DIFF_MEMBERS = [
-  'affinity_mode', 'affinity_ttl_seconds', 'auto_mode_server', 'body_capture_hours', 'burn_average_seconds', 'cache_diagnostics', 'cache_ttl', 'enabled', 'in_flight_cap', 'label', 'load_shedding',
+  'affinity_mode', 'affinity_ttl_seconds', 'auto_mode_server', 'body_capture_hours', 'burn_average_seconds', 'cache_diagnostics', 'cache_ttl', 'enabled', 'in_flight_cap',
+  'keepalive.enabled', 'keepalive.max_idle_seconds', 'keepalive.max_parked_seconds', 'keepalive.scheduled_horizon_seconds', 'label', 'load_shedding',
   'migrate_when_spent', 'min_shared_prefix_tokens', 'model_rules', 'overage_move_grace_minutes', 'overage_policy', 'prefer_subscription', 'retry_in_place_seconds', 'return_to_plan',
   'return_to_plan_dwell_seconds', 'session_placement', 'shed_cap', 'shed_dwell_seconds', 'slow_down', 'slow_down_hold_seconds', 'slow_down_stretch_seconds', 'strategy', 'subagent_placement',
   'warm_sessions', 'wind_down_minutes', 'window_ceiling',
 ];
+/**
+ * The keepalive policy the story's pool edit moved, at its value before the edit, as the mock's `BEFORE_EDIT` holds it
+ * by pool. No decision record carries a policy, so the pair's old value is read here rather than off the records.
+ */
+const POLICY_BEFORE_EDIT = { all: { maxIdleSeconds: 43_200 } };
 /** The fields an account edit carries as pairs, beside the flag a staged secret sets. */
 const ACCOUNT_DIFF_MEMBERS = ['canceled', 'enabled', 'label', 'state', 'subscription_ends_at'];
 
@@ -239,7 +245,7 @@ test("the fresh fit's demand prices the 5-hour window as the mock's fit does, wh
   const at = Date.parse('2026-09-16T14:00:00Z');
   const pool = { windDownMinutes: 60, windowCeiling: 0.9 };
   // A drawn placement, so no prior joins the account's burn.
-  const r = { request: { at: iso(at), bodyTokens: 20_000, canonicalModel: 'claude-sonnet-4-6' }, requestId: 'req_drawn' };
+  const r = { request: { at: iso(at), bodyTokens: 20_000, canonicalModel: 'claude-sonnet-4-5' }, requestId: 'req_drawn' };
   const window = (demand) => ({ demand, horizon: iso(at + 2 * HOUR), projection: 0.6, reserved: 0, utilization: 0.5 });
   // A slowed account burns its 5-hour window at 0.02 per hour, a demand of 0.25 at its speed, which carries the window
   // to the ceiling about 1.6 hours out, before the horizon two hours away.
@@ -439,8 +445,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.ok(a.subscription === null ? plan === null : s.lib.PLAN_WORDS.includes(plan), `${a.id}'s word ${plan}`);
     }
     const word = Object.fromEntries(s.accounts.map((a) => [a.id, a.subscription?.plan ?? null]));
-    // The seat's usage-based class resolves above its Enterprise type, and sunset keeps its last plan's stored document.
-    assert.deepEqual([word.contract, word.sunset], ['usage_based', 'pro']);
+    // The seat's usage-based class resolves above its Enterprise type, and sunset's stored document is the free
+    // organization the profile read found before it flagged the plan ended.
+    assert.deepEqual([word.contract, word.sunset], ['usage_based', 'free']);
     const typed = (type) => oauth.filter((a) => a.subscription?.organizationType === type && !a.usageBased);
     const sized = { default_claude_max_20x: 'max_20x', default_claude_max_5x: 'max_5x' };
     assert.ok(typed('claude_pro').length > 0 && typed('claude_pro').every((a) => a.subscription.plan === 'pro'), 'the Pro organizations read pro');
@@ -449,6 +456,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const wrong = candidates.filter(({ c }) => c.planTier !== (c.kind === 'api_key' ? null : word[c.accountId])).map(({ c, r }) => `${r.requestId}/${r.seq} ${c.accountId} ${c.planTier}`);
     assert.ok(candidates.length > 0, 'the story records candidates');
     assert.deepEqual(wrong, [], "a candidate's plan word is its account's");
+  });
+
+  test(`the story's plan-ended account reads Free on the tier its found profile reports, beside its flag, at ${at}`, async () => {
+    const s = await story;
+    const sunset = s.accounts.find((a) => a.id === 'sunset');
+    assert.deepEqual(
+      [sunset?.subscription?.plan, sunset?.subscription?.rateLimitTier, sunset?.plan, sunset?.planEndedAt !== null],
+      ['free', 'default_claude_ai', 'Free', true],
+      'the plan the found document resolves, its tier word, and the flag',
+    );
   });
 
   test(`the story's usage-based seat reads its class and its spend window with no plan window, the one member of its pool behind the key fleet, at ${at}`, async () => {
@@ -481,8 +498,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const fleetIds = new Set(rows.map((r) => r.id));
     const records = (await decisionsOf(s)).filter((r) => fleetIds.has(r.requestId));
     assert.deepEqual([...new Set(records.map((r) => r.requestId))].sort(), [...fleetIds].sort(), "each of the key's rows has its decision record");
-    const filed = records.map((r) => r.candidates.find((c) => c.accountId === 'contract')).map((c) => [c?.tier[0], c?.windows.spend?.utilization, c?.windows.spend?.source]);
-    assert.ok(filed.every(([tier, utilization, source]) => tier === 2 && utilization === 0.41 && source === 'estimated'), `the records file the seat in the metered tier with its spend window: ${JSON.stringify(filed)}`);
+    // The seat's first record reads no spend window, so the Pace hover's sentence rests on the pace's shape alone.
+    const unread = 'req_c94d1e07-b35';
+    const filed = records.filter((r) => r.requestId !== unread).map((r) => r.candidates.find((c) => c.accountId === 'contract')).map((c) => [c?.tier[0], c?.windows.spend?.utilization, c?.windows.spend?.source]);
+    assert.ok(filed.length > 0 && filed.every(([tier, utilization, source]) => tier === 2 && utilization === 0.41 && source === 'estimated'), `the records file the seat in the metered tier with its spend window: ${JSON.stringify(filed)}`);
+    const bare = records.filter((r) => r.requestId === unread).map((r) => r.candidates.find((c) => c.accountId === 'contract')).map((c) => [c?.tier[0], Object.keys(c?.windows ?? {})]);
+    assert.deepEqual(bare, [[2, []]], `${unread} files the seat in the metered tier with no window`);
     assert.ok(s.accounts.filter((a) => a.id !== 'contract').every((a) => !a.usageBased && a.spend === null), 'no other account reads the class');
     const headed = s.accounts.filter((a) => a.extraUsage?.enabled && a.extraUsage.usedCredits === null);
     assert.deepEqual(headed.map((a) => [a.id, a.extraUsage.monthlyLimitCredits, a.extraUsage.inUse]), [['nightly', null, true]], "the plan account whose newest reading a head wrote carries no amounts");
@@ -496,7 +517,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const listed = s.sessions.filter((x) => x.sessionId === session).map((x) => [x.keyId, x.accountId, x.model, x.pinned, x.keepalive.state]);
     assert.deepEqual(listed, [['fleet', 'contract', 'claude-opus-5-5', true, null]], 'the session is listed once, pinned on the seat');
     const pool = s.pools.find((p) => p.id === 'contract');
-    assert.deepEqual([pool.activePins, pool.members.map((m) => [m.accountId, m.activePins])], [1, [['contract', 1]]], 'the pool and its member count the pin');
+    // The seat also holds the two pins of the fleet session no mod reports, which has reached no ledger.
+    assert.deepEqual([pool.activePins, pool.members.map((m) => [m.accountId, m.activePins])], [3, [['contract', 3]]], 'the pool and its member count the pin beside the two');
   });
 
   test(`every record of one request reads the request's one boundary count, at ${at}`, async () => {
@@ -526,6 +548,20 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       // A source with no plan capacity books nothing, so its placement reaches the reserve station with no booking.
       assert.deepEqual([r.outcome.reservation, r.walk.find((w) => w.step === 'reserve')?.verdict], [null, 'none'], `${r.requestId}/${r.seq}'s reservation`);
     }
+  });
+
+  test(`every paid pace carries the whole shape the Pace hover reads, with or without the spend window, at ${at}`, async () => {
+    const s = await story;
+    const shaped = (pace) => pace !== null && pace.hours === null && pace.deadline === null && (pace.window ?? null) === null;
+    const named = ({ c, r }) => `${r.requestId}/${r.seq} ${c.accountId}`;
+    const members = (await decisionsOf(s)).flatMap((r) => r.candidates.map((c) => ({ c, r })));
+    const oauth = members.filter(({ c }) => c.kind === 'oauth');
+    assert.deepEqual(oauth.filter(({ c }) => c.pace !== null && c.pace.hours === null && !shaped(c.pace)).map(named), [], 'a pace with no hours names no deadline and no window');
+    const spends = members.filter(({ c }) => c.windows.spend !== undefined);
+    assert.ok(spends.length > 0 && spends.every(({ c }) => c.kind === 'oauth' && shaped(c.pace)), `every spend window sits on a paid pace: ${spends.filter(({ c }) => !shaped(c.pace)).map(named).join(', ')}`);
+    // The seat's first record carries no spend window (`SPEND_UNREAD` in mock/routingLog.ts), so a hover that read the
+    // entry rather than the shape would give that record the plan sentence.
+    assert.deepEqual(oauth.filter(({ c }) => shaped(c.pace) && c.windows.spend === undefined).map(named), ['req_c94d1e07-b35/1 contract'], 'the one paid candidate without the spend window');
   });
 
   test(`the story's usage-based seat knows its allowance as an API key does, and its plan windows are absent, so holdsAllowance reads true for it at the walk's two sites, at ${at}`, async () => {
@@ -669,9 +705,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([s.overview.equivalent24h.unpriced, ...s.overview.hourly.map((h) => h.equivalent.unpriced)].filter((u) => u.fiveHour || u.sevenDay), [], 'the dashboard reads no flag');
     for (const k of s.keys) assert.deepEqual([k.lifetime.equivalent.unpriced, k.usage7d.equivalent.unpriced], [shared, shared], `${k.id} reads no flag`);
     for (const p of s.pools) assert.deepEqual([p.equivalent24h.unpriced, ...p.traffic24h.map((b) => b.equivalent.unpriced)].filter((u) => u.fiveHour || u.sevenDay), [], `${p.id} reads no flag`);
-    // The story's Sonnet 4.6 account has no weight of its own and prices through its model tier's fallback.
+    // The story's Sonnet 4.5 account has no weight of its own and prices through its model tier's fallback.
     const secondary = (await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'account' })).find((g) => g.key === 'secondary');
-    assert.ok(secondary && secondary.estimated && secondary.costEquivalent.seven_day > 0, 'the Sonnet 4.6 account prices an estimate');
+    assert.ok(secondary && secondary.estimated && secondary.costEquivalent.seven_day > 0, 'the Sonnet 4.5 account prices an estimate');
     assert.deepEqual(secondary.unpriced, both, 'and is never unpriced');
     // The switch lends the story one plan request on a model the cost model lists in no tier, in a row of its own.
     globalThis.localStorage = { getItem: (key) => (key === 'phoebis.mockUnpriced' ? '1' : null) };
@@ -696,7 +732,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const g of switched.models.filter((x) => x.key !== unlisted.key)) assert.deepEqual(g.unpriced, plain.find((p) => p.key === g.key).unpriced, `${g.key} keeps its flags`);
     const [whole] = switched.all;
     assert.deepEqual([whole.unpriced, Object.keys(whole.costEquivalent).filter((w) => w === 'five_hour' || w === 'seven_day')], [{ ...whole.unpriced, five_hour: true, seven_day: true }, []], "the whole range's group flags both windows and leaves them out, so no partial sum reads as the whole");
-    assert.deepEqual(switched.accounts.find((g) => g.key === 'secondary').unpriced, both, 'the Sonnet 4.6 account stays priced beside it');
+    assert.deepEqual(switched.accounts.find((g) => g.key === 'secondary').unpriced, both, 'the Sonnet 4.5 account stays priced beside it');
     const bucket = switched.series.find((p) => p.groups.some((g) => g.key === unlisted.key));
     assert.deepEqual(bucket?.groups.filter((g) => g.unpriced.seven_day).map((g) => g.key), [unlisted.key], 'one bucket holds it, its group the one flagged');
     const flaggedPoints = switched.burn.points.filter((p) => p.fiveHourUnpriced || p.sevenDayUnpriced);
@@ -727,13 +763,18 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.requests.filter((r) => r.keyId === 'desktop').every((r) => r.keyGeneration === (Date.parse(r.at) < created ? generation : created)), 'each request row carries the holder it ran under');
   });
 
-  test(`the earlier holder's session row reads its own requests and stays listed inside the session expiry, at ${at}`, async () => {
+  test(`the earlier holder's session row reads its own requests inside the session expiry and is listed while its last request is inside the non-companion timeout, at ${at}`, async () => {
     const s = await story;
     const created = Date.parse(s.keys.find((k) => k.id === 'desktop').createdAt);
-    const historical = s.sessions.filter((x) => x.historical);
-    assert.deepEqual(historical.map((x) => x.keyId), ['desktop'], 'one earlier holder is listed');
-    const [held] = historical;
     // The rows run newest first.
+    const earlier = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration !== created);
+    assert.ok(earlier.length > 0, 'the earlier holder has requests');
+    // The holder's last request ran hours before the story's clock, so the route's list leaves the row out there and
+    // keeps it inside the hour of that request.
+    assert.ok(!s.sessions.some((x) => x.historical) && !s.lib.sessionsListedAt(s.now).some((x) => x.historical), "the route's list at the story's clock holds no earlier holder");
+    const historical = s.lib.sessionsListedAt(Date.parse(earlier[0].at) + HOUR / 2).filter((x) => x.historical);
+    assert.deepEqual(historical.map((x) => x.keyId), ['desktop'], 'one earlier holder is listed inside the hour of its last request');
+    const [held] = historical;
     const holders = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === held.keyGeneration);
     const own = holders.filter((r) => r.sessionId === held.sessionId);
     assert.ok(held.keyGeneration < created && own.length > 0, 'the row is the earlier generation, with rows of its own');
@@ -745,20 +786,26 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.sessions.some((x) => !x.historical && x.keyId === 'desktop' && x.sessionId === held.sessionId), 'the live key holds the same session id');
   });
 
-  test(`the desktop session its key's guardrail refused whole is listed while its newest refusal is inside the session expiry, and none past it, at ${at}`, async () => {
+  test(`the desktop session its key's guardrail refused whole is listed while its newest refusal is inside the non-companion timeout, and none past it, at ${at}`, async () => {
     const s = await story;
     const span = s.settings.sessions.expireAfterSeconds * 1000;
     assert.equal(s.lib.insideSessionExpiry(iso(s.now - span + 1_000), s.now), true, 'one second inside the span');
     assert.equal(s.lib.insideSessionExpiry(iso(s.now - span - 1_000), s.now), false, 'one second past the span');
+    const timeout = s.settings.sessions.nonCompanionIdleSeconds;
+    assert.equal(s.lib.withinNonCompanionTimeout(iso(s.now - timeout * 1000 + 1_000), timeout, s.now), true, 'one second inside the timeout');
+    assert.equal(s.lib.withinNonCompanionTimeout(iso(s.now - timeout * 1000 - 1_000), timeout, s.now), false, 'one second past the timeout');
     // The rows run newest first.
     const refusals = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.errorCode === 'guardrail_blocked');
     const [newest] = refusals;
     assert.ok(refusals.length > 0 && refusals.every((r) => r.refused && r.sessionId === newest.sessionId), 'one session holds the refusals');
     assert.ok(s.lib.insideSessionExpiry(newest.at, s.now), `the newest refusal at ${newest.at} is inside the span`);
-    const listed = s.sessions.filter((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId);
-    assert.deepEqual(listed.map((x) => [x.accountId, x.requests, x.lastRequestAt]), [[null, 0, newest.at]], 'listed off the ledger with no count');
-    assert.deepEqual(s.lib.refusalOnlyRows(s.now), listed, "the builder's row at the story's now is the listed one");
-    assert.deepEqual(s.lib.refusalOnlyRows(s.now + span), [], 'none a span later');
+    const listedAt = (now) => s.lib.sessionsListedAt(now).filter((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId);
+    const listed = listedAt(Date.parse(newest.at) + HOUR / 2);
+    assert.deepEqual(listed.map((x) => [x.accountId, x.requests, x.lastRequestAt]), [[null, 0, newest.at]], 'listed off the ledger with no count inside the hour of the newest refusal');
+    assert.deepEqual(s.lib.refusalOnlyRows(s.now), listed, "the builder's row at the story's now is the one listed inside the hour");
+    assert.deepEqual(listedAt(Date.parse(newest.at) + timeout * 1000 + 1_000), [], 'none past the timeout');
+    assert.ok(!s.sessions.some((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId), `the route's list at the story's clock, ${Math.round((s.now - Date.parse(newest.at)) / 60_000)} min after the newest refusal, leaves it out`);
+    assert.deepEqual(s.lib.refusalOnlyRows(s.now + span), [], 'the builder writes none a span later');
   });
 
   test(`a live session row counts the non-probe requests of its own key, generation and session, at ${at}`, async () => {
@@ -830,8 +877,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the runner's sessions on ci read their last use off their own newest request, at ${at}`, async () => {
     const s = await story;
-    const runner = s.sessions.filter((x) => x.keyId === 'ci' && !x.historical);
-    assert.ok(runner.length > 0, 'the story lists sessions of the ci key');
+    // The runner's rows left the route's list under the non-companion timeout, so the case reads the seed through the
+    // session expiry, which lists every row the story seeds.
+    const runner = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds).filter((x) => x.keyId === 'ci' && !x.historical);
+    assert.ok(runner.length > 0, 'the story holds sessions of the ci key');
     for (const x of runner) assert.equal(x.lastUsedAt, x.lastRequestAt, `${x.sessionId}'s last use`);
   });
 
@@ -908,7 +957,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const overview = await s.api.getKeepaliveOverview();
     const count = (word) => recipes.filter((r) => r.agentState === word).length;
     assert.deepEqual([overview.agents.busy, overview.agents.idle, overview.agents.parked], [count('busy'), count('idle'), count('parked')], 'the tiles count the recipe rows by lifecycle word, released ones left out');
-    assert.equal(overview.limits.agents.count, s.sessions.filter((x) => x.companion !== 'none' || x.keepalive.state !== null).reduce((n, x) => n + x.agents, 0), 'the cap counts every record');
+    // The engine's cap counts every seeded record, the idle recipe of the row two hours back among them, which left the
+    // route's list under the non-companion timeout, so the sum reads the seed through the session expiry.
+    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds);
+    assert.equal(overview.limits.agents.count, seeded.filter((x) => x.companion !== 'none' || x.keepalive.state !== null).reduce((n, x) => n + x.agents, 0), 'the cap counts every record');
   });
 
   test(`the all-released session lists every record released, keeps its row and the pin its last probe renewed, at ${at}`, async () => {
@@ -971,55 +1023,162 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the session idle for two hours is pinned with no companion and reads its last use two hours back, at ${at}`, async () => {
     const s = await story;
-    // Written out in the mock's seeds, as the smoke reads it.
-    const row = s.sessions.find((x) => x.sessionId === 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58');
-    assert.ok(row !== undefined, 'the session is listed');
+    // Written out in the mock's seeds, as the smoke reads it. The row left the route's list under the non-companion
+    // timeout, so the case reads the seed through the session expiry.
+    const row = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds).find((x) => x.sessionId === 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58');
+    assert.ok(row !== undefined, 'the session is in the seed');
     assert.deepEqual([row.pinned, row.companion], [true, 'none']);
     assert.equal(Date.parse(row.lastUsedAt), s.now - 2 * HOUR, 'last used two hours before the mock\'s now');
     assert.ok(Date.parse(row.createdAt) < Date.parse(row.lastUsedAt), 'created before its last use');
   });
 
-  test(`every row with a turn reads its window, its share of it to three decimals and a prefix inside its context, and a row with none reads no figure, at ${at}`, async () => {
+  test(`every row and every agent line drops the window, the share and the prefix, reads its effort as one of the four words or none, and each line reads warm by its TTL at the story's clock, at ${at}`, async () => {
     const s = await story;
-    // No request of the story names a `[1m]` twin, so every window is the 200 000 the route answers without one.
-    const figuresOk = (f) => f.contextWindowTokens === 200_000 && f.contextShare === Math.round((f.lastInputTokens / 200_000) * 1_000) / 1_000 && (f.cachedPrefixTokens === null || (f.cachedPrefixTokens > 0 && f.cachedPrefixTokens <= f.lastInputTokens));
-    const withTurn = s.sessions.filter((x) => !x.historical && x.lastInputTokens !== null && x.lastInputTokens > 0);
-    assert.ok(withTurn.length > 0, 'the story holds rows with a turn');
-    for (const row of withTurn) assert.ok(figuresOk(row), `${row.keyId} ${row.sessionId} reads ${JSON.stringify([row.lastInputTokens, row.contextWindowTokens, row.contextShare, row.cachedPrefixTokens])}`);
-    assert.ok(withTurn.some((x) => x.cachedPrefixTokens !== null), 'a row reads its cached prefix');
-    for (const row of s.sessions.filter((x) => !withTurn.includes(x))) {
-      assert.deepEqual([row.contextWindowTokens, row.contextShare, row.cachedPrefixTokens], [null, null, null], `${row.keyId} ${row.sessionId} has no turn to read`);
+    const gone = ['cachedPrefixTokens', 'contextShare', 'contextWindowTokens'];
+    const words = ['low', 'medium', 'high', 'max', null];
+    // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
+    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds);
+    for (const row of seeded) {
+      assert.ok(Array.isArray(row.agentContexts), `${row.keyId} ${row.sessionId} answers a list`);
+      assert.deepEqual(Object.keys(row).filter((k) => gone.includes(k)), [], `${row.keyId} ${row.sessionId} carries none of the three`);
+      assert.ok(words.includes(row.effort), `${row.keyId} ${row.sessionId} reads the effort ${row.effort}`);
+      if (!row.pinned) assert.equal(row.effort, null, `${row.keyId} ${row.sessionId} holds no pin to read an effort from`);
     }
-    const lines = s.sessions.flatMap((x) => x.agentContexts ?? []);
+    // The laptop's parked Haiku session is the one whose pin named no effort.
+    assert.equal(seeded.filter((x) => x.pinned && x.effort === null).length, 1, 'one pinned row reads no effort');
+    const lines = seeded.flatMap((x) => x.agentContexts);
     assert.ok(lines.length > 0, 'the story holds agent lines');
-    for (const line of lines) assert.ok(figuresOk(line), `${line.agentId} reads ${JSON.stringify(line)}`);
+    for (const line of lines) {
+      assert.deepEqual(Object.keys(line).filter((k) => gone.includes(k)), [], `${line.agentId} carries none of the three`);
+      assert.ok(words.includes(line.effort), `${line.agentId} reads the effort ${line.effort}`);
+      const warm = line.lastUsedAt !== null && line.cacheTtlMs !== null && s.now - Date.parse(line.lastUsedAt) < line.cacheTtlMs;
+      assert.equal(line.warm, warm, `${line.agentId} on ${line.model}, last used ${line.lastUsedAt} on a ${line.cacheTtlMs} ms TTL`);
+    }
+    assert.ok(lines.some((l) => l.warm) && lines.some((l) => !l.warm), 'warm and cold lines both');
   });
 
-  test(`a companion session lists its unreleased subagents' lines in agent id order with their models, one of them two lines, and none where every other agent is released, at ${at}`, async () => {
+  test(`a companion row lists main's line and one per unreleased subagent recipe, main first and then by agent id and model, and none of a released agent, at ${at}`, async () => {
     const s = await story;
     const recipes = await s.api.listKeepaliveRecipes();
     const companions = s.sessions.filter((x) => x.companion !== 'none');
-    const othersOf = (row) => recipes.filter((r) => r.keyId === row.keyId && r.sessionId === row.sessionId && r.agentId !== 'main');
+    const ownOf = (row) => recipes.filter((r) => r.keyId === row.keyId && r.sessionId === row.sessionId);
+    // The route orders the lines by agent id and then model as bytes, main first, which a locale's collation need not.
+    const bytes = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+    const routeOrder = (a, b) => (a.agentId === 'main') !== (b.agentId === 'main') ? (a.agentId === 'main' ? -1 : 1) : bytes(a.agentId, b.agentId) || bytes(a.model, b.model);
     for (const row of companions) {
-      const unreleased = othersOf(row).filter((r) => r.agentState !== 'released');
-      // The route orders the lines by agent id as bytes, which a locale's collation need not.
-      const want = unreleased.map((r) => r.agentId).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-      assert.deepEqual(row.agentContexts?.map((c) => c.agentId), want, `${row.sessionId} lists its unreleased subagents by agent id`);
-      for (const line of row.agentContexts) assert.equal(line.model, unreleased.find((r) => r.agentId === line.agentId).model, `${line.agentId} reads its own model`);
+      const unreleased = ownOf(row).filter((r) => r.agentState !== 'released');
+      const want = [...unreleased].sort(routeOrder).map((r) => [r.agentId, r.model, r.accountId]);
+      assert.deepEqual(row.agentContexts.map((c) => [c.agentId, c.model, c.accountId]), want, `${row.sessionId} lists its unreleased agents' pins`);
+      const main = row.agentContexts.find((c) => c.agentId === 'main');
+      if (main !== undefined) {
+        const read = (f) => [f.model, f.accountId, f.lastInputTokens, f.effort, f.cacheTtlMs, f.lastUsedAt, f.createdAt];
+        assert.deepEqual(read(main), read(row), `${row.sessionId}: main's line reads the row's pin`);
+      }
     }
-    assert.ok(companions.some((x) => x.agentContexts.length === 2), 'one companion session carries two agent lines');
-    // The session the mod released whole and the one it ended hold subagents whose every line is released.
-    const allReleased = companions.filter((x) => othersOf(x).length > 0 && othersOf(x).every((r) => r.agentState === 'released'));
-    assert.equal(allReleased.length, 2, 'two companion sessions whose other agents are all released');
+    assert.ok(companions.some((x) => x.agentContexts[0]?.agentId === 'main' && x.agentContexts.length >= 3), 'a companion session carries main and two subagents');
+    // The two sessions the mod released whole hold every record released, main's among them.
+    const allReleased = companions.filter((x) => ownOf(x).length > 0 && ownOf(x).every((r) => r.agentState === 'released'));
+    assert.equal(allReleased.length, 2, 'two companion sessions whose every agent is released');
     for (const row of allReleased) assert.deepEqual(row.agentContexts, [], `${row.sessionId} carries an empty list`);
   });
 
-  test(`a session no companion reports carries no agent lines, the plain row idle for two hours with the main pin's figures, at ${at}`, async () => {
+  test(`a plain row lists one line per pin within the non-companion timeout, the slowed session two, and a line leaves past the timeout while its row stays, at ${at}`, async () => {
     const s = await story;
-    for (const row of s.sessions.filter((x) => x.companion === 'none')) assert.equal(row.agentContexts, null, `${row.keyId} ${row.sessionId} carries none`);
-    // Written out in the mock's seeds, as the smoke reads it.
-    const row = s.sessions.find((x) => x.sessionId === 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58');
-    assert.deepEqual([row.companion, row.lastInputTokens, row.contextWindowTokens, row.contextShare, row.cachedPrefixTokens, row.agentContexts], ['none', 6_400, 200_000, 0.032, 5_000, null]);
+    const seconds = s.settings.sessions.nonCompanionIdleSeconds;
+    const plain = s.sessions.filter((x) => x.companion === 'none');
+    for (const row of plain) {
+      if (!row.pinned) assert.deepEqual(row.agentContexts, [], `${row.keyId} ${row.sessionId} holds no pin and draws no line`);
+      for (const line of row.agentContexts) assert.ok(s.lib.withinNonCompanionTimeout(line.lastUsedAt, seconds, s.now), `${row.sessionId} ${line.agentId} last used ${line.lastUsedAt}`);
+      const main = row.agentContexts.find((c) => c.agentId === row.agentId && c.model === row.model);
+      if (row.pinned) assert.ok(main !== undefined && main.lastInputTokens === row.lastInputTokens && main.effort === row.effort, `${row.keyId} ${row.sessionId}: the row's pin draws its line`);
+    }
+    // The slowed notebook session holds main's pin and its subagent's on Haiku.
+    const slowed = plain.filter((x) => x.keyId === 'notebook' && x.agents === 2);
+    assert.deepEqual(
+      slowed.map((x) => x.agentContexts.map((c) => [c.agentId, c.model])),
+      [
+        [
+          ['main', 'claude-sonnet-5-5'],
+          ['7b2e', 'claude-haiku-4-5-20251001'],
+        ],
+      ],
+    );
+    // The session no mod reports: its cold line passes the timeout forty minutes on, while its warm one keeps the row.
+    const noMod = plain.find((x) => x.agentContexts.length === 2 && x.agentContexts.some((c) => c.warm) && x.agentContexts.some((c) => !c.warm));
+    assert.ok(noMod !== undefined, 'the session no mod reports is listed');
+    const later = s.lib.sessionsListedAt(s.now + 40 * 60_000).find((x) => x.keyId === noMod.keyId && x.sessionId === noMod.sessionId);
+    assert.deepEqual(later?.agentContexts.map((c) => c.warm), [true], 'the warm line stays and the cold one leaves');
+  });
+
+  test(`the auxiliary-only session reads its subagent's pin on the row with no main line, and the session no mod reports holds two pins on a five-minute TTL, one warm and one cold, at ${at}`, async () => {
+    const s = await story;
+    const recipes = await s.api.listKeepaliveRecipes();
+    const ownOf = (row) => recipes.filter((r) => r.keyId === row.keyId && r.sessionId === row.sessionId);
+    // Main holds an auxiliary pin alone, which draws no line, so the row falls back to the subagent's pin.
+    const aux = s.sessions.filter((x) => x.companion !== 'none' && x.pinned && x.agentId !== 'main');
+    assert.equal(aux.length, 1, 'one companion row reads a subagent pin');
+    const [row] = aux;
+    assert.deepEqual(
+      [ownOf(row).map((r) => r.agentId), row.keepalive.state],
+      [[row.agentId], null],
+      'one subagent recipe and none of main',
+    );
+    const read = (f) => [f.agentId, f.model, f.accountId, f.lastInputTokens, f.effort];
+    assert.deepEqual(row.agentContexts.map(read), [read(row)], "the subagent's line, the one the row reads");
+    const noMod = s.sessions.filter((x) => x.companion === 'none' && ownOf(x).length === 0 && x.agentContexts.length === 2 && x.agentContexts.some((c) => c.warm) && x.agentContexts.some((c) => !c.warm));
+    assert.equal(noMod.length, 1, 'one session no mod reports with a warm and a cold pin');
+    const [plain] = noMod;
+    assert.deepEqual([plain.pinned, plain.keepalive.state, plain.agents], [true, null, 2]);
+    for (const line of plain.agentContexts) assert.equal(line.cacheTtlMs, 5 * 60_000, `${line.agentId}'s TTL`);
+  });
+
+  test(`every session a pin placed reads its first-seen time at or before its last use and one no pin placed none, and each line its agent's at or before the line's last use: main's the row's, a subagent's its earliest placing request of the session, and one no request names a minute per place among the row's distinct subagents, at ${at}`, async () => {
+    const s = await story;
+    const recipes = await s.api.listKeepaliveRecipes();
+    // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
+    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds);
+    // A recipe stands on a pin its first request placed, so a released or finished row with no pin left once held one.
+    const placed = (row) => row.pinned || (!row.historical && recipes.some((r) => r.keyId === row.keyId && r.sessionId === row.sessionId));
+    // The requests seed itself, read for the requests that place a pin: an inference request with an attempt, since a
+    // probe follows the request that placed its agent's pin and a count or a refusal before any attempt places none.
+    const seed = [...s.lib.requestById.values()].filter((r) => r.kind === 'inference' && r.attempts.length > 0);
+    const firstRequestOf = (row, agentId) =>
+      seed.filter((r) => r.keyId === row.keyId && r.keyGeneration === row.keyGeneration && r.sessionId === row.sessionId && r.agentId === agentId).reduce((first, r) => (first === null || r.at < first ? r.at : first), null);
+    const arms = { main: 0, request: 0, standIn: 0 };
+    for (const row of seeded) {
+      const name = `${row.keyId} ${row.sessionId}${row.historical ? ', the earlier holder' : ''}`;
+      if (placed(row)) {
+        const lastUse = s.lib.lastUseOf(row);
+        assert.ok(row.createdAt !== null && lastUse !== null && Date.parse(row.createdAt) <= Date.parse(lastUse), `${name} first seen at ${row.createdAt}, last used at ${lastUse}`);
+      } else assert.equal(row.createdAt, null, `${name}: no pin ever placed it`);
+      // An agent holds one first-seen time whatever models it is pinned on, so its place counts once.
+      const places = new Map();
+      for (const c of row.agentContexts) {
+        const where = `${name}: ${c.agentId} on ${c.model}`;
+        if (c.createdAt !== null && c.lastUsedAt !== null) assert.ok(Date.parse(c.createdAt) <= Date.parse(c.lastUsedAt), `${where} first seen at ${c.createdAt}, after its last use at ${c.lastUsedAt}`);
+        if (c.agentId === 'main') {
+          arms.main += 1;
+          assert.equal(c.createdAt, row.createdAt, `${where} reads the session's first-seen time`);
+          continue;
+        }
+        if (!places.has(c.agentId)) places.set(c.agentId, places.size + 1);
+        const place = places.get(c.agentId);
+        const first = firstRequestOf(row, c.agentId);
+        if (first !== null) {
+          arms.request += 1;
+          assert.equal(c.createdAt, first, `${where} reads its earliest request of the session`);
+          assert.ok(Date.parse(c.createdAt) >= Date.parse(row.createdAt), `${where} first seen at ${c.createdAt}, before the session at ${row.createdAt}`);
+        } else {
+          arms.standIn += 1;
+          assert.equal(c.createdAt, iso(Date.parse(row.createdAt) + place * 60_000), `${where} at place ${place} among the subagents`);
+        }
+      }
+    }
+    assert.ok(arms.main > 0 && arms.request > 0 && arms.standIn > 0, `each arm reads a line: ${JSON.stringify(arms)}`);
+    const unplaced = seeded.filter((row) => !placed(row));
+    assert.ok(unplaced.some((row) => row.companion !== 'none' && row.lastRequestAt === null), 'the registration-only row reads none');
+    assert.ok(unplaced.some((row) => row.lastRequestAt !== null), 'a row the ledger alone knows reads none');
+    assert.ok(seeded.some((row) => row.agentContexts[0]?.agentId === 'main' && row.agentContexts.length >= 3), 'a row lists main and two agents after it');
   });
 
   test(`one subagent's recipe stands under compacted after its compaction completed: ended, last guarded as a compaction, with no probe scheduled, at ${at}`, async () => {
@@ -1117,7 +1276,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(samples.at(-1).at, cleared.at, 'the samples end at the last clean poll');
     // No poll read the window after its reset, so the clock announced it, from the reading the last clean poll stored.
     const resets = log.filter((e) => e.kind === 'window_reset' && e.detail.window === 'five_hour');
-    assert.deepEqual(resets.map((e) => [e.at, e.detail]), [[five.resetsAt, { next_reset: null, observed: 'clock', reset_at: Date.parse(five.resetsAt), utilization_before: five.utilization, window: 'five_hour' }]]);
+    assert.deepEqual(resets.map((e) => [e.at, e.detail]), [[five.resetsAt, { next_reset: null, observed: 'clock', plan: legacy.subscription.plan, reset_at: Date.parse(five.resetsAt), tier: legacy.subscription.rateLimitTier, utilization_before: five.utilization, window: 'five_hour' }]]);
     assert.ok(Date.parse(five.resetsAt) > Date.parse(cleared.at) && cleared.detail.reset === Date.parse(five.resetsAt));
   });
 
@@ -1143,9 +1302,25 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // Each row in the engine's shape, announced at its reset, a sample's naming the next reset a week on and the clock
     // walk's none, all before the day the dashboard and the routing log count.
     const next = (e) => (e.detail.observed === 'clock' ? null : e.detail.reset_at + WEEK);
-    const off = weekly.filter((e) => JSON.stringify(Object.keys(e.detail).sort()) !== '["next_reset","observed","reset_at","utilization_before","window"]' || e.at !== iso(e.detail.reset_at) || e.detail.next_reset !== next(e) || !(e.detail.utilization_before > 0 && e.detail.utilization_before < 1) || Date.parse(e.at) >= s.now - DAY);
+    const off = weekly.filter((e) => JSON.stringify(Object.keys(e.detail).sort()) !== '["next_reset","observed","plan","reset_at","tier","utilization_before","window"]' || e.at !== iso(e.detail.reset_at) || e.detail.next_reset !== next(e) || !(e.detail.utilization_before > 0 && e.detail.utilization_before < 1) || Date.parse(e.at) >= s.now - DAY);
     assert.deepEqual(off.map((e) => `${e.accountId} ${e.at} ${JSON.stringify(e.detail)}`), []);
     assert.deepEqual(weekly.filter((e) => e.detail.observed !== 'sample').map((e) => `${e.accountId} ${e.detail.window} ${e.detail.observed}`), ['nightly seven_day clock'], 'one clock walk among the samples');
+    // Each reset carries the pair of the reading it replaced. Studio's seed (`claude_max` on `default_claude_max_5x`)
+    // upgraded 16 days back, inside its second-newest week, so its third and fourth weeks ran under Pro on both
+    // windows, one poll's readings naming one plan. Sunset's weeks before its plan ended ran under Pro too. Every
+    // other reset, the five-hour ones among them, carries its account's current pair.
+    const pairOf = (e) => ({ plan: e.detail.plan, tier: e.detail.tier });
+    const current = (id) => ({ plan: accountOf.get(id).subscription.plan, tier: accountOf.get(id).subscription.rateLimitTier });
+    const PRO = { plan: 'pro', tier: 'default_claude_ai' };
+    assert.deepEqual(current('studio'), { plan: 'max_5x', tier: 'default_claude_max_5x' }, "studio's current pair");
+    for (const window of ['seven_day', 'seven_day_fable']) {
+      const studio = weekly.filter((e) => e.accountId === 'studio' && e.detail.window === window).sort((x, y) => y.detail.reset_at - x.detail.reset_at);
+      assert.deepEqual(studio.map(pairOf), [current('studio'), current('studio'), PRO, PRO], `studio ${window}, newest first`);
+    }
+    assert.deepEqual(weekly.filter((e) => e.accountId === 'sunset').map(pairOf), [PRO, PRO, PRO], "sunset's weeks before its plan ended");
+    const resets = page.rows.filter((e) => e.type === 'event' && e.accountId !== 'studio' && e.accountId !== 'sunset');
+    assert.ok(resets.some((e) => e.detail.window === 'five_hour'), 'the five-hour resets read too');
+    assert.deepEqual(resets.filter((e) => JSON.stringify(pairOf(e)) !== JSON.stringify(current(e.accountId))).map((e) => `${e.accountId} ${e.detail.window} ${e.at} ${JSON.stringify(pairOf(e))}`), [], "every other reset carries its account's current pair");
 
     const answer = await s.api.getAnalyticsUnusedAllowance(span);
     assert.deepEqual([answer.from, answer.to], [span.from, span.to]);
@@ -1158,7 +1333,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         const fromLog = weekly
           .filter((e) => e.accountId === a.accountId && e.detail.window === w.window)
           .sort((x, y) => y.detail.reset_at - x.detail.reset_at)
-          .map((e) => ({ observedAt: e.at, resetAt: iso(e.detail.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - e.detail.utilization_before)), source: e.detail.observed }));
+          .map((e) => ({ observedAt: e.at, plan: e.detail.plan, resetAt: iso(e.detail.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - e.detail.utilization_before)), source: e.detail.observed, tier: e.detail.tier }));
         assert.deepEqual(a.accountId === 'sunset' ? w.resets.slice(1) : w.resets, fromLog, `${a.accountId} ${w.window}: the log's resets, newest first`);
         assert.ok(w.resetsCounted === w.resets.length && near(w.totalShareLeft, sum(w.resets, (r) => r.shareLeft)), `${a.accountId} ${w.window}: the total and the count over the listed resets`);
       }
@@ -1168,7 +1343,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const series = (await s.api.getQuotaHistory('sunset')).find((h) => h.windowId === '7d');
     const before = series.samples.filter((x) => Date.parse(x.at) < end).at(-1);
     const ended = answer.accounts.find((a) => a.accountId === 'sunset').windows[0].resets[0];
-    assert.deepEqual(ended, { observedAt: before.at, resetAt: iso(end), shareLeft: 1 - before.utilization, source: 'term_ended' });
+    assert.deepEqual(ended, { observedAt: before.at, plan: null, resetAt: iso(end), shareLeft: 1 - before.utilization, source: 'term_ended', tier: null }, "the term's end carries no pair");
     assert.ok(near(ended.shareLeft, 0.54), `sunset left ${ended.shareLeft} of its last week`);
     const one = await s.api.getAnalyticsUnusedAllowance(span, { accountIds: ['studio'] });
     assert.deepEqual(one.accounts, answer.accounts.filter((a) => a.accountId === 'studio'), 'the Accounts filter keeps its account alone');
@@ -1639,11 +1814,87 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const summaries = (await logOf(s)).filter((x) => x.type === 'decision' && x.kind === 'refused');
     const refused = (await decisionsOf(s)).filter((r) => r.outcome.kind === 'refused');
-    assert.deepEqual(refused.map((r) => `${r.outcome.refusal.kind} ${r.outcome.refusal.code}`).sort(), ['client contract', 'client drift', 'key revoked']);
+    assert.deepEqual(refused.map((r) => `${r.outcome.refusal.kind} ${r.outcome.refusal.code}`).sort(), ['client contract', 'client drift', 'guardrail guardrail_blocked', 'key revoked']);
     for (const r of refused) {
       const id = `${r.requestId}/${r.seq}`;
       assert.equal(summaries.find((x) => x.requestId === r.requestId && x.seq === r.seq)?.refusal?.code, r.outcome.refusal.code, `${id}'s row`);
     }
+  });
+
+  test(`a guardrail's block writes one refused record under the name of the guardrail its key enforces, its request facts as the contract's, at ${at}`, async () => {
+    const s = await story;
+    const blocks = (await decisionsOf(s)).filter((r) => r.outcome.refusal?.kind === 'guardrail');
+    assert.equal(blocks.length, 1, 'one block of the story writes its record');
+    const [r] = blocks;
+    const id = `${r.requestId}/${r.seq}`;
+    // The relay answers the stored name of the guardrail the request's matches mark blocking.
+    const row = s.requests.find((x) => x.id === r.requestId);
+    const blocker = (await s.api.listGuardrails()).find((g) => g.id === row?.guardrails.find((m) => m.blocked)?.id);
+    assert.deepEqual([row?.errorCode, blocker?.mode, blocker?.keys.map((k) => k.id)], ['guardrail_blocked', 'enforce', [r.request.keyId]], `${id}: the request row keeps its code under a guardrail its key enforces`);
+    assert.deepEqual(r.outcome.refusal, { code: 'guardrail_blocked', kind: 'guardrail', reason: blocker.name });
+    // The block reads the class and the count flag, and refuses before any selection reads the rest.
+    const { chain, flags, holds, lane, parentAgentId, requestClass } = r.request;
+    assert.deepEqual(
+      { chain, flags, holds, lane, parentAgentId, requestClass, walk: r.walk.map((w) => [w.step, w.verdict, w.facts.map((f) => `${f.key} ${f.value}`)]) },
+      {
+        chain: { boundaries: 0, staticBoundaries: 0, staticHash: false },
+        flags: { contextCompacted: false, count: row.kind === 'count_tokens', fast: false, marker: false, portable: false, probe: row.kind === 'probe' },
+        holds: [],
+        lane: { effort: '', speed: '', thinking: '' },
+        parentAgentId: null,
+        requestClass: row.requestClass,
+        walk: [['admission', 'refused', [`reason ${blocker.name}`]], ['selection', 'not_run', []]],
+      },
+    );
+    assert.deepEqual(r.request.attempted, []);
+    const preset = await s.api.listRoutingLog({ from: iso(Date.parse(r.request.at) - HOUR), kinds: ['refused'], limit: 200, to: iso(s.now) });
+    assert.ok(preset.rows.some((x) => x.type === 'decision' && x.requestId === r.requestId && x.refusal?.kind === 'guardrail'), `${id}: the refused kind lists the record`);
+  });
+
+  test(`a client's refusal writes its record with the selection's facts empty, as a guardrail's block does, at ${at}`, async () => {
+    const s = await story;
+    const refused = (await decisionsOf(s)).filter((r) => r.outcome.refusal?.kind === 'client');
+    assert.equal(refused.length, 2, 'the drift and the contract write their records');
+    const defaults = { contextCompacted: false, count: false, fast: false, marker: false, portable: false, probe: false };
+    for (const r of refused) {
+      const id = `${r.requestId}/${r.seq}`;
+      const row = s.requests.find((x) => x.id === r.requestId);
+      const { attempted, chain, flags, holds, lane, parentAgentId, requestClass } = r.request;
+      assert.deepEqual(
+        { attempted, chain, flags, holds, lane, parentAgentId, requestClass },
+        {
+          attempted: [],
+          chain: { boundaries: 0, staticBoundaries: 0, staticHash: false },
+          // The route writes a drift's flags as their defaults and derives count and probe from the request's kind for
+          // a contract alone.
+          flags: r.outcome.refusal.code === 'drift' ? defaults : { ...defaults, count: row.kind === 'count_tokens', probe: row.kind === 'probe' },
+          holds: [],
+          lane: { effort: '', speed: '', thinking: '' },
+          parentAgentId: null,
+          // The route reads no class for a drift and the header's for a contract.
+          requestClass: r.outcome.refusal.code === 'drift' ? null : row.requestClass,
+        },
+        `${id}: the refusal leaves the selection's facts empty`,
+      );
+    }
+  });
+
+  test(`the usage poll's two backoff closes read their causes, the plan's end at the pause's instant, at ${at}`, async () => {
+    const s = await story;
+    const log = await logOf(s);
+    const closes = log.filter((x) => x.type === 'event' && x.kind === 'poll_backoff_ended');
+    assert.deepEqual(closes.map((e) => [e.accountId, e.detail.cause]).sort(), [['primary', 'clean_poll'], ['sunset', 'plan_ended']]);
+    const ended = closes.find((e) => e.detail.cause === 'plan_ended');
+    const flag = log.find((x) => x.type === 'event' && x.kind === 'plan_ended' && x.accountId === ended?.accountId);
+    assert.deepEqual([ended?.detail.resumed_at, Date.parse(ended?.at ?? '')], [Date.parse(flag?.at ?? ''), Date.parse(flag?.at ?? '')], "the close stands at the plan_ended row's instant and names it as the pause's");
+    assert.ok(ended?.detail.attempts === 1 && ended.detail.duration_ms > 0, `the run before the plan ended reads its attempt and its span: ${JSON.stringify(ended?.detail)}`);
+  });
+
+  test(`the story's pool edit names the idle window it moved as a dotted field beside its two settings, at ${at}`, async () => {
+    const s = await story;
+    const edit = (await logOf(s)).find((x) => x.type === 'event' && x.kind === 'registry_changed' && x.detail.kind === 'pool_updated');
+    assert.deepEqual(Object.keys(edit?.detail.diff ?? {}).sort(), ['keepalive.max_idle_seconds', 'min_shared_prefix_tokens', 'slow_down_hold_seconds']);
+    assert.deepEqual(edit.detail.diff['keepalive.max_idle_seconds'], { from: POLICY_BEFORE_EDIT.all.maxIdleSeconds, to: s.pools.find((p) => p.id === 'all').keepalive.maxIdleSeconds });
   });
 
   test(`every registry change carries the diff its writer stores, at ${at}`, async () => {
@@ -1673,13 +1924,20 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         assert.ok(pool, `${e.id}: the edit names a pool of the story`);
         const member = (field) => (field === 'label' ? 'name' : field.replace(/_([a-z])/g, (_, c) => c.toUpperCase()));
         for (const [field, change] of Object.entries(pairs)) if (member(field) in pool) assert.deepEqual(change.to, pool[member(field)], `${e.id}: ${field} reads the pool's value`);
+        // A policy member's dotted field names its path under the pool's policy.
+        const policy = Object.entries(pairs).filter(([field]) => field.startsWith('keepalive.'));
+        for (const [field, change] of policy) {
+          const [, name] = member(field).split('.');
+          assert.deepEqual(change, { from: POLICY_BEFORE_EDIT[pool.id]?.[name], to: pool.keepalive[name] }, `${e.id}: ${field} reads the policy before the edit and the pool's`);
+        }
         // A decision record carries the pool's settings it was decided under, so the records before the edit read each
-        // pair's old value and the records after it the new one.
+        // pair's old value and the records after it the new one. No record carries the keepalive policy.
         const records = (await decisionsOf(s)).filter((r) => r.request.poolId === e.detail.target && r.settings !== null);
         const before = records.filter((r) => Date.parse(r.request.at) < Date.parse(e.at));
         const after = records.filter((r) => Date.parse(r.request.at) >= Date.parse(e.at));
         assert.ok(before.length > 0 && after.length > 0, `${e.id}: records stand on both sides of the edit`);
         for (const [field, change] of Object.entries(pairs)) {
+          if (field.startsWith('keepalive.')) continue;
           const setting = member(field);
           assert.ok(setting in before[0].settings, `${e.id}: ${field} is a setting the records carry`);
           assert.deepEqual([...new Set(before.map((r) => r.settings[setting]))], [change.from], `${e.id}: ${field} on the records before the edit`);
@@ -2045,9 +2303,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the story lists three forks, one on its base's account, one on another and one without a pin, at ${at}`, async () => {
     const s = await story;
-    // The mock lists its live sessions in the order it seeds them, one per slot of its session ids, so a row's place
-    // among them is the slot the story pinned its fork on.
-    const listed = s.sessions.filter((x) => !x.historical);
+    // The mock seeds its live sessions one per slot of its session ids, so a row's place among them is the slot the
+    // story pinned its fork on. The runner's rows on ci left the route's list under the non-companion timeout, so the
+    // slots are read off the seed through the session expiry.
+    const listed = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds).filter((x) => !x.historical);
     const forks = s.sessions.filter((x) => x.forkedFrom !== null);
     assert.equal(forks.length, 3, `${forks.length} forks are listed`);
     const pairs = forks.map((fork) => {
@@ -2431,9 +2690,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const flag = Date.parse(a.planEndedAt);
     assert.equal(end, s.now - 3 * DAY, 'the saved end three days back');
     assert.ok(end < flag && flag < s.now, `the flag at ${a.planEndedAt} after the end at ${a.subscription.endsAt} and before now`);
-    // The router keeps the last plan's stored document when a profile read finds no plan, so the word it resolves and the
-    // badge read that plan.
-    assert.deepEqual([a.subscription.organizationType, a.subscription.rateLimitTier, a.subscription.plan, a.plan], ['claude_pro', 'default_claude_ai', 'pro', 'Pro']);
+    // The router stores the document a profile read found before it flags the account, the free organization the
+    // canceled plan left on Pro's tier word, so the word it resolves and the badge read Free.
+    assert.deepEqual([a.subscription.organizationType, a.subscription.rateLimitTier, a.subscription.plan, a.plan], ['claude_free', 'default_claude_ai', 'free', 'Free']);
     assert.deepEqual([a.windows, a.fableWindow], [[], null], 'the route answers no window for a flagged account');
     // The poll pauses at the flag, so the read that set it is the last attempt, and the last clean poll came one poll
     // interval before the end.
@@ -2813,10 +3072,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.ok(values.length > 0 && values.every((v) => typeof v === 'number'), `${r.id} on ${r.canonicalModel} reads ${JSON.stringify([r.costShares, r.costEquivalent])}`);
       assert.equal(r.estimated, weight?.estimated, `${r.id} on ${r.canonicalModel} reads estimated ${r.estimated}`);
       priced += 1;
-      if (r.canonicalModel === 'claude-sonnet-4-6') estimated += 1;
+      if (r.canonicalModel === 'claude-sonnet-4-5') estimated += 1;
     }
     assert.ok(priced > 0, 'the story prices a share');
-    assert.ok(estimated > 0, "the story's Sonnet 4.6 rows price an estimate");
+    assert.ok(estimated > 0, "the story's Sonnet 4.5 rows price an estimate");
   });
 
   test(`the story's two classifier calls of one session read zero shares with the reason and book nothing, at ${at}`, async () => {
@@ -2960,7 +3219,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.ok(typeof x.burnEquivalent === 'number' && typeof x.burn === 'number', `${x.sessionId} on ${x.model} burns ${x.burn} and reads ${x.burnEquivalent}`);
       assert.equal(x.estimated, s.lib.weightOrFallback(costs, x.model, 'five_hour')?.estimated, `${x.sessionId} on ${x.model}`);
     }
-    assert.ok(pinned.some((x) => x.estimated), "a pin on the story's Sonnet 4.6 burns an estimate");
+    assert.ok(pinned.some((x) => x.estimated), "a pin on the story's Sonnet 4.5 burns an estimate");
   });
 
   test(`every row's phases are in order and agree with its ttfbMs and durationMs, at ${at}`, async () => {

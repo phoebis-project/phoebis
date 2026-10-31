@@ -1,3 +1,4 @@
+import { foldUserAgent } from '@/api/fold';
 import type {
   Account, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, QuotaHistory, Reconciliation, ReconciliationsAnswer,
   RefusalCategoriesAnswer, RequestKind, RequestLog, RewritePoint, RewritesAnswer, UnusedAllowanceAnswer, WastedProbeReason,
@@ -734,7 +735,9 @@ export function placementsOf(requests: RequestLog[], q: Pick<AnalyticsQuery, 'fr
  * The refused answers by category off the request rows, as the route counts them: each request in range whose serving
  * attempt the upstream answered with the stop reason `refusal`, `-` for a refusal with no category, the largest count
  * first and then the category in byte order, where the dash sorts first. The route narrows by the range, the accounts,
- * the keys, the pools, the models, the kinds and the probes switch, and by no client pattern.
+ * the keys, the pools, the models, the kinds, the probes switch and the client and user agent patterns. A pattern
+ * matches as the rollups key a row: the client as recorded and the user agent folded to its first product token, each
+ * `-` where the request named none. The user agent groups partition the rows and narrow nothing.
  */
 export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): RefusalCategoriesAnswer {
   const fromMs = Date.parse(q.from);
@@ -751,6 +754,8 @@ export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): 
     if (q.models?.length && !q.models.some((m) => m.toLowerCase() === r.canonicalModel)) continue;
     if (q.kinds?.length && !q.kinds.includes(r.kind)) continue;
     if (r.kind === 'probe' && !q.includeProbes && !q.kinds?.includes('probe')) continue;
+    if (q.userAgents?.length && !q.userAgents.some((p) => matchesPattern(p, r.userAgent === null ? '-' : foldUserAgent(r.userAgent)))) continue;
+    if (q.clients?.length && !q.clients.some((p) => matchesPattern(p, r.client ?? '-'))) continue;
     const answer = r.attempts[r.attempts.length - 1]?.response;
     if (answer?.stopReason !== 'refusal') continue;
     const category = answer.refusalCategory ?? '-';
@@ -905,12 +910,12 @@ function termEndOf(a: Account, at: number): number | null {
 
 /**
  * The weekly resets in range per subscription account as the route answers them, from the story's `window_reset` rows
- * and, for an account whose term ended in range, one `term_ended` reset per weekly window at the end, its share the
- * last reading of the window's quota history strictly before the end, as the ledger reads `observed_at < end`. A reset
- * at or after an end the read has reached is left out, an end before the range's start included, as the ledger drops
- * the resets at or after every end it lists, so the week the end cut short counts once. The `term_ended` rows build for
- * an end inside the range alone. The term is read at the range's end capped at the story's now, and the windows run in
- * key order, the 7-day window first.
+ * with the pair each event carries and, for an account whose term ended in range, one `term_ended` reset per weekly
+ * window at the end with no pair, its share the last reading of the window's quota history strictly before the end, as
+ * the ledger reads `observed_at < end`. A reset at or after an end the read has reached is left out, an end before the
+ * range's start included, as the ledger drops the resets at or after every end it lists, so the week the end cut short
+ * counts once. The `term_ended` rows build for an end inside the range alone. The term is read at the range's end
+ * capped at the story's now, and the windows run in key order, the 7-day window first.
  */
 export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], history: QuotaHistory[], span: Range, filters: Pick<AnalyticsQuery, 'accountIds'> = {}): UnusedAllowanceAnswer {
   const fromMs = Date.parse(span.from);
@@ -929,9 +934,9 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
       for (const e of events) {
         const at = Date.parse(e.at);
         if (e.kind !== 'window_reset' || e.accountId !== a.id || at < fromMs || at > toMs) continue;
-        const d = e.detail as { observed: string; reset_at: number; utilization_before: number; window: string };
+        const d = e.detail as { observed: string; plan: string | null; reset_at: number; tier: string | null; utilization_before: number; window: string };
         if (!isWeekly(d.window) || (elapsed !== null && d.reset_at >= elapsed)) continue;
-        add(d.window, { observedAt: e.at, resetAt: iso(d.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - d.utilization_before)), source: d.observed });
+        add(d.window, { observedAt: e.at, plan: d.plan, resetAt: iso(d.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - d.utilization_before)), source: d.observed, tier: d.tier });
       }
       if (ended !== null) {
         for (const h of history) {
@@ -939,7 +944,7 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
           if (h.accountId !== a.id || !isWeekly(window)) continue;
           const before = h.samples.filter((x) => Date.parse(x.at) < ended);
           const last = before[before.length - 1];
-          if (last) add(window, { observedAt: last.at, resetAt: iso(ended), shareLeft: Math.min(1, Math.max(0, 1 - last.utilization)), source: 'term_ended' });
+          if (last) add(window, { observedAt: last.at, plan: null, resetAt: iso(ended), shareLeft: Math.min(1, Math.max(0, 1 - last.utilization)), source: 'term_ended', tier: null });
         }
       }
       const windows = [...byWindow]

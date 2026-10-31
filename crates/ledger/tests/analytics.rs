@@ -4077,7 +4077,7 @@ async fn the_shares_answer_under_any_grouping_where_the_filter_names_one_account
 async fn a_group_on_a_model_without_a_weight_reads_its_tiers_equivalent_marked_estimated() {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
     for (id, model) in [
-        ("r-opus-5", "claude-opus-5"),
+        ("r-opus-4-7", "claude-opus-4-7"),
         ("r-opus-5-5", "claude-opus-5-5"),
     ] {
         plant_share(
@@ -4098,7 +4098,7 @@ async fn a_group_on_a_model_without_a_weight_reads_its_tiers_equivalent_marked_e
     )
     .await;
     let (unweighted, weighted) = (
-        group(&groups, "claude-opus-5"),
+        group(&groups, "claude-opus-4-7"),
         group(&groups, "claude-opus-5-5"),
     );
     assert!(
@@ -4111,7 +4111,7 @@ async fn a_group_on_a_model_without_a_weight_reads_its_tiers_equivalent_marked_e
             .get(FIVE_HOUR)
             .is_some_and(|e| *e > 0.0)
             && unweighted.cost_equivalent == weighted.cost_equivalent,
-        "Opus 5 reads Opus 5.5's figure for the same tokens: {unweighted:?} vs {weighted:?}"
+        "Opus 4.7 reads Opus 5.5's figure for the same tokens: {unweighted:?} vs {weighted:?}"
     );
 }
 
@@ -4803,7 +4803,7 @@ fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_on_a_sized_
             0,
             "p",
             "a",
-            "claude-opus-4-8",
+            "claude-sonnet-4-5",
             "inference",
             UNATTRIBUTED,
             UNATTRIBUTED,
@@ -4827,15 +4827,20 @@ fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_on_a_sized_
         )
     };
     assert!(
-        share("claude-opus-4-8").is_some() && share("claude-opus-4-8") == share("claude-opus-5-5"),
-        "the model has no weight of its own and prices at Opus 5.5's, the latest weighted model of its tier"
+        share("claude-sonnet-4-5").is_some() && share("claude-sonnet-4-5") == share("claude-sonnet-5-5"),
+        "the model has no weight of its own and prices at Sonnet 5.5's, the latest weighted model of its tier"
     );
     let point = burn_series_over(&[row], &tables, &PRICES, &filter)
         .unwrap()
         .into_iter()
         .find(|p| p.at == 3_600_000)
         .unwrap();
-    let fast_usd = shipped_usd(3_600_000, "claude-opus-4-8", Speed::Fast, usage(1_000, 100));
+    let fast_usd = shipped_usd(
+        3_600_000,
+        "claude-sonnet-4-5",
+        Speed::Fast,
+        usage(1_000, 100),
+    );
     assert_eq!(
         (point.usd, point.five_hour_share, point.seven_day_share),
         (fast_usd, Some(0.0), Some(0.0)),
@@ -5308,10 +5313,10 @@ fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_a
             "{priced} beside Mystery 2, the equivalent latched as the share is"
         );
     }
-    // Opus 5 has no weight of its own and prices at Opus 5.5's, so a bucket of the two is priced whole: the share is
-    // the sum of two Opus 5.5 rows.
+    // Opus 4.7 has no weight of its own and prices at Opus 5.5's, so a bucket of the two is priced whole: the share
+    // is the sum of two Opus 5.5 rows.
     plant_in_the_off_band_hour(&db, "c-opus-5-5", "c", "claude-opus-5-5", Some(1_000_000));
-    plant_in_the_off_band_hour(&db, "c-opus-5", "c", "claude-opus-5", Some(1_000_000));
+    plant_in_the_off_band_hour(&db, "c-opus-4-7", "c", "claude-opus-4-7", Some(1_000_000));
     let point = off_band_point_on_max_20x(&db, "c");
     let opus = |window| {
         share_of(
@@ -5330,7 +5335,7 @@ fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_a
             && point
                 .seven_day_share
                 .is_some_and(|share| (share - 2.0 * opus(SEVEN_DAY)).abs() < 1e-12),
-        "Opus 5.5 beside Opus 5: {point:?}"
+        "Opus 5.5 beside Opus 4.7: {point:?}"
     );
     assert_eq!(point.tokens, 2_000_000);
 }
@@ -5370,16 +5375,16 @@ fn a_row_with_no_token_never_unprices_a_bucket_and_a_bucket_of_them_alone_reads_
 #[test]
 fn a_row_on_a_model_without_a_weight_prices_an_estimated_share_at_its_tiers_latest_weight() {
     let db = LedgerDb::open_in_memory().unwrap();
-    // The shipped model has no weight for Opus 5, so a million of its input tokens price on both windows at the
+    // The shipped model has no weight for Opus 4.7, so a million of its input tokens price on both windows at the
     // weight of the latest weighted model of its tier.
     db.insert_request(
         &RequestRecord {
-            id: "r-opus-5".into(),
+            id: "r-opus-4-7".into(),
             received_at: WEEKDAY_OFF_PEAK,
             key_id: Some("k".into()),
             pool_id: Some("p".into()),
-            canonical_model: "claude-opus-5".into(),
-            model: "claude-opus-5".into(),
+            canonical_model: "claude-opus-4-7".into(),
+            model: "claude-opus-4-7".into(),
             kind: "inference".into(),
             origin: "client".into(),
             outcome: "succeeded".into(),
@@ -5387,7 +5392,7 @@ fn a_row_on_a_model_without_a_weight_prices_an_estimated_share_at_its_tiers_late
             ..Default::default()
         },
         &[AttemptRecord {
-            request_id: "r-opus-5".into(),
+            request_id: "r-opus-4-7".into(),
             attempt: 1,
             account_id: "max".into(),
             account_kind: "oauth".into(),
@@ -5416,8 +5421,8 @@ fn a_row_on_a_model_without_a_weight_prices_an_estimated_share_at_its_tiers_late
         .expect("the planted hour");
     let costs = tables.revisions.in_force(WEEKDAY_OFF_PEAK);
     let (weight, fallback) = costs
-        .weight_or_fallback("claude-opus-5", FIVE_HOUR)
-        .expect("Opus 5 prices through its tier");
+        .weight_or_fallback("claude-opus-4-7", FIVE_HOUR)
+        .expect("Opus 4.7 prices through its tier");
     assert!(fallback, "the weight is its tier's, not its own");
     let capacity = &costs.capacity[MAX_20X];
     let share = |window_capacity: Option<f64>| {
@@ -7937,12 +7942,12 @@ async fn the_dashboard_the_traffic_and_the_totals_split_the_billed_dollars_from_
             ..ShareRow::default()
         },
     );
-    // Opus 5 has no weight of its own in the shipped model and prices at its model tier's latest weight.
+    // Opus 4.7 has no weight of its own in the shipped model and prices at its model tier's latest weight.
     plant_share(
         &db,
         ShareRow {
             id: "r-unweighted",
-            model: "claude-opus-5",
+            model: "claude-opus-4-7",
             usage: plan,
             ..ShareRow::default()
         },
@@ -7981,7 +7986,7 @@ async fn the_dashboard_the_traffic_and_the_totals_split_the_billed_dollars_from_
     );
     let window = |w: &str| {
         equivalent_of("claude-opus-5-5", plan, WEEKDAY_OFF_PEAK)[w].unwrap()
-            + equivalent_of("claude-opus-5", plan, WEEKDAY_OFF_PEAK)[w].unwrap()
+            + equivalent_of("claude-opus-4-7", plan, WEEKDAY_OFF_PEAK)[w].unwrap()
     };
     let read =
         |got_billed: f64, got: &phoebis_ledger::SharedEquivalent, estimated: bool, what: &str| {

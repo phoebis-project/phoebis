@@ -282,6 +282,40 @@ test('the Quota page lists a subscription account that is paired, not awaiting r
   assert.equal(d.isQuotaListed({ kind: 'oauth', planEndedAt: ended, status: 'cooldown' }), false, 'a flagged account in cooldown');
 });
 
+test('the plan-ended sentence reads its age in the long form and in the compact one the account cards draw', () => {
+  const now = Date.UTC(2026, 8, 16, 14, 30);
+  const ended = new Date(now - 4 * 3_600_000).toISOString();
+  const ago = d.fmtRelative(ended, now);
+  assert.equal(ago, '4h ago');
+  assert.equal(d.planEndedSentence(ended, now), 'No quota window is read since the plan ended 4h ago.');
+  assert.equal(d.planEndedSentence(ended, now, false), `No quota window is read since the plan ended ${ago}.`);
+  assert.equal(d.planEndedSentence(ended, now, true), 'No window since the plan ended 4h ago');
+});
+
+test("the priced tier is the stored one under the six tiered plan words while the cost table holds its row, and none with the gate's reason otherwise", () => {
+  // The table's own rows: Max 20x and Team held, Enterprise and Pro's tier not.
+  const costs = { capacity: { default_claude_max_20x: { fiveHour: 100, sevenDay: 1_000 }, default_claude_team: { fiveHour: 10, sevenDay: 100 } } };
+  const priced = (plan, tier, table = costs) => d.pricedTier(plan, tier, table);
+  for (const plan of ['max', 'max_20x', 'max_5x', 'pro']) assert.deepEqual(priced(plan, 'default_claude_max_20x'), { tier: 'default_claude_max_20x' }, `${plan} on a held tier`);
+  assert.deepEqual(priced('team', 'default_claude_team'), { tier: 'default_claude_team' }, 'a Team seat on a held tier');
+  assert.deepEqual(priced('team', 'claude_team'), { tier: 'claude_team' }, "the held tier matched with the prefix put on, as the cost model's lookup matches it");
+  assert.deepEqual(priced('enterprise', 'default_claude_max_20x'), { tier: 'default_claude_max_20x' }, 'an Enterprise seat on a held tier');
+  const unknown = { reason: 'tier unknown', tier: null };
+  assert.deepEqual(priced('enterprise', 'default_claude_enterprise'), unknown, 'an Enterprise seat on a tier the table lacks');
+  assert.deepEqual(priced('pro', 'default_claude_ai'), unknown, 'a Pro tier the table lacks');
+  assert.deepEqual(priced('free', 'default_claude_max_20x'), { reason: 'no priced capacity for a free plan', tier: null }, 'a free plan on a held tier');
+  assert.deepEqual(priced('usage_based', 'default_claude_max_20x'), { reason: 'a usage-based seat', tier: null }, 'a usage-based seat on a held tier');
+  assert.deepEqual(priced(null, 'default_claude_max_20x'), unknown, 'no plan');
+  assert.deepEqual(priced('max_20x', null), unknown, 'no tier');
+  assert.deepEqual(priced('some_new_word', 'default_claude_max_20x'), unknown, 'a plan word outside the eight');
+  // Window shares prices no figure, so without a table the six words answer the stored tier and the plan word decides.
+  assert.deepEqual(priced('enterprise', 'default_claude_enterprise', null), { tier: 'default_claude_enterprise' }, 'no table: an Enterprise seat');
+  assert.deepEqual(priced('pro', 'default_claude_ai', null), { tier: 'default_claude_ai' }, 'no table: a Pro plan');
+  assert.deepEqual(priced('free', 'default_claude_ai', null), { reason: 'no priced capacity for a free plan', tier: null }, 'no table: a free plan');
+  assert.deepEqual(priced('usage_based', 'default_claude_zero', null), { reason: 'a usage-based seat', tier: null }, 'no table: a usage-based seat');
+  assert.deepEqual(priced('max', null, null), unknown, 'no table: no tier');
+});
+
 const SPEND_NOW = Date.UTC(2026, 8, 16, 14, 30);
 /** A usage-based seat's spend reading, its estimated reset at 00:00 UTC on the first of the next month. */
 const spendReading = (over = {}) => ({

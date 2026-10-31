@@ -1,9 +1,10 @@
 import type {
-  Account, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordOutcome,
-  RecordPin, RecordRequest, RecordSettings, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
+  Account, AllowanceReset, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordOutcome,
+  PoolKeepalive, RecordPin, RecordRequest, RecordSettings, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
 import { endOf } from '@/lib/quota';
 import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN } from './accounts';
+import { GUARDRAILS } from './guardrails';
 import { leadOf } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
@@ -153,20 +154,23 @@ interface ShedRound {
 }
 
 /**
- * The settings a pool's edit at its `updatedAt` moved, each at its value before the edit, which the edit's registry
- * change carries as each pair's old value, and the instant the settings before it took force. The story's other rows
- * read neither, so no row before the edit contradicts them.
+ * The settings and the keepalive policy a pool's edit at its `updatedAt` moved, each at its value before the edit,
+ * which the edit's registry change carries as each pair's old value, and the instant the settings before it took force.
+ * The story's other rows read neither, so no row before the edit contradicts them, and a record carries no policy.
  */
-const BEFORE_EDIT: Record<string, Partial<RecordSettings>> = { all: { minSharedPrefixTokens: 10_000, poolUpdatedAt: iso(NOW - 9 * DAY), slowDownHoldSeconds: 60 } };
+const BEFORE_EDIT: Record<string, Partial<RecordSettings> & { keepalive: Partial<PoolKeepalive> }> = {
+  all: { keepalive: { maxIdleSeconds: 43_200 }, minSharedPrefixTokens: 10_000, poolUpdatedAt: iso(NOW - 9 * DAY), slowDownHoldSeconds: 60 },
+};
 
 /**
  * The pool's settings as the record decided at `at` names them, by the pool fields they are read from: a record
  * decided before the pool's edit carries the values the edit moved.
  */
 function settingsOf(pool: PoolSeed, at: number): RecordSettings {
+  const { keepalive: _policy, ...before } = BEFORE_EDIT[pool.id] ?? { keepalive: {} };
   return {
     ...settingsNow(pool),
-    ...(at < Date.parse(pool.updatedAt) ? BEFORE_EDIT[pool.id] : {}),
+    ...(at < Date.parse(pool.updatedAt) ? before : {}),
   };
 }
 
@@ -464,6 +468,12 @@ function rampAt(accountId: string, pool: PoolSeed, at: number): number {
   return since === null ? 0 : round3(Math.min(1, (at - since) / (pool.burnAverageSeconds * 1_000)));
 }
 
+/**
+ * The seat's first record, which carries no spend entry, as a record does where the seat's share lapsed at its reset or
+ * was not yet read, so the Pace hover's sentence rests on the paid pace's shape alone.
+ */
+const SPEND_UNREAD: ReadonlySet<string> = new Set(['req_c94d1e07-b35']);
+
 /** Every pool member's standing at the decision's time, eligible or not. */
 function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
   const r = spec.request;
@@ -496,7 +506,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       }
       // The engine writes a usage-based seat's spend window while a share is held, its source the reset's.
       const spend = a.usageBased ? a.spend : null;
-      if (spend !== null && spend.utilization !== null) {
+      if (spend !== null && spend.utilization !== null && !SPEND_UNREAD.has(r.id)) {
         windows.spend = { ageMs, ahead: null, demand: null, horizon: null, observedAt: iso(at - ageMs), projection: null, reserved: 0, reset: spend.resetsAt, source: spend.resetSource, utilization: spend.utilization };
       }
     } else {
@@ -1401,6 +1411,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
       holds: spec.holds ?? [],
       keyGeneration: r.keyGeneration, keyId: r.keyId ?? '', lane: { effort: r.shape.effort ?? '-', speed: fast ? 'fast' : 'standard', thinking: r.shape.thinkingType ?? 'none' }, parentAgentId: r.agentId === 'main' ? null : 'main', poolId: r.poolId ?? '',
       registryRevision: 412, requestClass: r.requestClass, requestId: r.id, seq: spec.seq, sessionId: r.sessionId,
+      ...(spec.refusal?.kind === 'guardrail' || spec.refusal?.kind === 'client' ? refusedFacts(r, spec.refusal.code === 'drift') : {}),
     },
     requestId: r.id,
     seq: spec.seq,
@@ -1660,15 +1671,15 @@ const sessionId = (prefix: string) => REQUESTS.find((r) => r.sessionId?.startsWi
 
 /**
  * The 11:00 round's four pins on secondary in its order: the cold one, then the warm ones by burn over their prompt.
- * Each holds Sonnet 4.6, the one model secondary serves, and burns its share of the 5-hour window per hour, which sum
+ * Each holds Sonnet 4.5, the one model secondary serves, and burns its share of the 5-hour window per hour, which sum
  * to the account's burn. The first two cover the target under the cap and plan their moves to primary, where they fit,
  * and the walk stops before the current pin.
  */
 const ROUND_PINS: RoundPin[] = [
-  { agentId: 'main', burn: 0.0034, cold: true, keyId: 'desktop', lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('0d588de5'), skip: null },
-  { agentId: 'e90b', burn: 0.0142, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: true, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('c64358b5'), skip: null },
-  { agentId: 'e90b', burn: 0.0052, cold: false, keyId: 'desktop', lastInputTokens: 41_000, marked: false, model: 'claude-sonnet-4-6', note: 'current', sessionId: sessionId('407dd39b'), skip: null },
-  { agentId: 'c21e', burn: 0.0071, cold: false, keyId: 'desktop', lastInputTokens: 64_000, marked: false, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('76ddb35b'), skip: null },
+  { agentId: 'main', burn: 0.0034, cold: true, keyId: 'desktop', lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('0d588de5'), skip: null },
+  { agentId: 'e90b', burn: 0.0142, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: true, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('c64358b5'), skip: null },
+  { agentId: 'e90b', burn: 0.0052, cold: false, keyId: 'desktop', lastInputTokens: 41_000, marked: false, model: 'claude-sonnet-4-5', note: 'current', sessionId: sessionId('407dd39b'), skip: null },
+  { agentId: 'c21e', burn: 0.0071, cold: false, keyId: 'desktop', lastInputTokens: 64_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('76ddb35b'), skip: null },
 ];
 
 /**
@@ -1684,7 +1695,7 @@ const parkedOpus = SESSIONS.find((x) => x.sessionId === SESSION_IDS[3] && x.keyI
  * before the order.
  */
 const NO_RUNWAY_PINS: RoundPin[] = [
-  { agentId: 'main', burn: 0.052, cold: true, keyId: 'desktop', lastInputTokens: 43_000, marked: false, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('bcc805b6'), skip: 'no_runway' },
+  { agentId: 'main', burn: 0.052, cold: true, keyId: 'desktop', lastInputTokens: 43_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('bcc805b6'), skip: 'no_runway' },
   { agentId: 'main', burn: 0.033, cold: false, keyId: 'desktop', lastInputTokens: 52_300, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: sessionId('d7167642'), skip: 'no_runway' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: parkedOpus?.lastInputTokens ?? 0, marked: false, model: parkedOpus?.model ?? 'claude-opus-5', note: null, sessionId: SESSION_IDS[3], skip: 'fast_lane' },
 ];
@@ -1718,6 +1729,30 @@ const FABLE_WEEK_PINS: RoundPin[] = [
 ];
 
 const roundOfPins = (pins: RoundPin[]): ShedRound => ({ marks: pins.filter((p) => p.marked).map((p) => ({ agentId: p.agentId, keyId: p.keyId, model: p.model, sessionId: p.sessionId })), pins });
+
+/**
+ * A refusal at admission (a guardrail's block, a client's drift or contract) comes before any selection, so its record
+ * leaves the parent agent, the lane, the chains, the accounts attempted and the holds empty. The block and the contract
+ * keep the class and the count and probe flags the request carried, the drift keeps none of them. A key refusal is the
+ * selection's own and keeps the request's facts.
+ */
+const refusedFacts = (r: RequestLog, drift: boolean): Pick<RecordRequest, 'attempted' | 'chain' | 'flags' | 'holds' | 'lane' | 'parentAgentId' | 'requestClass'> => ({
+  attempted: [],
+  chain: { boundaries: 0, staticBoundaries: 0, staticHash: false },
+  flags: { contextCompacted: false, count: !drift && r.kind === 'count_tokens', fast: false, marker: false, portable: false, probe: !drift && r.kind === 'probe' },
+  holds: [],
+  lane: { effort: '', speed: '', thinking: '' },
+  parentAgentId: null,
+  requestClass: drift ? null : r.requestClass,
+});
+
+/**
+ * A guardrail's block as the relay answers it: the stored name of the guardrail the request's matches mark blocking.
+ */
+function blockOf(id: string): NonNullable<Spec['refusal']> {
+  const blocking = requestById.get(id)?.guardrails.find((m) => m.blocked)?.id ?? '';
+  return { code: 'guardrail_blocked', kind: 'guardrail', reason: GUARDRAILS.find((g) => g.id === blocking)?.name ?? blocking };
+}
 
 /**
  * The story hour and the morning's round, written by hand so every card the routing log draws is on the page: each
@@ -1832,6 +1867,8 @@ function storySpecs(): Spec[] {
     at('req_6c3a9e27-5b1', 1, 1, t(14, 18, 5), 'refused', null, { pin: 'not_looked_up', refusal: { code: 'revoked', kind: 'key', reason: 'the key was revoked' } }),
     at('req_e0a4c6f2-118', 1, 1, t(14, 14, 2), 'refused', null, { pin: 'not_looked_up', refusal: { code: 'drift', kind: 'client', reason: 'hash' } }),
     at('req_f1c8e3a5-29d', 1, 1, t(14, 14, 20), 'refused', null, { pin: 'not_looked_up', refusal: { code: 'contract', kind: 'client', reason: 'class_header' } }),
+    // The desktop key's own guardrail refused the day's last auxiliary fork on it.
+    at('req_a8f3c6d0-e17', 1, 1, t(12, 52, 20), 'refused', null, { pin: 'not_looked_up', refusal: blockOf('req_a8f3c6d0-e17') }),
     at('req_51d0e2b8-7a0', 1, 1, t(14, 16, 40), 'exhausted', null, { exhaustion: { deadline: iso(startOfDay(t(14, 16, 40)) + DAY), kind: 'timed', obstacle: null, reason: null, window: 'overage' }, pin: 'pinning_off' }),
     // The compacted conversation renews its pin cold.
     at('req_31f0b7c2-6e1', 1, 1, t(14, 17, 52), 'renewed', 'primary', { pin: live('compacted', 491_000, 'cold') }),
@@ -2085,7 +2122,7 @@ function poolDiff(p: PoolSeed, before: Record<string, unknown>): Record<string, 
   return Object.fromEntries(Object.entries(before).map(([field, from]) => [field, { from, to: row[field] }]));
 }
 
-/** A pool's row as the store's `pool_diff` writes it on a creation, under its column names. */
+/** A pool's row as the store's `pool_diff` writes it on a creation, under its column names, its policy dotted. */
 function poolRow(p: PoolSeed): Record<string, unknown> {
   return {
     affinity_mode: p.affinityMode,
@@ -2097,6 +2134,10 @@ function poolRow(p: PoolSeed): Record<string, unknown> {
     cache_ttl: { enabled: p.cacheTtl.enabled, inject_when_absent: p.cacheTtl.injectWhenAbsent, metered: ttlRulesDiff(p.cacheTtl.metered), plan: ttlRulesDiff(p.cacheTtl.plan) },
     enabled: p.status !== 'disabled',
     in_flight_cap: p.inFlightCap,
+    'keepalive.enabled': p.keepalive.enabled,
+    'keepalive.max_idle_seconds': p.keepalive.maxIdleSeconds,
+    'keepalive.max_parked_seconds': p.keepalive.maxParkedSeconds,
+    'keepalive.scheduled_horizon_seconds': p.keepalive.scheduledHorizonSeconds,
     label: p.name,
     load_shedding: p.loadShedding,
     migrate_when_spent: p.migrateWhenSpent,
@@ -2372,18 +2413,50 @@ function planEndedRow(account: Account): EventSeed[] {
   return [{ accountId: account.id, at: account.planEndedAt, detail: { organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', source: 'profile', subscription_status: 'canceled' }, kind: 'plan_ended' }];
 }
 
+/**
+ * The plan-ended account's backoff close: a run one rate limit opened six minutes earlier stood open when the profile
+ * read paused the poll, and the pause closes it at its own instant, since no clean answer will come.
+ */
+function planEndedClose(account: Account): EventSeed[] {
+  if (account.planEndedAt === null) return [];
+  const at = Date.parse(account.planEndedAt);
+  return [{ accountId: account.id, at: account.planEndedAt, detail: { attempts: 1, cause: 'plan_ended', duration_ms: 6 * MINUTE, resumed_at: at }, kind: 'poll_backoff_ended' }];
+}
+
 const WEEK = 7 * DAY;
+
+/** The plan word and the tier a `window_reset` stores, those of the reading it replaced. */
+type ReadingPair = Pick<AllowanceReset, 'plan' | 'tier'>;
+
+/** The account's pair as its subscription reads now, the one a reading taken under it stores. */
+const currentPair = (accountId: string): ReadingPair => {
+  const subscription = accountOf.get(accountId)?.subscription;
+  return { plan: subscription?.plan ?? null, tier: subscription?.rateLimitTier ?? null };
+};
+
+/**
+ * The pair an account held up to an instant before it changed: a reset at or before `through` replaced a reading taken
+ * under `pair`, whatever window it closes, since one poll's readings name one plan.
+ */
+interface EarlierPair {
+  pair: ReadingPair;
+  through: number;
+}
+
+const PRO_READING: ReadingPair = { plan: 'pro', tier: 'default_claude_ai' };
 
 /**
  * A weekly window's resets over the four weeks before the story's, a week apart back from `resetsAtMs`, its current
- * reset, each storing the reading before it so the share left is one less it, newest first. The clock walk announces a
- * reset no poll read after it, which names no next reset, as the engine writes it.
+ * reset, each storing the reading before it so the share left is one less it, newest first, with that reading's pair:
+ * the account's current one, or `earlier`'s for a reset at or before its instant. The clock walk announces a reset no
+ * poll read after it, which names no next reset, as the engine writes it.
  */
-function weeklyResets(accountId: string, window: string, resetsAtMs: number, shares: number[], clockAt = -1): EventSeed[] {
+function weeklyResets(accountId: string, window: string, resetsAtMs: number, shares: number[], clockAt = -1, earlier: EarlierPair | null = null): EventSeed[] {
   return shares.map((share, i) => {
     const reset = resetsAtMs - (i + 1) * WEEK;
     const clockWalk = i === clockAt;
-    return { accountId, at: iso(reset), detail: { next_reset: clockWalk ? null : reset + WEEK, observed: clockWalk ? 'clock' : 'sample', reset_at: reset, utilization_before: Math.round((1 - share) * 1000) / 1000, window }, kind: 'window_reset' };
+    const { plan, tier } = earlier !== null && reset <= earlier.through ? earlier.pair : currentPair(accountId);
+    return { accountId, at: iso(reset), detail: { next_reset: clockWalk ? null : reset + WEEK, observed: clockWalk ? 'clock' : 'sample', plan, reset_at: reset, tier, utilization_before: Math.round((1 - share) * 1000) / 1000, window }, kind: 'window_reset' };
   });
 }
 
@@ -2391,6 +2464,14 @@ const resetOf = (accountId: string, window: '7d' | '7d_fable'): number => {
   const a = accountOf.get(accountId);
   return Date.parse((window === '7d_fable' ? a?.fableWindow : a?.windows.find((w) => w.id === window))?.resetsAt ?? '');
 };
+
+/**
+ * Studio upgraded from Pro to Max 5x at its subscription's start, inside its second-newest week, so its third and
+ * fourth weeks ran under Pro on both its windows. Sunset was a Pro login until its plan ended, so its weeks before
+ * the end ran under Pro, whatever plan the profile read found after it.
+ */
+const STUDIO_BEFORE_UPGRADE: EarlierPair = { pair: PRO_READING, through: Date.parse(accountOf.get('studio')?.subscription?.since ?? '') };
+const SUNSET_BEFORE_END: EarlierPair = { pair: PRO_READING, through: Date.parse(accountOf.get('sunset')?.subscription?.endsAt ?? '') };
 
 /**
  * The story's weekly resets, the routing log's rows the unused allowance route answers from: each weekly window of the
@@ -2404,9 +2485,9 @@ export const WEEKLY_RESETS: EventSeed[] = [
   ...weeklyResets('secondary', 'seven_day', resetOf('secondary', '7d'), [0.61, 0.55, 0.7, 0.58]),
   ...weeklyResets('nightly', 'seven_day', resetOf('nightly', '7d'), [0.18, 0.22, 0.15, 0.29], 2),
   ...weeklyResets('nightly', 'seven_day_fable', resetOf('nightly', '7d_fable'), [0.31, 0.36, 0.28, 0.4]),
-  ...weeklyResets('studio', 'seven_day', resetOf('studio', '7d'), [0.44, 0.39, 0.5, 0.47]),
-  ...weeklyResets('studio', 'seven_day_fable', resetOf('studio', '7d_fable'), [0.79, 0.84, 0.76, 0.82]),
-  ...weeklyResets('sunset', 'seven_day', NOW + SUNSET_WEEK_RESETS_IN, [0.52, 0.48, 0.57]),
+  ...weeklyResets('studio', 'seven_day', resetOf('studio', '7d'), [0.44, 0.39, 0.5, 0.47], -1, STUDIO_BEFORE_UPGRADE),
+  ...weeklyResets('studio', 'seven_day_fable', resetOf('studio', '7d_fable'), [0.79, 0.84, 0.76, 0.82], -1, STUDIO_BEFORE_UPGRADE),
+  ...weeklyResets('sunset', 'seven_day', NOW + SUNSET_WEEK_RESETS_IN, [0.52, 0.48, 0.57], -1, SUNSET_BEFORE_END),
 ];
 
 /**
@@ -2462,7 +2543,7 @@ function buildEvents(): RoutingEvent[] {
     seeds.push(
       { accountId: 'legacy', at: iso(LEGACY_FIVE_HOUR_SPENT_AT), detail: { ...read, utilization: 1 }, kind: 'window_spent' },
       { accountId: 'legacy', at: legacy.observedAt, detail: { ...read, utilization: legacy.utilization, utilization_before: 1 }, kind: 'window_cleared' },
-      { accountId: 'legacy', at: iso(reset), detail: { next_reset: null, observed: 'clock', reset_at: reset, utilization_before: legacy.utilization, window: 'five_hour' }, kind: 'window_reset' },
+      { accountId: 'legacy', at: iso(reset), detail: { next_reset: null, observed: 'clock', ...currentPair('legacy'), reset_at: reset, utilization_before: legacy.utilization, window: 'five_hour' }, kind: 'window_reset' },
     );
   }
   // Studio's wall after the round its stretch fired at 14:05: a poll read the 5-hour window at its limit, and the
@@ -2571,7 +2652,7 @@ function buildEvents(): RoutingEvent[] {
     ...legacyPolls(),
     ...reservePolls(),
     { accountId: 'research', at: iso(t(12, 41, 7)), detail: { budget_usd: 20, period: 'day', period_end: startOfDay(t(12, 41, 7)) + DAY, source_request_id: BUDGET_CROSSING_ID, spent_usd: 20.4 }, kind: 'budget_reached', poolId: 'jobs', requestId: BUDGET_CROSSING_ID },
-    { accountId: 'primary', at: iso(fiveHourReset), detail: { next_reset: fiveHourReset + 5 * HOUR, observed: 'sample', reset_at: fiveHourReset, utilization_before: beforeReset, window: 'five_hour' }, kind: 'window_reset' },
+    { accountId: 'primary', at: iso(fiveHourReset), detail: { next_reset: fiveHourReset + 5 * HOUR, observed: 'sample', ...currentPair('primary'), reset_at: fiveHourReset, utilization_before: beforeReset, window: 'five_hour' }, kind: 'window_reset' },
     ...WEEKLY_RESETS,
     { accountId: 'overflow', at: iso(t(11, 30, 12)), detail: { cause: 'funding_refused', detail: 'Your credit balance is too low to access the Anthropic API.', from: 'ready', to: 'funding_required' }, kind: 'account_state_changed' },
     {
@@ -2581,12 +2662,17 @@ function buildEvents(): RoutingEvent[] {
       kind: 'fast_credits_changed',
     },
     { accountId: 'nightly', at: iso(OVERAGE_FROM), detail: {}, kind: 'overage_started' },
-    // The edit that raised the pool's shared prefix floor and its slow-down hold, at the stamp the pool carries.
+    // The edit that raised the pool's shared prefix floor and its slow-down hold and cut its idle window, at the stamp
+    // the pool carries.
     {
       accountId: null,
       actor: 'admin',
       at: pool.updatedAt,
-      detail: { diff: poolDiff(pool, { min_shared_prefix_tokens: BEFORE_EDIT.all.minSharedPrefixTokens, slow_down_hold_seconds: BEFORE_EDIT.all.slowDownHoldSeconds }), kind: 'pool_updated', target: 'all' },
+      detail: {
+        diff: poolDiff(pool, { min_shared_prefix_tokens: BEFORE_EDIT.all.minSharedPrefixTokens, slow_down_hold_seconds: BEFORE_EDIT.all.slowDownHoldSeconds, 'keepalive.max_idle_seconds': BEFORE_EDIT.all.keepalive.maxIdleSeconds }),
+        kind: 'pool_updated',
+        target: 'all',
+      },
       kind: 'registry_changed',
       poolId: 'all',
     },
@@ -2612,12 +2698,13 @@ function buildEvents(): RoutingEvent[] {
     // five minutes found it funded again.
     { accountId: 'overflow', at: iso(NOW - 3 * DAY - 5 * HOUR), detail: { cause: 'funding_refused', detail: 'Your credit balance is too low to access the Anthropic API.', from: 'ready', to: 'funding_required' }, kind: 'account_state_changed' },
     { accountId: 'overflow', at: iso(NOW - 3 * DAY - 5 * HOUR + 5 * MINUTE + 40_000), detail: { cause: 'funding_retry', detail: null, from: 'funding_required', to: 'ready' }, kind: 'account_state_changed' },
-    { accountId: 'primary', at: iso(t(8, 15, 3)), detail: { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: t(8, 15, 3) }, kind: 'poll_backoff_ended' },
+    { accountId: 'primary', at: iso(t(8, 15, 3)), detail: { attempts: 3, cause: 'clean_poll', duration_ms: 25 * MINUTE, resumed_at: t(8, 15, 3) }, kind: 'poll_backoff_ended' },
     { accountId: 'research', at: iso(startOfDay(t(14, 30))), detail: { period: 'day', period_start: startOfDay(t(14, 30)) - DAY, previous_spent_usd: 18.2 }, kind: 'budget_period_ended', poolId: 'jobs' },
     // Drawn at the instant it fires: the subscription's end less the pool's wind-down, which is still ahead.
     { accountId: 'secondary', at: iso(endsAt - pool.windDownMinutes * MINUTE), detail: { end_source: 'canceled', ends_at: endsAt, wind_down_minutes: pool.windDownMinutes }, kind: 'wind_down_started', poolId: 'all' },
     ...planRows(primary),
     ...planEndedRow(accountOf.get('sunset')!),
+    ...planEndedClose(accountOf.get('sunset')!),
   );
   if (oldestCooldown) seeds.push({ accountId: oldestCooldown.accountId, at: iso(oldestCooldown.until), detail: { cause: 'expired', scope: oldestCooldown.scope }, kind: 'cooldown_cleared' });
   if (gap) seeds.push({ accountId: null, at: iso(Date.parse(gap.at) + (gap.durationMs ?? 0)), detail: { reason: 'chunk_skipped', request_id: gap.id }, kind: 'ledger_gap', requestId: gap.id });
@@ -2682,11 +2769,14 @@ export function listRoutingLog(query: RoutingLogQuery, now: number, written: rea
   const within = (at: string) => Date.parse(at) >= from && Date.parse(at) <= to;
   const inList = (list: string[] | undefined, value: string | null) => !list?.length || (value !== null && list.includes(value));
   const session = (value: string | null) => !query.session || (value !== null && value.startsWith(query.session));
+  // An event that names no agent matches none, as the route leaves a session-level event out.
+  const agent = (value: string | null) => !query.agentId || value === query.agentId;
   const decisions = SUMMARIES.filter(
     (s) =>
       within(s.at) &&
       (!query.request || s.requestId === query.request) &&
       session(s.sessionId) &&
+      agent(s.agentId) &&
       inList(query.keyIds, s.keyId) &&
       inList(query.poolIds, s.poolId) &&
       inList(query.models, s.model) &&
@@ -2699,6 +2789,7 @@ export function listRoutingLog(query: RoutingLogQuery, now: number, written: rea
       (e.id !== LATE_EVENT_ID || now >= LATE_EVENT_AT) &&
       (!query.request || e.requestId === query.request) &&
       session(e.sessionId) &&
+      agent(e.agentId) &&
       inList(query.keyIds, e.keyId) &&
       inList(query.poolIds, e.poolId) &&
       inList(query.models, e.model) &&

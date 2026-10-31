@@ -11,15 +11,15 @@ const write = (codec, filters) => codec.toParams(filters).toString();
 
 /** Each view's codec over a filled address: every list with two ids, every text set, every flag on, every choice off its default. */
 const FILLED = {
-  ACCOUNTS_CODEC: { search: 'git', sort: 'usage', status: 'paused' },
-  ANALYTICS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', by: 'session', class: 'claude-code/*', groups: 'claude-cli/2.1.*\nclaude-cli/2.0.*', key: 'desktop@1000', keys: ['desktop', 'laptop'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], probes: true, range: preset('7d'), session: '407dd39b-dd60', unit: 'share' },
+  ACCOUNTS_CODEC: { dir: 'asc', search: 'git', sort: 'usage', status: 'paused' },
+  ANALYTICS_CODEC: { accounts: ['primary', 'secondary'], by: 'session', clients: ['claude-code/cli', 'claude-code/sdk*'], groups: 'claude-cli/2.1.*\nclaude-cli/2.0.*', key: 'desktop@1000', keys: ['desktop', 'laptop'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], probes: true, range: preset('7d'), session: '407dd39b-dd60', unit: 'share', userAgents: ['claude-cli/2.1.3 (external, cli)', 'claude-cli/2.0.*'] },
   KEYS_CODEC: { pools: ['all', 'jobs'], search: 'lap', status: 'active' },
   METER_CODEC: { accounts: ['primary', 'secondary'] },
   POOLS_CODEC: {},
   QUOTA_CODEC: {},
-  REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], classifiers: ['client', '-'], client: 'claude-code/*', efforts: ['high', 'low'], guardrails: ['large-auxiliary', '-'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), refusalCategories: ['cyber', '-'], request: 'req_f8085653', requestClasses: ['conversation', 'title'], rows: '50', search: 'req_1d9c3e55', session: '407dd39b-dd60', speeds: ['fast', 'standard'], statuses: ['200', '429'], stopReasons: ['refusal', '-'], turnOrigins: ['agent', 'user'] },
-  ROUTING_LOG_CODEC: { accounts: ['primary', 'secondary'], keys: ['desktop', 'laptop'], kinds: ['exhausted', 'moved'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], range: preset('6h'), request: 'req_1d9c3e55', session: '407dd39b-dd60' },
-  SESSIONS_CODEC: { age: '6h', companion: true, finished: true, released: true },
+  REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentId: 'main', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], classifiers: ['client', '-'], client: 'claude-code/*', efforts: ['high', 'low'], guardrails: ['large-auxiliary', '-'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), refusalCategories: ['cyber', '-'], request: 'req_f8085653', requestClasses: ['conversation', 'title'], rows: '50', search: 'req_1d9c3e55', session: '407dd39b-dd60', speeds: ['fast', 'standard'], statuses: ['200', '429'], stopReasons: ['refusal', '-'], turnOrigins: ['agent', 'user'] },
+  ROUTING_LOG_CODEC: { accounts: ['primary', 'secondary'], agentId: 'main', keys: ['desktop', 'laptop'], kinds: ['exhausted', 'moved'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], range: preset('6h'), request: 'req_1d9c3e55', session: '407dd39b-dd60' },
+  SESSIONS_CODEC: { companion: true, dir: 'asc', finished: true, released: true, sort: 'activity' },
 };
 
 test("each view's codec reads back the address it writes, the range at a preset and at a custom span", () => {
@@ -34,17 +34,73 @@ test("each view's codec reads back the address it writes, the range at a preset 
   }
 });
 
-test('the Sessions codec writes the filters off their defaults alone, in the bar order, and Reset leaves a bare address', () => {
-  assert.deepEqual(d.SESSION_AGES, ['15m', '1h', '6h', '24h', 'none']);
+test('the Sessions codec writes the filters off their defaults alone, in the bar order, reads no age, and Reset leaves a bare address', () => {
   const defaults = read(d.SESSIONS_CODEC, '');
-  assert.deepEqual(defaults, { age: '1h', companion: false, finished: false, released: false });
+  assert.deepEqual(defaults, { companion: false, dir: '', finished: false, released: false, sort: 'created' });
   assert.equal(write(d.SESSIONS_CODEC, defaults), '');
-  const set = { companion: true, finished: false, age: '6h', released: true };
-  assert.equal(write(d.SESSIONS_CODEC, set), 'companion=1&age=6h&released=1');
+  assert.deepEqual(read(d.SESSIONS_CODEC, 'age=6h'), defaults, 'an age is a key the codec does not know');
+  const set = { ...defaults, companion: true, released: true };
+  assert.equal(write(d.SESSIONS_CODEC, set), 'companion=1&released=1');
   assert.deepEqual(read(d.SESSIONS_CODEC, 'companion=1&age=6h&released=1'), set);
-  assert.equal(read(d.SESSIONS_CODEC, 'age=bogus').age, '1h');
   const reset = Object.fromEntries(d.SESSIONS_DIMENSIONS.map((x) => [x.field, d.emptyValue(x)]));
   assert.equal(write(d.SESSIONS_CODEC, { ...set, finished: true, ...reset }), '');
+});
+
+test("both logs' codecs carry the agent id as agent_id, and agent stays the Requests view's user agent pattern", () => {
+  for (const [name, codec] of [['requests', d.REQUESTS_CODEC], ['routing log', d.ROUTING_LOG_CODEC]]) {
+    const bare = read(codec, '');
+    assert.equal(bare.agentId, '', `${name}: a bare address reads no agent id`);
+    assert.equal(write(codec, { ...bare, agentId: 'main' }), 'agent_id=main', name);
+    assert.equal(read(codec, 'agent_id=main').agentId, 'main', name);
+  }
+  const both = read(d.REQUESTS_CODEC, 'agent=claude-cli%2F*&agent_id=main');
+  assert.deepEqual([both.agent, both.agentId], ['claude-cli/*', 'main']);
+});
+
+test("the Accounts codec carries the sort's direction after its key, written only where it differs from the key's own", () => {
+  const bare = read(d.ACCOUNTS_CODEC, '');
+  assert.deepEqual(bare, { dir: '', search: '', sort: 'name', status: 'all' });
+  assert.equal(write(d.ACCOUNTS_CODEC, { ...bare, dir: 'asc', sort: 'usage' }), 'sort=usage&dir=asc');
+  assert.equal(write(d.ACCOUNTS_CODEC, { ...bare, dir: '', sort: 'usage' }), 'sort=usage', "the key's own direction leaves the address");
+  assert.equal(write(d.ACCOUNTS_CODEC, { ...bare, dir: '', sort: 'name' }), '');
+  assert.equal(read(d.ACCOUNTS_CODEC, 'sort=usage&dir=bogus').dir, '');
+  // A saved `?sort=usage` keeps meaning the most used first.
+  assert.equal(d.sortDirOf(d.ACCOUNT_SORT_KEYS, { dir: '', sort: 'usage' }), 'desc');
+  assert.equal(d.sortDirOf(d.ACCOUNT_SORT_KEYS, { dir: 'asc', sort: 'usage' }), 'asc');
+  assert.deepEqual(d.sortAddressOf(d.ACCOUNT_SORT_KEYS, { dir: 'desc', sort: 'usage' }), { dir: '', sort: 'usage' });
+  assert.deepEqual(d.sortAddressOf(d.ACCOUNT_SORT_KEYS, { dir: 'asc', sort: 'usage' }), { dir: 'asc', sort: 'usage' });
+  assert.deepEqual(
+    d.ACCOUNT_SORT_KEYS.map((k) => [k.id, k.label, k.defaultDir]),
+    [
+      ['name', 'Name', 'asc'],
+      ['reset', 'Soonest reset', 'asc'],
+      ['usage', 'Most used', 'desc'],
+      ['status', 'Status', 'asc'],
+    ],
+  );
+});
+
+test("the Sessions codec carries the sort's direction after its key and the filters, each written only off its default, both keys newest first", () => {
+  const bare = read(d.SESSIONS_CODEC, '');
+  assert.deepEqual([bare.sort, bare.dir], ['created', '']);
+  assert.equal(write(d.SESSIONS_CODEC, { ...bare, dir: '', sort: 'activity' }), 'sort=activity', "the key's own direction leaves the address");
+  assert.equal(write(d.SESSIONS_CODEC, { ...bare, dir: 'asc', sort: 'activity' }), 'sort=activity&dir=asc');
+  assert.equal(write(d.SESSIONS_CODEC, { ...bare, dir: 'asc' }), 'dir=asc');
+  assert.equal(write(d.SESSIONS_CODEC, { ...bare, companion: true, dir: 'asc', released: true, sort: 'activity' }), 'companion=1&released=1&sort=activity&dir=asc', 'the control follows the filters in the bar');
+  assert.equal(read(d.SESSIONS_CODEC, 'dir=bogus').dir, '');
+  assert.equal(read(d.SESSIONS_CODEC, 'sort=bogus').sort, 'created');
+  // A bare address and a bogus direction both mean the key's own direction, newest first.
+  assert.equal(d.sortDirOf(d.SESSION_SORT_KEYS, bare), 'desc');
+  assert.equal(d.sortDirOf(d.SESSION_SORT_KEYS, read(d.SESSIONS_CODEC, 'sort=activity&dir=bogus')), 'desc');
+  assert.equal(d.sortDirOf(d.SESSION_SORT_KEYS, read(d.SESSIONS_CODEC, 'sort=activity&dir=asc')), 'asc');
+  assert.deepEqual(d.sortAddressOf(d.SESSION_SORT_KEYS, { dir: 'desc', sort: 'activity' }), { dir: '', sort: 'activity' });
+  assert.deepEqual(
+    d.SESSION_SORT_KEYS.map((k) => [k.id, k.label, k.defaultDir]),
+    [
+      ['created', 'Created', 'desc'],
+      ['activity', 'Last activity', 'desc'],
+    ],
+  );
 });
 
 test('every filter at its default leaves a bare address', () => {
@@ -56,12 +112,32 @@ test('a list splits on commas and joins back, empty entries dropped', () => {
   assert.equal(d.ROUTING_LOG_CODEC.toParams({ ...read(d.ROUTING_LOG_CODEC, ''), pools: ['all', 'jobs'] }).get('pools'), 'all,jobs');
 });
 
+test('the Analytics client and user agent patterns ride the address joined by a newline, a comma and a space kept whole', () => {
+  const bare = read(d.ANALYTICS_CODEC, '');
+  assert.deepEqual([bare.clients, bare.userAgents], [[], []]);
+  const agents = ['claude-cli/2.1.3 (external, cli)', 'claude-cli/2.0.*'];
+  const written = write(d.ANALYTICS_CODEC, { ...bare, userAgents: agents });
+  assert.equal(written, 'user_agents=claude-cli%2F2.1.3+%28external%2C+cli%29%0Aclaude-cli%2F2.0.*');
+  assert.deepEqual(read(d.ANALYTICS_CODEC, written).userAgents, agents, 'both patterns read back whole');
+  assert.equal(write(d.ANALYTICS_CODEC, { ...bare, clients: ['claude-code/cli'] }), 'clients=claude-code%2Fcli');
+  assert.deepEqual(read(d.ANALYTICS_CODEC, 'clients=claude-code%2Fcli%0A%0Aclaude-code%2Fsdk*').clients, ['claude-code/cli', 'claude-code/sdk*'], 'an empty line is dropped');
+  assert.equal(write(d.ANALYTICS_CODEC, { ...bare, clients: [], userAgents: [] }), '', 'an empty list writes nothing');
+  assert.equal(write(d.ANALYTICS_CODEC, read(d.ANALYTICS_CODEC, 'agent=claude-cli%2F*&class=claude-code%2F*')), '', 'the single pattern keys read nothing');
+});
+
+test('a picked value travels as a pattern that matches itself in full, the grammar characters quoted', () => {
+  assert.equal(d.escapePattern('claude-cli/2.1.3 (external, cli)'), 'claude-cli/2.1.3 (external, cli)');
+  assert.equal(d.escapePattern('a*b?c\\d'), 'a\\*b\\?c\\\\d');
+  assert.ok(d.matchesPattern(d.escapePattern('a*b?c\\d'), 'a*b?c\\d'), 'the escaped value matches the value itself');
+  assert.ok(!d.matchesPattern(d.escapePattern('a*b'), 'axxb'), 'and a star in it matches a star alone');
+});
+
 test('a preset travels by its name, nothing for the default, and a custom span as its two instants after every filter', () => {
   assert.equal(write(d.ROUTING_LOG_CODEC, { ...read(d.ROUTING_LOG_CODEC, ''), range: preset('6h') }), 'range=6h');
   assert.equal(write(d.ROUTING_LOG_CODEC, { ...read(d.ROUTING_LOG_CODEC, ''), range: preset('1h') }), '');
   assert.equal(write(d.REQUESTS_CODEC, { ...read(d.REQUESTS_CODEC, ''), range: preset('24h') }), '');
   const params = d.ROUTING_LOG_CODEC.toParams({ ...FILLED.ROUTING_LOG_CODEC, range: CUSTOM });
-  assert.deepEqual([...params.keys()], ['accounts', 'keys', 'kinds', 'models', 'pools', 'request', 'session', 'from', 'to']);
+  assert.deepEqual([...params.keys()], ['accounts', 'agent_id', 'keys', 'kinds', 'models', 'pools', 'request', 'session', 'from', 'to']);
   assert.deepEqual([params.get('from'), params.get('to'), params.get('range')], [FROM, TO, null]);
 });
 
@@ -77,15 +153,15 @@ test('the Requests codec carries a request and a session after the search, each 
 
 test('the Accounts codec round-trips its search, sort and status and writes nothing at the defaults', () => {
   const filters = read(d.ACCOUNTS_CODEC, 'search=git&sort=usage&status=paused');
-  assert.deepEqual(filters, { search: 'git', sort: 'usage', status: 'paused' });
+  assert.deepEqual(filters, { dir: '', search: 'git', sort: 'usage', status: 'paused' });
   assert.equal(write(d.ACCOUNTS_CODEC, filters), 'search=git&sort=usage&status=paused');
-  assert.deepEqual(read(d.ACCOUNTS_CODEC, ''), { search: '', sort: 'name', status: 'all' });
+  assert.deepEqual(read(d.ACCOUNTS_CODEC, ''), { dir: '', search: '', sort: 'name', status: 'all' });
   assert.equal(write(d.ACCOUNTS_CODEC, read(d.ACCOUNTS_CODEC, '')), '');
   for (const sort of ['name', 'reset', 'usage', 'status']) assert.equal(read(d.ACCOUNTS_CODEC, `sort=${sort}`).sort, sort, sort);
   // Every status the list labels is a value of the codec, so a link to any of them lands on its rows.
   assert.ok(d.ACCOUNT_STATUSES.length > 1);
   for (const status of d.ACCOUNT_STATUSES) assert.equal(read(d.ACCOUNTS_CODEC, `status=${status}`).status, status, status);
-  assert.deepEqual(read(d.ACCOUNTS_CODEC, 'sort=newest&status=disabled'), { search: '', sort: 'name', status: 'all' });
+  assert.deepEqual(read(d.ACCOUNTS_CODEC, 'sort=newest&status=disabled'), { dir: '', search: '', sort: 'name', status: 'all' });
 });
 
 test('from and to win over range while both parse, and the next write drops range', () => {

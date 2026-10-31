@@ -422,6 +422,37 @@ test('every reader prices through the overlay', () => {
   assert.equal(d.windowMultiple(over, MAX_20X, 'five_hour'), 20, '200 / 10');
 });
 
+// The shipped regime's key and tokens over the test tables' base, whose 5-hour band factor is 0.5.
+const INTERACTIVE = { capacity: { [MAX_20X]: { fiveHour: 200, sevenDay: 1250 } }, entrypoints: ['claude-desktop', 'claude-desktop-3p', 'claude-vscode', 'cli'], peakCapacityFactor: { fiveHour: 1, sevenDay: 1 } };
+
+test('a regime reads by its headline word and the clients it prices in alphabetical order, a key or token the map lacks reading raw', () => {
+  assert.equal(d.regimeWord(null), 'Headless', 'the base');
+  assert.equal(d.regimeWord('desk'), 'desk', 'a key the map lacks');
+  assert.equal(d.regimeTitle(costs, 'desk'), 'desk (desk, pane)', 'tokens the map lacks');
+  assert.equal(d.regimeTitle(costs, null), 'Headless (Claude Code CLI headless mode, the Agent SDK, Claude in Slack, etc.)');
+  const shipped = { ...costs, regimes: { interactive: INTERACTIVE } };
+  assert.equal(d.regimeWord('interactive'), 'Interactive');
+  assert.equal(d.regimeClients(shipped, 'interactive'), 'Claude Code CLI, Claude Desktop, Claude VSCode', 'the two desktop tokens named once, in alphabetical order');
+  const withPane = { ...costs, regimes: { interactive: { ...INTERACTIVE, entrypoints: ['pane', ...INTERACTIVE.entrypoints] } } };
+  assert.equal(d.regimeClients(withPane, 'interactive'), 'Claude Code CLI, Claude Desktop, Claude VSCode, pane', 'a token the map lacks, raw in its alphabetical place');
+  const withSdk = { ...costs, regimes: { interactive: { ...INTERACTIVE, entrypoints: [...INTERACTIVE.entrypoints, 'agent-sdk'] } } };
+  assert.equal(d.regimeClients(withSdk, 'interactive'), 'agent-sdk, Claude Code CLI, Claude Desktop, Claude VSCode', 'a lowercase token the map lacks sorts by its letters, ahead of the Claude names');
+  assert.equal(d.regimeTitle(shipped, 'interactive'), 'Interactive (Claude Code CLI, Claude Desktop, Claude VSCode)');
+});
+
+test("the Peak band card's sentence names the traffic the band applies to and the sessions it spares, and reads plain where it spares none", () => {
+  const interactive = INTERACTIVE;
+  const shipped = { ...costs, regimes: { interactive } };
+  const rest = 'a request completing inside it spends more of its 5-hour window.';
+  assert.equal(d.bandSentence(shipped), `The band applies to Headless traffic only: ${rest} Interactive sessions hold the full window at every hour.`);
+  const desk = { ...costs.regimes.desk, peakCapacityFactor: { fiveHour: 0.5, sevenDay: 1 } };
+  assert.equal(d.bandSentence({ ...costs, regimes: { interactive, desk } }), `The band applies to Headless and desk traffic only: ${rest} Interactive sessions hold the full window at every hour.`, 'a second regime that carries the band');
+  const plain = 'A request completing inside the band spends more of its 5-hour window.';
+  const carried = { ...interactive, peakCapacityFactor: { fiveHour: 0.7, sevenDay: 1 } };
+  assert.equal(d.bandSentence({ ...costs, regimes: { interactive: carried } }), plain, 'no regime spared');
+  assert.equal(d.bandSentence({ ...shipped, peak: { ...costs.peak, capacityFactor: { fiveHour: 1, sevenDay: 1 } } }), plain, 'a band that spares the base spares no regime');
+});
+
 test('fundingOf reads the account kind, then a fast answer, then overage, and a missing attempt as dollars', () => {
   const attempt = (over) => ({ accountKind: 'oauth', overageInUse: false, response: { speed: 'standard' }, ...over });
   assert.equal(d.fundingOf(attempt({ accountKind: 'api_key', overageInUse: null, response: { speed: 'fast' } })), 'api_key', "an API-key account's answer bills in dollars whatever its speed");

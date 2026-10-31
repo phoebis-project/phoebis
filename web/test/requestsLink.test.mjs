@@ -33,12 +33,17 @@ test("a refusal count links its category's refused answers over the counted wind
   assert.equal(target(d.refusalLink(input, '-', 1).href).refusal_categories, '-', 'a refusal with no category links the dash');
 });
 
-test('a refusal count links with no client or user agent pattern, since the route reads neither', () => {
-  const input = { filters: { ...BASE.filters, clientPattern: 'no-such-client', userAgentPattern: 'claude-cli*' }, window: BASE.window };
+test('a refusal count links with the client pattern and no session, and reads plain under a user agent pattern as the reasons panel does, since the route reads both patterns', () => {
+  const input = { filters: { ...BASE.filters, clientPattern: 'no-such-client', sessionId: SESSION }, window: BASE.window };
   const answer = d.refusalLink(input, 'cyber', 3);
   assert.notEqual(answer.href, null, 'the bar links');
-  assert.equal(target(answer.href).client, undefined, 'no client pattern travels');
+  const read = target(answer.href);
+  assert.equal(read.client, 'no-such-client', 'the client pattern travels');
+  assert.equal(read.agent, undefined);
+  assert.equal(read.session, undefined, 'the route reads no session');
   assert.equal(answer.title, 'List these requests on the Requests page');
+  const agent = d.refusalLink({ ...input, filters: { ...input.filters, userAgentPattern: 'claude-cli*' } }, 'cyber', 3);
+  assert.deepEqual(agent, { href: null, title: link({ filters: { userAgentPattern: 'claude-cli*' } }).title }, "the reasons panel's plain count under the same pattern");
 });
 
 test('a count links to the Requests page under its reason, from the hour holding the panel start to the end capped at now', () => {

@@ -698,6 +698,16 @@ test("every record version decodes its settings, a version 1 record's three remo
   assert.deepEqual(off.settings.legacy, { paceFloor: 0.05, selectBelowUtilization: null, shedAheadOfPace: null }, 'a setting the pool left off reads null');
 });
 
+test("a record before version 3 reads its session under the older member's name, and a version 3 record under session_id alone", () => {
+  const body = fixture('decision');
+  const { session_id: _session, ...request } = body.request;
+  const session = (version, members) => d.decodeDecisionRecord({ ...body, request: { ...request, ...members }, version }).request.sessionId;
+  assert.equal(session(2, { routing_session_id: 's2' }), 's2');
+  assert.equal(session(1, { routing_session_id: 's1' }), 's1');
+  assert.equal(session(3, { routing_session_id: 's2', session_id: 's3' }), 's3', 'a version 3 record reads session_id');
+  assert.equal(session(3, { routing_session_id: 's2' }), null, 'a version 3 record reads no older name');
+});
+
 test("a record decodes the five settings, the hold's figures, the cause, the factor, the demand and the pin's cycle, and a record without them reads null", () => {
   const body = fixture('decision');
   const until = 1_791_724_600_000;
@@ -778,6 +788,7 @@ test("the refusal categories answer keeps the route's rows in order with the das
 test('the unused allowance answer keeps every account, window and reset as the route lists them, newest first, its instants as ISO strings', () => {
   const end = 1_791_633_600_000;
   const at = (hours) => end - hours * 3_600_000;
+  // No reset carries the plan and the tier of the reading it replaced, so each decodes null for both.
   const reset = (hours, share, source, observedHours = hours) => ({ observed_at: at(observedHours), reset_at: at(hours), share_left: share, source });
   const body = {
     accounts: [
@@ -808,10 +819,10 @@ test('the unused allowance answer keeps every account, window and reset as the r
         windows: [
           {
             resets: [
-              { observedAt: iso(at(30)), resetAt: iso(at(24)), shareLeft: 0.54, source: 'term_ended' },
-              { observedAt: iso(at(192)), resetAt: iso(at(192)), shareLeft: 0.15000000000000002, source: 'clock' },
-              { observedAt: iso(at(360)), resetAt: iso(at(360)), shareLeft: 0.38, source: 'sample' },
-              { observedAt: iso(at(528)), resetAt: iso(at(528)), shareLeft: 0.6, source: 'sample' },
+              { observedAt: iso(at(30)), plan: null, resetAt: iso(at(24)), shareLeft: 0.54, source: 'term_ended', tier: null },
+              { observedAt: iso(at(192)), plan: null, resetAt: iso(at(192)), shareLeft: 0.15000000000000002, source: 'clock', tier: null },
+              { observedAt: iso(at(360)), plan: null, resetAt: iso(at(360)), shareLeft: 0.38, source: 'sample', tier: null },
+              { observedAt: iso(at(528)), plan: null, resetAt: iso(at(528)), shareLeft: 0.6, source: 'sample', tier: null },
             ],
             resetsCounted: 4,
             totalShareLeft: 1.67,
@@ -819,8 +830,8 @@ test('the unused allowance answer keeps every account, window and reset as the r
           },
           {
             resets: [
-              { observedAt: iso(at(48)), resetAt: iso(at(48)), shareLeft: 0.2, source: 'sample' },
-              { observedAt: iso(at(216)), resetAt: iso(at(216)), shareLeft: 0.7, source: 'clock' },
+              { observedAt: iso(at(48)), plan: null, resetAt: iso(at(48)), shareLeft: 0.2, source: 'sample', tier: null },
+              { observedAt: iso(at(216)), plan: null, resetAt: iso(at(216)), shareLeft: 0.7, source: 'clock', tier: null },
             ],
             resetsCounted: 2,
             totalShareLeft: 0.9,
@@ -828,12 +839,25 @@ test('the unused allowance answer keeps every account, window and reset as the r
           },
         ],
       },
-      { accountId: 'unprofiled', plan: null, tier: null, windows: [{ resets: [{ observedAt: iso(at(72)), resetAt: iso(at(72)), shareLeft: 1, source: 'replayed' }], resetsCounted: 1, totalShareLeft: 1, window: 'seven_day' }] },
+      { accountId: 'unprofiled', plan: null, tier: null, windows: [{ resets: [{ observedAt: iso(at(72)), plan: null, resetAt: iso(at(72)), shareLeft: 1, source: 'replayed', tier: null }], resetsCounted: 1, totalShareLeft: 1, window: 'seven_day' }] },
     ],
     from: iso(at(29 * 24)),
     to: iso(end),
   });
   assert.deepEqual(d.decodeUnusedAllowance({ accounts: [], from: at(24), to: end }), { accounts: [], from: iso(at(24)), to: iso(end) }, 'a range with no weekly reset lists no account');
+});
+
+test("an unused allowance reset keeps the plan and the tier of the reading it replaced, beside the account's current pair", () => {
+  const end = 1_791_633_600_000;
+  const pairOf = (pair) => {
+    const body = { accounts: [{ account_id: 'max-org', plan: 'max_20x', tier: 'default_claude_max_20x', windows: [{ resets: [{ observed_at: end, reset_at: end, share_left: 0.5, source: 'sample', ...pair }], resets_counted: 1, total_share_left: 0.5, window: 'seven_day' }] }], from: end - 29 * 86_400_000, to: end };
+    const { plan, tier } = d.decodeUnusedAllowance(body).accounts[0].windows[0].resets[0];
+    return { plan, tier };
+  };
+  assert.deepEqual(pairOf({ plan: 'max_5x', tier: 'default_claude_max_5x' }), { plan: 'max_5x', tier: 'default_claude_max_5x' }, 'a week before an upgrade');
+  assert.deepEqual(pairOf({ plan: null, tier: null }), { plan: null, tier: null }, 'a reset whose event carries no pair');
+  // The account's plan reader keeps a word the console does not know, so the reset's does too, and nothing prices it.
+  assert.deepEqual(pairOf({ plan: 'bogus', tier: 'default_claude_max_5x' }), { plan: 'bogus', tier: 'default_claude_max_5x' }, 'a plan word kept as sent');
 });
 
 test('a candidate decodes its fit figures and an outcome its reservation and its hold\'s reason', () => {
@@ -1697,7 +1721,7 @@ test('a decision record decodes its six blocks and the completion', () => {
   assert.deepEqual(r.walk[5].facts[0], { accountId: null, key: 'depth', unit: 'count', value: 1 });
   assert.deepEqual(r.walk[1].facts[0], { accountId: 'business', key: 'standing', unit: null, value: 'eligible' });
   assert.deepEqual([r.outcome.kind, r.outcome.accountId, r.outcome.rung], ['placed', 'business', { depth: 1, prefixTokens: 31200, rung: 'static' }]);
-  assert.deepEqual(r.outcome.pinWritten, { action: 'created', epoch: 7, hashesStamped: false, lane: 'claude-sonnet-5|standard|none|-', refreshStamped: true });
+  assert.deepEqual(r.outcome.pinWritten, { action: 'created', epoch: 8, hashesStamped: false, lane: 'claude-sonnet-5|standard|none|-', refreshStamped: true });
   assert.deepEqual(r.outcome.pinEvents, [{ kind: 'pin_created', reason: null }]);
   assert.equal(r.outcome.completion.hit, true);
   assert.deepEqual(r.outcome.completion.cacheMapWritten, [{ accountId: 'business', depth: 1, prefixTokens: 31200, tier: 'message', ttlMs: 300_000 }]);
@@ -2090,33 +2114,65 @@ test('a session row carries the presence age and the cause of its main recipe', 
   assert.equal(d.decodeSession({ ...row, keepalive: { ...row.keepalive, cause: null } }).keepalive.cause, null);
 });
 
-test("a session row carries the main pin's context window, share and cached prefix, and a row without them reads null for each", () => {
-  const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
-  const s = d.decodeSession({ ...row, cached_prefix_tokens: 171_000, context_share: 0.92, context_window_tokens: 200_000, last_input_tokens: 184_000 });
-  assert.deepEqual([s.lastInputTokens, s.contextWindowTokens, s.contextShare, s.cachedPrefixTokens], [184_000, 200_000, 0.92, 171_000]);
-  const { agent_contexts: _a, cached_prefix_tokens: _p, context_share: _s, context_window_tokens: _w, ...bare } = row;
-  const b = d.decodeSession(bare);
-  assert.deepEqual([b.contextWindowTokens, b.contextShare, b.cachedPrefixTokens, b.agentContexts], [null, null, null, null], 'a row that predates the members reads none');
+/** An agent line as the route sends it, every member set, the instants in epoch milliseconds. */
+const agentLine = (agent_id, model, members = {}) => ({
+  account_id: 'business',
+  agent_id,
+  cache_ttl_ms: 300_000,
+  created_at: 1_791_717_340_000,
+  effort: 'medium',
+  last_input_tokens: 12_000,
+  last_used_at: 1_791_721_000_000,
+  model,
+  warm: true,
+  ...members,
 });
 
-test("a companion session's agent lines decode in the order the route sent them, and a row no companion reports reads none", () => {
+test("a session row reads main's effort and every agent line with all its members, in the order the route sent them", () => {
   const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
-  const line = (agent_id, model, tokens) => ({
-    agent_id,
-    cached_prefix_tokens: tokens === null ? null : 9_000,
-    context_share: tokens === null ? null : tokens / 200_000,
-    context_window_tokens: tokens === null ? null : 200_000,
-    last_input_tokens: tokens,
-    model,
-  });
   // Sent out of the alphabet's order, so a decoder that sorted would read the second line first.
-  const s = d.decodeSession({ ...row, agent_contexts: [line('7b2e', 'claude-haiku-4-5', 12_000), line('4f0c', 'claude-sonnet-5', null)], companion: 'reporting' });
+  const sent = [agentLine('7b2e', 'claude-haiku-4-5', { effort: 'low', warm: false }), agentLine('4f0c', 'claude-sonnet-5', { account_id: 'direct', effort: 'high', last_input_tokens: 31_000 })];
+  const s = d.decodeSession({ ...row, agent_contexts: sent, effort: 'high' });
+  assert.equal(s.effort, 'high');
+  const created = new Date(1_791_717_340_000).toISOString();
+  const used = new Date(1_791_721_000_000).toISOString();
   assert.deepEqual(s.agentContexts, [
-    { agentId: '7b2e', cachedPrefixTokens: 9_000, contextShare: 0.06, contextWindowTokens: 200_000, lastInputTokens: 12_000, model: 'claude-haiku-4-5' },
-    { agentId: '4f0c', cachedPrefixTokens: null, contextShare: null, contextWindowTokens: null, lastInputTokens: null, model: 'claude-sonnet-5' },
+    { accountId: 'business', agentId: '7b2e', cacheTtlMs: 300_000, createdAt: created, effort: 'low', lastInputTokens: 12_000, lastUsedAt: used, model: 'claude-haiku-4-5', warm: false },
+    { accountId: 'direct', agentId: '4f0c', cacheTtlMs: 300_000, createdAt: created, effort: 'high', lastInputTokens: 31_000, lastUsedAt: used, model: 'claude-sonnet-5', warm: true },
   ]);
-  assert.deepEqual(d.decodeSession({ ...row, agent_contexts: [], companion: 'reporting' }).agentContexts, [], 'a companion session whose other agents are all released reads an empty list');
-  assert.equal(d.decodeSession({ ...row, agent_contexts: null, companion: 'none' }).agentContexts, null, 'a row no companion reports carries no agent lines');
+});
+
+test('an agent line reads null for each nullable member the route sends as null, cold without warm, and its account as sent', () => {
+  const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
+  const one = (entry) => d.decodeSession({ ...row, agent_contexts: [entry] }).agentContexts[0];
+  const full = agentLine('7b2e', 'claude-haiku-4-5');
+  for (const [wire, member] of [
+    ['cache_ttl_ms', 'cacheTtlMs'],
+    ['created_at', 'createdAt'],
+    ['effort', 'effort'],
+    ['last_input_tokens', 'lastInputTokens'],
+    ['last_used_at', 'lastUsedAt'],
+  ]) {
+    assert.notEqual(one(full)[member], null, `${wire} as sent`);
+    assert.equal(one({ ...full, [wire]: null })[member], null, `${wire} sent as null`);
+  }
+  const { warm: _w, ...withoutWarm } = full;
+  assert.deepEqual([one(full).warm, one(withoutWarm).warm], [true, false], 'an entry without warm reads cold');
+  assert.equal(one(full).accountId, 'business', "the pin's account");
+});
+
+test('a session row reads an empty list where it draws no line or sends none, no effort where it sends none, and none of the three context members', () => {
+  const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
+  assert.deepEqual(d.decodeSession({ ...row, agent_contexts: [] }).agentContexts, [], 'a row that draws no line');
+  const { agent_contexts: _a, effort: _e, ...bare } = row;
+  const b = d.decodeSession(bare);
+  assert.deepEqual([b.agentContexts, b.effort], [[], null], 'a row without the two members');
+  // The fixture's row and its lines still carry the three members, so a decoder that read them would answer them.
+  const names = ['cachedPrefixTokens', 'contextShare', 'contextWindowTokens'];
+  const s = d.decodeSession(row);
+  assert.ok(s.agentContexts.length > 0, "the fixture's row carries agent lines");
+  assert.deepEqual(Object.keys(s).filter((k) => names.includes(k)), [], 'the row');
+  assert.deepEqual(s.agentContexts.flatMap((c) => Object.keys(c).filter((k) => names.includes(k))), [], 'its lines');
 });
 
 test('a recipe and a session row decode the compaction verdict and the compacted cause', () => {
@@ -2295,8 +2351,8 @@ test('a session view given its held rows reads the first page alone, replacing t
 });
 
 test('the dashboard reads the live pin count the route answers beside the rollups', () => {
-  assert.equal(fixture('dashboard').sessions.active_pins, 5);
-  assert.equal(d.decodeDashboard(fixture('dashboard')).activePins, 5);
+  assert.equal(fixture('dashboard').sessions.active_pins, 6);
+  assert.equal(d.decodeDashboard(fixture('dashboard')).activePins, 6);
   assert.equal(d.decodeDashboard({ ...fixture('dashboard'), sessions: { active_pins: 3 } }).activePins, 3);
 });
 
@@ -2435,7 +2491,7 @@ test('settings decode the members the route answers and nothing more', () => {
       apiPrices: ['effective', 'effectiveDate', 'models', 'revisions', 'source'],
       listeners: ['metrics', 'proxy', 'proxyTls'],
       retention: ['bodyCaptureMaxHours', 'retentionDays', 'rollupRetentionDays'],
-      sessions: ['expireAfterSeconds'],
+      sessions: ['expireAfterSeconds', 'nonCompanionIdleSeconds'],
       storage: ['apiPricesPath', 'ledgerPath', 'path', 'subscriptionCostsPath'],
       subscriptionCosts: ['capacity', 'effective', 'modelTier', 'modelWeight', 'modelWindows', 'overrides', 'peak', 'problem', 'regimes', 'revisions', 'source', 'tierOrder', 'typeMultiplier', 'unit'],
     },
@@ -2466,7 +2522,7 @@ test('a settings member the answer leaves out decodes to its default', () => {
   assert.deepEqual(without('access'), { adminConfigured: true }, 'no session reaches the console without the admin secret');
   assert.deepEqual(without('listeners'), { metrics: '', proxy: '', proxyTls: false });
   assert.deepEqual(without('retention'), { bodyCaptureMaxHours: 0, retentionDays: 0, rollupRetentionDays: 0 });
-  assert.deepEqual(without('sessions'), { expireAfterSeconds: 0 });
+  assert.deepEqual(without('sessions'), { expireAfterSeconds: 0, nonCompanionIdleSeconds: 0 });
   assert.deepEqual(without('storage'), { apiPricesPath: null, ledgerPath: '', path: '', subscriptionCostsPath: null });
   const bare = { ...wire };
   delete bare.subscription_costs;
@@ -2711,6 +2767,11 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
   const wire = fixture('settings');
   const s = d.decodeSettings(wire);
   assert.equal(s.sessions.expireAfterSeconds, 86400);
+  assert.deepEqual(
+    d.decodeSettings({ ...wire, sessions: { expire_after_seconds: 86400, non_companion_idle_seconds: 3600 } }).sessions,
+    { expireAfterSeconds: 86400, nonCompanionIdleSeconds: 3600 },
+    'the two keys of the sessions block read under their own names',
+  );
   assert.equal(s.listeners.metrics, '127.0.0.1:9464');
   const rows = wire.api_prices.content.models;
   assert.equal(s.apiPrices.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, rows['claude-sonnet-5'].input);

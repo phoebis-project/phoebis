@@ -12913,6 +12913,20 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_read": 0.2,
               "output": 10
             },
+            "claude-sonnet-4-6": {
+              "input": 3,
+              "cache_write_5m": 3.75,
+              "cache_write_1h": 6,
+              "cache_read": 0.3,
+              "output": 15
+            },
+            "claude-sonnet-4-5": {
+              "input": 3,
+              "cache_write_5m": 3.75,
+              "cache_write_1h": 6,
+              "cache_read": 0.3,
+              "output": 15
+            },
             "claude-haiku-5-5": {
               "input": 0.1,
               "cache_write_5m": 0.125,
@@ -12954,7 +12968,7 @@ export const FIXTURES: Record<string, Fixture> = {
                   "input": 10,
                   "cache_write_5m": 12.5,
                   "cache_write_1h": 20,
-                  "cache_read": 0.25,
+                  "cache_read": 1,
                   "output": 50
                 },
                 "claude-opus-5-5": {
@@ -13012,6 +13026,20 @@ export const FIXTURES: Record<string, Fixture> = {
                   "cache_write_1h": 4,
                   "cache_read": 0.2,
                   "output": 10
+                },
+                "claude-sonnet-4-6": {
+                  "input": 3,
+                  "cache_write_5m": 3.75,
+                  "cache_write_1h": 6,
+                  "cache_read": 0.3,
+                  "output": 15
+                },
+                "claude-sonnet-4-5": {
+                  "input": 3,
+                  "cache_write_5m": 3.75,
+                  "cache_write_1h": 6,
+                  "cache_read": 0.3,
+                  "output": 15
                 },
                 "claude-haiku-4-5": {
                   "input": 1,
@@ -13098,6 +13126,20 @@ export const FIXTURES: Record<string, Fixture> = {
                   "cache_read": 0.2,
                   "output": 10
                 },
+                "claude-sonnet-4-6": {
+                  "input": 3,
+                  "cache_write_5m": 3.75,
+                  "cache_write_1h": 6,
+                  "cache_read": 0.3,
+                  "output": 15
+                },
+                "claude-sonnet-4-5": {
+                  "input": 3,
+                  "cache_write_5m": 3.75,
+                  "cache_write_1h": 6,
+                  "cache_read": 0.3,
+                  "output": 15
+                },
                 "claude-haiku-5-5": {
                   "input": 0.1,
                   "cache_write_5m": 0.125,
@@ -13171,9 +13213,13 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "model_weight": {
             "claude-fable-5-1": 10,
+            "claude-fable-5": 10,
             "claude-opus-5-5": 2.2,
+            "claude-opus-5": 2.75,
+            "claude-opus-4-8": 3.25,
             "claude-sonnet-5-5": 1.5,
             "claude-sonnet-5": 1.5,
+            "claude-sonnet-4-6": 3,
             "claude-haiku-5-5": 0.1,
             "claude-haiku-4-5": 1
           },
@@ -13283,9 +13329,13 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "model_weight": {
                 "claude-fable-5-1": 10,
+                "claude-fable-5": 10,
                 "claude-opus-5-5": 2.2,
+                "claude-opus-5": 2.75,
+                "claude-opus-4-8": 3.25,
                 "claude-sonnet-5-5": 1.5,
                 "claude-sonnet-5": 1.5,
+                "claude-sonnet-4-6": 3,
                 "claude-haiku-5-5": 0.1,
                 "claude-haiku-4-5": 1
               },
@@ -17898,6 +17948,28 @@ export const FIXTURES: Record<string, Fixture> = {
           "long_context": null
         },
         {
+          "model": "claude-sonnet-4-6",
+          "input_per_m": 3,
+          "cache_write_5m_per_m": 3.75,
+          "cache_write_1h_per_m": 6,
+          "cache_read_per_m": 0.3,
+          "output_per_m": 15,
+          "reads_per_write_5m": 12.5,
+          "fast": null,
+          "long_context": null
+        },
+        {
+          "model": "claude-sonnet-4-5",
+          "input_per_m": 3,
+          "cache_write_5m_per_m": 3.75,
+          "cache_write_1h_per_m": 6,
+          "cache_read_per_m": 0.3,
+          "output_per_m": 15,
+          "reads_per_write_5m": 12.5,
+          "fast": null,
+          "long_context": null
+        },
+        {
           "model": "claude-haiku-5-5",
           "input_per_m": 0.1,
           "cache_write_5m_per_m": 0.125,
@@ -18016,6 +18088,20 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_read": 0.2,
               "output": 10
             },
+            "claude-sonnet-4-6": {
+              "input": 3,
+              "cache_write_5m": 3.75,
+              "cache_write_1h": 6,
+              "cache_read": 0.3,
+              "output": 15
+            },
+            "claude-sonnet-4-5": {
+              "input": 3,
+              "cache_write_5m": 3.75,
+              "cache_write_1h": 6,
+              "cache_read": 0.3,
+              "output": 15
+            },
             "claude-haiku-5-5": {
               "input": 0.1,
               "cache_write_5m": 0.125,
@@ -18057,7 +18143,7 @@ export const FIXTURES: Record<string, Fixture> = {
                   "input": 10,
                   "cache_write_5m": 12.5,
                   "cache_write_1h": 20,
-                  "cache_read": 0.25,
+                  "cache_read": 1,
                   "output": 50
                 },
                 "claude-opus-5-5": {
@@ -18115,6 +18201,20 @@ export const FIXTURES: Record<string, Fixture> = {
                   "cache_write_1h": 4,
                   "cache_read": 0.2,
                   "output": 10
+                },
+                "claude-sonnet-4-6": {
+                  "input": 3,
+                  "cache_write_5m": 3.75,
+                  "cache_write_1h": 6,
+                  "cache_read": 0.3,
+                  "output": 15
+                },
+                "claude-sonnet-4-5": {
+                  "input": 3,
+                  "cache_write_5m": 3.75,
+                  "cache_write_1h": 6,
+                  "cache_read": 0.3,
+                  "output": 15
                 },
                 "claude-haiku-4-5": {
                   "input": 1,
@@ -18200,6 +18300,20 @@ export const FIXTURES: Record<string, Fixture> = {
                   "cache_write_1h": 4,
                   "cache_read": 0.2,
                   "output": 10
+                },
+                "claude-sonnet-4-6": {
+                  "input": 3,
+                  "cache_write_5m": 3.75,
+                  "cache_write_1h": 6,
+                  "cache_read": 0.3,
+                  "output": 15
+                },
+                "claude-sonnet-4-5": {
+                  "input": 3,
+                  "cache_write_5m": 3.75,
+                  "cache_write_1h": 6,
+                  "cache_read": 0.3,
+                  "output": 15
                 },
                 "claude-haiku-5-5": {
                   "input": 0.1,
@@ -18294,9 +18408,13 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "model_weight": {
             "claude-fable-5-1": 10,
+            "claude-fable-5": 10,
             "claude-opus-5-5": 2.2,
+            "claude-opus-5": 2.75,
+            "claude-opus-4-8": 3.25,
             "claude-sonnet-5-5": 1.5,
             "claude-sonnet-5": 1.5,
+            "claude-sonnet-4-6": 3,
             "claude-haiku-5-5": 0.1,
             "claude-haiku-4-5": 1
           },
@@ -18406,9 +18524,13 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "model_weight": {
                 "claude-fable-5-1": 10,
+                "claude-fable-5": 10,
                 "claude-opus-5-5": 2.2,
+                "claude-opus-5": 2.75,
+                "claude-opus-4-8": 3.25,
                 "claude-sonnet-5-5": 1.5,
                 "claude-sonnet-5": 1.5,
+                "claude-sonnet-4-6": 3,
                 "claude-haiku-5-5": 0.1,
                 "claude-haiku-4-5": 1
               },

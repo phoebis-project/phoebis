@@ -48,11 +48,11 @@ test('an item opens the page where its condition is fixed, and an item without a
   assert.equal(attentionHref(item('meter_drift', { link: { id: 'nightly', page: 'accounts' } }), NOW), '/meter?accounts=nightly', 'a meter drift opens the Meter view narrowed to its account');
   assert.equal(attentionHref(item('writer_degraded', { subject: { id: 'routing', label: 'routing', type: 'router' } }), NOW), null, "the router's own component has nothing to open");
   // An estimated weight shows in the cost reference dialog, which no address opens, so the item has nothing to open.
-  const unweighted = { detail: { model: 'claude-sonnet-4-6', requests: 12, tier: 'sonnet', weight_of: 'claude-sonnet-5-5' }, kind: 'model_unweighted', pools: [], since: NOW, subject: { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6', type: 'model' } };
-  for (const link of [{ id: 'claude-sonnet-4-6', page: 'models' }, null]) {
+  const unweighted = { detail: { model: 'claude-sonnet-4-5', requests: 12, tier: 'sonnet', weight_of: 'claude-sonnet-5-5' }, kind: 'model_unweighted', pools: [], since: NOW, subject: { id: 'claude-sonnet-4-5', label: 'claude-sonnet-4-5', type: 'model' } };
+  for (const link of [{ id: 'claude-sonnet-4-5', page: 'models' }, null]) {
     const model = decodeAttention({ ...unweighted, link });
     const drawn = [model.link, attentionHref(model, NOW), attentionWords(model, NOW) ?? `${ATTENTION_LABEL[model.kind]}: ${model.subject.label}`, attentionTitle(model, NOW).split('\n')[0]];
-    assert.deepEqual(drawn, [null, null, 'Model weight estimated: claude-sonnet-4-6', attentionDetail(model, NOW)], `an unweighted model's item ${link === null ? 'with no link' : 'naming the models page'} opens nothing and draws its label, its detail on the title`);
+    assert.deepEqual(drawn, [null, null, 'Model weight estimated: claude-sonnet-4-5', attentionDetail(model, NOW)], `an unweighted model's item ${link === null ? 'with no link' : 'naming the models page'} opens nothing and draws its label, its detail on the title`);
   }
 });
 
@@ -88,8 +88,8 @@ test("a row reads each kind's detail as one sentence", () => {
   assert.equal(sentence('ledger_record_parked', { accounts: [], count: 2, pool: 'jobs' }), "2 priced records parked, landing at the next start or on the dashboard's Replay", 'a record that names no account adds none');
   const since = fmtAbsolute(item('model_unweighted').since);
   assert.equal(
-    sentence('model_unweighted', { model: 'claude-sonnet-4-6', requests: 12, tier: 'sonnet', weight_of: 'claude-sonnet-5-5' }),
-    `claude-sonnet-4-6 has no measured weight, so its 12 plan-funded requests since ${since} priced at the weight of claude-sonnet-5-5, the latest weighted model of the sonnet model tier`,
+    sentence('model_unweighted', { model: 'claude-sonnet-4-5', requests: 12, tier: 'sonnet', weight_of: 'claude-sonnet-5-5' }),
+    `claude-sonnet-4-5 has no measured weight, so its 12 plan-funded requests since ${since} priced at the weight of claude-sonnet-5-5, the latest weighted model of the sonnet model tier`,
   );
   assert.equal(
     sentence('model_unweighted', { model: 'claude-opus-99', requests: 1, tier: null, weight_of: null }),
@@ -158,7 +158,7 @@ test("a badge's title for an item that carries no pool leads with its sentence, 
   );
   const degraded = item('writer_degraded', { detail: { component: 'ledger' } });
   assert.equal(attentionTitle(degraded, NOW), [attentionDetail(degraded, NOW), 'component: ledger', 'started 2h ago'].join('\n'));
-  const model = item('model_unweighted', { detail: { model: 'claude-sonnet-4-6', requests: 12, tier: 'sonnet', weight_of: 'claude-sonnet-5-5' }, subject: { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6', type: 'model' } });
+  const model = item('model_unweighted', { detail: { model: 'claude-sonnet-4-5', requests: 12, tier: 'sonnet', weight_of: 'claude-sonnet-5-5' }, subject: { id: 'claude-sonnet-4-5', label: 'claude-sonnet-4-5', type: 'model' } });
   assert.equal(attentionTitle(model, NOW).split('\n')[0], attentionDetail(model, NOW), "a model's item belongs to no pool card, so its title leads with its sentence");
   const pooled = item('writer_degraded', { detail: { component: 'ledger' }, pools: ['all'] });
   assert.equal(attentionTitle(pooled, NOW), ['component: ledger', 'started 2h ago'].join('\n'), "an item a pool carries reads its sentence on that pool's card");

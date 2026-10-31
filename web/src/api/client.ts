@@ -187,6 +187,9 @@ export interface GuardrailTestInput {
 /** The trailing day, or a range the page names. */
 export type GuardrailRange = '24h' | Pick<AnalyticsQuery, 'from' | 'to'>;
 
+/** The UTC days the keepalive overview's idle returns sum: the current one and the 6 or 29 before it. */
+export type OverviewRange = '7d' | '30d';
+
 export interface Api {
   /** Every budgeted member's spend in its current period; the route reads no range and no filter. */
   analyticsBudgets(): Promise<MemberBudget[]>;
@@ -238,7 +241,7 @@ export interface Api {
   /** Null for a decision the ledger no longer holds. */
   getDecision(requestId: string, seq: number): Promise<DecisionRecord | null>;
   getGuardrail(id: string): Promise<Guardrail>;
-  getKeepaliveOverview(): Promise<KeepaliveOverview>;
+  getKeepaliveOverview(q?: { range?: OverviewRange }): Promise<KeepaliveOverview>;
   getKeyModels(keyId: string): Promise<KeyModels>;
   getOverview(): Promise<Overview>;
   getQuotaHistory(accountId: string): Promise<QuotaHistory[]>;

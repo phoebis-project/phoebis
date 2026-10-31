@@ -1,12 +1,14 @@
 import type { Account, AccountSlowDown, RateLimitWindow, Spend } from '@/api/types';
 import { fmtAbsolute, fmtMinor, fmtPct, fmtRelative } from '@/lib/format';
-import { hasSpendReading, isExpired, meterTone, projectionParts, remainingOf, slowedOf, spendResetTitle } from '@/lib/quota';
+import { hasSpendReading, isExpired, meterTone, planEndedSentence, projectionParts, remainingOf, slowedOf, spendResetTitle } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 import { WINDOW_ORDER } from '@/lib/windows';
 import { Meter } from './primitives';
 import { SpeedChip } from './SpeedChip';
 
-/** `slowDown` is a slowed account's slow-down, which the whole 5-hour bar alone reads: its speed chip follows the label. */
+/**
+ * `slowDown` is a slowed account's slow-down, which the whole 5-hour bar alone reads: its speed chip follows the label.
+ */
 export function WindowBar({ window: w, now, soon = false, showLabel = true, compact = false, slowDown = null }: { compact?: boolean; now: number; showLabel?: boolean; slowDown?: AccountSlowDown | null; soon?: boolean; window: RateLimitWindow }) {
   const remaining = remainingOf(w);
   const reset = compact ? fmtRelative(w.resetsAt, now) : `resets ${fmtRelative(w.resetsAt, now)}`;
@@ -100,7 +102,7 @@ export function WindowBarAbsent({ label }: { label: string }) {
 export function WindowTriple({ account, now, compact = false, others = false }: { account: Account; compact?: boolean; now: number; others?: boolean }) {
   // A usage-based seat has no plan window, so its one spend window takes the triple's place, full width.
   if (account.usageBased) {
-    if (!hasSpendReading(account.spend)) return <div className="wbar__none muted">No spend reading yet</div>;
+    if (!hasSpendReading(account.spend)) return <div className={`wbar__none muted ${compact ? 'wbar__none--compact' : ''}`}>No spend reading yet</div>;
     return (
       <div className={`wbars wbars--1 ${compact ? 'wbars--compact' : ''}`}>
         <SpendBar spend={account.spend} now={now} compact={compact} />
@@ -111,7 +113,7 @@ export function WindowTriple({ account, now, compact = false, others = false }: 
   const w7 = account.windows.find((w) => w.id === '7d');
   const known: readonly string[] = WINDOW_ORDER;
   const rest = others ? account.windows.filter((w) => !known.includes(w.id)) : [];
-  if (!w5 && !w7 && !account.fableWindow && rest.length === 0) return <div className="wbar__none muted">No quota windows</div>;
+  if (!w5 && !w7 && !account.fableWindow && rest.length === 0) return <div className={`wbar__none muted ${compact ? 'wbar__none--compact' : ''}`}>{account.planEndedAt === null ? 'No quota windows' : planEndedSentence(account.planEndedAt, now, compact)}</div>;
   // One word each: "Fable 7d" wraps in the narrow compact columns, which drops
   // that meter a line below its two neighbors. Those columns have no room for a
   // speed chip beside the 5-hour label either, so a compact card draws it in its head.

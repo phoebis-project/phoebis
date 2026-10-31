@@ -109,7 +109,8 @@ const accounts = await mock.listAccounts();
 function poolDialog(props) {
   return h(PoolDialog, {
     accountsFailed: null,
-    idleReturns: { buckets: [], error: null, loading: false },
+    // The page opens each dialog's return rate on 7 days, so the dialog draws that range as it does there.
+    idleReturns: { buckets: [], error: null, loading: false, onRange() {}, range: '7d' },
     keys: [],
     models: [],
     onClose() {},

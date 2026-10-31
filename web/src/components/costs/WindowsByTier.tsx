@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { SubscriptionCosts } from '@/api/types';
 import { Card, Segmented } from '@/components/ui/primitives';
-import { anchorTier, fullWindowsAWeek, regimeNames, smallestTier, tierCapacity, withRegime, type CostWindow } from '@/lib/costs';
+import { anchorTier, fullWindowsAWeek, regimeNames, regimeTitle, regimeWord, smallestTier, tierCapacity, withRegime, type CostWindow } from '@/lib/costs';
 import { fmtInt, fmtShare } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 
@@ -33,8 +33,8 @@ export function BandSwitch({ inside, onChange, unreachable = null }: { inside: b
   );
 }
 
-/** Each sized tier's windows against the smallest tier's, and its week counted in full 5-hour windows, then every
- *  tier each regime names under a row naming it and its entrypoints. */
+/** Each regime's tiers first under a row naming it and the clients it prices, then every sized tier's windows against
+ *  the smallest tier's under the Headless row, each tier's week counted in full 5-hour windows. */
 export function WindowsByTier({ costs }: { costs: SubscriptionCosts }) {
   const [inside, setInside] = useState(false);
   const tiers = Object.keys(costs.capacity).filter((tier) => WINDOWS.some((w) => tierCapacity(costs, tier, w.key) !== null));
@@ -64,13 +64,13 @@ export function WindowsByTier({ costs }: { costs: SubscriptionCosts }) {
     }
     const factor = inside ? model.peak.capacityFactor[w.factor] : 1;
     const held = capacity * factor;
-    const read = `${label} ${w.short} window${regime === null ? '' : ` under ${regime}`}${inside ? ' inside the peak band' : ''}: ${figure(multiple)}x a ${planLabel(base)} one, ${fmtShare(held / max)} of the largest`;
+    const read = `${label} ${w.short} window${regime === null ? '' : ` under ${regimeWord(regime)}`}${inside ? ' inside the peak band' : ''}: ${figure(multiple)}x a ${planLabel(base)} one, ${fmtShare(held / max)} of the largest`;
     const regimeAnchor = tierCapacity(model, anchor, w.key);
     const baseAnchor = tierCapacity(costs, anchor, w.key);
     const title =
       regime === null || regimeAnchor === null || baseAnchor === null
         ? read
-        : `${read}. One percent of the ${planLabel(anchor)} ${w.short} window is ${fmtInt(regimeAnchor / 100)} units for a request under ${regime} and ${fmtInt(baseAnchor / 100)} for any other.`;
+        : `${read}. One percent of the ${planLabel(anchor)} ${w.short} window is ${fmtInt(regimeAnchor / 100)} units for a request under ${regimeWord(regime)} and ${fmtInt(baseAnchor / 100)} under ${regimeWord(null)}.`;
     return (
       <td key={w.key}>
         <div className="cost-ref__barcell" title={title}>
@@ -119,17 +119,17 @@ export function WindowsByTier({ costs }: { costs: SubscriptionCosts }) {
       {weekCell(model, tier)}
     </tr>
   );
+  // The base's key names no regime, so a regime the file keys `base` keeps a key of its own.
+  const groupRow = (name: string | null) => (alt: string | undefined) => (
+    <tr key={name === null ? 'group' : `group ${name}`} className={['cost-ref__group', alt].filter(Boolean).join(' ')}>
+      <td colSpan={WINDOWS.length + 2}>{regimeTitle(costs, name)}</td>
+    </tr>
+  );
   // The stripes run on through the group rows, which count as rows of their own.
   const rows = [
+    ...regimes.flatMap(({ model, name, tiers: named }) => [groupRow(name), ...named.map((tier) => tierRow(model, name, tier))]),
+    groupRow(null),
     ...tiers.map((tier) => tierRow(costs, null, tier)),
-    ...regimes.flatMap(({ model, name, tiers: named }) => [
-      (alt: string | undefined) => (
-        <tr key={`group ${name}`} className={['cost-ref__group', alt].filter(Boolean).join(' ')}>
-          <td colSpan={WINDOWS.length + 2}>{`${name}: ${costs.regimes[name].entrypoints.join(', ')}`}</td>
-        </tr>
-      ),
-      ...named.map((tier) => tierRow(model, name, tier)),
-    ]),
   ];
   return (
     <Card title="Windows by tier" subtitle={`How much each tier's windows hold, against ${smallest === null ? 'the smallest' : planLabel(smallest)}`} actions={<BandSwitch inside={inside} onChange={setInside} />}>

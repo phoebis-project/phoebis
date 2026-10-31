@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError } from '@/api';
-import type { Account, AllowanceAccount, AllowanceWindow, PairingConfirmed, PairingPreview, PairingSession, QuotaHistory, ReconciliationsAnswer, SubscriptionCosts } from '@/api/types';
+import type { Account, AllowanceAccount, AllowanceReset, AllowanceWindow, PairingConfirmed, PairingPreview, PairingSession, QuotaHistory, ReconciliationsAnswer, SubscriptionCosts } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { CatalogDialog } from '@/components/CatalogDialog';
@@ -12,19 +12,20 @@ import { CoolingDown } from '@/components/CoolingDown';
 import { FastLane } from '@/components/FastLane';
 import { FilterBar } from '@/components/FilterBar';
 import { MeterRatio } from '@/components/MeterRatio';
+import { SortControl } from '@/components/SortControl';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, Segmented, Select, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, Segmented, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
-import { ACCOUNTS_CODEC, METER_CODEC } from '@/lib/address';
-import { FREE_NOTE, allowanceFigure, allowanceSpan, allowanceSubtitle, allowanceWindows, newestResets, resetDate, resetHover, resetInstant, type AllowanceFigure } from '@/lib/allowance';
+import { ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, METER_CODEC, sortAddressOf, sortDirOf } from '@/lib/address';
+import { FREE_NOTE, allowanceFigure, allowanceSpan, allowanceSubtitle, allowanceWindows, newestResets, resetDate, resetHover, resetInstant, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { latestPerWindow, meterGroups, meterWindowWord } from '@/lib/meter';
-import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
+import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope, planEndedSentence, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { speedHover } from '@/lib/selection';
 import { joinTrend } from '@/lib/trend';
@@ -62,6 +63,7 @@ export function AccountsPage() {
     accounts.reload();
   };
 
+  const dir = sortDirOf(ACCOUNT_SORT_KEYS, filters);
   const list = useMemo(() => {
     const { search, sort, status } = filters;
     const rows = (accounts.data ?? []).filter((a) => {
@@ -71,13 +73,14 @@ export function AccountsPage() {
     });
     const nextReset = (a: Account) => Math.min(...a.windows.flatMap((w) => (w.resetsAt === null ? [] : [Date.parse(w.resetsAt)])).filter((t) => t > now), Number.POSITIVE_INFINITY);
     const usage = (a: Account) => Math.max(0, ...a.windows.map((w) => w.utilization));
+    const byKey = (a: Account, b: Account) => (sort === 'reset' ? nextReset(a) - nextReset(b) : sort === 'usage' ? usage(a) - usage(b) : sort === 'status' ? a.status.localeCompare(b.status) : a.label.localeCompare(b.label));
     return rows.sort((a, b) => {
-      if (sort === 'reset') return nextReset(a) - nextReset(b);
-      if (sort === 'usage') return usage(b) - usage(a);
-      if (sort === 'status') return a.status.localeCompare(b.status);
-      return a.label.localeCompare(b.label);
+      // No reset ahead sorts last under either direction, so the direction flips the dated rows alone.
+      if (sort === 'reset' && (nextReset(a) === Number.POSITIVE_INFINITY) !== (nextReset(b) === Number.POSITIVE_INFINITY)) return nextReset(a) === Number.POSITIVE_INFINITY ? 1 : -1;
+      const order = byKey(a, b);
+      return (dir === 'desc' ? -order : order) || a.label.localeCompare(b.label);
     });
-  }, [accounts.data, filters, now]);
+  }, [accounts.data, dir, filters, now]);
 
   const selected = accounts.data?.find((a) => a.id === accountId) ?? null;
   // The row a confirmed pairing created: the read that lists it lands after the URL names it, so the redirect below
@@ -139,15 +142,7 @@ export function AccountsPage() {
         refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: refresh, paused: dialogOpen ? 'dialog' : barOpen ? 'menu' : null, refreshTitle: 'Reads the list again now' }}
         update={update}
       >
-        <label className="row">
-          <span className="muted">Sort</span>
-          <Select value={filters.sort} onChange={(e) => update({ sort: e.target.value })} aria-label="Sort">
-            <option value="name">Name</option>
-            <option value="reset">Soonest reset</option>
-            <option value="usage">Most used</option>
-            <option value="status">Status</option>
-          </Select>
-        </label>
+        <SortControl keys={ACCOUNT_SORT_KEYS} onChange={(next) => update(sortAddressOf(ACCOUNT_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
         <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setAddOpen(true)}>
           Add account
         </Button>
@@ -683,7 +678,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
             awaitingReading ? (
               <p className="muted">The first quota reading is in flight.</p>
             ) : account.planEndedAt !== null ? (
-              <p className="muted">{`No quota window is read since the plan ended ${fmtRelative(account.planEndedAt, now)}.`}</p>
+              <p className="muted">{planEndedSentence(account.planEndedAt, now)}</p>
             ) : (
               <p className="muted">This account does not report quota windows.</p>
             )
@@ -737,7 +732,8 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
           <AllowanceCard
             answer={allowance.data === null ? undefined : (allowance.data.accounts.find((a) => a.accountId === account.id) ?? null)}
             costs={settings.data?.subscriptionCosts ?? null}
-            error={allowance.error ?? settings.error}
+            // The shares price nothing, so under Window shares a failed settings read leaves the block standing.
+            error={allowance.error ?? (unit === 'share' ? null : settings.error)}
             onRetry={() => {
               allowance.reload();
               settings.reload();
@@ -848,7 +844,8 @@ function AllowanceCard({ answer, costs, error, onRetry, unit }: { answer: Allowa
             </Button>
           }
         />
-      ) : answer === undefined || costs === null ? (
+      ) : answer === undefined || (costs === null && unit !== 'share') ? (
+        // Window shares price nothing, so the shares draw without waiting on the cost model.
         <Skeleton height={120} />
       ) : answer === null ? (
         <p className="muted">{"No weekly reset recorded yet. The first shows once this account's week ends."}</p>
@@ -917,16 +914,16 @@ function DriftCard({ accountId, answer, error, onRetry }: { accountId: string; a
   );
 }
 
-function AllowanceColumn({ account, costs, unit, window: w }: { account: AllowanceAccount; costs: SubscriptionCosts; unit: UnitPosition; window: AllowanceWindow }) {
-  const { counted, resets, total } = newestResets(w);
+function AllowanceColumn({ account, costs, unit, window: w }: { account: AllowanceAccount; costs: SubscriptionCosts | null; unit: UnitPosition; window: AllowanceWindow }) {
+  const { counted, resets } = newestResets(w);
   const [latest, ...before] = resets;
-  const figure = (share: number | null) => allowanceFigure(share, w.window, account, costs, unit);
+  const figure = (reset: AllowanceReset | undefined) => allowanceFigure(reset?.shareLeft ?? null, w.window, account, costs, unit, reset);
   const ended = <Badge tone="neutral">term ended</Badge>;
   return (
     <div className="allowance__col">
       <div className="wbar__head">
         <span className="wbar__label">{WINDOW_LABEL[windowKeyId(w.window) ?? ''] ?? w.window}</span>
-        <AllowanceText className="wbar__pct num" figure={figure(latest?.shareLeft ?? null)} />
+        <AllowanceText className="wbar__pct num" figure={figure(latest)} />
       </div>
       {latest && (
         <div className="wbar__reset allowance__reset" title={resetHover(latest)}>
@@ -945,12 +942,12 @@ function AllowanceColumn({ account, costs, unit, window: w }: { account: Allowan
             {resetDate(r.resetAt)}
             {r.source === 'term_ended' && <> {ended}</>}
           </span>
-          <AllowanceText className="num" figure={figure(r.shareLeft)} />
+          <AllowanceText className="num" figure={figure(r)} />
         </div>
       ))}
       <div className="allowance__row allowance__total">
         <span>{counted === 1 ? 'Total, 1 week' : `Total, ${counted} weeks`}</span>
-        <AllowanceText className="num" figure={figure(total)} />
+        <AllowanceText className="num" figure={weeksFigure(w, account, costs, unit)} />
       </div>
     </div>
   );

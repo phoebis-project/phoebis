@@ -1,7 +1,8 @@
 import type { Api } from '@/api/client';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, HeldPoint, PinMigrationReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
-import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
+import { tierCapacity, type CostWindow } from '@/lib/costs';
 import { earlierHolderLabel, equivalentShort, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtShare, fmtUsd, withEstimate } from '@/lib/format';
+import { pricedTier } from '@/lib/quota';
 import { ageWord } from '@/lib/time';
 import type { UnitPosition } from '@/lib/unit';
 import { WINDOW_LABEL, windowKeyId } from '@/lib/windows';
@@ -55,12 +56,12 @@ export const classLegendOf = (requestClass: string): ClassLegend => ((CONVERSATI
 
 /** Lines a burn chart draws before the rest fold into one, the stacked cost chart's limit. */
 export const MAX_BURN_LINES = 7;
-/** The key the folded rest carries, suffixed by its unit under the account grouping; no group is looked up by it. */
+/** The key the folded rest carries, suffixed by its unit under the account grouping. No group is looked up by it. */
 export const OTHER_KEY = 'other';
 /**
- * The unit a burn line charts in. `unknown` is a subscription account the cost model does not size, its tier missing
- * or one the model has no capacity row for: it has no share to draw, and dollars only for what its fast-mode and
- * overage answers spent.
+ * The unit a burn line charts in. `unknown` is a subscription account whose plan the router prices on no tier the cost
+ * model sizes (`pricedTier`): a free plan, an account with no tier or one on a tier the model has no capacity row for.
+ * It has no share to draw, and dollars only for what its fast-mode and overage answers spent.
  */
 export type BurnLineUnit = BurnUnit | 'unknown';
 const OTHER_LABEL: Record<BurnLineUnit, string> = { unknown: 'Other (tier unknown)', usd: 'Other (dollars)', window_share: 'Other (plan)' };
@@ -225,15 +226,19 @@ function burnLabelOf(groupBy: BurnGroup, key: string): string {
 }
 
 /**
- * The accounts whose stored tier the cost model sizes, matched as the ledger matches it: as stored, then with the
- * `default_` prefix taken off or put on, since only one spelling has been seen on the wire. The plan chart reads a
- * listed tier as sized and draws a window it has no capacity on as model unlisted. With `window`, a tier sizes an
- * account only where it has a capacity on that window, as the shed preview needs for the 5-hour window: the sessions
- * route reads no burn for a pin of a tier without one.
+ * The accounts the router prices a tier for (`pricedTier`), whose stored tier the cost model lists, matched as the
+ * ledger matches it: as stored, then with the `default_` prefix taken off or put on, since only one spelling has been
+ * seen on the wire. The plan chart reads a listed tier as sized and draws a window it has no capacity on as model
+ * unlisted. With `window`, a tier sizes an account only where it has a capacity on that window, as the shed preview
+ * needs for the 5-hour window: the sessions route reads no burn for a pin of a tier without one.
  */
 export function sizedAccounts(accounts: Account[], costs: SubscriptionCosts, window?: CostWindow): Set<string> {
-  const sizes = (tier: string) => (window === undefined ? tierRow(costs, tier) !== undefined : tierCapacity(costs, tier, window) !== null);
-  return new Set(accounts.filter((a) => a.subscription !== null && sizes(a.subscription.rateLimitTier)).map((a) => a.id));
+  const sizes = (a: Account) => {
+    if (a.subscription === null) return false;
+    const priced = pricedTier(a.subscription.plan, a.subscription.rateLimitTier, costs);
+    return priced.tier !== null && (window === undefined || tierCapacity(costs, priced.tier, window) !== null);
+  };
+  return new Set(accounts.filter(sizes).map((a) => a.id));
 }
 
 export const SHARE_NOTE = "Shares read under the account grouping alone, since shares of different accounts' windows do not add.";
@@ -605,17 +610,18 @@ const SCALE_FLOOR = 0.1;
 const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
 
 /**
- * The burn route's points as chart lines and rows. The request-class grouping folds into its two legend entries;
+ * The burn route's points as chart lines and rows. The request-class grouping folds into its two legend entries, and
  * every other grouping keeps the groups with the most tokens and sums the rest as other, which draws no plan line, so
  * its plan figures stay empty. Under the account grouping the rest folds once per unit, since a subscription account's
  * window share and an API-key account's dollars chart on different axes. Where the shares answer (that grouping, or
  * `account`, the one account the Accounts filter names) a line's unit is its account's. `sized` names the accounts
- * whose tier the cost model sizes, which chart in window share whatever their buckets priced. `figure` picks what the
- * plan rows carry: the shares, or the 20x window equivalents, which add across accounts and tiers.
+ * whose plan the router prices on a tier the cost model sizes (`pricedTier`, so a free plan and a usage-based seat are
+ * out), which chart in window share whatever their buckets priced. `figure` picks what the plan rows carry: the shares,
+ * or the 20x window equivalents, which add across accounts and tiers.
  *
  * `rangeEndMs` is the end of the range the points were read for and `nowMs` the instant of that read, the end when
  * absent. The route reads whole hours through the hour ceiling of the end, so a bucket covers its width up to the hour
- * ceiling of the range's end, no later than the read's instant; the full width without an end.
+ * ceiling of the range's end, no later than the read's instant, and its full width without an end.
  */
 export function foldBurn(
   points: BurnPoint[],

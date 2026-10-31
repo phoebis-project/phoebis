@@ -963,6 +963,10 @@ textarea.input {
   margin-bottom: 4px;
 }
 
+.add-filter__typed {
+  margin-top: 6px;
+}
+
 .add-filter__row {
   display: flex;
   gap: 12px;
@@ -2281,5 +2285,22 @@ textarea.input {
     left: 0;
     width: auto;
     max-width: none;
+  }
+}
+
+/* Under 375 px a one-word title as long as Dashboard leaves the controls beside it past the window, at 360 px by
+   14 px, so the bar and its right group close up further and the switch's text and padding shrink. */
+@media (max-width: 374px) {
+  .topbar {
+    gap: 4px;
+  }
+
+  .topbar__right {
+    gap: 3px;
+  }
+
+  .topbar .unit-switch {
+    padding: 4px 18px 4px 4px;
+    font-size: 11px;
   }
 }

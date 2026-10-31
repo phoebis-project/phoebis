@@ -65,13 +65,18 @@ fn inference_rows(rows: &[RollupRow]) -> RollupRow {
     sum
 }
 
-// claude-sonnet-4-5 is not in the shipped price table; the harness serves it under that id alone. Every test
-// here serves and requests claude-sonnet-5, which the table prices, so the cost is a number the assertions can
-// name.
+// BODY asks for claude-sonnet-4-5, and the harness serves it under that id alone. A test that names a cost serves
+// and requests claude-sonnet-5, which the table prices, so the cost is a number its assertions can name, and a test
+// on a model the table does not price requests claude-opus-4-7.
 const PRICED: &str = "claude-sonnet-5";
+const UNPRICED: &str = "claude-opus-4-7";
 
 fn priced_body() -> String {
     BODY.replace("claude-sonnet-4-5", PRICED)
+}
+
+fn unpriced_body() -> String {
+    BODY.replace("claude-sonnet-4-5", UNPRICED)
 }
 
 /// The cells `model` prices at for an answer served at `speed` on a prompt under any threshold, in the table the
@@ -4061,16 +4066,15 @@ async fn the_canonical_model_prices_a_probe_whatever_the_caller_spelled() {
 
 #[tokio::test]
 async fn a_kept_warm_request_on_an_unpriced_model_counts_and_its_recipe_keeps_probing() {
-    // claude-sonnet-4-5 is BODY's own model and stays out of the shipped price table for this test, unlike
-    // the priced tests above.
     let mut r = rig(RigSpec::default()).await;
+    let body = unpriced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
-    r.observe_with("main", BODY).await;
+    r.observe_with("main", &body).await;
     r.advance(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
     r.advance(60_000);
-    let second = r.observe_with("main", BODY).await;
+    let second = r.observe_with("main", &body).await;
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
     let credit = inference_rows(&rows);
     assert_eq!(
@@ -4104,14 +4108,14 @@ fn dearest_read_2000() -> f64 {
 #[tokio::test]
 async fn an_unpriced_model_costs_the_dearest_cells_and_still_lands_a_probe_row() {
     let mut r = rig(RigSpec::default()).await;
-    r.observe("main").await;
+    r.observe_with("main", &unpriced_body()).await;
     r.advance(270_000);
     r.step().await;
     let rows = rollups(&r, |rows| probe_rows(rows).requests == 1).await;
     let (cost, _) = read_dollars(&r, &rows);
     assert!(
         (cost - dearest_read_2000()).abs() < 1e-12,
-        "claude-sonnet-4-5 is not in the shipped table, so its probe row prices at the dearest cells: {cost}"
+        "claude-opus-4-7 is not in the shipped table, so its probe row prices at the dearest cells: {cost}"
     );
     assert_eq!(r.status("main").unanswered, 1);
 }

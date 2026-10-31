@@ -28,6 +28,8 @@ export interface Dimension {
   searchable?: true;
   /** The chip's text, title and values for a value, in place of chipText's forms. The chip draws `values` as given, whatever `text` reads. */
   text?: (value: unknown, options: Option[]) => ChipText;
+  /** A list that also takes a typed value through the field under its rows, a chip's value cut after 32 characters. */
+  typed?: true;
   /** The word before the colon: the label in lower case unless named ("kinds", "client"). */
   word: string;
 }
@@ -57,6 +59,8 @@ const LISTED = 3;
 const SHOWN = 5;
 /** The cut an id chip prints, enough to tell two sessions or requests apart. */
 const ID_SHOWN = 8;
+/** The cut a typed list's chip prints, since a user agent pattern can run past the line's room. */
+const TYPED_SHOWN = 32;
 
 const labelOf = (value: string, options: Option[]) => options.find((o) => o.value === value)?.label ?? value;
 const listed = (words: string[]) => `${words.slice(0, LISTED).join(', ')}${words.length > LISTED ? ` +${words.length - LISTED}` : ''}`;
@@ -101,7 +105,14 @@ export function withoutValue(dimension: Dimension, filters: Record<string, unkno
   return value === undefined || !Array.isArray(current) ? emptyValue(dimension) : current.filter((v) => v !== value);
 }
 
-/** A list as up to three option labels then "+N" with every label in the title, a pattern as itself, an id as its first eight characters and an ellipsis with the whole id in the title, a choice as its option's label, a flag as the word alone with no colon. */
+/** A value as a pattern that matches itself in full: `*`, `?` and `\` quoted, the rest verbatim. */
+export const escapePattern = (value: string): string => value.replace(/[*?\\]/g, '\\$&');
+
+/**
+ * A list as up to three option labels then "+N" with every label in the title, a typed list's labels each cut to 32
+ * characters and an ellipsis, a pattern as itself, an id as its first eight characters and an ellipsis with the whole
+ * id in the title, a choice as its option's label, a flag as the word alone with no colon.
+ */
 export function chipText(dimension: Dimension, value: unknown, options: Option[] = []): ChipText {
   const { word } = dimension;
   switch (dimension.kind) {
@@ -117,7 +128,8 @@ export function chipText(dimension: Dimension, value: unknown, options: Option[]
       // A value no option names prints itself, so an earlier key holder or a status code only a loaded row carries
       // still reads.
       const labels = (value as string[]).map((v) => labelOf(v, options));
-      return worded(word, listed(labels), labels.join(', '));
+      const shown = dimension.typed ? labels.map((l) => (l.length > TYPED_SHOWN ? `${l.slice(0, TYPED_SHOWN)}…` : l)) : labels;
+      return worded(word, listed(shown), labels.join(', '));
     }
     case 'pattern':
       return worded(word, value as string);
@@ -158,6 +170,11 @@ const MODEL: Dimension = { field: 'models', group: 'Routing', kind: 'list', labe
 const CATALOG_MODEL: Dimension = { ...MODEL, searchable: true };
 const POOL: Dimension = { field: 'pools', group: 'Routing', kind: 'list', label: 'Pool', mono: true, word: 'pool' };
 const USER_AGENT: Dimension = { field: 'agent', group: 'Request', kind: 'pattern', label: 'User agent', mono: true, word: 'user agent' };
+/**
+ * The agent id of a request, which both logs match exactly. The word is `agent`, so its chip reads `agent: main` beside
+ * the user agent's chip.
+ */
+export const AGENT_ID: Dimension = { field: 'agentId', group: 'Subject', kind: 'id', label: 'Agent', mono: true, word: 'agent' };
 
 /**
  * A dimension's disabled reason while its option list did not load, `{ [field]: "The key list did not load: ..." }`,
@@ -210,6 +227,7 @@ export const REQUESTS_DIMENSIONS: Dimension[] = [
   { field: 'speeds', group: 'Request', kind: 'list', label: 'Speed', mono: true, word: 'speed' },
   { field: 'turnOrigins', group: 'Request', kind: 'list', label: 'Turn origin', mono: true, word: 'turn origin' },
   USER_AGENT,
+  AGENT_ID,
   { field: 'request', group: 'Subject', kind: 'id', label: 'Request', mono: true, word: 'request' },
   { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' },
 ];
@@ -221,6 +239,7 @@ export const ROUTING_LOG_DIMENSIONS: Dimension[] = [
   KEY,
   CATALOG_MODEL,
   POOL,
+  AGENT_ID,
   { field: 'request', group: 'Subject', kind: 'id', label: 'Request', mono: true, word: 'request' },
   { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' },
 ];
@@ -228,15 +247,18 @@ export const ROUTING_LOG_DIMENSIONS: Dimension[] = [
 /** Account alone: the route answers the trailing 30 days whatever the range, so the view offers none. */
 export const METER_DIMENSIONS: Dimension[] = [ACCOUNT];
 
-/** Routing, Request, Subject. The client pattern travels as `class` and reads "client", as on Requests. */
+/**
+ * Routing, Request, Subject. The client and user agent patterns travel as the `clients` and `user_agents` lists, each
+ * value a chip reading "client" or "user agent", as on Requests.
+ */
 export const ANALYTICS_DIMENSIONS: Dimension[] = [
   { ...ACCOUNT, mono: true },
   KEY,
   MODEL,
   POOL,
-  { field: 'class', group: 'Request', kind: 'pattern', label: 'Client', mono: true, word: 'client' },
+  { field: 'clients', group: 'Request', kind: 'list', label: 'Client', mono: true, perValue: true, typed: true, word: 'client' },
   { field: 'probes', group: 'Request', kind: 'flag', label: 'Include probes', word: 'include probes' },
-  USER_AGENT,
+  { field: 'userAgents', group: 'Request', kind: 'list', label: 'User agent', mono: true, perValue: true, typed: true, word: 'user agent' },
   { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' },
 ];
 
@@ -252,20 +274,19 @@ export const KEYS_DIMENSIONS: Dimension[] = [
 /** Accounts. The status choice's none is `all`, the codec's default. */
 export const ACCOUNTS_DIMENSIONS: Dimension[] = [{ anyLabel: 'All statuses', defaultValue: 'all', field: 'status', group: 'Accounts', kind: 'choice', label: 'Status', word: 'status' }];
 
-/** Sessions. The age choice's none is `1h`, the codec's default, and its options are the other four presets. */
+/** Sessions. */
 export const SESSIONS_DIMENSIONS: Dimension[] = [
   { field: 'companion', group: 'Sessions', kind: 'flag', label: 'Companion only', word: 'companion only' },
   { field: 'finished', group: 'Sessions', kind: 'flag', label: 'Finished sessions', word: 'finished sessions' },
-  { anyLabel: '1 h', defaultValue: '1h', field: 'age', group: 'Sessions', kind: 'choice', label: 'Non-companion age', word: 'age' },
   { field: 'released', group: 'Sessions', kind: 'flag', label: 'Released agents', word: 'released agents' },
 ];
 
 /** The codec keys that are no dimension: `range`, `rows` and `search` everywhere, and per view the keys named here. */
 export const NOT_DIMENSIONS: Record<'accounts' | 'analytics' | 'keys' | 'requests' | 'routingLog' | 'sessions', readonly string[]> = {
-  accounts: ['range', 'rows', 'search', 'sort'],
+  accounts: ['dir', 'range', 'rows', 'search', 'sort'],
   analytics: ['by', 'groups', 'key', 'range', 'rows', 'search', 'unit'],
   keys: ['range', 'rows', 'search'],
   requests: ['range', 'rows', 'search'],
   routingLog: ['range', 'rows', 'search'],
-  sessions: ['range', 'rows', 'search'],
+  sessions: ['dir', 'range', 'rows', 'search', 'sort'],
 };

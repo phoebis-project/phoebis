@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, type PoolInput } from '@/api';
-import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
+import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type OverviewRange, type PoolEngineFields } from '@/api/client';
 import { slug } from '@/api/http';
 import type {
   Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeepaliveOverview, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, PoolWarning, Range, ReturnToPlan, Session,
@@ -82,6 +82,13 @@ const WARNING_FIELD_GROUP: Readonly<Record<string, PoolGroup>> = {
 /** Where a warning is fixed: the group of its first field, or none for a field this build does not know. */
 const warningGroup = (warning: PoolWarning): PoolGroup | null => WARNING_FIELD_GROUP[warning.fields[0] ?? ''] ?? null;
 type IdleReturnBucket = KeepaliveOverview['pools'][number]['idleReturns'][number];
+interface ReturnRateProps {
+  buckets: IdleReturnBucket[];
+  error: string | null;
+  loading: boolean;
+  onRange: (range: OverviewRange) => void;
+  range: OverviewRange;
+}
 const BREAK_EVEN_HINT = "The pause length at which the recipe's probes cost one re-write of its prefix, for this pool's funding, cache TTL and models.";
 const SHARE_HINT = "The idle window's probes against one re-write of the prefix, so the bet this window makes is visible per pool.";
 /** A range of seconds through `format`, one figure when both ends read alike. */
@@ -220,7 +227,9 @@ const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
 
 export function PoolsPage() {
   const { unit } = useAppSettings();
-  const [dialog, setDialog] = useState<{ initialGroup: PoolGroup | null; pool: Pool | null } | null>(null);
+  // The return rate's range is the dialog's own, so each opening, a fresh state without one, starts on 7 days.
+  const [dialog, setDialog] = useState<{ initialGroup: PoolGroup | null; pool: Pool | null; range?: OverviewRange } | null>(null);
+  const returnRange = dialog?.range ?? '7d';
   const [deleting, setDeleting] = useState<Pool | null>(null);
   const [intervalMs, setIntervalMs] = useState(5_000);
   const [barOpen, setBarOpen] = useState(false);
@@ -235,8 +244,9 @@ export function PoolsPage() {
   // auto reload, and Refresh reads it again.
   const catalog = useAsync(() => api.listCatalog(), []);
   const sessions = useAsync(() => api.listSessions(), [], reread);
-  // The dialog's return rate, as the Sessions page reads it.
-  const overview = useAsync(() => api.getKeepaliveOverview(), [], reread);
+  // The dialog's return rate over the range the dialog picks, each answer carrying the range it was read for.
+  const overview = useAsync(() => api.getKeepaliveOverview({ range: returnRange }).then((read) => ({ overview: read, range: returnRange })), [returnRange], reread);
+  const answer = overview.data?.range === returnRange ? overview.data.overview : null;
   const attention = useAttention();
   const now = useNow();
   const location = useLocation();
@@ -411,9 +421,13 @@ export function PoolsPage() {
         pools={pools.data ?? []}
         sessions={dialog?.pool ? (sessionsByPool.get(dialog.pool.id) ?? []) : []}
         idleReturns={{
-          buckets: (dialog?.pool && overview.data?.pools.find((p) => p.poolId === dialog.pool?.id)?.idleReturns) || [],
-          error: overview.data === null ? overview.error : null,
-          loading: overview.data === null && overview.error === null,
+          // The last answer outlives a pending or failed read, which after a pick is the other range's, so the dialog
+          // draws an answer read for the range it names, its loading or its error otherwise.
+          buckets: (dialog?.pool && answer?.pools.find((p) => p.poolId === dialog.pool?.id)?.idleReturns) || [],
+          error: answer === null && !overview.loading ? overview.error : null,
+          loading: answer === null && overview.loading,
+          onRange: (range) => setDialog((d) => d && { ...d, range }),
+          range: returnRange,
         }}
         models={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))}
         onSaved={(created) => {
@@ -908,11 +922,17 @@ function PoolCard({
 }
 
 /** The pool's idle-age counters: of the idle windows that reached each age, how many the next request continued. */
-function ReturnRate({ buckets, error, loading }: { buckets: IdleReturnBucket[]; error: string | null; loading: boolean }) {
+function ReturnRate({ buckets, error, loading, onRange, range }: ReturnRateProps) {
   return (
     <div className="field return-rate">
-      <span className="field__label">Return rate by idle age</span>
-      <p className="field__hint">Of the idle windows that reached each age, the ones whose next request continued the same prefix within it.</p>
+      <label className="row">
+        <span className="field__label">Return rate by idle age</span>
+        <Select value={range} onChange={(e) => onRange(e.target.value as OverviewRange)} aria-label="Return rate range">
+          <option value="7d">7 days</option>
+          <option value="30d">30 days</option>
+        </Select>
+      </label>
+      <p className="field__hint">Of the idle windows that reached each age in the last {range === '7d' ? 7 : 30} days, the ones whose next request continued the same prefix within it.</p>
       {error !== null ? (
         <p className="muted">Could not load the return rate: {error}</p>
       ) : loading ? (
@@ -1190,7 +1210,7 @@ export function PoolDialog({
   /** Whether the accounts read has answered or failed. Before that no stored member is refused or marked unlisted. */
   accountsLoaded: boolean;
   /** The pool's idle-age counters from the keepalive overview, empty for a new pool or one the overview does not list. */
-  idleReturns: { buckets: IdleReturnBucket[]; error: string | null; loading: boolean };
+  idleReturns: ReturnRateProps;
   /** The group the address named. The reset opens on it, Identity otherwise. */
   initialGroup?: PoolGroup | null;
   keys: ApiKey[];

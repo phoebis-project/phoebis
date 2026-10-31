@@ -75,6 +75,11 @@ const AGENT_PATTERN_PLAIN = 'Not linked: the user agent pattern matches the fold
 const AGENT_GROUP_PLAIN = 'Not linked: this grouping keys a user agent by its folded product token, and the request log matches the raw header';
 const CLIENT_PLAIN = 'Not linked: the request log matches the raw client class, and the rollups file a long or unusual class under other';
 const CLIENT_PATTERN_PLAIN = 'Not linked: the client pattern matches other here, where the rollups file a long or unusual class, and the request log matches the raw client class';
+/**
+ * The hover of a count the Analytics page draws under several client patterns: the request log's client filter takes
+ * one pattern, so a link could list fewer rows than the count holds or, with the patterns dropped, more.
+ */
+export const CLIENT_PATTERNS_PLAIN = 'Several client patterns are set, and the request log takes one';
 
 /**
  * The key selectors a link carries: a session view's key lifetime alone while the page reads the session under one,
@@ -128,10 +133,12 @@ export function requestsLink({ count, filters, group, reason, refusalCategory, w
 }
 
 /** A count of the refusals card: its category's refused answers over the exact window the route counted, since the
- *  route reads the attempts at the request rather than the rollups' whole hours, and with no session, client pattern
- *  or user agent pattern, since the route's query reads none of the three. */
+ *  route reads the attempts at the request rather than the rollups' whole hours, with no session, which the route does
+ *  not read. The two patterns pass through as the route reads them, so the count reads plain under a user agent pattern
+ *  or a client pattern the request log cannot list, as the reasons panel's counts do, and its link never lists more
+ *  rows than the bar counts. */
 export function refusalLink(input: Omit<RequestsLinkInput, 'count' | 'group' | 'reason' | 'refusalCategory'>, category: string, count: number): RequestsLinkTarget {
-  return requestsLink({ ...input, count, filters: { ...input.filters, clientPattern: '', sessionId: null, userAgentPattern: '' }, refusalCategory: category, window: { ...input.window, exact: true } });
+  return requestsLink({ ...input, count, filters: { ...input.filters, sessionId: null }, refusalCategory: category, window: { ...input.window, exact: true } });
 }
 
 /** One link of the drawer's "Widen to" line. */

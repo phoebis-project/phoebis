@@ -3057,8 +3057,8 @@ fn seed_oauth_account(db_path: &std::path::Path, key_path: &std::path::Path) {
     }
 }
 
-/// The fixture head with an Opus 5 body in place of the captured fixture's own model; a test that needs a model the
-/// subscription cost model has a weight for names it through `request_on`.
+/// The fixture head with an Opus 5 body in place of the captured fixture's own model. A test that needs another model
+/// names it through `request_on`.
 fn opus_request(
     client: &reqwest::Client,
     proxy_port: u16,

@@ -16,6 +16,7 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, Err
 import { KEYS_CODEC, type KeysAddress } from '@/lib/address';
 import { nativeFiguresOf, SHARE_NOTE, UNPRICED_TITLE, type DollarPosition } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
+import { effectiveCaptureHours } from '@/lib/capture';
 import { clock } from '@/lib/clock';
 import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import type { PauseCause } from '@/lib/follow';
@@ -27,8 +28,6 @@ import type { UnitPosition } from '@/lib/unit';
 
 const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 const isKeyGroup = (value: string | null): value is KeyGroup => value !== null && (KEY_GROUPS as readonly string[]).includes(value);
-/** A key with no override of its own captures for as long as its pool says. */
-export const effectiveCaptureHours = (key: Pick<ApiKey, 'bodyCaptureHours'>, pool: Pick<Pool, 'bodyCaptureHours'> | null): number => key.bodyCaptureHours ?? pool?.bodyCaptureHours ?? 0;
 const captureLabel = (hours: number) => (hours > 0 ? `bodies captured, ${hours}h` : 'bodies not captured');
 /** The capture line whole, its inherited mark included, for the title of a line the fill column cuts. */
 const captureLine = (key: Pick<ApiKey, 'bodyCaptureHours'>, pool: Pick<Pool, 'bodyCaptureHours'> | null) => `${captureLabel(effectiveCaptureHours(key, pool))}${key.bodyCaptureHours === null ? ' inherited' : ''}`;

@@ -56,19 +56,38 @@ test("the mock keeps a request under its serving attempt's stop reason and refus
   assert.deepEqual(await listed({ refusalCategories: ['-'], stopReasons: ['refusal'] }), ids(bare));
 });
 
-test("a refusal bar's link lists the rows its count counted under a client pattern the route does not read", async () => {
+/** The refusal count over the story's last day under `lists`, as the page reads it. */
+const refusalCount = (lists) => api.getAnalyticsRefusalCategories({ accountIds: [], from: new Date(Date.parse(AT) - 24 * 3_600_000).toISOString(), groupBy: 'all', includeProbes: false, keyIds: [], models: [], poolIds: [], to: AT, ...lists });
+const refusalsIn = (answer) => answer.rows.reduce((n, r) => n + r.requests, 0);
+
+test('the mock narrows the refusal count by the client and user agent patterns, the agent folded to its product token, and the user agent groups narrow nothing', async () => {
+  // The story's six refused answers, the laptop's owed turns in `mock/requests.ts`, are all on `claude-code/cli` under
+  // `claude-cli/2.0.44 (external, cli)`.
+  const whole = refusalsIn(await refusalCount({}));
+  assert.equal(whole, 6);
+  assert.equal(refusalsIn(await refusalCount({ clients: ['claude-code/sdk-cli'] })), 0, 'no refused answer came from the sdk-cli client');
+  assert.equal(refusalsIn(await refusalCount({ clients: ['claude-code/cli'] })), whole);
+  assert.equal(refusalsIn(await refusalCount({ userAgents: ['claude-cli/2.0.44'] })), whole, "the laptop agent's token keeps its refusals");
+  assert.equal(refusalsIn(await refusalCount({ userAgents: ['claude-cli/2.1.*'] })), 0, 'no refused answer came from a 2.1 build');
+  assert.equal(refusalsIn(await refusalCount({ userAgentGroups: ['claude-cli/2.1.*'] })), whole, 'the groups partition the rows and keep every one');
+});
+
+test("a refusal bar's link carries the client pattern its count was read under and lists the rows the count counted", async () => {
   const now = Date.parse(AT);
   const from = now - 24 * 3_600_000;
-  const count = await api.getAnalyticsRefusalCategories({ accountIds: [], clients: ['no-such-client'], from: new Date(from).toISOString(), groupBy: 'all', includeProbes: false, keyIds: [], models: [], poolIds: [], to: AT });
+  const pattern = 'claude-code/cli';
+  const count = await refusalCount({ clients: [pattern] });
+  // Three of the laptop's owed turns refused under cyber, every one on the pattern's client.
   const cyber = count.rows.find((r) => r.category === 'cyber');
   assert.equal(cyber?.requests, 3, JSON.stringify(count.rows));
-  const counted = unprobed.filter((r) => Date.parse(r.at) >= from && Date.parse(r.at) <= now && r.attempts.at(-1)?.response?.stopReason === 'refusal' && r.attempts.at(-1).response.refusalCategory === 'cyber');
-  const input = { filters: { accountIds: [], clientPattern: 'no-such-client', includeProbes: false, keyIds: [], models: [], poolIds: [], sessionId: null, userAgentPattern: '' }, window: { exact: false, fromMs: from, nowMs: now, toMs: now } };
+  const counted = unprobed.filter((r) => Date.parse(r.at) >= from && Date.parse(r.at) <= now && d.matchesPattern(pattern, r.client ?? '-') && r.attempts.at(-1)?.response?.stopReason === 'refusal' && r.attempts.at(-1).response.refusalCategory === 'cyber');
+  const input = { filters: { accountIds: [], clientPattern: pattern, includeProbes: false, keyIds: [], models: [], poolIds: [], sessionId: null, userAgentPattern: '' }, window: { exact: false, fromMs: from, nowMs: now, toMs: now } };
   // The address read back as the Requests page reads it into its list query.
   const read = d.REQUESTS_CODEC.fromParams(new URL(d.refusalLink(input, 'cyber', cyber.requests).href, 'http://console.test').searchParams, now);
+  assert.equal(read.client, pattern);
   const linked = await listed({ accountIds: read.accounts, client: read.client, from: read.range.from, includeProbes: read.kind === 'probe', keyIds: read.keys, models: read.models, poolIds: read.pools, refusalCategories: read.refusalCategories, session: read.session || undefined, stopReasons: read.stopReasons, to: read.range.to });
   assert.deepEqual(linked, ids(counted));
-  assert.equal(linked.length, 3);
+  assert.equal(linked.length, cyber.requests);
 });
 
 test('the mock leaves the stamp uncapped under a fixed end, so a row received inside the range and written after it is read once, as the route does', async () => {
@@ -155,4 +174,71 @@ test("the mock answers a session id with the session's rows beside the search", 
   const inside = new Set(ids(expected));
   assert.ok(searched.some((id) => !inside.has(id)), `the search ${search} also hits rows outside the session`);
   assert.deepEqual(await listed({ search, session }), searched.filter((id) => inside.has(id)), 'the session and the search combine');
+});
+
+test("the mock answers an agent id with the agent's rows on both logs, an event naming no agent left out", async () => {
+  const mains = unprobed.filter((r) => r.agentId === 'main');
+  narrowed(mains, 'of the main agent');
+  assert.deepEqual(await listed({ agentId: 'main' }), ids(mains));
+  const subagent = unprobed.find((r) => r.agentId !== 'main' && r.agentId !== null)?.agentId;
+  assert.ok(subagent, 'the story holds a subagent row');
+  const own = unprobed.filter((r) => r.agentId === subagent);
+  narrowed(own, `of subagent ${subagent}`);
+  assert.deepEqual(await listed({ agentId: subagent }), ids(own));
+  // Unasked, the mock reads the wall clock's last hour, which holds none of the story's rows.
+  const from = new Date(Date.parse(AT) - 3_600_000).toISOString();
+  const to = new Date(Date.parse(AT)).toISOString();
+  const hour = await api.listRoutingLog({ from, limit: 200, to });
+  assert.equal(hour.nextCursor, null, 'one page holds the hour');
+  assert.ok(hour.rows.some((r) => r.type === 'event' && r.agentId === null), 'the hour holds an event that names no agent');
+  const key = (r) => (r.type === 'decision' ? `${r.requestId}/${r.seq}` : `event/${r.id}`);
+  for (const agentId of ['main', subagent]) {
+    const kept = hour.rows.filter((r) => r.agentId === agentId);
+    assert.ok(kept.length > 0 && kept.length < hour.rows.length, `the hour holds ${kept.length} rows of ${agentId} of ${hour.rows.length}`);
+    const page = await api.listRoutingLog({ agentId, from, limit: 200, to });
+    assert.ok(page.rows.every((r) => r.agentId === agentId), `every row of the ${agentId} page carries its agent id`);
+    assert.deepEqual(page.rows.map(key), kept.map(key), `the ${agentId} page is the hour's rows of ${agentId}`);
+  }
+});
+
+test('the mock leaves out a session no mod reports once its last use is older than the non-companion timeout, as the route does', async () => {
+  const now = Date.parse(AT);
+  const HOUR_S = 3_600;
+  const TWO_HOURS_BACK = 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58';
+  const key = (s) => `${s.keyId}|${s.keyGeneration}|${s.sessionId}`;
+  const named = (s) => `${s.keyId} on ${s.accountId ?? 'no account'} ${s.sessionId.slice(0, 8)}${s.historical ? ' earlier holder' : ''}`;
+  const back = (s) => (d.lastUseOf(s) === null ? 'no use on record' : `${Math.round((now - Date.parse(d.lastUseOf(s))) / 60_000)} min back`);
+  const sessions = await api.listSessions();
+  const plain = sessions.filter((s) => s.companion === 'none');
+  const past = plain.filter((s) => !d.withinNonCompanionTimeout(d.lastUseOf(s), HOUR_S, now));
+  assert.equal(past.length, 0, `listed past the hour: ${past.map((s) => `${named(s)} (${back(s)})`).join(', ')}`);
+  const overflow = plain.find((s) => s.keyId === 'desktop' && s.accountId === 'overflow');
+  const pinless = plain.find((s) => s.keyId === 'laptop' && s.accountId === 'secondary' && !s.pinned);
+  assert.ok(overflow && pinless, `the unpinned rows on overflow and secondary stay listed, their last use inside the hour: ${plain.map((s) => `${named(s)} (${back(s)})`).join(', ')}`);
+  // The laptop row the ledger never saw holds no pin and no request: a null last use is never older than the timeout.
+  const unused = plain.filter((s) => d.lastUseOf(s) === null);
+  assert.deepEqual(unused.map((s) => `${s.keyId} on ${s.accountId}`), ['laptop on nightly'], 'one row no mod reports has no use on record and is listed at any instant');
+  assert.deepEqual(d.sessionsListedAt(now).map(key), sessions.map(key), "the helper reads the route's list at the story's clock");
+  assert.ok(d.sessionsListedAt(now, undefined, 10_800).some((s) => s.sessionId === TWO_HOURS_BACK), 'a three-hour timeout lists the row last used two hours back');
+  assert.ok(!d.sessionsListedAt(now, undefined, HOUR_S).some((s) => s.sessionId === TWO_HOURS_BACK), 'the one-hour timeout leaves it out');
+  const later = d.sessionsListedAt(now + 2 * HOUR_S * 1000);
+  assert.deepEqual(later.filter((s) => s.companion === 'none').map(named), unused.map(named), 'two hours on, no row no mod reports with a use on record stays listed');
+  assert.deepEqual(later.filter((s) => s.companion !== 'none').map(key), sessions.filter((s) => s.companion !== 'none').map(key), "every companion row of the story's list still stands two hours on");
+});
+
+test('the mock answers the keepalive overview over 7 days by default and over 30 under its range, and refuses any other word, as the route does', async () => {
+  const bare = await api.getKeepaliveOverview();
+  const week = await api.getKeepaliveOverview({ range: '7d' });
+  const month = await api.getKeepaliveOverview({ range: '30d' });
+  assert.deepEqual(week, bare, 'the default range is 7 days');
+  const rest = (o) => ({ ...o, pools: o.pools.map(({ idleReturns: _idle, ...p }) => p) });
+  assert.deepEqual(rest(month), rest(week), 'the range moves the idle returns alone');
+  const total = (o, member) => o.pools.flatMap((p) => p.idleReturns).reduce((n, b) => n + b[member], 0);
+  for (const [i, pool] of month.pools.entries()) {
+    const seven = week.pools[i].idleReturns;
+    const larger = pool.idleReturns.filter((b, j) => b.fromSeconds !== seven[j].fromSeconds || b.reached <= seven[j].reached || b.returned <= seven[j].returned);
+    assert.deepEqual(larger, [], `${pool.poolId}: every bucket reaches and returns more windows over 30 days`);
+  }
+  assert.ok(total(month, 'reached') > total(week, 'reached') && total(month, 'returned') > total(week, 'returned'), 'the 30-day totals are larger');
+  await assert.rejects(api.getKeepaliveOverview({ range: '14d' }), (e) => e instanceof d.ApiError && e.status === 400 && e.message === 'range is 7d or 30d');
 });

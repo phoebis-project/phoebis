@@ -1,6 +1,6 @@
 import type { AgentContext, KeepaliveRecipe, KeepaliveState, RecipeCause, Session } from '@/api/types';
-import { RANGE_PRESETS } from '@/lib/address';
-import { fmtCompact, fmtShare } from '@/lib/format';
+import { RANGE_PRESETS, type SortDir } from '@/lib/address';
+import { fmtCompact } from '@/lib/format';
 
 export const CAUSE_LABEL: Record<RecipeCause, string> = {
   affinity_too_short: 'affinity too short',
@@ -101,7 +101,7 @@ export const CAUSE_HINT: Record<RecipeCause, string> = {
   ledger_behind: "The router refused the probe while its ledger was catching up. The probe is sent again after the answer's wait.",
   missing_account: "The last probe's answer named no account, so the engine cannot tell where it landed.",
   no_cache_evidence: "The request's answer showed no cache read or write, so there was no entry to keep warm.",
-  no_probe_cache_evidence: "The last probe's answer showed no cache read or write. The next attempt is scheduled with backoff.",
+  no_probe_cache_evidence: "The last probe's answer showed no cache read or write. The next attempt is scheduled on the retry ladder before the entry expires.",
   opted_out: "The session's key opts out of cache warming, so the request was not kept.",
   overage: 'The account is on extra usage and the pool policy skips probes there.',
   owner_mismatch: 'The request named another owner than the one the keepalive mod registered, so the engine kept nothing from it.',
@@ -129,7 +129,7 @@ export const CAUSE_HINT: Record<RecipeCause, string> = {
   scheduled: 'The next probe is scheduled before the cache entry expires.',
   session_ended: 'The session ended, by the mod reporting it or by its key being deleted, so its recipes were dropped.',
   session_expired: 'The session passed the session expiry with no request and no report.',
-  slow_probe: 'The last probe took its whole refresh interval, so the next one waits out a backoff rather than starting at once.',
+  slow_probe: 'The last probe took its whole refresh interval, so the next one is scheduled on the retry ladder before the entry expires rather than starting at once.',
   storage_limit: 'The engine was at its retained-bytes cap with nothing idle to evict, so this recipe was not kept.',
   structured_output: 'The request asked for structured output, which a probe cannot replay, so it was not kept.',
   unexpected_output: "The last probe's answer carried output, which a probe never asks for.",
@@ -142,26 +142,49 @@ export const WARNING_CAUSES: RecipeCause[] = ['affinity_too_short', 'budget', 'e
 /** The engine's name for a session's main conversation. */
 export const MAIN_AGENT = 'main';
 
-/** The lifecycle words in the order a session's lines run after main. `unknown` sits with `parked`, and `released`
- * closes the list wherever a released record is still listed. */
+/** The lifecycle words in the order a session's recipe lines run after main. `unknown` sits with `parked`, and
+ * `released` closes the recipe lines wherever a released record is still listed. */
 const STATE_ORDER: Record<KeepaliveState, number> = { busy: 0, idle: 1, parked: 2, released: 3, unknown: 2 };
 
 /** Newest last request first, an agent without one last. */
-function byLastRequest(a: KeepaliveRecipe, b: KeepaliveRecipe): number {
+function byLastRequest(a: Pick<KeepaliveRecipe, 'lastRequestAt'>, b: Pick<KeepaliveRecipe, 'lastRequestAt'>): number {
   if (a.lastRequestAt === null || b.lastRequestAt === null) return a.lastRequestAt === b.lastRequestAt ? 0 : a.lastRequestAt === null ? 1 : -1;
   return Date.parse(b.lastRequestAt) - Date.parse(a.lastRequestAt);
 }
 
 /**
- * A session's agents in the order the Sessions view draws them: main first, then by lifecycle word, inside a word the
- * newest last request first, an agent without one last, and ties by agent id, so two reads of one list draw one
- * order. The list handed in is left as it is.
+ * Two instants newest first under `desc` and oldest first under `asc`, an instant missing last under either, so the
+ * direction flips the dated entries alone.
  */
-export function orderRecipes(agents: readonly KeepaliveRecipe[]): KeepaliveRecipe[] {
-  return [...agents].sort((a, b) => {
-    if (a.agentId === MAIN_AGENT || b.agentId === MAIN_AGENT) return a.agentId === b.agentId ? 0 : a.agentId === MAIN_AGENT ? -1 : 1;
-    return STATE_ORDER[a.agentState] - STATE_ORDER[b.agentState] || byLastRequest(a, b) || a.agentId.localeCompare(b.agentId);
-  });
+const byInstant = (a: string | null, b: string | null, dir: SortDir): number => {
+  const order = byLastRequest({ lastRequestAt: a }, { lastRequestAt: b });
+  return a === null || b === null || dir === 'desc' ? order : -order;
+};
+
+/** The later of a session's own last use and its last ledgered request, the `activity` key's value. */
+export const lastActivity = (s: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>): string | null => {
+  if (s.lastUsedAt === null || s.lastRequestAt === null) return s.lastUsedAt ?? s.lastRequestAt;
+  return Date.parse(s.lastRequestAt) > Date.parse(s.lastUsedAt) ? s.lastRequestAt : s.lastUsedAt;
+};
+
+/** The rows under a key and a direction, ties by session id, a row without the key's value last either way. */
+export function orderRows<T extends { session: Pick<Session, 'createdAt' | 'lastRequestAt' | 'lastUsedAt' | 'sessionId'> }>(rows: readonly T[], sort: string, dir: SortDir): T[] {
+  const valueOf = (s: T['session']) => (sort === 'activity' ? lastActivity(s) : s.createdAt);
+  return [...rows].sort((a, b) => byInstant(valueOf(a.session), valueOf(b.session), dir) || a.session.sessionId.localeCompare(b.session.sessionId));
+}
+
+/** A line's group: main first, then the recipe lines by lifecycle word, then the pins no recipe stands on. */
+const lineGroup = (line: SessionLine): number => (line.agentId === MAIN_AGENT ? -1 : line.recipe === null ? STATE_ORDER.released + 1 : STATE_ORDER[line.recipe.agentState]);
+
+/**
+ * The lines under the rows' key: main first, then the lifecycle groups of the recipe lines (`STATE_ORDER`), then the
+ * pin-only lines, and inside a group by the line's own `createdAt` under `created` (a line without one last) or by
+ * `byLastRequest` under `activity` (a pin-only line by its pin's last use), the direction applied inside the groups,
+ * ties by agent id and then by model.
+ */
+export function orderLines(lines: readonly SessionLine[], sort: string, dir: SortDir): SessionLine[] {
+  const valueOf = (line: SessionLine) => (sort === 'activity' ? (line.recipe !== null ? line.recipe.lastRequestAt : (line.pin?.lastUsedAt ?? null)) : (line.pin?.createdAt ?? null));
+  return [...lines].sort((a, b) => lineGroup(a) - lineGroup(b) || byInstant(valueOf(a), valueOf(b), dir) || a.agentId.localeCompare(b.agentId) || a.model.localeCompare(b.model));
 }
 
 export type RequestsRange = (typeof RANGE_PRESETS)[number]['name'];
@@ -173,9 +196,9 @@ export type RequestsRange = (typeof RANGE_PRESETS)[number]['name'];
 const RANGE_HEADROOM_MS = 60_000;
 
 /**
- * The narrowest of the request log's ranges that covers a session's last request, measured back from `now` (the
- * instant of the click, never a sampled one) with the headroom, or null past the widest range or without a last
- * request, where the page's own default applies.
+ * The narrowest of the request log's ranges that covers a last request, a session's or one of its lines', measured
+ * back from `now` (the instant of the click, never a sampled one) with the headroom, or null past the widest range or
+ * without a last request, where the page's own default applies.
  */
 export function requestsRange(lastRequestAt: string | null, now: number): RequestsRange | null {
   if (lastRequestAt === null) return null;
@@ -199,9 +222,6 @@ export function releasedCount(agents: readonly Pick<KeepaliveRecipe, 'agentState
   return agents.filter(isReleasedLine).length;
 }
 
-/** The age preset's span in milliseconds, null for `none`. */
-export const SESSION_AGE_MS: Record<string, number | null> = { '15m': 15 * 60_000, '1h': 3_600_000, '6h': 6 * 3_600_000, '24h': 24 * 3_600_000, none: null };
-
 /**
  * A session the engine is done with: main's recipe reads the cause `session_ended` or `released`, or every line it
  * holds is a released one. Such a session keeps its lines, so its probe facts stay in view once it is shown.
@@ -211,46 +231,48 @@ export function isFinished(session: Pick<Session, 'keepalive'>, agents: readonly
   return cause === 'session_ended' || cause === 'released' || (agents.length > 0 && agents.every(isReleasedLine));
 }
 
-/** The Context cell's three texts, a dash where the tokens are null. */
-export function contextCell(tokens: number | null, window: number | null, share: number | null, prefix: number | null): { main: string; share: string | null; prefix: string | null } {
-  if (tokens === null) return { main: '-', share: null, prefix: null };
-  // The route rounds the share to three decimals, a tenth of a percent, which `fmtShare` keeps and a whole percent
-  // would round away.
-  return { main: fmtCompact(tokens), share: window === null || share === null ? null : `${fmtShare(share)} of ${fmtCompact(window)}`, prefix: prefix === null ? null : `prefix ${fmtCompact(prefix)}` };
-}
-
-export type PinFigures = Pick<AgentContext, 'cachedPrefixTokens' | 'contextShare' | 'contextWindowTokens' | 'lastInputTokens'>;
-
-/** The main pin's figures off the row. A row with no pin, or a pin before its first turn, has no context to read. */
-export const mainFigures = (s: Session): PinFigures => ({
-  cachedPrefixTokens: s.cachedPrefixTokens,
-  contextShare: s.contextShare,
-  contextWindowTokens: s.contextWindowTokens,
-  lastInputTokens: s.pinned && s.lastInputTokens ? s.lastInputTokens : null,
-});
+/** The Context cell's text: the tokens compact, a dash with none or before the first turn. */
+export const contextCell = (tokens: number | null): string => (tokens === null || tokens === 0 ? '-' : fmtCompact(tokens));
 
 /** A model as the route keys a pin: the relay folds the long-context suffix out case-blind before it pins. */
 const pinModel = (model: string): string => model.toLowerCase().replace(/\[1m\]$/, '');
 
 /**
- * An agent line's pin figures, keyed by the agent id and the recipe's model, since the route answers one entry per pin
- * and an agent can hold pins on two models. The row's own figures are its agent's pin on the row's model, so they fill
- * that line alone. Every other line reads the route's entry for its agent and model, and none where the route answers
- * none: a released agent's, or the main agent's on another model, which the route never lists among its entries.
+ * The route's entry for an agent's pin on a model, none where it lists none (a released agent's among them). The route
+ * answers one entry per pin and an agent can hold pins on two models, so the key is the agent id and the model.
  */
-export const lineFigures = (s: Session, agentId: string, model: string): PinFigures | null => {
-  const key = pinModel(model);
-  if (agentId === s.agentId && s.model !== null && pinModel(s.model) === key) return mainFigures(s);
-  return s.agentContexts?.find((c) => c.agentId === agentId && pinModel(c.model) === key) ?? null;
-};
+export const lineFigures = (s: Pick<Session, 'agentContexts'>, agentId: string, model: string): AgentContext | null =>
+  s.agentContexts.find((c) => c.agentId === agentId && pinModel(c.model) === pinModel(model)) ?? null;
 
-/** Whether the Non-companion age hides the row: never a companion row, else its last use older than the preset. */
-export function hiddenByAge(session: Pick<Session, 'companion' | 'lastRequestAt' | 'lastUsedAt'>, age: string, now: number): boolean {
-  const span = SESSION_AGE_MS[age] ?? null;
-  const lastUse = session.lastUsedAt ?? session.lastRequestAt;
-  // A row with no use on record keeps its place, as the expiry keeps it.
-  return session.companion === 'none' && span !== null && lastUse !== null && now - Date.parse(lastUse) > span;
+/** One drawn line: a recipe with its pin, a recipe without one, or a pin without a recipe. */
+export interface SessionLine {
+  agentId: string;
+  model: string;
+  pin: AgentContext | null;
+  recipe: KeepaliveRecipe | null;
 }
+
+/**
+ * The union of a session's entries and its recipes, keyed by agent id and pin model: the recipes first in the order
+ * handed, then the pins no recipe claims in the route's order, which `orderLines` sorts into the view's.
+ */
+export function sessionLines(s: Pick<Session, 'agentContexts'>, recipes: readonly KeepaliveRecipe[]): SessionLine[] {
+  const claimed = new Set<AgentContext>();
+  const lines: SessionLine[] = recipes.map((recipe) => {
+    const pin = lineFigures(s, recipe.agentId, recipe.model);
+    if (pin !== null) claimed.add(pin);
+    return { agentId: recipe.agentId, model: recipe.model, pin, recipe };
+  });
+  for (const pin of s.agentContexts) if (!claimed.has(pin)) lines.push({ agentId: pin.agentId, model: pin.model, pin, recipe: null });
+  return lines;
+}
+
+/** A pin-only line's TTL: the time left to the pin's last use plus its cache TTL, null once passed or unknown. */
+export const pinTtlMs = (pin: Pick<AgentContext, 'cacheTtlMs' | 'lastUsedAt'>, now: number): number | null => {
+  if (pin.cacheTtlMs === null || pin.lastUsedAt === null) return null;
+  const left = Date.parse(pin.lastUsedAt) + pin.cacheTtlMs - now;
+  return left > 0 ? left : null;
+};
 
 /** A read a tile's figure needs: the word the notice names it by, its error, and whether it has ever answered. */
 export interface TileRead {

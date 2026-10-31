@@ -98,8 +98,8 @@ With both price files left uninstalled, `check-config` names the shipped revisio
 `account tiers` count names the tiers the base rows size, leaving out a tier only a regime sizes:
 
 ```text
-api prices: built in (2 revisions, in force 2026-10-08, 9 models), since /etc/phoebis/api_prices.yaml was not found
-subscription costs: built in (1 revision, in force 2026-10-05, 6 weighted models, 8 more by model tier, 3 account tiers, 1 regime: interactive), since /etc/phoebis/subscription_costs.yaml was not found
+api prices: built in (2 revisions, in force 2026-10-08, 11 models), since /etc/phoebis/api_prices.yaml was not found
+subscription costs: built in (1 revision, in force 2026-10-05, 10 weighted models, 4 more by model tier, 3 account tiers, 1 regime: interactive), since /etc/phoebis/subscription_costs.yaml was not found
 ```
 
 While a file holds an entry dated after the one in force, its line adds `next {date}` after the date in force, the date

@@ -716,7 +716,8 @@ export function decodeDecisionRecord(v: unknown): DecisionRecord {
       keyGeneration: num(q.key_generation), keyId: str(q.key_id), lane: { effort: str(lane.effort), speed: str(lane.speed), thinking: str(lane.thinking) }, parentAgentId: strOrNull(q.parent_agent_id), poolId: str(q.pool_id),
       registryRevision: num(q.registry_revision), requestClass: strOrNull(q.request_class), requestId: str(q.request_id),
       seq: num(q.seq, 1),
-      sessionId: strOrNull(q.session_id),
+      // A record before version 3 wrote the session under `routing_session_id`.
+      sessionId: strOrNull(q.session_id ?? (version !== null && version <= 2 ? q.routing_session_id : null)),
     },
     requestId: str(r.request_id),
     seq: num(r.seq, 1),
@@ -852,7 +853,7 @@ export const decodeReconciliations = (v: unknown): ReconciliationsAnswer => ({ r
 
 const decodeAllowanceReset = (v: unknown): AllowanceReset => {
   const r = rec(v);
-  return { observedAt: isoOr(r.observed_at, epoch), resetAt: isoOr(r.reset_at, epoch), shareLeft: num(r.share_left), source: str(r.source) };
+  return { observedAt: isoOr(r.observed_at, epoch), plan: strOrNull(r.plan), resetAt: isoOr(r.reset_at, epoch), shareLeft: num(r.share_left), source: str(r.source), tier: strOrNull(r.tier) };
 };
 export const decodeUnusedAllowance = (v: unknown): UnusedAllowanceAnswer => ({
   accounts: list(rec(v).accounts)
@@ -913,13 +914,13 @@ const burnUnit = (v: unknown): BurnUnit | null => BURN_UNIT_VALUES.find((u) => u
 
 function decodeAgentContext(v: unknown): AgentContext {
   const c = rec(v);
-  return { agentId: str(c.agent_id), cachedPrefixTokens: numOrNull(c.cached_prefix_tokens), contextShare: numOrNull(c.context_share), contextWindowTokens: numOrNull(c.context_window_tokens), lastInputTokens: numOrNull(c.last_input_tokens), model: str(c.model) };
+  return { accountId: str(c.account_id), agentId: str(c.agent_id), cacheTtlMs: numOrNull(c.cache_ttl_ms), createdAt: isoOrNull(c.created_at), effort: strOrNull(c.effort), lastInputTokens: numOrNull(c.last_input_tokens), lastUsedAt: isoOrNull(c.last_used_at), model: str(c.model), warm: bool(c.warm) };
 }
 
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agentContexts: Array.isArray(s.agent_contexts) ? s.agent_contexts.map(decodeAgentContext) : null, agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), cachedPrefixTokens: numOrNull(s.cached_prefix_tokens), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), contextShare: numOrNull(s.context_share), contextWindowTokens: numOrNull(s.context_window_tokens), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), epoch: numOrNull(s.epoch), estimated: bool(s.estimated), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: typeof s.runway_bounded === 'boolean' ? s.runway_bounded : null, runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), shedReason: strOrNull(s.shed_reason), speed: numOrNull(s.speed) };
+  return { accountId: strOrNull(s.account_id), agentContexts: list(s.agent_contexts).map(decodeAgentContext), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), effort: strOrNull(s.effort), epoch: numOrNull(s.epoch), estimated: bool(s.estimated), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: typeof s.runway_bounded === 'boolean' ? s.runway_bounded : null, runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), shedReason: strOrNull(s.shed_reason), speed: numOrNull(s.speed) };
 }
 
 /** Every cause word the engine serializes, so the decoder never reads one it sends as none. */
@@ -1140,7 +1141,7 @@ export function decodeSettings(v: unknown): Settings {
     apiPrices: decodePricing(s.api_prices),
     listeners: { metrics: str(l.metrics), proxy: str(l.proxy), proxyTls: bool(l.proxy_tls) },
     retention: { bodyCaptureMaxHours: num(kept.body_capture_max_hours), retentionDays: num(kept.retention_days), rollupRetentionDays: num(kept.rollup_retention_days) },
-    sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
+    sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds), nonCompanionIdleSeconds: num(rec(s.sessions).non_companion_idle_seconds) },
     storage: { apiPricesPath: strOrNull(store.api_prices_path), ledgerPath: str(store.ledger_path), path: str(store.path), subscriptionCostsPath: strOrNull(store.subscription_costs_path) },
     subscriptionCosts: decodeCostsEnvelope(s.subscription_costs),
   };

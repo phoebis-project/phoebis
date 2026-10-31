@@ -54,7 +54,7 @@ function unweighted(model: string): Pick<AttentionItem, 'detail' | 'since'> | nu
   return first ? { detail: { model, requests: rows.length, tier, weight_of: tier === null ? null : latestWeighted(TABLES, tier) }, since: first.at } : null;
 }
 
-const sonnetUnweighted = unweighted('claude-sonnet-4-6');
+const sonnetUnweighted = unweighted('claude-sonnet-4-5');
 
 /**
  * An account's walls over the day as the reader dates them, read by the newest round on the newest wall's window
@@ -228,7 +228,7 @@ const CONDITIONS: AttentionItem[] = [
  * its one member spent the day's budget, a client build refused on the laptop key, the routing state writer keeping
  * its writes in memory, legacy's lapsed credential, the Overflow workspace out of funding as its account reads,
  * legacy's refreshes failing, the proxy listener's certificate 12 days from its end, a priced record of the jobs pool's
- * one member parked in the ledger file, the backoff secondary's poll is in, Sonnet 4.6 priced at its model tier's
+ * one member parked in the ledger file, the backoff secondary's poll is in, Sonnet 4.5 priced at its model tier's
  * weight, nightly's 5-hour window charged twice the table up to its 13:11 reset, nightly's wall at 12:01 and
  * secondary's after the 11:00 round, nightly spent after the least-bad move onto it, the all pool's round that found
  * no destination with runway, and studio slowed in work for 2 h 8 min of the day. The meter drift reads the reconciled
@@ -319,7 +319,7 @@ export const ATTENTION: AttentionItem[] = [
           kind: 'model_unweighted' as const,
           link: null,
           pools: [],
-          subject: { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6', type: 'model' as const },
+          subject: { id: 'claude-sonnet-4-5', label: 'claude-sonnet-4-5', type: 'model' as const },
         },
       ]
     : []),

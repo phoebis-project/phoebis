@@ -1,5 +1,5 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from './client';
-import type { GuardrailInput, GuardrailRange, GuardrailTestInput } from './client';
+import type { GuardrailInput, GuardrailRange, GuardrailTestInput, OverviewRange } from './client';
 import * as d from './decode';
 import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingConfirmed, PairingInput, PairingPreview, PairingStart, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
 
@@ -223,7 +223,7 @@ export class HttpApi implements Api {
     }
   };
   getGuardrail = async (id: string) => d.decodeGuardrail(await call('GET', `/admin/guardrails/${enc(id)}`));
-  getKeepaliveOverview = async () => d.decodeKeepaliveOverview(await call('GET', '/admin/keepalive/overview'));
+  getKeepaliveOverview = async (q?: { range?: OverviewRange }) => d.decodeKeepaliveOverview(await call('GET', `/admin/keepalive/overview${qs({ range: q?.range })}`));
   getKeyModels = async (keyId: string) => d.decodeKeyModels(await call('GET', `/admin/keys/${enc(keyId)}/models`));
   getOverview = async () => d.decodeDashboard(await call('GET', '/admin/dashboard'));
   getQuotaHistory = async (accountId: string) => d.decodeQuotaHistory(await call('GET', `/admin/accounts/${enc(accountId)}/quota?range=7d`));
@@ -267,11 +267,11 @@ export class HttpApi implements Api {
   listPools = async () => (await call<{ pools: unknown[] }>('GET', '/admin/pools')).pools.map(d.decodePool);
   listRequests = async (q: RequestQuery = {}) =>
     d.decodeRequestPage(
-      await call('GET', `/admin/requests${qs({ accounts: q.accountIds, agent_types: q.agentTypes, cache_miss_reasons: q.cacheMissReasons, classifiers: q.classifiers, client: q.client, cursor: q.cursor, efforts: q.efforts, fixed_end: q.fixedEnd, from: q.from ? Date.parse(q.from) : undefined, guardrails: q.guardrails, held: q.held, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, landed_after: q.landedAfter, limit: q.limit, models: q.models, outcomes: q.outcomes, pools: q.poolIds, refusal_categories: q.refusalCategories, request: q.request, request_classes: q.requestClasses, session: q.session, speeds: q.speeds, statuses: q.statuses?.map(String), stop_reasons: q.stopReasons, text: q.search, to: q.to ? Date.parse(q.to) : undefined, turn_origins: q.turnOrigins, user_agent: q.userAgent })}`),
+      await call('GET', `/admin/requests${qs({ accounts: q.accountIds, agent_id: q.agentId, agent_types: q.agentTypes, cache_miss_reasons: q.cacheMissReasons, classifiers: q.classifiers, client: q.client, cursor: q.cursor, efforts: q.efforts, fixed_end: q.fixedEnd, from: q.from ? Date.parse(q.from) : undefined, guardrails: q.guardrails, held: q.held, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, landed_after: q.landedAfter, limit: q.limit, models: q.models, outcomes: q.outcomes, pools: q.poolIds, refusal_categories: q.refusalCategories, request: q.request, request_classes: q.requestClasses, session: q.session, speeds: q.speeds, statuses: q.statuses?.map(String), stop_reasons: q.stopReasons, text: q.search, to: q.to ? Date.parse(q.to) : undefined, turn_origins: q.turnOrigins, user_agent: q.userAgent })}`),
     );
   // The route reads RFC 3339 instants, so the two times pass through as the page wrote them.
   listRoutingLog = async (q: RoutingLogQuery = {}) =>
-    d.decodeRoutingLogPage(await call('GET', `/admin/routing-log${qs({ accounts: q.accountIds, cursor: q.cursor, from: q.from, keys: q.keyIds, kinds: q.kinds, limit: q.limit, models: q.models, pools: q.poolIds, request: q.request, session: q.session, to: q.to })}`));
+    d.decodeRoutingLogPage(await call('GET', `/admin/routing-log${qs({ accounts: q.accountIds, agent_id: q.agentId, cursor: q.cursor, from: q.from, keys: q.keyIds, kinds: q.kinds, limit: q.limit, models: q.models, pools: q.poolIds, request: q.request, session: q.session, to: q.to })}`));
   listSessions = async () => (await call<{ sessions: unknown[] }>('GET', '/admin/sessions')).sessions.map(d.decodeSession);
   login = async (secret: string, stayLoggedIn?: boolean): Promise<SessionInfo> => {
     await call<void>('POST', '/admin/session', { secret, stay_logged_in: stayLoggedIn === true });

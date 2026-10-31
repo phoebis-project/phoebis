@@ -1,6 +1,9 @@
-import type { Account, AccountSlowDown, ExtraUsage, PLAN_WORDS, PlanWord, PollOutcome, QuotaPoll, RateLimitWindow, Spend, WindowId } from '@/api/types';
-import { own } from '@/lib/analytics';
+import type { Account, AccountSlowDown, ExtraUsage, PLAN_WORDS, PlanWord, PollOutcome, QuotaPoll, RateLimitWindow, Spend, SubscriptionCosts, WindowId } from '@/api/types';
+import { tierRow } from '@/lib/costs';
 import { fmtAbsolute, fmtPct, fmtRelative, instant } from '@/lib/format';
+
+// A local copy, since `lib/analytics` reads `pricedTier` from this module and the two would import each other.
+const own = (map: object, key: string): boolean => Object.prototype.hasOwnProperty.call(map, key);
 
 export type MeterTone = 'good' | 'low' | 'warn';
 
@@ -35,14 +38,26 @@ export const PLAN_WORD_LABEL: Readonly<Record<string, string>> = {
 /** A resolved plan word's label, a word the table lacks shown as sent. */
 export const planWordLabel = (word: PlanWord): string => (own(PLAN_WORD_LABEL, word) ? PLAN_WORD_LABEL[word] : word);
 
-/**
- * The router keys capacity by the stored tier for these plans alone (its snapshot's `priced_tier`), so a Free, Team,
- * Enterprise or usage-based account, or one with no plan, is unpriced even on a tier the cost model sizes.
- */
-const ROUTER_PRICED_PLANS: ReadonlySet<string> = new Set(['max', 'max_20x', 'max_5x', 'pro']);
+/** The plan words the router's `priced_tier` answers the stored tier for, the cost table deciding whether it holds
+ *  that tier. */
+const TIERED_PLANS: ReadonlySet<string> = new Set(['enterprise', 'max', 'max_20x', 'max_5x', 'pro', 'team']);
 
-/** Whether the router prices capacity for an account of this plan word. */
-export const routerPricesPlan = (plan: PlanWord | null): boolean => plan !== null && ROUTER_PRICED_PLANS.has(plan);
+/** Why the gate prices no tier, the ring's and the sized set's reason word. */
+export type UnpricedReason = 'no priced capacity for a free plan' | 'a usage-based seat' | 'tier unknown';
+
+/**
+ * The tier the router prices an account's capacity at, its snapshot's `priced_tier` and the capacity lookup behind it
+ * folded into one answer: the stored tier under `pro`, `max`, `max_5x`, `max_20x`, `team` and `enterprise` while the
+ * cost table holds a row for it, and none with the reason for `free`, `usage_based`, no plan, a word outside the eight,
+ * no tier or a tier the table lacks. With no table (`costs` null) the six words answer the stored tier, since Window
+ * shares prices no figure and the plan word alone decides there.
+ */
+export function pricedTier(plan: PlanWord | null, tier: string | null, costs: SubscriptionCosts | null): { tier: string } | { reason: UnpricedReason; tier: null } {
+  if (plan === 'free') return { reason: 'no priced capacity for a free plan', tier: null };
+  if (plan === 'usage_based') return { reason: 'a usage-based seat', tier: null };
+  if (plan === null || !TIERED_PLANS.has(plan) || tier === null || (costs !== null && tierRow(costs, tier) === undefined)) return { reason: 'tier unknown', tier: null };
+  return { tier };
+}
 
 /** Remaining share drives the color: green at 50% and above, amber at 20% and above, red below. */
 export function meterTone(remaining: number): MeterTone {
@@ -83,10 +98,12 @@ export function endOf(account: Pick<Account, 'canceled' | 'subscription'>, now: 
   return trial > now ? trial : null;
 }
 
-/** The account's `end` where a window's pace runs to it, an end before the reset (one at the reset is the reset); else null. */
+/** The account's `end` where a window's pace runs to it, an end before the reset (one at the reset is the reset), and
+ *  null otherwise. */
 export const paceEnd = (resetsAt: string | null, end: number | null): number | null => (resetsAt !== null && end !== null && end < Date.parse(resetsAt) ? end : null);
 
-/** " to its end at 15:42" for the end a pace runs to (`paceEnd`), as the decision card's Pace hover names it; empty for none. */
+/** " to its end at 15:42" for the end a pace runs to (`paceEnd`), as the decision card's Pace hover names it, and empty
+ *  for none. */
 export const toEndWords = (end: number | null, now: number): string => (end === null ? '' : ` to its end at ${instant(end, now)}`);
 
 /** One less the share elapsed, read off the field as the utilization less the lead, so the mark and the words read one
@@ -167,6 +184,11 @@ export const isSubscription = (account: Pick<Account, 'kind'>) => account.kind =
  */
 export const isQuotaListed = (account: Pick<Account, 'kind' | 'planEndedAt' | 'status'>): boolean =>
   isSubscription(account) && account.status !== 'reauth_required' && account.status !== 'unpaired' && account.planEndedAt === null;
+
+/** The no-window sentence of an account whose plan ended: the long form, or the compact one the account cards and the
+ *  Accounts list's rows draw in their window bars' place. */
+export const planEndedSentence = (planEndedAt: string, now: number, compact = false): string =>
+  compact ? `No window since the plan ended ${fmtRelative(planEndedAt, now)}` : `No quota window is read since the plan ended ${fmtRelative(planEndedAt, now)}.`;
 
 /** The fast lane's two cooldown scopes, its rate limit's and its usage-credits refusal's: each holds fast-mode
  *  requests alone, so neither cools the account's standard traffic. */

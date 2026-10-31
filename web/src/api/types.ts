@@ -96,7 +96,7 @@ export interface Subscription {
   /** The plan the router resolved from the profile's organization type and tier, null while no profile document stands. */
   plan: PlanWord | null;
   rateLimitTier: string;
-  /** Epoch milliseconds on the wire, decoded to the ISO string every other timestamp carries; null when the
+  /** Epoch milliseconds on the wire, decoded to the ISO string every other timestamp carries, and `null` when the
    *  profile does not report it. */
   since: string | null;
   trialEndsAt: string | null;
@@ -139,7 +139,8 @@ export interface Account {
   extraUsage: ExtraUsage | null;
   /** Null when the provider reports no Fable window for this plan. */
   fableWindow: RateLimitWindow | null;
-  /** The fast lane's input and output buckets as the router last read them; null until an answer to a fast request carried them. */
+  /** The fast lane's input and output buckets as the router last read them, and `null` until an answer to a fast
+   * request carried them. */
   fastLane: { input: FastLaneReading | null; output: FastLaneReading | null } | null;
   id: string;
   kind: AccountKind;
@@ -165,7 +166,7 @@ export interface Account {
   spend: Spend | null;
   status: AccountStatus;
   subscription: Subscription | null;
-  /** The poll's standing and its last snapshot's error and instant, as the usage route answers them; null for an
+  /** The poll's standing and its last snapshot's error and instant, as the usage route answers them, and `null` for an
    * API-key account, which the poll never reads. */
   usage: QuotaSnapshot | null;
   /**
@@ -272,17 +273,17 @@ export type QuotaFetchStatus = 'error' | 'success';
 /** How the usage endpoint answered an account's last attempt. */
 export type PollOutcome = 'clean' | 'failed' | 'rate_limited';
 
-/** The poll's standing for an OAuth account, kept by the router; null until the poll first asks. */
+/** The poll's standing for an OAuth account, kept by the router, and `null` until the poll first asks. */
 export interface QuotaPoll {
-  /** The first 429 of the run the account is in; null outside one. */
+  /** The first 429 of the run the account is in, and `null` outside one. */
   backoffSince: string | null;
   lastAttemptAt: string | null;
-  /** When the windows of the last clean answer were read; null until one lands. */
+  /** When the windows of the last clean answer were read, and `null` until one lands. */
   lastCleanAt: string | null;
-  /** The message of the last attempt that was not clean; null after a clean one. */
+  /** The message of the last attempt that was not clean, and `null` after a clean one. */
   lastError: string | null;
   lastOutcome: PollOutcome;
-  /** When the account may be asked again; null when its next slot may ask it. */
+  /** When the account may be asked again, and `null` when its next slot may ask it. */
   nextAttemptAt: string | null;
   /** 429s answered in a row; 0 after a clean answer. */
   rateLimitedInARow: number;
@@ -421,7 +422,7 @@ export interface PoolMember {
   /** Null is no budget over that period; a member may carry one, both, or neither. */
   budgetDailyUsd: number | null;
   budgetMonthlyUsd: number | null;
-  /** The router's end for a member at a budget: the latest end among the budgets reached; null while none is. */
+  /** The router's end for a member at a budget: the latest end among the budgets reached, and `null` while none is. */
   budgetUntil: string | null;
   /**
    * The 7-day window's share the sessions on the member burn per hour, null on an API-key member or one with no 7-day
@@ -559,7 +560,7 @@ export type KeyStatus = 'active' | 'disabled' | 'expired' | 'revoked';
 export interface ApiKey {
   /** Null inherits the pool's `autoModeServer`; true or false overrides it for this key. */
   autoModeServer: boolean | null;
-  /** Hours of captured bodies for this key; null inherits the pool, 0 turns capture off here. */
+  /** Hours of captured bodies for this key, and `null` inherits the pool, 0 turns capture off here. */
   bodyCaptureHours: number | null;
   createdAt: string;
   /** The stored switch, which `status` folds expiry and revocation over; an edit sends it back as it stands. */
@@ -584,7 +585,8 @@ export interface ApiKey {
   poolGuardrails: GuardrailRef[];
   poolId: string;
   prefix: string;
-  /** When the secret the last rotation retired last authenticated; null until it does or once rotation clears it. */
+  /** When the secret the last rotation retired last authenticated, and `null` until it does or once rotation clears
+   * it. */
   retiredSecretLastUsedAt: string | null;
   /** The row's edit token, which an edit sends back as `expected_revision`. A key deleted and created again under
    * its id never answers one its predecessor did. */
@@ -670,7 +672,7 @@ export interface Placement {
 
 /** The holds a request waited through before this attempt was placed. */
 export interface CohortHold {
-  /** The cohort's account the last hold was placed by; null for a hold on the strategy's choice. */
+  /** The cohort's account the last hold was placed by, and `null` for a hold on the strategy's choice. */
   cohort: string | null;
   /** The holds' waits summed, in milliseconds, whether a slot freed or the bound ran out. */
   heldMs: number;
@@ -681,7 +683,8 @@ export interface CohortHold {
 
 /** Why a selection landed where it did, as the router stored it on the attempt. */
 export interface SelectionTrace {
-  /** The cache-read tokens the response reported, folded in at completion; null until then or without a response. */
+  /** The cache-read tokens the response reported, folded in at completion, and `null` until then or without a
+   * response. */
   cacheRead: number | null;
   cohortHold: CohortHold | null;
   /** The move reason when a fail-over or a move placed the attempt, null otherwise. */
@@ -691,7 +694,7 @@ export interface SelectionTrace {
   renewed: boolean;
   skipped: SkippedCandidate[];
   strategy: string;
-  /** Group, priority, and the overage bit the choice was made in; null for a renewed pin. */
+  /** Group, priority, and the overage bit the choice was made in, and `null` for a renewed pin. */
   tier: [number, number, number] | null;
 }
 
@@ -714,7 +717,7 @@ export interface Attempt {
   startedAt: string;
   /** The account tier the attempt's account was on when it landed, null for an API-key account and an unknown tier. */
   tier: string | null;
-  /** The `id` of the message the answer carried, the join to a transcript's assistant entry; null without one. */
+  /** The `id` of the message the answer carried, the join to a transcript's assistant entry, and `null` without one. */
   upstreamMessageId: string | null;
   upstreamRequestId: string | null;
   upstreamStatus: number | null;
@@ -800,7 +803,7 @@ export interface RequestLog {
   costEquivalent: Record<string, number | null> | null;
   costShares: CostShares | null;
   costUsd: number;
-  /** The member's source on the serving leg's body; null for a body that went without one. */
+  /** The member's source on the serving leg's body, and `null` for a body that went without one. */
   diagnosticsSource: DiagnosticsSource | null;
   durationMs: number | null;
   errorCode: string | null;
@@ -813,7 +816,7 @@ export interface RequestLog {
   guardrailId: string | null;
   /** Every guardrail that matched, in the order they ran, the one that blocked marked. */
   guardrails: GuardrailMatch[];
-  /** The holds the request waited through, with the wait; null for a request never held. */
+  /** The holds the request waited through, with the wait, and `null` for a request never held. */
   held: CohortHold | null;
   id: string;
   /** The `created_at` of the key the request was read under, 0 for none; a key id created again is another holder. */
@@ -924,6 +927,8 @@ export interface RequestDetail {
 
 export interface RequestQuery {
   accountIds?: string[];
+  /** The requests whose agent id equals the value, `main` or a subagent's id. */
+  agentId?: string;
   agentTypes?: string[];
   /** The serving attempt's cache miss reason, any name the beta sent. */
   cacheMissReasons?: string[];
@@ -1090,6 +1095,11 @@ export interface RoutingLogPage {
 /** `from` and `to` are ISO instants, sent as they are: the route reads RFC 3339. */
 export interface RoutingLogQuery {
   accountIds?: string[];
+  /**
+   * The rows whose agent id equals the value: a decision's by its request, an event's own, so an event that names
+   * no agent is none.
+   */
+  agentId?: string;
   cursor?: string;
   from?: string;
   keyIds?: string[];
@@ -1441,7 +1451,7 @@ export interface AnalyticsQuery {
 /** The placements of one rung over the range, counted off the attempts that carried usage. */
 export interface PlacementRow {
   cacheReadTokens: number;
-  /** Hits over placements; null for a rung with no placement. */
+  /** Hits over placements, and `null` for a rung with no placement. */
   hitShare: number | null;
   hits: number;
   placements: number;
@@ -1458,7 +1468,7 @@ export interface MemberBudget {
   budgetUsd: number;
   /** The member's account kind: a subscription member's spend is its metered spend alone. */
   kind: AccountKind;
-  /** The next UTC day or month boundary; null, with `spentUsd`, until the ledger reports. */
+  /** The next UTC day or month boundary, and `null`, with `spentUsd`, until the ledger reports. */
   periodEnd: string | null;
   poolId: string;
   spentUsd: number | null;
@@ -1526,7 +1536,8 @@ export interface AnalyticsGroup {
    * for the live key, for every other dimension and for a group folded from request rows.
    */
   keyCreatedAt: number | null;
-  /** The key's id for a key group the route answered, so the label is built in the viewer's zone; null otherwise. */
+  /** The key's id for a key group the route answered, so the label is built in the viewer's zone, and `null`
+   * otherwise. */
   keyId: string | null;
   label: string;
   percentiles: Record<keyof LatencyHistograms, { p50: number | null; p90: number | null; p95: number | null; p99: number | null }>;
@@ -1638,10 +1649,10 @@ export interface BurnPoint {
    *  zero, so a bucket with tokens and no plan row reads 0. Null for an idle bucket and for one holding a row the cost
    *  model cannot price on the window. */
   fiveHourEquivalent: number | null;
-  /** A subscription account's spend in the bucket as a fraction of its own 5-hour window, the band weighed in; null
-   *  for an API-key account, one whose tier is unknown, a bucket with no row the cost model prices (an idle hour among
-   *  them) or one holding a row the cost model cannot price, and wherever the group holds more than one account's rows
-   *  (every grouping but the account one, unless the Accounts filter names exactly one account). */
+  /** A subscription account's spend in the bucket as a fraction of its own 5-hour window, the band weighed in, and
+   *  `null` for an API-key account, one whose tier is unknown, a bucket with no row the cost model prices (an idle hour
+   *  among them) or one holding a row the cost model cannot price, and wherever the group holds more than one account's
+   *  rows (every grouping but the account one, unless the Accounts filter names exactly one account). */
   fiveHourShare: number | null;
   /** Whether the bucket holds a plan row with tokens the cost model could not price on the 5-hour window, so a null
    *  `fiveHourEquivalent` with the flag unset is an idle bucket. The shares carry no flag of their own. */
@@ -1745,10 +1756,14 @@ export type AllowanceResetSource = 'clock' | 'sample' | 'term_ended' | string;
 
 export interface AllowanceReset {
   observedAt: string;
+  /** The pair of the reading the reset replaced, null on a reset whose event carries none and on a term's end. */
+  plan: PlanWord | null;
   resetAt: string;
   /** One less the utilization before the reset, inside the unit interval. */
   shareLeft: number;
   source: AllowanceResetSource;
+  /** The tier of that reading, null where `plan` is. */
+  tier: string | null;
 }
 
 export interface AllowanceWindow {
@@ -1786,19 +1801,27 @@ export type CompanionState = 'none' | 'reporting' | 'silent';
 export type BurnUnit = 'usd' | 'window_share';
 
 export interface AgentContext {
+  /** The pin's account. */
+  accountId: string;
   agentId: string;
-  cachedPrefixTokens: number | null;
-  contextShare: number | null;
-  contextWindowTokens: number | null;
+  /** The cache TTL in force at the pin's last refresh. */
+  cacheTtlMs: number | null;
+  /** The agent's first-seen time, null where none. */
+  createdAt: string | null;
+  /** The effective effort of the request that placed or last renewed the pin, the word as the client sent it. */
+  effort: string | null;
   lastInputTokens: number | null;
+  lastUsedAt: string | null;
   model: string;
+  /** The route's `now - last_used_at < cache_ttl_ms`: the State cell's warm or cold on a pin-only line. */
+  warm: boolean;
 }
 
 export interface Session {
   accountId: string | null;
-  /** The other pins' figures on a companion session, keyed by the mod's agent id. Null where `companion` is `none`. */
-  agentContexts: AgentContext[] | null;
-  /** The pin's own agent: `main`, or a subagent's id; null for a session with no pin. */
+  /** One entry per conversation pin that draws a line, main's among them, and empty where none does. */
+  agentContexts: AgentContext[];
+  /** The pin's own agent: `main`, or a subagent's id, and `null` for a session with no pin. */
   agentId: string | null;
   agents: number;
   /** The pin's typed burn per hour in `burnUnit`, priced when read; 0 for a pin never renewed with usage, null with
@@ -1812,24 +1835,21 @@ export interface Session {
   burnEquivalent: number | null;
   /** Null for a session with no pin, or one whose account left the registry: no kind is left to pick a unit from. */
   burnUnit: BurnUnit | null;
-  /** The deepest cache-map entry of the main pin. Null with no entry standing. */
-  cachedPrefixTokens: number | null;
-  /** The cache TTL in force at the pin's last refresh; null for a session with no pin. */
+  /** The cache TTL in force at the pin's last refresh, and `null` for a session with no pin. */
   cacheTtlMs: number | null;
   companion: CompanionState;
   /** When the companion last reported; set only while `companion` is `silent`. */
   companionSince: string | null;
-  /** `lastInputTokens` over the model's window, three decimals. Null with either side unknown. */
-  contextShare: number | null;
-  contextWindowTokens: number | null;
   createdAt: string | null;
   /** The pin's cycle, null until two requests of the pin after its placement have measured a gap under the pool's
    *  burn average, and on a row with no pin. */
   cycleMs: number | null;
+  /** The effective effort of the pin's last turn, the word as the client sent it, and `null` with none or no pin. */
+  effort: string | null;
   epoch: number | null;
   /** True when the pin's burn priced through the model tier's fallback weight. */
   estimated: boolean;
-  /** The depth where a forked session parts from its base; null with `forkedFrom`. */
+  /** The depth where a forked session parts from its base, and `null` with `forkedFrom`. */
   forkDepth: number | null;
   /** The session this one branched from, null for one that branched from none. */
   forkedFrom: string | null;
@@ -1845,12 +1865,12 @@ export interface Session {
   /** The `created_at` of the key that owns the session. */
   keyGeneration: number;
   keyId: string;
-  /** The input, cache-read and cache-write tokens of the pin's last renewal; null for a session with no pin. */
+  /** The input, cache-read and cache-write tokens of the pin's last renewal, and `null` for a session with no pin. */
   lastInputTokens: number | null;
-  /** The pin's last main, subagent or compaction turn, or a keepalive probe's renewal; null for a session with
+  /** The pin's last main, subagent or compaction turn, or a keepalive probe's renewal, and `null` for a session with
    *  no pin. */
   lastRefreshAt: string | null;
-  /** Last ledgered client request; null for a session that has not been seen in the ledger. */
+  /** Last ledgered client request, and `null` for a session that has not been seen in the ledger. */
   lastRequestAt: string | null;
   lastUsedAt: string | null;
   model: string | null;
@@ -1868,7 +1888,7 @@ export interface Session {
   /** Until the pin's account's projection reaches the ceiling on the window that binds, null unless `runwayBounded`. */
   runwayMs: number | null;
   sessionId: string;
-  /** The account a shed round marked this pin's session to leave, kept off until the session moves; null off a
+  /** The account a shed round marked this pin's session to leave, kept off until the session moves, and `null` off a
    *  pin never marked, or with no pin. */
   shedFrom: string | null;
   /** Why the pin was stamped from `shedFrom`: `round` for a shedding round's move, the failover's word (`cooldown`,
@@ -2072,14 +2092,17 @@ export interface Settings {
   listeners: { metrics: string; proxy: string; proxyTls: boolean };
   /** The two day counts are file settings of the `stats` section, 0 for forever. */
   retention: { bodyCaptureMaxHours: number; retentionDays: number; rollupRetentionDays: number };
-  /** How long a session stays listed after its last activity. */
-  sessions: { expireAfterSeconds: number };
+  /**
+   * How long a session stays listed after its last activity, and how long a session no mod reports stays listed
+   * after its last use.
+   */
+  sessions: { expireAfterSeconds: number; nonCompanionIdleSeconds: number };
   /** Each path is null when no override file is configured. */
   storage: { apiPricesPath: string | null; ledgerPath: string; path: string; subscriptionCostsPath: string | null };
   /**
-   * The envelope's `content` with its `source` beside it; an answer without the envelope reads as an empty model.
+   * The envelope's `content` with its `source` beside it. An answer without the envelope reads as an empty model.
    * `problem` is the sentence the cost views show in place of a model the answer carries and the console cannot read,
-   * which then reads as the empty model too; null otherwise.
+   * which then reads as the empty model too, and `null` otherwise.
    * `revisions` lists every dated entry of the file, ascending by date, and is empty where the model reads as empty.
    */
   subscriptionCosts: SubscriptionCosts & { problem: string | null; revisions: CostRevision[]; source: string };

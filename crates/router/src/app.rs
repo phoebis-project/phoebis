@@ -1510,14 +1510,14 @@ mod tests {
             .rates
             .five_hour
             .base
-            .price("claude-opus-4-8", usage, prompt)
+            .price("claude-sonnet-4-5", usage, prompt)
             .expect("a model of a weighted model tier");
         let expected = tables
             .share_at(
                 phoebis_routing::FIVE_HOUR,
                 None,
                 "default_claude_max_20x",
-                "claude-opus-4-8",
+                "claude-sonnet-4-5",
                 usage,
                 out_of_band,
             )

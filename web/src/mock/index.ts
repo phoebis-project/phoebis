@@ -1,5 +1,5 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
-import type { GuardrailInput, GuardrailRange, GuardrailTestInput } from '@/api/client';
+import type { GuardrailInput, GuardrailRange, GuardrailTestInput, OverviewRange } from '@/api/client';
 import { AFFINITY_MODE_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeSettings } from '@/api/decode';
 import { GUARDRAIL_MODE_VALUES } from '@/api/decode';
 import { decodeStreamCut } from '@/api/decode';
@@ -21,7 +21,7 @@ import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, 
 import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
-import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins, pinsUnderPool } from './operations';
+import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins, pinsUnderPool, sessionsListedAt } from './operations';
 import { KEYS, POOLS, composedFor, resolvedFor, servedFigures } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRICED_REQUEST, UNPRICED_ROLLUPS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
@@ -126,6 +126,13 @@ const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRule
   const mode = input.modelRulesMode;
   return rulesRefusal(input.modelRules) ?? (mode === undefined || mode === 'extend' || mode === 'replace' ? null : 'model_rules_mode is extend or replace');
 };
+
+/**
+ * The key routes refuse a body with a member outside `KeyInput` before they read any member, so the mock answers the
+ * pool routes' sentence first.
+ */
+const KEY_INPUT_MEMBERS: ReadonlySet<string> = new Set(['autoModeServer', 'bodyCaptureHours', 'enabled', 'expiresAt', 'guardrails', 'keepaliveOptOut', 'longContextTwins', 'modelRules', 'modelRulesMode', 'name', 'notes', 'poolId']);
+const unknownKeyMember = (input: object, also: readonly string[] = []): string | null => (Object.keys(input).some((k) => !KEY_INPUT_MEMBERS.has(k) && !also.includes(k)) ? 'body must be a JSON object' : null);
 
 /**
  * The ceiling, shedding, failover, slow-down and return-to-plan refusals, in the order and words of the pool routes.
@@ -451,6 +458,7 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   if (q.to && Date.parse(r.at) > Date.parse(q.to)) return false;
   if (q.request && r.id !== q.request) return false;
   if (q.session && r.sessionId !== q.session) return false;
+  if (q.agentId && r.agentId !== q.agentId) return false;
   if (q.search) {
     const needle = q.search.toLowerCase();
     const hay = [r.id, r.sessionId ?? '', r.keyId ?? '', r.accountId ?? '', r.model, r.errorCode ?? '', r.agentId ?? '', ...r.attempts.flatMap((a) => [a.upstreamRequestId ?? '', a.upstreamMessageId ?? ''])].join(' ').toLowerCase();
@@ -864,7 +872,10 @@ export class MockApi implements Api {
   }
 
   async createKey(input: CreateKeyInput): Promise<CreatedApiKey> {
-    // A new key starts with none of its own, so the route refuses the member before it reads anything else.
+    const shape = unknownKeyMember(input, ['expiresInDays']);
+    if (shape) throw new ApiError(400, shape, null);
+    // A new key starts with none of its own, so once the body's shape passes, the route refuses the member before it
+    // reads anything else.
     if (input.guardrails !== undefined) throw new ApiError(400, 'guardrails applies on edit', null);
     // The client sends the id it derives from the name, so a name already taken is an id already taken.
     const id = slug(input.name);
@@ -1079,8 +1090,9 @@ export class MockApi implements Api {
     return latency(this.guardrailView(row));
   }
 
-  getKeepaliveOverview() {
-    return latency(emptyStore() ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW);
+  getKeepaliveOverview(q: { range?: OverviewRange } = {}) {
+    if (q.range !== undefined && q.range !== '7d' && q.range !== '30d') return Promise.reject(new ApiError(400, 'range is 7d or 30d', null));
+    return latency(emptyStore() ? EMPTY_KEEPALIVE_OVERVIEW : q.range === '30d' ? KEEPALIVE_OVERVIEW_30D : KEEPALIVE_OVERVIEW);
   }
 
   /** Every live model-scoped cooldown across the accounts, folded to the shape the key models route answers. */
@@ -1278,7 +1290,7 @@ export class MockApi implements Api {
 
   listSessions() {
     if (sessionsFail()) return Promise.reject(new ApiError(503, 'store busy', null));
-    return latency(emptyStore() ? [] : this.sessions);
+    return latency(emptyStore() ? [] : sessionsListedAt(NOW, this.sessions, this.settings.sessions.nonCompanionIdleSeconds));
   }
 
   login(secret: string, stayLoggedIn = false): Promise<SessionInfo> {
@@ -1464,17 +1476,24 @@ export class MockApi implements Api {
     return latency(this.guardrailView(next), 250);
   }
 
+  /**
+   * The refusals in the route's order: the unknown member, then after the mock's key lookup the pool 404, the rules
+   * refusal, the doubled guardrail, the stale stamp, the bound refusal, the unknown guardrail.
+   */
   async updateKey(id: string, input: KeyInput, revision?: number): Promise<ApiKey> {
+    const shape = unknownKeyMember(input);
+    if (shape) return Promise.reject(new ApiError(400, shape, null));
     const idx = this.keys.findIndex((k) => k.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown key ${id}`));
+    const { expiresAt: expiry, guardrails: ownIds, ...rest } = input;
+    const current = this.keys[idx];
+    // The route reads the pool before the rule list and the guardrail list, and before it compares the edit's stamp, so
+    // an edit onto a missing pool answers 404 ahead of their refusals.
+    if (!this.pools.some((p) => p.id === rest.poolId)) return Promise.reject(new ApiError(404, 'pool not found', null));
     const refusal = keyRulesRefusal(input);
     if (refusal) return Promise.reject(new ApiError(400, refusal, null));
-    const { expiresAt: expiry, guardrails: ownIds, ...rest } = input;
     const twice = repeatedId(ownIds);
     if (twice !== null) return Promise.reject(new ApiError(400, `guardrails lists ${twice} twice`, null));
-    const current = this.keys[idx];
-    // The route reads the pool before it compares the edit's stamp, so a stale edit onto a missing pool answers 404.
-    if (!this.pools.some((p) => p.id === rest.poolId)) return Promise.reject(new ApiError(404, 'pool not found', null));
     if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the key changed while it was being edited, so reload and try again', 'stale_edit'));
     // The pool the key lands in, a new one on a move, with the key's own list as the edit leaves it.
     const own = ownIds ?? this.guardrailRefs('keys', id).map((r) => r.id);

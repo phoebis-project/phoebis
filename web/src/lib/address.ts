@@ -36,9 +36,42 @@ export type KeySpec =
   | { kind: 'flag'; name: string }
   /** Comma-joined ids. */
   | { kind: 'list'; name: string }
+  /** Patterns joined by a newline, as the wire joins them, so a comma inside one rides. */
+  | { kind: 'patterns'; name: string }
   /** The keys `range`, `from` and `to`. */
   | { kind: 'range'; default: string; presets: readonly RangePreset[] }
   | { kind: 'text'; name: string };
+
+export type SortDir = 'asc' | 'desc';
+export const SORT_DIRS = ['asc', 'desc'] as const;
+
+/** One key of a view's sort control: its address value, its label and the direction a pick of it starts in. */
+export interface SortKey {
+  defaultDir: SortDir;
+  id: string;
+  label: string;
+}
+
+/**
+ * A view's `sort` and `dir` keys: `choice` keys with the view's default key as `sort`'s default and the empty value
+ * as `dir`'s, which stands for the picked key's own default direction, so the address carries `dir` only where it
+ * differs from that direction and `?sort=usage` alone keeps its meaning. `sort` comes first, since `codecOf` writes
+ * the keys in the specification's order, so a spread writes `sort=...&dir=...`.
+ */
+export const sortSpecs = (keys: readonly SortKey[], defaultKey: string): { sort: KeySpec; dir: KeySpec } => ({
+  sort: { default: defaultKey, kind: 'choice', name: 'sort', values: keys.map((k) => k.id) },
+  dir: { default: '', kind: 'choice', name: 'dir', values: SORT_DIRS },
+});
+
+/** The direction an address means: its `dir` where it names one, else the sort key's own default. */
+export const sortDirOf = (keys: readonly SortKey[], address: { dir: string; sort: string }): SortDir =>
+  address.dir === 'asc' || address.dir === 'desc' ? address.dir : (keys.find((k) => k.id === address.sort)?.defaultDir ?? 'asc');
+
+/** The address fields of a pick: `dir` empty where it is the key's own default, so the address omits it. */
+export const sortAddressOf = (keys: readonly SortKey[], next: { dir: SortDir; sort: string }): { dir: string; sort: string } => ({
+  dir: next.dir === keys.find((k) => k.id === next.sort)?.defaultDir ? '' : next.dir,
+  sort: next.sort,
+});
 
 export type Codec<F> = { fromParams(params: URLSearchParams, now?: number): F; toParams(filters: F): URLSearchParams };
 
@@ -60,6 +93,8 @@ function readKey(key: KeySpec, params: URLSearchParams, now: number): unknown {
       return params.get(key.name) === '1';
     case 'list':
       return (params.get(key.name) ?? '').split(',').filter(Boolean);
+    case 'patterns':
+      return (params.get(key.name) ?? '').split('\n').filter(Boolean);
     case 'range': {
       const from = instantOf(params.get('from'));
       const asked = instantOf(params.get('to'));
@@ -86,6 +121,9 @@ function writeKey(key: KeySpec, value: unknown, params: URLSearchParams): void {
       return;
     case 'list':
       if ((value as string[]).length > 0) params.set(key.name, (value as string[]).join(','));
+      return;
+    case 'patterns':
+      if ((value as string[]).length > 0) params.set(key.name, (value as string[]).join('\n'));
       return;
     case 'range': {
       const range = value as RangeValue;
@@ -139,6 +177,7 @@ export interface RequestsAddress {
   accounts: string[];
   /** The user agent pattern. */
   agent: string;
+  agentId: string;
   agentTypes: string[];
   cacheMissReasons: string[];
   /** `client`, `-` for a request the marker does not hold. */
@@ -175,6 +214,7 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   search: text('search'),
   request: text('request'),
   session: text('session'),
+  agentId: text('agent_id'),
   client: text('client'),
   agent: text('agent'),
   agentTypes: list('agent_types'),
@@ -201,12 +241,10 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
 
 export interface AnalyticsAddress {
   accounts: string[];
-  /** The user agent pattern. */
-  agent: string;
   /** The group-by, the Burn section's own `session` among its values. */
   by: string;
-  /** The client pattern. */
-  class: string;
+  /** The client patterns, any of which a request's client matches. */
+  clients: string[];
   /** The user agent groups, one pattern per line. */
   groups: string;
   /** A session's key lifetime, `<key id>@<generation>`. */
@@ -219,6 +257,8 @@ export interface AnalyticsAddress {
   session: string;
   /** A shared link's unit position, which the page reads once into the console-wide setting and drops. */
   unit: string;
+  /** The user agent patterns, any of which a request's user agent matches. */
+  userAgents: string[];
 }
 
 // A key table rather than a list, so a grouping the burn route gains fails to compile until it is listed here. The
@@ -230,21 +270,22 @@ export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({
   session: text('session'),
   key: text('key'),
   accounts: list('accounts'),
-  agent: text('agent'),
   by: { default: 'key', kind: 'choice', name: 'by', values: GROUP_BYS },
-  class: text('class'),
+  clients: { kind: 'patterns', name: 'clients' },
   groups: text('groups'),
   keys: list('keys'),
   models: list('models'),
   pools: list('pools'),
   probes: { kind: 'flag', name: 'probes' },
   unit: text('unit'),
+  userAgents: { kind: 'patterns', name: 'user_agents' },
   range: { default: '24h', kind: 'range', presets: RANGE_PRESETS },
 });
 
 /** The routing log's filters as the address holds them. */
 export interface LogFilters {
   accounts: string[];
+  agentId: string;
   keys: string[];
   kinds: string[];
   models: string[];
@@ -260,6 +301,7 @@ export interface LogFilters {
  */
 export const ROUTING_LOG_CODEC = codecOf<LogFilters>({
   accounts: list('accounts'),
+  agentId: text('agent_id'),
   keys: list('keys'),
   kinds: list('kinds'),
   models: list('models'),
@@ -291,6 +333,8 @@ export const KEYS_CODEC = codecOf<KeysAddress>({
 });
 
 export interface AccountsAddress {
+  /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
+  dir: string;
   search: string;
   /** The list's order: `name` the default, `reset` the soonest reset, `usage` the most used, `status`. */
   sort: string;
@@ -298,11 +342,16 @@ export interface AccountsAddress {
   status: string;
 }
 
-const ACCOUNT_SORTS = ['name', 'reset', 'usage', 'status'] as const;
+export const ACCOUNT_SORT_KEYS: readonly SortKey[] = [
+  { defaultDir: 'asc', id: 'name', label: 'Name' },
+  { defaultDir: 'asc', id: 'reset', label: 'Soonest reset' },
+  { defaultDir: 'desc', id: 'usage', label: 'Most used' },
+  { defaultDir: 'asc', id: 'status', label: 'Status' },
+];
 
 export const ACCOUNTS_CODEC = codecOf<AccountsAddress>({
   search: text('search'),
-  sort: { default: 'name', kind: 'choice', name: 'sort', values: ACCOUNT_SORTS },
+  ...sortSpecs(ACCOUNT_SORT_KEYS, 'name'),
   status: { default: 'all', kind: 'choice', name: 'status', values: ['all', ...ACCOUNT_STATUSES] },
 });
 
@@ -311,24 +360,28 @@ export const ACCOUNTS_CODEC = codecOf<AccountsAddress>({
 export const POOLS_CODEC = codecOf<Record<string, never>>({});
 export const QUOTA_CODEC = codecOf<Record<string, never>>({});
 
-/** The Non-companion age presets, `none` for no limit. The default is the view's own hour. */
-export const SESSION_AGES = ['15m', '1h', '6h', '24h', 'none'] as const;
-
 export interface SessionsAddress {
-  /** The Non-companion age preset, one of SESSION_AGES. */
-  age: string;
   /** Companion only: the rows whose companion reports or went silent. */
   companion: boolean;
+  /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
+  dir: string;
   /** Show finished sessions. */
   finished: boolean;
   /** Show released agents on a live session. */
   released: boolean;
+  /** The rows' order: `created` the default, the session's creation time, or `activity`, its last activity. */
+  sort: string;
 }
+
+export const SESSION_SORT_KEYS: readonly SortKey[] = [
+  { defaultDir: 'desc', id: 'created', label: 'Created' },
+  { defaultDir: 'desc', id: 'activity', label: 'Last activity' },
+];
 
 // The codec's literal keeps the bar's order: codecOf writes the address's keys in its specification's order.
 export const SESSIONS_CODEC = codecOf<SessionsAddress>({
   companion: { kind: 'flag', name: 'companion' },
   finished: { kind: 'flag', name: 'finished' },
-  age: { default: '1h', kind: 'choice', name: 'age', values: SESSION_AGES },
   released: { kind: 'flag', name: 'released' },
+  ...sortSpecs(SESSION_SORT_KEYS, 'created'),
 });

@@ -1,4 +1,4 @@
-import type { BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, RecipeCause, RecipeState, Session } from '@/api/types';
+import type { AgentContext, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, RecipeCause, RecipeState, Session } from '@/api/types';
 import { anchorTier, tierCapacity, weightOrFallback } from '@/lib/costs';
 import { accountById } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE } from './catalog';
@@ -7,7 +7,7 @@ import { keyById, poolById } from './pools';
 import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
-import { HOUR, MINUTE, NOW, ago, ahead } from './time';
+import { HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
 
 const rng = createRng(2_024);
 
@@ -20,8 +20,6 @@ interface WrittenFigures {
   agents: { agentId: string; lastProbeMinutes?: number; lastRequestMinutes: number; nextProbeSeconds: number | null }[];
   burn: number;
   burnAtMinutes: number;
-  /** The deepest cache-map entry's prefix of the main pin. */
-  cachedPrefixTokens: number;
   createdMinutes: number;
   lastInputTokens: number;
   lastRefreshMinutes: number;
@@ -57,6 +55,8 @@ const sessionSpec: ({
   keyId: string;
   lastUseFromRows?: boolean;
   model: string;
+  /** Main's requests named no effort, so its pin, the row and main's line read none. */
+  noEffort?: true;
   released?: true;
   sessionId?: string;
   state: Session['keepalive']['state'];
@@ -73,20 +73,20 @@ const sessionSpec: ({
 ))[] = [
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', lastUseFromRows: true, subagents: { model: 'claude-sonnet-5', accountId: 'nightly' } },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting' },
-  { keyId: 'desktop', accountId: 'nightly', model: 'claude-sonnet-4-6', state: 'idle', agents: 2, companion: 'silent' },
+  { keyId: 'desktop', accountId: 'nightly', model: 'claude-sonnet-4-5', state: 'idle', agents: 2, companion: 'silent' },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting' },
   { keyId: 'desktop', accountId: 'nightly', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' } },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'busy', agents: 1, companion: 'reporting' },
   // Idle for longer than the pool's one-hour max idle, so its recipe is held and its retained prompt is gone.
-  { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-4-6', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95 },
-  // The laptop key allows Haiku 4.5 and Sonnet 4.6 only, so its subagents stay inside that list.
-  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-6', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' } },
-  { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting' },
+  { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-4-5', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95 },
+  // The laptop key allows Haiku 4.5 and Sonnet 4.5 only, so its subagents stay inside that list.
+  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' } },
+  { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting', noEffort: true },
   // Five of its agents are written below, so it holds an agent in each lifecycle word, three of them released.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 7, companion: 'reporting' },
   { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none', lastUseFromRows: true },
   { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 2, companion: 'none', lastUseFromRows: true },
-  { keyId: 'laptop', accountId: 'secondary', model: 'claude-sonnet-4-6', state: null, agents: 1, companion: 'none' },
+  { keyId: 'laptop', accountId: 'secondary', model: 'claude-sonnet-4-5', state: null, agents: 1, companion: 'none' },
   { keyId: 'desktop', accountId: 'overflow', model: 'claude-opus-5', state: null, agents: 1, companion: 'none', idleMinutes: 570 },
   // Seen by the router but with nothing in the ledger, so the per-row jump to
   // analytics has no traffic to land on.
@@ -94,10 +94,10 @@ const sessionSpec: ({
   // A session the mod released whole, whose lines' last uses, minutes back, date the release inside all's one-hour
   // cache TTL, since the router lists a released record for one TTL after its release and then not at all.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'idle', agents: 3, companion: 'reporting', released: true, sessionId: RELEASED_SESSION_ID },
-  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-6', state: 'busy', agents: 1, companion: 'reporting', sessionId: CLIENT_SESSION_ID },
-  // The two sessions the Sessions view's default filters hide: one the mod ended, which keeps its lines, its released
-  // subagents' last probes dating their release inside all's one-hour cache TTL, and one no companion reports, last
-  // used two hours ago, past the view's one-hour age.
+  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 1, companion: 'reporting', sessionId: CLIENT_SESSION_ID },
+  // One session the mod ended, which keeps its lines, its released subagents' last probes dating their release inside
+  // all's one-hour cache TTL, and which the Sessions view's default filters hide, and one no companion reports, last
+  // used two hours ago, past the one-hour non-companion timeout, so the route's list leaves it out.
   {
     keyId: 'desktop',
     accountId: 'nightly',
@@ -117,7 +117,6 @@ const sessionSpec: ({
       ],
       burn: 0.18,
       burnAtMinutes: 22,
-      cachedPrefixTokens: 12_000,
       createdMinutes: 140,
       lastInputTokens: 14_200,
       lastRefreshMinutes: 22,
@@ -126,7 +125,7 @@ const sessionSpec: ({
   {
     keyId: 'laptop',
     accountId: 'secondary',
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-4-5',
     state: 'idle',
     agents: 1,
     companion: 'none',
@@ -137,7 +136,6 @@ const sessionSpec: ({
       agents: [{ agentId: 'main', lastRequestMinutes: 120, nextProbeSeconds: null }],
       burn: 0.09,
       burnAtMinutes: 121,
-      cachedPrefixTokens: 5_000,
       createdMinutes: 310,
       lastInputTokens: 6_400,
       lastRefreshMinutes: 121,
@@ -159,7 +157,6 @@ const sessionSpec: ({
       agents: [{ agentId: 'main', lastRequestMinutes: 20, nextProbeSeconds: 240 }],
       burn: 0.04,
       burnAtMinutes: 21,
-      cachedPrefixTokens: 9_000,
       createdMinutes: 95,
       lastInputTokens: 10_800,
       lastRefreshMinutes: 21,
@@ -183,7 +180,6 @@ const sessionSpec: ({
       agents: [{ agentId: 'main', lastProbeMinutes: 31, lastRequestMinutes: 25, nextProbeSeconds: null }],
       burn: 0.05,
       burnAtMinutes: 26,
-      cachedPrefixTokens: 8_000,
       createdMinutes: 90,
       lastInputTokens: 9_400,
       lastRefreshMinutes: 26,
@@ -193,38 +189,44 @@ const sessionSpec: ({
 
 /** How long the router lists a session after its last request, which the settings answer as well. */
 const SESSION_EXPIRE_SECONDS = 86_400;
+const NON_COMPANION_IDLE_SECONDS = 3_600;
 /**
  * The router drops a session past `SESSION_EXPIRE_SECONDS`, so a ledger-only row is listed only while its last request
  * is inside the span. Exported for the consistency test's two instants.
  */
 export const insideSessionExpiry = (lastAt: string, now: number): boolean => Date.parse(lastAt) + SESSION_EXPIRE_SECONDS * 1000 > now;
+/** Whether an instant is inside the non-companion timeout: a row or a line with no use on record is never older. */
+export const withinNonCompanionTimeout = (at: string | null, seconds: number, now: number): boolean => at === null || now - Date.parse(at) <= seconds * 1000;
+/** The later of a session's own last use and its last ledgered request, which the route's timeout reads. */
+export const lastUseOf = (s: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>): string | null => {
+  const stamps = [s.lastUsedAt, s.lastRequestAt].filter((t): t is string => t !== null);
+  return stamps.length === 0 ? null : stamps.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
+};
 
 // Grouped as the route's activity query groups a session's rows, by key, generation and session with probes left out,
 // so the earlier holder's rows count for its own row below, never for the live session that shares their id. A refused
 // request moves the session's last request and adds to no count, as the query sums the unrefused rows alone.
 const activityOf = (keyId: string | null, keyGeneration: number, sessionId: string) => `${keyId}|${keyGeneration}|${sessionId}`;
-// The newest request's model is kept as sent, since a `[1m]` spelling there names the session's context window.
-const ledgered = new Map<string, { last: string; model: string; requests: number }>();
+const ledgered = new Map<string, { last: string; requests: number }>();
 for (const r of REQUESTS) {
   if (r.sessionId === null || r.kind === 'probe') continue;
   const id = activityOf(r.keyId, r.keyGeneration, r.sessionId);
   const seen = ledgered.get(id);
   const counted = r.refused ? 0 : 1;
-  if (!seen) ledgered.set(id, { last: r.at, model: r.model, requests: counted });
-  else ledgered.set(id, r.at > seen.last ? { last: r.at, model: r.model, requests: seen.requests + counted } : { ...seen, requests: seen.requests + counted });
+  if (!seen) ledgered.set(id, { last: r.at, requests: counted });
+  else ledgered.set(id, r.at > seen.last ? { last: r.at, requests: seen.requests + counted } : { ...seen, requests: seen.requests + counted });
 }
-
 /**
- * A pin's context figures as the route answers them off its tokens: the window by the client's rule, a million where
- * the session's newest request named a `[1m]` twin and 200 000 otherwise, and the share of it to three decimals. The
- * mock keeps no cache map, so unless a fixed row writes its own, the deepest entry's prefix stands at nine tenths of
- * the tokens floored to the thousand, none below a thousand. A pin with no turn yet reads no figure.
+ * Each agent's earliest request of its session that placed a pin, the instant the router first saw the agent there: an
+ * inference request with an attempt, since the router writes the record at the first placement and a count, a probe or
+ * a refusal before any attempt places none.
  */
-function pinContext(tokens: number | null, newestModel: string | null, writtenPrefix?: number): Pick<Session, 'cachedPrefixTokens' | 'contextShare' | 'contextWindowTokens'> {
-  if (tokens === null || tokens === 0) return { cachedPrefixTokens: null, contextShare: null, contextWindowTokens: null };
-  const window = newestModel?.endsWith('[1m]') ? 1_000_000 : 200_000;
-  const prefix = writtenPrefix ?? Math.floor((tokens * 0.9) / 1_000) * 1_000;
-  return { cachedPrefixTokens: prefix >= 1_000 ? prefix : null, contextShare: Math.round((tokens / window) * 1_000) / 1_000, contextWindowTokens: window };
+const firstRequestAt = new Map<string, string>();
+for (const r of REQUESTS) {
+  if (r.sessionId === null || r.agentId === null || r.kind !== 'inference' || r.attempts.length === 0) continue;
+  const id = `${activityOf(r.keyId, r.keyGeneration, r.sessionId)}|${r.agentId}`;
+  const seen = firstRequestAt.get(id);
+  if (seen === undefined || r.at < seen) firstRequestAt.set(id, r.at);
 }
 
 /** The weight `model` prices at on the 5-hour window (a dated id reads its undated name), its model tier's latest
@@ -256,6 +258,41 @@ function runwayOf(i: number): Pick<Session, 'runwayBounded' | 'runwayMs'> {
       return { runwayBounded: null, runwayMs: null };
   }
 }
+
+/**
+ * The words a pin's effort reads, taken by an index rather than drawn, so the rows after it keep their rolls. The four
+ * are the levels the relay reads, in no order a reader relies on.
+ */
+const EFFORT_WORDS = ['medium', 'high', 'low', 'max'] as const;
+const effortAt = (i: number) => EFFORT_WORDS[i % EFFORT_WORDS.length];
+
+/** A pin's line as the route answers it: warm while its last use is inside its cache TTL at the story's clock. */
+const pinLine = (line: Omit<AgentContext, 'createdAt' | 'warm'>): Omit<AgentContext, 'createdAt'> => ({
+  ...line,
+  warm: line.lastUsedAt !== null && line.cacheTtlMs !== null && NOW - Date.parse(line.lastUsedAt) < line.cacheTtlMs,
+});
+const byteOrder = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+/** The route's order of a session's lines: main first, then by agent id and model as bytes. */
+const lineOrder = (a: Pick<AgentContext, 'agentId' | 'model'>, b: Pick<AgentContext, 'agentId' | 'model'>) =>
+  (a.agentId === 'main') !== (b.agentId === 'main') ? (a.agentId === 'main' ? -1 : 1) : byteOrder(a.agentId, b.agentId) || byteOrder(a.model, b.model);
+/**
+ * A row's lines in the route's order, each at its agent's first-seen time: main's at the session's, a subagent's at its
+ * earliest placing request (`firstRequestAt`) of the session in the requests seed. A subagent no placing request names
+ * reads the session's time plus a minute per place among the row's subagents, a stand-in for a first sighting the story
+ * does not write, and an agent pinned on two models takes one place, since it holds one first-seen time.
+ */
+const datedLines = (createdAt: string | null, session: string, lines: readonly Omit<AgentContext, 'createdAt'>[]): AgentContext[] => {
+  const places = new Map<string, number>();
+  return [...lines].sort(lineOrder).map((line) => {
+    if (line.agentId === 'main') return { ...line, createdAt };
+    if (!places.has(line.agentId)) places.set(line.agentId, places.size + 1);
+    const place = places.get(line.agentId)!;
+    const first = firstRequestAt.get(`${session}|${line.agentId}`);
+    return { ...line, createdAt: first ?? (createdAt === null ? null : iso(Date.parse(createdAt) + place * MINUTE)) };
+  });
+};
+/** A request's prompt as the route counts a pin's last turn: its uncached input, cache reads and cache writes. */
+const promptOf = (r: { usage: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; input: number } }) => r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h;
 
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // An entry past the story's session ids draws one the ledger never saw. The draw runs where the spec writes its id
@@ -304,7 +341,8 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     epoch: i < 3 ? 2 : 1,
     historical: false,
     keyGeneration,
-    // An unpinned session has no pin to date, so the route answers no creation and the last use its own rows read.
+    // The router keeps a session's first-seen time until its last pin leaves, so an unpinned session answers none, and
+    // its last use is what its own rows read.
     createdAt: pinned ? ago(createdAgo) : null,
     lastUsedAt: !pinned ? (seen ? seen.last : null) : lastFromRows === null ? null : ago(lastUsedAgo),
     lastRequestAt: seen ? seen.last : null,
@@ -315,14 +353,14 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     burnEquivalent: unit === 'window_share' ? burnEquivalentOf(burn, spec.accountId) : null,
     burnUnit: unit,
     cacheTtlMs: pinned ? 5 * MINUTE : null,
+    effort: pinned && !spec.noEffort ? effortAt(i) : null,
     lastInputTokens: pinned ? lastInputRoll : null,
-    ...pinContext(pinned ? lastInputRoll : null, seen?.model ?? null, written?.cachedPrefixTokens),
     lastRefreshAt: pinned ? lastRefreshRoll : null,
     shedFrom: null,
     shedReason: null,
     ...(pinned ? runwayOf(i) : { runwayBounded: null, runwayMs: null }),
-    // A companion row's lines are written once the recipes exist, so every row starts with none.
-    agentContexts: null,
+    // A row's lines are written once the recipes exist, so every row starts with none.
+    agentContexts: [],
     agents: spec.agents,
     companion: spec.companion,
     companionSince: spec.companion === 'silent' ? ago(rng.int(12, 150) * MINUTE) : null,
@@ -345,14 +383,12 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
 SESSIONS.push({
   ...SESSION_SAMPLE,
   accountId: null,
-  agentContexts: null,
+  agentContexts: [],
   agents: 0,
-  cachedPrefixTokens: null,
   companion: 'reporting',
   companionSince: null,
-  contextShare: null,
-  contextWindowTokens: null,
   createdAt: null,
+  effort: null,
   epoch: null,
   forkDepth: null,
   forkedFrom: null,
@@ -390,8 +426,9 @@ const RECIPE_CAUSES: (RecipeCause | null)[] = [
   null,
   // One row for each session past the story's ids, so the modulo wraps none of them onto the first causes. The
   // finished row's main is written over its own, the row idle for two hours ran past the `all` pool's one-hour max
-  // idle as the 95-minute `laptop` row did, the pin on the work pool's former member waits for its next probe, and the
-  // released row's main is written over its own.
+  // idle as the 95-minute `laptop` row did and keeps its recipe in the engine's figures while the route's list leaves
+  // the row out under the non-companion timeout, the pin on the work pool's former member waits for its next probe,
+  // and the released row's main is written over its own.
   null,
   null,
   null,
@@ -578,16 +615,21 @@ for (const pin of SESSIONS) {
  * keep their rolls.
  */
 const agentTokens = (i: number, j: number) => 2_000 + ((i * 31 + j * 17) % 23) * 1_000;
-// The route lists a companion session's other pins whose agent the mod has not released, ordered by agent id as
-// bytes, empty where every other agent is released, and none on a session no companion reports.
+// The route lists one line per pin of an agent the engine holds and has not released, main's reading the row's own pin,
+// so a session the mod released whole lists none. Every recipe the story writes stands on a pin, and a session no
+// companion reports holds main's alone. The subagents' pins take the companion's five-minute TTL, their place's effort
+// word and their last request as their last use.
 SESSIONS.forEach((pin, i) => {
-  if (pin.companion === 'none') return;
-  const newest = ledgered.get(activityOf(pin.keyId, pin.keyGeneration, pin.sessionId))?.model ?? null;
-  pin.agentContexts = RECIPES.filter((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId)
-    .map((r, j) => ({ r, tokens: agentTokens(i, j) }))
-    .filter(({ r }) => r.agentId !== 'main' && r.agentState !== 'released')
-    .sort(({ r: a }, { r: b }) => (a.agentId < b.agentId ? -1 : a.agentId > b.agentId ? 1 : 0))
-    .map(({ r, tokens }) => ({ agentId: r.agentId, lastInputTokens: tokens, model: r.model, ...pinContext(tokens, newest) }));
+  pin.agentContexts = datedLines(
+    pin.createdAt,
+    activityOf(pin.keyId, pin.keyGeneration, pin.sessionId),
+    RECIPES.filter((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId).flatMap((r, j) => {
+      if (r.agentState === 'released' || r.accountId === null) return [];
+      const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
+      if (r.agentId === 'main') return [pinLine({ ...own, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt })];
+      return [pinLine({ ...own, cacheTtlMs: 5 * MINUTE, effort: effortAt(j), lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt })];
+    }),
+  );
 });
 
 /**
@@ -605,17 +647,33 @@ const SLOWED_PINS: { agents: { agentId: string; model: string }[]; burn: number;
 // Every pin of the account reads the window's runway: until its burn carries the utilization to the pool's ceiling.
 const studioFive = accountById.get('studio')?.windows.find((w) => w.id === '5h');
 const studioRunwayMs = studioFive?.burn ? Math.round(((poolById.get('work')!.windowCeiling - studioFive.utilization) / studioFive.burn) * HOUR) : null;
-for (const pin of SLOWED_PINS) {
+SLOWED_PINS.forEach((pin, k) => {
   // The rows run newest first, and the main agent's newest turn is the pin's last use.
   const rows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'notebook' && r.sessionId === pin.sessionId);
   const main = rows.filter((r) => r.agentId === 'main');
   const last = main[0];
   const lastAttempt = last.attempts[last.attempts.length - 1];
-  const lastInputTokens = last.usage.input + last.usage.cacheRead + last.usage.cacheWrite5m + last.usage.cacheWrite1h;
+  const lastInputTokens = promptOf(last);
+  const effort = effortAt(k);
+  const createdAt = main[main.length - 1].at;
+  // Each agent's pin reads its own newest turn, which wrote the hour's cache.
+  const lines = pin.agents.map(({ agentId, model }, j) => {
+    const own = rows.filter((r) => r.agentId === agentId);
+    const newest = own[0];
+    return pinLine({
+      accountId: 'studio',
+      agentId,
+      cacheTtlMs: HOUR,
+      effort: agentId === 'main' ? effort : effortAt(k + j),
+      lastInputTokens: promptOf(newest),
+      lastUsedAt: newest.attempts[newest.attempts.length - 1].startedAt,
+      model,
+    });
+  });
   SESSIONS.push({
     ...SESSION_SAMPLE,
     accountId: 'studio',
-    agentContexts: null,
+    agentContexts: datedLines(createdAt, activityOf('notebook', Date.parse(keyById.get('notebook')!.createdAt), pin.sessionId), lines),
     agentId: 'main',
     agents: pin.agents.length,
     burn: pin.burn,
@@ -625,8 +683,9 @@ for (const pin of SLOWED_PINS) {
     cacheTtlMs: HOUR,
     companion: 'none',
     companionSince: null,
-    createdAt: main[main.length - 1].at,
+    createdAt,
     cycleMs: pin.cycleMs,
+    effort,
     epoch: 1,
     estimated: false,
     forkDepth: null,
@@ -636,7 +695,6 @@ for (const pin of SLOWED_PINS) {
     keyGeneration: Date.parse(keyById.get('notebook')!.createdAt),
     keyId: 'notebook',
     lastInputTokens,
-    ...pinContext(lastInputTokens, rows[0].model),
     lastRefreshAt: lastAttempt.startedAt,
     lastRequestAt: rows[0].at,
     lastUsedAt: lastAttempt.startedAt,
@@ -651,7 +709,7 @@ for (const pin of SLOWED_PINS) {
     shedReason: null,
     speed: accountById.get('studio')?.slowDown?.factor ?? null,
   });
-}
+});
 
 /**
  * The contract seat's batch session on fleet, whose pool keeps no cache warm, so no recipe warms it. Its main agent
@@ -671,13 +729,25 @@ const FLEET_PINS = [...new Set(fleetRows.map((r) => r.canonicalModel))]
 if (FLEET_PINS.length > 0) {
   const last = FLEET_PINS[0];
   const lastAttempt = last.attempts[last.attempts.length - 1];
-  const lastInputTokens = last.usage.input + last.usage.cacheRead + last.usage.cacheWrite5m + last.usage.cacheWrite1h;
+  const lastInputTokens = promptOf(last);
   const keyGeneration = Date.parse(keyById.get('fleet')!.createdAt);
   const seen = ledgered.get(activityOf('fleet', keyGeneration, FLEET_SESSION_ID)) ?? null;
+  // The session is first seen at the oldest turn of its last unbroken run: a turn that came once the pin before it had
+  // passed the affinity window found the session holding no pin, so the router dated the session again from it.
+  let firstSeen = fleetRows[0];
+  for (const r of fleetRows.slice(1)) {
+    if (Date.parse(firstSeen.at) - Date.parse(r.attempts[r.attempts.length - 1].startedAt) > fleetTtlMs) break;
+    firstSeen = r;
+  }
+  // One line per standing pin, each read off its model's last turn as the row reads the newest one.
+  const lines = FLEET_PINS.map((pin, j) => {
+    const attempt = pin.attempts[pin.attempts.length - 1];
+    return pinLine({ accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), lastInputTokens: promptOf(pin), lastUsedAt: attempt.startedAt, model: pin.canonicalModel });
+  });
   SESSIONS.push({
     ...SESSION_SAMPLE,
     accountId: lastAttempt.accountId,
-    agentContexts: null,
+    agentContexts: datedLines(firstSeen.at, activityOf('fleet', keyGeneration, FLEET_SESSION_ID), lines),
     agentId: 'main',
     agents: 1,
     burn: 0.36,
@@ -687,8 +757,9 @@ if (FLEET_PINS.length > 0) {
     cacheTtlMs: 5 * MINUTE,
     companion: 'none',
     companionSince: null,
-    createdAt: last.at,
+    createdAt: firstSeen.at,
     cycleMs: null,
+    effort: lines[0].effort,
     epoch: 1,
     estimated: false,
     forkDepth: null,
@@ -698,7 +769,6 @@ if (FLEET_PINS.length > 0) {
     keyGeneration,
     keyId: 'fleet',
     lastInputTokens,
-    ...pinContext(lastInputTokens, seen?.model ?? null),
     lastRefreshAt: lastAttempt.startedAt,
     lastRequestAt: seen?.last ?? null,
     lastUsedAt: lastAttempt.startedAt,
@@ -717,29 +787,27 @@ if (FLEET_PINS.length > 0) {
 
 // The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...)`
 // with the creation minute in the viewer's zone: the router lists a holder's session while its last request is inside
-// the session expiry, with that holder's own requests and no pin or recipe. The holder's last request ran on the
-// session the live key holds now, so the row carries that id, and it joins the list after the probe times are filled
-// in, which would otherwise hand it that session's next probe.
+// the session expiry and the non-companion timeout, with that holder's own requests and no pin or recipe. The holder's
+// last request ran on the session the live key holds now, so the row carries that id, and it joins the list after the
+// probe times are filled in, which would otherwise hand it that session's next probe.
 const holderRows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION && r.sessionId === SESSION_IDS[0]);
 const holderLast = holderRows[0];
 if (holderLast && insideSessionExpiry(holderLast.at, NOW)) {
   SESSIONS.push({
     ...SESSION_SAMPLE,
     accountId: holderLast.accountId,
-    agentContexts: null,
+    agentContexts: [],
     agentId: null,
     agents: 0,
     burn: null,
     burnAt: null,
     burnEquivalent: null,
     burnUnit: null,
-    cachedPrefixTokens: null,
     cacheTtlMs: null,
     companion: 'none',
     companionSince: null,
-    contextShare: null,
-    contextWindowTokens: null,
     createdAt: null,
+    effort: null,
     epoch: null,
     forkDepth: null,
     forkedFrom: null,
@@ -764,8 +832,9 @@ if (holderLast && insideSessionExpiry(holderLast.at, NOW)) {
 // The desktop session whose every request the key's own guardrail refused before any account was asked. The router
 // lists it off the ledger's rows with no pin and no recipe, so a drifting or blocked client stays visible, and the
 // activity fold gives it a count of none and the newest refusal as its last request, and only while that refusal is
-// inside the router's session expiry. The row is built at an instant since the mock's now is fixed at load, so the
-// consistency test reads it inside the expiry and past it.
+// inside the router's session expiry, the non-companion timeout leaving it out of the route's list sooner. The row is
+// built at an instant since the mock's now is fixed at load, so the consistency test reads it inside the expiry and
+// past it.
 const blockedGeneration = Date.parse(keyById.get('desktop')!.createdAt);
 const blocked = ledgered.get(activityOf('desktop', blockedGeneration, BLOCKED_SESSION_ID));
 const blockedLast = REQUESTS.find((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === blockedGeneration && r.sessionId === BLOCKED_SESSION_ID);
@@ -774,20 +843,18 @@ export function refusalOnlyRows(now: number): Session[] {
   const row: Session = {
     ...SESSION_SAMPLE,
     accountId: null,
-    agentContexts: null,
+    agentContexts: [],
     agentId: null,
     agents: 0,
     burn: null,
     burnAt: null,
     burnEquivalent: null,
     burnUnit: null,
-    cachedPrefixTokens: null,
     cacheTtlMs: null,
     companion: 'none',
     companionSince: null,
-    contextShare: null,
-    contextWindowTokens: null,
     createdAt: null,
+    effort: null,
     epoch: null,
     forkDepth: null,
     forkedFrom: null,
@@ -811,6 +878,135 @@ export function refusalOnlyRows(now: number): Session[] {
 }
 SESSIONS.push(...refusalOnlyRows(NOW));
 
+/**
+ * Two sessions written after the recipes rather than rolled, so every drawn row and recipe keeps its rolls, and neither
+ * has reached the ledger. On the laptop, a companion session whose main has sent auxiliary calls alone while its
+ * subagent works: main's auxiliary pin draws no line and holds no recipe, so the row falls back to the subagent's
+ * conversation pin and the mod's one recipe is the subagent's. On fleet, a session no mod reports whose main and
+ * subagent each hold a pin on the contract seat, the subagent's last used past its five-minute cache TTL.
+ */
+const AUXILIARY_ONLY_SESSION_ID = '3e9b7c21-4d58-4a06-8f1e-6c2a9d0b5e74';
+const NO_MOD_SESSION_ID = 'b7e2d5a9-6c13-4f80-a4d2-9e1f3c7b0a68';
+const auxiliaryOnlyRecipe: KeepaliveRecipe = {
+  ...RECIPE_SAMPLE,
+  accountId: 'overflow',
+  agentId: 'd41c',
+  agentState: 'busy',
+  cause: 'scheduled',
+  creditedToday: 0,
+  deadline: null,
+  keyId: 'laptop',
+  lastGuard: 'rearm',
+  lastProbeAt: null,
+  lastRequestAt: ago(3 * MINUTE),
+  model: 'claude-sonnet-4-5',
+  nextProbeAt: ahead(75_000),
+  parkKind: null,
+  poolId: 'all',
+  probesToday: 0,
+  sessionId: AUXILIARY_ONLY_SESSION_ID,
+  state: 'retained',
+  ttlSeconds: 300,
+  wakeAt: null,
+};
+RECIPES.push(auxiliaryOnlyRecipe);
+const auxiliaryOnlyLine = pinLine({
+  accountId: 'overflow',
+  agentId: auxiliaryOnlyRecipe.agentId,
+  cacheTtlMs: 5 * MINUTE,
+  effort: 'high',
+  lastInputTokens: 23_400,
+  lastUsedAt: auxiliaryOnlyRecipe.lastRequestAt,
+  model: auxiliaryOnlyRecipe.model,
+});
+const AUXILIARY_ONLY_CREATED_AT = ago(38 * MINUTE);
+const noModLines = [
+  pinLine({ accountId: 'contract', agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: 'max', lastInputTokens: 41_200, lastUsedAt: ago(2 * MINUTE), model: 'claude-sonnet-5-5' }),
+  pinLine({ accountId: 'contract', agentId: '5c8e', cacheTtlMs: 5 * MINUTE, effort: 'low', lastInputTokens: 7_900, lastUsedAt: ago(25 * MINUTE), model: HAIKU }),
+];
+const NO_MOD_CREATED_AT = ago(47 * MINUTE);
+/** A written row that names no fork, no cycle, no runway and no shed stamp, and has reached no ledger. */
+const writtenRow = (row: Pick<Session, 'accountId' | 'agentContexts' | 'agentId' | 'agents' | 'burn' | 'companion' | 'createdAt' | 'keepalive' | 'keyId' | 'presenceAgeSeconds' | 'sessionId'>, line: Omit<AgentContext, 'createdAt'>): Session => ({
+  ...SESSION_SAMPLE,
+  ...row,
+  burnAt: line.lastUsedAt,
+  burnEquivalent: null,
+  burnUnit: 'usd',
+  cacheTtlMs: line.cacheTtlMs,
+  companionSince: null,
+  cycleMs: null,
+  effort: line.effort,
+  epoch: 1,
+  estimated: false,
+  forkDepth: null,
+  forkedFrom: null,
+  historical: false,
+  keyGeneration: Date.parse(keyById.get(row.keyId)!.createdAt),
+  lastInputTokens: line.lastInputTokens,
+  lastRefreshAt: line.lastUsedAt,
+  lastRequestAt: null,
+  lastUsedAt: line.lastUsedAt,
+  model: line.model,
+  pinned: true,
+  requests: 0,
+  runwayBounded: null,
+  runwayMs: null,
+  shedFrom: null,
+  shedReason: null,
+  speed: null,
+});
+const WRITTEN_SESSIONS = [
+  writtenRow(
+    {
+      accountId: 'overflow',
+      agentContexts: datedLines(AUXILIARY_ONLY_CREATED_AT, activityOf('laptop', Date.parse(keyById.get('laptop')!.createdAt), AUXILIARY_ONLY_SESSION_ID), [auxiliaryOnlyLine]),
+      agentId: auxiliaryOnlyLine.agentId,
+      agents: 1,
+      burn: 0.05,
+      companion: 'reporting',
+      createdAt: AUXILIARY_ONLY_CREATED_AT,
+      // Main holds no recipe, so the summary names no state, cause or guard, and its next probe is the subagent's.
+      keepalive: { cause: null, lastGuard: null, nextProbeAt: auxiliaryOnlyRecipe.nextProbeAt, state: null },
+      keyId: 'laptop',
+      presenceAgeSeconds: 9,
+      sessionId: AUXILIARY_ONLY_SESSION_ID,
+    },
+    auxiliaryOnlyLine,
+  ),
+  writtenRow(
+    {
+      accountId: 'contract',
+      agentContexts: datedLines(NO_MOD_CREATED_AT, activityOf('fleet', Date.parse(keyById.get('fleet')!.createdAt), NO_MOD_SESSION_ID), noModLines),
+      agentId: 'main',
+      agents: noModLines.length,
+      burn: 0.22,
+      companion: 'none',
+      createdAt: NO_MOD_CREATED_AT,
+      keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
+      keyId: 'fleet',
+      presenceAgeSeconds: null,
+      sessionId: NO_MOD_SESSION_ID,
+    },
+    noModLines[0],
+  ),
+];
+SESSIONS.push(...WRITTEN_SESSIONS);
+
+/**
+ * The sessions the route lists at `now`: a session no mod reports leaves once its last use is older than the timeout,
+ * and each of its lines once its pin's last use is. The clock is handed in, as `refusalOnlyRows` takes it, since the
+ * story is built against `NOW` and a test reads the list at any instant without moving `Date.now`. A row whose lines
+ * all stand is answered as the seed holds it, so two reads of one instant answer the same rows.
+ */
+export const sessionsListedAt = (now: number, sessions: readonly Session[] = SESSIONS, seconds = NON_COMPANION_IDLE_SECONDS): Session[] =>
+  sessions
+    .filter((s) => s.companion !== 'none' || withinNonCompanionTimeout(lastUseOf(s), seconds, now))
+    .map((s) => {
+      if (s.companion !== 'none') return s;
+      const standing = s.agentContexts.filter((c) => withinNonCompanionTimeout(c.lastUsedAt, seconds, now));
+      return standing.length === s.agentContexts.length ? s : { ...s, agentContexts: standing };
+    });
+
 // A pin is the engine's: one per key, session, agent and model, so a session's subagents hold pins of their own, on
 // another account where they run there. The router renews a pin on each request and each keepalive probe, and the
 // mod's release ends the keepalive record alone, so a released agent keeps its pin while its last request or probe is
@@ -831,6 +1027,9 @@ for (const r of RECIPES) {
 }
 for (const pin of SLOWED_PINS) for (const a of pin.agents) pinOn('studio', `notebook|${pin.sessionId}|${a.agentId}|${a.model}`);
 for (const last of FLEET_PINS) pinOn(last.attempts[last.attempts.length - 1].accountId, `fleet|${FLEET_SESSION_ID}|main|${last.canonicalModel}`);
+for (const row of WRITTEN_SESSIONS) for (const line of row.agentContexts) pinOn(line.accountId, `${row.keyId}|${row.sessionId}|${line.agentId}|${line.model}`);
+// Main's auxiliary pin draws no line, but the router holds it, so the pools count it as they count every pin.
+pinOn('overflow', `laptop|${AUXILIARY_ONLY_SESSION_ID}|main|${HAIKU}`);
 const underKeys = (pins: Iterable<string>, keyIds: ReadonlySet<string>) => [...pins].filter((pin) => keyIds.has(pin.slice(0, pin.indexOf('|'))));
 /**
  * The pins under a pool's current keys on one member's account, the one membership `pinsUnderPool` reads too, so a
@@ -858,6 +1057,9 @@ const PROBES_24H = { ok: 225, migrated: 18, held: 4, skipped: 45, failed: 3 };
 // Each bucket reaches fewer windows than the one before it left unreturned.
 const IDLE_REACHED = [96, 70, 50, 36, 22, 13, 8, 5, 2, 1];
 const IDLE_RETURNED = [24, 16, 11, 12, 7, 4, 2, 2, 1, 0];
+// The 30 days hold more of each, at rates within a few points of the 7 days' where a bucket counts enough windows.
+const IDLE_REACHED_30D = [430, 315, 230, 170, 105, 64, 40, 26, 14, 7];
+const IDLE_RETURNED_30D = [107, 72, 51, 57, 33, 20, 10, 10, 7, 1];
 
 export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   ...KEEPALIVE_OVERVIEW_SAMPLE,
@@ -890,6 +1092,12 @@ export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   probes24h: PROBES_24H,
 };
 
+/** The overview under the 30-day range, which moves the idle returns alone, as the route's answer keeps its shape. */
+export const KEEPALIVE_OVERVIEW_30D: KeepaliveOverview = {
+  ...KEEPALIVE_OVERVIEW,
+  pools: KEEPALIVE_OVERVIEW.pools.map((p) => ({ ...p, idleReturns: p.idleReturns.map((b, i) => ({ ...b, reached: IDLE_REACHED_30D[i], returned: IDLE_RETURNED_30D[i] })) })),
+};
+
 const settingsFixture = FIXTURES.settings.body as Record<string, Record<string, unknown>>;
 
 /**
@@ -905,7 +1113,7 @@ export const SETTINGS_WIRE = {
   api_prices: API_PRICES_WIRE,
   listeners: { metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080', proxy_tls: false },
   retention: { body_capture_max_hours: 72, retention_days: 365, rollup_retention_days: 365 },
-  sessions: { expire_after_seconds: SESSION_EXPIRE_SECONDS },
+  sessions: { expire_after_seconds: SESSION_EXPIRE_SECONDS, non_companion_idle_seconds: NON_COMPANION_IDLE_SECONDS },
   storage: { api_prices_path: './api_prices.yaml', ledger_path: './data/ledger.sqlite', path: './data/router.sqlite', subscription_costs_path: './subscription_costs.yaml' },
   subscription_costs: SUBSCRIPTION_COSTS_WIRE,
 };

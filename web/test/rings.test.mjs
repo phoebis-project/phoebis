@@ -11,7 +11,18 @@ const TABLES = JSON.parse(readFileSync(new URL('./fixtures/test_tables.json', im
 const COSTS = d.decodeSubscriptionCosts(TABLES.subscription_costs.content);
 
 const window = (id, utilization, resetsInMs = 2 * HOUR) => ({ id, label: id, observedAt: new Date(NOW - 60_000).toISOString(), periodHours: id === '5h' ? 5 : 168, resetsAt: new Date(NOW + resetsInMs).toISOString(), utilization });
-const account = (id, rateLimitTier, windows, extra = {}, plan = null) => ({
+// The plan word each tier resolves to on its own, so an account reads the plan the router would resolve for it and the
+// gate weighs it by its tier. A case that needs another word passes it.
+const PLAN_OF_TIER = {
+  claude_enterprise: 'enterprise',
+  claude_team: 'team',
+  default_claude_ai: 'pro',
+  default_claude_max_20x: 'max_20x',
+  default_claude_max_5x: 'max_5x',
+  default_claude_team: 'team',
+  default_claude_zero: 'usage_based',
+};
+const account = (id, rateLimitTier, windows, extra = {}, plan = PLAN_OF_TIER[rateLimitTier] ?? null) => ({
   id,
   kind: 'oauth',
   label: id,
@@ -79,7 +90,7 @@ test('an unsized tier and a null 7-day capacity are left out with their reasons'
   );
   assert.deepEqual(figures.leftOut, [
     { id: 'nightly', label: 'nightly', reason: 'Team 7-day capacity not measured' },
-    { id: 'team', label: 'team', reason: 'tier claude_enterprise is not in the cost model' },
+    { id: 'team', label: 'team', reason: 'tier unknown' },
     { id: 'fresh', label: 'fresh', reason: 'no subscription profile' },
   ]);
   close(figures.capacity, 1, 'capacity');
@@ -94,7 +105,7 @@ test('a ring with every account left out has no rows', () => {
   assert.equal(figures.left, 0);
   assert.deepEqual(
     figures.leftOut.map((o) => o.reason),
-    ['Team 7-day capacity not measured', 'tier claude_enterprise is not in the cost model'],
+    ['Team 7-day capacity not measured', 'tier unknown'],
   );
 });
 
@@ -153,22 +164,40 @@ test('a disconnected account with the windows of its last reading and no profile
   }
 });
 
-test('a usage-based seat is on no ring and in no left-out list, as an API-key account is', () => {
-  // A window the seat carried into the class, so the case reads the class and not the window's absence. Its tier is
-  // in no cost model, which names it under the ring unless the class leaves it out first.
-  const accounts = [account('primary', 'default_claude_max_20x', [window('5h', 0.5), window('7d', 0.4)]), account('seat', 'default_claude_zero', [window('5h', 0.3), window('7d', 0.2)], { usageBased: true })];
+test('a usage-based seat is named under both rings with its reason and weighs nothing, with or without the window', () => {
+  // One seat carries windows into the class and the other reports none, as a real seat does, so the case reads the
+  // plan word before the window test. An API-key account is on no ring and in no list.
+  const accounts = [
+    account('primary', 'default_claude_max_20x', [window('5h', 0.5), window('7d', 0.4)]),
+    account('seat', 'default_claude_zero', [window('5h', 0.3), window('7d', 0.2)], { usageBased: true }),
+    account('bare', 'default_claude_zero', [], { usageBased: true }),
+    account('key', null, [], { kind: 'api_key' }),
+  ];
   for (const id of ['5h', '7d']) {
     const figures = d.ringFigures(accounts, id, COSTS, NOW);
-    assert.deepEqual(figures.rows.map((r) => r.id), ['primary'], `the ${id} ring`);
-    assert.deepEqual(figures.leftOut, [], `the ${id} ring's left-out list`);
+    assert.deepEqual(figures.rows.map((r) => [r.id, r.weight]), [['primary', 1]], `the ${id} ring`);
+    assert.deepEqual(
+      figures.leftOut,
+      [
+        { id: 'seat', label: 'seat', reason: 'a usage-based seat' },
+        { id: 'bare', label: 'bare', reason: 'a usage-based seat' },
+      ],
+      `the ${id} ring's left-out list`,
+    );
   }
+});
+
+test('a Team seat on a tier the cost model holds weighs by its row, as any plan the router prices', () => {
+  const figures = d.ringFigures([account('primary', 'default_claude_max_20x', [window('5h', 0.5)]), account('team', 'default_claude_team', [window('5h', 0.4)])], '5h', COSTS, NOW);
+  assert.deepEqual(figures.rows.map((r) => [r.id, r.weight]), [['team', 0.1], ['primary', 1]], "Team's 10 over the anchor's 100");
+  assert.deepEqual(figures.leftOut, []);
 });
 
 test('a free plan is named under the ring with its reason and weighs nothing, while a Pro plan on the same tier weighs its capacity', () => {
   // A free organization reports the tier the profile reports for Pro, so the plan word and not the tier decides.
   const free = d.ringFigures([account('free', 'default_claude_ai', [window('5h', 0.5)], {}, 'free')], '5h', COSTS, NOW);
   assert.deepEqual(free.rows, []);
-  assert.deepEqual(free.leftOut, [{ id: 'free', label: 'free', reason: 'Free plan, no priced capacity' }]);
+  assert.deepEqual(free.leftOut, [{ id: 'free', label: 'free', reason: 'no priced capacity for a free plan' }]);
   assert.deepEqual([free.capacity, free.left], [0, 0]);
   const pro = d.ringFigures([account('pro', 'default_claude_ai', [window('5h', 0.5)], {}, 'pro')], '5h', COSTS, NOW);
   assert.deepEqual(pro.rows.map((r) => [r.id, r.weight]), [['pro', 0.05]], "Pro's 5 over the anchor's 100");

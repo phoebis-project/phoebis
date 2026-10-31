@@ -125,6 +125,10 @@ test('each dimension list names keys of its codec, and every codec key but the e
   }
 });
 
+test("the Accounts view's sort key and its direction draw no chip, since the bar's sort control holds both", () => {
+  assert.deepEqual(d.NOT_DIMENSIONS.accounts, ['dir', 'range', 'rows', 'search', 'sort']);
+});
+
 test("the lists are alphabetical inside each group, the groups in the view's order, and the Routing log leads with its kinds", () => {
   const groups = (dimensions) => [...new Set(dimensions.map((x) => x.group))];
   assert.deepEqual(groups(d.REQUESTS_DIMENSIONS), ['Routing', 'Outcome', 'Request', 'Subject']);
@@ -140,7 +144,7 @@ test("the lists are alphabetical inside each group, the groups in the view's ord
     }
   }
   const words = Object.fromEntries(d.ANALYTICS_DIMENSIONS.map((x) => [x.field, x.word]));
-  assert.deepEqual([words.class, words.probes, words.agent], ['client', 'include probes', 'user agent'], 'the Analytics client pattern reads client over its class key');
+  assert.deepEqual([words.clients, words.probes, words.userAgents], ['client', 'include probes', 'user agent'], 'the Analytics client patterns read client over their clients key');
   assert.equal(d.ROUTING_LOG_DIMENSIONS[0].word, 'kinds');
 });
 

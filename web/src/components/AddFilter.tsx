@@ -25,6 +25,16 @@ const SEARCHED = 12;
 
 export const PATTERN_GRAMMAR = '* matches any run of characters, ? one, and a backslash quotes either';
 
+/**
+ * A typed list's rows: each checked value no option carries under "Patterns", ahead of the range's own under
+ * "In range", so a typed pattern stands as a row that unchecks like any other and reads apart from the values the
+ * range holds.
+ */
+function typedOptions(known: Option[], listed: string[]): Option[] {
+  const typed = [...new Set(listed)].filter((v) => !known.some((o) => o.value === v));
+  return [...typed.map((v) => ({ group: 'Patterns', label: v, value: v })), ...known.map((o) => ({ ...o, group: 'In range' }))];
+}
+
 /** A dimension's value in the chip's words without the dimension, "on" for a flag, and nothing while it holds none. */
 function valueWords(dimension: Dimension, value: unknown, options: Option[]): string {
   if (!hasValue(dimension, value)) return '';
@@ -75,7 +85,7 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
   useEffect(() => {
     const body = bodyRef.current;
     if (!open || body === null) return;
-    const own = kind === null ? '.add-filter__search' : kind === 'list' ? '.mselect__search, [role="option"]' : kind === 'choice' ? '[role="radio"]' : 'input';
+    const own = kind === null ? '.add-filter__search' : kind === 'list' ? '.mselect__search, [role="option"], .add-filter__typed' : kind === 'choice' ? '[role="radio"]' : 'input';
     (body.querySelector<HTMLElement>(own) ?? body.querySelector<HTMLElement>('button'))?.focus({ preventScroll: true });
   }, [kind, open, step]);
 
@@ -170,6 +180,7 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
     // narrows to its members. After Select all's uncheck it draws no check, so the uncheck reads as the inverse of the
     // check while the value still means every option.
     const every = d.emptyMeansAll === true && listed.length === 0 && cleared !== d.field;
+    const rows = d.typed ? typedOptions(known, listed) : known;
     return (
       <div ref={bodyRef} className="add-filter" onKeyDown={d.kind === 'choice' ? (e) => walkRows(e, e.currentTarget) : undefined}>
         <div className="popover__head">
@@ -196,10 +207,27 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
               setCleared((c) => (d.emptyMeansAll === true && via === 'all' && next.length === 0 ? d.field : c === d.field ? null : c));
               update({ [d.field]: next });
             }}
-            options={known}
+            options={rows}
             presets={presets[d.field]}
-            searchable={d.searchable === true || known.length > SEARCHED}
+            searchable={d.searchable === true || rows.length > SEARCHED}
             value={every ? known.map((o) => o.value) : listed}
+          />
+        )}
+        {d.kind === 'list' && d.typed && (
+          <Input
+            className="add-filter__typed mono"
+            aria-label={`${d.label} pattern`}
+            placeholder="Pattern"
+            title={PATTERN_GRAMMAR}
+            spellCheck={false}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter') return;
+              e.preventDefault();
+              const typed = e.currentTarget.value.trim();
+              if (typed === '') return;
+              e.currentTarget.value = '';
+              if (!listed.includes(typed)) update({ [d.field]: [...listed, typed] });
+            }}
           />
         )}
         {(d.kind === 'id' || d.kind === 'pattern') && (

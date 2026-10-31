@@ -1,6 +1,6 @@
 import type { Account, SubscriptionCosts, WindowId } from '@/api/types';
-import { anchorTier, tierCapacity, tierRow } from '@/lib/costs';
-import { isExpired, isQuotaListed, planLabel, remainingOf, windowOf } from '@/lib/quota';
+import { anchorTier, tierCapacity } from '@/lib/costs';
+import { isExpired, isQuotaListed, planLabel, pricedTier, remainingOf, windowOf } from '@/lib/quota';
 
 /** An account on a quota ring: its own remaining share of the window, 1 for an expired window, and its tier's capacity in windows of the anchor tier. */
 export interface RingRow { color?: never; id: string; label: string; remaining: number; weight: number }
@@ -28,24 +28,19 @@ export function ringFigures(accounts: Account[], windowId: WindowId, costs: Subs
   const leftOut: RingLeftOut[] = [];
   for (const a of accounts) {
     if (!isQuotaListed(a) || !a.routingEnabled) continue;
-    // A usage-based seat has no plan window to weigh and the cost model sizes no tier for it, as for an API key.
-    if (a.usageBased) continue;
+    // Read before the window test, since a usage-based seat reports no plan window and is named all the same.
+    const priced = a.subscription === null ? null : pricedTier(a.subscription.plan, a.subscription.rateLimitTier, costs);
+    if (priced !== null && priced.tier === null) {
+      leftOut.push({ id: a.id, label: a.label, reason: priced.reason });
+      continue;
+    }
     const w = windowOf(a, windowId);
     if (w === null) continue;
-    if (a.subscription === null) {
+    if (priced === null) {
       leftOut.push({ id: a.id, label: a.label, reason: 'no subscription profile' });
       continue;
     }
-    // A free plan prices no capacity, so the account leaves the ring before the tier lookup, which would read its Pro tier.
-    if (a.subscription.plan === 'free') {
-      leftOut.push({ id: a.id, label: a.label, reason: 'Free plan, no priced capacity' });
-      continue;
-    }
-    const tier = a.subscription.rateLimitTier;
-    if (tierRow(costs, tier) === undefined) {
-      leftOut.push({ id: a.id, label: a.label, reason: `tier ${tier} is not in the cost model` });
-      continue;
-    }
+    const tier = priced.tier;
     const capacity = tierCapacity(costs, tier, window);
     if (capacity === null || anchorCapacity === null) {
       // The reason names the side of the ratio that has no capacity, the account's own tier first.

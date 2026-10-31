@@ -21,7 +21,10 @@ export interface FilterBarProps<F extends { range?: RangeValue; search?: string 
   dimensions?: Dimension[];
   disabled?: Record<string, string>;
   filters: F;
-  /** Whether a popover or menu under the bar (Add filter, a chip's step, the Custom popover, the Columns and Groups popovers among the extras, the interval menu) is open, for the page's pause with the cause `menu`. */
+  /**
+   * Whether a popover or menu under the bar (Add filter, a chip's step, the Custom popover, the Columns, Groups and
+   * Sort popovers among the extras, the interval menu) is open, for the page's pause with the cause `menu`.
+   */
   onOpenChange?: (open: boolean) => void;
   options?: Record<string, Option[]>;
   /** The search's placeholder and label, which a view without a search leaves out. The field reads and writes `filters.search` through useCommittedText. */
