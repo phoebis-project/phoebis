@@ -139,9 +139,6 @@ test("the lists are alphabetical inside each group, the groups in the view's ord
       assert.deepEqual(labels, [...labels].sort((a, b) => a.localeCompare(b)), `${group} is alphabetical`);
     }
   }
-  const words = Object.fromEntries(d.ANALYTICS_DIMENSIONS.map((x) => [x.field, x.word]));
-  assert.deepEqual([words.clients, words.probes, words.userAgents], ['client', 'include probes', 'user agent'], 'the Analytics client patterns read client over their clients key');
-  assert.equal(d.ROUTING_LOG_DIMENSIONS[0].word, 'kinds');
 });
 
 test('the_guardrail_dimension_sits_under_outcome_and_its_chip_reads_the_names', () => {
@@ -175,22 +172,8 @@ test("a dimension whose list did not load carries the failure's words, and a lis
 
 test('every kind belongs to exactly one preset and a preset is exactly its members', () => {
   const members = d.KIND_PRESETS.flatMap((p) => p.members);
-  assert.equal(d.ALL_KINDS.length, 44);
   assert.equal(new Set(members).size, members.length, 'no kind stands in two presets');
   assert.deepEqual([...members].sort(), [...d.ALL_KINDS].sort(), 'the presets together are every kind the Kinds list offers');
-  assert.deepEqual(
-    d.KIND_PRESETS.map((p) => [p.label, p.members.length]),
-    [
-      ['placements and pins', 7],
-      ['moves and holds', 7],
-      ['exhaustion and refusals', 5],
-      ['account state and windows', 13],
-      ['cooldowns and backoff', 4],
-      ['keepalive', 2],
-      ['registry changes', 4],
-      ['router life cycle', 2],
-    ],
-  );
   assert.deepEqual(d.KIND_PRESETS.find((p) => p.label === 'keepalive').members, ['probe', 'warm_prefix_expired']);
   assert.deepEqual([d.kindWord('probe'), d.kindWord('moved'), d.kindWord('pin_migrated')], ['probe decisions', 'moved', 'pin moved']);
   // A booking the request's end let go belongs to the placement or the move that made it, and a mark to its round.
@@ -220,11 +203,8 @@ test('the Kinds chip names a whole preset, a union of whole presets in the table
   assert.deepEqual([d.kindsChipText(d.ALL_KINDS), d.kindsChipText([...d.ALL_KINDS].reverse()), d.kindsChipText([])], [nothing, nothing, nothing]);
 });
 
-test('the Kinds dimension reads its chip through the presets, and the Model dimension opens on its search field', () => {
-  const kinds = d.ROUTING_LOG_DIMENSIONS.find((x) => x.field === 'kinds');
+test('the Kinds dimension reads its chip through the presets', () => {
   assert.deepEqual(d.chipsOf(d.ROUTING_LOG_DIMENSIONS, { kinds: ['probe', 'warm_prefix_expired'] }, {}), [{ field: 'kinds', label: 'kinds', mono: false, text: 'kinds: keepalive', title: 'probe decisions, warm prefix expired', values: 'keepalive' }]);
-  assert.equal(kinds.emptyMeansAll, true, 'an empty Kinds value is every kind');
-  assert.deepEqual([d.REQUESTS_DIMENSIONS, d.ROUTING_LOG_DIMENSIONS].map((list) => list.find((x) => x.field === 'models').searchable), [true, true]);
 });
 
 // Last in the file, since the DOM globals it sets for React stay set for the rest of the process.

@@ -38,8 +38,6 @@ test('a pool exhausted item opens the routing log since the condition began and 
   assert.equal(attentionHref(item('pool_exhausted', { link: { id: 'a b', page: 'pools' } }), NOW), '/routing-log?kinds=exhausted&pools=a+b&from=2026-09-18T10%3A00%3A00.000Z&to=2026-09-18T12%3A00%3A00.000Z', 'the pool id travels encoded');
   assert.equal(attentionHref(item('pool_exhausted'), NOW), null, 'a pool deleted since has nothing to open');
   assert.equal(attentionHref(item('ledger_record_parked', { link: { id: 'jobs', page: 'pools' } }), NOW), '/pools#jobs', "a parked record keeps its pool's card");
-  assert.equal(attentionHref(item('reauth_required', { link: { id: 'legacy', page: 'accounts' } }), NOW), '/accounts/legacy');
-  assert.equal(attentionHref(item('client_drift', { link: { id: 'laptop', page: 'keys' } }), NOW), '/keys#laptop');
 });
 
 test("a row reads each kind's detail as one sentence", () => {

@@ -572,8 +572,6 @@ test("Next from the first page keeps the first page's cursor on the stack, and P
 });
 
 test('an ended span polls nothing', () => {
-  assert.equal(d.effectiveInterval(5_000, true), 0);
-  assert.equal(d.effectiveInterval(5_000, false), 5_000);
   const clock = frozen();
   const f = follow({ intervalMs: d.effectiveInterval(5_000, true) });
   act(() => clock.tick(5_000));

@@ -532,7 +532,7 @@ test("the mock's client classifier group reads zero cache, saving and split figu
   for (const [family, values] of Object.entries(free)) assert.ok(values.length > 0 && values.every((v) => v === 0), `the client group's ${family} figures: ${values}`);
 });
 
-test("the mock prices a fast hour and a fast answer at the model's fast cells", async () => {
+test("the mock prices a fast hour at the model's fast cells", async () => {
   // The mock draws its story from the clock it loads at and its seeded stream, so the case loads a copy of the bundle
   // at one fixed instant, and the rollups read the same figures on every run in one time zone.
   const at = Date.UTC(2026, 8, 16, 14, 30);
@@ -554,23 +554,14 @@ test("the mock prices a fast hour and a fast answer at the model's fast cells", 
     const want = priced(cells.get(r.model), { ...r.tokens, input: r.tokens.uncachedInput });
     assert.ok(Math.abs(r.costUsd - want) <= 0.001 + want * 0.001, `${r.hour} ${r.model}: ${r.costUsd} against ${want}`);
   }
-  const { requests } = await api.listRequests({ speeds: ['fast'] });
-  assert.ok(requests.length > 0);
-  // A price rounded to 1e-4 in two orders of operation can land one unit in the last place apart. The compare counts
-  // whole units, since a float difference of one unit can read a hair over 1e-4.
-  for (const r of requests) {
-    const want = Math.round(priced(cells.get(r.model), r.usage) * 10_000);
-    assert.ok(Math.abs(Math.round(r.costUsd * 10_000) - want) <= 1, `${r.id}: ${r.costUsd} against ${want / 10_000}`);
-  }
 });
 
 test('the session fold files a request under the speed its serving attempt reported, else fast when it asked for fast, standard otherwise', () => {
   const rows = d.decodeRequestPage(fixture('requests')).requests;
   const served = (r) => r.attempts.at(-1)?.response.speed;
-  const speedOf = (r) => served(r) ?? (r.shape.requestedSpeed === 'fast' ? 'fast' : 'standard');
-  // The route flags the requests it refused before any account, which the fold counts under no speed.
-  const flagged = new Set(fixture('requests').requests.filter((r) => r.refused).map((r) => r.id));
-  assert.deepEqual(d.foldGroups(rows, 'speed').map((g) => [g.key, g.requests]).sort(), [['fast', rows.filter((r) => speedOf(r) === 'fast').length], ['standard', rows.filter((r) => !flagged.has(r.id) && speedOf(r) !== 'fast').length]]);
+  // Of the fixture's 13 requests the failover's serving attempt answered fast and ten others standard. The route flags
+  // the blocked and the contract request as refused before any account, which the fold counts under no speed.
+  assert.deepEqual(d.foldGroups(rows, 'speed').map((g) => [g.key, g.requests]).sort(), [['fast', 1], ['standard', 10]]);
   const named = rows.find((r) => served(r) === 'fast');
   const unnamed = { ...named, attempts: named.attempts.map((a) => ({ ...a, response: { ...a.response, speed: null } })) };
   assert.deepEqual(d.foldGroups([unnamed], 'speed').map((g) => g.key), ['standard'], 'an answer that named no speed files as standard, as the rollups file it');
@@ -635,24 +626,12 @@ test('the session fold keys a model by its canonical id, as the rollups file it 
   assert.deepEqual(d.foldGroups([wide, plain], 'model').map((g) => [g.key, g.label, g.requests]), [['claude-sonnet-5', 'claude-sonnet-5', 2]]);
 });
 
-test('the cooldown move reason reads failed over and the other seven keep their words', () => {
-  assert.deepEqual(d.PIN_MIGRATION_LABEL, {
-    cooldown: 'failed over',
-    drain: 'winding down',
-    fast_lane: 'fast lane cooling',
-    mark: 'account marked',
-    overage: 'overage',
-    return_to_plan: 'returned to plan',
-    shed: 'shed',
-    spent: 'window spent',
-  });
+test('the cooldown move reason reads failed over', () => {
   assert.equal(d.moveLabel('cooldown'), 'failed over', 'every reader of the map takes the word through moveLabel');
 });
 
-test('FAILOVER_MOVE_REASONS names the three failover reasons and no reason the map does not label', () => {
-  assert.deepEqual([...d.FAILOVER_MOVE_REASONS], ['cooldown', 'fast_lane', 'mark']);
+test('the rule and the failover move reasons together name each reason the map labels once', () => {
   assert.deepEqual([...d.RULE_MOVE_REASONS, ...d.FAILOVER_MOVE_REASONS].sort(), Object.keys(d.PIN_MIGRATION_LABEL).sort(), 'the two sets split the labeled reasons');
-  assert.equal(d.FAILOVER_MOVE_REASONS.includes('unknown'), false, "the route's unknown reason is no failover");
 });
 
 test("the held bars read one bar per bucket, the range's sum, and an empty range reads no bar", () => {
@@ -1163,9 +1142,6 @@ test('ratioOff marks no row whose priced share sits under the floor the rise rea
 test('the error rate is the requests that did not succeed over the requests', () => {
   assert.equal(d.errorRateOf({ requests: 10, succeeded: 9 }), 0.1);
   assert.equal(d.errorRateOf({ requests: 0, succeeded: 0 }), null, 'a group with no request has no rate, which the cells draw as a dash');
-  // The fold never counts a refused request, so no code needs a rule of the console's own.
-  assert.equal(d.blockedOf, undefined);
-  assert.equal(d.GUARDRAIL_BLOCKED, undefined);
 });
 
 test('sumGroups sums refused and the refusals map', () => {

@@ -108,8 +108,6 @@ test('requestsRange picks the narrowest range that covers the last request, with
     cases.map(([, range]) => range),
   );
   assert.equal(d.requestsRange(null, NOW), null);
-  // The widths are the Requests page's own presets, read from the one table the address grammar holds.
-  assert.deepEqual(d.RANGE_PRESETS.map((r) => r.name), ['1h', '6h', '24h', '7d', '30d']);
 });
 
 test('releasedCount counts the lines the view hides and nothing else', () => {

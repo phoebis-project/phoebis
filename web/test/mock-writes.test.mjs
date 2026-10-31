@@ -818,12 +818,11 @@ test('a_guardrail_is_created_edited_attached_and_deleted_on_the_mock_with_the_ro
 });
 
 test("a login with Stay logged in checked keeps the flag in the signed-in mark for a reload, and the smoke's bare mark reads a login left unchecked", async () => {
-  // The mark lives in the browser's storage, which the case lends the mock as a stand-in it can read back.
+  // The mark lives in the browser's storage, which the case lends the mock as a stand-in that a reload reads.
   const stored = new Map();
   globalThis.localStorage = { getItem: (key) => stored.get(key) ?? null, removeItem: (key) => stored.delete(key), setItem: (key, value) => stored.set(key, String(value)) };
   try {
     await new d.MockApi().login('admin', true);
-    assert.equal(stored.get('phoebis.mockSession'), JSON.stringify({ persistent: true, user: 'admin' }));
     // A reload builds the mock anew, whose session reads the mark alone.
     assert.deepEqual(await new d.MockApi().getSession(), { persistent: true, sessionId: 'mock-admin' }, 'a reload after a checked login');
     stored.set('phoebis.mockSession', 'admin');

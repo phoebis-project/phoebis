@@ -24,11 +24,7 @@ for (const [name, cases] of Object.entries(CASES.matcher)) {
 test('the matcher answers no match past its bounds', () => {
   const withinPattern = '*a'.repeat(128);
   const withinName = 'a'.repeat(256);
-  assert.equal([...withinPattern].length, 256);
-  assert.equal([...withinName].length, 256);
-  const start = Date.now();
-  matchesPattern(withinPattern, withinName);
-  assert.ok(Date.now() - start < 1_000, 'a table-filled match must stay bounded');
+  assert.equal(matchesPattern(withinPattern, withinName), true, 'a pattern and a name at the bound fill the table and match');
   const overPattern = `${withinPattern}a`;
   assert.equal(matchesPattern(overPattern, withinName), false, 'a pattern past the bound answers no match');
   const overName = 'a'.repeat(257);

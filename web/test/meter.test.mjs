@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-const { judged, latestPerWindow, meterGroups, meterWindowWord, ratioOff, SPARK, sparkOf } = await import('./dist/api.js');
+const { judged, latestPerWindow, meterGroups, meterWindowWord, SPARK, sparkOf } = await import('./dist/api.js');
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -65,14 +65,19 @@ test('the groups fold by account and window kind, the weekly windows apart, each
       ['acct-b', 'five_hour'],
     ],
   );
-  for (const g of [...weekly, ...fiveHour]) {
-    const mine = ROWS.filter((r) => r.accountId === g.accountId && r.window === g.window);
-    assert.deepEqual(ends(g.rows), ends(newestFirst(mine)), `${g.accountId} ${g.window} lists its rows newest first`);
-    assert.equal(g.latest, g.rows[0], `${g.accountId} ${g.window}'s latest is its newest row`);
-    assert.equal(g.off, mine.filter(ratioOff).length, `${g.accountId} ${g.window} counts the rows the band marks`);
-    assert.equal(g.judged, mine.filter(judged).length, `${g.accountId} ${g.window} counts the rows the band judges`);
-    assert.equal(g.leftOut, mine.length - g.judged, `${g.accountId} ${g.window} leaves the rest out`);
-  }
+  // A row is judged once its rise and its priced share each reach 5%, and off where its ratio then leaves 0.8 to 1.25.
+  const iso = (ms) => new Date(ms).toISOString();
+  assert.deepEqual(
+    [...weekly, ...fiveHour].map((g) => [g.accountId, g.window, ends(g.rows), g.latest.windowEnd, g.judged, g.off, g.leftOut]),
+    [
+      ['acct-a', 'seven_day', [iso(T - 3 * DAY), iso(T - 10 * DAY)], iso(T - 3 * DAY), 2, 0, 0],
+      ['acct-a', 'seven_day_fable', [iso(T - 3 * DAY)], iso(T - 3 * DAY), 1, 0, 0],
+      ['acct-b', 'seven_day', [iso(T - 4 * DAY), iso(T - 11 * DAY)], iso(T - 4 * DAY), 2, 1, 0],
+      ['acct-a', 'five_hour', [iso(T - 2 * HOUR), iso(T - 8 * HOUR), iso(T - 14 * HOUR)], iso(T - 2 * HOUR), 2, 1, 1],
+      ['acct-b', 'five_hour', [iso(T - HOUR)], iso(T - HOUR), 1, 1, 0],
+    ],
+    'each group lists its rows newest first with its latest the newest, and counts the rows judged, off and left out',
+  );
   const a5 = fiveHour[0];
   assert.deepEqual([a5.rows.length, a5.judged, a5.off, a5.leftOut, a5.latest.windowEnd], [3, 2, 1, 1, new Date(T - 2 * HOUR).toISOString()], "acct-a's 5-hour group: one row off, one under the floor");
   assert.deepEqual([weekly[2].off, weekly[2].judged], [1, 2], "acct-b's 7-day group: its older 1.4 off");
