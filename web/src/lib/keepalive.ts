@@ -196,9 +196,9 @@ export type RequestsRange = (typeof RANGE_PRESETS)[number]['name'];
 const RANGE_HEADROOM_MS = 60_000;
 
 /**
- * The narrowest of the request log's ranges that covers a session's last request, measured back from `now` (the
- * instant of the click, never a sampled one) with the headroom, or null past the widest range or without a last
- * request, where the page's own default applies.
+ * The narrowest of the request log's ranges that covers a last request, a session's or one of its lines', measured
+ * back from `now` (the instant of the click, never a sampled one) with the headroom, or null past the widest range or
+ * without a last request, where the page's own default applies.
  */
 export function requestsRange(lastRequestAt: string | null, now: number): RequestsRange | null {
   if (lastRequestAt === null) return null;

@@ -24077,9 +24077,9 @@ const CARD_VIEWS = [
   }
   {
     // An agent whose last request is older than its session's lists only in a range that covers its own, so a line's
-    // link reads the line's instant and the row's link the session's. Every line sits inside the hour at the story's
-    // instant, so the page mounts where the hour less the link's minute of headroom ends halfway between the session's
-    // last request and its line older by the most, a recipe's.
+    // link reads the line's instant and the row's link the session's. At the story's instant no line older than its
+    // session sits past a range edge from the session, so the page mounts where the hour less the link's minute of
+    // headroom ends halfway between the session's last request and its line older by the most, a recipe's.
     const MINUTE = 60_000;
     const HOUR = 60 * MINUTE;
     const drawn = recipes.filter((r) => r.lastRequestAt !== null && !(r.agentState === 'released' && r.cause === 'agent_released'));
