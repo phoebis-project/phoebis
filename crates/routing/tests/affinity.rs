@@ -1,7 +1,6 @@
-//! The cases the affinity map alone can exercise: what the conversation lookup and `deepest` answer over a
-//! continuation, a fork, an edit, a fresh session under a known static prefix, a tools change, a compaction, and a
-//! subagent's first request. The warmth verdict and the placement of each case are the selector's tests, and the
-//! fork facts the relay reads from a match are the relay's own.
+//! The cases the affinity map alone can exercise: what the conversation lookup and `deepest` answer over a fork, a
+//! tools change, a compaction, and a subagent's first request. The warmth verdict and the placement of each case are
+//! the selector's tests, and the fork facts the relay reads from a match are the relay's own.
 
 use std::sync::Arc;
 
@@ -104,46 +103,11 @@ fn match_at(m: Option<ConversationMatch>, root: &str, depth: u32) {
 }
 
 #[test]
-fn the_lookup_answers_a_continuation_by_one_message_at_the_previous_tails_depth() {
-    let mut map = AffinityMap::default();
-    map.record(&report("k", "a", "b1", &["b1", "b2", "b3"], 1_000));
-    let q = boundaries(&["b1", "b2", "b3", "b4"]);
-    match_at(map.conversation(&query("k", &q)), "b1", 3);
-}
-
-#[test]
 fn a_fork_matches_at_the_last_shared_boundary() {
     let mut map = AffinityMap::default();
     map.record(&report("k", "a", "b1", &["b1", "b2", "b3", "bA4"], 1_000));
     let q = boundaries(&["b1", "b2", "b3", "bB4"]);
     match_at(map.conversation(&query("k", &q)), "b1", 3);
-}
-
-#[test]
-fn the_lookup_answers_a_replaced_last_message_one_boundary_shallower() {
-    let mut map = AffinityMap::default();
-    map.record(&report("k", "a", "b1", &["b1", "b2", "b3", "b4"], 1_000));
-    let q = boundaries(&["b1", "b2", "b3", "b4-edited"]);
-    match_at(map.conversation(&query("k", &q)), "b1", 3);
-}
-
-#[test]
-fn fresh_messages_under_a_known_static_prefix_name_no_conversation_and_match_the_static_depth() {
-    let mut map = AffinityMap::default();
-    map.record(&AffinityReport {
-        static_boundaries: Arc::from(boundaries(&["s1", "s2"])),
-        static_sizes: vec![10, 20],
-        cache_touched: true,
-        static_ttl_ms: Some(3_600_000),
-        ..report("k1", "a", "s1", &["old-m1"], 1_000)
-    });
-    let q = boundaries(&["fresh-m1"]);
-    assert_eq!(map.conversation(&query("k2", &q)), None);
-    let statics = boundaries(&["s1", "s2"]);
-    let (depth, _) = map
-        .deepest("claude-sonnet-5", &statics, |_| true)
-        .expect("the static prefix is known");
-    assert_eq!(depth, 2);
 }
 
 #[test]

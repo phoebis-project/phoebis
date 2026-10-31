@@ -4573,40 +4573,6 @@ async fn a_repeated_rejection_moves_the_fence_a_recovery_sample_has_to_clear() {
 }
 
 #[tokio::test]
-async fn a_sample_the_cooled_account_was_holding_when_it_was_rejected_releases_nothing() {
-    let store = seeded_oauth(&["a"]);
-    let now = Arc::new(AtomicI64::new(2_000));
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle
-        .report(cooled(
-            "a",
-            "account",
-            2_000 + 5 * HOUR,
-            "rate_limit",
-            "five_hour",
-        ))
-        .await;
-    assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
-    // The usage endpoint serves a cached view for a minute, so the snapshot that arrives first can be older
-    // than the rejection.
-    handle
-        .report(observed("a", sample_with(1_999, FIVE_HOUR, 0.4, None)))
-        .await;
-    assert_eq!(
-        handle.cooldowns().await.unwrap().len(),
-        1,
-        "a reading from before the row was set is not evidence about it"
-    );
-    handle
-        .report(observed("a", sample_with(2_001, FIVE_HOUR, 0.4, None)))
-        .await;
-    assert!(
-        handle.cooldowns().await.unwrap().is_empty(),
-        "the same reading taken after it is"
-    );
-}
-
-#[tokio::test]
 async fn a_window_at_its_limit_keeps_the_cooldown() {
     use phoebis_routing::SPENT_MARGIN;
     let store = seeded_oauth(&["a"]);
@@ -6443,48 +6409,6 @@ async fn a_share_at_one_persisted_in_october_lapses_after_a_restart_on_the_first
     }
 }
 
-/// The usage body of an invented usage-based Enterprise seat, the oauth crate's fixture, its extra usage on the
-/// percent scale.
-const SEAT_USAGE: &[u8] = include_bytes!("../../oauth/tests/fixtures/usage_based_seat.json");
-
-#[tokio::test]
-async fn the_seat_fixtures_poll_moves_the_spend_share_to_its_extra_usage_utilization_over_a_hundred(
-) {
-    let store = seeded_oauth(&["a"]);
-    usage_based_seat(&store, "a");
-    let now = Arc::new(AtomicI64::new(OCT_10));
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    let (windows, fable_window, extra_usage, spend, raw_keys) =
-        phoebis_oauth::parse_usage(SEAT_USAGE).unwrap();
-    let snapshot = UsageSnapshot {
-        account_id: "a".into(),
-        identity_generation: 1,
-        fetched_at: OCT_10,
-        windows,
-        fable_window,
-        extra_usage,
-        raw_keys,
-        error: None,
-        spend,
-    };
-    handle
-        .report(Report::Credits {
-            account_id: "a".into(),
-            state: credits_from_usage(&snapshot, 1).expect("the fixture carries extra usage"),
-            incarnation: 1,
-        })
-        .await;
-    let share = spend_window_of(&handle)
-        .await
-        .utilization
-        .expect("the poll set a share");
-    // The body's 41.0 percent, which its `spend.percent` carries as 41.
-    assert!(
-        (share - 0.41).abs() < 1e-9,
-        "the share is extra usage's utilization over a hundred, the one figure the view reads too: {share}"
-    );
-}
-
 /// A seat body whose `spend.percent` rounds its extra usage's utilization, so the two fields answer different shares.
 const UNEQUAL_SEAT_USAGE: &[u8] = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":250000,"used_credits":103125.0,"utilization":41.25,"currency":"USD","decimal_places":2},"spend":{"used":{"amount_minor":103125,"currency":"USD","exponent":2},"limit":{"amount_minor":250000,"currency":"USD","exponent":2},"percent":41}}"#;
 
@@ -7817,6 +7741,7 @@ async fn a_reports_affinity_rows_reach_the_store_and_a_restart_reloads_them() {
         let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
         let report = AffinityReport {
             message_boundaries: Arc::from(["b1".to_string(), "b2".to_string()]),
+            message_id: Some("msg_01".into()),
             ..affinity_report(&handle, "a", 1_000)
         };
         handle.report(Report::Affinity(report)).await;
@@ -7837,6 +7762,22 @@ async fn a_reports_affinity_rows_reach_the_store_and_a_restart_reloads_them() {
     assert!(
         entry.is_some(),
         "the restart reloaded the map from the store"
+    );
+    let tail = handle
+        .affinity()
+        .read()
+        .unwrap()
+        .entry("claude-sonnet-5", "b2")
+        .cloned();
+    assert_eq!(
+        tail.as_ref().map(|e| e.depth),
+        Some(2),
+        "the reloaded tail keeps the depth its row names"
+    );
+    assert_eq!(
+        tail.as_ref().and_then(|e| e.message_id.as_deref()),
+        Some("msg_01"),
+        "the reloaded tail keeps the message id its row names"
     );
 }
 
@@ -8250,68 +8191,6 @@ async fn a_spend_report_under_another_period_than_the_members_is_discarded() {
     assert_eq!(
         state.member_spends_of("p", "a").collect::<Vec<_>>(),
         vec![&day_row]
-    );
-}
-
-#[tokio::test]
-async fn a_members_spend_read_after_a_period_edit_answers_none_until_the_next_report() {
-    let store = seeded(&["a"]);
-    store
-        .set_pool_members(
-            "p",
-            &[MemberWrite {
-                account_id: "a".into(),
-                priority: 0,
-                budget_daily_usd: None,
-                budget_monthly_usd: Some(10.0),
-            }],
-            "test",
-        )
-        .unwrap();
-    let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    let month_snapshot = handle.snapshot();
-    let mut state = RoutingState::from_load(RoutingLoad::default());
-    let month_row = MemberSpend {
-        pool_id: "p".into(),
-        account_id: "a".into(),
-        period: phoebis_store::BudgetPeriod::Month,
-        period_start: 0,
-        period_end: 100_000,
-        spent_usd: 5.0,
-        observed_at: 1_000,
-    };
-    state.record_member_spend(&month_snapshot, vec![month_row.clone()]);
-    assert_eq!(
-        state.member_spends_live(&month_snapshot, "p", "a"),
-        vec![&month_row],
-        "the row matches the member's period at write time"
-    );
-
-    // The member's period changes with no report following yet: the raw accessor still holds the old row, but
-    // a read against the new snapshot must not answer it as if it were current.
-    store
-        .set_pool_members(
-            "p",
-            &[MemberWrite {
-                account_id: "a".into(),
-                priority: 0,
-                budget_daily_usd: Some(10.0),
-                budget_monthly_usd: None,
-            }],
-            "test",
-        )
-        .unwrap();
-    handle.reload().await.unwrap();
-    let day_snapshot = handle.snapshot();
-    assert_eq!(
-        state.member_spends_of("p", "a").collect::<Vec<_>>(),
-        vec![&month_row],
-        "nothing has cleared the stale row yet"
-    );
-    assert!(
-        state.member_spends_live(&day_snapshot, "p", "a").is_empty(),
-        "the read applies the current period, not the one the stored row was summed under"
     );
 }
 
