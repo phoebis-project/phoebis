@@ -65,9 +65,9 @@ fn inference_rows(rows: &[RollupRow]) -> RollupRow {
     sum
 }
 
-// BODY asks for claude-sonnet-4-5, and the harness serves it under that id alone. Every test here serves and
-// requests claude-sonnet-5, which the table prices, so the cost is a number the assertions can name, and a test on
-// a model the table does not price requests claude-opus-4-7.
+// BODY asks for claude-sonnet-4-5, and the harness serves it under that id alone. A test that names a cost serves
+// and requests claude-sonnet-5, which the table prices, so the cost is a number its assertions can name, and a test
+// on a model the table does not price requests claude-opus-4-7.
 const PRICED: &str = "claude-sonnet-5";
 const UNPRICED: &str = "claude-opus-4-7";
 
