@@ -18,13 +18,20 @@ for (const [name, cases] of Object.entries(CASES.matcher)) {
 }
 
 /**
- * A pattern of many stars against a value that cannot match is where a split-per-star matcher goes exponential;
- * the table walk answers in bounded steps, and a pattern or a name past the bound answers no match at all.
+ * A pattern of many stars against a value it cannot match is where a split-per-star matcher goes exponential. At the
+ * bound, a matching pair answers true, and a non-matching pair answers false inside one second, which only an
+ * exponential matcher exceeds. A pattern or a name past the bound answers no match at all.
  */
 test('the matcher answers no match past its bounds', () => {
   const withinPattern = '*a'.repeat(128);
   const withinName = 'a'.repeat(256);
   assert.equal(matchesPattern(withinPattern, withinName), true, 'a pattern and a name at the bound fill the table and match');
+  // 256 tokens, the last a literal b the name never holds.
+  const missing = `${'*a'.repeat(127)}*b`;
+  const start = Date.now();
+  const missed = matchesPattern(missing, withinName);
+  assert.ok(Date.now() - start < 1_000, 'a table-filled match must stay bounded');
+  assert.equal(missed, false, 'a pattern at the bound whose last literal the name lacks answers no match');
   const overPattern = `${withinPattern}a`;
   assert.equal(matchesPattern(overPattern, withinName), false, 'a pattern past the bound answers no match');
   const overName = 'a'.repeat(257);
