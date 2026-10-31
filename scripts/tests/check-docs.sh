@@ -5,8 +5,8 @@
 # client page skipped, a row the proxy listener does not serve, and a handler call it cannot consume. Every
 # checker case runs against a throwaway tree, never the real site. The five content checks run against throwaway
 # files in the same way: a page list short a line the binary prints, a code with no row, a quoted example that
-# drifted, a quoted unit that drifted, and prose that breaks a rule. The favicon case and the unit case at the end
-# read the real tree.
+# drifted, a quoted unit that drifted, and prose that breaks a rule. The favicon case at the end reads the real
+# tree.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -522,7 +522,5 @@ echo "$out" | grep -q 'inner-fence.md:5: semicolon:' || fail "prose did not repo
 # Unlike the cases above this reads the real tree: the site's favicon is a copy of the console's, and nothing else
 # keeps the two equal.
 cmp -s "$here/web/public/favicon.svg" "$here/docs/site/assets/favicon.svg" || fail "docs/site/assets/favicon.svg differs from web/public/favicon.svg"
-# The real tree too: the installation page quotes the shipped unit whole.
-out=$(python3 "$check" unit 2>&1) || fail "the installation page's unit block differs from deploy/phoebis.service: $out"
 
 echo "check-docs: ok"

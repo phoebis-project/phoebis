@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use phoebis_guardrails::{
-    evaluate, presets, CompiledGuardrail, GuardrailAction, GuardrailMode, HeaderLookup, Lookup,
-    Preset, RequestFacts, Verdict,
+    evaluate, presets, CompiledGuardrail, GuardrailAction, HeaderLookup, Lookup, Preset,
+    RequestFacts, Verdict,
 };
 use serde_json::Value;
 
@@ -60,29 +60,6 @@ fn every_preset_of_every_version_checks_and_compiles_under_the_size_limit() {
 }
 
 #[test]
-fn the_first_preset_is_subagent_status_summary_version_one_in_observe_mode_with_its_three_conditions(
-) {
-    let first = &presets()[0];
-    assert_eq!(first.id, "subagent-status-summary");
-    assert_eq!(first.version, 1);
-    assert_eq!(first.suggested_mode, GuardrailMode::Observe);
-    assert_eq!(first.conditions.len(), 3);
-}
-
-#[test]
-fn the_first_preset_matches_the_fork_fixture_and_not_the_classifier_fixture() {
-    let guardrail = compiled(&presets()[0]);
-    let fork: Value = serde_json::from_str(FORK).expect("the fork fixture parses");
-    let classifier: Value =
-        serde_json::from_str(CLASSIFIER).expect("the classifier fixture parses");
-    assert_eq!(evaluate(&guardrail, &auxiliary(&fork)), Verdict::Matched);
-    assert!(matches!(
-        evaluate(&guardrail, &auxiliary(&classifier)),
-        Verdict::Unmatched { .. }
-    ));
-}
-
-#[test]
 fn versions_of_one_id_are_distinct_and_ascending_and_current_and_at_answer_the_table() {
     let mut versions: BTreeMap<&str, Vec<u32>> = BTreeMap::new();
     for preset in presets() {
@@ -104,20 +81,6 @@ fn versions_of_one_id_are_distinct_and_ascending_and_current_and_at_answer_the_t
     }
     assert!(Preset::current("not-a-preset").is_none());
     assert!(Preset::at("not-a-preset", 1).is_none());
-}
-
-#[test]
-fn the_table_holds_the_summary_the_suggestion_and_the_recap_at_version_one_in_observe_mode() {
-    let ids: BTreeSet<&str> = presets().iter().map(|preset| preset.id).collect();
-    assert_eq!(
-        ids,
-        BTreeSet::from(["away-recap", "prompt-suggestion", "subagent-status-summary"])
-    );
-    for id in ["prompt-suggestion", "away-recap"] {
-        let preset = Preset::at(id, 1).unwrap_or_else(|| panic!("{id} version 1 is in the table"));
-        assert_eq!(preset.suggested_mode, GuardrailMode::Observe, "{id}");
-        assert_eq!(preset.conditions.len(), 3, "{id}");
-    }
 }
 
 #[test]

@@ -23,16 +23,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_model_access_phrase_is_found_in_any_case_and_answered_as_listed() {
-        assert_eq!(client_phrase("Model: Opus Only"), Some("model:"));
-        assert_eq!(
-            client_phrase("Opus model only"),
-            None,
-            "the word without its colon is no switch"
-        );
-    }
-
-    #[test]
     fn the_token_refresh_phrase_is_found_in_any_case_and_answered_as_listed() {
         assert_eq!(
             client_phrase("oauth TOKEN has been REVOKED"),

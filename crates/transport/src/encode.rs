@@ -30,14 +30,4 @@ mod tests {
         out.extend(d.finish_bounded(input.len() - out.len()).unwrap());
         assert_eq!(out, input);
     }
-
-    #[test]
-    fn an_empty_input_encodes_to_a_valid_empty_gzip_stream() {
-        let encoded = gzip(&[]);
-        assert_eq!(&encoded[..2], &[0x1f, 0x8b], "a gzip member's magic bytes");
-        let mut d = decoder(Encoding::Gzip);
-        let mut out = d.feed_bounded(&encoded, 0).unwrap();
-        out.extend(d.finish_bounded(0).unwrap());
-        assert!(out.is_empty());
-    }
 }

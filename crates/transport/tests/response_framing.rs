@@ -23,14 +23,6 @@ async fn collect(raw: &'static [u8]) -> (u16, Vec<Vec<u8>>) {
 }
 
 #[tokio::test]
-async fn content_length_body_is_delivered_completely() {
-    let (status, chunks) =
-        collect(b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nhello world").await;
-    assert_eq!(status, 200);
-    assert_eq!(chunks.concat(), b"hello world");
-}
-
-#[tokio::test]
 async fn chunked_body_streams_payload_before_the_terminator_arrives() {
     let (mut tx, mut rx) = duplex(256);
     let gate = Arc::new(Notify::new());

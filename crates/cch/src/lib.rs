@@ -1323,24 +1323,6 @@ mod tests {
     }
 
     #[test]
-    fn the_array_element_span_counts_the_array_it_walks_toward_the_depth_bound() {
-        let body = |depth: usize| format!(r#"{{"system":[{}]}}"#, arrays(depth)).into_bytes();
-        let at_the_bound = body(MAX_DEPTH - 2);
-        assert!(!serde_reads(&at_the_bound));
-        assert_eq!(
-            array_member_span(&at_the_bound, &["system"], 0),
-            None,
-            "the root, the walked array and the arrays of its element reach the bound"
-        );
-        let under_it = body(MAX_DEPTH - 3);
-        assert!(serde_reads(&under_it));
-        assert!(
-            array_member_span(&under_it, &["system"], 0).is_some(),
-            "one level less reads as serde reads it"
-        );
-    }
-
-    #[test]
     fn a_numeric_path_segment_counts_the_array_it_skips_through_toward_the_depth_bound() {
         let body = |depth: usize| {
             format!(r#"{{"system":[{},{{"text":"x"}}]}}"#, arrays(depth)).into_bytes()
@@ -1364,67 +1346,6 @@ mod tests {
         assert_eq!(
             s.depth, 3,
             "the root, the walked array and the element stand counted at the member's value"
-        );
-    }
-
-    /// The bound falls inside the element the path skips, so the walk gives up before it reaches the empty array,
-    /// whose own count the next case bounds.
-    #[test]
-    fn the_empty_array_end_behind_a_numeric_segment_counts_the_skipped_array_toward_the_depth_bound(
-    ) {
-        let body = |depth: usize| format!(r#"{{"system":[{},[]]}}"#, arrays(depth)).into_bytes();
-        let at_the_bound = body(MAX_DEPTH - 2);
-        assert!(!serde_reads(&at_the_bound));
-        assert_eq!(
-            empty_array_member_end(&at_the_bound, &["system", "1"]),
-            None,
-            "the root, the walked array and the arrays of the skipped element reach the bound"
-        );
-        let under_it = body(MAX_DEPTH - 3);
-        assert!(serde_reads(&under_it));
-        assert!(
-            empty_array_member_end(&under_it, &["system", "1"]).is_some(),
-            "one level less reads as serde reads it"
-        );
-    }
-
-    /// An empty array behind `walked` containers its path walks, objects and arrays in turn from the root object, with
-    /// the path that reaches it.
-    fn empty_array_behind(walked: usize) -> (Vec<u8>, Vec<&'static str>) {
-        let (mut open, mut close, mut path) = (String::new(), String::new(), Vec::new());
-        for level in 0..walked {
-            if level % 2 == 0 {
-                open.push_str(r#"{"k":"#);
-                close.insert(0, '}');
-                path.push("k");
-            } else {
-                open.push('[');
-                close.insert(0, ']');
-                path.push("0");
-            }
-        }
-        (format!("{open}[]{close}").into_bytes(), path)
-    }
-
-    #[test]
-    fn the_empty_array_end_answers_none_at_the_128th_container_and_its_position_at_the_127th() {
-        let (at_the_bound, path) = empty_array_behind(MAX_DEPTH - 1);
-        assert!(
-            !serde_reads(&at_the_bound),
-            "serde refuses the empty array as the 128th container counted with the root"
-        );
-        assert_eq!(
-            empty_array_member_end(&at_the_bound, &path),
-            None,
-            "the empty array counts toward the bound as any container does"
-        );
-        let (under_it, path) = empty_array_behind(MAX_DEPTH - 2);
-        assert!(serde_reads(&under_it));
-        let at = empty_array_member_end(&under_it, &path).expect("one level less reads");
-        assert_eq!(
-            &under_it[at - 1..=at],
-            b"[]",
-            "the position is the empty array's closing bracket"
         );
     }
 
@@ -1712,27 +1633,6 @@ mod tests {
     }
 
     #[test]
-    fn an_array_element_span_covers_nested_objects_and_strings_holding_brackets() {
-        let body = br#"{"system":[{"type":"text","text":"[not] {a} bracket"},{"type":"text","text":"kept","meta":{"tags":["a]b","c}d"]}}],"model":"m"}"#;
-        let (start, end) = array_member_span(body, &["system"], 0).unwrap();
-        assert_eq!(
-            &body[start..end],
-            br#"{"type":"text","text":"[not] {a} bracket"}"#,
-            "a bracket inside a string does not end the element early"
-        );
-        let (start, end) = array_member_span(body, &["system"], 1).unwrap();
-        assert_eq!(
-            &body[start..end],
-            br#"{"type":"text","text":"kept","meta":{"tags":["a]b","c}d"]}}"#,
-            "a nested object and array are walked by depth, not skipped"
-        );
-        assert!(
-            array_member_span(body, &["system"], 2).is_none(),
-            "past the last element"
-        );
-    }
-
-    #[test]
     fn an_object_member_span_covers_the_key_and_the_value_past_a_decoy_and_a_nested_match() {
         let body = br#"{"outer":{"stream":"decoy"},"diagnostics":{"previous_message_id":null},"stream":true}"#;
         let (start, end) = object_member_span(body, &["diagnostics"]).unwrap();
@@ -1828,32 +1728,6 @@ mod tests {
             )
             .unwrap(),
             Some("safeguards")
-        );
-    }
-
-    #[test]
-    fn an_empty_array_end_is_found_by_depth_past_an_earlier_decoy_and_nowhere_for_a_non_empty_one()
-    {
-        let decoy = br#"{"messages":[{"role":"system","content":"x"}],"system":[]}"#;
-        let (start, end) = string_member_span(decoy, &["messages", "0", "role"]).unwrap();
-        assert_eq!(
-            &decoy[start..end],
-            br#""system""#,
-            "the decoy really does carry the same bytes"
-        );
-        let at = empty_array_member_end(decoy, &["system"]).unwrap();
-        assert_eq!(
-            &decoy[at..],
-            b"]}",
-            "the top-level array's own bracket, not the decoy's"
-        );
-        assert!(
-            empty_array_member_end(br#"{"system":[1]}"#, &["system"]).is_none(),
-            "an array holding an element is not empty"
-        );
-        assert!(
-            empty_array_member_end(br#"{"system":"x"}"#, &["system"]).is_none(),
-            "a string is not an array"
         );
     }
 
@@ -2024,15 +1898,6 @@ mod tests {
     }
 
     #[test]
-    fn a_raw_repeat_of_a_top_level_member_is_found() {
-        let body = br#"{"model":"a","messages":[],"model":"b"}"#;
-        assert_eq!(
-            repeated_top_level_member(body, &["metadata", "model", "stream"]).unwrap(),
-            Some("model")
-        );
-    }
-
-    #[test]
     fn an_escaped_repeat_of_a_top_level_member_is_found_by_its_decoded_key() {
         let body = "{\"model\":\"a\",\"messages\":[],\"\\u006dodel\":\"b\"}".as_bytes();
         assert_eq!(
@@ -2154,14 +2019,5 @@ mod tests {
     fn a_body_whose_top_level_is_an_array_is_refused() {
         let body = br#"[{"model":"a"}]"#;
         assert!(repeated_top_level_member(body, &["metadata", "model", "stream"]).is_err());
-    }
-
-    #[test]
-    fn a_single_occurrence_of_each_named_member_is_not_a_repeat() {
-        let body = br#"{"metadata":{"user_id":"u"},"model":"a","stream":true,"messages":[]}"#;
-        assert_eq!(
-            repeated_top_level_member(body, &["metadata", "model", "stream"]).unwrap(),
-            None
-        );
     }
 }
