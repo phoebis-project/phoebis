@@ -107,14 +107,14 @@ const rowKey = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>)
 const rowDomId = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>) => `session-${encodeURIComponent(rowKey(session))}`;
 /**
  * The request log on the session the client sent under the row's key lifetime, since a key id created again can hold
- * the same session id, inside the narrowest range that covers its last request, read on the clock when the link is made
- * (the menu's click, a line's draw): the page's `now` is a sample up to five seconds old, and the request log measures
- * its window from its own load. The session lands as the log's session chip, which matches the id exactly, and an agent
- * line's link adds its agent's.
+ * the same session id, inside the narrowest range that covers `lastRequestAt`, the last request of the session or of
+ * the line the link is for, read on the clock when the link is made (the menu's click, a line's draw): the page's `now`
+ * is a sample up to five seconds old, and the request log measures its window from its own load. The session lands as
+ * the log's session chip, which matches the id exactly, and an agent line's link adds its agent's.
  */
-const requestsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId' | 'lastRequestAt'>, agentId?: string) => {
+const requestsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId'>, lastRequestAt: string | null, agentId?: string) => {
   const defaults = REQUESTS_CODEC.fromParams(new URLSearchParams());
-  const range = requestsRange(session.lastRequestAt, clock.now());
+  const range = requestsRange(lastRequestAt, clock.now());
   return `/requests?${REQUESTS_CODEC.toParams({ ...defaults, agentId: agentId ?? defaults.agentId, keys: [`${session.keyId}@${session.keyGeneration}`], range: range === null ? defaults.range : { from: '', preset: range, to: '' }, session: trafficSession })}`;
 };
 /** The analytics on the session the client sent under the row's key lifetime. */
@@ -231,8 +231,9 @@ export function SessionsPage() {
   const reread = { paused: pauseCause !== null, refreshMs: intervalMs };
   // The router keeps a session while it is used, so the list is read again rather than aged on this clock alone: a
   // session still sending requests would otherwise drop off once its first-read activity crossed the expiry. The
-  // overview and the recipes read on the same interval, so the tiles and the hidden lines move with the rows.
-  const accounts = useAsync(() => api.listAccounts(), []);
+  // accounts, the overview and the recipes read on the same interval, so the lines' slow-down chips, the tiles and the
+  // hidden lines move with the rows.
+  const accounts = useAsync(() => api.listAccounts(), [], reread);
   const keys = useAsync(() => api.listKeys(), []);
   const overview = useAsync(() => api.getKeepaliveOverview(), [], reread);
   const pools = useAsync(() => api.listPools(), []);
@@ -352,6 +353,7 @@ export function SessionsPage() {
           intervalMs,
           onIntervalChange: setIntervalMs,
           onRefresh: () => {
+            accounts.reload();
             overview.reload();
             recipes.reload();
             sessions.reload();
@@ -766,7 +768,7 @@ function SessionRows({
             onOpenChange={onMenuChange}
             items={[
               { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(analyticsHref(trafficSession, session)) },
-              { label: 'View in requests', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(requestsHref(trafficSession, session)) },
+              { label: 'View in requests', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(requestsHref(trafficSession, session, session.lastRequestAt)) },
               // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request.
               { label: 'View in routing log', disabled: !session.sessionId, onClick: () => onOpen(logHref({ session: session.sessionId, ...aroundSubject(session.lastRequestAt ? Date.parse(session.lastRequestAt) : null, now) })) },
               ...(!session.historical ? [{ label: 'Release', onClick: onRelease }] : []),
@@ -814,7 +816,7 @@ function SessionRows({
                     accountById={accountById}
                     line={line}
                     now={now}
-                    requestsTo={hasTraffic ? requestsHref(trafficSession, session, line.agentId) : null}
+                    requestsTo={hasTraffic ? requestsHref(trafficSession, session, lineLastRequestAt(line) ?? session.lastRequestAt, line.agentId) : null}
                   />
                 ))}
               </div>
@@ -896,6 +898,13 @@ const PIN_CACHE_HINT = {
 };
 
 /**
+ * A line's last request, its recipe's or, where no recipe stands, its pin's last use. The Last request cell draws it
+ * and the Agent cell's link opens the narrowest range that covers it, so the log the link opens holds the request the
+ * cell names.
+ */
+const lineLastRequestAt = ({ pin, recipe }: SessionLine): string | null => (recipe !== null ? recipe.lastRequestAt : (pin?.lastUsedAt ?? null));
+
+/**
  * One line of an expanded row. A recipe's line reads its own model, account, TTL, probes and state as the mod reports
  * them, and its pin's Effort and Context, dashes where it stands on none. A pin no recipe stands on reads its own
  * figures, its TTL as the time left on its cache, its last use as its last request, a dash in each probe cell and a
@@ -906,7 +915,7 @@ function AgentLine({ accountById, line, now, requestsTo }: { accountById: Readon
   const context = contextCell(pin?.lastInputTokens ?? null);
   const accountId = a !== null ? a.accountId : (pin?.accountId ?? null);
   const ttlMs = a !== null ? a.ttlSeconds * 1000 : pin === null ? null : pinTtlMs(pin, now);
-  const lastRequestAt = a !== null ? a.lastRequestAt : (pin?.lastUsedAt ?? null);
+  const lastRequestAt = lineLastRequestAt(line);
   const cache = pin?.warm ? 'warm' : 'cold';
   return (
     <div className="agents__row">

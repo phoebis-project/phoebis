@@ -22331,8 +22331,9 @@ for (const path of ['/models', '/models#claude-sonnet-4-5']) {
 }
 
 {
-  // The page reads the overview, the recipes and the sessions again at its one auto reload interval, 5 s at the start,
-  // which keeps a session that is still sending requests on it, and the accounts, keys, pools and settings once.
+  // The page reads the accounts, the overview, the recipes and the sessions again at its one auto reload interval, 5 s
+  // at the start, which keeps a session that is still sending requests on it and a line's slow-down chip current, and
+  // the keys, pools and settings once.
   const page = await mount('/sessions', { now: CLOCK_ORIGIN });
   const spies = Object.fromEntries(['getKeepaliveOverview', 'listKeepaliveRecipes', 'listSessions', 'listAccounts', 'listKeys', 'listPools', 'getSettings'].map((name) => [name, countCalls(name)]));
   for (let i = 0; i < 4; i += 1) {
@@ -22342,8 +22343,8 @@ for (const path of ['/models', '/models#claude-sonnet-4-5']) {
   const counts = Object.fromEntries(Object.entries(spies).map(([name, spy]) => [name, spy.calls.length]));
   for (const spy of Object.values(spies)) spy.restore();
   results.push({
-    name: '/sessions reads the overview, the recipes and the sessions at the one interval and the other reads once',
-    ok: JSON.stringify(counts) === JSON.stringify({ getKeepaliveOverview: 4, listKeepaliveRecipes: 4, listSessions: 4, listAccounts: 0, listKeys: 0, listPools: 0, getSettings: 0 }),
+    name: '/sessions reads the accounts, the overview, the recipes and the sessions at the one interval and the other reads once',
+    ok: JSON.stringify(counts) === JSON.stringify({ getKeepaliveOverview: 4, listKeepaliveRecipes: 4, listSessions: 4, listAccounts: 4, listKeys: 0, listPools: 0, getSettings: 0 }),
     missing: [JSON.stringify(counts)],
   });
   page.unmount();
@@ -24072,6 +24073,32 @@ const CARD_VIEWS = [
       name: '/sessions an Agent cell links to the request log on the session and the agent where the session has traffic',
       ok: first !== undefined && first.lastRequestAt !== null && links.length >= 3 && off.length === 0,
       missing: links.map((l) => JSON.stringify(l)),
+    });
+  }
+  {
+    // An agent whose last request is older than its session's lists only in a range that covers its own, so a line's
+    // link reads the line's instant and the row's link the session's. Every line sits inside the hour at the story's
+    // instant, so the page mounts where the hour less the link's minute of headroom ends halfway between the session's
+    // last request and its line older by the most, a recipe's.
+    const MINUTE = 60_000;
+    const HOUR = 60 * MINUTE;
+    const drawn = recipes.filter((r) => r.lastRequestAt !== null && !(r.agentState === 'released' && r.cause === 'agent_released'));
+    const pairs = listed.flatMap((s) => (s.historical || s.lastRequestAt === null ? [] : drawn.filter((r) => r.keyId === s.keyId && r.sessionId === s.sessionId).map((line) => ({ gap: Date.parse(s.lastRequestAt) - Date.parse(line.lastRequestAt), line, session: s }))));
+    const widest = pairs.sort((a, b) => b.gap - a.gap)[0];
+    const at = widest === undefined ? CLOCK_ORIGIN : Date.parse(widest.line.lastRequestAt) + HOUR - MINUTE + Math.floor(widest.gap / 2);
+    const page = await mount('/sessions', { now: at });
+    const tr = await open(page, widest?.session);
+    const line = linesOf(page, tr).lines.find((l) => l.agent === widest?.line.agentId);
+    tr?.querySelector('.menu__trigger')?.click();
+    await page.settle(120);
+    [...(tr?.querySelectorAll('.menu__list button') ?? [])].find((b) => b.textContent?.trim() === 'View in requests')?.click();
+    await page.settle(300);
+    const read = { line: new URL(line?.agentHref ?? '', 'http://console.test').searchParams.get('range'), row: new URLSearchParams(page.location().search).get('range') };
+    page.unmount();
+    results.push({
+      name: "/sessions an agent line's link opens the range that covers the line's own last request and the row's link the session's",
+      ok: widest !== undefined && widest.gap >= MINUTE && JSON.stringify(read) === JSON.stringify({ line: '6h', row: '1h' }),
+      missing: [`line ${widest?.line.agentId} of session ${widest?.session.sessionId}, ${widest?.gap} ms before the session's last request`, JSON.stringify(read)],
     });
   }
   {
