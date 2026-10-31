@@ -900,9 +900,9 @@ pub(crate) struct BurnPoint {
 // naming exactly one account, and read null otherwise, since shares of different accounts' windows do not add. A
 // point whose shares answer knows its account's funding, so `unit` follows the same gate. The Pro-week figure adds
 // across accounts and tiers, so it answers under every grouping. A bucket holding a row the table cannot price reads
-// null on that window and in the figure, so a partial sum never reads as its share. Each point's `tokens` counts every token
-// type of the bucket's rows, whatever the tables priced, so a reader tells an idle bucket from one whose traffic no
-// table priced.
+// null on that window and in the figure, so a partial sum never reads as its share. Each point's `tokens` counts every
+// token type of the bucket's rows, whatever the tables priced, so a reader tells an idle bucket from one whose traffic
+// no table priced.
 pub(crate) async fn burn(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,

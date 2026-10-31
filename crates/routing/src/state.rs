@@ -701,7 +701,8 @@ impl RateTable {
             self.rows.get_key_value(k).map(|(key, _)| key)
         });
         let Some(key) = key else {
-            // An id no file lists has no weight, so it prices at nothing and its pin ranks last.
+            // An id the table does not list reads `fallback`: no rate on the cost model's tables, where its pin ranks
+            // last, and the dearest listed rate on the dollar tables.
             return self.fallback;
         };
         match self.long_context.get(key) {

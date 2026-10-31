@@ -728,9 +728,9 @@ impl SubscriptionCosts {
         Some(units / capacity / self.factor_at(priced, entrypoint, at) / divisor)
     }
 
-    /// The cost model's units `usage` spends on `window` at the band of `at`, before any capacity: the weight times
-    /// the type multipliers over the band's factor and the model week's divisor. `None` where the model has no weight
-    /// on the window or the window prices nothing.
+    /// The units `usage` costs on `window` in this revision: the model's weight on the window times each type's
+    /// multiplier, over the band's factor at `at` and the model week's divisor, before any capacity. `None` where the
+    /// model has no weight on the window or the window prices nothing.
     pub fn units_at(
         &self,
         window: &str,
@@ -869,8 +869,8 @@ impl SubscriptionCosts {
                 output: rate(output),
             }
         };
-        // A listed model without a weight keeps a row of no rates, so `rates_for` reads it before `fallback` and the pin
-        // ranks last, as the meter prices it at nothing.
+        // A listed model without a weight keeps a row of no rates, so `rates_for` reads it before `fallback` and the
+        // pin ranks last, as the meter prices it at nothing.
         let rows = models
             .into_iter()
             .map(|model| {

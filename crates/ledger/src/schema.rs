@@ -385,8 +385,8 @@ CREATE TABLE IF NOT EXISTS routing_conditions (
 );
 -- One row per completed 5-hour, 7-day and Fable window of an account: the rise its readings showed against the share
 -- the router priced for its own plan-funded attempts between those readings. The hourly fold reads the newest of each
--- window for the meter's drift. Every open runs this baseline, so it keeps the `estimated` count the second migration
--- drops, which a fresh file then loses as a stamped one does.
+-- window for the meter's drift. Every open runs this baseline, so it keeps the `estimated` count the migration to
+-- version 2 drops, which a fresh file then loses as a stamped one does.
 CREATE TABLE IF NOT EXISTS window_reconciliations (
   account_id TEXT NOT NULL,
   window TEXT NOT NULL,

@@ -31,7 +31,8 @@ const WEEKDAY_OFF_PEAK: i64 = 1_790_020_800_000;
 const WEEKDAY_BAND_OPENS: i64 = 1_789_992_000_000;
 const MAX_20X: &str = "default_claude_max_20x";
 const PRO: &str = "default_claude_ai";
-/// 2027-01-01 at 00:00 UTC, the read's instant, after every row these cases plant, so the anchor row in force then divides the Pro-week figure.
+/// 2027-01-01 at 00:00 UTC, the read's instant, after every row these cases plant, so the anchor row in force then
+/// divides the Pro-week figure.
 const NOW: i64 = 1_798_761_600_000;
 
 /// The lists the readers price at, the ones `insert_request` folds with: a reader prices a row's counts at read
@@ -2363,10 +2364,10 @@ async fn an_unpriced_row_nulls_the_window_it_could_not_price_and_leaves_the_othe
     assert!(close(cost.get(FIVE_HOUR), want), "{cost:?} vs {want}");
 }
 
-/// A weighted and an unweighted plan row of an account whose tier the test cost model sizes, beside a billed row of
-/// another account: the day, the pool's traffic and the account breakdown answer the same dollars and Pro-week figure
-/// whether or not the read answers the shares, each figure the test tables' own to the bit, and the read that answers
-/// the shares answers them.
+/// A weighted plan row of an account whose tier the test cost model sizes, an unweighted plan row of a second account
+/// and a billed row of a third: the day, the pool's traffic and the account breakdown answer the same dollars and
+/// Pro-week figure whether or not the read answers the shares, each figure the test tables' own to the bit, and the
+/// read that answers the shares answers them.
 #[tokio::test]
 async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_dollars_and_figures() {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
@@ -2376,7 +2377,7 @@ async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_doll
     for (id, account, account_kind, model, counts) in [
         ("r-plan", "a", "oauth", "claude-opus-5-5", usage(10, 1)),
         // Opus 5 has no weight in the test cost model, so it prices nothing whatever its model tier weighs.
-        ("r-unweighted", "a", "oauth", "claude-opus-5", usage(10, 0)),
+        ("r-unweighted", "c", "oauth", "claude-opus-5", usage(10, 0)),
         ("r-billed", "b", "api_key", "claude-opus-5-5", usage(20, 0)),
     ] {
         plant_share(
@@ -2451,34 +2452,48 @@ async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_doll
         ("a with the shares", of_group(&shares_read, "a")),
         ("b without the shares", of_group(&dollar_read, "b")),
         ("b with the shares", of_group(&shares_read, "b")),
+        ("c without the shares", of_group(&dollar_read, "c")),
+        ("c with the shares", of_group(&shares_read, "c")),
     ];
-    // Account a's Opus 5 row carries tokens and no weight, so a's figure and the day's read none beside their dollars,
-    // $0.00015 and $0.00005 for a. Account b's 20 input tokens of Opus 5.5 are billed, $0.0002, and its figure reads
-    // the zero of a group with no plan row.
-    let both = (0.0004, 0.0002, None);
-    let a = (0.0002, 0.0, None);
+    // Account a's Opus 5.5 row weighs 40 units, 10 input tokens and 1 output token at weight 2, 0.8 of the Pro week's
+    // 50, and $0.00015, its two cells' sum one bit above. Account b's 20 input tokens of Opus 5.5 are billed, $0.0002,
+    // and its figure reads the zero of a group with no plan row. Account c's Opus 5 row carries tokens and no weight,
+    // so c's figure and the day's read none beside their dollars, $0.00005 for c and $0.0004 for the day, one bit
+    // above.
+    let all = (0.0004000000000000001, 0.0002, None);
+    let a = (0.00015000000000000001, 0.0, Some(0.8));
     let b = (0.0002, 0.0002, Some(0.0));
+    let c = (0.00005, 0.0, None);
     assert_eq!(
         figures,
         [
-            ("the day", both),
-            ("the pool's bucket", both),
+            ("the day", all),
+            ("the pool's bucket", all),
             ("a without the shares", a),
             ("a with the shares", a),
             ("b without the shares", b),
             ("b with the shares", b),
+            ("c without the shares", c),
+            ("c with the shares", c),
         ]
     );
     assert_eq!(group(&dollar_read, "a").cost_shares, None);
-    let shares: Vec<(&str, f64)> = group(&shares_read, "a")
-        .cost_shares
-        .as_ref()
-        .expect("the shares read prices the sized tier")
-        .iter()
-        .map(|(window, share)| (*window, *share))
-        .collect();
+    let shares = |key: &str| -> Vec<(&str, f64)> {
+        group(&shares_read, key)
+            .cost_shares
+            .as_ref()
+            .expect("the shares read prices the sized tier")
+            .iter()
+            .map(|(window, share)| (*window, *share))
+            .collect()
+    };
     assert_eq!(
-        shares,
+        shares("a"),
+        [(FIVE_HOUR, 8.0), (SEVEN_DAY, 0.8)],
+        "the 40 units over Pro's windows of 5 and 50 units"
+    );
+    assert_eq!(
+        shares("c"),
         [],
         "the unweighted row leaves both of Pro's windows unpriced"
     );
@@ -4003,8 +4018,8 @@ async fn the_equivalent_split_s_four_kinds_sum_to_the_figure_and_the_cache_halve
     );
 }
 
-/// The probe rows and the wasted probes' own counts read in the Pro-week figure under every grouping, each priced at its
-/// own row's hour.
+/// The probe rows and the wasted probes' own counts read in the Pro-week figure under every grouping, each priced at
+/// its own row's hour.
 #[tokio::test]
 async fn the_probe_equivalent_prices_the_probe_rows_and_the_wasted_counts() {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());

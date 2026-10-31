@@ -42,9 +42,8 @@ pub(crate) struct Session {
     pub pinned: bool,
     /// The pin's typed burn per hour, decayed to the read with its pool's `burn_average_seconds` as a shedding round
     /// decays it, priced in `burn_unit`: the share of the account's own 5-hour window on plan quota, dollars
-    /// otherwise, null when the account's tier is unknown, when the model has no weight on the 5-hour window, a model
-    /// without a weight, or when the account tier has no capacity on it. Null as well on a pinned row whose account
-    /// has left the registry.
+    /// otherwise, null when the account's tier is unknown, when the model has no weight on the 5-hour window, or when
+    /// the account tier has no capacity on it. Null as well on a pinned row whose account has left the registry.
     pub burn: Option<f64>,
     /// `window_share` or `usd`, also null when the pin's account has left the registry, with no kind left to pick
     /// a unit from.
@@ -351,7 +350,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             json!({
                 "key_id": p.key_id, "key_generation": generation, "session_id": p.session_id, "agent_id": p.agent_id, "model": p.model, "account_id": p.account_id, "epoch": p.epoch,
                 "created_at": created_at, "last_used_at": p.last_used_at, "last_request_at": null, "requests": null, "pinned": true,
-                "burn": burn, "burn_unit": unit, "burn_equivalent": equivalent, "burn_at": p.burn_at, "runway_ms": standing.runway_ms, "runway_bounded": standing.runway_bounded, "cache_ttl_ms": p.cache_ttl_ms,
+                "burn": burn, "burn_unit": unit, "burn_equivalent": equivalent, "burn_at": p.burn_at,
+                "runway_ms": standing.runway_ms, "runway_bounded": standing.runway_bounded,
+                "cache_ttl_ms": p.cache_ttl_ms,
                 "speed": standing.speed,
                 "cycle_ms": standing.cycle_ms,
                 "last_input_tokens": p.last_input_tokens, "effort": standing.effort, "last_refresh_at": p.last_refresh_at, "shed_from": p.shed_from, "shed_reason": p.shed_reason,
@@ -368,7 +369,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 json!({
                     "key_id": a.key_id, "key_generation": a.key_generation, "session_id": a.session_id, "agent_id": null, "model": a.model, "account_id": null, "epoch": null,
                     "created_at": created_at, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
-                    "burn": null, "burn_unit": null, "burn_equivalent": null, "burn_at": null, "runway_ms": null, "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
+                    "burn": null, "burn_unit": null, "burn_equivalent": null, "burn_at": null, "runway_ms": null,
+                    "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
                     "speed": null,
                     "cycle_ms": null,
                     "last_refresh_at": null, "shed_from": null, "shed_reason": null,
@@ -398,7 +400,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             json!({
                 "key_id": key.0, "key_generation": key.1, "session_id": key.2, "agent_id": null, "model": null, "account_id": null, "epoch": null,
                 "created_at": created.get(key), "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
-                "burn": null, "burn_unit": null, "burn_equivalent": null, "burn_at": null, "runway_ms": null, "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
+                "burn": null, "burn_unit": null, "burn_equivalent": null, "burn_at": null, "runway_ms": null,
+                "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
                 "speed": null,
                 "cycle_ms": null,
                 "last_refresh_at": null, "shed_from": null, "shed_reason": null,

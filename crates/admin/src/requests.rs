@@ -158,9 +158,9 @@ pub(crate) struct RequestSummary {
     /// Else an object keyed by the account's window ids, `five_hour`, `seven_day` and the model's own week where it
     /// has one, each the serving attempt's share of that window under the account tier the attempt recorded, priced
     /// at read time on the cost revision in force at the request's receipt with the peak band read at the attempt's
-    /// finish, or null where the account tier has no capacity on that window or the model has no weight there, a
-    /// model without a weight. An empty object for an attempt that recorded no account tier. A free call under
-    /// `share_reason` lists the windows its account tier sizes alone, each at zero.
+    /// finish, or null where the account tier has no capacity on that window or the model has no weight there. An
+    /// empty object for an attempt that recorded no account tier. A free call under `share_reason` lists the windows
+    /// its account tier sizes alone, each at zero.
     pub cost_shares: Option<BTreeMap<String, Option<f64>>>,
     /// Null for a request billed in dollars, as `cost_shares`, and for a plan-funded request the cost model cannot
     /// price, a model without a weight. Else the serving attempt's usage as the share of the Pro 7-day window, the
