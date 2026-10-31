@@ -70,12 +70,12 @@ pub use query::{
     pin_migrations_by_reason, placements, pool_traffic, recent_events_of_kind, recent_gaps,
     request_by_id, request_events, request_totals, revision_spans, rewrite_series,
     routing_conditions, series_paged, session_activity, session_burn_series, session_identities,
-    BudgetedMember, BurnPoint, CacheEquivalent, CacheFacts, CacheShare, Dashboard, DecisionListRow,
+    BudgetedMember, BurnPoint, CacheEquivalent, CacheFacts, Dashboard, DecisionListRow,
     EventListRow, FundingFilter, GroupRow, GuardrailCountRow, HourlyWindowSample, LiveKeys,
-    ParkedSummary, PlacementRow, ProbeCounts, ProbeEquivalent, ProbeShare, RequestFilter,
-    RollupFilter, RoutingCondition, RoutingLogCursor, RoutingLogFilter, RoutingLogPage,
-    RoutingLogRow, SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, SharePricing, Span,
-    Totals, TrafficBucket, DECISION_KINDS, EVENT_KINDS, GROUP_BYS, GUARDRAIL_BLOCKED_BYTES_SQL,
+    ParkedSummary, PlacementRow, ProbeCounts, ProbeEquivalent, RequestFilter, RollupFilter,
+    RoutingCondition, RoutingLogCursor, RoutingLogFilter, RoutingLogPage, RoutingLogRow,
+    SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, SharePricing, Span, Totals,
+    TrafficBucket, DECISION_KINDS, EVENT_KINDS, GROUP_BYS, GUARDRAIL_BLOCKED_BYTES_SQL,
     GUARDRAIL_COUNTS_SQL, MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
 };
 pub use query::{guardrail_sample_page, request_body, SampleRow, SampleSubject};

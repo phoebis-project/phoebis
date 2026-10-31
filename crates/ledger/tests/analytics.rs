@@ -3044,7 +3044,6 @@ async fn the_probe_inclusion_rule_governs_the_request_shares() {
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
     let inference_share = fable_shares(&tables, inference)[FIVE_HOUR].unwrap();
     let probe_share = fable_shares(&tables, probe)[FIVE_HOUR].unwrap();
-    let probe_figure = equivalent_of("claude-fable-5-1", probe, WEEKDAY_OFF_PEAK);
     let read = |filter: RollupFilter| {
         let db = db.clone();
         async move {
@@ -3056,29 +3055,20 @@ async fn the_probe_inclusion_rule_governs_the_request_shares() {
                     .and_then(|m| m.get(FIVE_HOUR))
                     .copied(),
                 a.plan_requests,
-                a.probe_equivalent.as_ref().map(|p| p.cost),
             )
         }
     };
-    let (cost, requests, probe_cost) = read(RollupFilter::default()).await;
+    let (cost, requests) = read(RollupFilter::default()).await;
     assert!(
         close(cost.as_ref(), inference_share) && requests == Some(1),
         "with probes left out the request shares read the inference row alone: {cost:?}, {requests:?}"
     );
-    assert!(
-        close(probe_cost.as_ref(), probe_figure),
-        "while the probe figure reads the probe row: {probe_cost:?} vs {probe_figure}"
-    );
-    let (cost, requests, probe_cost) = read(with_probes()).await;
+    let (cost, requests) = read(with_probes()).await;
     assert!(
         close(cost.as_ref(), inference_share + probe_share) && requests == Some(2),
         "with probes counted the probe row joins the request shares: {cost:?}, {requests:?}"
     );
-    assert!(
-        close(probe_cost.as_ref(), probe_figure),
-        "and the probe figure stays the probe row's: {probe_cost:?}"
-    );
-    let (cost, requests, _) = read(RollupFilter {
+    let (cost, requests) = read(RollupFilter {
         kinds: vec!["probe".into()],
         ..RollupFilter::default()
     })

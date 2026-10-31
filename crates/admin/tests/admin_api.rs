@@ -5344,9 +5344,17 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         "the plan pin's plain copy as its Pro-week figure per hour, on a weighted model: {s1}"
     );
     assert_eq!(
-        (s2.get("burn_equivalent"), s2.get("estimated")),
-        (Some(&serde_json::Value::Null), None),
-        "a pin billed in dollars has no window equivalent, whatever its model: {s2}"
+        (
+            s2.get("burn_equivalent"),
+            s2.get("burn_window"),
+            s2.get("estimated")
+        ),
+        (
+            Some(&serde_json::Value::Null),
+            Some(&serde_json::Value::Null),
+            None
+        ),
+        "a pin billed in dollars has no window equivalent and names no window, whatever its model: {s2}"
     );
     // Pushed into overage with a reset ahead of now: the same pin reads the dollar average instead.
     parts
@@ -6624,7 +6632,7 @@ async fn a_pin_whose_account_lacks_the_five_hour_window_reads_its_burn_on_the_we
     );
 }
 
-/// A clean poll of `business` at `observed_at` carrying `windows`, each at a third of its allowance.
+/// A clean poll of `business` at `observed_at` carrying `windows`, each at 30% of its allowance.
 fn poll_of(windows: &[&str], observed_at: i64) -> phoebis_routing::Report {
     let mut sample = phoebis_routing::UtilizationSample {
         observed_at,

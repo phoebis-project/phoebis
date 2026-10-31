@@ -20,7 +20,7 @@ use crate::db::{
 use crate::histogram::Histogram;
 use crate::plan::{
     entrypoint_of_client, free_equivalent, free_shares, funding_of, price_equivalent, price_shares,
-    CostRevisions, Funding, PlanTables, WindowShares,
+    CostRevisions, Funding, PlanTables,
 };
 use crate::price::{price_row, Priced, RowKey};
 use crate::pricing::{effective_instant, prompt_tokens, Band, PriceRevisions, Speed};
@@ -1751,22 +1751,6 @@ pub fn names_one_account(accounts: &[String]) -> bool {
     accounts.iter().collect::<BTreeSet<_>>().len() == 1
 }
 
-/// The read and write halves of a window's cache share, as fractions of the window.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-pub struct CacheShare {
-    pub read: f64,
-    pub write: f64,
-}
-
-/// The probe rows' share of a window and the wasted probes' part of it, the wasted probes' own counts priced on the
-/// window. `wasted` is `None` while the group's plan-funded rows count no wasted probe, and on a window a wasted count
-/// could not be priced on.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-pub struct ProbeShare {
-    pub cost: f64,
-    pub wasted: Option<f64>,
-}
-
 /// The read and write halves of a group's plan-funded cache in the Pro-week figure.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct CacheEquivalent {
@@ -2340,13 +2324,18 @@ impl ShareSums {
     /// row's own hour under `tier` and the regime the row's `client` names, so a group that mixes clients prices each
     /// row under its own.
     fn add(&mut self, row: &RollupRow, tier: &str, tables: &PlanTables, counted: bool) {
-        let free = row.classifier == Classifier::Client.as_str();
-        self.add_priced(row, counted, |usage| {
-            let at = row.hour * 1_000;
-            let entrypoint = entrypoint_of_client(&row.client);
-            if free {
-                return free_shares(tables, entrypoint, tier, &row.canonical_model, at);
-            }
+        let usage = row.usage();
+        // A failed request books a row with no token and an accounting row carries the wasted counts alone, while the
+        // model refuses a model it has no weight for before it reads the usage: such a row would null a priced window
+        // for a charge of nothing.
+        if !counted || tokens_of(usage) == 0 {
+            return;
+        }
+        let at = row.hour * 1_000;
+        let entrypoint = entrypoint_of_client(&row.client);
+        let shares = if row.classifier == Classifier::Client.as_str() {
+            free_shares(tables, entrypoint, tier, &row.canonical_model, at)
+        } else {
             price_shares(
                 tables,
                 entrypoint,
@@ -2356,24 +2345,8 @@ impl ShareSums {
                 at,
                 at,
             )
-        });
-    }
-
-    /// `add` with the pricer passed in.
-    fn add_priced(
-        &mut self,
-        row: &RollupRow,
-        counted: bool,
-        price: impl Fn(PinUsage) -> WindowShares,
-    ) {
-        let usage = row.usage();
-        // A failed request books a row with no token and an accounting row carries the wasted counts alone, while the
-        // model refuses a model it has no weight for before it reads the usage: such a row would null a priced window
-        // for a charge of nothing.
-        if !counted || tokens_of(usage) == 0 {
-            return;
-        }
-        for (window, share) in price(usage) {
+        };
+        for (window, share) in shares {
             self.cost.entry(window).or_default().add(share);
         }
     }
