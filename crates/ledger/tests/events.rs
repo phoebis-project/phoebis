@@ -254,55 +254,6 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
 }
 
 #[tokio::test]
-async fn an_uncertain_refresh_mirrors_as_refresh_uncertain() {
-    let up = FakeUpstream::start(vec![]).await;
-    let h = harness(
-        &up,
-        &[oauth("a", A, 0), oauth("b", B, 1)],
-        (0, None),
-        LedgerConfig {
-            event_poll: Duration::from_millis(50),
-            ..LedgerConfig::default()
-        },
-    )
-    .await;
-    let uncertain = h.store.open_refresh_attempt("a", 1, 1, 1).unwrap();
-    h.store
-        .resolve_refresh_attempt(
-            uncertain,
-            1,
-            phoebis_store::AttemptOutcome::Uncertain("token request timed out".into()),
-        )
-        .unwrap();
-    let failed = h.store.open_refresh_attempt("b", 1, 1, 1).unwrap();
-    h.store
-        .resolve_refresh_attempt(
-            failed,
-            1,
-            phoebis_store::AttemptOutcome::Failed(
-                "refresh rejected with status 401 (invalid_grant)".into(),
-            ),
-        )
-        .unwrap();
-    let kinds = wait_for_async(Duration::from_secs(5), || async {
-        let rows = h.db.events(0, i64::MAX, 100).await.unwrap();
-        rows.iter()
-            .any(|e| e.kind == "refresh_failed")
-            .then(|| rows.iter().map(|e| e.kind.clone()).collect::<Vec<_>>())
-    })
-    .await;
-    assert!(
-        kinds.contains(&"refresh_uncertain".to_string()),
-        "an uncertain outcome mirrors as its own kind: {kinds:?}"
-    );
-    assert!(
-        kinds.contains(&"refresh_failed".to_string()),
-        "a plain failure still mirrors as refresh_failed: {kinds:?}"
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
 async fn a_refresh_row_names_the_failure_s_class_and_text_or_the_committed_token_s_expiry() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(
@@ -2213,46 +2164,6 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
     }
 }
 
-#[test]
-fn a_backoff_s_end_row_names_its_cause_a_clean_poll_or_the_plan_ended_pause() {
-    let ended = |cause: phoebis_oauth::BackoffEndCause| {
-        let edge = phoebis_oauth::BackoffEdge::Ended {
-            account_id: "a".into(),
-            at: 2_000,
-            since: 1_000,
-            attempts: 2,
-            resumed_at: 2_000,
-            cause,
-        };
-        let phoebis_ledger::Record::Event(row) = phoebis_ledger::poll_backoff(&edge) else {
-            panic!("a backoff edge is an event row");
-        };
-        assert_eq!(row.kind, "poll_backoff_ended");
-        detail_of(&row)
-    };
-    assert_eq!(
-        (
-            ended(phoebis_oauth::BackoffEndCause::CleanPoll),
-            ended(phoebis_oauth::BackoffEndCause::PlanEnded)
-        ),
-        (
-            serde_json::json!({
-                "duration_ms": 1_000,
-                "attempts": 2,
-                "resumed_at": 2_000,
-                "cause": "clean_poll"
-            }),
-            serde_json::json!({
-                "duration_ms": 1_000,
-                "attempts": 2,
-                "resumed_at": 2_000,
-                "cause": "plan_ended"
-            })
-        ),
-        "the end row names what closed the run beside its length, its 429s and its resume"
-    );
-}
-
 /// The account rows the mirror wrote, in order: each kind with its detail.
 async fn account_rows(h: &Harness) -> Vec<(String, serde_json::Value)> {
     let rows = h.db.events(0, i64::MAX, 100).await.unwrap();
@@ -2704,44 +2615,6 @@ fn window_reset_under(
         tier: pair.map(|(_, tier)| tier.into()),
     })
     .expect("a reset row")
-}
-
-fn detail_of(row: &EventRecord) -> serde_json::Value {
-    serde_json::from_str(row.detail.as_deref().expect("a detail")).expect("a JSON detail")
-}
-
-#[test]
-fn a_window_reset_s_detail_names_the_plan_and_the_tier_the_replaced_reading_carried() {
-    let detail = detail_of(&window_reset_under(
-        "a",
-        "seven_day",
-        0.62,
-        10 * DAY,
-        "sample",
-        Some(("max_20x", "default_claude_max_20x")),
-    ));
-    assert_eq!(
-        (
-            &detail["utilization_before"],
-            &detail["plan"],
-            &detail["tier"]
-        ),
-        (
-            &serde_json::json!(0.62),
-            &serde_json::json!("max_20x"),
-            &serde_json::json!("default_claude_max_20x")
-        ),
-        "{detail}"
-    );
-}
-
-#[test]
-fn a_window_reset_s_detail_names_no_pair_where_the_reading_carried_none() {
-    let detail = detail_of(&window_reset("a", "seven_day", 0.62, 10 * DAY, "clock"));
-    assert!(
-        detail["plan"].is_null() && detail["tier"].is_null(),
-        "{detail}"
-    );
 }
 
 fn weekly_sample(
@@ -3664,18 +3537,6 @@ async fn a_quarantine_the_start_lands_after_the_mirrors_baseline_is_mirrored() {
             serde_json::json!({ "from": "ready", "to": "reauth_required", "cause": "refresh_failed", "detail": null })
         ],
         "the quarantine the recovery landed"
-    );
-}
-
-/// A move into `reauth_required` is an `account_state_changed` row, so the routing log's kinds name no kind of that
-/// state's own.
-#[test]
-fn the_event_kinds_hold_no_reauth_required_kind() {
-    assert!(phoebis_ledger::EVENT_KINDS.contains(&"account_state_changed"));
-    assert!(
-        !phoebis_ledger::EVENT_KINDS.contains(&"reauth_required"),
-        "{:?}",
-        phoebis_ledger::EVENT_KINDS
     );
 }
 

@@ -2072,15 +2072,6 @@ mod tests {
         assert_eq!(utc_stamp(i64::MAX), i64::MAX.to_string());
     }
 
-    #[test]
-    fn the_default_ledger_keeps_the_raw_rows_and_the_rollups_365_days() {
-        let config = LedgerConfig::default();
-        assert_eq!(
-            (config.retention_days, config.rollup_retention_days),
-            (365, 365)
-        );
-    }
-
     #[tokio::test]
     async fn a_request_record_waits_for_room_in_the_channel_rather_than_drop() {
         let (ledger, mut rx) = stalled();

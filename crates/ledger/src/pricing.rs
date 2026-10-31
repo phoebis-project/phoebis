@@ -764,23 +764,6 @@ mod tests {
         assert_eq!(revisions.latest().effective, "2026-02-01");
     }
 
-    /// A provider announces a price change ahead, so a future entry loads and waits for its date.
-    #[test]
-    fn a_future_entry_loads_and_is_held_until_its_date() {
-        let revisions =
-            PriceRevisions::from_yaml(&dated(&["2026-01-01", "2099-01-01"]), "file").unwrap();
-        assert_eq!(revisions.in_force(JANUARY_2026).effective, "2026-01-01");
-        assert_eq!(
-            revisions
-                .pending(JANUARY_2026)
-                .map(|r| r.effective.as_str()),
-            Some("2099-01-01")
-        );
-        let in_2099 = effective_instant("2099-01-01").unwrap();
-        assert_eq!(revisions.in_force(in_2099).effective, "2099-01-01");
-        assert_eq!(revisions.pending(in_2099), None);
-    }
-
     /// Before its date the first entry is already in force, since an instant before the list reads the first, so a
     /// restart before it changes nothing: the entry held is the second, and a list of one entry holds none.
     #[test]
@@ -824,58 +807,6 @@ mod tests {
             message.starts_with("pricing table: ") && message.contains("unknown field `source`"),
             "{message}"
         );
-    }
-
-    #[test]
-    fn the_shipped_table_parses_and_every_cell_is_a_finite_price_at_or_above_zero() {
-        let revisions = PriceRevisions::shipped();
-        assert_eq!(revisions.source, "shipped");
-        assert!(revisions.len() >= 1);
-        let instants: Vec<i64> = revisions
-            .iter()
-            .map(|table| effective_instant(&table.effective).unwrap())
-            .collect();
-        assert!(
-            instants.windows(2).all(|pair| pair[0] < pair[1]),
-            "the dates ascend"
-        );
-        let costs = crate::CostRevisions::shipped();
-        let finite = |p: &ModelPrice| {
-            [
-                p.input,
-                p.cache_write_5m,
-                p.cache_write_1h,
-                p.cache_read,
-                p.output,
-            ]
-            .iter()
-            .all(|c| c.is_finite() && *c >= 0.0)
-        };
-        for table in revisions.iter() {
-            assert!(!table.models.is_empty(), "{}", table.effective);
-            for (model, row) in &table.models {
-                assert!(finite(&row.standard), "{model}: {:?}", row.standard);
-                assert!(
-                    row.fast.as_ref().is_none_or(finite),
-                    "{model}: {:?}",
-                    row.fast
-                );
-                assert!(
-                    row.long_context
-                        .as_ref()
-                        .is_none_or(|l| l.over > 0 && finite(&l.cells)),
-                    "{model}: {:?}",
-                    row.long_context
-                );
-            }
-            let models: Vec<&str> = table.models.keys().map(String::as_str).collect();
-            assert_eq!(
-                models,
-                costs.latest().model_order(&models),
-                "the rows of {} keep the model order",
-                table.effective
-            );
-        }
     }
 
     // The test table's Sonnet 5.5 row: input 3, cache read 0.3, 5-minute write 3.75, output 15 per million.

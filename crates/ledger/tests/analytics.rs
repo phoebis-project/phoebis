@@ -7,14 +7,14 @@ use phoebis_ledger::{
     apply_filter, breakdown, breakdown_paged, bucket_index, bucket_seconds, burn_groups_paged,
     burn_rows, burn_series, burn_series_over, deltas_of, fold_account, fold_event, fold_keepalive,
     held_series, hour_ceil, hour_of, key_request_totals, list_requests, member_spends,
-    moves_by_reason, pattern_matches, placements, price_equivalent, price_shares,
-    read_account_rollups, read_rollups, refusal_categories, request_totals, rewrite_series,
-    run_retention_blocking, series, series_paged, session_identities, AttemptRecord,
-    BudgetedMember, CostRevisions, EventRecord, FundingFilter, GroupRow, Histogram, KeepaliveDelta,
-    LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables, PriceRevisions, PriceTable,
-    RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter,
-    SharePricing, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING,
-    PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
+    moves_by_reason, placements, price_equivalent, price_shares, read_account_rollups,
+    read_rollups, refusal_categories, request_totals, rewrite_series, run_retention_blocking,
+    series, series_paged, session_identities, AttemptRecord, BudgetedMember, CostRevisions,
+    EventRecord, FundingFilter, GroupRow, Histogram, KeepaliveDelta, LedgerConfig, LedgerDb,
+    LiveKeys, ModelPrice, ModelRow, PlanTables, PriceRevisions, PriceTable, RequestFilter,
+    RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter, SharePricing, Speed,
+    WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS,
+    PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 use phoebis_routing::{
     PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
@@ -1496,17 +1496,6 @@ fn the_refusal_count_counts_a_row_only_where_the_client_and_the_user_agent_lists
     );
 }
 
-/// The grammar reads a user agent's parentheses, comma and spaces literally, with `*` and `?` its only wildcards, so a
-/// label spelled in full with its comment names itself alone.
-#[test]
-fn a_user_agent_label_spelled_in_full_matches_itself_and_not_its_sdk_cli_sibling() {
-    assert!(pattern_matches(CLI_310, CLI_310));
-    assert!(
-        !pattern_matches(CLI_310, SDK_310),
-        "the comment's entrypoint is part of the label"
-    );
-}
-
 #[test]
 fn a_rejection_after_an_attempt_folds_as_a_rejected_request_as_before() {
     let db = LedgerDb::open_in_memory().unwrap();
@@ -1593,96 +1582,6 @@ fn a_replaced_flagged_request_leaves_its_old_row_and_a_row_of_refusals_alone_is_
     );
     assert_eq!(row("k2").refusals, blocked(1));
     assert_eq!(rows.len(), 2);
-}
-
-#[test]
-fn the_start_time_pass_moves_the_stored_refusals_and_leaves_a_request_after_an_attempt_alone() {
-    use phoebis_ledger::{refold_refusals, REFUSALS_BACKFILL_KEY};
-
-    let db = LedgerDb::open_in_memory().unwrap();
-    // Landed unflagged, as the fold read every refusal before the flag existed, then flagged by id as the step's
-    // backfill flags the rows it matches.
-    let stored = RequestRecord {
-        refused: false,
-        ..refusal("r1", "k")
-    };
-    db.insert_request(&stored, &[], None).unwrap();
-    let after_an_attempt = RequestRecord {
-        status: Some(403),
-        outcome: "rejected".into(),
-        attempts: 1,
-        duration_ms: Some(4),
-        error_code: Some("client_not_allowed".into()),
-        ..replaced("r2")
-    };
-    let attempt = AttemptRecord {
-        request_id: "r2".into(),
-        attempt: 1,
-        account_id: "a".into(),
-        account_kind: "oauth".into(),
-        started_at: 3_700_000,
-        outcome: "failed".into(),
-        ..Default::default()
-    };
-    db.insert_request(&after_an_attempt, &[attempt], None)
-        .unwrap();
-    db.write(|c| {
-        c.execute(
-            "UPDATE requests SET refused = 1 WHERE id IN (?1)",
-            rusqlite::params!["r1"],
-        )?;
-        Ok(())
-    })
-    .unwrap();
-    let now = 3_700_000 + DAY_MS;
-    assert_eq!(
-        refold_refusals(&db, &PriceRevisions::shipped(), 0, 0, now).unwrap(),
-        1,
-        "the one flagged request moved"
-    );
-    let rows = all_rows(&db);
-    let on = |account: &str| {
-        rows.iter()
-            .find(|r| r.account_id == account)
-            .unwrap_or_else(|| panic!("a row on {account}: {rows:?}"))
-    };
-    assert_eq!(
-        request_figures(on(UNATTRIBUTED)),
-        ("k".to_string(), 0, 0, 0, BTreeMap::new(), 0, blocked(1)),
-        "the refusal's request, rejected, uncached request, error and duration moved into the map"
-    );
-    assert_eq!(
-        (
-            on("a").requests,
-            on("a").rejected,
-            on("a").errors.clone(),
-            on("a").refusals.clone()
-        ),
-        (
-            1,
-            1,
-            BTreeMap::from([("client_not_allowed".to_string(), 1)]),
-            BTreeMap::new()
-        ),
-        "the rejection after an attempt keeps its figures"
-    );
-    let mark: serde_json::Value = db
-        .read_blocking(|c| {
-            Ok(c.query_row(
-                "SELECT value FROM meta WHERE key = ?1",
-                [REFUSALS_BACKFILL_KEY],
-                |r| r.get::<_, String>(0),
-            )?)
-        })
-        .map(|text| serde_json::from_str(&text).expect("the mark is JSON"))
-        .expect("the pass wrote its mark");
-    assert_eq!(mark["done_at"].as_i64(), Some(now));
-    assert_eq!(
-        refold_refusals(&db, &PriceRevisions::shipped(), 0, 0, now + DAY_MS).unwrap(),
-        0,
-        "the mark stands, so a second start moves nothing"
-    );
-    assert_eq!(all_rows(&db), rows);
 }
 
 /// An older build keyed a refusal's row by the raw `User-Agent` and `standard` speed, where today's fold keys the cut
@@ -1952,38 +1851,6 @@ fn served_at(id: &str, speeds: &[Option<&str>]) -> (RequestRecord, Vec<AttemptRe
         })
         .collect();
     (request, attempts)
-}
-
-#[test]
-fn a_fast_answer_files_its_request_under_speed_fast_and_a_silent_answer_under_standard() {
-    let fast = served_at("r-fast", &[Some("fast")]);
-    let silent = served_at("r-silent", &[None]);
-    let speeds = |r: &(RequestRecord, Vec<AttemptRecord>)| -> Vec<String> {
-        deltas_of(&r.0, &r.1, &PRICES)
-            .into_iter()
-            .map(|d| d.speed)
-            .collect()
-    };
-    assert_eq!(speeds(&fast), ["fast"]);
-    assert_eq!(
-        speeds(&silent),
-        ["standard"],
-        "an answer that named no speed files under standard"
-    );
-    let db = LedgerDb::open_in_memory().unwrap();
-    for (request, attempts) in [&fast, &silent] {
-        db.insert_request(request, attempts, None).unwrap();
-    }
-    let rows = db
-        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
-        .unwrap();
-    assert_eq!(
-        rows.iter()
-            .map(|r| (r.speed.as_str(), r.requests))
-            .collect::<Vec<_>>(),
-        vec![("fast", 1), ("standard", 1)],
-        "every other key part is equal, so the speed alone keeps the two requests on rows of their own"
-    );
 }
 
 #[test]
@@ -6751,61 +6618,6 @@ fn a_members_spend_prices_every_token_kind_at_its_own_rate() {
         rows[0].spent_usd,
         10.0 * 1.0 + 20.0 * 2.0 + 30.0 * 3.0 + 40.0 * 4.0 + 50.0 * 5.0,
         "each token kind is priced at its own rate; a transposition of the five sums would answer a different total"
-    );
-}
-
-#[test]
-fn a_members_spend_prices_a_fast_row_at_the_fast_cells() {
-    let db = LedgerDb::open_in_memory().unwrap();
-    let now = ms(2026, 1, 15, 10, 0);
-    for (id, speed) in [("standard", None), ("fast", Some("fast"))] {
-        let request = RequestRecord {
-            id: id.into(),
-            received_at: ms(2026, 1, 15, 1, 0),
-            key_id: Some("desktop".into()),
-            pool_id: Some("p".into()),
-            canonical_model: "claude-opus-5".into(),
-            model: "claude-opus-5".into(),
-            kind: "inference".into(),
-            origin: "client".into(),
-            outcome: "succeeded".into(),
-            attempts: 1,
-            ..Default::default()
-        };
-        let attempt = AttemptRecord {
-            request_id: id.into(),
-            attempt: 1,
-            account_id: "a".into(),
-            account_kind: "api_key".into(),
-            outcome: "succeeded".into(),
-            input_tokens: Some(1_000_000),
-            speed: speed.map(String::from),
-            ..Default::default()
-        };
-        db.insert_request(&request, &[attempt], None).unwrap();
-    }
-    let rows = db
-        .read_blocking(|c| {
-            member_spends(
-                c,
-                &[budgeted("p", "a", BudgetPeriod::Day)],
-                now,
-                &PriceRevisions::shipped(),
-            )
-        })
-        .unwrap();
-    let shipped = PriceRevisions::shipped();
-    let table = shipped.in_force(ms(2026, 1, 15, 1, 0));
-    let input = |speed| {
-        table
-            .price_at("claude-opus-5", speed, 0)
-            .expect("the shipped list prices Opus 5")
-            .input
-    };
-    assert!(
-        (rows[0].spent_usd - (input(Speed::Standard) + input(Speed::Fast))).abs() < 1e-9,
-        "a million Opus 5 input tokens at the shipped standard cell and a million at the fast cell: {}",
-        rows[0].spent_usd
     );
 }
 

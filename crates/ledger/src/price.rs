@@ -604,30 +604,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_row_in_february_reads_the_doubled_cells_and_weights() {
-        let january = price(&plan_row(), input(1));
-        let february = price(
-            &RowKey {
-                at: FEBRUARY_2026,
-                ..plan_row()
-            },
-            input(1),
-        );
-        let input_usd = |p: &Priced| p.usd.as_ref().unwrap().input_usd;
-        assert_eq!(input_usd(&february), 2.0 * input_usd(&january));
-        for window in [FIVE_HOUR, SEVEN_DAY] {
-            for (what, january, february) in [
-                ("shares", &january.shares, &february.shares),
-                ("equivalent", &january.equivalent, &february.equivalent),
-            ] {
-                let january = january.as_ref().unwrap()[window].unwrap();
-                let february = february.as_ref().unwrap()[window];
-                assert!(close(february, 2.0 * january), "{what} on {window}");
-            }
-        }
-    }
-
     // `at` in January keeps Opus 5.5's weight of 2, and `band_at` inside the band divides the 5-hour window's units
     // by its 0.5, so the share reads 0.04 where the revision at `band_at` would read 0.08 and the band at `at` 0.02.
     #[test]

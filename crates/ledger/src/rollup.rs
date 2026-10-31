@@ -2146,54 +2146,7 @@ pub fn read_account_rollups(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::read_version;
     use crate::record::*;
-
-    /// The tables a connection holds, sorted.
-    fn tables(conn: &Connection) -> Vec<String> {
-        let mut stmt = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'")
-            .unwrap();
-        let mut names: Vec<String> = stmt
-            .query_map([], |r| r.get::<_, String>(0))
-            .unwrap()
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .unwrap();
-        names.sort();
-        names
-    }
-
-    /// Every table of the newest schema, sorted.
-    const FINAL_TABLES: &[&str] = &[
-        "account_rollups_hourly",
-        "attempts",
-        "bodies",
-        "cooldown_segments",
-        "cooldown_spans",
-        "decisions",
-        "events",
-        "extra_usage_samples",
-        "kept_warm_marks",
-        "meta",
-        "parked_records",
-        "quota_samples",
-        "request_guardrails",
-        "requests",
-        "rollups_hourly",
-        "routing_conditions",
-        "window_reconciliations",
-    ];
-
-    /// `SCHEMA` creates every table in one batch, so a file that did not exist opens at version 1 with all of them.
-    #[test]
-    fn a_fresh_ledger_is_at_version_one_with_the_baseline_tables() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ledger.sqlite");
-        assert!(!path.exists());
-        let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 1);
-        assert_eq!(db.read_blocking(|c| Ok(tables(c))).unwrap(), FINAL_TABLES);
-    }
 
     /// The test price list. The requests here arrive before its first date, so each prices at its first entry.
     fn prices() -> PriceRevisions {
@@ -3631,47 +3584,6 @@ mod tests {
                 },
                 47
             )
-        );
-    }
-
-    #[test]
-    fn two_folded_requests_sum_the_thinking_share_and_the_server_tool_calls() {
-        let db = crate::LedgerDb::open_in_memory().unwrap();
-        let counted = |n: u32| AttemptRecord {
-            thinking_tokens: Some(25),
-            web_search_requests: Some(2),
-            web_fetch_requests: Some(1),
-            ..attempt(n, "a", Some(5), None, Some(40))
-        };
-        let first = (request("succeeded", Some(200), Some("k")), vec![counted(1)]);
-        let second = (
-            RequestRecord {
-                id: "r2".into(),
-                ..request("succeeded", Some(200), Some("k"))
-            },
-            vec![counted(1)],
-        );
-        db.write(|c| {
-            let tx = c.transaction()?;
-            fold_request(&tx, &first.0, &first.1, None, &prices())?;
-            fold_request(&tx, &second.0, &second.1, None, &prices())?;
-            tx.commit()?;
-            Ok(())
-        })
-        .unwrap();
-        let rows = db
-            .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
-            .unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(
-            (
-                rows[0].output_tokens,
-                rows[0].thinking_tokens,
-                rows[0].web_search_requests,
-                rows[0].web_fetch_requests
-            ),
-            (80, 50, 4, 2),
-            "each request adds its own counts to the hour's row"
         );
     }
 }

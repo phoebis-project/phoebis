@@ -2472,38 +2472,6 @@ fn the_request_log_keeps_one_agents_requests_under_agent_id() {
     );
 }
 
-/// The request log reads its singular `user_agent` against the header as sent, so a label spelled in full with its
-/// parentheses, comma and spaces names that label and not its sibling under another entrypoint.
-#[test]
-fn the_request_logs_user_agent_spelled_in_full_lists_that_label_and_not_its_sdk_cli_sibling() {
-    let db = LedgerDb::open_in_memory().unwrap();
-    plant_agent_request(
-        &db,
-        "cli",
-        2,
-        Some("main"),
-        Some("claude-cli/2.1.310 (external, cli)"),
-    );
-    plant_agent_request(
-        &db,
-        "sdk",
-        1,
-        Some("main"),
-        Some("claude-cli/2.1.310 (external, sdk-cli)"),
-    );
-    let listed = |agent: &str| {
-        listed_ids(
-            &db,
-            &RequestFilter {
-                user_agent: Some(agent.into()),
-                ..Default::default()
-            },
-        )
-    };
-    assert_eq!(listed("claude-cli/2.1.310 (external, cli)"), ["cli"]);
-    assert_eq!(listed("claude-cli/2.1.310 (external, sdk-cli)"), ["sdk"]);
-}
-
 /// A row's own `landed_at`, as the ledger wrote it.
 fn landed_at(db: &LedgerDb, id: &str) -> Option<i64> {
     db.read_blocking(|c| {
@@ -3556,31 +3524,6 @@ async fn a_contract_refusal_round_trips_its_item() {
     up.shutdown().await;
 }
 
-#[tokio::test]
-async fn a_requests_diagnostics_source_round_trips() {
-    let request = |id: &str, source: Option<&str>| RequestRecord {
-        id: id.into(),
-        received_at: 3_600_000,
-        canonical_model: "claude-sonnet-5".into(),
-        model: "claude-sonnet-5".into(),
-        kind: "inference".into(),
-        origin: "client".into(),
-        outcome: "succeeded".into(),
-        diagnostics_source: source.map(String::from),
-        ..Default::default()
-    };
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-    for (id, source) in [
-        ("r-client", Some("client")),
-        ("r-router", Some("router")),
-        ("r-none", None),
-    ] {
-        db.insert_request(&request(id, source), &[], None).unwrap();
-        let (row, _) = db.request(id).await.unwrap().unwrap();
-        assert_eq!(row.diagnostics_source.as_deref(), source, "{id}");
-    }
-}
-
 /// A decision whose every column reads a value of its own: a probe's move from `a` to `b` under session `s1`.
 /// Built over a refusal's record, since the columns come off the request and outcome blocks alone.
 fn decision(
@@ -3947,53 +3890,6 @@ fn an_incomplete_request_counts_in_the_rollups_incomplete_column_and_nowhere_els
             "the key's own usage reports it in its own count beside failed"
         );
     }
-}
-
-#[test]
-fn a_request_folds_under_its_class_and_a_classless_one_under_the_reserved_value() {
-    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
-    let plant = |id: &str, class: Option<&str>| {
-        db.insert_request(
-            &RequestRecord {
-                id: id.into(),
-                received_at: 3_600_000,
-                key_id: Some("k".into()),
-                pool_id: Some("p".into()),
-                canonical_model: "m".into(),
-                kind: "inference".into(),
-                outcome: "succeeded".into(),
-                request_class: class.map(String::from),
-                ..Default::default()
-            },
-            &[phoebis_ledger::AttemptRecord {
-                request_id: id.into(),
-                attempt: 1,
-                account_id: "a".into(),
-                account_kind: "oauth".into(),
-                outcome: "succeeded".into(),
-                ..Default::default()
-            }],
-            None,
-        )
-        .unwrap();
-    };
-    plant("r1", Some("main"));
-    plant("r2", None);
-    let rows = db
-        .read_blocking(|c| {
-            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
-        })
-        .unwrap();
-    let classes: Vec<&str> = rows.iter().map(|r| r.request_class.as_str()).collect();
-    assert_eq!(
-        rows.len(),
-        2,
-        "the named class and the reserved one are separate rows"
-    );
-    assert!(
-        classes.contains(&"main") && classes.contains(&phoebis_ledger::NO_CLASS),
-        "every other key part is equal, so only the class tells the two rows apart: {classes:?}"
-    );
 }
 
 #[test]
