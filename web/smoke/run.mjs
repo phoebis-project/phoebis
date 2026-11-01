@@ -519,7 +519,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   await p.settle(300);
   results.push({
     name: '/pools a first attention read that fails draws the unavailable line above the grid, while the pools load and over cards without a badge',
-    ok: loading[0] === true && loading[1] === 0 && unavailable() && rows() === '[0,0,0,0]',
+    ok: loading[0] === true && loading[1] === 0 && unavailable() && rows() === '[0,0,0,0,0]',
     missing: [JSON.stringify(loading), line()?.outerHTML.slice(0, 200) ?? 'no line', rows()],
   });
   api.getAttention = getAttention;
@@ -1026,19 +1026,20 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: 'the theme buttons carry their names', ok: JSON.stringify(named) === JSON.stringify([['Light', 'Light'], ['Dark', 'Dark'], ['System', 'System']]), missing: named.map((n) => n.join(' / ')) });
 }
 {
-  // The story's pools hold 31, 0, 6 and 3 pins, one per key, session, agent and model under their keys, on primary,
-  // nightly, secondary, overflow, studio and contract, over 22 listed pinned rows on five of those accounts, since
-  // secondary's one pinned row, idle for two hours, left the route's list under the non-companion timeout. The two
-  // written sessions bring four of them: the auxiliary-only session's subagent pin and main's auxiliary pin on
-  // overflow, and the two pins of the fleet session no mod reports on contract. So a hero counting the pinned rows or a
-  // note counting every row's account reads otherwise. A hero counting every session row reads otherwise only while the
-  // story's row count differs from its pins, so the count is read first and a story where the two meet fails here.
-  const PINS = 40;
+  // The story's pools hold 31, 0, 6, 3 and 1 pins, one per key, session, agent and model under their keys, on primary,
+  // nightly, secondary, overflow, studio, contract and workshop, over 23 listed pinned rows on six of those accounts,
+  // since secondary's one pinned row, idle for two hours, left the route's list under the non-companion timeout. The
+  // two written sessions bring four of them: the auxiliary-only session's subagent pin and main's auxiliary pin on
+  // overflow, and the two pins of the fleet session no mod reports on contract. The workshop session's one pin on bench
+  // is the workshop pool's. So a hero counting the pinned rows or a note counting every row's account reads otherwise.
+  // A hero counting every session row reads otherwise only while the story's row count differs from its pins, so the
+  // count is read first and a story where the two meet fails here.
+  const PINS = 41;
   const sessionRows = (await api.listSessions()).length;
   const hero = m.container.querySelector('.sess-summary__hero');
   results.push({
     name: "/ the sessions card counts the router's live pins, which the story keeps apart from its session rows, over the pinned rows' accounts",
-    ok: sessionRows !== PINS && hero?.querySelector('.stat__value')?.textContent === String(PINS) && hero?.querySelector('.stat__note')?.textContent === 'active pins across 5 accounts',
+    ok: sessionRows !== PINS && hero?.querySelector('.stat__value')?.textContent === String(PINS) && hero?.querySelector('.stat__note')?.textContent === 'active pins across 6 accounts',
     missing: [`${sessionRows} session rows against ${PINS} pins`, hero?.textContent ?? 'absent'],
   });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
@@ -6852,8 +6853,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
       await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', memberRows().map((tr) => [byLabel.get(tr.querySelector('td:first-child span')?.textContent ?? '') ?? '', tr.querySelector('td:first-child span.mono')?.textContent ?? null]));
     }
-    // The pool's members by priority, then every other account by label, the sunset seed last by its label.
-    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset'];
+    // The pool's members by priority, then every other account by label, the workshop seed last by its label.
+    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop'];
     results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     const prio = dlg?.querySelector('input[aria-label="Priority for primary"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -6863,7 +6864,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools priority keystrokes leave the row where it is', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     prio?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await m.settle(150);
-    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset']), missing: memberLabels() });
+    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop']), missing: memberLabels() });
     setter.call(prio, '0');
     dlg?.querySelector('input[aria-label="Priority for primary"]')?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(150);
@@ -7123,7 +7124,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const moveDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const moveSelect = moveDlg?.querySelector('select[aria-label="Destination pool"]');
   expect('/pools move dialog', moveDlg?.textContent ?? '', ['Move key laptop', 'ends its current session pins', 'Move key']);
-  results.push({ name: '/pools move dialog lists the other pools only', ok: [...(moveSelect?.options ?? [])].map((o) => o.value).join(',') === 'jobs,work,contract', missing: [...(moveSelect?.options ?? [])].map((o) => o.value) });
+  results.push({ name: '/pools move dialog lists the other pools only', ok: [...(moveSelect?.options ?? [])].map((o) => o.value).join(',') === 'jobs,work,contract,workshop', missing: [...(moveSelect?.options ?? [])].map((o) => o.value) });
   [...(moveDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Move key')?.click();
   await m.settle(600);
   results.push({ name: '/pools moved key leaves the list', ok: keyRows().length > 0 && !keyRows().some((tr) => tr.children[0]?.textContent?.trim() === 'laptop'), missing: keyRows().map((tr) => tr.children[0]?.textContent?.trim()) });
@@ -8216,7 +8217,7 @@ m.unmount();
   const unchecked = !(dlg?.textContent ?? '').includes('is not an account') && members?.querySelector('.members-table') === null;
   retry?.click();
   await m.settle(600);
-  // The pool's members by priority, then every other account by label, the sunset seed last by its label.
+  // The pool's members by priority, then every other account by label, the workshop seed last by its label.
   const labels = [...(members?.querySelectorAll('.members-table tbody tr') ?? [])].map((tr) => tr.querySelector('td:first-child span')?.textContent);
   results.push({
     name: "/pools a failed accounts read holds the dialog's save without naming a member",
@@ -8226,7 +8227,7 @@ m.unmount();
       held.startsWith('Save is held: the account list did not load, so the members cannot be checked.') &&
       held.includes('Go to Members') &&
       unchecked &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop']) &&
       status() === 'Every group saves together.',
     missing: [...failed.map(String), retry ? 'Try again' : 'no Try again', held, unchecked ? '' : 'a member refusal or a table while the read failed', ...labels.map(String), status()],
   });
@@ -8249,14 +8250,14 @@ m.unmount();
   read.release();
   await m.settle(600);
   read.restore();
-  // The pool's members by priority, then every other account by label, the sunset seed last by its label.
+  // The pool's members by priority, then every other account by label, the workshop seed last by its label.
   const labels = rows().map((tr) => tr.querySelector('td:first-child span')?.textContent);
   results.push({
     name: '/pools while the accounts read is out the stored members draw unmarked and hold nothing',
     ok:
       JSON.stringify(early) === JSON.stringify([['nightly', true, true], ['overflow', true, true], ['primary', true, true], ['secondary', true, true]]) &&
       before === 'Every group saves together.' &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop']) &&
       status() === 'Every group saves together.',
     missing: [JSON.stringify(early), before, ...labels.map(String), status()],
   });
@@ -17255,8 +17256,9 @@ m.unmount();
       ok: opened === 1 && shut === 0 && paged === 0 && back === 0 && chevrons && first?.querySelector('td.routing-log__chevron svg') !== null,
       missing: [`opened ${opened}, shut ${shut}, after paging ${paged}, back on the first page ${back}, chevrons ${chevrons}`],
     });
-    // Every decision and every event of the default hour opens, the second and third pages' rows and then the first's,
-    // and the cards and details join the scan.
+    // Every decision and every event of the default hour opens, each page after the first in turn and then the first's,
+    // and the cards and details join the scan. The walk follows the pager to its last page, since the hour's row count
+    // is the route's answer and no count of its pages is kept here.
     const openAll = async () => {
       const rows = trs(page).filter((tr) => tr.classList.contains('routing-log__row'));
       for (const tr of rows) tr.querySelector('td.routing-log__kind')?.click();
@@ -17265,20 +17267,21 @@ m.unmount();
       for (const p of panels) scan('the hour', p.querySelector('.decision-card, .event-detail'));
       return { drawn: panels.filter((p) => p.querySelector('.decision-card .decision-strip, .event-detail .kv') !== null).length, panels: panels.length, rows: rows.length };
     };
-    const second = await openAll();
-    pager('Next page')?.click();
-    await page.settle(300);
-    const third = await openAll();
-    pager('Next page')?.click();
-    await page.settle(300);
-    const fourth = await openAll();
+    const later = [await openAll()];
+    // Bounded, so a pager that never disables Next fails the case instead of hanging the run.
+    while (pager('Next page')?.disabled === false && later.length < 12) {
+      pager('Next page')?.click();
+      await page.settle(300);
+      later.push(await openAll());
+    }
     [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'First page')?.click();
     await page.settle(300);
     const firstPage = await openAll();
+    const walked = [...later, firstPage];
     results.push({
       name: '/routing-log every row of a page opens to its card or its detail',
-      ok: [second, third, fourth, firstPage].every((p) => p.rows > 0 && p.panels === p.rows && p.drawn === p.rows) && second.rows + third.rows + fourth.rows + firstPage.rows === hour.rows.length,
-      missing: [JSON.stringify({ firstPage, fourth, second, third }), `${hour.rows.length} rows in the hour`],
+      ok: later.length >= 3 && walked.every((p) => p.rows > 0 && p.panels === p.rows && p.drawn === p.rows) && walked.reduce((n, p) => n + p.rows, 0) === hour.rows.length,
+      missing: [JSON.stringify({ firstPage, later }), `${hour.rows.length} rows in the hour`],
     });
     page.unmount();
   }
@@ -18259,8 +18262,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // revocation on ci, the three guardrail blocks on desktop, and the drift and the contract refusals on laptop. Each
   // key's Failed leaves them out, as the Traffic line does. Laptop's Failed and the line's errors count the two rows
   // the router's own stop cut, `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, and the line's requests the tie's failover
-  // `req_8c41f2d7-a93`, which answered on its second attempt, and the contract seat's three rows on fleet, each
-  // answered.
+  // `req_8c41f2d7-a93`, which answered on its second attempt, the contract seat's three rows on fleet and the approved
+  // Ultra's two rows on bench, each answered.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
@@ -18273,7 +18276,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '3'], ['laptop', '6', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '217 requests, 17.1% errors',
+      line === '219 requests, 16.9% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -23549,29 +23552,29 @@ const CARD_VIEWS = [
     page.unmount();
     return got;
   };
-  // The route's 26 rows at the story's instant: the three finished sessions (the two the mod released whole and the
+  // The route's 27 rows at the story's instant: the three finished sessions (the two the mod released whole and the
   // one it ended), thirteen rows a companion reports or went silent on, the registration-only row and the written
-  // auxiliary-only session among them, and ten no companion reports: the laptop row the ledger never saw, with no last
-  // use, and by their last use the written fleet session no mod reports 2 minutes back, the fleet row 4, the pinless
-  // fork 16, nightly's notebook row 20, overflow's desktop row 28 and studio's four notebook rows 25 to 42. The
-  // non-companion timeout leaves out the five past the hour: the refusal-only row 98 by its newest refusal, the ci rows
-  // 118 and 240, the row idle for two hours 120 and the earlier holder 20 hours back. The defaults keep 23 and hide the
-  // three finished.
+  // auxiliary-only session among them, and eleven no companion reports: the laptop row the ledger never saw, with no
+  // last use, and by their last use the written fleet session no mod reports 2 minutes back, the fleet row 4, the
+  // workshop session on bench 6, the pinless fork 16, nightly's notebook row 20, overflow's desktop row 28 and studio's
+  // four notebook rows 25 to 42. The non-companion timeout leaves out the five past the hour: the refusal-only row 98
+  // by its newest refusal, the ci rows 118 and 240, the row idle for two hours 120 and the earlier holder 20 hours
+  // back. The defaults keep 24 and hide the three finished.
   const bare = await read('');
   const AWAY = '3 sessions hidden by the filters';
   const drawnOf = (got) => got.drawn.map((id) => listed.find((s) => idOfRow(s) === id)).filter(Boolean);
   results.push({
     name: '/sessions the bare address keeps the rows the default filters keep, with no chip and the finished session hidden',
-    ok: finished !== undefined && bare.chips.length === 0 && !bare.finished && bare.drawn.length === 23 && bare.count === '23 sessions',
+    ok: finished !== undefined && bare.chips.length === 0 && !bare.finished && bare.drawn.length === 24 && bare.count === '24 sessions',
     missing: [`finished ${finished?.sessionId ?? 'absent'}`, JSON.stringify(bare.chips), `${bare.drawn.length} rows`, String(bare.count)],
   });
   results.push({
     name: '/sessions the Sessions and Agents tiles count the rows the filters keep and name the rows they hide on hover',
     ok:
-      bare.sessionsValue === '23 of 128' &&
+      bare.sessionsValue === '24 of 128' &&
       bare.sessionsTile === AWAY &&
       bare.agentsTile === AWAY &&
-      bare.agentsTitle === `The rows shown hold 35 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine. ${AWAY}.`,
+      bare.agentsTitle === `The rows shown hold 36 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine. ${AWAY}.`,
     missing: [String(bare.sessionsValue), String(bare.sessionsTile), String(bare.agentsTile), String(bare.agentsTitle)],
   });
   {
@@ -23591,7 +23594,7 @@ const CARD_VIEWS = [
   });
   {
     // While the filters hide every row the router lists, the card says so with the hidden count and no expiry sentence:
-    // the route's ten rows no companion reports inside the non-companion timeout, read under Companion only.
+    // the route's eleven rows no companion reports inside the non-companion timeout, read under Companion only.
     const { listSessions } = api;
     api.listSessions = async (...args) => (await listSessions.apply(api, args)).filter((s) => s.companion === 'none');
     const page = await mount('/sessions?companion=1', { now: CLOCK_ORIGIN });
@@ -23601,7 +23604,7 @@ const CARD_VIEWS = [
     api.listSessions = listSessions;
     results.push({
       name: '/sessions with every row hidden by the filters the card reads No sessions kept by the filters with the hidden count',
-      ok: got.rows === 0 && (got.body ?? '').includes('No sessions kept by the filters') && (got.body ?? '').includes('10 sessions hidden by the filters.') && !(got.body ?? '').includes('session expiry') && !(got.body ?? '').includes('No live sessions'),
+      ok: got.rows === 0 && (got.body ?? '').includes('No sessions kept by the filters') && (got.body ?? '').includes('11 sessions hidden by the filters.') && !(got.body ?? '').includes('session expiry') && !(got.body ?? '').includes('No live sessions'),
       missing: [JSON.stringify(got)],
     });
   }
@@ -23709,10 +23712,10 @@ const CARD_VIEWS = [
         JSON.stringify(picked.chips) === JSON.stringify(['released agents']),
       missing: [JSON.stringify(offered), JSON.stringify(picked)],
     });
-    // The defaults keep the route's 23 rows, the two written sessions among them.
+    // The defaults keep the route's 24 rows, the two written sessions and the workshop session among them.
     results.push({
       name: "/sessions the chip line's Clear all returns the three filters to their defaults and the bare address",
-      ok: JSON.stringify(three) === JSON.stringify(['companion only', 'finished sessions', 'released agents']) && cleared.search === '' && cleared.chips.length === 0 && cleared.rows === 23,
+      ok: JSON.stringify(three) === JSON.stringify(['companion only', 'finished sessions', 'released agents']) && cleared.search === '' && cleared.chips.length === 0 && cleared.rows === 24,
       missing: [JSON.stringify(three), JSON.stringify(cleared)],
     });
   }
@@ -23777,7 +23780,7 @@ const CARD_VIEWS = [
     // Each order moves rows past the route's own, and the story holds rows with no creation time, which tie and read by
     // session id, and rows with no activity, the registration-only row among both.
     const none = (sort) => drawn.filter((s) => timeOf(s, sort) === null).length;
-    const story = drawn.length === 23 && ![drawn.map(idOfRow), want.activity.rows].some((rows) => JSON.stringify(rows) === JSON.stringify(want.bare.rows)) && none('created') >= 2 && none('activity') >= 1;
+    const story = drawn.length === 24 && ![drawn.map(idOfRow), want.activity.rows].some((rows) => JSON.stringify(rows) === JSON.stringify(want.bare.rows)) && none('created') >= 2 && none('activity') >= 1;
     const wantRadios = {
       ascRadios: [
         ['Created false', 'Last activity true'],
@@ -24191,11 +24194,12 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     // as a count of the cap the bootstrap file sets, so an operator sees how close the router runs to refusing a
     // session or dropping a recipe. The Agents figure leaves out the subagents the mod released under a live session,
     // which draw no line, and its title names them beside the records and then the rows the filters hide. Read on the
-    // story's instant, where the defaults keep 23 rows holding 35 records, two of them the written session's released
-    // subagents and three the two written sessions', and whose lines read 10 busy, 7 idle and 4 parked, the
-    // auxiliary-only session's subagent among the busy: the overview's other two idle agents are the mains of the
-    // session the mod ended, which the defaults hide, and of the row idle for two hours, which the route's list leaves
-    // out under the non-companion timeout.
+    // story's instant, where the defaults keep 24 rows holding 36 records, two of them the written session's released
+    // subagents, three the two written sessions' and one the workshop session's, and whose lines read 10 busy, 7 idle
+    // and 4 parked, the auxiliary-only session's subagent among the busy: the overview's other two idle agents are the
+    // mains of the session the mod ended, which the defaults hide, and of the row idle for two hours, which the route's
+    // list leaves out under the non-companion timeout. The workshop session's line is a pin no recipe stands on, so it
+    // reads no lifecycle word and holds no retained prompt.
     const ov = await api.getKeepaliveOverview();
     const pinned = await mount('/sessions', { now: CLOCK_ORIGIN });
     const strip = [...pinned.container.querySelectorAll('.stat-grid > .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector(':scope > .stat__note')?.textContent?.trim()]);
@@ -24203,8 +24207,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const agentsTitle = [...pinned.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value [title]')?.getAttribute('title') ?? '';
     pinned.unmount();
     const want = [
-      ['Sessions', '23 of 128'],
-      ['Agents', '33 of 1,024', '10 busy, 7 idle, 4 parked'],
+      ['Sessions', '24 of 128'],
+      ['Agents', '34 of 1,024', '10 busy, 7 idle, 4 parked'],
       ['Retained', '40 MiB of 256 MiB', 'prompts kept for probes'],
     ];
     results.push({
@@ -24212,16 +24216,16 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       ok:
         JSON.stringify(strip.map(([l]) => l)) === JSON.stringify(['Sessions', 'Agents', 'Retained', 'Cache probes, 24h', 'Expired between turns, 24h', 'Bus gaps']) &&
         JSON.stringify([ov.agents.busy, ov.agents.idle, ov.agents.parked]) === JSON.stringify([10, 9, 4]) &&
-        agentsTitle === 'The rows shown hold 35 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine. 3 sessions hidden by the filters.' &&
+        agentsTitle === 'The rows shown hold 36 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine. 3 sessions hidden by the filters.' &&
         want.every(([label, value, note]) => read(label)[1] === value && (note === undefined || read(label)[2] === note)),
       missing: [...strip.map((t) => t.join(' | ')), `overview ${ov.agents.busy} busy, ${ov.agents.idle} idle, ${ov.agents.parked} parked`, agentsTitle || 'no Agents title'],
     });
   }
   {
     // With no line hidden the title's second sentence would count none, so it draws the records' sentence alone. The
-    // view shows every row, so no row is hidden either and the title carries no hidden count. The route's 26 rows hold
-    // 42 agent records, three of them the two written sessions', the ci key's two rows and the row idle for two hours
-    // holding the other four of the story's 46.
+    // view shows every row, so no row is hidden either and the title carries no hidden count. The route's 27 rows hold
+    // 43 agent records, three of them the two written sessions' and one the workshop session's, the ci key's two rows
+    // and the row idle for two hours holding the other four of the story's 47.
     const { listKeepaliveRecipes } = api;
     api.listKeepaliveRecipes = async (...args) => (await listKeepaliveRecipes.apply(api, args)).filter((r) => !(r.agentState === 'released' && r.cause === 'agent_released'));
     const none = await mount('/sessions?finished=1');
@@ -24229,7 +24233,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     api.listKeepaliveRecipes = listKeepaliveRecipes;
     results.push({
       name: "/sessions the Agents tile's title carries one sentence with no line and no row hidden",
-      ok: title === 'The rows shown hold 42 agent records against the cap.',
+      ok: title === 'The rows shown hold 43 agent records against the cap.',
       missing: [title || 'no Agents title'],
     });
     none.unmount();
@@ -24288,14 +24292,14 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     missing: [JSON.stringify(heads().slice(0, 2)), ...rows().slice(0, 3).map((r) => r.lastElementChild?.innerHTML ?? 'no cell')],
   });
   {
-    // The 23 rows the default filters keep at the story's instant, twelve of them reading no recipe: the ten no recipe
-    // warms, the written fleet session no mod reports among them, the written auxiliary-only session, whose main holds
-    // none, and the silent row past its idle limit.
+    // The 24 rows the default filters keep at the story's instant, thirteen of them reading no recipe: the eleven no
+    // recipe warms, the written fleet session no mod reports and the workshop session, whose pool keeps no cache warm,
+    // among them, the written auxiliary-only session, whose main holds none, and the silent row past its idle limit.
     const pinned = await mount('/sessions', { now: CLOCK_ORIGIN });
     const drawn = [...pinned.container.querySelectorAll('tbody tr.srow')];
     const unwarmed = drawn.filter((tr) => sessionCell(pinned, tr, 'Cache warming')?.textContent?.trim() === 'no recipe').length;
     pinned.unmount();
-    results.push({ name: '/sessions lists every session the default filters keep, not only warmed ones', ok: drawn.length === 23 && unwarmed === 12, missing: [`${drawn.length} rows, ${unwarmed} with no recipe`] });
+    results.push({ name: '/sessions lists every session the default filters keep, not only warmed ones', ok: drawn.length === 24 && unwarmed === 13, missing: [`${drawn.length} rows, ${unwarmed} with no recipe`] });
   }
   // The sessions the mod released whole are finished, so these read with the finished sessions shown.
   await m.navigate('/sessions?finished=1');
@@ -24363,12 +24367,13 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const plus = [...m.container.querySelectorAll('tbody tr.srow .badge')].filter((b) => /^\+\d+$/.test(b.textContent?.trim() ?? ''));
     [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all')?.click();
     await m.settle(250);
-    // The default filters' 23 rows draw 30 lines, each on an account, and the registration-only row draws none. Eight
+    // The default filters' 24 rows draw 31 lines, each on an account, and the registration-only row draws none. Nine
     // are pins no recipe stands on: the written fleet session no mod reports draws two, studio's four slowed notebook
-    // rows five and the fleet row one. The written auxiliary-only session draws its subagent's recipe line.
+    // rows five, the fleet row one and the workshop session one. The written auxiliary-only session draws its
+    // subagent's recipe line.
     results.push({
       name: "/sessions each line's Account cell links to the account with its kind on the title and in its description and its speed chip while slowed, and the +N badges stand on the Model cell",
-      ok: !heads().includes('Account') && links.length === 30 && off.length === 0 && kinds.includes('oauth') && kinds.includes('api_key') && links.some((l) => l.chip) && plus.length > 0 && plus.every((b) => b.closest('.srow__pin') !== null),
+      ok: !heads().includes('Account') && links.length === 31 && off.length === 0 && kinds.includes('oauth') && kinds.includes('api_key') && links.some((l) => l.chip) && plus.length > 0 && plus.every((b) => b.closest('.srow__pin') !== null),
       missing: [`${links.length} lines`, ...new Set(kinds), ...off.slice(0, 6).map((l) => l.link?.outerHTML ?? 'no link'), `${plus.length} +N badges`],
     });
   }
@@ -24448,15 +24453,16 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
 
   // Expiry now rides under the last-used time rather than in a column of its own.
   const expiries = rows().map((r) => cell(r, 'Last used')?.querySelector('.sub')?.textContent?.trim() ?? '');
-  // Of the 23 rows the default filters keep, the registration-only row and the laptop row the ledger never saw carry no
+  // Of the 24 rows the default filters keep, the registration-only row and the laptop row the ledger never saw carry no
   // last use and no request, so they have no expiry to count down. The earlier holder, the ci key's two rows, the row
   // idle for two hours and the refusal-only row, each with an expiry, left the list under the non-companion timeout.
-  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 23 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 21, missing: [`${expiries.length} rows`, ...expiries.slice(0, 3)] });
+  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 24 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 22, missing: [`${expiries.length} rows`, ...expiries.slice(0, 3)] });
   const counts = rows().map((r) => Number(cell(r, 'Requests')?.textContent?.trim()));
-  // 18 of the 23 rows the default filters keep hold ledgered requests, and the two rows with no last use, nightly's
-  // notebook row and the two written sessions, which reached no ledger, hold none. The ci key's two rows and the
-  // earlier holder, which hold some, left the list under the non-companion timeout.
-  results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length === 18 && counts.includes(0), missing: counts.map(String) });
+  // 19 of the 24 rows the default filters keep hold ledgered requests, the workshop session's two bench rows among
+  // them, and the two rows with no last use, nightly's notebook row and the two written sessions, which reached no
+  // ledger, hold none. The ci key's two rows and the earlier holder, which hold some, left the list under the
+  // non-companion timeout.
+  results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length === 19 && counts.includes(0), missing: counts.map(String) });
 
   // Per-agent pins: a "+N" badge on the Model cell wherever an agent is pinned on another model, recipe or not, its
   // hover naming each one's model and account. The set is read off the mock's answer: a listed session's pins on
@@ -24585,11 +24591,11 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       missing: epochLines,
     });
     const lasts = rows().map((r) => cell(r, 'Last request')?.textContent?.trim() ?? '');
-    // The 18 rows the default filters keep that hold ledgered requests read a last request and the other five none, the
+    // The 19 rows the default filters keep that hold ledgered requests read a last request and the other five none, the
     // two written sessions among the five. The earlier holder, the ci key's two rows and the refusal-only row, which
     // read a last request, and the row idle for two hours, which read none, left the list under the non-companion
     // timeout.
-    results.push({ name: '/sessions last request is relative or none', ok: lasts.filter((v) => v === 'none').length === 5 && lasts.filter((v) => /ago$|^now$/.test(v)).length === 18, missing: lasts });
+    results.push({ name: '/sessions last request is relative or none', ok: lasts.filter((v) => v === 'none').length === 5 && lasts.filter((v) => /ago$|^now$/.test(v)).length === 19, missing: lasts });
     const silentRows = rows().filter((r) => (cell(r, 'Companion')?.textContent?.trim() ?? '').startsWith('silent'));
     const silentWarming = silentRows.map((r) => cell(r, 'Cache warming')?.textContent?.trim() ?? '');
     results.push({
@@ -25255,10 +25261,11 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     }));
     const count = cell(row, 'Agents')?.textContent?.trim();
     const tile = [...m.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value')?.textContent?.trim();
-    // The 23 rows the default filters keep hold 35 records, two of them the written session's released subagents and
-    // three the two written sessions'. The earlier holder, the ci key's two rows, the row idle for two hours and the
-    // refusal-only row left the list under the non-companion timeout with their records.
-    const want = '33 of 1,024';
+    // The 24 rows the default filters keep hold 36 records, two of them the written session's released subagents,
+    // three the two written sessions' and one the workshop session's. The earlier holder, the ci key's two rows, the
+    // row idle for two hours and the refusal-only row left the list under the non-companion timeout with their
+    // records.
+    const want = '34 of 1,024';
     results.push({
       name: '/sessions a line the mod released is not listed, one the session\'s end released is, and the Agents column and tile leave the hidden ones out of their counts',
       ok:
@@ -25287,8 +25294,9 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     await m.settle(250);
     [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(600);
-    // The route's 26 rows with the finished sessions shown, the two written sessions among them, less the one released.
-    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 25, missing: [String(rows().length)] });
+    // The route's 27 rows with the finished sessions shown, the two written sessions and the workshop session among
+    // them, less the one released.
+    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 26, missing: [String(rows().length)] });
     {
       // The earlier holder left the route's list under the non-companion timeout, so the case reads its drawing from
       // the seed, the view mounted again past another page.
