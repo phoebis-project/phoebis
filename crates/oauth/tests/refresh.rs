@@ -23,7 +23,7 @@ use std::sync::{
     Arc,
 };
 
-fn bodies_match_measured_key_order() {
+fn refresh_body_matches_measured_key_order() {
     let p = claude_code_2_1_310_linux_x64();
     let b = refresh_body(p, "sk-ant-ort01-PLACEHOLDER", "user:profile user:inference");
     assert_eq!(
@@ -34,7 +34,7 @@ fn bodies_match_measured_key_order() {
 
 #[test]
 fn control_requests_serialize_to_the_fixture_heads() {
-    bodies_match_measured_key_order();
+    refresh_body_matches_measured_key_order();
     let p = claude_code_2_1_310_linux_x64();
     let fixture = control_head(ControlFixture::Roles);
     let req = control_request(

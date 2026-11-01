@@ -223,8 +223,8 @@ fn init_on_a_terminal(dir: &Path, args: &[&str], answers: &str) -> (Output, Stri
 fn the_prompt_offers_files_or_none_and_an_existing_file_refuses_in_every_run() {
     let files = tempfile::tempdir().unwrap();
     let config = files.path().join("config.yaml");
-    // A word the flag refuses is no answer either, so the question is asked again.
-    let refused = REFUSED_TLS_FLAGS[1][1];
+    // `self-signed` is neither answer, so the question is asked again.
+    let refused = "self-signed";
     let (out, shown) = init_on_a_terminal(
         files.path(),
         &["--config", path_arg(&config)],
@@ -400,10 +400,6 @@ fn an_address_off_loopback_is_written_without_a_tls_line_and_passes_check_config
     );
     assert!(!dir.path().join("tls").exists());
 }
-
-// On one line, so a grep for the flag can tell these refused spellings apart by the constant's name.
-#[rustfmt::skip]
-const REFUSED_TLS_FLAGS: [[&str; 2]; 3] = [["--tls", "files"], ["--tls", "self-signed"], ["--proxy-tls", "self_signed"]];
 
 #[test]
 fn a_failure_after_the_first_write_removes_what_the_run_wrote() {

@@ -533,7 +533,7 @@ test("a story card's candidate table leads with the member the decision placed, 
   assert.notEqual(record.candidates[0].accountId, record.outcome.accountId, "the fast failover's record leads with another member");
 });
 
-test('the settings fold lists the twenty-four settings in the card order with Load shedding on or off, and a version 1 record its three removed after them', async () => {
+test('the settings fold lists the twenty-four settings with Load shedding on or off, and a version 1 record its three removed after them', async () => {
   const { record, row } = await storyRecord('req_ef099b34-453', 1);
   const fold = async (settings) => {
     const container = await cardOf({ ...record, settings }, row);

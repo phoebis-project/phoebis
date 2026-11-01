@@ -45,7 +45,7 @@ export { slowedLongOf } from '@/mock/attention';
 export { leadOf } from '@/mock/lead';
 export { insideSessionExpiry, lastUseOf, refusalOnlyRows, sessionsListedAt, withinNonCompanionTimeout } from '@/mock/operations';
 export { poolById } from '@/mock/pools';
-export { ALL_ROLLUPS, costSplitOf, requestById, rollups } from '@/mock/requests';
+export { ALL_ROLLUPS, requestById, rollups } from '@/mock/requests';
 export { GUARDRAIL_STORY_IDS, NIGHTLY_CAP_RAISED, STORY_IDS } from '@/mock/requests';
 export { partitionsOf, placementFactOf, stretchTriggerOf } from '@/mock/routingLog';
 export { PRIOR_BURN, rewriteOf, runwayTiesOf } from '@/mock/routingLog';

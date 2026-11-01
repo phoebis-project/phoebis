@@ -83,6 +83,7 @@ fn a_replay_changes_only_the_output_controls() {
         headers(),
         "every header the bus published, in its order"
     );
+    // The edited body's 320 bytes, the 5 of "alias" and the 80 of the headers' names and values.
     assert_eq!(recipe.size, 405);
 }
 
@@ -148,6 +149,7 @@ fn a_retained_body_loses_its_safeguards_member_and_a_stamped_one_is_resigned() {
             .body,
         "the cut takes the member and one comma and nothing else"
     );
+    // The cut body's 84,135 bytes, the 17 of the model and the 110 of the headers with the beta.
     assert_eq!(recipe.size, 84_262, "the retained size reads the cut body");
     assert_eq!(
         recipe.headers,
@@ -165,6 +167,7 @@ fn a_body_without_the_member_yields_the_recipe_it_did() {
     assert_eq!(
         make_recipe(&headers(), BODY.as_bytes(), "routing-alias", 1 << 20).unwrap(),
         Recipe {
+            // BODY's 221 bytes once edited, the 13 of "routing-alias" and the 80 of the headers.
             size: 314,
             body,
             headers: headers(),
