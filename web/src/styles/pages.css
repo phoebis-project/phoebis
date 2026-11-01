@@ -1579,12 +1579,12 @@
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
-/* The day's five tiles take the columns that hold the cost tile's figure, where the auto-fit grid would hold five at
-   1440 px and four at 1280 px. The figure keeps its window's name on one line, and the widest form a share at or above
-   0.001% draws, the eight-character `~0.00998% of 20x 7-day`, runs to 194.4 px at 15 px: four tiles hold it from a
-   1260 px viewport (the shell takes 288 px) and two from 511 px (the content's 16 px padding a side), and under that
-   the tiles stack. A share under 0.001% draws a wider string still. In four columns and in two the fifth tile opens a
-   row and spans it, since a tile alone at a quarter width reads as a gap. */
+/* The day's five tiles take the columns that hold the cost tile's common figures on one line, where the auto-fit grid
+   would hold five at 1440 px and four at 1280 px. "12.5% of an Ultra week" runs to 185.3 px at 15 px: four tiles hold
+   it from a 1224 px viewport (the shell takes 288 px) and two from 493 px (the content's 16 px padding a side), both
+   under the breakpoints at 1260 px and 511 px, and under 511 px the tiles stack. A smaller share draws a wider form,
+   "0.00998% of an Ultra week" at 215.1 px, which breaks between its words where its tile is narrower. In four columns
+   and in two the fifth tile opens a row and spans it, since a tile alone at a quarter width reads as a gap. */
 .stat-grid--day {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -4782,7 +4782,7 @@
   border-bottom: 1px dotted var(--ink-3);
 }
 
-/* A tile is never narrower than its figure, so "~0.05% of 20x 7-day" reads whole and the funding's word moves
+/* A tile is never narrower than its figure, so "0.05% of an Ultra week" reads whole and the funding's word moves
    under it: the row's tiles grow from the 170 px floor and never shrink under their widest unbreakable run. */
 .tiles-row {
   display: flex;
@@ -4816,6 +4816,12 @@
 /* A pool card's tile is a third of the card's width, or half of it on a phone, and both are narrower than a figure in
    the Ultra week, which then breaks between its words rather than widening the card. */
 .pool__stats .cost-figure {
+  white-space: normal;
+}
+
+/* Four to a row at 1280 px, a day tile is narrower than a smaller share's figure in the Ultra week, which then breaks
+   between its words rather than spilling past the tile. */
+.stat-grid--day .cost-figure {
   white-space: normal;
 }
 

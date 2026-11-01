@@ -26,8 +26,14 @@ the fold badge, the Replay button on a second row where they need more than the 
 the same draw on a second read), the dashboard's stat grid at the pass's viewport, at 1024 by 768 and at 400 by 900 (all
 five tiles drawn, wrapping as the grid's columns let them and none past its right edge, no tile's figure past its
 content box, the fifth tile across the row's width, the tiles, their rows, the fifth tile's width and any figure past
-its tile recorded at each width), the Dashboard's tiles at 1280 by 800 and 1440 by 900 (four to a row, the fourth a
-quarter of the row on the first tile's top edge and the fifth across the row's width at the first tile's left edge, both
+its tile recorded at each width), the Dashboard's tiles at 360 by 800, 900 by 800, 1280 by 800 and 1440 by 900 (one to a
+row at 360, two at 900 and four at 1280 and 1440, the tile closing the first row its share of the row on the first
+tile's top edge, the tile after it opening the next row at the first tile's left edge, and the fifth across the row's
+width, every width recorded), the Estimated cost, 24h tile with the widest week figure, "0.00998% of an Ultra week",
+written into its subscription line (mock pass, at the same four widths: the figure inside the tile's content box,
+breaking between its words where the tile is narrower, from the left edge and in the type of the billed line's figure,
+with the rows its line takes recorded and the dash restored after, and at 1280 by 800 the widths of that figure and of
+the common "12.5% of an Ultra week" on one line at 15 px, the two figures that the day grid's width comments cite,
 recorded), the Dashboard's tile words (the Estimated cost, 24h tile's subscription line a share of an Ultra week, `0%`
 on a day without subscription cost, or the dash under the unpriced title on the story's day, and its note a figure per
 hour, and the Refused, 24h tile's hover naming the router's own refusals beside the Requests, 24h tile's hover, the two
@@ -111,7 +117,9 @@ px window stacks the slots), whole inside its slot with the window's words on it
 compact one its short form, at 1280 by 800 and, after the view's shot, in a 400 px window, mock pass: the approved Ultra
 account's "no 5-hour window"), the usage-based seat's spend bar there at 1280 and 400 by 800 (mock pass: its row as wide
 as a window triple's beside it, from its left edge where the two share a column, the amount spent of the limit in its
-head, and its reset on one line inside the bar with the estimate's word muted and its sentence on hover), the plan
+head, and its reset on one line inside the bar with the estimate's word muted and its sentence on hover), the approved
+Ultra account's own Accounts page (mock pass, at 1280 by 800 after the view's shot: its Usage card's whole slot reading
+"no 5-hour window" muted in the share's place, the words on its title, read as the triples' absent slots are), the plan
 badges' words on the seat's row and the plan-ended account's row against the first other row's, the Accounts bar's sort
 control (its button in the height, top edge, type size and weight of the Add filter button beside it, and once opened
 its popover inside the window under the button, its six radio rows one height, a mark on the checked key and direction
@@ -247,7 +255,7 @@ the four billed fundings, each in the face, size and ink of the line after it, i
 Unit select and the legend's button in the top bar (inside the bar, clear of the week control, Log out and the theme
 switch, inside the viewport at 1280 and 400 px with nothing scrolling the bar sideways, every short label whole and no
 legend button at 400 px, the long labels whole at 1280 px, and the legend's popover over the filter bar uncovered at
-1280 px), the top bar on every view at 1280 and 400 px (nothing scrolling it sideways, its last control inside its
+1280 px), the top bar on every view at 1440, 1280, 900, 400 and 360 px (no sideways scroll, its last control inside its
 padding, the title whole on one line, and Log out a text button at 1280 px and its icon alone at 400 px), every view at
 360 by 800 (the document as wide as the window, the widest element recorded), the reload banner under the mock's build
 switch `phoebis.mockBuildMismatch` (mock pass, on loads of its own at 1280 by 800 and 400 by 800, scrolled 600 px down
@@ -257,7 +265,7 @@ and opaque with it on, the sticky filter bar on the block's bottom and the secti
 at 1280 by 800 the Accounts list 20 px under the block, each edge within 1 px), the anchored pool card and key row under
 the reload banner (mock pass, on loads of its own under the mock's build switch, the Pools view at 1280 by 800 and the
 Keys view at 1280 by 400: the first card's or row's top edge 16 px under the sticky block's bottom once the view moves
-to its hash, within 1 px), the fast lane, the request drawer, which opens once the request list's shot is taken (its
+to its hash, within 0.5 px), the fast lane, the request drawer, which opens once the request list's shot is taken (its
 compact table with Time the fill as wide as its card at 1280 by 800 and 1440 by 900 with every id whole in the mock
 pass, and at 375 by 800 under the list scrolling inside its card, its chips in the status badge's type, and the
 Estimated cost row's figure chip and muted equivalent on one line each inside the cell and its hint's chips on a row of

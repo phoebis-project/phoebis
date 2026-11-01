@@ -827,11 +827,15 @@ async function statGrid(theme) {
   }
 }
 
+/** The Dashboard's tiles by their place in the grid. */
+const TILE_ORDINALS = ['first', 'second', 'third', 'fourth', 'fifth'];
+
 /**
- * The Dashboard's five tiles at 1280 by 800 and 1440 by 900: four to a row, the fourth a quarter of the row (the row's
- * width less its three gaps, over four, within 1 px) on the first tile's top edge, and the fifth opening a row of its
- * own at the first tile's left edge across the row's whole width, so no tile sits alone at a quarter width. Both widths
- * go to the measurements, and the viewport is the pass's again after.
+ * The Dashboard's five tiles at 360 by 800, 900 by 800, 1280 by 800 and 1440 by 900: one to a row at 360, two at 900
+ * and four at 1280 and 1440. The tile closing the first row takes its share of the row (the row's width less the gaps
+ * between its tiles, over the tiles it holds, within 1 px) on the first tile's top edge, the tile after it opens the
+ * next row at the first tile's left edge, and the fifth runs across the row's whole width, so no tile sits alone at a
+ * part of a row. Every width goes to the measurements, and the viewport is the pass's again after.
  */
 async function dashboardTiles(theme) {
   const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
@@ -841,29 +845,133 @@ async function dashboardTiles(theme) {
       if (!grid) return null;
       const s = getComputedStyle(grid);
       const row = grid.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
-      const box = (t) => (t ? { left: Math.round(t.getBoundingClientRect().left * 10) / 10, top: Math.round(t.getBoundingClientRect().top), width: Math.round(t.getBoundingClientRect().width * 10) / 10 } : null);
-      const tiles = [...grid.querySelectorAll(':scope > .stat')];
-      return { first: box(tiles[0]), fifth: box(tiles[4]), fourth: box(tiles[3]), gap: parseFloat(s.columnGap) || 0, modifier: grid.classList.contains('stat-grid--day'), row: Math.round(row * 10) / 10, tiles: tiles.length };
+      const box = (t) => ({ left: Math.round(t.getBoundingClientRect().left * 10) / 10, top: Math.round(t.getBoundingClientRect().top), width: Math.round(t.getBoundingClientRect().width * 10) / 10 });
+      return { gap: parseFloat(s.columnGap) || 0, modifier: grid.classList.contains('stat-grid--day'), row: Math.round(row * 10) / 10, tiles: [...grid.querySelectorAll(':scope > .stat')].map(box) };
     });
   try {
-    for (const size of [
-      { height: 800, width: 1280 },
-      { height: 900, width: 1440 },
+    for (const { perRow, ...size } of [
+      { height: 800, perRow: 1, width: 360 },
+      { height: 800, perRow: 2, width: 900 },
+      { height: 800, perRow: 4, width: 1280 },
+      { height: 900, perRow: 4, width: 1440 },
     ]) {
       await page.setViewportSize(size);
       await settle();
       const grid = await read();
       measurements.push(`${theme} / Dashboard tiles at ${size.width} by ${size.height} ${JSON.stringify(grid)}`);
       const say = (what) => failures.push(`${theme} /: at ${size.width} by ${size.height} the Dashboard tiles ${what}`);
-      if (!grid || grid.tiles !== 5 || !grid.fourth || !grid.fifth) {
+      if (!grid || grid.tiles.length !== 5) {
         say(`draw ${JSON.stringify(grid)}, not five tiles`);
         continue;
       }
-      const quarter = (grid.row - 3 * grid.gap) / 4;
-      if (Math.abs(grid.fourth.width - quarter) > 1) say(`draw the fourth tile ${grid.fourth.width} px wide, not a quarter of the ${grid.row} px row (${Math.round(quarter * 10) / 10} px)`);
-      if (Math.abs(grid.fifth.width - grid.row) > 1) say(`draw the fifth tile ${grid.fifth.width} px wide, not the ${grid.row} px row`);
-      for (const what of compare(grid.fourth, grid.first, ['top'], 'the fourth tile against the first')) say(what);
-      for (const what of compare(grid.fifth, grid.first, ['left'], 'the fifth tile against the first')) say(what);
+      const [first, , , , fifth] = grid.tiles;
+      const closing = grid.tiles[perRow - 1];
+      const opening = grid.tiles[perRow];
+      const share = (grid.row - (perRow - 1) * grid.gap) / perRow;
+      if (Math.abs(closing.width - share) > 1) say(`draw the ${TILE_ORDINALS[perRow - 1]} tile ${closing.width} px wide, not its share of the ${grid.row} px row at ${perRow} to a row (${Math.round(share * 10) / 10} px)`);
+      for (const what of compare(closing, first, ['top'], `the ${TILE_ORDINALS[perRow - 1]} tile against the first`)) say(what);
+      if (opening.top <= first.top) say(`draw the ${TILE_ORDINALS[perRow]} tile at ${opening.top}, not on a row under the first tile's at ${first.top}`);
+      for (const what of compare(opening, first, ['left'], `the ${TILE_ORDINALS[perRow]} tile against the first`)) say(what);
+      if (Math.abs(fifth.width - grid.row) > 1) say(`draw the fifth tile ${fifth.width} px wide, not the ${grid.row} px row`);
+    }
+  } finally {
+    await page.setViewportSize(viewport);
+    await settle();
+  }
+}
+
+/** A smaller share's week figure, the widest form a share at or above 0.001% draws. */
+const WIDEST_WEEK_FIGURE = '0.00998% of an Ultra week';
+/** The week figure of a common share, the form the day grid's columns hold on one line. */
+const COMMON_WEEK_FIGURE = '12.5% of an Ultra week';
+
+/**
+ * The Dashboard's Estimated cost, 24h tile at 360 by 800, 900 by 800, 1280 by 800 and 1440 by 900 with the widest week
+ * figure written into its subscription line, where the story's day draws the unpriced dash: the figure ends inside the
+ * tile's content box, breaking between its words where the tile is narrower, from the left edge and in the type of the
+ * billed line's figure, the rows its line then takes recorded. The dash is restored in the same read, so the shot and
+ * the measures after it read the tile as it drew. At 1280 by 800 the widths of the widest and the common week figure on
+ * one line are read off a range over a span in the subscription line, which takes the line's 15 px and the value's
+ * letter spacing, for the day grid's width comments. The mock pass's alone, since the router's seed holds no
+ * subscription account and so draws no subscription line.
+ */
+async function dashboardWidestFigure(theme) {
+  const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
+  const read = (forms) =>
+    page.evaluate(
+      ({ forms, written }) => {
+        const tile = [...document.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent === 'Estimated cost, 24h');
+        const lineOf = (word) => [...(tile?.querySelectorAll('.stat__pair-line') ?? [])].find((l) => l.querySelector('.stat__pair-word')?.textContent === word) ?? null;
+        const subscription = lineOf('subscription');
+        const figure = subscription?.querySelector('.cost-figure');
+        const billed = lineOf('billed')?.querySelector('.cost-figure');
+        // The text node React holds is rewritten in place, so its next render still finds it.
+        const text = figure?.firstChild;
+        if (!tile || !figure || !billed || text?.nodeType !== Node.TEXT_NODE) return null;
+        const round = (n) => Math.round(n * 10) / 10;
+        const rangeOver = (el) => {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          return range;
+        };
+        const type = (el) => {
+          const s = getComputedStyle(el);
+          return `${s.fontWeight} ${s.fontSize} ${s.fontFamily}`;
+        };
+        const widths = forms.map((form) => {
+          const span = document.createElement('span');
+          span.style.position = 'absolute';
+          span.style.whiteSpace = 'nowrap';
+          span.textContent = form;
+          subscription.append(span);
+          const width = round(rangeOver(span).getBoundingClientRect().width);
+          span.remove();
+          return width;
+        });
+        const drawn = text.nodeValue;
+        text.nodeValue = written;
+        const s = getComputedStyle(tile);
+        const box = tile.getBoundingClientRect();
+        const ink = rangeOver(figure).getBoundingClientRect();
+        // The line's own boxes would count the word's lower baseline as a row, so the rows are its height in lines.
+        const rows = Math.round(subscription.getBoundingClientRect().height / parseFloat(getComputedStyle(subscription).lineHeight));
+        const measured = {
+          billed: { left: round(rangeOver(billed).getBoundingClientRect().left), type: type(billed) },
+          figure: { left: round(ink.left), right: round(ink.right), type: type(figure) },
+          inner: round(box.right - parseFloat(s.paddingRight) - parseFloat(s.borderRightWidth)),
+          rows,
+          tile: round(box.width),
+          widths,
+        };
+        text.nodeValue = drawn;
+        return measured;
+      },
+      { forms, written: WIDEST_WEEK_FIGURE },
+    );
+  try {
+    for (const size of [
+      { height: 800, width: 360 },
+      { height: 800, width: 900 },
+      { height: 800, width: 1280 },
+      { height: 900, width: 1440 },
+    ]) {
+      await page.setViewportSize(size);
+      await settle();
+      const forms = size.width === 1280 ? [COMMON_WEEK_FIGURE, WIDEST_WEEK_FIGURE] : [];
+      const got = await read(forms);
+      const where = `at ${size.width} by ${size.height}`;
+      measurements.push(`${theme} / Estimated cost, 24h tile with ${JSON.stringify(WIDEST_WEEK_FIGURE)} ${where} ${JSON.stringify(got)}`);
+      const say = (what) => failures.push(`${theme} /: ${where} the Estimated cost, 24h tile ${what}`);
+      if (got === null) {
+        say('draws no subscription and billed figures to write the widest week figure into');
+        continue;
+      }
+      if (forms.length) {
+        measurements.push(`${theme} / the common widest week figure at 15 px: ${got.widths[0]}`);
+        measurements.push(`${theme} / the widest week figure at 15 px: ${got.widths[1]}`);
+      }
+      if (got.figure.right > got.inner + 0.5) say(`draws ${JSON.stringify(WIDEST_WEEK_FIGURE)} to ${got.figure.right} px, past its content's right edge at ${got.inner} px`);
+      for (const what of compare(got.figure, got.billed, ['left', 'type'], "the subscription line's widest week figure against the billed line's figure")) say(what);
     }
   } finally {
     await page.setViewportSize(viewport);
@@ -3748,6 +3856,7 @@ const readAbsentSlots = () =>
       return {
         compact: bar.closest('.wbars--compact') !== null,
         cut: words ? words.scrollWidth > words.clientWidth : null,
+        detail: bar.closest('.detail') !== null,
         label: type((row ? neighbor : bar).querySelector('.wbar__label')),
         row,
         muted: words?.classList.contains('muted') ?? false,
@@ -3981,6 +4090,19 @@ async function slowedUsageBar(theme) {
     return;
   }
   await windowBarLines(theme, '/accounts/studio');
+}
+
+/**
+ * The story's approved Ultra account, workshop, carries no 5-hour window, so the Usage card on its own Accounts page
+ * draws the whole slot: "no 5-hour window" muted in the share's place with the window's words on its title, read at
+ * 1280 by 800 as the window triples' absent slots are read. The mock pass opens the page after the view's shot.
+ */
+async function approvedUltraUsageCard(theme) {
+  const path = '/accounts/workshop';
+  await loadAtOrigin(path, '.detail .wbars');
+  const absent = (await readAbsentSlots()).filter((a) => a.detail);
+  if (!absent.some((a) => !a.compact && a.words === 'no 5-hour window' && a.title === 'no 5-hour window')) failures.push(`${theme} ${path}: the Usage card of the story's approved Ultra account draws no whole slot naming its missing 5-hour window`);
+  sayAbsentSlots(theme, path, absent);
 }
 
 /**
@@ -7430,14 +7552,14 @@ async function settingsUnitLegend(theme) {
 }
 
 /**
- * The top bar on every view at 1280 and 400 px: nothing scrolls it sideways and its last control ends inside its
- * padding, the page title reads whole on one line, and Log out is a text button at 1280 px and its icon alone at
- * 400 px, named by its label and its title for the reader who cannot see the glyph.
+ * The top bar on every view at 1440, 1280, 900, 400 and 360 px: nothing scrolls it sideways and its last control ends
+ * inside its padding, the page title reads whole on one line, and Log out is a text button at 1280 px and its icon
+ * alone at 400 px, named by its label and its title for the reader who cannot see the glyph.
  */
 async function topBarFits(theme, path) {
   try {
-    for (const width of [1280, 400]) {
-      await page.setViewportSize({ height: 800, width });
+    for (const width of [1440, 1280, 900, 400, 360]) {
+      await page.setViewportSize({ height: width === 1440 ? 900 : 800, width });
       await settle();
       const read = await page.evaluate(() => {
         const bar = document.querySelector('.topbar');
@@ -7745,8 +7867,11 @@ async function shellBanner(theme) {
 /**
  * An anchored pool card or key row under the reload banner, on loads of its own under the mock's build switch: the view
  * loads with the banner drawn and the token past the bar's 52 px, then moves to the hash of its first card or row,
- * which lands with its top edge 16 px under the sticky block's bottom, each side rounded, rather than behind the
- * banner. The Pools view is read at 1280 by 800 and the Keys view at 1280 by 400, since at 800 px tall the six keys
+ * which lands with its top edge 16 px under the sticky block's bottom rather than behind the banner. Both edges are
+ * read raw and the top may sit up to half a pixel off: the text lines above the first card or row take fractional
+ * heights under the console's line heights (on Pools the page head's meta line and the tiles' label and pair lines),
+ * so its offset in the document carries a fraction that the browser's scroll, which stops on whole pixels, leaves
+ * standing. The Pools view is read at 1280 by 800 and the Keys view at 1280 by 400, since at 800 px tall the six keys
  * leave the page too short to scroll the first row to its margin. The view loads again without the switch at 1280 by
  * 800, so the measures after it read the view as it first drew.
  */
@@ -7779,16 +7904,15 @@ async function anchoredRowUnderBanner(theme, path) {
         const el = [...document.querySelectorAll(row)].find((e) => e.id === id);
         const main = document.querySelector('.main');
         const block = document.querySelector('.main__top');
-        const round = (n) => Math.round(n * 10) / 10;
         return {
           banner: document.querySelector('.main__top > .callout[role="status"]') !== null,
-          block: block ? round(block.getBoundingClientRect().bottom) : null,
+          block: block ? block.getBoundingClientRect().bottom : null,
           hash: location.hash,
           margin: el ? getComputedStyle(el).scrollMarginTop : null,
           room: Math.round(document.scrollingElement.scrollHeight - window.innerHeight),
-          scrolled: Math.round(document.scrollingElement.scrollTop),
+          scrolled: document.scrollingElement.scrollTop,
           token: main ? getComputedStyle(main).getPropertyValue('--main-top').trim() : null,
-          top: el ? round(el.getBoundingClientRect().top) : null,
+          top: el ? el.getBoundingClientRect().top : null,
         };
       },
       { id, row },
@@ -7799,7 +7923,7 @@ async function anchoredRowUnderBanner(theme, path) {
       say(`the ${noun} #${id} or the sticky block is not drawn to measure`);
       return;
     }
-    for (const what of compare({ top: Math.round(read.top) }, { top: Math.round(read.block + 16) }, ['top'], `the ${noun} #${id}'s top edge against 16 px under the sticky block's bottom`)) say(what);
+    if (Math.abs(read.top - (read.block + 16)) > 0.5) say(`the ${noun} #${id}'s top edge sits at ${read.top} px, more than half a pixel off 16 px under the sticky block's bottom at ${read.block} px`);
   } finally {
     await page.evaluate((key) => localStorage.removeItem(key), BUILD_MISMATCH_SWITCH);
     await page.setViewportSize({ height: 800, width: 1280 });
@@ -11015,8 +11139,8 @@ async function costReference(theme) {
         await atRest();
         await dialog.screenshot({ path: join(shots, theme, `cost-reference-${slug}.png`) });
       }
-      // The older models show under the fold row too, the estimated weight cells among them, so the stripes and the
-      // width are read with them open, and the fold closes again for the next shot.
+      // The older models show under the fold row too, so the stripes and the width are read with them open, and the
+      // fold closes again for the next shot.
       const fold = dialog.locator('.cost-ref__panel:not([hidden]) tr.cost-ref__fold button');
       if ((await fold.count()) > 0) {
         await fold.click();
@@ -12061,6 +12185,7 @@ try {
         await attentionLine(theme);
         await statGrid(theme);
         await dashboardTiles(theme);
+        if (mock) await dashboardWidestFigure(theme);
         await dashboardTileWords(theme);
         await diagnosticsNav(theme, view.path);
       }
@@ -12303,6 +12428,7 @@ try {
       if (view.path === '/accounts') await planEndedLines(theme, '/accounts/sunset');
       if (view.path === '/accounts' && mock) await firstReadingHint(theme);
       if (view.path === '/accounts' && mock) await slowedUsageBar(theme);
+      if (view.path === '/accounts' && mock) await approvedUltraUsageCard(theme);
       if (view.path === '/accounts' && mock) await allowancePricedWeek(theme);
       if (CARD_VIEWS.includes(view.path)) await barRow(theme, view.path);
     }
