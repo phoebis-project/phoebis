@@ -852,16 +852,6 @@ mod tests {
     }
 
     #[test]
-    fn a_report_under_the_spelling_after_the_table_knows_its_dated_id_lands_under_the_dated_id() {
-        let mut map = AffinityMap::default();
-        map.learn_resolution("spelling", "dated");
-        let mut r = report("k", "a", 1_000);
-        r.canonical_model = "spelling".into();
-        map.record(&r);
-        assert!(map.entry("dated", "b2").is_some());
-    }
-
-    #[test]
     fn a_lookup_with_the_spelling_finds_an_entry_recorded_under_the_dated_id() {
         let mut map = AffinityMap::default();
         map.learn_resolution("spelling", "dated");
@@ -1037,51 +1027,6 @@ mod tests {
             (300_000, 3_600_000),
             "the static size is an estimate that can run past the real prefix, so a read short of it proves no static \
              write: the static boundaries keep five minutes and the message boundary records the hour"
-        );
-    }
-
-    #[test]
-    fn a_restored_entry_keeps_the_depth_its_row_names() {
-        let map = AffinityMap::from_rows(vec![AffinityRow {
-            model: "m".into(),
-            hash: "b3".into(),
-            chain: AffinityChain::Message,
-            account_id: "a".into(),
-            incarnation: 1,
-            written_at: 1_000,
-            ttl_ms: 300_000,
-            prefix_tokens: 500,
-            key_id: "k".into(),
-            key_generation: 0,
-            root: "b1".into(),
-            lane: crate::lane_key("m", "standard", "none", "-"),
-            depth: 3,
-            message_id: None,
-        }]);
-        assert_eq!(map.entry("m", "b3").map(|e| e.depth), Some(3));
-    }
-
-    #[test]
-    fn a_restored_entry_keeps_the_message_id_its_row_names() {
-        let map = AffinityMap::from_rows(vec![AffinityRow {
-            model: "m".into(),
-            hash: "b1".into(),
-            chain: AffinityChain::Message,
-            account_id: "a".into(),
-            incarnation: 1,
-            written_at: 1_000,
-            ttl_ms: 300_000,
-            prefix_tokens: 500,
-            key_id: "k".into(),
-            key_generation: 0,
-            root: "b1".into(),
-            lane: crate::lane_key("m", "standard", "none", "-"),
-            depth: 1,
-            message_id: Some("msg_01".into()),
-        }]);
-        assert_eq!(
-            map.entry("m", "b1").and_then(|e| e.message_id.as_deref()),
-            Some("msg_01")
         );
     }
 

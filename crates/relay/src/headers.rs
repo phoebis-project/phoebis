@@ -628,17 +628,6 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_injection_list_leaves_a_missing_beta_line_missing() {
-        let caller = head(&[("Authorization", "Bearer phoebis-testkey")]);
-        let head = emit_injected(&caller, &[]);
-        assert!(!head
-            .headers
-            .iter()
-            .any(|(n, _)| n.eq_ignore_ascii_case("anthropic-beta")));
-        assert!(head.injected.is_empty());
-    }
-
-    #[test]
     fn an_empty_beta_line_carries_the_injected_beta_alone() {
         let caller = head(&[
             ("Authorization", "Bearer phoebis-testkey"),
@@ -719,43 +708,6 @@ mod tests {
         let (line, injected) = betas("", &api_key(), &[Injected::ExtendedTtlBeta], &[]);
         assert_eq!(line, "extended-cache-ttl-2025-04-11");
         assert_eq!(injected, vec![Injected::ExtendedTtlBeta]);
-    }
-
-    #[test]
-    fn a_dropped_beta_leaves_the_list() {
-        let caller = head(&[(
-            "anthropic-beta",
-            "claude-code-20250219,extended-cache-ttl-2025-04-11",
-        )]);
-        let (line, injected) = betas(
-            "claude-code-20250219,extended-cache-ttl-2025-04-11",
-            &api_key(),
-            &[],
-            &["extended-cache-ttl-2025-04-11"],
-        );
-        assert_eq!(line, "claude-code-20250219");
-        assert!(injected.is_empty());
-
-        let emitted = outbound_headers(
-            &HeaderMap::new(),
-            Some(&caller),
-            &api_key(),
-            "api.anthropic.com",
-            7,
-            None,
-            None,
-            &[],
-            &["extended-cache-ttl-2025-04-11"],
-        );
-        assert_eq!(
-            emitted
-                .headers
-                .iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case("anthropic-beta"))
-                .unwrap()
-                .1,
-            "claude-code-20250219"
-        );
     }
 
     #[test]

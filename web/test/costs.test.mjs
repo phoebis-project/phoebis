@@ -463,11 +463,6 @@ test('fundingOf reads the account kind, then a fast answer, then overage, and a 
   assert.equal(d.fundingOf(null), 'api_key', 'a request with no attempt is billed in dollars');
 });
 
-test('the native unit of a subscription window is the 20x equivalent, and of every other funding dollars', () => {
-  assert.equal(d.nativeOf('plan'), 'equivalent');
-  for (const funding of ['api_key', 'fast', 'overage']) assert.equal(d.nativeOf(funding), 'usd', funding);
-});
-
 // The shipped cost model, as the settings answer carries it.
 const shipped = d.decodeSettings(JSON.parse(readFileSync(new URL('./fixtures/settings.json', import.meta.url), 'utf8')).body).subscriptionCosts;
 
@@ -569,19 +564,23 @@ test('the worked figures: a million input tokens of a model read its units over 
   const model = 'claude-opus-5-5';
   const anchor = d.anchorTier(shipped);
   const million = usage({ input: 1_000_000 });
-  const units = 1_000_000 * shipped.modelWeight[model] * shipped.typeMultiplier.input;
-  close(d.equivalentOf(shipped, 'five_hour', model, million, OUT)?.equivalent, units / d.tierCapacity(shipped, anchor, 'five_hour'), 'the 20x 5-hour window');
-  close(d.equivalentOf(shipped, 'five_hour', model, million, IN)?.equivalent, units / d.tierCapacity(shipped, anchor, 'five_hour') / shipped.peak.capacityFactor.fiveHour, 'inside the band');
-  close(d.equivalentOf(shipped, 'seven_day', model, million, OUT)?.equivalent, units / d.tierCapacity(shipped, anchor, 'seven_day'), 'the 20x 7-day window');
+  // Opus 5.5 weighs 2.2 and an input token 1, so a million input tokens are 2,200,000 units (docs/site/statistics.md).
+  // The shipped Max 20x anchor holds 150,000,000 units on the 5-hour window and 900,000,000 on the week, and the band's
+  // 5-hour capacity factor is 0.7.
+  close(d.equivalentOf(shipped, 'five_hour', model, million, OUT)?.equivalent, 2_200_000 / 150_000_000, 'the 20x 5-hour window');
+  close(d.equivalentOf(shipped, 'five_hour', model, million, IN)?.equivalent, 2_200_000 / 150_000_000 / 0.7, 'inside the band');
+  close(d.equivalentOf(shipped, 'seven_day', model, million, OUT)?.equivalent, 2_200_000 / 900_000_000, 'the 20x 7-day window');
   assert.deepEqual(d.modelWeeks(shipped, model), [], 'Opus 5.5 carries no model week');
   const fable = 'claude-fable-5-1';
-  const fableUnits = 1_000_000 * shipped.modelWeight[fable] * shipped.typeMultiplier.input;
-  close(d.equivalentOf(shipped, 'seven_day_fable', fable, million, OUT)?.equivalent, fableUnits / d.tierCapacity(shipped, anchor, 'seven_day') / shipped.modelWindows.seven_day_fable.capacityFactor, 'the 20x 7-day Fable window');
+  // Fable 5.1 weighs 10, so 10,000,000 units, over its model week of half the 7-day window.
+  close(d.equivalentOf(shipped, 'seven_day_fable', fable, million, OUT)?.equivalent, 10_000_000 / 900_000_000 / 0.5, 'the 20x 7-day Fable window');
   const output = usage({ output: 1_000_000 });
-  close(d.equivalentOf(shipped, 'five_hour', model, output, OUT)?.equivalent, (1_000_000 * shipped.modelWeight[model] * shipped.typeMultiplier.output) / d.tierCapacity(shipped, anchor, 'five_hour'), 'output tokens at their multiplier');
-  // The same request on a Pro account reads its own window's share apart and the one equivalent.
+  // An output token multiplies by 5: 11,000,000 units.
+  close(d.equivalentOf(shipped, 'five_hour', model, output, OUT)?.equivalent, 11_000_000 / 150_000_000, 'output tokens at their multiplier');
+  // The same request on a Pro account reads its own window's share apart and the one equivalent, Pro's 5-hour window
+  // holding 7,500,000 units.
   const pro = 'default_claude_ai';
-  close(d.shareOrFallback(shipped, 'five_hour', pro, model, million, OUT)?.share, units / d.tierCapacity(shipped, pro, 'five_hour'), "a Pro account's own 5-hour share");
+  close(d.shareOrFallback(shipped, 'five_hour', pro, model, million, OUT)?.share, 2_200_000 / 7_500_000, "a Pro account's own 5-hour share");
   close(d.shareOrFallback(shipped, 'five_hour', anchor, model, million, OUT)?.share, d.equivalentOf(shipped, 'five_hour', model, million, OUT)?.equivalent, 'the equivalent is the anchor tier\'s share');
 });
 

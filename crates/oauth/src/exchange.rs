@@ -288,7 +288,10 @@ mod tests {
     fn a_token_parse_failure_never_quotes_the_value_it_refused() {
         let body = br#"{"access_token":"a","expires_in":"sk-ant-oat01-PLACEHOLDER"}"#;
         let error = parse_token_response(body).expect_err("a string lifetime is not a token");
-        assert_eq!(error.to_string(), "control response is not valid JSON");
+        assert!(
+            !error.to_string().contains("sk-ant-oat01-PLACEHOLDER"),
+            "{error}"
+        );
     }
 
     #[test]

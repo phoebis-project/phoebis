@@ -5205,25 +5205,21 @@ mod tests {
         row.input_tokens = 1_000;
         row.cache_read_tokens = 500;
         row.output_tokens = 100;
-        let usage = row.usage();
         let at = HOUR * 1_000;
         let entrypoint = entrypoint_of_client(&row.client);
-        let whole = price_equivalent(&tables, entrypoint, model, usage, at, at).shares;
-        let priced_whole = std::cell::Cell::new(0);
+        // Figures no pricing of the row's usage answers, so a sum that priced it again reads other ones.
+        let whole: WindowShares =
+            IndexMap::from([(FIVE_HOUR, Some(0.375)), (SEVEN_DAY, Some(0.0625))]);
         let mut sums = ShareSums::default();
-        sums.add_priced(&row, true, Some(whole.clone()), |priced| {
-            if priced == usage {
-                priced_whole.set(priced_whole.get() + 1);
-            }
+        sums.add_priced(&row, true, Some(whole), |priced| {
             price_equivalent(&tables, entrypoint, model, priced, at, at).shares
         });
-        assert_eq!(priced_whole.get(), 0, "the whole usage is not priced again");
         let cost: Vec<_> = sums.cost.iter().map(|(w, sum)| (*w, sum.sum)).collect();
-        let want: Vec<_> = whole
-            .iter()
-            .map(|(w, share)| (*w, share.unwrap()))
-            .collect();
-        assert_eq!(cost, want);
+        assert_eq!(
+            cost,
+            [(FIVE_HOUR, 0.375), (SEVEN_DAY, 0.0625)],
+            "the whole usage is not priced again"
+        );
     }
 
     /// No reader of a priced row reads its shares, since the shares a route answers come from the share fold under

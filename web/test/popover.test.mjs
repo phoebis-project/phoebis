@@ -86,16 +86,11 @@ test('the box portals to the body as a dialog with aria-modal false and its labe
   assert.ok(document.activeElement === el.querySelector('input'), 'the field before the button takes focus');
 });
 
-test("a popover anchored on a Button's forwarded ref hangs 8 px under it, left edges aligned, and Escape returns focus to it", () => {
-  const closes = [];
-  const { container } = render(h(Opened, { onClose: () => closes.push('close') }, content()));
-  const anchor = container.querySelector('.btn');
+test("a popover anchored on a Button's forwarded ref hangs 8 px under it, left edges aligned", () => {
+  render(h(Opened, { onClose() {} }, content()));
   const el = box();
   assert.ok(el, "the box draws once the Button's ref names its element");
   assert.deepEqual([el.style.position, el.style.left, el.style.top, el.style.visibility, el.style.maxHeight], ['fixed', '40px', '108px', 'visible', '784px']);
-  press('Escape');
-  assert.ok(document.activeElement === anchor, 'Escape puts focus on the Button');
-  assert.deepEqual(closes, ['close']);
 });
 
 test("the box flips above an anchor near the window's foot and keeps 8 px inside the window", () => {

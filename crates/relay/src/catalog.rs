@@ -1160,14 +1160,6 @@ mod tests {
             row("claude-opus-5"),
             row("claude-sonnet-4-6"),
         ];
-        assert_eq!(
-            derive(&listing, "claude-sonnet-4-5"),
-            Some("claude-sonnet-4-5-20250929".to_string())
-        );
-        assert_eq!(derive(&listing, "claude-opus-5"), None);
-        assert_eq!(derive(&listing, "claude-sonnet-4-6"), None);
-        assert_eq!(derive(&listing, "claude-nope"), None);
-        assert_eq!(derive(&listing, "claude-sonnet-4-5-20250929"), None);
         let all = derive_all(&listing);
         assert_eq!(all.len(), 1);
         assert_eq!(

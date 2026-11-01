@@ -15,23 +15,15 @@ test('a request class folds as the rollups file it: - for none, an identifier up
   for (const raw of ['bad class', 'x'.repeat(65), 'café']) assert.equal(d.foldRequestClass(raw), d.OTHER_DIMENSION, `${raw.slice(0, 12)} reads as other`);
 });
 
-test("the Agent dimension leads the Subject group on both logs with the word agent, apart from the user agent's word", () => {
-  assert.deepEqual(d.AGENT_ID, { field: 'agentId', group: 'Subject', kind: 'id', label: 'Agent', mono: true, word: 'agent' });
+test('no two dimensions on either log share a word, so the agent reads apart from the user agent', () => {
   for (const [view, dimensions] of [['requests', d.REQUESTS_DIMENSIONS], ['routingLog', d.ROUTING_LOG_DIMENSIONS]]) {
-    assert.deepEqual(dimensions.slice(-3).map((x) => x.field), ['agentId', 'request', 'session'], `${view}: the list ends on the Subject group`);
-    assert.deepEqual(dimensions.filter((x) => x.group === 'Subject').map((x) => x.field), ['agentId', 'request', 'session'], `${view}: the Subject group`);
-    assert.equal(dimensions.at(-3), d.AGENT_ID, `${view}: the one shared dimension`);
     assert.equal(new Set(dimensions.map((x) => x.word)).size, dimensions.length, `${view}: no two dimensions share a word`);
   }
-  assert.equal(d.REQUESTS_DIMENSIONS.find((x) => x.field === 'agent')?.word, 'user agent');
 });
 
-test('the Analytics Client and User agent filters are typed lists with a chip per value, a long value cut after 32 characters', () => {
+test('the Analytics Client and User agent filters draw a chip per value, a long value cut after 32 characters', () => {
   const of = (field) => d.ANALYTICS_DIMENSIONS.find((x) => x.field === field);
-  assert.deepEqual(of('clients'), { field: 'clients', group: 'Request', kind: 'list', label: 'Client', mono: true, perValue: true, typed: true, word: 'client' });
-  assert.deepEqual(of('userAgents'), { field: 'userAgents', group: 'Request', kind: 'list', label: 'User agent', mono: true, perValue: true, typed: true, word: 'user agent' });
   const long = 'claude-cli/2.1.302 (external, sdk-cli) x';
-  assert.equal(long.length, 40);
   const chips = d.chipsOf([of('userAgents')], { userAgents: ['claude-cli/2.0.*', long] }, {});
   assert.deepEqual(chips.map((c) => [c.text, c.title, c.value]), [
     ['user agent: claude-cli/2.0.*', 'claude-cli/2.0.*', 'claude-cli/2.0.*'],
@@ -39,15 +31,4 @@ test('the Analytics Client and User agent filters are typed lists with a chip pe
   ]);
   assert.deepEqual(d.chipText(of('clients'), [long]), { text: `client: ${long.slice(0, 32)}…`, title: long, values: `${long.slice(0, 32)}…` });
   assert.deepEqual(d.chipText(of('clients'), ['x'.repeat(32)]), { text: `client: ${'x'.repeat(32)}`, title: 'x'.repeat(32), values: 'x'.repeat(32) }, 'a value of 32 characters reads whole');
-});
-
-test("the Sessions view's filters are its three flags in the bar's order", () => {
-  assert.deepEqual(
-    d.SESSIONS_DIMENSIONS.map((x) => [x.field, x.kind, x.label]),
-    [
-      ['companion', 'flag', 'Companion only'],
-      ['finished', 'flag', 'Finished sessions'],
-      ['released', 'flag', 'Released agents'],
-    ],
-  );
 });

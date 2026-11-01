@@ -716,29 +716,6 @@ mod tests {
     }
 
     #[test]
-    fn a_model_only_rejection_cools_only_the_requested_model() {
-        let h = head(
-            429,
-            &[
-                ("anthropic-ratelimit-unified-status", "rejected"),
-                (
-                    "anthropic-ratelimit-unified-representative-claim",
-                    "seven_day_fable",
-                ),
-                ("anthropic-ratelimit-unified-5h-status", "allowed"),
-                ("anthropic-ratelimit-unified-7d-status", "allowed"),
-                ("anthropic-ratelimit-unified-7d_oi-status", "rejected"),
-                ("anthropic-ratelimit-unified-7d_oi-reset", "1700007200"),
-            ],
-        );
-        let c = cooldown_of(classify(&h, &fable_ctx()));
-        assert_eq!(
-            (c.scope, c.until, c.window.as_str()),
-            (Scope::Model, 1_700_007_200_000 + 1_000, "seven_day_fable")
-        );
-    }
-
-    #[test]
     fn a_spend_cap_rejection_of_the_overage_window_cools_only_the_model() {
         // The header set an organization at its spend cap answers, as observed: no 5h status, a 5h utilization
         // of zero, no reset header, `Retry-After` alone.

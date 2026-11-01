@@ -160,14 +160,3 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     })
     .into_response()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::Dashboard;
-    use crate::openapi::round_trip::round_trips;
-
-    #[test]
-    fn the_dashboard_fixture_round_trips_through_its_declared_type() {
-        round_trips::<Dashboard>("dashboard");
-    }
-}

@@ -197,6 +197,8 @@ mod tests {
         tokio::spawn(async move {
             for chunk in chunks {
                 tx.write_all(&chunk).await.unwrap();
+                // On the tests' paused clock the hold reads each chunk before the next one is written, so an
+                // event split across two chunks reaches it in two reads.
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
             // The writer stays open past the last chunk so the hold has to decide on its own.
@@ -214,7 +216,7 @@ mod tests {
         chunks.iter().map(|c| c.as_bytes().to_vec()).collect()
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_ping_is_held_until_message_start_commits() {
         let held = held_from(
             plain(&[
@@ -241,7 +243,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn an_error_before_message_start_commits_with_its_data_and_an_event_split_across_chunks_is_reassembled(
     ) {
         let error = event(
@@ -264,7 +266,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_crlf_message_start_followed_by_an_lf_error_commits_on_message_start() {
         let chunks = plain(&["event: message_start\r\ndata: {}\r\n\r\n", "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"}}\n\n"]);
         let held = held_from(chunks, Inspect::new(None), Duration::from_secs(1)).await;
@@ -283,7 +285,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_compressed_stream_is_inspected_decoded_and_held_raw() {
         let text = format!("{}{}", event("ping", "{}"), event("message_start", "{}"));
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
@@ -320,7 +322,7 @@ mod tests {
             .unwrap()
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn the_end_of_the_body_commits_on_a_last_event_missing_its_empty_line() {
         let ping = event("ping", "{}");
         let held = held_to_end_of_body(plain(&[&ping])).await;
@@ -333,7 +335,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn the_hold_gives_up_on_time_and_on_either_bound() {
         let held = held_from(
             plain(&[&event("ping", "{}")]),

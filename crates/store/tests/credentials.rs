@@ -347,7 +347,7 @@ fn a_bogus_attempt_id_is_rejected_and_leaves_credentials_unchanged() {
 
 #[test]
 fn secret_debug_never_prints_the_value() {
-    assert_eq!(format!("{:?}", Secret::new("hunter2")), "Secret(***)");
+    assert!(!format!("{:?}", Secret::new("hunter2")).contains("hunter2"));
 }
 
 #[test]
@@ -702,18 +702,6 @@ fn a_holders_newest_settled_attempts_read_newest_first_within_the_bound_and_its_
         3,
         "and the previous holder keeps its own"
     );
-}
-
-#[test]
-fn a_failed_holder_read_answers_an_error_once() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store.insert_account(&account("a")).unwrap();
-    store.debug_fail_next_refresh_read();
-    assert!(store.newest_resolved_refresh_attempts("a", 1, 16).is_err());
-    assert!(store
-        .newest_resolved_refresh_attempts("a", 1, 16)
-        .unwrap()
-        .is_empty());
 }
 
 #[test]

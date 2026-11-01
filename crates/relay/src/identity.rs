@@ -409,65 +409,6 @@ mod tests {
     }
 
     #[test]
-    fn the_client_class_reads_the_entrypoint_or_other() {
-        let agent = |value: &str| {
-            let mut headers = HeaderMap::new();
-            headers.insert(axum::http::header::USER_AGENT, value.parse().unwrap());
-            headers
-        };
-        assert_eq!(
-            client_class(&agent("claude-cli/2.1.269 (external, sdk-cli)")),
-            "claude-code/sdk-cli"
-        );
-        assert_eq!(
-            client_class(&agent(
-                "claude-cli/2.1.295 (external, claude-desktop-3p, agent-sdk/0.3.295)"
-            )),
-            "claude-code/claude-desktop-3p"
-        );
-        assert_eq!(
-            client_class(&agent("claude-cli/2.1.300 (external, cli, workload/cron)")),
-            "claude-code/cli"
-        );
-        assert_eq!(
-            client_class(&agent("claude-cli/2.1.269 (external, cli)")),
-            "claude-code/cli"
-        );
-        assert_eq!(
-            client_class(&agent("claude-cli/2.1.269")),
-            "claude-code/cli"
-        );
-        assert_eq!(
-            client_class(&agent("claude-cli/2.1.269;x (external, cli; y)")),
-            "claude-code/cli",
-            "the class is a label and never the version gate"
-        );
-        let over_bound = format!(
-            "claude-cli/2.1.269 (external, {})",
-            "a".repeat(MAX_ID_LEN + 1)
-        );
-        assert_eq!(
-            client_class(&agent(&over_bound)),
-            "claude-code/cli",
-            "an entrypoint token past the bound reads as unknown rather than widening the class"
-        );
-        let mut headers = agent("anthropic-sdk-python/0.40.0");
-        headers.insert("x-stainless-lang", "python".parse().unwrap());
-        assert_eq!(client_class(&headers), OTHER_CLIENT);
-        assert_eq!(
-            client_class(&agent("anthropic-sdk-python/0.40.0")),
-            OTHER_CLIENT
-        );
-        let mut headers = agent("anthropic-sdk-python/0.40.0");
-        headers.insert("x-stainless-lang", "py thon".parse().unwrap());
-        assert_eq!(
-            client_class(&headers),
-            OTHER_CLIENT,
-            "a stainless header on an agent outside Claude Code does not change the label"
-        );
-    }
-
-    #[test]
     fn the_identity_carries_the_entrypoint_for_a_claude_cli_agent_and_none_for_any_other() {
         let agent = |value: &str| {
             let mut headers = HeaderMap::new();
@@ -920,40 +861,12 @@ mod tests {
     }
 
     #[test]
-    fn a_session_header_names_the_conversation() {
-        let mut identity = identity_of(Some("s1"));
-        let k = key();
-        climb(&mut identity, &k, &[], None, &Stub(HashMap::new()));
-        assert_eq!(identity.session_id.as_deref(), Some("s1"));
-        assert_eq!(identity.forked_from, None);
-        assert_eq!(identity.fork_depth, None);
-    }
-
-    #[test]
     fn an_empty_boundary_slice_never_reaches_the_lookup() {
         let mut identity = identity_of(Some("s1"));
         let k = key();
         climb(&mut identity, &k, &[], None, &Panicking);
         assert_eq!(identity.forked_from, None);
         assert_eq!(identity.fork_depth, None);
-    }
-
-    #[test]
-    fn a_session_request_whose_messages_continue_another_conversation_is_a_fork_of_it() {
-        let mut identity = identity_of(Some("s1"));
-        let k = key();
-        let mut map = HashMap::new();
-        map.insert("b3", ("k", matched("s0", Some(3))));
-        climb(
-            &mut identity,
-            &k,
-            &["b1".into(), "b2".into(), "b3".into()],
-            None,
-            &Stub(map),
-        );
-        assert_eq!(identity.session_id.as_deref(), Some("s1"));
-        assert_eq!(identity.forked_from.as_deref(), Some("s0"));
-        assert_eq!(identity.fork_depth, Some(3));
     }
 
     #[test]

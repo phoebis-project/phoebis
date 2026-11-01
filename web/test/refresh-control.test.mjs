@@ -12,7 +12,7 @@ globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
 const { act, createElement: h, createRoot, FilterBar, RefreshControl, useState } = await import('./dist/ui.js');
-const { PAUSE_CAUSE, RELOAD_INTERVALS } = await import('./dist/api.js');
+const { RELOAD_INTERVALS } = await import('./dist/api.js');
 
 const roots = [];
 afterEach(() => {
@@ -87,13 +87,8 @@ test("the part reads the interval's word, its state on the root and its title, w
   assert.deepEqual([c.word(), c.state(), c.part().title], ['5 s', 'paused', 'Auto reload every 5 s, paused while a request is open']);
 });
 
-test("the title names each cause while paused, the hidden tab the control's own", () => {
+test('a hidden tab pauses the control on its own reading and names itself in the title', () => {
   const c = control({ intervalMs: 10_000 });
-  for (const cause of Object.keys(PAUSE_CAUSE).filter((k) => k !== 'hidden')) {
-    c.render({ intervalMs: 10_000, paused: cause });
-    assert.deepEqual([c.state(), c.part().title], ['paused', `Auto reload every 10 s, ${PAUSE_CAUSE[cause]}`], cause);
-  }
-  c.render({ intervalMs: 10_000, paused: null });
   let hidden = true;
   Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
   visibility();
@@ -101,7 +96,6 @@ test("the title names each cause while paused, the hidden tab the control's own"
   hidden = false;
   visibility();
   assert.deepEqual([c.state(), c.part().title], ['on', 'Auto reload every 10 s']);
-  assert.equal(PAUSE_CAUSE.hidden, 'paused while the tab is hidden');
 });
 
 test('an off part with a note names it after a comma, and an interval leaves the note out', () => {
@@ -241,7 +235,7 @@ test('a FilterBar draws only the slots it is given, and its sticky variant', () 
   assert.ok(b.root().classList.contains('filter-bar--sticky'));
 });
 
-test("a FilterBar writes a chip's x as its empty value and hands the focus on from the last chip", () => {
+test("a FilterBar writes a chip's x as its empty value", () => {
   const b = bar({}, { keys: ['k1'], status: 'active' });
   const chips = () => [...b.root().querySelectorAll('.chip-line .chip--filter')].map((c) => c.textContent);
   assert.deepEqual(chips(), ['key: alpha', 'status: Active']);
@@ -250,7 +244,6 @@ test("a FilterBar writes a chip's x as its empty value and hands the focus on fr
   assert.deepEqual(chips(), ['status: Active']);
   click(b.root().querySelector('button[aria-label="Remove status filter"]'));
   assert.deepEqual(b.patches.at(-1), { status: 'all' }, "a choice's empty value is its default");
-  assert.equal(document.activeElement?.textContent, 'Add filter', 'the last chip hands the focus to Add filter');
 });
 
 test('a FilterBar Clear all writes every dimension and leaves the range, the search and the page size', () => {

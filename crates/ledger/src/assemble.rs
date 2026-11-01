@@ -1734,54 +1734,56 @@ mod tests {
     #[test]
     fn the_entry_cap_eviction_releases_the_victims_capture_budget_too() {
         let mut a = Assembler::new(clock_at(1_000));
+        // The entry cap's worth of captures fills the budget to the byte, so a victim's charge left behind pushes
+        // the next capture past it.
+        let size = MAX_CAPTURE_BYTES / MAX_IN_FLIGHT;
         for i in 0..MAX_IN_FLIGHT {
             a.observe(observed_capturing_with_body(
                 &format!("r{i}"),
-                vec![b'x'; 10],
+                vec![b'x'; size],
             ));
         }
-        let before = a.retained_capture_bytes();
-        assert_eq!(before, MAX_IN_FLIGHT * 10);
-        let records = a.observe(observed_capturing_with_body("overflow", vec![b'x'; 10]));
+        let records = a.observe(observed_capturing_with_body("overflow", vec![b'x'; size]));
         assert_eq!(
-            records.iter().find_map(gap_detail),
-            Some(("r0".to_string(), "in_flight_cap".to_string()))
+            records.iter().filter_map(gap_detail).collect::<Vec<_>>(),
+            vec![("r0".to_string(), "in_flight_cap".to_string())],
+            "the evicted entry's bytes came back out, so the new entry's charge stays inside the budget"
         );
-        assert_eq!(
-            a.retained_capture_bytes(),
-            before,
-            "the evicted entry's bytes came back out, so the new entry's charge does not grow the total"
-        );
-        // Nothing leaked upward: steady turnover at the entry cap never approaches the capture budget.
-        let more = a.observe(observed_capturing_with_body("more", vec![b'x'; 10]));
+        let more = a.observe(observed_capturing_with_body("more", vec![b'x'; size]));
         assert!(
             !more
                 .iter()
                 .any(|r| gap_detail(r).is_some_and(|(_, reason)| reason == "capture_budget")),
-            "the budget was never approached, only the unrelated entry cap"
+            "the next turnover gives its victim's bytes back too"
         );
-        assert_eq!(a.retained_capture_bytes(), before);
     }
 
     #[test]
     fn a_completed_capture_gives_its_charge_back_to_the_budget() {
         let mut a = Assembler::new(clock_at(1_000));
-        for id in ["r1", "r2"] {
-            a.observe(observed_capturing_with_body(id, vec![b'x'; 10]));
-            a.chunk(&chunk_bytes(id, 0, b"answer"));
-            assert_eq!(
-                a.retained_capture_bytes(),
-                16,
-                "{id} is charged while in flight"
-            );
-            let records = a.observe(Event::RequestComplete(completion(id, Some(1), None)));
-            assert!(request_of(&records).bodies_captured);
-            assert_eq!(
-                a.retained_capture_bytes(),
-                0,
-                "{id} left the assembler with its bodies, so nothing of it stays charged"
-            );
-        }
+        a.observe(observed_capturing_with_body("r1", vec![b'x'; 10]));
+        a.chunk(&chunk_bytes("r1", 0, b"answer"));
+        // One byte past the budget with r1's 10 request bytes and 6 response bytes counted, so the budget drops
+        // this larger capture and r1 keeps its bodies.
+        let records = a.observe(observed_capturing_with_body(
+            "filler",
+            vec![b'x'; MAX_CAPTURE_BYTES - 15],
+        ));
+        assert_eq!(
+            records.iter().find_map(gap_detail),
+            Some(("filler".to_string(), "capture_budget".to_string())),
+            "r1 is charged while in flight"
+        );
+        let records = a.observe(Event::RequestComplete(completion("r1", Some(1), None)));
+        assert!(request_of(&records).bodies_captured);
+        let records = a.observe(observed_capturing_with_body(
+            "r2",
+            vec![b'x'; MAX_CAPTURE_BYTES],
+        ));
+        assert!(
+            records.iter().find_map(gap_detail).is_none(),
+            "r1 left the assembler with its bodies, so nothing of it stays charged and the whole budget fits"
+        );
     }
 
     #[test]
@@ -1790,7 +1792,14 @@ mod tests {
         a.observe(observed_capturing_with_body("r1", vec![b'x'; 10]));
         a.chunk(&chunk_bytes("r1", 0, b"answer"));
         assert_eq!(a.expire(1_000 + IN_FLIGHT_TTL_MS).ids.len(), 1);
-        assert_eq!(a.retained_capture_bytes(), 0);
+        let records = a.observe(observed_capturing_with_body(
+            "r2",
+            vec![b'x'; MAX_CAPTURE_BYTES],
+        ));
+        assert!(
+            records.iter().find_map(gap_detail).is_none(),
+            "nothing of r1 stays charged, so the whole budget fits"
+        );
     }
 
     #[test]

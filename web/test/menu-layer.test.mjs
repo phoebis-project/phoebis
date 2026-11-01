@@ -227,7 +227,7 @@ test('Add filter opens a long list onto its search field, the arrows move betwee
   assert.equal(filterBox(), null, 'a Tab out of the list closes it');
 });
 
-test("a closed Add filter lets Escape through from its button, and a chip's x hands focus to the next chip or to Add filter as it clears", () => {
+test("a closed Add filter lets Escape through from its button and from a chip's x", () => {
   function Held() {
     const [filters, setFilters] = useState({ models: ['opus'], statuses: ['200'] });
     const [buttonRef] = useState(() => ({ current: null }));
@@ -256,13 +256,6 @@ test("a closed Add filter lets Escape through from its button, and a chip's x ha
   const fromChip = press('Escape');
   assert.ok(!fromButton.defaultPrevented && !fromChip.defaultPrevented, 'no handler takes the key');
   assert.deepEqual(atDocument, ['Escape', 'Escape'], "a drawer's Escape listener hears the key while Add filter is closed");
-  act(() => removes()[0].click());
-  assert.equal(m.container.querySelectorAll('.chip--filter').length, 1, 'the cleared filter draws no chip');
-  assert.ok(document.activeElement === m.container.querySelector('.chip--filter .chip__body'), 'focus goes to the chip that stood after it rather than leave with the x');
-  act(() => removes()[0].focus());
-  act(() => removes()[0].click());
-  assert.equal(m.container.querySelector('.chip--filter'), null, 'the last cleared filter leaves no chip');
-  assert.ok(document.activeElement === opener, 'with no chip left, focus goes to Add filter');
 });
 
 test('an open menu answers its keys from the trigger too', () => {

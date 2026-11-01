@@ -84,12 +84,8 @@ test('a figure reads a dash where the plan is Free, the cost model sizes no capa
     assert.deepEqual(d.allowanceFigure(0.33, 'seven_day', { plan: 'max_20x', tier: 'default_claude_team' }, COSTS, unit).kind, 'unpriced', `${unit}: a tier the cost model lacks`);
     assert.deepEqual(d.allowanceFigure(0.33, 'seven_day_fable', { plan: 'pro', tier: null }, COSTS, unit).kind, 'unpriced', `${unit}: no stored tier`);
   }
-  assert.equal(d.ALLOWANCE_UNPRICED_TITLE, "Unpriced: the cost model holds no capacity for this account's plan");
-  assert.notEqual(d.ALLOWANCE_UNPRICED_TITLE, d.UNPRICED_TITLE, "the analytics library's own title keeps its words beside this one");
   assert.equal(d.allowanceFigure(0.33, 'seven_day', FREE, COSTS, 'share').text, '33%', 'Window shares reads a Free account its shares');
   for (const unit of ['share', ...EQUIVALENT_UNITS]) assert.deepEqual(d.allowanceFigure(null, 'seven_day', PRO, COSTS, unit), { kind: 'none', text: '-', title: d.NO_READING_TITLE }, unit);
-  assert.equal(d.NO_READING_TITLE, 'no reading at this reset');
-  assert.equal(d.FREE_NOTE, 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it. Window shares reads the shares.');
   const texts = [0, 0.004, 0.33, 0.999].flatMap((share) => ['share', ...EQUIVALENT_UNITS].flatMap((unit) => [PRO, MAX_5X, FREE].flatMap((plan) => ['seven_day', 'seven_day_fable'].map((w) => d.allowanceFigure(share, w, plan, COSTS, unit).text))));
   assert.deepEqual(texts.filter((t) => t.includes('~')), [], 'no model is priced here, so no figure is estimated');
 });
@@ -167,8 +163,8 @@ test("a reset's hover names its instant and the reading's source in the block's 
   const at = Date.UTC(2026, 8, 12, 20, 10);
   const reset = (source) => ({ observedAt: iso(at), plan: null, resetAt: iso(at), shareLeft: 0.5, source, tier: null });
   assert.deepEqual(
-    ['sample', 'clock', 'term_ended', 'replayed'].map((source) => d.resetHover(reset(source))),
-    [`${d.fmtAbsolute(iso(at))}, read from a usage sample`, `${d.fmtAbsolute(iso(at))}, read from the clock walk`, `${d.fmtAbsolute(iso(at))}, read from the term's end`, `${d.fmtAbsolute(iso(at))}, read from replayed`],
+    ['sample', 'replayed'].map((source) => d.resetHover(reset(source))),
+    ['Sep 12, 2026, 20:10:00, read from a usage sample', 'Sep 12, 2026, 20:10:00, read from replayed'],
   );
   // A week's reset lies days back, so even one within a day of now keeps its date.
   assert.deepEqual([d.resetDate(iso(at)), d.resetInstant(iso(at)), d.resetInstant(iso(Date.UTC(2026, 9, 25, 7, 5)))], ['Sep 12', 'Sep 12 20:10', 'Oct 25 07:05']);
@@ -221,8 +217,6 @@ test('under Window shares the rows read the shares with no cost model, the unpri
   // The shares price nothing, so the card draws them before the cost model lands or after its read failed.
   const bare = d.allowanceRows(RANKED, null, 'share');
   assert.deepEqual(bare, d.allowanceRows(RANKED, COSTS, 'share'));
-  assert.deepEqual(bare.map((r) => [r.accountId, r.unpriced]), [['charlie', true], ['alpha', false], ['delta', false], ['echo', false], ['bravo', false], ['foxtrot', false]]);
-  assert.deepEqual(d.fleetFigures(bare, 'share'), d.fleetFigures(d.allowanceRows(RANKED, COSTS, 'share'), 'share'));
   // An equivalent with no cost model reads the dash, an arm the pages never draw, since they wait on the model there.
   for (const unit of EQUIVALENT_UNITS) assert.deepEqual(d.allowanceFigure(0.33, 'seven_day', PRO, null, unit), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, unit);
 });

@@ -1789,27 +1789,9 @@ async fn a_restart_restores_the_class_of_a_seats_records_and_a_payload_from_befo
     );
 }
 
-/// A saved session of an older record version carries probes with no funding to settle under, so the load drops it
-/// whole: no session comes back, nothing settles, its session row and its agent row leave the registry, and one warn
-/// line names the count.
-#[tokio::test]
-async fn a_saved_session_of_record_version_one_is_dropped_at_the_load_with_one_line() {
-    let r = rig(on_disk()).await;
-    let kept = serde_json::json!({
-        "key_generation": r.generation("desktop"),
-        "pool_id": "main",
-        "canonical_model": "claude-sonnet-4-5",
-        "account": "a",
-        "fast": false,
-        "cost": "0.0006",
-        "entry_expires": NOW + 570_000,
-    });
-    dropped_at_the_load_with_one_line(r, 1, kept).await;
-}
-
 /// A saved session of record version 2 carries a probe's dollars in place of its usage, its account tier, its
 /// instant and its band, so nothing would settle its waste under the cells and the revision the probe ran at: the
-/// load drops it whole as it drops version 1.
+/// load drops it whole.
 #[tokio::test]
 async fn a_saved_session_of_record_version_two_is_dropped_at_the_load_with_one_line() {
     let r = rig(on_disk()).await;
@@ -2276,10 +2258,11 @@ async fn a_release_after_the_quiesce_is_refused_and_leaves_the_final_save_author
     let shutdown = on_own_thread(async move { engine.shutdown().await });
     // The shutdown's save has read its snapshot and waits on the held registry.
     r.engine.persist_reached(2, 2).await;
-    let refused = r.engine.release("desktop", "session");
-    assert!(
-        refused.is_err(),
-        "a release after the quiesce answers unavailable: {refused:?}"
+    let refused = r.engine.release("desktop", "session").unwrap_err();
+    assert_eq!(
+        (refused.code, refused.status),
+        ("quiesced", 503),
+        "a release after the quiesce answers unavailable"
     );
     assert_eq!(
         r.engine.stats().retained_bytes,

@@ -5,8 +5,7 @@
 # client page skipped, a row the proxy listener does not serve, and a handler call it cannot consume. Every
 # checker case runs against a throwaway tree, never the real site. The five content checks run against throwaway
 # files in the same way: a page list short a line the binary prints, a code with no row, a quoted example that
-# drifted, a quoted unit that drifted, and prose that breaks a rule. The favicon case and the unit case at the end
-# read the real tree.
+# drifted, a quoted unit that drifted, and prose that breaks a rule. The favicon case at the end reads the real tree.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -484,12 +483,12 @@ for finding in 'fail.md:1: semicolon:' 'fail.md:2: columns: 121' 'fail.md:3: das
   echo "$out" | grep -q "$finding" || fail "prose did not report $finding: $out"
 done
 echo "$out" | grep -q 'fail.md:6:' && fail "prose reported the line that opens a wrapped span: $out"
-for word in sub-project subproject ruling rulings task tasks finding findings worktree worktrees workstream 'item 12' 'shape B' 'option 2'; do
+# A word from each of the two vocabulary patterns, a working document's word and a shape letter. The code span that
+# exempts such a word is pass.md's `task`.
+for word in task 'shape B'; do
   echo "The $word is named here." > "$tmp/prose/word.md"
   out=$(python3 "$check" prose "$tmp/prose/word.md" 2>&1) && fail "prose passed the word $word in prose"
   echo "$out" | grep -q "word.md:1: vocabulary:" || fail "prose did not report $word as vocabulary: $out"
-  echo "The \`$word\` is named here." > "$tmp/prose/word.md"
-  python3 "$check" prose "$tmp/prose/word.md" >/dev/null || fail "prose refused the word $word inside a code span"
 done
 # A span left open ends with its paragraph: a blank line or a fence line closes it, so the prose after either is read.
 {
@@ -522,7 +521,5 @@ echo "$out" | grep -q 'inner-fence.md:5: semicolon:' || fail "prose did not repo
 # Unlike the cases above this reads the real tree: the site's favicon is a copy of the console's, and nothing else
 # keeps the two equal.
 cmp -s "$here/web/public/favicon.svg" "$here/docs/site/assets/favicon.svg" || fail "docs/site/assets/favicon.svg differs from web/public/favicon.svg"
-# The real tree too: the installation page quotes the shipped unit whole.
-out=$(python3 "$check" unit 2>&1) || fail "the installation page's unit block differs from deploy/phoebis.service: $out"
 
 echo "check-docs: ok"

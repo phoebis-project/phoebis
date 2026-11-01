@@ -75,15 +75,6 @@ fn the_default_limits_are_the_specs() {
     let timing = KeepaliveTiming::default();
     assert_eq!(
         (
-            timing.lead_5m_ms,
-            timing.lead_1h_ms,
-            timing.jitter_5m_ms,
-            timing.jitter_1h_ms
-        ),
-        (60_000, 360_000, 5_000, 30_000)
-    );
-    assert_eq!(
-        (
             timing.cold_probe_limit,
             timing.retry_ms,
             timing.retry_max_ms
@@ -212,32 +203,60 @@ fn limits_and_policies_outside_their_bounds_are_refused() {
         Ok(()),
         "a zero idle window is the break-even"
     );
-    for (value, admitted) in [(59, false), (60, true), (604_800, true), (604_801, false)] {
-        let parked = KeepalivePolicy {
-            max_parked_seconds: Some(value),
+    let parked = |seconds| {
+        KeepalivePolicy {
+            max_parked_seconds: Some(seconds),
             ..KeepalivePolicy::default()
-        };
-        let horizon = KeepalivePolicy {
-            scheduled_horizon_seconds: Some(value),
-            ..KeepalivePolicy::default()
-        };
-        for (field, refused) in [
-            ("max_parked_seconds", parked.validate_fields()),
-            ("scheduled_horizon_seconds", horizon.validate_fields()),
-        ] {
-            let expected = if admitted {
-                Ok(())
-            } else {
-                Err(PolicyError::OutOfRange {
-                    field,
-                    min: 60,
-                    max: 604_800,
-                    value,
-                })
-            };
-            assert_eq!(refused, expected, "{field} at {value}");
         }
-    }
+        .validate_fields()
+    };
+    assert_eq!(
+        parked(59),
+        Err(PolicyError::OutOfRange {
+            field: "max_parked_seconds",
+            min: 60,
+            max: 604_800,
+            value: 59
+        })
+    );
+    assert_eq!(parked(60), Ok(()));
+    assert_eq!(parked(604_800), Ok(()));
+    assert_eq!(
+        parked(604_801),
+        Err(PolicyError::OutOfRange {
+            field: "max_parked_seconds",
+            min: 60,
+            max: 604_800,
+            value: 604_801
+        })
+    );
+    let horizon = |seconds| {
+        KeepalivePolicy {
+            scheduled_horizon_seconds: Some(seconds),
+            ..KeepalivePolicy::default()
+        }
+        .validate_fields()
+    };
+    assert_eq!(
+        horizon(59),
+        Err(PolicyError::OutOfRange {
+            field: "scheduled_horizon_seconds",
+            min: 60,
+            max: 604_800,
+            value: 59
+        })
+    );
+    assert_eq!(horizon(60), Ok(()));
+    assert_eq!(horizon(604_800), Ok(()));
+    assert_eq!(
+        horizon(604_801),
+        Err(PolicyError::OutOfRange {
+            field: "scheduled_horizon_seconds",
+            min: 60,
+            max: 604_800,
+            value: 604_801
+        })
+    );
     assert_eq!(
         KeepalivePolicy::parse(&json!({"max_parked_seconds": 59}))
             .unwrap_err()

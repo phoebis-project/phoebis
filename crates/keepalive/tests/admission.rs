@@ -571,17 +571,6 @@ async fn a_stream_arms_before_completion_and_a_cancel_discards() {
         ),
         (0, None, Reason::RequestCanceled)
     );
-    for (outcome, reason) in [
-        (Outcome::Failed, Reason::RequestFailed),
-        (Outcome::Rejected, Reason::RequestRejected),
-        (Outcome::Incomplete, Reason::RequestFailed),
-        (Outcome::Canceled, Reason::RequestCanceled),
-        (Outcome::Exhausted, Reason::RequestFailed),
-    ] {
-        r.engine.observe(r.observed("again", "main", BODY));
-        r.engine.observe(r.complete("again", outcome, None));
-        assert_eq!(r.status("main").reason, reason);
-    }
 }
 
 #[tokio::test]
@@ -605,13 +594,15 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
             && !encoded.contains(KEY)
             && !encoded.contains("test-beta")
     );
-    assert!(
+    assert_eq!(
         r.event(Event {
             event: "agent_start".into(),
             agent_id: Some("worker".into()),
             ..Default::default()
         })
-        .is_err(),
+        .unwrap_err()
+        .code,
+        "agent_limit",
         "the agent limit holds"
     );
     let held = r.engine.stats().retained_bytes;
@@ -816,50 +807,41 @@ async fn eviction_takes_unattended_then_the_oldest_idle_and_nothing_when_it_cann
 
 #[tokio::test]
 async fn an_oversized_request_invalidates_only_its_own_agent() {
-    for child in [false, true] {
-        let mut r = rig(RigSpec {
-            limits: KeepaliveLimits {
-                max_retained_bytes: 32 << 20,
-                ..KeepaliveLimits::default()
-            },
-            ..RigSpec::default()
-        })
-        .await;
-        r.observe("main").await;
-        let main_generation = r.status("main").request_generation;
-        let agent = if child {
-            r.event(Event {
-                event: "agent_start".into(),
-                agent_id: Some("worker".into()),
-                ..Default::default()
-            })
-            .unwrap();
-            r.observe("worker").await;
-            "worker"
-        } else {
-            "main"
-        };
-        let old = r.status(agent).request_generation;
-        let large = format!(
-            r#"{{"model":"m","max_tokens":10,"messages":[{{"role":"user","content":"{}"}}]}}"#,
-            "x".repeat(32 << 20)
-        );
-        r.engine.observe(r.observed("oversized", agent, &large));
-        let status = r.status(agent);
-        assert!(
-            status.request_generation > old
-                && status.next_probe_at.is_none()
-                && status.reason == Reason::RequestTooLarge,
-            "{status:?}"
-        );
-        if child {
-            assert_eq!(
-                r.status("main").request_generation,
-                main_generation,
-                "the child's request did not touch main"
-            );
-        }
-    }
+    let mut r = rig(RigSpec {
+        limits: KeepaliveLimits {
+            max_retained_bytes: 32 << 20,
+            ..KeepaliveLimits::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    let main_generation = r.status("main").request_generation;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("worker".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    r.observe("worker").await;
+    let old = r.status("worker").request_generation;
+    let large = format!(
+        r#"{{"model":"m","max_tokens":10,"messages":[{{"role":"user","content":"{}"}}]}}"#,
+        "x".repeat(32 << 20)
+    );
+    r.engine.observe(r.observed("oversized", "worker", &large));
+    let status = r.status("worker");
+    assert!(
+        status.request_generation > old
+            && status.next_probe_at.is_none()
+            && status.reason == Reason::RequestTooLarge,
+        "{status:?}"
+    );
+    assert_eq!(
+        r.status("main").request_generation,
+        main_generation,
+        "the child's request did not touch main"
+    );
 }
 
 /// A billing line stamping a hash; its digits need not reproduce, since a stamp the replay cannot reach is
@@ -1000,6 +982,7 @@ async fn reason_counters_measure_the_gates_and_survive_close() {
         "close keeps the counters"
     );
     assert_eq!(r.engine.stats().retained_bytes, 0);
+    assert_eq!(r.engine.stats().agents, 0);
 }
 
 /// A gap drops one event and leaves the rest of the queue behind it. A request observed inside that backlog

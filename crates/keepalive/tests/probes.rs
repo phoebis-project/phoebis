@@ -357,27 +357,6 @@ async fn a_probe_built_from_a_placeholder_request_carries_the_placeholder_and_th
     );
 }
 
-/// The decoded `system[0].text` of `body`, its billing line.
-fn billing_line(body: &[u8]) -> String {
-    let root: serde_json::Value = serde_json::from_slice(body).unwrap();
-    root["system"][0]["text"].as_str().unwrap().to_string()
-}
-
-/// Signing a placeholder is the relay's call over a line it restored, never the recipe's, so the recipe keeps a
-/// client-sent placeholder line as the client wrote it. The relay's side is
-/// `a_client_sent_placeholder_on_a_full_shape_line_is_relayed_intact` in the relay's restoration suite.
-#[test]
-fn the_recipe_keeps_a_client_sent_placeholder_line() {
-    let body = placeholder_body();
-    let recipe =
-        phoebis_keepalive::make_recipe(&[], body.as_bytes(), "claude-sonnet-4-5", 1 << 20).unwrap();
-    assert_eq!(
-        billing_line(&recipe.body),
-        billing_line(body.as_bytes()),
-        "the recipe keeps the client's line"
-    );
-}
-
 #[tokio::test]
 async fn a_heartbeat_does_not_reset_idle_or_refresh() {
     let mut r = rig(RigSpec {
@@ -589,70 +568,99 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
     );
 }
 
+/// A rig whose first probe of main the upstream has received and holds until `release`.
+async fn a_probe_held_upstream() -> Rig {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(probe_answer(2_000, 0))),
+    );
+    r.advance_attended(270_000);
+    r.engine.step().await;
+    wait_for(std::time::Duration::from_secs(5), || {
+        (r.up.requests().len() == 2).then_some(())
+    })
+    .await;
+    r
+}
+
 #[tokio::test]
 async fn a_late_probe_cannot_revive_a_new_generation() {
-    for action in ["new_request", "close", "release"] {
-        let mut r = rig(RigSpec::default()).await;
-        r.observe("main").await;
-        r.up.push_credential_rule(
-            A,
-            "/v1/messages",
-            Respond::Gated(Box::new(probe_answer(2_000, 0))),
-        );
-        r.advance_attended(270_000);
-        r.engine.step().await;
-        wait_for(std::time::Duration::from_secs(5), || {
-            (r.up.requests().len() == 2).then_some(())
-        })
-        .await;
-        match action {
-            "new_request" => r.engine.observe(r.observed("new", "main", BODY)),
-            "close" => r.engine.close(),
-            _ => r.state("main", "released"),
-        }
-        r.up.release();
-        r.engine.wait_idle().await;
-        assert_eq!(
-            r.engine.stats().running_probes,
-            0,
-            "{action}: no worker leaked"
-        );
-        if action != "close" {
-            let status = r.status("main");
-            assert_eq!(
-                (
-                    status.account_id.as_deref(),
-                    status.next_probe_at,
-                    status.unanswered
-                ),
-                (Some("a"), None, 0),
-                "{action}: the late result touched no recipe state: {status:?}"
-            );
-            assert!(
-                !status.in_flight,
-                "{action}: the orphaned result gave the record's slot back"
-            );
-        } else {
-            assert_eq!(r.engine.stats().retained_bytes, 0);
-        }
-        // The record the orphaned probe left behind is probed again once the new request arms it: a result that
-        // failed the fence must not strand the agent it started on.
-        if action == "new_request" {
-            r.engine.observe(r.selected("new", "a"));
-            r.engine.observe(read_evidence("new", 2_000));
-            assert!(
-                r.status("main").next_probe_at.is_some(),
-                "the new request armed the record"
-            );
-            r.advance(270_000);
-            r.step().await;
-            assert_eq!(
-                (r.status("main").probes, r.status("main").reason),
-                (2, Reason::Scheduled),
-                "the re-armed record probes again"
-            );
-        }
-    }
+    let mut r = a_probe_held_upstream().await;
+    r.engine.observe(r.observed("new", "main", BODY));
+    r.up.release();
+    r.engine.wait_idle().await;
+    assert_eq!(
+        r.engine.stats().running_probes,
+        0,
+        "new_request: no worker leaked"
+    );
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.account_id.as_deref(),
+            status.next_probe_at,
+            status.unanswered
+        ),
+        (Some("a"), None, 0),
+        "new_request: the late result touched no recipe state: {status:?}"
+    );
+    assert!(
+        !status.in_flight,
+        "new_request: the orphaned result gave the record's slot back"
+    );
+    // The record the orphaned probe left behind is probed again once the new request arms it: a result that
+    // failed the fence must not strand the agent it started on.
+    r.engine.observe(r.selected("new", "a"));
+    r.engine.observe(read_evidence("new", 2_000));
+    assert!(
+        r.status("main").next_probe_at.is_some(),
+        "the new request armed the record"
+    );
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (2, Reason::Scheduled),
+        "the re-armed record probes again"
+    );
+
+    let r = a_probe_held_upstream().await;
+    r.engine.close();
+    r.up.release();
+    r.engine.wait_idle().await;
+    assert_eq!(
+        r.engine.stats().running_probes,
+        0,
+        "close: no worker leaked"
+    );
+    assert_eq!(r.engine.stats().retained_bytes, 0);
+
+    let mut r = a_probe_held_upstream().await;
+    r.state("main", "released");
+    r.up.release();
+    r.engine.wait_idle().await;
+    assert_eq!(
+        r.engine.stats().running_probes,
+        0,
+        "release: no worker leaked"
+    );
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.account_id.as_deref(),
+            status.next_probe_at,
+            status.unanswered
+        ),
+        (Some("a"), None, 0),
+        "release: the late result touched no recipe state: {status:?}"
+    );
+    assert!(
+        !status.in_flight,
+        "release: the orphaned result gave the record's slot back"
+    );
 }
 
 /// A probe whose recipe a release stopped while it was in flight was still served and its ledger row carries its
@@ -1263,120 +1271,6 @@ async fn a_rewrite_still_counts_toward_the_cold_probe_limit() {
     );
 }
 
-#[tokio::test]
-async fn probe_outcomes_are_classified() {
-    for (name, respond, reason, armed) in [
-        (
-            "missing_usage",
-            json(200, r#"{"id":"m","type":"message","content":[]}"#),
-            Reason::InvalidProbeUsage,
-            false,
-        ),
-        (
-            "output",
-            json(
-                200,
-                r#"{"id":"m","type":"message","content":[],"usage":{"cache_read_input_tokens":2000,"output_tokens":1}}"#,
-            ),
-            Reason::UnexpectedOutput,
-            false,
-        ),
-        (
-            "partial",
-            probe_answer(100, 0),
-            Reason::PartialCacheCoverage,
-            false,
-        ),
-        // The 503's first rung would land at the five-minute entry's expiry, so the ladder pauses at once.
-        (
-            "server",
-            json(
-                503,
-                r#"{"type":"error","error":{"type":"api_error","message":"x"}}"#,
-            ),
-            Reason::ProbeRetryLimit,
-            false,
-        ),
-        (
-            "unsupported",
-            json(
-                400,
-                r#"{"type":"error","error":{"type":"invalid_request_error","message":"x"}}"#,
-            ),
-            Reason::UnsupportedProbe,
-            false,
-        ),
-    ] {
-        let mut r = rig(RigSpec::default()).await;
-        r.observe("main").await;
-        r.up.push_credential_rule(A, "/v1/messages", respond);
-        r.advance(270_000);
-        r.step().await;
-        let status = r.status("main");
-        assert_eq!(
-            (name, status.reason, status.next_probe_at.is_some()),
-            (name, reason, armed),
-            "{status:?}"
-        );
-    }
-    // An upstream 401 never reaches the engine as a 401: the relay marks the account, fails over, and with no
-    // account left answers the untimed exhaustion 503 naming the mark, which pauses under the authentication
-    // reason.
-    let mut r = rig(RigSpec {
-        accounts: vec![api_key("a", A, 0)],
-        ..RigSpec::default()
-    })
-    .await;
-    r.observe("main").await;
-    r.up.push_credential_rule(
-        A,
-        "/v1/messages",
-        json(
-            401,
-            r#"{"type":"error","error":{"type":"authentication_error","message":"x"}}"#,
-        ),
-    );
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").reason, r.status("main").next_probe_at),
-        (Reason::ProbeAuthenticationError, None)
-    );
-    // A 429 on every account is the relay's exhaustion 429, read as a single 429 after failover is. Its first rung
-    // would land at the five-minute entry's expiry, so the ladder pauses at once.
-    let mut r = rig(RigSpec::default()).await;
-    r.observe("main").await;
-    r.up.push_credential_rule(
-        A,
-        "/v1/messages",
-        relay_common::json_429_unified(4_600, "five_hour"),
-    );
-    r.up.push_credential_rule(
-        B,
-        "/v1/messages",
-        relay_common::json_429_unified(4_600, "five_hour"),
-    );
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").reason, r.status("main").next_probe_at),
-        (Reason::ProbeRetryLimit, None)
-    );
-    r.advance(5_000_000);
-    r.step().await;
-    assert_eq!(
-        r.engine.reasons().get(&Reason::ProbeRetryLimit).copied(),
-        Some(1),
-        "no probe ran again after the ladder's pause"
-    );
-    r.observe("main").await;
-    assert_eq!(
-        r.status("main").reason,
-        Reason::Scheduled,
-        "a real request re-arms the agent"
-    );
-}
-
 /// The relay answers a probe without the session header with its 403 `client_contract`, which refuses the probe's
 /// own request shape rather than the credential, so the recipe pauses under `UnsupportedProbe` and not under the
 /// authentication reason the status alone would pick.
@@ -1479,6 +1373,12 @@ async fn a_probe_exhaustion_pauses_the_recipe_and_a_gate_hold_leaves_it_armed() 
     );
     // Past the accounts' reset the next real request selects one again.
     r.advance(5_000_000);
+    r.step().await;
+    assert_eq!(
+        r.engine.reasons().get(&Reason::ProbeRetryLimit).copied(),
+        Some(1),
+        "no probe ran again after the ladder's pause"
+    );
     r.observe("main").await;
     let status = r.status("main");
     assert_eq!(
@@ -1567,15 +1467,6 @@ async fn a_probe_on_a_pin_whose_subscription_ended_holds_the_agent_and_keeps_the
             .iter()
             .any(|p| p.session_id == "session" && p.account_id == "a"),
         "the pin still names a"
-    );
-}
-
-/// The word a stored probe row and the analytics read for a probe the engine's shutdown or quiesce ended.
-#[test]
-fn a_probe_the_engine_ended_in_flight_is_filed_under_the_word_canceled() {
-    assert_eq!(
-        phoebis_keepalive::ProbeOutcome::Canceled.as_str(),
-        "canceled"
     );
 }
 
@@ -2301,22 +2192,6 @@ async fn a_running_total_without_the_split_keeps_the_hour() {
         lines.len(),
         2,
         "the first arming and the probe's landing:\n{text}"
-    );
-    assert!(
-        lines[0].contains("DEBUG")
-            && lines[0].contains("agent=main")
-            && lines[0].contains("previous_ms=0")
-            && lines[0].contains("ttl_ms=3600000")
-            && lines[0].contains("one_hour=51177"),
-        "{}",
-        lines[0]
-    );
-    assert!(
-        lines[1].contains("previous_ms=3600000")
-            && lines[1].contains("ttl_ms=300000")
-            && lines[1].contains(&format!("five_minutes={prefix}")),
-        "{}",
-        lines[1]
     );
 }
 

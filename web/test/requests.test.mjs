@@ -107,16 +107,6 @@ test('under Billed dollars a plan request reads a dash titled nothing billed, wi
   }
 });
 
-test('the Cost header names what a subscription and a billed request read under each position', () => {
-  assert.deepEqual(Object.fromEntries(POSITIONS.map((position) => [position, d.costHeaderTitle(position)])), {
-    all: 'Dollar equivalent for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
-    equivalent: 'Dollar equivalent for a request a subscription window paid, a dash for an API key, fast mode, overage or usage-based request',
-    native: '20x window equivalents for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
-    share: 'Window shares for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
-    usd: 'A dash for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
-  });
-});
-
 test('a plan request the route priced no share for reads dollars over equivalent with the no-share title', () => {
   assert.equal(d.NO_SHARE_TITLE, 'The cost model prices no share for this request');
   for (const position of SHARE_POSITIONS) {

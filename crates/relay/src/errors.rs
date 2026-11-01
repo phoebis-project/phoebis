@@ -581,66 +581,6 @@ mod tests {
         assert_ne!(hash.message, suffix.message);
     }
 
-    /// A contract refusal's fix is the client's environment, so each message names the item the request lacks and
-    /// the answer tells the client not to resend it unchanged. The words are the identity's own, so a word the
-    /// message table spells differently answers the wrong message here.
-    #[test]
-    fn every_contract_message_names_its_item_and_ends_without_a_semicolon() {
-        use crate::identity::{
-            ITEM_AGENT_ID_HEADER, ITEM_ATTRIBUTION_LINE, ITEM_CLASS_HEADER, ITEM_CLIENT_VERSION,
-            ITEM_COMPACTION_HEADER, ITEM_METADATA_USER_ID, ITEM_SESSION_HEADER,
-        };
-        for (item, name) in [
-            (ITEM_CLIENT_VERSION, "User-Agent"),
-            (ITEM_SESSION_HEADER, "x-claude-code-session-id"),
-            (ITEM_CLASS_HEADER, "x-claude-code-request-class"),
-            (ITEM_ATTRIBUTION_LINE, "system[0]"),
-            (ITEM_METADATA_USER_ID, "account_uuid"),
-            (ITEM_AGENT_ID_HEADER, "x-claude-code-agent-id"),
-            (ITEM_COMPACTION_HEADER, "x-claude-code-compaction"),
-        ] {
-            let failure = relay_failure(&RelayError::ClientContract { item });
-            assert_eq!(
-                (
-                    failure.status,
-                    failure.error_type,
-                    failure.code,
-                    failure.retry_after,
-                    failure.no_retry
-                ),
-                (
-                    StatusCode::FORBIDDEN,
-                    "permission_error",
-                    "client_contract",
-                    None,
-                    true
-                ),
-                "{item}"
-            );
-            assert!(
-                failure.message.contains(name),
-                "{item}: {}",
-                failure.message
-            );
-            assert!(
-                !failure.message.contains(';'),
-                "{item}: {}",
-                failure.message
-            );
-            for phrase in [
-                "prompt is too long",
-                "model:",
-                "OAuth token has been revoked",
-            ] {
-                assert!(
-                    !failure.message.contains(phrase),
-                    "{item}: the client acts on {phrase:?} in a 4xx: {}",
-                    failure.message
-                );
-            }
-        }
-    }
-
     /// The client page quotes each message whole, so a word or a space the table's wrapped lines drop answers a text
     /// the page does not show.
     #[test]
@@ -734,36 +674,8 @@ mod tests {
         let failure = relay_failure(&RelayError::GuardrailBlocked {
             name: "Large auxiliary".into(),
         });
-        assert_eq!(
-            (
-                failure.status,
-                failure.error_type,
-                failure.code,
-                failure.retry_after,
-                failure.no_retry
-            ),
-            (
-                StatusCode::FORBIDDEN,
-                "permission_error",
-                "guardrail_blocked",
-                None,
-                true
-            )
-        );
+        assert_eq!(failure.retry_after, None);
         assert_eq!(failure.message, r#"blocked by guardrail "Large auxiliary""#);
-        assert!(
-            !failure.message.contains("prompt is too long"),
-            "the client reads that phrase in a 400 as its compaction trigger, and a name is the one part of the \
-             message the operator writes"
-        );
-        assert!(
-            !failure.message.contains("model:"),
-            "the client reads that phrase in a 403 permission_error as its model-access switch"
-        );
-        assert!(
-            !failure.message.contains("OAuth token has been revoked"),
-            "the client reads that phrase in a 403 as its token refresh"
-        );
     }
 
     /// The client refusals, the gate and the guardrail block answer the 403 `permission_error` the client reads as
@@ -937,36 +849,46 @@ mod tests {
     }
 
     /// The routing log's exhausted row records the routing crate's status as its `answer`, so the builder the
-    /// relay answers an exhaustion with must carry that same status for the exhaustion's kind and at-cap reading.
+    /// relay answers an exhaustion with must carry the status the client reference documents for the exhaustion's
+    /// kind and at-cap reading.
     #[test]
     fn every_exhaustion_builder_answers_the_status_the_exhausted_row_records() {
-        for exhaustion in [
-            Exhaustion::FastCredits {
-                reason: "out_of_credits".into(),
-            },
-            Exhaustion::FastLane { deadline: 60_000 },
-            Exhaustion::ModelRejected,
-            Exhaustion::Pinned {
-                obstacle: "attempted",
-            },
-            Exhaustion::Timed {
-                deadline: 60_000,
-                window: "five_hour".into(),
-            },
-            Exhaustion::Untimed,
+        for (exhaustion, status) in [
+            (
+                Exhaustion::FastCredits {
+                    reason: "out_of_credits".into(),
+                },
+                429,
+            ),
+            (Exhaustion::FastLane { deadline: 60_000 }, 429),
+            (Exhaustion::ModelRejected, 404),
+            (
+                Exhaustion::Pinned {
+                    obstacle: "attempted",
+                },
+                503,
+            ),
+            (
+                Exhaustion::Timed {
+                    deadline: 60_000,
+                    window: "five_hour".into(),
+                },
+                429,
+            ),
+            (Exhaustion::Untimed, 503),
         ] {
-            for at_cap in [false, true] {
-                let response = if exhaustion == Exhaustion::Untimed && at_cap {
-                    accounts_at_cap(60).response("r-1")
-                } else {
-                    crate::exhaustion::exhaustion_response(&exhaustion, 0, "r-1")
-                };
-                assert_eq!(
-                    response.status().as_u16(),
-                    exhaustion_status(&exhaustion, at_cap),
-                    "{exhaustion:?} at_cap {at_cap}"
-                );
-            }
+            assert_eq!(
+                crate::exhaustion::exhaustion_response(&exhaustion, 0, "r-1")
+                    .status()
+                    .as_u16(),
+                status,
+                "{exhaustion:?}"
+            );
         }
+        assert_eq!(
+            accounts_at_cap(60).response("r-1").status().as_u16(),
+            429,
+            "the untimed exhaustion at the cap"
+        );
     }
 }

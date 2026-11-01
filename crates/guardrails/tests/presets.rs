@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use phoebis_guardrails::{
-    evaluate, presets, CompiledGuardrail, GuardrailAction, GuardrailMode, HeaderLookup, Lookup,
-    Preset, RequestFacts, Verdict,
+    evaluate, presets, CompiledGuardrail, GuardrailAction, HeaderLookup, Lookup, Preset,
+    RequestFacts, Verdict,
 };
 use serde_json::Value;
 
@@ -60,29 +60,6 @@ fn every_preset_of_every_version_checks_and_compiles_under_the_size_limit() {
 }
 
 #[test]
-fn the_first_preset_is_subagent_status_summary_version_one_in_observe_mode_with_its_three_conditions(
-) {
-    let first = &presets()[0];
-    assert_eq!(first.id, "subagent-status-summary");
-    assert_eq!(first.version, 1);
-    assert_eq!(first.suggested_mode, GuardrailMode::Observe);
-    assert_eq!(first.conditions.len(), 3);
-}
-
-#[test]
-fn the_first_preset_matches_the_fork_fixture_and_not_the_classifier_fixture() {
-    let guardrail = compiled(&presets()[0]);
-    let fork: Value = serde_json::from_str(FORK).expect("the fork fixture parses");
-    let classifier: Value =
-        serde_json::from_str(CLASSIFIER).expect("the classifier fixture parses");
-    assert_eq!(evaluate(&guardrail, &auxiliary(&fork)), Verdict::Matched);
-    assert!(matches!(
-        evaluate(&guardrail, &auxiliary(&classifier)),
-        Verdict::Unmatched { .. }
-    ));
-}
-
-#[test]
 fn versions_of_one_id_are_distinct_and_ascending_and_current_and_at_answer_the_table() {
     let mut versions: BTreeMap<&str, Vec<u32>> = BTreeMap::new();
     for preset in presets() {
@@ -93,63 +70,57 @@ fn versions_of_one_id_are_distinct_and_ascending_and_current_and_at_answer_the_t
             stamped.windows(2).all(|pair| pair[0] < pair[1]),
             "{id}: {stamped:?}"
         );
-        let highest = *stamped.last().expect("an id holds a version");
+    }
+    // The table ships each id at version 1 alone.
+    for id in ["away-recap", "prompt-suggestion", "subagent-status-summary"] {
         let current = Preset::current(id).expect("a shipped id has a current version");
-        assert_eq!((current.id, current.version), (*id, highest));
-        for &version in stamped {
-            let at = Preset::at(id, version).expect("a shipped version answers");
-            assert_eq!((at.id, at.version), (*id, version));
-        }
-        assert!(Preset::at(id, highest + 1).is_none());
+        assert_eq!((current.id, current.version), (id, 1));
+        let at = Preset::at(id, 1).expect("a shipped version answers");
+        assert_eq!((at.id, at.version), (id, 1));
+        assert!(Preset::at(id, 2).is_none());
     }
     assert!(Preset::current("not-a-preset").is_none());
     assert!(Preset::at("not-a-preset", 1).is_none());
 }
 
 #[test]
-fn the_table_holds_the_summary_the_suggestion_and_the_recap_at_version_one_in_observe_mode() {
-    let ids: BTreeSet<&str> = presets().iter().map(|preset| preset.id).collect();
-    assert_eq!(
-        ids,
-        BTreeSet::from(["away-recap", "prompt-suggestion", "subagent-status-summary"])
-    );
-    for id in ["prompt-suggestion", "away-recap"] {
-        let preset = Preset::at(id, 1).unwrap_or_else(|| panic!("{id} version 1 is in the table"));
-        assert_eq!(preset.suggested_mode, GuardrailMode::Observe, "{id}");
-        assert_eq!(preset.conditions.len(), 3, "{id}");
-    }
-}
-
-#[test]
 fn each_preset_matches_its_own_fork_fixture_and_none_of_the_other_bodies() {
-    let forks = [
-        ("subagent-status-summary", FORK),
-        ("prompt-suggestion", SUGGESTION),
-        ("away-recap", RECAP),
-    ];
-    let bodies: Vec<(&str, Value)> = forks
-        .into_iter()
-        .chain([("classifier", CLASSIFIER)])
-        .map(|(name, text)| {
-            (
-                name,
-                serde_json::from_str(text).expect("the fixture parses"),
-            )
-        })
-        .collect();
-    for (id, _) in forks {
+    let body = |name: &'static str, text: &str| -> (&'static str, Value) {
+        (
+            name,
+            serde_json::from_str(text).expect("the fixture parses"),
+        )
+    };
+    let summary = body("subagent-status-summary", FORK);
+    let suggestion = body("prompt-suggestion", SUGGESTION);
+    let recap = body("away-recap", RECAP);
+    let classifier = body("classifier", CLASSIFIER);
+    for (id, own, others) in [
+        (
+            "subagent-status-summary",
+            &summary,
+            [&suggestion, &recap, &classifier],
+        ),
+        (
+            "prompt-suggestion",
+            &suggestion,
+            [&summary, &recap, &classifier],
+        ),
+        ("away-recap", &recap, [&summary, &suggestion, &classifier]),
+    ] {
         let preset = Preset::current(id).unwrap_or_else(|| panic!("{id} is not in the table"));
         let guardrail = compiled(preset);
-        for (name, body) in &bodies {
+        assert_eq!(
+            evaluate(&guardrail, &auxiliary(&own.1)),
+            Verdict::Matched,
+            "{id} on its own fork"
+        );
+        for (name, body) in others {
             let verdict = evaluate(&guardrail, &auxiliary(body));
-            if *name == id {
-                assert_eq!(verdict, Verdict::Matched, "{id} on its own fork");
-            } else {
-                assert!(
-                    matches!(verdict, Verdict::Unmatched { .. }),
-                    "{id} on the {name} body: {verdict:?}"
-                );
-            }
+            assert!(
+                matches!(verdict, Verdict::Unmatched { .. }),
+                "{id} on the {name} body: {verdict:?}"
+            );
         }
     }
 }

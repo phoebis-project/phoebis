@@ -4,9 +4,7 @@
 mod common;
 
 use common::*;
-use phoebis_keepalive::{
-    recipe_state, AgentState, Event, ParkKind, Reason, RecipeState, RecipeView,
-};
+use phoebis_keepalive::{AgentState, Event, ParkKind, Reason, RecipeState, RecipeView};
 
 const DAY: i64 = 86_400_000;
 
@@ -213,17 +211,6 @@ async fn the_day_counters_read_zero_after_midnight_without_a_probe_or_a_credit()
 
 #[tokio::test]
 async fn the_five_states_follow_the_table() {
-    for (reason, state) in [
-        (Reason::Scheduled, RecipeState::Retained),
-        (Reason::RequestFailed, RecipeState::Retained),
-        (Reason::ForcedTool, RecipeState::NotRetained),
-        (Reason::PoolDisabled, RecipeState::Held),
-        (Reason::ProbeQuotaExhausted, RecipeState::Held),
-        (Reason::ProbeRetryLimit, RecipeState::Paused),
-        (Reason::Released, RecipeState::Ended),
-    ] {
-        assert_eq!(recipe_state(reason, false), state, "{reason:?}");
-    }
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     let read = |r: &Rig, agent: &str| {

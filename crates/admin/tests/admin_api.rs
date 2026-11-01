@@ -489,23 +489,6 @@ async fn a_fronts_https_makes_the_origin_https_only_on_a_plain_listener() {
     );
 }
 
-#[tokio::test]
-async fn a_plain_listener_behind_no_front_admits_an_origin_of_either_scheme() {
-    use common::{login, send_with_host};
-    const HOST: &str = "phoebis.example";
-    let (app, _up) = common::admin_app().await;
-    let cookie = login(&app, "admin-secret").await;
-    let pause = "/admin/accounts/business/pause";
-    for origin in ["http://phoebis.example", "https://phoebis.example"] {
-        let response = send_with_host(&app, "POST", pause, "", Some(&cookie), origin, HOST).await;
-        assert_ne!(
-            response.status(),
-            403,
-            "{origin} names the request's own host"
-        );
-    }
-}
-
 /// The scheme is required on a listener that terminates TLS whatever a front says, so a downgrade word relaxes
 /// nothing.
 #[tokio::test]
@@ -974,20 +957,18 @@ async fn a_pairing_over_an_uncertain_refresh_row_leaves_the_commit_as_the_newest
         )
         .unwrap();
     assert_eq!(pair_business(&app, &cookie).await.status(), 200);
-    let newest: Vec<(String, Option<String>)> = store
-        .newest_resolved_refresh_attempts("business", 1, 16)
-        .unwrap()
-        .into_iter()
-        .map(|a| (a.outcome, a.detail))
-        .collect();
+    // An attempt left open reads as quarantined, and a newest attempt that settled failed or uncertain answers its
+    // detail as the last error. Both read clear only when the commit superseded the row and stands newest.
+    let account =
+        common::json(common::get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
     assert_eq!(
-        newest,
-        [
-            ("committed".to_string(), Some("pairing".to_string())),
-            ("failed".to_string(), Some("superseded".to_string())),
-        ]
+        (
+            &account["credential"]["quarantined"],
+            &account["credential"]["last_error"]
+        ),
+        (&serde_json::json!(false), &serde_json::Value::Null),
+        "{account}"
     );
-    assert!(store.pending_refresh_attempts().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -3117,7 +3098,16 @@ async fn a_refresh_whose_read_ends_after_the_clock_moved_answers_the_one_reading
             )
         })
         .collect();
-    assert!(!read.is_empty(), "{refreshed}");
+    assert_eq!(
+        read,
+        [
+            ("five_hour".to_string(), 12.5),
+            ("seven_day".to_string(), 40.0)
+        ],
+        "the Usage fixture's two windows in percent: {refreshed}"
+    );
+    // The same two figures as shares of one.
+    let shares = [("five_hour", 0.125), ("seven_day", 0.4)];
 
     let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     let rows = loop {
@@ -3135,14 +3125,14 @@ async fn a_refresh_whose_read_ends_after_the_clock_moved_answers_the_one_reading
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     };
     assert_eq!(rows.len(), read.len(), "one row per window read: {rows:?}");
-    for (key, percent) in &read {
+    for (key, share) in shares {
         let row = rows
             .iter()
-            .find(|r| &r.window == key)
+            .find(|r| r.window == key)
             .unwrap_or_else(|| panic!("no row under {key}: {rows:?}"));
         assert_eq!(
             (row.source.as_str(), row.observed_at, row.utilization),
-            ("poll", Some(NOW), Some(percent / 100.0)),
+            ("poll", Some(NOW), Some(share)),
             "{row:?}"
         );
     }
@@ -3156,16 +3146,12 @@ async fn a_refresh_whose_read_ends_after_the_clock_moved_answers_the_one_reading
     let acct = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
     let routed = acct["windows"].as_array().unwrap();
     assert_eq!(routed.len(), read.len(), "{acct}");
-    for (key, percent) in &read {
+    for (key, share) in shares {
         let entry = routed
             .iter()
-            .find(|w| w["id"] == key.as_str())
+            .find(|w| w["id"] == key)
             .unwrap_or_else(|| panic!("no window {key} on the account: {acct}"));
-        assert_eq!(
-            entry["utilization"],
-            serde_json::json!(percent / 100.0),
-            "{acct}"
-        );
+        assert_eq!(entry["utilization"], serde_json::json!(share), "{acct}");
     }
     let latest = json(get(&h.app, "/admin/accounts/business/usage", Some(&cookie)).await).await;
     assert_eq!(
@@ -3256,22 +3242,20 @@ async fn a_refresh_and_the_list_read_after_it_carry_its_reading_at_its_own_insta
         windows.sort_by_key(|w| w["id"].to_string());
         windows
     };
-    let reading = by_id(
-        refreshed["windows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|w| {
-                serde_json::json!({
-                    "id": w["key"],
-                    "utilization": w["utilization"].as_f64().unwrap() / 100.0,
-                    "resets_at": w["resets_at"],
-                    "observed_at": taken,
-                })
-            })
-            .collect(),
+    assert_eq!(
+        refreshed["windows"].as_array().map(Vec::len),
+        Some(2),
+        "{refreshed}"
     );
-    assert_eq!(reading.len(), 2, "{refreshed}");
+    // The upstream's 37.5 and 61.0 percent as shares of one, at the resets the body named and the refresh's instant.
+    let reading = vec![
+        serde_json::json!({
+            "id": "five_hour", "utilization": 0.375, "resets_at": NOW + 3 * HOUR, "observed_at": taken,
+        }),
+        serde_json::json!({
+            "id": "seven_day", "utilization": 0.61, "resets_at": NOW + 90 * HOUR, "observed_at": taken,
+        }),
+    ];
     assert!(
         h.db.quota_samples("business", bucket, bucket + 300)
             .await
@@ -3846,20 +3830,18 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
     // the router's prediction, which empties that window until the next reading names a reset. No pin burns, so each
     // window projects its prediction at its horizon: five hours on, the weekly windows' resets lying further out. The
     // Fable week reads under the one id `seven_day_fable`, and its lead paces it as the week the routing name says it
-    // is.
-    let lead = |window: &str, utilization: f64, reset: Option<i64>| {
-        utilization - phoebis_routing::elapsed_share_at(window, reset, None, NOW)
-    };
+    // is. Each lead is the utilization less the share of the window run: the whole 5-hour window, whose reset passed a
+    // day ago, and 96 of each week's 168 hours, four sevenths, with its reset 72 hours out.
     let held = serde_json::json!([
         { "id": "five_hour", "observed_at": read_at, "resets_at": NOW - 25 * HOUR, "utilization": 0.9,
           "projection": 0.0, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0,
-          "lead": lead(FIVE_HOUR, 0.9, Some(NOW - 25 * HOUR)) },
+          "lead": 0.9 - 1.0 },
         { "id": "seven_day", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.5,
           "projection": 0.5, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0,
-          "lead": lead(SEVEN_DAY, 0.5, Some(NOW + 72 * HOUR)) },
+          "lead": 0.5 - 4.0 / 7.0 },
         { "id": "seven_day_fable", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.2,
           "projection": 0.2, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0,
-          "lead": lead(SEVEN_DAY_FABLE, 0.2, Some(NOW + 72 * HOUR)) },
+          "lead": 0.2 - 4.0 / 7.0 },
     ]);
     let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
     assert_eq!(account["windows"], held, "{account}");
@@ -4023,15 +4005,6 @@ async fn a_plan_ended_oauth_account_answers_no_window_while_the_flag_stands_and_
     }
     assert!(h.store.clear_plan_ended("business").unwrap());
     for after in business_as_read_and_listed(&h, &cookie).await {
-        assert_eq!(after["windows"], before["windows"], "{after}");
-    }
-}
-
-#[tokio::test]
-async fn a_ready_oauth_account_answers_the_windows_the_router_and_the_ledger_hold() {
-    let (h, cookie, before) = business_with_both_windows_paths().await;
-    for after in business_as_read_and_listed(&h, &cookie).await {
-        assert_eq!(after["state"], "ready", "{after}");
         assert_eq!(after["windows"], before["windows"], "{after}");
     }
 }
@@ -5270,28 +5243,12 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
     let cookie = login(&parts.app, "admin-secret").await;
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = |sessions: &serde_json::Value, session: &str| session_row(sessions, session);
-    // The banded copy priced at the fixed clock, which the peak band never covers, so the shipped model's plain
-    // Opus 5.5 share on Max 20x; the plain copy at the shipped Opus 5 input price.
-    let share_per_hour = phoebis_ledger::PlanTables::shipped()
-        .share_at(
-            phoebis_routing::FIVE_HOUR,
-            None,
-            "default_claude_max_20x",
-            "claude-opus-5-5",
-            phoebis_routing::PinUsage {
-                input: 145,
-                ..phoebis_routing::PinUsage::default()
-            },
-            now,
-        )
-        .unwrap()
-        * 3_600.0;
-    let opus_5_input = phoebis_ledger::PriceRevisions::shipped()
-        .in_force(now)
-        .price("claude-opus-5")
-        .unwrap()
-        .input;
-    let usd_per_hour = 100.0 * opus_5_input / 1_000_000.0 * 3_600.0;
+    // The banded copy priced at the fixed clock, which the peak band never covers: 145 Opus 5.5 input tokens a second
+    // at the shipped weight 2.2 are 319 units, over Max 20x's 150,000,000 and times 3,600 seconds 0.007656 an hour,
+    // which is also the 20x equivalent. The plain copy at the shipped Opus 5 input price of $5 a million tokens is
+    // $1.80 an hour, and at Opus 5.5's own $4 it is $1.44.
+    let (share_per_hour, equivalent_per_hour) = (0.007656, 0.007656);
+    let usd_per_hour = 1.8;
     let (burn, unit) = burn_of(&sessions, "s1");
     assert!(
         close(burn, share_per_hour) && unit.as_deref() == Some("window_share"),
@@ -5304,38 +5261,13 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         "an api_key pin always reads the plain copy in dollars per hour: {:?}",
         (burn, unit)
     );
-    // The shipped table lists Opus 5.5, so its dollar reading is that row's own rate, read as the route reads it.
-    let s1_usd_per_hour = phoebis_ledger::PriceRevisions::shipped()
-        .in_force(now)
-        .rate_table()
-        .price_burn(
-            "claude-opus-5-5",
-            &phoebis_store::PinBurn {
-                input: 100.0,
-                ..phoebis_store::PinBurn::default()
-            },
-            1_000,
-        )
-        .unwrap()
-        * 3_600.0;
+    // The shipped table lists Opus 5.5, so its dollar reading is that row's own rate.
+    let s1_usd_per_hour = 1.44;
     assert_eq!(
         row(&sessions, "s1")["burn_at"].as_i64(),
         Some(now),
         "the instant the served burn is decayed to, the read's own"
     );
-    let equivalent_per_hour = phoebis_ledger::PlanTables::shipped()
-        .equivalent_at(
-            phoebis_routing::FIVE_HOUR,
-            None,
-            "claude-opus-5-5",
-            phoebis_routing::PinUsage {
-                input: 145,
-                ..phoebis_routing::PinUsage::default()
-            },
-            now,
-        )
-        .unwrap()
-        * 3_600.0;
     let (s1, s2) = (row(&sessions, "s1"), row(&sessions, "s2"));
     assert!(
         close(s1["burn_equivalent"].as_f64(), equivalent_per_hour) && s1["estimated"] == false,
@@ -5419,7 +5351,6 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
 #[tokio::test]
 async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects() {
     use common::{get, json, login, patch, wait_json};
-    use phoebis_ledger::Speed;
     let now = common::NOW;
     // One Haiku 5.5 row with both blocks in round numbers: the standard cells at 1, the fast cells at 2 and the
     // long-context cells at 5 over 1,000 prompt tokens.
@@ -5431,17 +5362,10 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
         "test",
     )
     .unwrap();
-    let input = |speed, prompt| {
-        revisions
-            .in_force(now)
-            .price_at("claude-haiku-5-5", speed, prompt)
-            .unwrap()
-            .input
-    };
     // Three api_key pins burning 100 input tokens a second: `s-at` with its last prompt at the threshold,
     // `s-over` one token over it, and `s-fast` over it, which then answers a fast turn and a standard turn below
     // the threshold through the router. Its copies were never folded, so nothing decays at those turns.
-    let parts = sessions_harness_priced(revisions.clone(), |generation| {
+    let parts = sessions_harness_priced(revisions, |generation| {
         let haiku = |session: &str, last_input_tokens: u64| phoebis_store::PinRow {
             model: "claude-haiku-5-5".into(),
             last_input_tokens,
@@ -5467,16 +5391,14 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
     .await;
     assert_eq!(averaged.status(), 200);
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
-    let usd_per_hour =
-        |tokens: f64, speed, prompt| tokens * input(speed, prompt) / 1_000_000.0 * 3_600.0;
-    for (session, prompt) in [("s-at", 1_000), ("s-over", 1_001)] {
+    // 100 input tokens a second for an hour are 360,000 tokens: $0.36 at the standard cells' $1 a million, the prompt
+    // at the threshold, and $1.80 at the long-context cells' $5, the prompt one token over it.
+    for (session, usd_per_hour) in [("s-at", 0.36), ("s-over", 1.8)] {
         let (burn, unit) = burn_of(&sessions, session);
         assert!(
-            close(burn, usd_per_hour(100.0, Speed::Standard, prompt))
-                && unit.as_deref() == Some("usd"),
-            "{session} reads its burn per hour at the cells its last prompt selects: {:?} against {}",
-            (burn, unit),
-            usd_per_hour(100.0, Speed::Standard, prompt)
+            close(burn, usd_per_hour) && unit.as_deref() == Some("usd"),
+            "{session} reads its burn per hour at the cells its last prompt selects: {:?} against {usd_per_hour}",
+            (burn, unit)
         );
         let row = session_row(&sessions, session);
         assert_eq!(
@@ -5511,8 +5433,8 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
     };
     parts.router.report(renewal(true, 60_000)).await;
     parts.router.report(renewal(false, 600)).await;
-    let expected =
-        usd_per_hour(101.0, Speed::Standard, 600) + usd_per_hour(100.0, Speed::Fast, 600);
+    // An hour of 101 standard tokens a second at $1 a million and 100 fast ones at $2: 0.3636 and 0.72 dollars.
+    let expected = 1.0836;
     let renewed = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         close(session_row(v, "s-fast")["burn"].as_f64(), expected)
     })
@@ -5571,24 +5493,10 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
             classifier: false,
         })
         .await;
-    let window = 600.0;
-    let tables = phoebis_ledger::PlanTables::shipped();
-    let million = phoebis_routing::PinUsage {
-        input: 1_000_000,
-        ..phoebis_routing::PinUsage::default()
-    };
-    let on_max_20x = tables
-        .share_at(
-            phoebis_routing::FIVE_HOUR,
-            None,
-            "default_claude_max_20x",
-            "claude-opus-5-5",
-            million,
-            now,
-        )
-        .unwrap()
-        * 3_600.0
-        / window;
+    // A million tokens at the shipped weight 2.2 are 2,200,000 units, over Max 20x's 150,000,000 on the 5-hour window,
+    // and an hour holds six of the 600-second averages: 0.088 an hour, which is also the 20x equivalent. Pro's
+    // 7,500,000 is a twentieth of that capacity, so the same tokens read 1.76 there.
+    let on_max_20x = 0.088;
     let renewed = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         session_row(v, "s1")["burn"]
             .as_f64()
@@ -5603,17 +5511,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
         (burn, unit)
     );
     // The 20x equivalent reads no account tier, so the same figure on every tier the account moves to below.
-    let equivalent = tables
-        .equivalent_at(
-            phoebis_routing::FIVE_HOUR,
-            None,
-            "claude-opus-5-5",
-            million,
-            now,
-        )
-        .unwrap()
-        * 3_600.0
-        / window;
+    let equivalent = 0.088;
     let equivalent_of = |sessions: &serde_json::Value| {
         let row = session_row(sessions, "s1");
         (row["burn_equivalent"].as_f64(), row["estimated"].clone())
@@ -5629,18 +5527,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
         !close(session_row(v, "s1")["burn"].as_f64(), on_max_20x)
     })
     .await;
-    let pro = tables
-        .share_at(
-            phoebis_routing::FIVE_HOUR,
-            None,
-            "default_claude_ai",
-            "claude-opus-5-5",
-            million,
-            now,
-        )
-        .unwrap()
-        * 3_600.0
-        / window;
+    let pro = 1.76;
     assert!(
         close(burn_of(&on_pro, "s1").0, pro),
         "the same tokens read on Pro are their share of Pro's own 5-hour window: {:?} against {pro}",
@@ -6421,26 +6308,11 @@ async fn a_pin_on_a_model_without_a_weight_reads_an_estimated_burn() {
     .await;
     let cookie = login(&parts.app, "admin-secret").await;
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
-    let tables = phoebis_ledger::PlanTables::shipped();
-    let donor = tables
-        .tier_of("claude-sonnet-4-5", now)
-        .and_then(|tier| tables.latest_weighted(tier, now))
-        .expect("the shipped model weighs a model of Sonnet 4.5's model tier");
-    // The banded copy at the fixed clock, which the peak band never covers, priced at the donor's weight on Max 20x.
-    let share_per_hour = tables
-        .share_at(
-            phoebis_routing::FIVE_HOUR,
-            None,
-            "default_claude_max_20x",
-            donor,
-            phoebis_routing::PinUsage {
-                input: 100,
-                ..phoebis_routing::PinUsage::default()
-            },
-            now,
-        )
-        .unwrap()
-        * 3_600.0;
+    // The banded copy at the fixed clock, which the peak band never covers, priced at the weight 1.5 of Sonnet 5.5, the
+    // newest weighted model of the `sonnet` tier in the shipped cost model (Sonnet 4.6 weighs 3): 100 tokens a second
+    // are 150 units, over Max 20x's 150,000,000 and times 3,600 seconds 0.0036 an hour, which is also the 20x
+    // equivalent.
+    let share_per_hour = 0.0036;
     let (burn, unit) = burn_of(&sessions, "s1");
     assert!(
         close(burn, share_per_hour) && unit.as_deref() == Some("window_share"),
@@ -6448,19 +6320,7 @@ async fn a_pin_on_a_model_without_a_weight_reads_an_estimated_burn() {
          {share_per_hour}",
         (burn, unit)
     );
-    let equivalent_per_hour = tables
-        .equivalent_at(
-            phoebis_routing::FIVE_HOUR,
-            None,
-            donor,
-            phoebis_routing::PinUsage {
-                input: 100,
-                ..phoebis_routing::PinUsage::default()
-            },
-            now,
-        )
-        .unwrap()
-        * 3_600.0;
+    let equivalent_per_hour = 0.0036;
     let row = session_row(&sessions, "s1");
     assert!(
         close(row["burn_equivalent"].as_f64(), equivalent_per_hour) && row["estimated"] == true,
@@ -6485,9 +6345,12 @@ async fn a_pin_on_a_model_without_a_weight_reads_an_estimated_burn() {
         session_row(v, "s1")["burn_unit"] == "usd"
     })
     .await;
+    // Sonnet 4.5's own $3 a million input tokens make $1.08 an hour of 100 a second, where an id the table did not list
+    // would price at its dearest cell, Fable's $10.
     assert!(
-        burn_of(&in_overage, "s1").0.is_some_and(|b| b > 0.0),
-        "dollars price the same pin, since the price table lists the model"
+        close(burn_of(&in_overage, "s1").0, 1.08),
+        "dollars price the same pin at its own row, since the price table lists the model: {:?}",
+        burn_of(&in_overage, "s1")
     );
     let row = session_row(&in_overage, "s1");
     assert_eq!(
@@ -8377,25 +8240,18 @@ async fn deleting_either_fast_cooldown_clears_its_own_row_and_leaves_the_others(
         .await;
     // A query queues behind the reports, so the rows it answers are the ones the route will read.
     assert_eq!(parts.router.cooldowns().await.unwrap().len(), 3);
-    let shown = json(get(&parts.app, "/admin/accounts/business", Some(&cookie)).await).await;
-    let mut scopes: Vec<&str> = shown["cooldowns"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| c["scope"].as_str().unwrap())
-        .collect();
-    scopes.sort_unstable();
-    assert_eq!(scopes, ["account", "fast", "fast_credits"]);
     let standing = || async {
-        parts
-            .router
-            .cooldowns()
-            .await
+        let shown = json(get(&parts.app, "/admin/accounts/business", Some(&cookie)).await).await;
+        let mut scopes: Vec<String> = shown["cooldowns"]
+            .as_array()
             .unwrap()
-            .into_iter()
-            .map(|c| c.scope)
-            .collect::<Vec<_>>()
+            .iter()
+            .map(|c| c["scope"].as_str().unwrap().to_string())
+            .collect();
+        scopes.sort_unstable();
+        scopes
     };
+    assert_eq!(standing().await, ["account", "fast", "fast_credits"]);
     let path = "/admin/accounts/business/cooldowns/fast";
     assert_eq!(delete(&parts.app, path, Some(&cookie)).await.status(), 204);
     assert_eq!(

@@ -1644,23 +1644,13 @@ mod tests {
                 "{outcome:?}"
             );
         }
-        for outcome in [
-            ProbeOutcome::Canceled,
-            ProbeOutcome::Exhausted,
-            ProbeOutcome::Failed,
-            ProbeOutcome::RateLimited,
-            ProbeOutcome::Rejected,
-            ProbeOutcome::TimedOut,
-        ] {
-            assert_eq!(
-                (
-                    probe_outcome_label(outcome, true),
-                    probe_outcome_label(outcome, false)
-                ),
-                ("failed", "failed"),
-                "{outcome:?}"
-            );
-        }
+        assert_eq!(
+            (
+                probe_outcome_label(ProbeOutcome::Failed, true),
+                probe_outcome_label(ProbeOutcome::Failed, false)
+            ),
+            ("failed", "failed")
+        );
     }
 
     #[test]

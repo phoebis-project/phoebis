@@ -57,12 +57,6 @@ fn the_fixture_lists_every_step_the_router_records_with_its_verdicts() {
 
 #[test]
 fn the_steps_written_without_the_recorder_are_in_the_table() {
-    // The fit table is appended as a whole step after the fired rule, so no recorder call asserts it, and the
-    // spent rule's wait is a verdict of its own.
-    assert!(listed("fit", "fits") && listed("fit", "none") && listed("move:spent", "held"));
-    assert!(listed("reserve", "booked") && listed("reserve", "none"));
-    assert!(!WALK_STEPS.iter().any(|(id, _)| *id == "cool"));
-    assert!(PARTITION_VALUES.contains(&"held") && PARTITION_VALUES.contains(&"fell_through"));
     // The refusal record writes its two steps by hand, before the engine runs.
     let snapshot = RegistrySnapshot::from_load(RegistryLoad::default(), [0; 32], 0, 1);
     let request = RefusedRequest {

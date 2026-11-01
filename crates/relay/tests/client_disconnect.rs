@@ -10,7 +10,6 @@ use bytes::Bytes;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use futures::stream;
-use phoebis_profile::fixtures::{body, BodyFixture};
 use phoebis_routing::{
     Report, RouterConfig, RouterEvent, SharePricer, UtilizationSample, WindowReading, WindowSource,
     FIVE_HOUR,
@@ -124,12 +123,6 @@ async fn priced_harness(up: &FakeUpstream, accounts: &[TestAccount]) -> Harness 
     h
 }
 
-/// The rewrite the fixture body books on `TIER`: its bytes over four, the relay's estimate of its prompt tokens, each
-/// a ten-millionth of the window.
-fn fixture_rewrite() -> f64 {
-    (body(BodyFixture::Oauth).len() / 4) as f64 / 10_000_000.0
-}
-
 /// The 5-hour prediction of `account`, as the router answers it now.
 async fn five_hour(h: &Harness, account: &str) -> f64 {
     h.router
@@ -205,8 +198,9 @@ async fn a_canceled_request_sends_one_ended_report_with_the_cause_canceled() {
     assert_eq!(response.status(), 200);
     let id = outcome(&response).request_id;
     let booked = five_hour(&h, "a").await;
+    // The fixture body's 84,390 bytes over four are 21,097 tokens, a ten-millionth of the window each.
     assert!(
-        (booked - (0.5 + fixture_rewrite())).abs() < 1e-9,
+        (booked - (0.5 + 0.002_109_7)).abs() < 1e-9,
         "the body's estimate stands in the prediction while the answer streams: {booked}"
     );
     // The client leaves with the head read and the body unread: the stream ends with no usage.

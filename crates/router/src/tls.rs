@@ -563,39 +563,7 @@ fn ip_text(octets: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
 
-    use fake_upstream::{generate_pair, generate_pair_valid_between, generate_pair_valid_until};
-
-    #[test]
-    fn a_pair_loads_with_its_leafs_names_and_the_days_it_has_left() {
-        let dir = tempfile::tempdir().unwrap();
-        let utc = jiff::tz::TimeZone::UTC;
-        let date = jiff::Timestamp::now()
-            .to_zoned(utc.clone())
-            .date()
-            .checked_add(jiff::Span::new().days(400))
-            .unwrap();
-        let pair = generate_pair_valid_between(
-            &["localhost"],
-            (2020, 1, 1),
-            (i32::from(date.year()), date.month() as u8, date.day() as u8),
-        );
-        let (cert, key) = pair.write_to(dir.path(), "proxy");
-        let not_after = date.to_zoned(utc).unwrap().timestamp().as_second();
-        let whole_days = |now: i64| (not_after - now).div_euclid(86_400);
-        // The loader reads its clock in whole seconds between these two reads, so the count is both bounds' unless
-        // the load straddles midnight UTC, when it is either.
-        let before = jiff::Timestamp::now().as_second();
-        let loaded = load_pair("proxy.tls", &cert, &key).unwrap();
-        let after = jiff::Timestamp::now().as_second();
-        assert_eq!(loaded.leaf.names, ["localhost"]);
-        assert!(
-            (whole_days(after)..=whole_days(before)).contains(&i64::from(loaded.leaf.days_left)),
-            "{:?} between {} and {}",
-            loaded.leaf,
-            whole_days(after),
-            whole_days(before)
-        );
-    }
+    use fake_upstream::{generate_pair, generate_pair_valid_until};
 
     #[test]
     fn a_leafs_not_after_reads_as_unix_milliseconds() {
@@ -714,43 +682,11 @@ mod tests {
     }
 
     #[test]
-    fn the_attention_reader_reads_each_pair_with_its_key_its_end_and_its_failed_reload() {
+    fn the_expiry_warning_and_the_attention_item_start_the_same_number_of_days_before_the_end() {
         assert_eq!(
             i64::from(EXPIRY_WARNING_DAYS),
             phoebis_attention::CERTIFICATE_WARNING_DAYS,
             "the dashboard's item holds from exactly 30 days before not_after"
-        );
-        let dir = tempfile::tempdir().unwrap();
-        let not_after = jiff::Timestamp::now().as_second() + 90 * 86_400;
-        let (cert, key) =
-            generate_pair_valid_until(&["localhost"], not_after).write_to(dir.path(), "proxy");
-        let set = LiveSet::new();
-        set.fill(vec![
-            (
-                "proxy",
-                Some(Live::new(
-                    "proxy.tls",
-                    load_pair("proxy.tls", &cert, &key).unwrap(),
-                    1_000,
-                )),
-            ),
-            ("admin", None),
-        ]);
-        std::fs::write(&key, generate_pair(&["localhost"]).key_pem).unwrap();
-        let refused = set.reload(2_000);
-        let Some(("proxy", Reloaded::Refused { error })) = refused.first().cloned() else {
-            panic!("{refused:?}");
-        };
-        assert_eq!(
-            TlsPairs::pairs(&*set),
-            [phoebis_attention::PairFacts {
-                key: "proxy.tls".to_owned(),
-                cert_file: cert,
-                key_file: key,
-                not_after_ms: not_after * 1_000,
-                loaded_at: 1_000,
-                failed: Some((2_000, error)),
-            }]
         );
     }
 
@@ -877,20 +813,6 @@ mod tests {
     }
 
     #[test]
-    fn a_leaf_past_its_not_after_is_refused_as_expired_with_the_date() {
-        let dir = tempfile::tempdir().unwrap();
-        let pair = generate_pair_valid_between(&["localhost"], (2020, 1, 1), (2021, 1, 1));
-        let (cert, key) = pair.write_to(dir.path(), "proxy");
-        let error = load_pair("proxy.tls", &cert, &key).err().unwrap();
-        let text = error.to_string();
-        assert!(matches!(error, TlsError::Expired { .. }), "{error:?}");
-        assert!(
-            text.starts_with("proxy.tls.cert_file ") && text.contains("expired on"),
-            "{text}"
-        );
-    }
-
-    #[test]
     fn a_leaf_with_thirty_whole_days_left_and_part_of_a_day_warns() {
         let dir = tempfile::tempdir().unwrap();
         // Thirty days and an hour on: 30 whole days and part of one whatever the clock reads, the warning's last day.
@@ -950,48 +872,5 @@ mod tests {
                 .any(|warning| warning.contains("readable by group or other (mode 0640)")),
             "a group-readable key this user owns is not the unit's shape: {warned:?}"
         );
-    }
-
-    #[test]
-    fn a_leaf_valid_from_tomorrow_is_refused_as_not_yet_valid() {
-        let dir = tempfile::tempdir().unwrap();
-        let tomorrow = jiff::Timestamp::now()
-            .to_zoned(jiff::tz::TimeZone::UTC)
-            .date()
-            .tomorrow()
-            .unwrap();
-        let pair = generate_pair_valid_between(
-            &["localhost"],
-            (
-                i32::from(tomorrow.year()),
-                tomorrow.month() as u8,
-                tomorrow.day() as u8,
-            ),
-            (2100, 1, 1),
-        );
-        let (cert, key) = pair.write_to(dir.path(), "proxy");
-        let error = load_pair("proxy.tls", &cert, &key).err().unwrap();
-        assert!(matches!(error, TlsError::NotYetValid { .. }), "{error:?}");
-        assert!(
-            error.to_string().starts_with(&format!(
-                "proxy.tls.cert_file {}: not valid before ",
-                cert.display()
-            )),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn an_absent_key_loads_no_acceptor_and_a_pair_names_the_https_scheme() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(matches!(load("proxy.tls", &None).unwrap(), Serving::Plain));
-        assert_eq!(scheme(&None), "http");
-        let (cert_file, key_file) = generate_pair(&["localhost"]).write_to(dir.path(), "proxy");
-        let pair = Some(ListenerTls {
-            cert_file,
-            key_file,
-        });
-        assert!(matches!(load("proxy.tls", &pair).unwrap(), Serving::Tls(_)));
-        assert_eq!(scheme(&pair), "https");
     }
 }

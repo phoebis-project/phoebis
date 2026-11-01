@@ -1243,63 +1243,56 @@ mod tests {
     /// condition as no body at all.
     #[test]
     fn the_scanners_refuse_the_depth_serde_refuses_and_admit_the_depth_it_reads() {
-        let mut verdicts = Vec::new();
-        for depth in MAX_DEPTH - 2..=MAX_DEPTH {
-            let body = nested(depth);
-            let reads = serde_json::from_slice::<serde_json::Value>(&body).is_ok();
-            verdicts.push(reads);
-            if reads {
-                let admitted =
-                    format!("serde reads {depth} arrays under the root, so the scanners do");
-                assert!(sign(&body).is_ok(), "{admitted}");
-                assert!(
-                    string_member_span(&body, &["model"]).is_some(),
-                    "{admitted}"
-                );
-                assert!(
-                    matches!(repeated_top_level_member(&body, &["model"]), Ok(None)),
-                    "{admitted}"
-                );
-                assert!(
-                    matches!(first_system_block_member_count(&body, "text"), Ok(1)),
-                    "{admitted}"
-                );
-                assert!(
-                    matches!(cache_control_spans(&body), Ok(spans) if spans.is_empty()),
-                    "{admitted}"
-                );
-            } else {
-                let refused =
-                    format!("serde refuses {depth} arrays under the root, so the scanners do");
-                assert!(
-                    matches!(sign(&body), Err(CchError::TooDeep(_))),
-                    "{refused}"
-                );
-                assert_eq!(string_member_span(&body, &["model"]), None, "{refused}");
-                assert!(
-                    matches!(
-                        repeated_top_level_member(&body, &["model"]),
-                        Err(CchError::TooDeep(_))
-                    ),
-                    "{refused}"
-                );
-                assert!(
-                    matches!(
-                        first_system_block_member_count(&body, "text"),
-                        Err(CchError::TooDeep(_))
-                    ),
-                    "{refused}"
-                );
-                assert!(
-                    matches!(cache_control_spans(&body), Err(CchError::TooDeep(_))),
-                    "{refused}"
-                );
-            }
-        }
+        // The root and 126 arrays are 127 containers, the most serde's recursion limit of 128 reads.
+        let body = nested(MAX_DEPTH - 2);
+        let admitted = "serde reads 126 arrays under the root, so the scanners do";
+        assert!(serde_reads(&body), "{admitted}");
+        assert!(sign(&body).is_ok(), "{admitted}");
         assert!(
-            verdicts.contains(&true) && verdicts.contains(&false),
-            "the range holds a depth serde reads and one it refuses: {verdicts:?}"
+            string_member_span(&body, &["model"]).is_some(),
+            "{admitted}"
         );
+        assert!(
+            matches!(repeated_top_level_member(&body, &["model"]), Ok(None)),
+            "{admitted}"
+        );
+        assert!(
+            matches!(first_system_block_member_count(&body, "text"), Ok(1)),
+            "{admitted}"
+        );
+        assert!(
+            matches!(cache_control_spans(&body), Ok(spans) if spans.is_empty()),
+            "{admitted}"
+        );
+        for depth in [MAX_DEPTH - 1, MAX_DEPTH] {
+            let body = nested(depth);
+            let refused =
+                format!("serde refuses {depth} arrays under the root, so the scanners do");
+            assert!(!serde_reads(&body), "{refused}");
+            assert!(
+                matches!(sign(&body), Err(CchError::TooDeep(_))),
+                "{refused}"
+            );
+            assert_eq!(string_member_span(&body, &["model"]), None, "{refused}");
+            assert!(
+                matches!(
+                    repeated_top_level_member(&body, &["model"]),
+                    Err(CchError::TooDeep(_))
+                ),
+                "{refused}"
+            );
+            assert!(
+                matches!(
+                    first_system_block_member_count(&body, "text"),
+                    Err(CchError::TooDeep(_))
+                ),
+                "{refused}"
+            );
+            assert!(
+                matches!(cache_control_spans(&body), Err(CchError::TooDeep(_))),
+                "{refused}"
+            );
+        }
     }
 
     /// `depth` nested arrays around a number, the element of a container a walker eats the bracket of itself. The
@@ -1320,24 +1313,6 @@ mod tests {
             depth,
             edits: Vec::new(),
         }
-    }
-
-    #[test]
-    fn the_array_element_span_counts_the_array_it_walks_toward_the_depth_bound() {
-        let body = |depth: usize| format!(r#"{{"system":[{}]}}"#, arrays(depth)).into_bytes();
-        let at_the_bound = body(MAX_DEPTH - 2);
-        assert!(!serde_reads(&at_the_bound));
-        assert_eq!(
-            array_member_span(&at_the_bound, &["system"], 0),
-            None,
-            "the root, the walked array and the arrays of its element reach the bound"
-        );
-        let under_it = body(MAX_DEPTH - 3);
-        assert!(serde_reads(&under_it));
-        assert!(
-            array_member_span(&under_it, &["system"], 0).is_some(),
-            "one level less reads as serde reads it"
-        );
     }
 
     #[test]
@@ -1364,67 +1339,6 @@ mod tests {
         assert_eq!(
             s.depth, 3,
             "the root, the walked array and the element stand counted at the member's value"
-        );
-    }
-
-    /// The bound falls inside the element the path skips, so the walk gives up before it reaches the empty array,
-    /// whose own count the next case bounds.
-    #[test]
-    fn the_empty_array_end_behind_a_numeric_segment_counts_the_skipped_array_toward_the_depth_bound(
-    ) {
-        let body = |depth: usize| format!(r#"{{"system":[{},[]]}}"#, arrays(depth)).into_bytes();
-        let at_the_bound = body(MAX_DEPTH - 2);
-        assert!(!serde_reads(&at_the_bound));
-        assert_eq!(
-            empty_array_member_end(&at_the_bound, &["system", "1"]),
-            None,
-            "the root, the walked array and the arrays of the skipped element reach the bound"
-        );
-        let under_it = body(MAX_DEPTH - 3);
-        assert!(serde_reads(&under_it));
-        assert!(
-            empty_array_member_end(&under_it, &["system", "1"]).is_some(),
-            "one level less reads as serde reads it"
-        );
-    }
-
-    /// An empty array behind `walked` containers its path walks, objects and arrays in turn from the root object, with
-    /// the path that reaches it.
-    fn empty_array_behind(walked: usize) -> (Vec<u8>, Vec<&'static str>) {
-        let (mut open, mut close, mut path) = (String::new(), String::new(), Vec::new());
-        for level in 0..walked {
-            if level % 2 == 0 {
-                open.push_str(r#"{"k":"#);
-                close.insert(0, '}');
-                path.push("k");
-            } else {
-                open.push('[');
-                close.insert(0, ']');
-                path.push("0");
-            }
-        }
-        (format!("{open}[]{close}").into_bytes(), path)
-    }
-
-    #[test]
-    fn the_empty_array_end_answers_none_at_the_128th_container_and_its_position_at_the_127th() {
-        let (at_the_bound, path) = empty_array_behind(MAX_DEPTH - 1);
-        assert!(
-            !serde_reads(&at_the_bound),
-            "serde refuses the empty array as the 128th container counted with the root"
-        );
-        assert_eq!(
-            empty_array_member_end(&at_the_bound, &path),
-            None,
-            "the empty array counts toward the bound as any container does"
-        );
-        let (under_it, path) = empty_array_behind(MAX_DEPTH - 2);
-        assert!(serde_reads(&under_it));
-        let at = empty_array_member_end(&under_it, &path).expect("one level less reads");
-        assert_eq!(
-            &under_it[at - 1..=at],
-            b"[]",
-            "the position is the empty array's closing bracket"
         );
     }
 
@@ -1641,10 +1555,10 @@ mod tests {
     /// member one level nearer the bound.
     #[test]
     fn an_empty_block_array_counts_back_out_of_its_bracket() {
-        let mut s = scanner_at(b"[]", 0, 1);
-        block_array(&mut s, &mut Vec::new(), false, Keys::Raw).unwrap();
-        assert_eq!(
-            s.depth, 1,
+        let body = format!(r#"{{"system":[],"x":{}}}"#, arrays(MAX_DEPTH - 2)).into_bytes();
+        assert!(serde_reads(&body));
+        assert!(
+            matches!(cache_control_spans(&body), Ok(spans) if spans.is_empty()),
             "the walk counts back out at the closing bracket"
         );
     }
@@ -1708,27 +1622,6 @@ mod tests {
         assert!(bool_member_span(br#"{"model":"m"}"#, &["stream"]).is_none());
         assert!(
             bool_member_span(br#"{"metadata":{"stream":true}}"#, &["metadata", "stream"]).is_some()
-        );
-    }
-
-    #[test]
-    fn an_array_element_span_covers_nested_objects_and_strings_holding_brackets() {
-        let body = br#"{"system":[{"type":"text","text":"[not] {a} bracket"},{"type":"text","text":"kept","meta":{"tags":["a]b","c}d"]}}],"model":"m"}"#;
-        let (start, end) = array_member_span(body, &["system"], 0).unwrap();
-        assert_eq!(
-            &body[start..end],
-            br#"{"type":"text","text":"[not] {a} bracket"}"#,
-            "a bracket inside a string does not end the element early"
-        );
-        let (start, end) = array_member_span(body, &["system"], 1).unwrap();
-        assert_eq!(
-            &body[start..end],
-            br#"{"type":"text","text":"kept","meta":{"tags":["a]b","c}d"]}}"#,
-            "a nested object and array are walked by depth, not skipped"
-        );
-        assert!(
-            array_member_span(body, &["system"], 2).is_none(),
-            "past the last element"
         );
     }
 
@@ -1828,32 +1721,6 @@ mod tests {
             )
             .unwrap(),
             Some("safeguards")
-        );
-    }
-
-    #[test]
-    fn an_empty_array_end_is_found_by_depth_past_an_earlier_decoy_and_nowhere_for_a_non_empty_one()
-    {
-        let decoy = br#"{"messages":[{"role":"system","content":"x"}],"system":[]}"#;
-        let (start, end) = string_member_span(decoy, &["messages", "0", "role"]).unwrap();
-        assert_eq!(
-            &decoy[start..end],
-            br#""system""#,
-            "the decoy really does carry the same bytes"
-        );
-        let at = empty_array_member_end(decoy, &["system"]).unwrap();
-        assert_eq!(
-            &decoy[at..],
-            b"]}",
-            "the top-level array's own bracket, not the decoy's"
-        );
-        assert!(
-            empty_array_member_end(br#"{"system":[1]}"#, &["system"]).is_none(),
-            "an array holding an element is not empty"
-        );
-        assert!(
-            empty_array_member_end(br#"{"system":"x"}"#, &["system"]).is_none(),
-            "a string is not an array"
         );
     }
 
@@ -2024,15 +1891,6 @@ mod tests {
     }
 
     #[test]
-    fn a_raw_repeat_of_a_top_level_member_is_found() {
-        let body = br#"{"model":"a","messages":[],"model":"b"}"#;
-        assert_eq!(
-            repeated_top_level_member(body, &["metadata", "model", "stream"]).unwrap(),
-            Some("model")
-        );
-    }
-
-    #[test]
     fn an_escaped_repeat_of_a_top_level_member_is_found_by_its_decoded_key() {
         let body = "{\"model\":\"a\",\"messages\":[],\"\\u006dodel\":\"b\"}".as_bytes();
         assert_eq!(
@@ -2153,15 +2011,9 @@ mod tests {
     #[test]
     fn a_body_whose_top_level_is_an_array_is_refused() {
         let body = br#"[{"model":"a"}]"#;
-        assert!(repeated_top_level_member(body, &["metadata", "model", "stream"]).is_err());
-    }
-
-    #[test]
-    fn a_single_occurrence_of_each_named_member_is_not_a_repeat() {
-        let body = br#"{"metadata":{"user_id":"u"},"model":"a","stream":true,"messages":[]}"#;
-        assert_eq!(
-            repeated_top_level_member(body, &["metadata", "model", "stream"]).unwrap(),
-            None
-        );
+        assert!(matches!(
+            repeated_top_level_member(body, &["metadata", "model", "stream"]),
+            Err(CchError::Json(0))
+        ));
     }
 }

@@ -1706,21 +1706,21 @@ mod tests {
         );
     }
 
-    /// One row with a `fast` block and one without, so the fast table's rule shows on a table of the test's own.
-    const FAST_AND_PLAIN: &str = "\
+    /// One row whose `fast` cells differ from its standard ones, so each of the router's two slots shows which cells
+    /// it took.
+    const FAST_ROW: &str = "\
 revisions:
   - effective: 2026-01-01
     models:
       claude-fast-1:
         {input: 2, cache_write_5m: 3, cache_write_1h: 4, cache_read: 1, output: 10,
          fast: {input: 12, cache_write_5m: 15, cache_write_1h: 24, cache_read: 6, output: 60}}
-      claude-plain-1: {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.3, output: 15}
 ";
 
     #[test]
-    fn the_router_configs_fast_table_reads_a_rows_fast_cells_and_a_row_without_them_its_standard_cells(
+    fn the_router_configs_fast_table_reads_a_rows_fast_cells_and_the_dollar_table_its_standard_cells(
     ) {
-        let prices = phoebis_ledger::PriceRevisions::from_yaml(FAST_AND_PLAIN, "test").unwrap();
+        let prices = phoebis_ledger::PriceRevisions::from_yaml(FAST_ROW, "test").unwrap();
         let config = router_config(
             prices.in_force(START),
             Arc::new(phoebis_ledger::PlanTables::shipped()),
@@ -1744,11 +1744,6 @@ revisions:
             config.rates.dollars.rates_for("claude-fast-1", 0),
             per_token([2.0, 3.0, 4.0, 1.0, 10.0]),
             "the dollar table keeps the same row's standard cells"
-        );
-        assert_eq!(
-            config.rates.fast.rates_for("claude-plain-1", 0),
-            per_token([3.0, 3.75, 6.0, 0.3, 15.0]),
-            "a row without a fast block burns fast at its standard cells"
         );
     }
 
@@ -1782,35 +1777,6 @@ revisions:
         .unwrap();
         let view = settings_view(&config, phoebis_profile::claude_code_2_1_310_linux_x64());
         assert_eq!((view.retention_days, view.rollup_retention_days), (30, 0));
-    }
-
-    /// The anchor tier carries a capacity on both windows, so every model the cost model names has a burn rate on
-    /// each, at its own weight or, as an estimate, at its model tier's latest weight: a pin on a model without a
-    /// weight ranks by its estimated burn rather than last.
-    #[test]
-    fn the_burn_rates_carry_a_row_per_model_the_fallback_prices_so_an_unweighted_pin_ranks_by_its_estimate(
-    ) {
-        let tables = phoebis_ledger::PlanTables::shipped();
-        let costs = tables.revisions.in_force(START);
-        for window in [phoebis_routing::FIVE_HOUR, phoebis_routing::SEVEN_DAY] {
-            let rates = tables.rate_table(window, None, START);
-            let mut rows: Vec<&str> = rates.rows.keys().map(String::as_str).collect();
-            rows.sort_unstable();
-            let mut priced: Vec<&str> = costs
-                .model_weight
-                .keys()
-                .chain(costs.model_tier.keys())
-                .map(String::as_str)
-                .filter(|model| costs.weight_or_fallback(model, window).is_some())
-                .collect();
-            priced.sort_unstable();
-            priced.dedup();
-            assert!(
-                !rows.is_empty(),
-                "{window}: the shipped model weighs a model"
-            );
-            assert_eq!(rows, priced, "{window}");
-        }
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { ATTENTION_PAGE_VALUES, ApiError, HttpApi, SessionNotKept, call, noteBuild, quietly, setBuildHook, setHooks, slug } from './dist/api.js';
+import { ApiError, HttpApi, SessionNotKept, call, noteBuild, quietly, setBuildHook, setHooks, slug } from './dist/api.js';
 
 const answer = (status, body, headers = {}) => ({ headers: { get: (k) => headers[k.toLowerCase()] ?? null }, ok: status >= 200 && status < 300, status, text: async () => (body === undefined ? '' : JSON.stringify(body)), json: async () => body });
 const stub = (handler) => { const calls = []; globalThis.fetch = async (url, init = {}) => { calls.push({ init, url }); return handler(url, init); }; return calls; };
@@ -414,10 +414,7 @@ test('the placements read sends the range and the key and pool lists, the budget
   assert.deepEqual([...bare.searchParams.keys()], ['range'], 'an empty key or pool list is left off the query');
   assert.deepEqual([budgetsUrl.pathname, budgetsUrl.search], ['/admin/analytics/budgets', ''], 'the budgets route reads no query');
   assert.deepEqual(placements, [{ cacheReadTokens: 1_000, hitShare: 1, hits: 2, placements: 2, promisedTokens: 1_000, rung: 'content' }]);
-  // Each of the row's fields reads under its camel-case name with the route's value, the end as an ISO instant.
-  const camel = (name) => name.replace(/_(\w)/g, (_, c) => c.toUpperCase());
-  const decoded = (row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [camel(k), k === 'period_end' ? new Date(v).toISOString() : v]));
-  assert.deepEqual(budgets, bodies['/admin/analytics/budgets'].members.map(decoded));
+  assert.deepEqual(budgets.map((b) => [b.poolId, b.budgetUsd, b.budgetPeriod]), [['main', 30, 'month'], ['main', 50, 'month']]);
   // The month end and the subscription's spend follow the capture's clock, so they are read from the capture.
   const wire = Object.fromEntries(bodies['/admin/analytics/budgets'].members.map((m) => [m.account_id, m]));
   const end = new Date(wire.direct.period_end).toISOString();
@@ -688,8 +685,16 @@ test('the attention read is one GET, and its failures reach no toast, since the 
   assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['GET', '/admin/attention']]);
   assert.deepEqual(
     items.map((i) => [i.kind, i.subject.id, i.link]),
-    body.items.map((i) => [i.kind, i.subject.id, i.link && ATTENTION_PAGE_VALUES.includes(i.link.page) ? { id: i.link.id, page: i.link.page } : null]),
-    'every captured kind decodes as itself, its link whole where its page is one the console knows and null otherwise',
+    [
+      ['pool_exhausted', 'main', { id: 'main', page: 'pools' }],
+      ['ledger_record_parked', 'main', { id: 'main', page: 'pools' }],
+      ['model_unweighted', 'claude-opus-99', null],
+      ['meter_drift', 'business', { id: 'business', page: 'accounts' }],
+      ['wall_reached', 'business', { id: 'business', page: 'accounts' }],
+      ['destination_spent', 'business', { id: 'business', page: 'accounts' }],
+      ['shed_no_runway', 'main', { id: 'main', page: 'pools' }],
+    ],
+    'every captured kind decodes as itself with its subject and its link',
   );
   assert.ok(items.some((i) => i.kind === 'model_unweighted'), "the capture's unweighted model among them");
   assert.deepEqual(

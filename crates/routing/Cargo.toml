@@ -32,3 +32,4 @@ phoebis-routing = { path = ".", features = ["debug-hooks"] }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 phoebis-transport = { path = "../transport" }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

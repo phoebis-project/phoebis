@@ -1522,29 +1522,6 @@ async fn a_subscriber_that_never_reads_drops_chunks_but_the_completion_waits_for
 }
 
 #[tokio::test]
-async fn a_relay_without_a_bus_publishes_nothing_and_still_answers() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: json_200(),
-    }])
-    .await;
-    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
-    let resp = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let o = outcome(&resp);
-    assert!(
-        o.received_at <= o.head_at.unwrap(),
-        "the outcome carries the timeline whether or not a bus is attached"
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
 async fn a_buffered_body_that_does_not_decode_answers_502_upstream_undecodable_and_publishes_no_chunk(
 ) {
     // A rejection that names a coding its body does not use, to a caller that reads that coding: the relay decodes

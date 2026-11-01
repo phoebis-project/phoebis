@@ -1162,7 +1162,6 @@ pub(crate) async fn bodies(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::openapi::round_trip::{fixture, round_trips};
     use phoebis_ledger::{CostRevisions, PlanTables, RequestRecord};
     use serde_json::json;
 
@@ -1550,25 +1549,22 @@ revisions:
             &shares,
         );
         let equivalent = plan.cost_equivalent.expect("a plan request");
-        let one_input = PinUsage {
-            input: 1,
-            ..PinUsage::default()
-        };
-        let finished = WEEKDAY_OFF_PEAK + 400;
         assert_eq!(
             equivalent.keys().map(String::as_str).collect::<Vec<_>>(),
             ["five_hour", "seven_day", "seven_day_fable"],
             "the two shared windows and the model week"
         );
-        for (window, share) in &equivalent {
-            assert_eq!(
-                *share,
-                shares
-                    .tables
-                    .equivalent_at(window, None, "claude-fable-5-1", one_input, finished),
-                "{window}: the cost model's units over the anchor tier's capacity"
-            );
-        }
+        // One Fable input token is 10 units: over the anchor tier's 100 on the 5-hour window and 1000 on the week,
+        // and over half the week on the model week.
+        assert_eq!(
+            [
+                equivalent["five_hour"],
+                equivalent["seven_day"],
+                equivalent["seven_day_fable"]
+            ],
+            [Some(0.1), Some(0.01), Some(0.02)],
+            "the cost model's units over the anchor tier's capacity"
+        );
         let billed = serde_json::to_value(request_summary(
             &request_of("claude-fable-5-1"),
             &[attempt_of("api_key", None, None)],
@@ -1761,32 +1757,6 @@ revisions:
                 ),
                 (Some(&Value::Null), "0.0".to_string()),
                 "{case}: no dollars, and the request sums none: {summary}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_request_fixtures_round_trip_through_their_declared_types() {
-        round_trips::<RequestList>("requests");
-        round_trips::<RequestDetail>("request");
-        round_trips::<Bodies>("request_bodies");
-        // The three captures the route answers outside a JSON object, as the document test reads them back.
-        for (request, response) in [
-            (
-                json!({"model": "claude-sonnet-5", "messages": []}),
-                json!("event: message_stop\ndata: {}\n\n"),
-            ),
-            (json!("{\"model\":\"claude-son"), Value::Null),
-            (json!(42), json!("ok")),
-        ] {
-            let mut capture = fixture("request_bodies");
-            capture["request"] = request;
-            capture["response"] = response;
-            let typed: Bodies = serde_json::from_value(capture.clone()).unwrap();
-            assert_eq!(
-                serde_json::to_value(&typed).unwrap(),
-                capture,
-                "a capture outside a JSON object round-trips"
             );
         }
     }

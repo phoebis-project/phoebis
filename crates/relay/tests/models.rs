@@ -184,8 +184,14 @@ async fn the_twins_are_switched_off_per_key() {
         .unwrap();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
     let body = body_json(resp).await;
-    assert!(
-        ids_of(&body).iter().all(|id| !id.ends_with("[1m]")),
+    assert_eq!(
+        ids_of(&body),
+        vec![
+            "claude-haiku-4-5-20251001",
+            "claude-opus-5",
+            "claude-sonnet-4-5-20250929",
+            "vendor/model-a",
+        ],
         "no twin id is listed"
     );
 }

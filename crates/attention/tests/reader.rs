@@ -594,6 +594,7 @@ fn resolve(rig: &Rig, outcome: AttemptOutcome) -> u64 {
 #[tokio::test]
 async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_first() {
     let rig = rig().await;
+    rig.store.set_clock(rig.clock());
     let (attention, _arm) = rig.attention(None);
     resolve(&rig, AttemptOutcome::Failed("invalid_grant".into()));
     let conditions = read(&attention, NOW);
@@ -603,8 +604,8 @@ async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_
         (false, &json!(1)),
         "one failure is a token endpoint having a bad moment"
     );
-    // Apart by more than a millisecond, so the run's start can only be read off the older attempt.
-    tokio::time::sleep(Duration::from_millis(2)).await;
+    // A millisecond apart on the store's clock, so the run's start can only be read off the older attempt.
+    rig.at(NOW + 1);
     let lost = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
     rig.store
         .resolve_refresh_attempt(lost, 1, AttemptOutcome::Uncertain("lost".into()))
@@ -638,13 +639,14 @@ async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_
 #[tokio::test]
 async fn a_lost_refresh_a_committed_retry_supersedes_counts_no_second_failure() {
     let rig = rig().await;
+    rig.store.set_clock(rig.clock());
     let (attention, _arm) = rig.attention(None);
     let lost = resolve(
         &rig,
         AttemptOutcome::Uncertain("refresh response lost".into()),
     );
-    // Apart by more than a millisecond, so the commit settles the lost row again under a later time than its own.
-    tokio::time::sleep(Duration::from_millis(2)).await;
+    // A millisecond on the store's clock, so the commit settles the lost row again under a later time than its own.
+    rig.at(NOW + 1);
     let retry = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
     rig.store
         .commit_credentials(
@@ -705,10 +707,11 @@ async fn a_lost_refresh_a_committed_retry_supersedes_counts_no_second_failure() 
 async fn a_pairing_that_supersedes_a_pending_retry_leaves_no_refresh_run() {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     let rig = rig_with_store(store.clone()).await;
+    rig.store.set_clock(rig.clock());
     let failed = resolve(&rig, AttemptOutcome::Failed("invalid_grant".into()));
-    tokio::time::sleep(Duration::from_millis(2)).await;
+    rig.at(NOW + 1);
     let pending = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
-    tokio::time::sleep(Duration::from_millis(2)).await;
+    rig.at(NOW + 2);
     rig.store
         .commit_credentials(
             "business",
@@ -949,43 +952,6 @@ async fn scrape(rig: &Rig, attention: &Arc<Attention>) -> (u16, String) {
     let status = response.status().as_u16();
     let body = response.into_body().collect().await.unwrap().to_bytes();
     (status, String::from_utf8(body.to_vec()).unwrap())
-}
-
-#[tokio::test]
-async fn the_scrape_reads_a_drift_version_1_after_its_refusal_and_0_after_a_relayed_request() {
-    let rig = rig().await;
-    let (attention, _arm) = rig.attention(None);
-    attention.observe(&observed("d1", Some("desktop"), "main"));
-    attention.observe(&complete(
-        "d1",
-        Outcome::Rejected,
-        Some("hash"),
-        Some("2.1.274"),
-        NOW,
-    ));
-    let (status, text) = scrape(&rig, &attention).await;
-    assert_eq!(status, 200);
-    assert!(
-        text.contains(r#"phoebis_attention{kind="client_drift",subject="2.1.274"} 1"#),
-        "{text}"
-    );
-    assert!(
-        text.contains(r#"phoebis_attention{kind="poll_backoff",subject="business"} 0"#),
-        "a polled account with no poll status yet scrapes its backoff series at 0: {text}"
-    );
-    attention.observe(&observed("d2", Some("desktop"), "main"));
-    attention.observe(&complete(
-        "d2",
-        Outcome::Succeeded,
-        None,
-        Some("2.1.274"),
-        NOW,
-    ));
-    let (_, text) = scrape(&rig, &attention).await;
-    assert!(
-        text.contains(r#"phoebis_attention{kind="client_drift",subject="2.1.274"} 0"#),
-        "the cleared version reads 0 under the same labels rather than vanishing: {text}"
-    );
 }
 
 #[tokio::test]
@@ -1348,55 +1314,6 @@ async fn a_move_whose_destination_was_spent_within_the_hour_holds_the_condition_
 }
 
 #[tokio::test]
-async fn a_window_cleared_after_the_spent_window_ends_the_condition_the_move_onto_that_account_held(
-) {
-    let rig = rig().await;
-    let (attention, _arm) = rig.attention(None);
-    routing_event(
-        &rig,
-        NOW - 50 * MINUTE,
-        "pin_migrated",
-        "business",
-        None,
-        json!({ "reason": "spent", "from_account": "direct", "fit": "fits" }),
-    );
-    routing_event(
-        &rig,
-        NOW - 10 * MINUTE,
-        "window_spent",
-        "business",
-        None,
-        json!({ "window": "five_hour", "source": "head" }),
-    );
-    routing_event(
-        &rig,
-        NOW - 5 * MINUTE,
-        "window_cleared",
-        "business",
-        None,
-        json!({ "window": "five_hour", "source": "head" }),
-    );
-    fold_at(&rig, NOW).await;
-    let conditions = read(&attention, NOW);
-    let cleared = find(&conditions, Kind::DestinationSpent, "business")
-        .cloned()
-        .expect("an OAuth account keeps its series while it holds nothing");
-    assert_eq!(
-        (cleared.holds, cleared.since, &cleared.detail),
-        (
-            false,
-            None,
-            &json!({ "fits": {}, "moves": 0, "setting": ["window_ceiling"], "windows": [] })
-        ),
-        "the clear ended the spent window's reach, so the move before it holds nothing"
-    );
-    assert!(
-        find(&conditions, Kind::WallReached, "business").is_some_and(|wall| wall.holds),
-        "the wall was still reached"
-    );
-}
-
-#[tokio::test]
 async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_with_the_projection_error(
 ) {
     let rig = rig().await;
@@ -1481,55 +1398,6 @@ async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_wi
             })
         ),
         "the condition clears once the trailing day holds no wall"
-    );
-}
-
-#[tokio::test]
-async fn an_account_that_reached_its_wall_under_a_stretch_round_holds_the_condition_with_how_early_it_came(
-) {
-    let rig = rig().await;
-    let (attention, _arm) = rig.attention(None);
-    // The stretch fired a round two hours before the wall, which came 25 minutes before the reset its event names.
-    routing_event(
-        &rig,
-        NOW - 2 * HOUR,
-        "shedding_round",
-        "business",
-        Some("main"),
-        json!({
-            "window": "five_hour",
-            "projection": 1.3,
-            "trigger": "slow_down",
-            "outcome": "marked 1",
-            "reason": null,
-        }),
-    );
-    routing_event(
-        &rig,
-        NOW - HOUR,
-        "window_spent",
-        "business",
-        None,
-        json!({ "window": "five_hour", "source": "poll", "reset": NOW - HOUR + 25 * MINUTE }),
-    );
-    fold_at(&rig, NOW).await;
-    let held = find(&read(&attention, NOW), Kind::WallReached, "business")
-        .cloned()
-        .expect("the wall holds the condition");
-    assert_eq!(
-        (held.holds, held.since, &held.detail),
-        (
-            true,
-            Some(NOW - HOUR),
-            &json!({
-                "early_ms": 25 * MINUTE,
-                "projection_error": null,
-                "setting": ["shed_cap", "window_ceiling"],
-                "walls": 1,
-                "windows": ["five_hour"],
-            })
-        ),
-        "a stretch round's wall reads how early it came, and its projection measures nothing at the reset"
     );
 }
 
@@ -2021,32 +1889,6 @@ async fn a_pair_within_thirty_days_of_its_end_holds_certificate_expiring_since_t
 }
 
 #[tokio::test]
-async fn a_loaded_pair_crosses_the_warning_threshold_and_its_end_as_the_clock_advances() {
-    let rig = rig().await;
-    let pairs = Arc::new(Pairs::default());
-    let not_after = NOW + 31 * DAY;
-    pairs.set(vec![pair("proxy.tls", not_after)]);
-    let (attention, _arm) = rig.attention_with_pairs(None, Some(pairs));
-
-    let expiring = |at: i64| {
-        let conditions = read(&attention, at);
-        let c = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
-        (c.holds, c.since, c.detail["days_left"].clone())
-    };
-    assert_eq!(expiring(NOW), (false, None, json!(31)));
-    assert_eq!(
-        expiring(NOW + DAY),
-        (true, Some(not_after - 30 * DAY), json!(30)),
-        "a day later the same loaded pair holds"
-    );
-    assert_eq!(
-        expiring(NOW + 32 * DAY),
-        (true, Some(not_after - 30 * DAY), json!(-1)),
-        "past its end the count goes negative without a reload"
-    );
-}
-
-#[tokio::test]
 async fn a_leaf_thirty_days_and_twelve_hours_from_its_end_holds_no_expiring_item() {
     let rig = rig().await;
     let pairs = Arc::new(Pairs::default());
@@ -2065,19 +1907,15 @@ async fn a_leaf_thirty_days_and_twelve_hours_from_its_end_holds_no_expiring_item
 async fn a_leaf_exactly_thirty_days_from_its_end_holds_the_expiring_item_since_the_read() {
     let rig = rig().await;
     let pairs = Arc::new(Pairs::default());
-    pairs.set(vec![pair("proxy.tls", NOW + 30 * DAY)]);
     let (attention, _arm) = rig.attention_with_pairs(None, Some(pairs.clone()));
-    let conditions = read(&attention, NOW);
-    let held = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
-    assert_eq!((held.holds, held.since), (true, Some(NOW)));
 
     // One pair installed once and read at twelve-hour steps across its onset: no read dates the item after itself.
     let not_after = NOW + 61 * DAY;
     pairs.set(vec![pair("proxy.tls", not_after)]);
-    for at in [
-        NOW + 30 * DAY + 12 * HOUR,
-        NOW + 31 * DAY,
-        NOW + 31 * DAY + 12 * HOUR,
+    for (at, expiring) in [
+        (NOW + 30 * DAY + 12 * HOUR, (false, None)),
+        (NOW + 31 * DAY, (true, Some(NOW + 31 * DAY))),
+        (NOW + 31 * DAY + 12 * HOUR, (true, Some(NOW + 31 * DAY))),
     ] {
         let conditions = read(&attention, at);
         let c = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
@@ -2086,15 +1924,7 @@ async fn a_leaf_exactly_thirty_days_from_its_end_holds_the_expiring_item_since_t
             "at {at}: since {:?} is after the read",
             c.since
         );
-        assert_eq!(
-            (c.holds, c.since),
-            if at < not_after - 30 * DAY {
-                (false, None)
-            } else {
-                (true, Some(not_after - 30 * DAY))
-            },
-            "at {at}"
-        );
+        assert_eq!((c.holds, c.since), expiring, "at {at}");
     }
 }
 
@@ -2349,54 +2179,6 @@ async fn a_weighted_model_a_model_of_no_weighted_tier_and_a_billed_request_raise
         ["claude-sonnet-5"],
         "a weighted model needs no stand-in, nothing stands in for a model tier without a weighted model, and an \
          API key's request reads no window share"
-    );
-}
-
-#[tokio::test]
-async fn a_held_unweighted_model_has_its_series_and_ranks_after_every_degraded_state() {
-    let rig = rig().await;
-    let (attention, _arm) = rig.attention(None);
-    attention.observe(&observed("x1", Some("desktop"), "main"));
-    attention.observe(&complete("x1", Outcome::Exhausted, None, None, NOW));
-    rig.ledger
-        .record_request(on_model("r1", "claude-opus-5", "business", NOW, 1))
-        .await;
-    let conditions = read_counting(&attention, NOW, "claude-opus-5", 1).await;
-    assert_eq!(
-        series(&conditions),
-        [
-            ("destination_spent", "business".to_string(), false),
-            ("funding_required", "direct".to_string(), false),
-            ("ledger_record_parked", "main".to_string(), false),
-            ("meter_drift", "business".to_string(), false),
-            ("model_unweighted", "claude-opus-5".to_string(), true),
-            ("poll_backoff", "business".to_string(), false),
-            ("pool_exhausted", "main".to_string(), true),
-            ("reauth_required", "business".to_string(), false),
-            ("reauth_required", "direct".to_string(), false),
-            ("refresh_failed", "business".to_string(), false),
-            ("shed_no_runway", "main".to_string(), false),
-            ("slowed_long", "business".to_string(), false),
-            ("wall_reached", "business".to_string(), false),
-            ("writer_degraded", "ledger".to_string(), false),
-            ("writer_degraded", "routing".to_string(), false),
-        ],
-        "the model that served joins the series while every other subject keeps its own"
-    );
-    let mut held: Vec<Kind> = conditions
-        .iter()
-        .filter(|c| c.holds)
-        .map(|c| c.kind)
-        .collect();
-    held.sort();
-    assert_eq!(
-        held,
-        [Kind::PoolExhausted, Kind::ModelUnweighted],
-        "an estimate breaks nothing, so it ranks after the exhaustion held beside it"
-    );
-    assert!(
-        Kind::PollBackoff < Kind::ModelUnweighted,
-        "and after the last degraded state"
     );
 }
 

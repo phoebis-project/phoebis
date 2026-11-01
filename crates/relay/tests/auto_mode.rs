@@ -159,55 +159,52 @@ fn ok_answer() -> Vec<u8> {
     }
 }
 
+/// One request of `kind` carrying the member and the beta under the default setting, through the checks both
+/// fixtures share. Answers the body the upstream received.
+async fn passed_through_unchanged(kind: FixtureKind, sent_body: &[u8]) -> Vec<u8> {
+    let head = head_with_beta(kind);
+    let r = relay(
+        &[account()],
+        PoolSpec::default(),
+        json_200(),
+        &head,
+        sent_body,
+    )
+    .await;
+    assert_eq!(r.status, 200);
+    assert_eq!(
+        r.answer,
+        ok_answer(),
+        "the answer reaches the caller as sent"
+    );
+    let received = &r.sent[0].body;
+    assert!(
+        received.ends_with(&[b",", SAFEGUARDS_MEMBER.as_bytes(), br#","stream":true}"#].concat()),
+        "the member travels verbatim where the client put it"
+    );
+    assert_eq!(beta_list(&r.sent[0]), caller_betas(&head));
+    assert_eq!(
+        beta_list(&r.sent[0]).last().map(String::as_str),
+        Some(DANGEROUS_TOOL_USE_BETA),
+        "the beta stays where the caller put it"
+    );
+    received.clone()
+}
+
 #[tokio::test]
 async fn the_default_passes_the_member_and_the_beta_through_unchanged() {
-    for (kind, sent_body, client_hash) in [
-        (
-            FixtureKind::OauthFirstParty,
-            first_party_with_safeguards(),
-            true,
-        ),
-        (
-            FixtureKind::OauthNonFirstParty,
-            with_safeguards(body(BodyFixture::Oauth)),
-            false,
-        ),
-    ] {
-        let head = head_with_beta(kind);
-        let r = relay(
-            &[account()],
-            PoolSpec::default(),
-            json_200(),
-            &head,
-            &sent_body,
-        )
-        .await;
-        assert_eq!(r.status, 200);
-        assert_eq!(
-            r.answer,
-            ok_answer(),
-            "the answer reaches the caller as sent"
-        );
-        let received = &r.sent[0].body;
-        assert!(
-            received
-                .ends_with(&[b",", SAFEGUARDS_MEMBER.as_bytes(), br#","stream":true}"#].concat()),
-            "the member travels verbatim where the client put it"
-        );
-        assert_eq!(beta_list(&r.sent[0]), caller_betas(&head));
-        assert_eq!(
-            beta_list(&r.sent[0]).last().map(String::as_str),
-            Some(DANGEROUS_TOOL_USE_BETA),
-            "the beta stays where the caller put it"
-        );
-        // The first-party hash is re-signed over the edited bytes; the reduced line's restored `cch` is the
-        // client's placeholder, unsigned.
-        if client_hash {
-            assert_eq!(&phoebis_cch::sign(received).unwrap(), received);
-        } else {
-            assert_eq!(stamp(received), b"00000");
-        }
-    }
+    // The first-party hash is re-signed over the edited bytes.
+    let received =
+        passed_through_unchanged(FixtureKind::OauthFirstParty, &first_party_with_safeguards())
+            .await;
+    assert_eq!(phoebis_cch::sign(&received).unwrap(), received);
+    // The reduced line's restored `cch` is the client's placeholder, unsigned.
+    let received = passed_through_unchanged(
+        FixtureKind::OauthNonFirstParty,
+        &with_safeguards(body(BodyFixture::Oauth)),
+    )
+    .await;
+    assert_eq!(stamp(&received), b"00000");
 }
 
 #[tokio::test]

@@ -300,10 +300,10 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
     store.revoke_api_key("k", 2, "test").unwrap();
     handle.reload().await.unwrap();
     assert!(
-        handle
-            .snapshot()
-            .authenticate("phoebis-secret", 1_002)
-            .is_err(),
+        matches!(
+            handle.snapshot().authenticate("phoebis-secret", 1_002),
+            Err(KeyRefusal::Revoked)
+        ),
         "a revoked key answers 401 at once"
     );
 }
@@ -543,10 +543,10 @@ async fn a_failed_reload_keeps_the_old_snapshot_and_says_so() {
     );
     handle.reload().await.unwrap();
     assert!(
-        handle
-            .snapshot()
-            .authenticate("phoebis-secret", 1_004)
-            .is_err(),
+        matches!(
+            handle.snapshot().authenticate("phoebis-secret", 1_004),
+            Err(KeyRefusal::Revoked)
+        ),
         "the next successful reload publishes the revocation"
     );
 }
@@ -1029,9 +1029,8 @@ async fn two_concurrent_first_requests_of_one_session_land_on_one_account() {
     let store = seeded(&["a", "b", "c"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
-    let mut picks = std::collections::HashSet::new();
     for _ in 0..5 {
-        let session = format!("s{}", rand::random::<u32>());
+        let session = fresh_session();
         let (x, y) = tokio::join!(
             handle.select(request(&handle, Some(&session), 1_000)),
             handle.select(request(&handle, Some(&session), 1_000))
@@ -1042,9 +1041,7 @@ async fn two_concurrent_first_requests_of_one_session_land_on_one_account() {
         };
         let (x, y) = (id(x.unwrap().result), id(y.unwrap().result));
         assert_eq!(x, y);
-        picks.insert(x);
     }
-    let _ = picks;
 }
 
 #[tokio::test]
@@ -4573,40 +4570,6 @@ async fn a_repeated_rejection_moves_the_fence_a_recovery_sample_has_to_clear() {
 }
 
 #[tokio::test]
-async fn a_sample_the_cooled_account_was_holding_when_it_was_rejected_releases_nothing() {
-    let store = seeded_oauth(&["a"]);
-    let now = Arc::new(AtomicI64::new(2_000));
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle
-        .report(cooled(
-            "a",
-            "account",
-            2_000 + 5 * HOUR,
-            "rate_limit",
-            "five_hour",
-        ))
-        .await;
-    assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
-    // The usage endpoint serves a cached view for a minute, so the snapshot that arrives first can be older
-    // than the rejection.
-    handle
-        .report(observed("a", sample_with(1_999, FIVE_HOUR, 0.4, None)))
-        .await;
-    assert_eq!(
-        handle.cooldowns().await.unwrap().len(),
-        1,
-        "a reading from before the row was set is not evidence about it"
-    );
-    handle
-        .report(observed("a", sample_with(2_001, FIVE_HOUR, 0.4, None)))
-        .await;
-    assert!(
-        handle.cooldowns().await.unwrap().is_empty(),
-        "the same reading taken after it is"
-    );
-}
-
-#[tokio::test]
 async fn a_window_at_its_limit_keeps_the_cooldown() {
     use phoebis_routing::SPENT_MARGIN;
     let store = seeded_oauth(&["a"]);
@@ -4960,7 +4923,7 @@ fn the_purge_reclaims_a_permit_and_a_ticket_whose_guard_never_dropped() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_completion_wakes_a_waiter_and_the_bound_ends_the_wait() {
     use phoebis_routing::{InFlight, IN_FLIGHT_RECLAIM_MS};
     use tokio::time::Instant;
@@ -6386,102 +6349,66 @@ async fn standard_and_fast(handle: &RouterHandle, at: i64) -> (SelectResult, Sel
     )
 }
 
+/// A seat's share of one, its poll fetched at `persisted_at`, persisted before a shutdown and read by a task spawned
+/// six hours into November: the spend window, then the answers to a plain request and a fast one.
+async fn a_share_at_one_after_a_restart(
+    persisted_at: i64,
+) -> (SpendWindow, SelectResult, SelectResult) {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(persisted_at));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .report(credits_at(true, None, Some(100.0), persisted_at))
+        .await;
+    credits_row_reads(&store, 1.0).await;
+    handle.shutdown().await.unwrap();
+    now.store(NOV_1 + 6 * HOUR, Ordering::SeqCst);
+    let again = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let window = spend_window_of(&again).await;
+    let (standard, fast) = standard_and_fast(&again, NOV_1 + 6 * HOUR).await;
+    (window, standard, fast)
+}
+
 #[tokio::test]
 async fn a_share_at_one_persisted_in_october_lapses_after_a_restart_on_the_first_and_one_persisted_on_the_first_keeps_holding(
 ) {
-    for (persisted_at, holds) in [(NOV_1 - HOUR, false), (NOV_1 + 1_000, true)] {
-        let store = seeded_oauth(&["a"]);
-        usage_based_seat(&store, "a");
-        let now = Arc::new(AtomicI64::new(persisted_at));
-        let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-        handle
-            .report(credits_at(true, None, Some(100.0), persisted_at))
-            .await;
-        credits_row_reads(&store, 1.0).await;
-        handle.shutdown().await.unwrap();
-        now.store(NOV_1 + 6 * HOUR, Ordering::SeqCst);
-        let again = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-        let window = spend_window_of(&again).await;
-        let (standard, fast) = standard_and_fast(&again, NOV_1 + 6 * HOUR).await;
-        if holds {
-            assert_eq!(
-                (window.utilization, window.share_source),
-                (Some(1.0), None),
-                "the share persisted this month stands, with no source the row could keep"
-            );
-            assert_eq!(
-                (standard, fast),
-                (
-                    SelectResult::Exhausted(Exhaustion::Timed {
-                        deadline: DEC_1,
-                        window: "spend".into()
-                    }),
-                    SelectResult::Exhausted(Exhaustion::FastCredits {
-                        reason: "org_spend_cap_reached".into()
-                    })
-                ),
-                "it holds the seat out until the next month's first, the fast lane's credits read alike"
-            );
-        } else {
-            let answered = |result: &SelectResult| match result {
-                SelectResult::Selected(selection) => format!("selected {}", selection.account.id),
-                other => format!("{other:?}"),
-            };
-            assert_eq!(
-                (
-                    window.utilization,
-                    window.share_source,
-                    window.reset,
-                    answered(&standard),
-                    answered(&fast)
-                ),
-                (None, None, DEC_1, "selected a".into(), "selected a".into()),
-                "October's share lapsed at the first, read under the estimate over its own instant, so it holds \
-                 nothing, the fast lane's credits read included"
-            );
-        }
-    }
-}
-
-/// The usage body of an invented usage-based Enterprise seat, the oauth crate's fixture, its extra usage on the
-/// percent scale.
-const SEAT_USAGE: &[u8] = include_bytes!("../../oauth/tests/fixtures/usage_based_seat.json");
-
-#[tokio::test]
-async fn the_seat_fixtures_poll_moves_the_spend_share_to_its_extra_usage_utilization_over_a_hundred(
-) {
-    let store = seeded_oauth(&["a"]);
-    usage_based_seat(&store, "a");
-    let now = Arc::new(AtomicI64::new(OCT_10));
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    let (windows, fable_window, extra_usage, spend, raw_keys) =
-        phoebis_oauth::parse_usage(SEAT_USAGE).unwrap();
-    let snapshot = UsageSnapshot {
-        account_id: "a".into(),
-        identity_generation: 1,
-        fetched_at: OCT_10,
-        windows,
-        fable_window,
-        extra_usage,
-        raw_keys,
-        error: None,
-        spend,
+    let (window, standard, fast) = a_share_at_one_after_a_restart(NOV_1 - HOUR).await;
+    let answered = |result: &SelectResult| match result {
+        SelectResult::Selected(selection) => format!("selected {}", selection.account.id),
+        other => format!("{other:?}"),
     };
-    handle
-        .report(Report::Credits {
-            account_id: "a".into(),
-            state: credits_from_usage(&snapshot, 1).expect("the fixture carries extra usage"),
-            incarnation: 1,
-        })
-        .await;
-    let share = spend_window_of(&handle)
-        .await
-        .utilization
-        .expect("the poll set a share");
-    // The body's 41.0 percent, which its `spend.percent` carries as 41.
-    assert!(
-        (share - 0.41).abs() < 1e-9,
-        "the share is extra usage's utilization over a hundred, the one figure the view reads too: {share}"
+    assert_eq!(
+        (
+            window.utilization,
+            window.share_source,
+            window.reset,
+            answered(&standard),
+            answered(&fast)
+        ),
+        (None, None, DEC_1, "selected a".into(), "selected a".into()),
+        "October's share lapsed at the first, read under the estimate over its own instant, so it holds nothing, \
+         the fast lane's credits read included"
+    );
+
+    let (window, standard, fast) = a_share_at_one_after_a_restart(NOV_1 + 1_000).await;
+    assert_eq!(
+        (window.utilization, window.share_source),
+        (Some(1.0), None),
+        "the share persisted this month stands, with no source the row could keep"
+    );
+    assert_eq!(
+        (standard, fast),
+        (
+            SelectResult::Exhausted(Exhaustion::Timed {
+                deadline: DEC_1,
+                window: "spend".into()
+            }),
+            SelectResult::Exhausted(Exhaustion::FastCredits {
+                reason: "org_spend_cap_reached".into()
+            })
+        ),
+        "it holds the seat out until the next month's first, the fast lane's credits read alike"
     );
 }
 
@@ -7022,15 +6949,14 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
         })
         .await;
     let pins = handle.pins().await.unwrap();
-    // The pool's burn average is 600 s, and the second fold lands 60 s after the first.
-    let window = 600.0_f64;
-    let decay = (-60.0_f64 / window).exp();
+    // The pool's burn average is 600 s, and the second fold lands 60 s after the first: each type's first tokens over
+    // 600 s keep e^-0.1 (0.904 837 418 036) of their rate, and the 500 input tokens of the second add 500 / 600.
     let expected = PinBurn {
-        cache_read: 1_000.0 / window * decay,
-        input: 100.0 / window * decay + 500.0 / window,
-        output: 20.0 / window * decay,
-        write_1h: 30.0 / window * decay,
-        write_5m: 50.0 / window * decay,
+        cache_read: 1.508_062_363_393,
+        input: 0.984_139_569_673,
+        output: 0.030_161_247_268,
+        write_1h: 0.045_241_870_902,
+        write_5m: 0.075_403_118_170,
     };
     let folded = pins.iter().find(|p| p.session_id == "s1").unwrap();
     let close = |a: PinBurn, b: PinBurn| {
@@ -7132,9 +7058,10 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
         .await;
     let pins = handle.pins().await.unwrap();
     let fast_burns = handle.fast_burns().await.unwrap();
-    // The pool's burn average is 600 s, and the fast fold lands 60 s after the standard one.
+    // The pool's burn average is 600 s, and the fast fold lands 60 s after the standard one, so the row's 600 tokens
+    // over 600 s keep e^-0.1 of their rate of 1.
     let window = 600.0_f64;
-    let decayed = 600.0 / window * (-60.0_f64 / window).exp();
+    let decayed = 0.904_837_418_036;
     let s1 = pins.iter().find(|p| p.session_id == "s1").unwrap();
     assert!(
         (s1.burn.input - decayed).abs() < 1e-9 && (s1.burn_banded.input - decayed).abs() < 1e-9,
@@ -7149,8 +7076,9 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
     );
     assert_eq!((s1.burn_at, s1.last_input_tokens), (Some(62_000), 1_000));
     let priced = rates.price_pin(BurnUnit::Usd, s1).unwrap();
+    // 0.904 837 418 036 x 0.25 + 1 000 / 600 x 0.5.
     assert!(
-        (priced - (decayed * 0.25 + 1_000.0 / window * 0.5)).abs() < 1e-9,
+        (priced - 1.059_542_687_842).abs() < 1e-9,
         "priced, the row's tokens at the quarter and the fast tokens at the half: {priced}"
     );
     let s2 = pins.iter().find(|p| p.session_id == "s2").unwrap();
@@ -7246,10 +7174,10 @@ async fn a_classifier_renewal_lands_in_the_pins_unmetered_copy_priced_in_dollars
         .report(speed_renewal(standard, 62_000, false, 1_000))
         .await;
     let pins = handle.pins().await.unwrap();
-    // The pool's burn average is 600 s, and the classifier's fold lands 60 s after the standard one.
+    // The pool's burn average is 600 s, and the classifier's fold lands 60 s after the standard one, so the row's 600
+    // tokens over 600 s keep e^-0.1 of their rate of 1.
     let window = 600.0_f64;
-    let decay = (-60.0_f64 / window).exp();
-    let decayed = 600.0 / window * decay;
+    let decayed = 0.904_837_418_036;
     let s1 = pins.iter().find(|p| p.session_id == "s1").unwrap();
     assert!(
         (s1.burn.input - decayed).abs() < 1e-9 && (s1.burn_banded.input - decayed).abs() < 1e-9,
@@ -7273,8 +7201,9 @@ async fn a_classifier_renewal_lands_in_the_pins_unmetered_copy_priced_in_dollars
         "under the window share the row's banded copy alone, so the renewal adds nothing to the plan's figure: {share}"
     );
     let dollars = rates.price_pin(BurnUnit::Usd, s1).unwrap();
+    // (0.904 837 418 036 + 1 000 / 600) x 0.25.
     assert!(
-        (dollars - (decayed + 1_000.0 / window) * 0.25).abs() < 1e-9,
+        (dollars - 0.642_876_021_176).abs() < 1e-9,
         "in dollars the classifier tokens price at the standard quarter beside the row's: {dollars}"
     );
     let s2 = pins.iter().find(|p| p.session_id == "s2").unwrap();
@@ -7287,8 +7216,9 @@ async fn a_classifier_renewal_lands_in_the_pins_unmetered_copy_priced_in_dollars
         .report(speed_renewal(classified, 122_000, false, 600))
         .await;
     let (s1, _) = pin_and_fast_usage(&handle).await;
+    // The thousand classifier tokens over 600 s, 60 s later at e^-0.1 of that rate.
     assert!(
-        (s1.burn_unmetered.input - 1_000.0 / window * decay).abs() < 1e-9,
+        (s1.burn_unmetered.input - 1.508_062_363_393).abs() < 1e-9,
         "a standard renewal folds nothing into the unmetered copy, which decays with the row: {:?}",
         s1.burn_unmetered
     );
@@ -7581,17 +7511,6 @@ async fn dollar_burn(handle: &RouterHandle, rates: &BurnRates) -> f64 {
         .unwrap()
 }
 
-/// `tokens` folded at `now` onto an average last folded at `at`, over the pool's 600 s burn average, as
-/// the task folds a renewal: tokens a second.
-fn average_after(average: f64, at: Option<i64>, now: i64, tokens: f64) -> f64 {
-    let window = 600.0;
-    let decayed = match at {
-        None => average,
-        Some(at) => average * (-((now - at) as f64 / 1_000.0) / window).exp(),
-    };
-    decayed + tokens / window
-}
-
 #[tokio::test]
 async fn two_fast_renewals_around_the_threshold_price_at_the_fast_cells_whichever_side_each_prompt_fell(
 ) {
@@ -7601,18 +7520,13 @@ async fn two_fast_renewals_around_the_threshold_price_at_the_fast_cells_whicheve
         .report(speed_renewal(pin.clone(), 2_000, true, 1_000))
         .await;
     handle.report(speed_renewal(pin, 3_000, true, 1_001)).await;
-    let fast_tokens = average_after(
-        average_after(0.0, None, 2_000, 1_000.0),
-        Some(2_000),
-        3_000,
-        1_001.0,
-    );
+    // Over the pool's 600 s burn average, (1 000 / 600 x e^(-1/600) + 1 001 / 600) x 0.5: the first turn's tokens a
+    // second later beside the second's, at the fast cells' half.
     let priced = dollar_burn(&handle, &rates).await;
     assert!(
-        (priced - fast_tokens * 0.5).abs() < 1e-9,
+        (priced - 1.666_112_267_876).abs() < 1e-9,
         "the fast cells never move with the prompt, so the dollar burn is a half over every fast token folded and \
-         the second prompt's crossing of the threshold reprices nothing: {priced} against {}",
-        fast_tokens * 0.5
+         the second prompt's crossing of the threshold reprices nothing: {priced}"
     );
 }
 
@@ -7628,27 +7542,22 @@ async fn a_standard_renewal_crossing_the_threshold_each_way_reprices_the_ordinar
     handle
         .report(speed_renewal(pin.clone(), 3_000, false, 1_001))
         .await;
-    let fast_tokens = average_after(0.0, None, 2_000, 1_000.0);
-    let ordinary_tokens = average_after(0.0, Some(2_000), 3_000, 1_001.0);
-    let fast_decayed = average_after(fast_tokens, Some(2_000), 3_000, 0.0);
+    // Over the pool's 600 s burn average: 1 001 / 600 x 1 + 1 000 / 600 x e^(-1/600) x 0.5.
     let crossed_up = dollar_burn(&handle, &rates).await;
-    let expected_up = ordinary_tokens * 1.0 + fast_decayed * 0.5;
     assert!(
-        (crossed_up - expected_up).abs() < 1e-9,
+        (crossed_up - 2.500_278_934_542).abs() < 1e-9,
         "crossing up, the ordinary tokens read at the long-context rate and the fast tokens at the fast cells: \
-         {crossed_up} against {expected_up}"
+         {crossed_up}"
     );
     // A standard turn back at the threshold: the whole ordinary history reprices at the standard rate, as the
     // pin's last prompt rules, and the fast tokens still read at the fast cells.
     handle.report(speed_renewal(pin, 4_000, false, 1_000)).await;
-    let ordinary_back = average_after(ordinary_tokens, Some(3_000), 4_000, 1_000.0);
-    let fast_back = average_after(fast_decayed, Some(3_000), 4_000, 0.0);
+    // (1 001 / 600 x e^(-1/600) + 1 000 / 600) x 0.25 + 1 000 / 600 x e^(-2/600) x 0.5.
     let crossed_back = dollar_burn(&handle, &rates).await;
-    let expected_back = ordinary_back * 0.25 + fast_back * 0.5;
     assert!(
-        (crossed_back - expected_back).abs() < 1e-9,
+        (crossed_back - 1.663_615_620_117).abs() < 1e-9,
         "crossing back, the ordinary tokens read at the standard rate and the fast tokens at the fast cells: \
-         {crossed_back} against {expected_back}"
+         {crossed_back}"
     );
 }
 
@@ -7665,27 +7574,19 @@ async fn mixed_speed_renewals_across_the_threshold_sum_the_ordinary_burn_at_the_
         (4_000, false, 1_001),
         (5_000, true, 1_000),
     ];
-    let (mut ordinary, mut fast, mut at) = (0.0, 0.0, None);
     for (now, is_fast, input) in turns {
         handle
             .report(speed_renewal(pin.clone(), now, is_fast, input))
             .await;
-        let (plain, fast_tokens) = if is_fast {
-            (0.0, input as f64)
-        } else {
-            (input as f64, 0.0)
-        };
-        ordinary = average_after(ordinary, at, now, plain);
-        fast = average_after(fast, at, now, fast_tokens);
-        at = Some(now);
     }
-    // The last prompt, 1,000 tokens, is at the threshold, so the ordinary tokens price at the standard rate.
-    let expected = ordinary * 0.25 + fast * 0.5;
+    // The last prompt, 1,000 tokens, is at the threshold, so the ordinary tokens price at the standard rate. Over the
+    // pool's 600 s burn average the ordinary copy holds 900 / 600 three seconds old and 1 001 / 600 one second old,
+    // the fast copy 1 001 / 600 two seconds old and 1 000 / 600: 0.25 x (900 / 600 x e^(-3/600) + 1 001 / 600 x
+    // e^(-1/600)) + 0.5 x (1 001 / 600 x e^(-2/600) + 1 000 / 600).
     let priced = dollar_burn(&handle, &rates).await;
     assert!(
-        (priced - expected).abs() < 1e-9,
-        "the ordinary tokens at the set the last prompt selects plus the fast tokens at the fast cells: {priced} \
-         against {expected}"
+        (priced - 2.454_242_526_661).abs() < 1e-9,
+        "the ordinary tokens at the set the last prompt selects plus the fast tokens at the fast cells: {priced}"
     );
 }
 
@@ -7817,6 +7718,7 @@ async fn a_reports_affinity_rows_reach_the_store_and_a_restart_reloads_them() {
         let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
         let report = AffinityReport {
             message_boundaries: Arc::from(["b1".to_string(), "b2".to_string()]),
+            message_id: Some("msg_01".into()),
             ..affinity_report(&handle, "a", 1_000)
         };
         handle.report(Report::Affinity(report)).await;
@@ -7834,9 +7736,28 @@ async fn a_reports_affinity_rows_reach_the_store_and_a_restart_reloads_them() {
         .unwrap()
         .entry("claude-sonnet-5", "b1")
         .cloned();
-    assert!(
-        entry.is_some(),
+    assert_eq!(
+        entry
+            .as_ref()
+            .map(|e| (e.account_id.as_str(), e.written_at, e.depth)),
+        Some(("a", 1_000, 1)),
         "the restart reloaded the map from the store"
+    );
+    let tail = handle
+        .affinity()
+        .read()
+        .unwrap()
+        .entry("claude-sonnet-5", "b2")
+        .cloned();
+    assert_eq!(
+        tail.as_ref().map(|e| e.depth),
+        Some(2),
+        "the reloaded tail keeps the depth its row names"
+    );
+    assert_eq!(
+        tail.as_ref().and_then(|e| e.message_id.as_deref()),
+        Some("msg_01"),
+        "the reloaded tail keeps the message id its row names"
     );
 }
 
@@ -7924,6 +7845,8 @@ async fn an_affinity_report_takes_a_sequence_at_enqueue_and_the_wait_sees_it_app
     hold.release().await;
     assert_eq!(handle.applied_report(), 3);
 
+    // The bound reads tokio's clock, paused from here so the wait ends at its deadline whatever the host's load.
+    tokio::time::pause();
     let started = tokio::time::Instant::now();
     assert!(
         !handle
@@ -8254,68 +8177,6 @@ async fn a_spend_report_under_another_period_than_the_members_is_discarded() {
 }
 
 #[tokio::test]
-async fn a_members_spend_read_after_a_period_edit_answers_none_until_the_next_report() {
-    let store = seeded(&["a"]);
-    store
-        .set_pool_members(
-            "p",
-            &[MemberWrite {
-                account_id: "a".into(),
-                priority: 0,
-                budget_daily_usd: None,
-                budget_monthly_usd: Some(10.0),
-            }],
-            "test",
-        )
-        .unwrap();
-    let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    let month_snapshot = handle.snapshot();
-    let mut state = RoutingState::from_load(RoutingLoad::default());
-    let month_row = MemberSpend {
-        pool_id: "p".into(),
-        account_id: "a".into(),
-        period: phoebis_store::BudgetPeriod::Month,
-        period_start: 0,
-        period_end: 100_000,
-        spent_usd: 5.0,
-        observed_at: 1_000,
-    };
-    state.record_member_spend(&month_snapshot, vec![month_row.clone()]);
-    assert_eq!(
-        state.member_spends_live(&month_snapshot, "p", "a"),
-        vec![&month_row],
-        "the row matches the member's period at write time"
-    );
-
-    // The member's period changes with no report following yet: the raw accessor still holds the old row, but
-    // a read against the new snapshot must not answer it as if it were current.
-    store
-        .set_pool_members(
-            "p",
-            &[MemberWrite {
-                account_id: "a".into(),
-                priority: 0,
-                budget_daily_usd: Some(10.0),
-                budget_monthly_usd: None,
-            }],
-            "test",
-        )
-        .unwrap();
-    handle.reload().await.unwrap();
-    let day_snapshot = handle.snapshot();
-    assert_eq!(
-        state.member_spends_of("p", "a").collect::<Vec<_>>(),
-        vec![&month_row],
-        "nothing has cleared the stale row yet"
-    );
-    assert!(
-        state.member_spends_live(&day_snapshot, "p", "a").is_empty(),
-        "the read applies the current period, not the one the stored row was summed under"
-    );
-}
-
-#[tokio::test]
 async fn the_handle_answers_no_row_for_a_member_whose_period_the_report_predates() {
     let store = seeded(&["a"]);
     store
@@ -8579,10 +8440,12 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
                  burn covers the target, marked as the cheapest sufficient pin"
             );
             assert!(round.pins.iter().all(|p| p.burn.is_some()));
-            let sum: f64 = round.pins.iter().filter_map(|p| p.burn).sum();
-            assert!((round.burn_sum - sum).abs() < 1e-9);
+            // The pins' 0.067 and 0.017 an hour, 599 s after their fold over the 600 s average: 5 000 / 60 000 x
+            // e^(-599/600). Five hours of it over 0.9 put the excess at 0.0207 an hour, over the cap's half of the
+            // burn.
+            assert!((round.burn_sum - 0.030_707_757_067).abs() < 1e-9);
             assert!(
-                (round.target - round.excess.min(0.5 * sum)).abs() < 1e-9,
+                (round.target - 0.015_353_878_533).abs() < 1e-9,
                 "the target is the lesser of the excess and the cap's share of the burn"
             );
             assert!(round.pins[0].burn.unwrap() < round.target);
@@ -13335,7 +13198,6 @@ async fn a_factor_under_one_emits_slow_down_started_once_and_a_return_to_one_end
         1,
         "the second read under 1 continues the span: {seen:?}"
     );
-    let decisions = decisions_of(&seen);
     let first = match &seen[started[0] - 1] {
         RouterEvent::Decision { record, .. } => record,
         other => panic!("the start follows the decision whose read opened the span, not {other:?}"),
@@ -13376,14 +13238,6 @@ async fn a_factor_under_one_emits_slow_down_started_once_and_a_return_to_one_end
         }
         _ => unreachable!(),
     }
-    let lowest = decisions
-        .iter()
-        .map(|(_, record)| match shed_fact(record, "factor") {
-            FactValue::Number(factor) => factor,
-            other => panic!("{other:?}"),
-        })
-        .fold(f64::INFINITY, f64::min);
-
     // The window reads far under the ceiling a minute after the hold's deadline: the factor returns to 1, and the span
     // stays open through the wait.
     let t3 = until + 60_000;
@@ -13424,18 +13278,42 @@ async fn a_factor_under_one_emits_slow_down_started_once_and_a_return_to_one_end
             break ended;
         }
     };
+    let RouterEvent::SlowDownEnded {
+        account_id,
+        pool_id,
+        since,
+        duration_ms,
+        factor_min,
+        held_ms,
+        at,
+    } = ended
+    else {
+        unreachable!()
+    };
     assert_eq!(
-        ended,
-        RouterEvent::SlowDownEnded {
-            account_id: "a".into(),
-            pool_id: "p".into(),
-            since: stamped,
-            duration_ms: t3 - stamped,
-            factor_min: lowest,
-            held_ms: until - t2,
-            at: t3 + SLOW_DOWN_WAIT_MS,
-        },
+        (
+            account_id.as_str(),
+            pool_id.as_str(),
+            since,
+            duration_ms,
+            held_ms,
+            at
+        ),
+        (
+            "a",
+            "p",
+            stamped,
+            t3 - stamped,
+            until - t2,
+            t3 + SLOW_DOWN_WAIT_MS
+        ),
         "the span runs from the first read under 1 to the return, with the hold it answered"
+    );
+    // The lowest factor is the stamp turn's: the 0.05 of room under the ceiling over the 70 minutes to the reset at a
+    // tenth of the window an hour, 0.05 / (0.1 x 70 / 60) = 3 / 7. The main turns, nearer the reset, read about 0.75.
+    assert!(
+        (factor_min - 0.428_571_428_571).abs() < 1e-9,
+        "the span's lowest factor: {factor_min}"
     );
     assert!(
         !drained(&mut events)

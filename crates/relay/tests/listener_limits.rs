@@ -342,9 +342,7 @@ async fn a_body_task_cut_at_the_deadline_publishes_its_completion_before_the_dra
         .await
         .expect("drain_bodies returns once the cut body task publishes its completion");
     let mut saw_complete = false;
-    while let Ok(Some(event)) =
-        tokio::time::timeout(Duration::from_millis(500), sub.events.recv()).await
-    {
+    while let Ok(event) = sub.events.try_recv() {
         if matches!(event, Event::RequestComplete(_)) {
             saw_complete = true;
             break;

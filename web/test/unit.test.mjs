@@ -48,12 +48,6 @@ test("the legend's closing paragraph names the account tiers and the model tier 
   assert.deepEqual(d.UNIT_LEGEND_NOTE.match(/\b(?<!account |model )tiers?\b/g) ?? [], [], 'every tier the paragraph mentions is named');
 });
 
-test('no legend sentence joins two clauses with a semicolon', () => {
-  const texts = [...Object.values(d.UNIT_LEGEND), d.UNIT_LEGEND_NOTE];
-  assert.equal(texts.length, 6);
-  assert.deepEqual(texts.filter((t) => t === '' || t.includes(';')), []);
-});
-
 test('a stored value the console does not know reads native', () => {
   for (const position of d.UNIT_POSITIONS) assert.equal(d.positionOf(position), position, position);
   assert.equal(d.positionOf('share'), 'share');

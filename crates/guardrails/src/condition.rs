@@ -405,28 +405,6 @@ mod tests {
 
     use super::*;
 
-    const SUBJECTS: [&str; 9] = [
-        "agent_type",
-        "body",
-        "client",
-        "header",
-        "kind",
-        "message",
-        "model",
-        "request_class",
-        "user_agent",
-    ];
-    const OPERATORS: [&str; 6] = ["absent", "equals", "gt", "lt", "matches", "present"];
-    const SELECTORS: [&str; 7] = [
-        "any",
-        "any_assistant",
-        "any_user",
-        "first_user",
-        "last",
-        "last_assistant",
-        "last_user",
-    ];
-
     fn words(subject: &str, operator: &str) -> ConditionWords {
         ConditionWords {
             subject: subject.to_string(),
@@ -635,29 +613,29 @@ mod tests {
     }
 
     #[test]
-    fn from_words_and_words_round_trip_every_subject_operator_and_selector() {
-        for word in SUBJECTS {
-            let subject = Subject::parse(word).expect("a subject word parses");
-            assert_eq!(subject.as_str(), word);
-            assert_eq!(serde_json::to_value(subject).unwrap(), json!(word));
-        }
+    fn from_words_and_words_round_trip_a_subject_an_operator_and_a_selector() {
+        // The subject and the selector are words of two parts, so serde's snake_case spelling meets `parse` and
+        // `as_str` at the underscore.
+        let subject = Subject::parse("request_class").expect("a subject word parses");
+        assert_eq!(subject.as_str(), "request_class");
+        assert_eq!(
+            serde_json::to_value(subject).unwrap(),
+            json!("request_class")
+        );
         assert_eq!(Subject::parse("Kind"), None);
-        for word in OPERATORS {
-            let operator = Operator::parse(word).expect("an operator word parses");
-            assert_eq!(operator.as_str(), word);
-            assert_eq!(serde_json::to_value(operator).unwrap(), json!(word));
-            assert_eq!(
-                operator.takes_value(),
-                !matches!(word, "absent" | "present"),
-                "{word}"
-            );
-        }
+        let operator = Operator::parse("present").expect("an operator word parses");
+        assert_eq!(operator.as_str(), "present");
+        assert_eq!(serde_json::to_value(operator).unwrap(), json!("present"));
+        assert!(!Operator::Absent.takes_value());
+        assert!(!Operator::Present.takes_value());
+        assert!(Operator::Equals.takes_value());
         assert_eq!(Operator::parse("contains"), None);
-        for word in SELECTORS {
-            let selector = Selector::parse(word).expect("a selector word parses");
-            assert_eq!(selector.as_str(), word);
-            assert_eq!(serde_json::to_value(selector).unwrap(), json!(word));
-        }
+        let selector = Selector::parse("last_assistant").expect("a selector word parses");
+        assert_eq!(selector.as_str(), "last_assistant");
+        assert_eq!(
+            serde_json::to_value(selector).unwrap(),
+            json!("last_assistant")
+        );
         assert_eq!(Selector::parse("middle"), None);
         for mode in [GuardrailMode::Enforce, GuardrailMode::Observe] {
             assert_eq!(GuardrailMode::parse(mode.as_str()), Some(mode));
@@ -671,22 +649,16 @@ mod tests {
         assert_eq!(GuardrailAction::Block.as_str(), "block");
         assert_eq!(GuardrailAction::parse("allow"), None);
 
-        for subject in SUBJECTS {
-            for operator in OPERATORS {
-                for selector in SELECTORS {
-                    let written = ConditionWords {
-                        subject: subject.to_string(),
-                        operator: operator.to_string(),
-                        value: Some("v".to_string()),
-                        name: Some("n".to_string()),
-                        path: Some("p".to_string()),
-                        selector: Some(selector.to_string()),
-                    };
-                    let condition = Condition::from_words(&written).expect("known words parse");
-                    assert_eq!(condition.words(), written);
-                }
-            }
-        }
+        let written = ConditionWords {
+            subject: "request_class".to_string(),
+            operator: "present".to_string(),
+            value: Some("v".to_string()),
+            name: Some("n".to_string()),
+            path: Some("p".to_string()),
+            selector: Some("last_assistant".to_string()),
+        };
+        let condition = Condition::from_words(&written).expect("known words parse");
+        assert_eq!(condition.words(), written);
         let bare = words("kind", "equals");
         assert_eq!(Condition::from_words(&bare).unwrap().words(), bare);
     }

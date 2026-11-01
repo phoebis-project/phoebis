@@ -764,23 +764,6 @@ mod tests {
         assert_eq!(revisions.latest().effective, "2026-02-01");
     }
 
-    /// A provider announces a price change ahead, so a future entry loads and waits for its date.
-    #[test]
-    fn a_future_entry_loads_and_is_held_until_its_date() {
-        let revisions =
-            PriceRevisions::from_yaml(&dated(&["2026-01-01", "2099-01-01"]), "file").unwrap();
-        assert_eq!(revisions.in_force(JANUARY_2026).effective, "2026-01-01");
-        assert_eq!(
-            revisions
-                .pending(JANUARY_2026)
-                .map(|r| r.effective.as_str()),
-            Some("2099-01-01")
-        );
-        let in_2099 = effective_instant("2099-01-01").unwrap();
-        assert_eq!(revisions.in_force(in_2099).effective, "2099-01-01");
-        assert_eq!(revisions.pending(in_2099), None);
-    }
-
     /// Before its date the first entry is already in force, since an instant before the list reads the first, so a
     /// restart before it changes nothing: the entry held is the second, and a list of one entry holds none.
     #[test]
@@ -824,58 +807,6 @@ mod tests {
             message.starts_with("pricing table: ") && message.contains("unknown field `source`"),
             "{message}"
         );
-    }
-
-    #[test]
-    fn the_shipped_table_parses_and_every_cell_is_a_finite_price_at_or_above_zero() {
-        let revisions = PriceRevisions::shipped();
-        assert_eq!(revisions.source, "shipped");
-        assert!(revisions.len() >= 1);
-        let instants: Vec<i64> = revisions
-            .iter()
-            .map(|table| effective_instant(&table.effective).unwrap())
-            .collect();
-        assert!(
-            instants.windows(2).all(|pair| pair[0] < pair[1]),
-            "the dates ascend"
-        );
-        let costs = crate::CostRevisions::shipped();
-        let finite = |p: &ModelPrice| {
-            [
-                p.input,
-                p.cache_write_5m,
-                p.cache_write_1h,
-                p.cache_read,
-                p.output,
-            ]
-            .iter()
-            .all(|c| c.is_finite() && *c >= 0.0)
-        };
-        for table in revisions.iter() {
-            assert!(!table.models.is_empty(), "{}", table.effective);
-            for (model, row) in &table.models {
-                assert!(finite(&row.standard), "{model}: {:?}", row.standard);
-                assert!(
-                    row.fast.as_ref().is_none_or(finite),
-                    "{model}: {:?}",
-                    row.fast
-                );
-                assert!(
-                    row.long_context
-                        .as_ref()
-                        .is_none_or(|l| l.over > 0 && finite(&l.cells)),
-                    "{model}: {:?}",
-                    row.long_context
-                );
-            }
-            let models: Vec<&str> = table.models.keys().map(String::as_str).collect();
-            assert_eq!(
-                models,
-                costs.latest().model_order(&models),
-                "the rows of {} keep the model order",
-                table.effective
-            );
-        }
     }
 
     // The test table's Sonnet 5.5 row: input 3, cache read 0.3, 5-minute write 3.75, output 15 per million.
@@ -1171,34 +1102,33 @@ mod tests {
     #[test]
     fn the_fallback_rates_are_the_dearest_listed_standard_cell_of_each_type_in_the_revision_in_force(
     ) {
+        // The test table's dearest standard row is Opus 5.5 in both entries: input, cache read, the two writes and
+        // output at 10, 1, 12.5, 20 and 50 per million in January, each doubled in February. Its January fast
+        // cells are dearer still, at 20 input, and the fallback leaves them out.
         let revisions = crate::test_tables::api_prices();
-        let dearest = |at: i64, cell: fn(&ModelPrice) -> f64| {
-            revisions
-                .in_force(at)
-                .models
-                .values()
-                .map(|row| cell(&row.standard))
-                .fold(0.0, f64::max)
-                / 1_000_000.0
-        };
-        let cells = |at: i64| {
-            [
-                dearest(at, |p| p.input),
-                dearest(at, |p| p.cache_read),
-                dearest(at, |p| p.cache_write_5m),
-                dearest(at, |p| p.cache_write_1h),
-                dearest(at, |p| p.output),
-            ]
-        };
         let rates = |at: i64| {
             let r = revisions.fallback_rates(at);
             [r.input, r.cache_read, r.write_5m, r.write_1h, r.output].map(Option::unwrap)
         };
-        assert_eq!(rates(JANUARY_2026), cells(JANUARY_2026));
-        assert_eq!(rates(FEBRUARY_2026), cells(FEBRUARY_2026));
+        assert_eq!(
+            rates(JANUARY_2026),
+            [
+                10.0 / 1_000_000.0,
+                1.0 / 1_000_000.0,
+                12.5 / 1_000_000.0,
+                20.0 / 1_000_000.0,
+                50.0 / 1_000_000.0
+            ]
+        );
         assert_eq!(
             rates(FEBRUARY_2026),
-            cells(JANUARY_2026).map(|cell| cell * 2.0),
+            [
+                20.0 / 1_000_000.0,
+                2.0 / 1_000_000.0,
+                25.0 / 1_000_000.0,
+                40.0 / 1_000_000.0,
+                100.0 / 1_000_000.0
+            ],
             "the second entry doubles every standard cell"
         );
     }

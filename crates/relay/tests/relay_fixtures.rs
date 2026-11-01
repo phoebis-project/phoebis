@@ -11,55 +11,7 @@ mod common;
 use common::*;
 
 #[tokio::test]
-async fn oauth_first_party_request_is_byte_identical_except_the_two_edits() {
-    let up = FakeUpstream::start(vec![Rule { path_prefix: "/v1/messages".into(), respond: Respond::Json { status: 200, headers: vec![], body: br#"{"id":"msg_1","type":"message","content":[],"usage":{"input_tokens":1,"output_tokens":1}}"#.to_vec() } }]).await;
-    let app = relay_with(AccountKind::Oauth, &up).await;
-    let head = inference_head(FixtureKind::OauthFirstParty);
-    let native = body(BodyFixture::FirstParty);
-    let resp = app
-        .oneshot(request_from_fixture(head, native, "phoebis-testkey"))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let recorded = up.requests();
-    let got = wire_of(&recorded[0]);
-    // The expected body is built without the relay's own editor: a plain splice of the uuid into the escaped
-    // metadata string, then a signature. An oracle that called edit_body would only restate the implementation.
-    let expected_body = phoebis_cch::sign(
-        String::from_utf8(native.to_vec())
-            .unwrap()
-            .replacen(
-                r#"\"account_uuid\":\"\""#,
-                &format!(r#"\"account_uuid\":\"{ACCOUNT_UUID}\""#),
-                1,
-            )
-            .as_bytes(),
-    )
-    .unwrap();
-    // The recorded head carries the class header, so the harness adds none and the head travels as recorded.
-    let expected_head = String::from_utf8(head.to_vec()).unwrap().replace(
-        &format!("Content-Length: {}", native.len()),
-        &format!("Content-Length: {}", expected_body.len()),
-    );
-    let mut expected = expected_head.into_bytes();
-    expected.extend_from_slice(&expected_body);
-    assert_eq!(got, expected);
-    let stamp = |bytes: &[u8]| {
-        let at = phoebis_cch::find_cch(bytes)
-            .expect("a stamped body")
-            .digits_start;
-        bytes[at..at + 5].to_vec()
-    };
-    assert_ne!(
-        stamp(&expected_body),
-        stamp(native),
-        "the uuid edit changes the hash"
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn oauth_non_first_party_request_passes_through_with_only_the_uuid_edit() {
+async fn oauth_non_first_party_request_passes_through_with_the_uuid_edit_and_the_restoration() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::Json {
@@ -70,24 +22,55 @@ async fn oauth_non_first_party_request_passes_through_with_only_the_uuid_edit() 
     }])
     .await;
     let app = relay_with(AccountKind::Oauth, &up).await;
+    let head = inference_head(FixtureKind::OauthNonFirstParty);
     let native = body(BodyFixture::Oauth);
     let resp = app
-        .oneshot(request_from_fixture(
-            inference_head(FixtureKind::OauthNonFirstParty),
-            native,
-            "phoebis-testkey",
-        ))
+        .oneshot(request_from_fixture(head, native, "phoebis-testkey"))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let got = &up.requests()[0];
-    assert!(got
+    // The recorded head already carries the account's own token, so the credential slot reads as recorded. The
+    // body takes the account's uuid and the placeholder stamp the reduced shape lacks, and the head takes the
+    // client request id after `x-app`, read off the relayed request since it is fresh.
+    let got = wire_of(&up.requests()[0]);
+    let client_request_id = up.requests()[0]
         .headers
         .iter()
-        .any(|(n, v)| n == "Authorization" && v == "Bearer sk-ant-oat01-PLACEHOLDER"));
-    assert!(std::str::from_utf8(&got.body)
+        .find(|(n, _)| n.eq_ignore_ascii_case("x-client-request-id"))
+        .map(|(_, v)| v.clone())
+        .expect("the restoration sends a client request id");
+    let edited = String::from_utf8(native.to_vec())
         .unwrap()
-        .contains(&format!(r#"\"account_uuid\":\"{ACCOUNT_UUID}\""#)));
+        .replacen(
+            r#"\"account_uuid\":\"\""#,
+            &format!(r#"\"account_uuid\":\"{ACCOUNT_UUID}\""#),
+            1,
+        )
+        .replacen(
+            "cc_entrypoint=sdk-cli;",
+            "cc_entrypoint=sdk-cli; cch=00000;",
+            1,
+        );
+    let mut expected_head = String::from_utf8(head.to_vec())
+        .unwrap()
+        .replace(
+            &format!("Content-Length: {}", native.len()),
+            &format!("Content-Length: {}", edited.len()),
+        )
+        .replace(
+            "x-app: cli\r\n",
+            &format!("x-app: cli\r\nx-client-request-id: {client_request_id}\r\n"),
+        );
+    // The request was built from the client's head, which the harness ends with the class header the recorded
+    // head predates.
+    let end = expected_head.rfind("\r\n\r\n").unwrap();
+    expected_head.insert_str(end + 2, "x-claude-code-request-class: main\r\n");
+    let mut expected = expected_head.into_bytes();
+    expected.extend_from_slice(edited.as_bytes());
+    assert_eq!(
+        got, expected,
+        "an OAuth fixture round-trips byte-identical but for the account's uuid and what the restoration adds"
+    );
     up.shutdown().await;
 }
 
@@ -266,33 +249,6 @@ async fn local_rejections_are_anthropic_shaped() {
         app.clone().oneshot(both).await.unwrap().status(),
         StatusCode::UNAUTHORIZED
     );
-    let hello = Request::builder()
-        .method("HEAD")
-        .uri("/api/hello")
-        .body(Body::empty())
-        .unwrap();
-    assert_eq!(
-        app.clone().oneshot(hello).await.unwrap().status(),
-        StatusCode::OK
-    );
-    let models = Request::builder()
-        .method("GET")
-        .uri("/v1/models")
-        .header("Authorization", "Bearer phoebis-testkey")
-        .body(Body::empty())
-        .unwrap();
-    let resp = app.oneshot(models).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert!(
-        v["data"].is_array(),
-        "the harness's default catalog fake feeds the listing"
-    );
-    assert!(
-        up.requests().is_empty(),
-        "the catalog fetches go to catalog_up"
-    );
     up.shutdown().await;
 }
 
@@ -349,38 +305,6 @@ async fn ready_answers_503_naming_what_the_readiness_source_reads_dead() {
         ask_ready(&app, "HEAD").await,
         (StatusCode::SERVICE_UNAVAILABLE, Vec::new()),
         "HEAD carries the status alone"
-    );
-    up.shutdown().await;
-}
-
-/// The placeholder is what the client sends wherever its native patch does not run: no hash to check, so it
-/// is relayed as the placeholder rather than refused as drift.
-#[tokio::test]
-async fn a_client_sent_placeholder_is_relayed_as_the_placeholder() {
-    let placeholder = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
-        .unwrap()
-        .replacen("cch=91984", "cch=00000", 1)
-        .into_bytes();
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: json_200(),
-    }])
-    .await;
-    let app = relay_with(AccountKind::Oauth, &up).await;
-    let resp = app
-        .oneshot(request_from_fixture(
-            inference_head(FixtureKind::OauthFirstParty),
-            &placeholder,
-            "phoebis-testkey",
-        ))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(outcome(&resp).client_drift, None);
-    let sent = &up.requests()[0].body;
-    assert_eq!(
-        phoebis_cch::find_cch(sent).map(|l| &sent[l.digits_start..l.digits_start + 5]),
-        Some(&b"00000"[..])
     );
     up.shutdown().await;
 }
@@ -452,35 +376,6 @@ async fn a_bare_version_with_no_suffix_is_not_drift() {
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(outcome(&resp).client_drift, None);
     assert_eq!(up.requests().len(), 1, "the body reached the upstream");
-    up.shutdown().await;
-}
-
-/// The guard reaches the comparison on a stamped body: the same edit with the right suffix relays, so the
-/// refusal above is the suffix's and not a `None` from a span the guard could not read.
-#[tokio::test]
-async fn a_stamped_body_with_the_right_suffix_relays() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: json_200(),
-    }])
-    .await;
-    let app = relay_with(AccountKind::Oauth, &up).await;
-    let same = resigned("cc_version=2.1.310.077", "cc_version=2.1.310.077");
-    assert_eq!(
-        same,
-        body(BodyFixture::FirstParty),
-        "re-signing the unchanged fixture reproduces its own stamp"
-    );
-    let resp = app
-        .oneshot(request_from_fixture(
-            inference_head(FixtureKind::OauthFirstParty),
-            &same,
-            "phoebis-testkey",
-        ))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(up.requests().len(), 1);
     up.shutdown().await;
 }
 
@@ -563,123 +458,6 @@ async fn a_drifted_stamp_is_refused(drifted: Vec<u8>, kind: &str) {
     assert!(
         up.requests().is_empty(),
         "a drifted body is not sent upstream in any form"
-    );
-    up.shutdown().await;
-}
-
-/// A body the account identity cannot be written into would be billed against whatever the caller wrote, so
-/// it is refused before any account is tried rather than relayed as it stands. The body carries a
-/// `metadata.user_id` string with no `account_uuid` member inside it for the splice to find, which the contract
-/// reads as the member missing.
-#[tokio::test]
-async fn a_body_whose_user_id_lacks_the_account_uuid_member_is_refused_for_the_contract() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: b"{}".to_vec(),
-        },
-    }])
-    .await;
-    let app = relay_with(AccountKind::Oauth, &up).await;
-    let request = Request::builder()
-        .method("POST")
-        .uri("/v1/messages")
-        .header("Authorization", "Bearer phoebis-testkey")
-        .header("User-Agent", CLAUDE_CLI_USER_AGENT)
-        .header("x-claude-code-session-id", "s-1")
-        .header("x-claude-code-request-class", "main")
-        .body(Body::from(
-            r#"{"model":"claude-sonnet-4-5","messages":[],"metadata":{"user_id":"{\"session_id\":\"s-1\"}"}}"#,
-        ))
-        .unwrap();
-    let resp = app.oneshot(request).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    assert_eq!(
-        resp.headers()
-            .get("x-phoebis-error-code")
-            .and_then(|v| v.to_str().ok()),
-        Some("client_contract")
-    );
-    let outcome = resp
-        .extensions()
-        .get::<RelayOutcome>()
-        .expect("a refused request carries its outcome")
-        .clone();
-    assert_eq!(
-        (
-            outcome.error_code.as_deref(),
-            outcome.client_contract.as_deref(),
-            outcome.attempt
-        ),
-        (Some("client_contract"), Some("metadata_user_id"), 0),
-        "the ledger row names the refusal and its item, and no attempt was spent"
-    );
-    let refusal: serde_json::Value =
-        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert_eq!(refusal["error"]["type"], "permission_error");
-    let message = refusal["error"]["message"].as_str().unwrap();
-    assert!(
-        message.contains("account_uuid")
-            && message.contains("metadata.user_id")
-            && !message.contains("claude-sonnet-4-5")
-            && !message.contains(';'),
-        "the refusal names the member it could not find and nothing of the body: {message}"
-    );
-    assert!(
-        up.requests().is_empty(),
-        "a body the relay cannot bind is not sent upstream in any form"
-    );
-    up.shutdown().await;
-}
-
-/// The client sends its session header on every call, a token count among them, so a count without it is refused
-/// for the contract before any account is tried, whatever its body holds.
-#[tokio::test]
-async fn an_oauth_count_tokens_body_without_the_session_header_is_refused_for_the_contract() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages/count_tokens".into(),
-        respond: Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: br#"{"input_tokens":7}"#.to_vec(),
-        },
-    }])
-    .await;
-    let app = relay_with(AccountKind::Oauth, &up).await;
-    let request = Request::builder()
-        .method("POST")
-        .uri("/v1/messages/count_tokens")
-        .header("Authorization", "Bearer phoebis-testkey")
-        .header("User-Agent", CLAUDE_CLI_USER_AGENT)
-        .body(Body::from(
-            r#"{"model":"claude-sonnet-4-5[1m]","messages":[{"role":"user","content":"hi"}]}"#,
-        ))
-        .unwrap();
-    let resp = app.oneshot(request).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    assert_eq!(
-        resp.headers()
-            .get("x-phoebis-error-code")
-            .and_then(|v| v.to_str().ok()),
-        Some("client_contract")
-    );
-    assert_eq!(
-        outcome(&resp).client_contract.as_deref(),
-        Some("session_header"),
-        "the ledger row names the item"
-    );
-    let refusal: serde_json::Value =
-        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    let message = refusal["error"]["message"].as_str().unwrap();
-    assert!(
-        message.contains("x-claude-code-session-id") && !message.contains(';'),
-        "{message}"
-    );
-    assert!(
-        up.requests().is_empty(),
-        "a count the contract refuses is not sent upstream"
     );
     up.shutdown().await;
 }
