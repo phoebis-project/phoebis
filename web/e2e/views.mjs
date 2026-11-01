@@ -3651,6 +3651,69 @@ async function deleteAccountButton(theme) {
   if (differs.length) say(`the Delete account button's ${differs.join(', ')} differs from the Disconnect button's`);
 }
 
+/** Every slot of a window triple whose window the account's poll does not carry, read off the page as it stands. */
+const readAbsentSlots = () =>
+  page.evaluate(() =>
+    [...document.querySelectorAll('.wbars .wbar--absent')].map((bar) => {
+      const words = bar.querySelector('.wbar__pct');
+      const neighbor = [...bar.parentElement.children].find((b) => b !== bar && b.classList.contains('wbar') && !b.classList.contains('wbar--absent'));
+      const type = (el) => (el ? { ink: getComputedStyle(el).color, top: Math.round(el.getBoundingClientRect().top) } : null);
+      // A narrow window stacks the triple's slots, so the neighbor's label then stands on another line than the words.
+      const row = neighbor !== undefined && Math.abs(neighbor.getBoundingClientRect().top - bar.getBoundingClientRect().top) < 0.5;
+      return {
+        compact: bar.closest('.wbars--compact') !== null,
+        cut: words ? words.scrollWidth > words.clientWidth : null,
+        label: type((row ? neighbor : bar).querySelector('.wbar__label')),
+        row,
+        muted: words?.classList.contains('muted') ?? false,
+        right: words ? Math.round(words.getBoundingClientRect().right * 10) / 10 : null,
+        slot: Math.round(bar.getBoundingClientRect().right * 10) / 10,
+        title: bar.getAttribute('title'),
+        type: type(words),
+        view: window.innerWidth,
+        words: words?.textContent?.trim() ?? '',
+      };
+    }),
+  );
+
+/**
+ * A slot of a window the account's poll does not carry names the window muted in the share's place, on the line and
+ * in the ink of the neighboring bar's label (its own label where a narrow window stacks the slots), whole inside its
+ * own slot, the window's words on its title: a whole slot draws them, a compact one the short form its width holds
+ * beside the label.
+ */
+function sayAbsentSlots(theme, path, absent) {
+  const say = (what) => failures.push(`${theme} ${path}: ${what}`);
+  measurements.push(`${theme} ${path} absent window slots ${JSON.stringify(absent.map((a) => [a.view, a.compact ? 'compact' : 'whole', a.row ? 'in a row' : 'stacked', a.words, a.title, a.type, a.label, a.cut, a.right, a.slot]))}`);
+  if (mock && ['/', '/accounts'].includes(path) && !absent.some((a) => a.title === 'no 5-hour window')) say("the story's approved Ultra account carries no 5-hour window, yet no slot names it");
+  for (const a of absent) {
+    const kind = `the ${a.compact ? 'compact ' : ''}slot's words ${JSON.stringify(a.words)} in a ${a.view}px window`;
+    if (!a.muted) say(`${kind} read outside the muted ink's class`);
+    if (!/^no .+ window$/.test(a.title ?? '')) say(`${kind} carry the title ${JSON.stringify(a.title)}, not the window's words`);
+    if (!a.compact && a.title !== a.words) say(`${kind} are not the window's words on its title, ${JSON.stringify(a.title)}`);
+    if (a.compact && (a.words === '' || a.words === a.title)) say(`${kind} are not the compact slot's short form`);
+    if (a.cut !== false || a.right === null || a.right > a.slot + 0.5) say(`${kind} end at ${a.right}px, past their slot's ${a.slot}px, or are cut`);
+    for (const what of compare(a.type, a.label, ['ink', 'top'], `${kind} against ${a.row ? "the neighboring bar's label" : "the slot's own label, the slots stacked"}`)) say(what);
+  }
+}
+
+/**
+ * The window triples' absent slots in a 400 px window, where the compact cards stack the triple's slots: the compact
+ * short form whole there too. After the view's shot, since the check resizes the page and back.
+ */
+async function absentSlotsPhone(theme, path) {
+  if (!mock) return;
+  const was = page.viewportSize();
+  try {
+    await page.setViewportSize({ height: 800, width: 400 });
+    await settle();
+    sayAbsentSlots(theme, path, await readAbsentSlots());
+  } finally {
+    await page.setViewportSize(was);
+    await settle();
+  }
+}
+
 /**
  * The window bars of the dashboard's account cards and the Accounts page's rows and detail card: each bar's reset line
  * stays inside its bar. A compact bar, three to a card, reads its projection in its reset's place, its share and its
@@ -3740,36 +3803,7 @@ async function windowBarLines(theme, path) {
     if (projects(r) && r.parts.length !== 2) say(`the ${kind}'s projection ${JSON.stringify(r.words)} draws ${r.parts.length} parts, not its share and its horizon as two`);
     if (r.parts.length === 0 ? r.line.lines > 1 : r.parts.some((part) => part.lines > 1) || r.line.lines > r.parts.length) say(`the ${kind}'s line ${JSON.stringify(r.words)} wraps inside ${r.parts.length === 0 ? 'itself' : 'a part'}, over ${r.line.lines} lines`);
   }
-  // A slot of a window the account's poll does not carry names the window muted in the share's place, on the line and
-  // in the ink of the neighboring bar's label, inside its own slot, its title holding the words whole where a narrow
-  // compact slot cuts them.
-  const absent = await page.evaluate(() =>
-    [...document.querySelectorAll('.wbars .wbar--absent')].map((bar) => {
-      const words = bar.querySelector('.wbar__pct');
-      const neighbor = [...bar.parentElement.children].find((b) => b !== bar && b.classList.contains('wbar') && !b.classList.contains('wbar--absent'));
-      const type = (el) => (el ? { ink: getComputedStyle(el).color, top: Math.round(el.getBoundingClientRect().top) } : null);
-      return {
-        compact: bar.closest('.wbars--compact') !== null,
-        cut: words ? words.scrollWidth > words.clientWidth : null,
-        label: type(neighbor?.querySelector('.wbar__label') ?? null),
-        muted: words?.classList.contains('muted') ?? false,
-        right: words ? Math.round(words.getBoundingClientRect().right * 10) / 10 : null,
-        slot: Math.round(bar.getBoundingClientRect().right * 10) / 10,
-        title: bar.getAttribute('title'),
-        type: type(words),
-        words: words?.textContent?.trim() ?? '',
-      };
-    }),
-  );
-  measurements.push(`${theme} ${path} absent window slots ${JSON.stringify(absent.map((a) => [a.compact ? 'compact' : 'whole', a.words, a.type, a.label, a.cut, a.right, a.slot]))}`);
-  if (mock && ['/', '/accounts'].includes(path) && !absent.some((a) => a.words === 'no 5-hour window')) say("the story's approved Ultra account carries no 5-hour window, yet no slot names it");
-  for (const a of absent) {
-    const kind = `the ${a.compact ? 'compact ' : ''}slot's words ${JSON.stringify(a.words)}`;
-    if (!a.muted) say(`${kind} read outside the muted ink's class`);
-    if (a.title !== a.words) say(`${kind} carry the title ${JSON.stringify(a.title)}, not their own words`);
-    if (a.right === null || a.right > a.slot + 0.5) say(`${kind} end at ${a.right}px, past their slot's ${a.slot}px`);
-    if (a.label !== null) for (const what of compare(a.type, a.label, ['ink', 'top'], `${kind} against the neighboring bar's label`)) say(what);
-  }
+  sayAbsentSlots(theme, path, await readAbsentSlots());
   const slowed = read.filter((r) => r.speed !== null);
   measurements.push(`${theme} ${path} window bar speed chips ${JSON.stringify(slowed.map((r) => [r.compact ? 'compact' : 'whole', r.speed]))}`);
   if (mock && path === '/accounts/studio' && !slowed.some((r) => !r.compact)) say("the story slows studio, yet its Usage card's 5-hour bar draws no speed chip");
@@ -4099,12 +4133,11 @@ async function quotaCards(theme) {
       const muted = getComputedStyle(probe).color;
       probe.remove();
       const type = (el) => (el ? { fontSize: getComputedStyle(el).fontSize, right: Math.round(el.getBoundingClientRect().right) } : null);
+      // A row's chip names its window on its title, so the filter reads the title and the row its words.
       return resets
-        .filter((r) => /^no .+ window$/.test(r.textContent?.trim() ?? ''))
-        .map((r) => {
-          const chip = r.previousElementSibling?.previousElementSibling ?? null;
-          return { card: card.querySelector('.qcard__name')?.textContent?.trim() ?? '', chip: chip ? [chip.textContent?.trim() ?? '', chip.getAttribute('title')] : null, ink: [getComputedStyle(r).color, muted], live: type(live), muted: r.classList.contains('muted'), type: type(r), words: r.textContent?.trim() ?? '' };
-        });
+        .map((r) => ({ chip: r.previousElementSibling?.previousElementSibling ?? null, r }))
+        .filter(({ chip }) => /^no .+ window$/.test(chip?.getAttribute('title') ?? ''))
+        .map(({ chip, r }) => ({ card: card.querySelector('.qcard__name')?.textContent?.trim() ?? '', chip: [chip.textContent?.trim() ?? '', chip.getAttribute('title')], ink: [getComputedStyle(r).color, muted], live: type(live), muted: r.classList.contains('muted'), type: type(r), words: r.textContent?.trim() ?? '' }));
     }),
   );
   measurements.push(`${theme} /quota absent window rows ${JSON.stringify(absent)}`);
@@ -12115,6 +12148,7 @@ try {
       // After the shot, since it resizes the page and back, and before the measures that reload or leave the view.
       await topBarFits(theme, view.path);
       await phoneFit(theme, view.path);
+      if (['/', '/accounts'].includes(view.path)) await absentSlotsPhone(theme, view.path);
       if (view.path === '/guardrails') await barRow(theme, view.path);
       if (view.path === '/pools') await utilizationCeiling(theme);
       if (view.path === '/pools' && mock) await anchoredRowUnderBanner(theme, view.path);

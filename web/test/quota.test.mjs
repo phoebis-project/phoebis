@@ -308,12 +308,6 @@ test("the priced tier is the stored one under the six tiered plan words while th
   assert.deepEqual(priced(null, 'default_claude_max_20x'), unknown, 'no plan');
   assert.deepEqual(priced('max_20x', null), unknown, 'no tier');
   assert.deepEqual(priced('some_new_word', 'default_claude_max_20x'), unknown, 'a plan word outside the eight');
-  // Window shares prices no figure, so without a table the six words answer the stored tier and the plan word decides.
-  assert.deepEqual(priced('enterprise', 'default_claude_enterprise', null), { tier: 'default_claude_enterprise' }, 'no table: an Enterprise seat');
-  assert.deepEqual(priced('pro', 'default_claude_ai', null), { tier: 'default_claude_ai' }, 'no table: a Pro plan');
-  assert.deepEqual(priced('free', 'default_claude_ai', null), { reason: 'no priced capacity for a free plan', tier: null }, 'no table: a free plan');
-  assert.deepEqual(priced('usage_based', 'default_claude_zero', null), { reason: 'a usage-based seat', tier: null }, 'no table: a usage-based seat');
-  assert.deepEqual(priced('max', null, null), unknown, 'no table: no tier');
 });
 
 const SPEND_NOW = Date.UTC(2026, 8, 16, 14, 30);

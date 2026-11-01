@@ -63,13 +63,12 @@ export type UnpricedReason = 'no priced capacity for a free plan' | 'a usage-bas
  * The tier the router prices an account's capacity at, its snapshot's `priced_tier` and the capacity lookup behind it
  * folded into one answer: the stored tier under `pro`, `max`, `max_5x`, `max_20x`, `team` and `enterprise` while the
  * cost table holds a row for it, and none with the reason for `free`, `usage_based`, no plan, a word outside the eight,
- * no tier or a tier the table lacks. With no table (`costs` null) the six words answer the stored tier, the plan word
- * alone deciding.
+ * no tier or a tier the table lacks.
  */
-export function pricedTier(plan: PlanWord | null, tier: string | null, costs: SubscriptionCosts | null): { tier: string } | { reason: UnpricedReason; tier: null } {
+export function pricedTier(plan: PlanWord | null, tier: string | null, costs: SubscriptionCosts): { tier: string } | { reason: UnpricedReason; tier: null } {
   if (plan === 'free') return { reason: 'no priced capacity for a free plan', tier: null };
   if (plan === 'usage_based') return { reason: 'a usage-based seat', tier: null };
-  if (plan === null || !TIERED_PLANS.has(plan) || tier === null || (costs !== null && tierRow(costs, tier) === undefined)) return { reason: 'tier unknown', tier: null };
+  if (plan === null || !TIERED_PLANS.has(plan) || tier === null || tierRow(costs, tier) === undefined) return { reason: 'tier unknown', tier: null };
   return { tier };
 }
 

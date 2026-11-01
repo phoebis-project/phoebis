@@ -126,7 +126,7 @@ test('a Team or Enterprise seat prices through its tier where the cost model hol
   };
   const rows = d.allowanceRows(answer, COSTS, 'ultra');
   assert.deepEqual(rows.map((r) => [r.accountId, r.unpriced]), [['team', false], ['max', false]]);
-  assert.equal(d.fleetFigures(rows, 'ultra').note, '2 accounts priced');
+  assert.equal(d.fleetFigures(rows, 'ultra', d.weekScale(COSTS, 'ultra')).note, '2 accounts priced');
 });
 
 /** The cost model of the per-reset cases: Max's 7-day capacity a quarter of Ultra's, five Pro weeks. */
@@ -235,7 +235,7 @@ const FLEET = {
 test("the fleet figures add the priced accounts' figures in the chosen week and name the unpriced accounts", () => {
   // 8 Ultra accounts leave 0.75 of a week each, 6 Ultra weeks, and 1.75 of their Fable weeks, 0.875 of an Ultra week.
   assert.deepEqual(
-    WEEKS.map((week) => d.fleetFigures(d.allowanceRows(FLEET, COSTS, week), week)),
+    WEEKS.map((week) => d.fleetFigures(d.allowanceRows(FLEET, COSTS, week), week, d.weekScale(COSTS, week))),
     [
       { fable: '87.5% Ultra week', note: '8 accounts priced, a9 left out unpriced', sevenDay: '600% Ultra week' },
       { fable: '219% Max week', note: '8 accounts priced, a9 left out unpriced', sevenDay: '1500% Max week' },
@@ -243,8 +243,8 @@ test("the fleet figures add the priced accounts' figures in the chosen week and 
     ],
   );
   const priced = { ...FLEET, accounts: FLEET.accounts.slice(0, 1) };
-  assert.deepEqual(d.fleetFigures(d.allowanceRows(priced, COSTS, 'pro'), 'pro').note, '1 account priced');
-  assert.deepEqual(d.fleetFigures([], 'ultra'), { fable: '-', note: '0 accounts priced', sevenDay: '-' });
+  assert.deepEqual(d.fleetFigures(d.allowanceRows(priced, COSTS, 'pro'), 'pro', d.weekScale(COSTS, 'pro')).note, '1 account priced');
+  assert.deepEqual(d.fleetFigures([], 'ultra', d.weekScale(COSTS, 'ultra')), { fable: '-', note: '0 accounts priced', sevenDay: '-' });
 });
 
 /**
@@ -272,7 +272,7 @@ test("the four weeks' figure, the rows and the fleet total add each week's figur
   assert.ok(near(row.figures.seven_day.weeks.share, 1.25) && near(row.figures.seven_day.last.share, 1), `weeks ${row.figures.seven_day.weeks.share}, last ${row.figures.seven_day.last.share}`);
   assert.equal(row.unpriced, false);
   // 1.25 beside steady's 0.5, where the summed shares priced once read 2.5.
-  assert.equal(d.fleetFigures(d.allowanceRows(MIXED, QUARTER, 'ultra'), 'ultra').sevenDay, '175% Ultra week');
+  assert.equal(d.fleetFigures(d.allowanceRows(MIXED, QUARTER, 'ultra'), 'ultra', d.weekScale(QUARTER, 'ultra')).sevenDay, '175% Ultra week');
 
   // A week on Free prices nothing, so the four weeks it joins read the dash, and the row is marked under every week.
   const freed = accountOf('freed', MAX_20X, [windowOf('seven_day', [0.5, 0.5], { pairs: [NO_PAIR, FREE] })]);
@@ -283,6 +283,15 @@ test("the four weeks' figure, the rows and the fleet total add each week's figur
     const freedRow = rows.find((r) => r.accountId === 'freed');
     assert.deepEqual([freedRow.figures.seven_day.last.kind, freedRow.figures.seven_day.weeks.kind, freedRow.unpriced], ['equivalent', 'unpriced', true], week);
     assert.deepEqual(rows.map((r) => r.accountId), ['mixed', 'steady', 'freed'], `${week}: the unpriced row last`);
-    assert.equal(d.fleetFigures(rows, week).note, '2 accounts priced, freed left out unpriced', week);
+    assert.equal(d.fleetFigures(rows, week, d.weekScale(QUARTER, week)).note, '2 accounts priced, freed left out unpriced', week);
   }
+});
+
+test("a cost model without the chosen week's tier titles every dash with that week, and the fleet note says so in place of a count", () => {
+  // No Ultra row, so no figure reads in the Ultra week, whatever the account's own plan prices at.
+  const ultraless = { ...COSTS, capacity: { default_claude_ai: COSTS.capacity.default_claude_ai, default_claude_max_5x: COSTS.capacity.default_claude_max_5x } };
+  const title = 'Unpriced: the cost model holds no 7-day capacity for the Ultra week';
+  assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_5X, ultraless, 'ultra'), { kind: 'unpriced', text: '-', title });
+  const rows = d.allowanceRows({ accounts: [accountOf('nightly', MAX_5X, [windowOf('seven_day', [0.5])])], from: iso(NOW - 29 * DAY), to: iso(NOW) }, ultraless, 'ultra');
+  assert.deepEqual(d.fleetFigures(rows, 'ultra', d.weekScale(ultraless, 'ultra')), { fable: '-', note: title, sevenDay: '-' });
 });

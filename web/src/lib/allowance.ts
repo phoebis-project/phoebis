@@ -2,8 +2,8 @@ import type { AllowanceAccount, AllowanceReset, AllowanceWindow, SubscriptionCos
 import { HINT_WINDOW, own } from '@/lib/analytics';
 import { anchorTier, pricedWindow, tierCapacity, weekScale } from '@/lib/costs';
 import { fmtAbsolute, fmtShare, fmtShortTime, weekShort } from '@/lib/format';
-import { pricedTier } from '@/lib/quota';
-import type { WeekPosition } from '@/lib/unit';
+import { planLabel, pricedTier } from '@/lib/quota';
+import { WEEK_TIER, type WeekPosition } from '@/lib/unit';
 import { WINDOW_LABEL, WINDOW_ORDER, windowKeyId } from '@/lib/windows';
 
 /** The weeks the Accounts block and the Analytics card read: the latest reset and the three before it. */
@@ -33,6 +33,8 @@ export type AllowanceFigure = { kind: 'equivalent'; share: number; text: string 
 /** The dash's hover where the plan prices no capacity. Named apart from `lib/analytics.ts`'s `UNPRICED_TITLE`, whose
  *  words differ, so the test bundle's star exports keep both. */
 export const ALLOWANCE_UNPRICED_TITLE = "Unpriced: the cost model holds no capacity for this account's plan";
+/** The dash's hover and the fleet's note where the chosen week's tier has no 7-day capacity to read a figure in. */
+const weekUnpricedTitle = (week: WeekPosition): string => `Unpriced: the cost model holds no 7-day capacity for the ${planLabel(WEEK_TIER[week])} week`;
 export const NO_READING_TITLE = 'no reading at this reset';
 export const FREE_NOTE = 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it.';
 
@@ -57,15 +59,17 @@ function capacityWeight(account: Pick<AllowanceAccount, 'plan' | 'tier'>, window
  * The pair a reset prices at: the plan and the tier of the reading it replaced where the router recorded them, the
  * account's current pair where it did not. A missing key reads as null, since the wire writes both or neither.
  */
-const pairOf = (account: Pick<AllowanceAccount, 'plan' | 'tier'>, reset?: Pick<AllowanceReset, 'plan' | 'tier'>): Pick<AllowanceAccount, 'plan' | 'tier'> =>
+export const pairOf = (account: Pick<AllowanceAccount, 'plan' | 'tier'>, reset?: Pick<AllowanceReset, 'plan' | 'tier'>): Pick<AllowanceAccount, 'plan' | 'tier'> =>
   reset !== undefined && (reset.plan ?? null) !== null && (reset.tier ?? null) !== null ? reset : account;
 
 /** With no cost model a figure reads the unpriced dash, an arm the pages never draw, since they hold the skeleton
  *  while the model loads. */
 export function allowanceFigure(share: number | null, window: string, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts | null, week: WeekPosition, reset?: Pick<AllowanceReset, 'plan' | 'tier'>): AllowanceFigure {
   if (share === null) return { kind: 'none', text: '-', title: NO_READING_TITLE };
-  const weight = capacityWeight(pairOf(account, reset), window, costs);
   const scale = weekScale(costs, week);
+  // No figure reads in a week whose tier the cost model does not size, so the dash names that week, not the plan.
+  if (costs !== null && scale === null) return { kind: 'unpriced', text: '-', title: weekUnpricedTitle(week) };
+  const weight = capacityWeight(pairOf(account, reset), window, costs);
   if (weight === null || scale === null) return { kind: 'unpriced', text: '-', title: ALLOWANCE_UNPRICED_TITLE };
   const figure = share * weight * scale;
   return { kind: 'equivalent', share: figure, text: weekShort(figure, week) };
@@ -182,12 +186,15 @@ export function allowanceRows(answer: UnusedAllowanceAnswer, costs: Subscription
 
 const counted = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
 
-/** The two fleet figures: the priced accounts' figures in the chosen week added, with the unpriced accounts named. */
-export function fleetFigures(rows: AllowanceRow[], week: WeekPosition): { fable: string; note: string; sevenDay: string } {
+/** The two fleet figures: the priced accounts' figures in the chosen week added, with the unpriced accounts named, and
+ *  where the week's `scale` is null, every figure a dash, the note naming the week the cost model does not size. */
+export function fleetFigures(rows: AllowanceRow[], week: WeekPosition, scale: number | null): { fable: string; note: string; sevenDay: string } {
   const sum = (window: string) => {
     const values = rows.map((r) => valueOf(r.figures[window]?.weeks)).filter((v): v is number => v !== null);
     return values.length === 0 ? '-' : weekShort(values.reduce((a, b) => a + b, 0), week);
   };
+  // The rows' flags read each account's own pair, which would count accounts as priced over a column of dashes.
+  if (scale === null) return { fable: sum('seven_day_fable'), note: weekUnpricedTitle(week), sevenDay: sum('seven_day') };
   const priced = rows.filter((r) => !r.unpriced).length;
   const unpriced = rows
     .filter((r) => r.unpriced)

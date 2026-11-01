@@ -18,7 +18,7 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, E
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, METER_CODEC, sortAddressOf, sortDirOf } from '@/lib/address';
-import { FREE_NOTE, allowanceFigure, allowanceSpan, allowanceSubtitle, allowanceWindows, newestResets, ownShareHover, resetDate, resetHover, resetInstant, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
+import { FREE_NOTE, allowanceFigure, allowanceSpan, allowanceSubtitle, allowanceWindows, newestResets, ownShareHover, pairOf, resetDate, resetHover, resetInstant, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
@@ -26,7 +26,7 @@ import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, f
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { latestPerWindow, meterGroups, meterWindowWord } from '@/lib/meter';
-import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope, planEndedSentence, slowedOf } from '@/lib/quota';
+import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope, planEndedSentence, planWordLabel, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { speedHover } from '@/lib/selection';
 import { joinTrend } from '@/lib/trend';
@@ -918,10 +918,12 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
   const { counted, resets } = newestResets(w);
   const [latest, ...before] = resets;
   const figure = (reset: AllowanceReset | undefined) => allowanceFigure(reset?.shareLeft ?? null, w.window, account, costs, week, reset);
-  // The figure reads the chosen week, so the hover adds the reset's own share of the account's window, named by the
-  // display name where the account carries one and else by the tier the reset ran on.
+  // The figure reads the chosen week, so the hover adds the reset's own share of the account's window under the plan
+  // the figure prices at: the reset's pair, named by its word where the router prices no tier for it (a free plan, a
+  // usage-based seat), so the hover and the dash name one plan, else by the display name or the pair's tier.
   const hover = (reset: AllowanceReset) => {
-    const plan = hintPlan(holder, reset.tier ?? account.tier);
+    const pair = pairOf(account, reset);
+    const plan = pair.plan === 'free' || pair.plan === 'usage_based' ? planWordLabel(pair.plan) : hintPlan(holder, pair.tier);
     return plan === null ? resetHover(reset) : `${resetHover(reset)}\n${ownShareHover(plan, w.window, reset.shareLeft)}`;
   };
   const ended = <Badge tone="neutral">term ended</Badge>;

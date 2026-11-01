@@ -76,14 +76,20 @@ export function SpendBar({ spend, now, compact = false }: { compact?: boolean; n
   );
 }
 
-/** The slot of a window the account does not carry: `words` muted under the label ("no 5-hour window", "no Fable
- *  window"), so the triple keeps its three slots aligned across the list. */
-export function WindowBarAbsent({ label, words }: { label: string; words: string }) {
+/** Where a compact slot names a window it lacks: the slot's label says which, and the title carries the words. */
+const COMPACT_ABSENT = 'none';
+
+/**
+ * The slot of a window the account does not carry: `words` muted in the share's place, in the head beside the label
+ * ("no 5-hour window", "no Fable window"), so the triple keeps its three slots aligned across the list. A compact slot
+ * is too narrow for the words beside its label, so it draws a short form in their place and keeps them on its title.
+ */
+export function WindowBarAbsent({ compact = false, label, words }: { compact?: boolean; label: string; words: string }) {
   return (
     <div className="wbar wbar--absent" title={words}>
       <div className="wbar__head">
         <span className="wbar__label">{label}</span>
-        <span className="wbar__pct muted">{words}</span>
+        <span className="wbar__pct muted">{compact ? COMPACT_ABSENT : words}</span>
       </div>
       <div className="meter meter--thin meter--absent" role="presentation">
         <div className="meter__fill" style={{ width: '100%' }} />
@@ -97,7 +103,8 @@ export function WindowBarAbsent({ label, words }: { label: string; words: string
  * The three windows every subscription account chip shows, in one row: 5h, 7d,
  * and Fable 7d. A window the account's poll does not carry keeps its slot as a
  * greyed placeholder naming it, so chips line up across the list: an approved
- * Ultra account reads "no 5-hour window" beside its 7-day bar. With `others`,
+ * Ultra account reads "no 5-hour window" beside its 7-day bar, "none" on a
+ * compact card. With `others`,
  * every further window the account carries follows under its own key, as the
  * detail card draws them.
  */
@@ -115,17 +122,25 @@ export function WindowTriple({ account, now, compact = false, others = false }: 
   const w7 = account.windows.find((w) => w.id === '7d');
   const known: readonly string[] = WINDOW_ORDER;
   const rest = others ? account.windows.filter((w) => !known.includes(w.id)) : [];
-  // An API-key account carries no quota window by nature, so only a subscription account's empty triple waits on a read.
-  if (!w5 && !w7 && !account.fableWindow && rest.length === 0) return <div className={`wbar__none muted ${compact ? 'wbar__none--compact' : ''}`}>{account.planEndedAt !== null ? planEndedSentence(account.planEndedAt, now, compact) : isSubscription(account) ? 'Not read yet' : 'No quota windows'}</div>;
+  // An API-key account carries no quota window by nature, so only a subscription account's empty triple waits on a
+  // read, which a compact card writes short with the sentence on its title.
+  if (!w5 && !w7 && !account.fableWindow && rest.length === 0) {
+    const unread = account.planEndedAt === null && isSubscription(account);
+    return (
+      <div className={`wbar__none muted ${compact ? 'wbar__none--compact' : ''}`} title={unread && compact ? 'Not read yet' : undefined}>
+        {account.planEndedAt !== null ? planEndedSentence(account.planEndedAt, now, compact) : unread ? (compact ? 'not read' : 'Not read yet') : 'No quota windows'}
+      </div>
+    );
+  }
   // One word each: "Fable 7d" wraps in the narrow compact columns, which drops
   // that meter a line below its two neighbors. Those columns have no room for a
   // speed chip beside the 5-hour label either, so a compact card draws it in its head.
   const labels = compact ? { '5h': '5h', '7d': '7d', fable: 'Fable' } : { '5h': '5-hour', '7d': '7-day', fable: 'Fable' };
   return (
     <div className={`wbars wbars--3 ${compact ? 'wbars--compact' : ''}`}>
-      {w5 ? <WindowBar window={{ ...w5, label: labels['5h'] }} now={now} compact={compact} slowDown={compact ? null : slowedOf(account, now)} /> : <WindowBarAbsent label={labels['5h']} words="no 5-hour window" />}
-      {w7 ? <WindowBar window={{ ...w7, label: labels['7d'] }} now={now} compact={compact} /> : <WindowBarAbsent label={labels['7d']} words="no 7-day window" />}
-      {account.fableWindow ? <WindowBar window={{ ...account.fableWindow, label: labels.fable }} now={now} compact={compact} /> : <WindowBarAbsent label={labels.fable} words="no Fable window" />}
+      {w5 ? <WindowBar window={{ ...w5, label: labels['5h'] }} now={now} compact={compact} slowDown={compact ? null : slowedOf(account, now)} /> : <WindowBarAbsent compact={compact} label={labels['5h']} words="no 5-hour window" />}
+      {w7 ? <WindowBar window={{ ...w7, label: labels['7d'] }} now={now} compact={compact} /> : <WindowBarAbsent compact={compact} label={labels['7d']} words="no 7-day window" />}
+      {account.fableWindow ? <WindowBar window={{ ...account.fableWindow, label: labels.fable }} now={now} compact={compact} /> : <WindowBarAbsent compact={compact} label={labels.fable} words="no Fable window" />}
       {rest.map((w) => (
         <WindowBar key={w.id} window={w} now={now} compact={compact} />
       ))}

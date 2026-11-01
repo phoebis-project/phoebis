@@ -3772,17 +3772,8 @@
   font-size: 11.5px;
 }
 
-/* The label keeps its room and the words naming the missing window give way, cut behind an ellipsis in a compact slot
-   too narrow for them, where the slot's title holds them whole. */
 .wbar--absent .wbar__label {
-  flex-shrink: 0;
   color: var(--ink-2);
-}
-
-.wbar--absent .wbar__pct {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .meter--absent {

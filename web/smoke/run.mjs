@@ -1020,7 +1020,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
 }
 
 let m = await mount('/');
-expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', 'Refused, 24h', '7d remaining', 'Fable week remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'no Fable window', 'no 5-hour window']);
+expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', 'Refused, 24h', '7d remaining', 'Fable week remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'none']);
 {
   const tiles = [...m.container.querySelectorAll('.stat-grid > .stat')];
   const read = (t) => [t?.querySelector('.stat__label')?.textContent ?? null, t?.querySelector('.stat__value')?.textContent ?? null, t?.querySelector('.stat__note')?.textContent ?? null];
@@ -1198,7 +1198,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 }
 {
   // The workshop seed is the approved Ultra account, whose poll carries no 5-hour window: its card keeps the triple's
-  // first slot and names the window there in the muted ink, where primary, an unapproved Ultra account, draws its bar.
+  // first slot and names the window there in the muted ink, short in the compact slot with the words on its title,
+  // where primary, an unapproved Ultra account, draws its bar.
   const cardOf = (id) => [...m.container.querySelectorAll('a.account-mini')].find((c) => idOf(c) === id);
   const firstSlot = (id) => {
     const slot = cardOf(id)?.querySelector('.wbars--3 > .wbar');
@@ -1208,7 +1209,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const slots = { primary: firstSlot('primary'), workshop: firstSlot('workshop') };
   results.push({
     name: '/ the workshop card names its missing 5-hour window in the slot\'s place, muted, where primary draws its bar',
-    ok: JSON.stringify(slots.workshop) === JSON.stringify({ absent: true, muted: true, reset: 'not reported', title: 'no 5-hour window', words: 'no 5-hour window' }) && slots.primary.absent === false,
+    ok: JSON.stringify(slots.workshop) === JSON.stringify({ absent: true, muted: true, reset: 'not reported', title: 'no 5-hour window', words: 'none' }) && slots.primary.absent === false,
     missing: [JSON.stringify(slots)],
   });
 }
@@ -2527,12 +2528,13 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
 }
 {
   // The workshop seed, the approved Ultra account, carries no 5-hour window, so its list row's triple names the window
-  // in the first slot's place, muted, beside its 7-day and Fable bars.
+  // in the first slot's place, muted and short in the compact slot with the words on its title, beside its 7-day and
+  // Fable bars.
   const row = m.container.querySelector('a.account-row[href="/accounts/workshop"]');
-  const slots = [...(row?.querySelectorAll('.wbars--3 > .wbar') ?? [])].map((b) => [b.classList.contains('wbar--absent'), b.querySelector('.wbar__pct')?.textContent ?? null, b.querySelector('.wbar__pct')?.classList.contains('muted') ?? null]);
+  const slots = [...(row?.querySelectorAll('.wbars--3 > .wbar') ?? [])].map((b) => [b.classList.contains('wbar--absent'), b.querySelector('.wbar__pct')?.textContent ?? null, b.querySelector('.wbar__pct')?.classList.contains('muted') ?? null, b.getAttribute('title')]);
   results.push({
     name: '/accounts the workshop row names its missing 5-hour window in the first slot, muted, beside its 7-day and Fable bars',
-    ok: JSON.stringify(slots.map(([absent]) => absent)) === '[true,false,false]' && JSON.stringify(slots[0]) === JSON.stringify([true, 'no 5-hour window', true]),
+    ok: JSON.stringify(slots.map(([absent]) => absent)) === '[true,false,false]' && JSON.stringify(slots[0]) === JSON.stringify([true, 'none', true, 'no 5-hour window']),
     missing: [JSON.stringify(slots)],
   });
 }
@@ -4818,13 +4820,15 @@ m.unmount();
   const weekOf = (tier, week = 'ultra') => (shares, window) => weekShort(shares.reduce((a, s) => a + figureIn(s, tier, window, week), 0), week);
   const sum = (shares) => shares.reduce((a, b) => a + b, 0);
   const resetsBack = (resetsAt, n) => Array.from({ length: n }, (_, k) => Date.parse(resetsAt) - (k + 1) * WEEK);
-  const columnOf = (label, window, shares, resets, figure, plan, latest = { line: `left at the reset of ${instantOf(resets[0])}`, badge: null, title: hoverOf(resets[0], 'a usage sample') }) => ({
+  /** A column's figures, its hovers naming `plans`, one plan for every week or one per week, newest first. */
+  const planAt = (plans, i) => (Array.isArray(plans) ? plans[i] : plans);
+  const columnOf = (label, window, shares, resets, figure, plans, latest = { line: `left at the reset of ${instantOf(resets[0])}`, badge: null, title: hoverOf(resets[0], 'a usage sample') }) => ({
     head: [label, figure([shares[0]], window)],
     reset: latest.line,
     resetBadge: latest.badge,
-    resetTitle: `${latest.title}\n${ownShare(plan, window, shares[0])}`,
+    resetTitle: `${latest.title}\n${ownShare(planAt(plans, 0), window, shares[0])}`,
     rows: shares.slice(1).map((s, i) => [day(resets[i + 1]), figure([s], window)]),
-    rowTitles: resets.slice(1).map((ms, i) => `${hoverOf(ms, 'a usage sample')}\n${ownShare(plan, window, shares[i + 1])}`),
+    rowTitles: resets.slice(1).map((ms, i) => `${hoverOf(ms, 'a usage sample')}\n${ownShare(planAt(plans, i + 1), window, shares[i + 1])}`),
     total: [`Total, ${shares.length} weeks`, figure(shares, window)],
   });
   const primary = story.get('primary');
@@ -4865,13 +4869,13 @@ m.unmount();
   // 0.52, 0.48 and 0.57, each under the Pro pair the account held before its plan ended (`WEEKLY_RESETS`), so under
   // Native each prices at Pro's tier. The term's end carries no pair and reads at the account's plan, free, which the
   // router prices no capacity for, so its figure and the total it joins read a dash beside the Free note. Each hover
-  // names the Pro tier the week ran on, since the account carries no display name.
+  // names the plan its figure prices at: Free on the term's end beside its dash, Pro on the three weeks before it.
   const sunset = story.get('sunset');
   const end = Date.parse(sunset.subscription.endsAt);
   const sunsetResets = [end, ...resetsBack(new Date(end + 4 * 24 * 3_600_000).toISOString(), 3)];
   const ended = await mount('/accounts/sunset', { now: CLOCK_ORIGIN });
   const term = blockOf(ended);
-  const termColumn = columnOf('7-day', 'seven_day', [1 - 0.46, 0.52, 0.48, 0.57], sunsetResets, weekOf('default_claude_ai'), 'Pro', { line: `left at ${instantOf(end)} term ended`, badge: 'term ended', title: hoverOf(end, "the term's end") });
+  const termColumn = columnOf('7-day', 'seven_day', [1 - 0.46, 0.52, 0.48, 0.57], sunsetResets, weekOf('default_claude_ai'), ['Free', 'Pro', 'Pro', 'Pro'], { line: `left at ${instantOf(end)} term ended`, badge: 'term ended', title: hoverOf(end, "the term's end") });
   const termWant = [{ ...termColumn, head: ['7-day', '-'], total: ['Total, 4 weeks', '-'] }];
   const freeNote = 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it.';
   results.push({
@@ -18304,11 +18308,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 }
 {
   // "Unused allowance by account" over the story's weekly resets (`WEEKLY_RESETS` in mock/routingLog.ts) and sunset's
-  // term end, the last four weeks whatever the range. Under Window shares the rows rank on the four weeks' 7-day share
-  // each account left: secondary 0.61, 0.55, 0.7 and 0.58 of its week (2.44), sunset 0.54, 0.52, 0.48 and 0.57 (2.11,
-  // its newest the share its term's end left off its seed's 0.46), studio 0.44, 0.39, 0.5 and 0.47 (1.80), primary
-  // 0.32, 0.41, 0.27 and 0.38 (1.38) and nightly 0.18, 0.22, 0.15 and 0.29 (0.84). The smoke runs under TZ=UTC, so the
-  // term's end reads its UTC text.
+  // term end, the last four weeks whatever the range. The priced cases read the four weeks' 7-day shares each account
+  // left: secondary 0.61, 0.55, 0.7 and 0.58 of its week (2.44), sunset 0.54, 0.52, 0.48 and 0.57 (2.11, its newest
+  // the share its term's end left off its seed's 0.46), studio 0.44, 0.39, 0.5 and 0.47 (1.80), primary 0.32, 0.41,
+  // 0.27 and 0.38 (1.38) and nightly 0.18, 0.22, 0.15 and 0.29 (0.84). The smoke runs under TZ=UTC, so the term's end
+  // reads its UTC text.
   const DAY_MS = 24 * 3_600_000;
   const text = (el) => el?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
   const instantOf = (ms) => `${new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' })}`;
@@ -27219,10 +27223,11 @@ m.unmount();
 }
 
 {
-  // An account whose poll has read no window yet is named "not read yet" under both rings, where its card reads the
-  // same while an API-key account's card, which no poll reads, keeps "No quota windows", and a fleet whose polls carry
-  // no Fable week reads that sentence over the Fable ring's list in place of one about unsized tiers. The answer drops every Fable week and reserve's windows, a Pro seed listed and routable with
-  // no plan end.
+  // An account whose poll has read no window yet is named "not read yet" under both rings, where its compact card reads
+  // "not read" with "Not read yet" on its title while an API-key account's card, which no poll reads, keeps "No quota
+  // windows", and a fleet whose polls carry no Fable week reads that sentence over the Fable ring's list in place of one
+  // about unsized tiers. The answer drops every Fable week and reserve's windows, a Pro seed listed and routable with no
+  // plan end.
   const { listAccounts } = api;
   api.listAccounts = async () => (await listAccounts.call(api)).map((a) => ({ ...a, fableWindow: null, ...(a.id === 'reserve' ? { windows: [] } : {}) }));
   const page = await mount('/', { now: CLOCK_ORIGIN });
@@ -27234,7 +27239,7 @@ m.unmount();
   const reserve = page.container.querySelector('a.account-mini[href="/accounts/reserve"] .wbar__none');
   const annex = page.container.querySelector('a.account-mini[href="/accounts/annex"] .wbar__none');
   const drawn = {
-    card: [reserve?.textContent ?? null, reserve?.classList.contains('muted') ?? null],
+    card: [reserve?.textContent ?? null, reserve?.classList.contains('muted') ?? null, reserve?.getAttribute('title') ?? null],
     key: annex?.textContent ?? null,
     fable: { listAfter: sentence?.nextElementSibling?.matches('.remaining__left-out') ?? false, names: named(fable), ring: !!fable?.querySelector('svg.donut'), sentence: sentence?.textContent ?? 'none' },
     week: { names: named(ringCard('7d remaining')), ring: !!ringCard('7d remaining')?.querySelector('svg.donut') },
@@ -27245,7 +27250,7 @@ m.unmount();
     ok:
       JSON.stringify(drawn) ===
       JSON.stringify({
-        card: ['Not read yet', true],
+        card: ['not read', true, 'Not read yet'],
         key: 'No quota windows',
         fable: {
           listAfter: true,

@@ -422,10 +422,10 @@ export function AnalyticsPage() {
   const funded = sessionId === null && (unit === 'usd' || unit === 'equivalent');
   const costSeries = useAsync(() => (funded && fundedTab ? api.getAnalyticsSeries({ ...query, funding }) : Promise.resolve<AnalyticsPoint[] | null>(null)), [query, funding, funded, fundedTab, generation], reload);
   // The Cache warming card's Probe cost tile is the one reader of this breakdown on its tab, and it reads the probe
-  // rows counted under every position, the whole and the shares included: a breakdown that does not count probes
-  // drops a group left with probe rows alone, whether a dollar side dropped the group's real rows or the group is
-  // probe-only in the whole (the probe kind, an idle account over a short range), and the three positions add up
-  // only when all three keep it. Under the whole and the shares the read carries no funding.
+  // rows counted under every position, the whole included: a breakdown that does not count probes drops a group left
+  // with probe rows alone, whether a dollar side dropped the group's real rows or the group is probe-only in the whole
+  // (the probe kind, an idle account over a short range), and the three positions add up only when all three keep it.
+  // Under the whole the read carries no funding.
   const warming = sessionId === null && tab === 'cache-warming';
   const costBreakdown = useAsync(
     () => ((funded && fundedTab) || warming ? api.getAnalyticsBreakdown({ ...query, funding: funded ? funding : undefined, includeProbes: query.includeProbes || warming }) : Promise.resolve<AnalyticsGroup[] | null>(null)),
@@ -2774,7 +2774,7 @@ const allowanceCell = (key: string, figure: AllowanceFigure | undefined) => (
 function AllowanceTable({ answer, costs, error, week }: { answer: UnusedAllowanceAnswer | null; costs: SubscriptionCosts | null; error: string | null; week: WeekPosition }) {
   const rows = useMemo(() => (answer === null || costs === null ? null : allowanceRows(answer, costs, week)), [answer, costs, week]);
   const windows = useMemo(() => weeklyKeys(answer?.accounts ?? []), [answer]);
-  const fleet = rows === null ? null : fleetFigures(rows, week);
+  const fleet = rows === null ? null : fleetFigures(rows, week, weekScale(costs, week));
   return (
     <Card title="Unused allowance by account" subtitle="Each subscription account's weekly windows left unused at their resets, the last four weeks, under the Accounts filter. The range does not apply here" padded={false} className="card--table accounts-range allowance-table">
       {error === null && (
