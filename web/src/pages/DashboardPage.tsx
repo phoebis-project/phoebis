@@ -19,7 +19,7 @@ import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, f
 import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
 import { REFUSED_TITLE, costHeaderTitle, costUnitOf, glanceCellOf, requestHintArgs, revisionsTitle } from '@/lib/requests';
-import { fmtWindows, ringFigures, type RingFigures, type RingLeftOut, type RingRow } from '@/lib/rings';
+import { ringFigures, ringLine, ringRowTitle, type RingFigures, type RingLeftOut, type RingRow, type RingWindow } from '@/lib/rings';
 import { speedHover } from '@/lib/selection';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
 
@@ -63,7 +63,6 @@ function costTileOf(unit: UnitPosition, o: Overview, week: WeekPosition, scale: 
   if (unit === 'all') return { note: `${fmtUsd(o.cost24h / 24)} per hour`, spark: o.hourly.map((h) => h.cost), value: fmtUsd(o.cost24h) };
   if (unit === 'usd') return { note: `${fmtUsd(o.billed24h / 24)} per hour`, spark: o.hourly.map((h) => h.billed), value: fmtUsd(o.billed24h) };
   if (unit === 'equivalent') return { note: 'at the API price list, the subscription requests', spark: o.hourly.map((h) => h.cost - h.billed), value: fmtUsd(o.cost24h - o.billed24h) };
-  // The `share` position is the one no select offers, so it reads as native from here.
   const day = o.equivalent24h;
   const plan = day === null || day > 0;
   const billed = o.billed24h > 0;
@@ -149,19 +148,20 @@ export function DashboardPage() {
 
       <div className="grid-2">
         <RemainingCard
-          title="5h remaining"
+          title="7d remaining"
           subtitle={
             <>
-              Subscription accounts, 5-hour window, weighed by tier <CostReferenceLink tab="tiers" />
+              Subscription accounts, 7-day window, weighed by tier <CostReferenceLink tab="tiers" />
             </>
           }
-          windowId="5h"
+          windowId="7d"
           accounts={accounts.data}
           costs={costs}
           now={now}
+          week={week}
           failure={ringFailure}
         />
-        <RemainingCard title="7d remaining" subtitle="Subscription accounts, 7-day window, weighed by tier" windowId="7d" accounts={accounts.data} costs={costs} now={now} failure={ringFailure} />
+        <RemainingCard title="Fable week remaining" subtitle="Subscription accounts, Fable week, weighed by tier" windowId="7d_fable" accounts={accounts.data} costs={costs} now={now} week={week} failure={ringFailure} />
       </div>
 
       <section>
@@ -211,8 +211,11 @@ function StatTile({ label, value, note, spark, color, title }: { color: string; 
   );
 }
 
-function RemainingCard({ title, subtitle, windowId, accounts, costs, now, failure }: { accounts: Account[] | null; costs: SubscriptionCosts | null; failure: ReactNode; now: number; subtitle: ReactNode; title: string; windowId: '5h' | '7d' }) {
-  const figures = useMemo(() => (accounts && costs ? ringFigures(accounts, windowId, costs, now) : null), [accounts, costs, windowId, now]);
+/** The window's words in a ring's empty sentence. */
+const RING_WINDOW: Record<RingWindow, string> = { '7d': '7-day window', '7d_fable': 'Fable week' };
+
+function RemainingCard({ title, subtitle, windowId, accounts, costs, now, week, failure }: { accounts: Account[] | null; costs: SubscriptionCosts | null; failure: ReactNode; now: number; subtitle: ReactNode; title: string; week: WeekPosition; windowId: RingWindow }) {
+  const figures = useMemo(() => (accounts && costs ? ringFigures(accounts, windowId, costs, week, now) : null), [accounts, costs, windowId, week, now]);
   const slotOf = useMemo(() => accountSlots((accounts ?? []).map((a) => a.id)), [accounts]);
   return (
     <Card title={title} subtitle={subtitle}>
@@ -224,8 +227,9 @@ function RemainingCard({ title, subtitle, windowId, accounts, costs, now, failur
         // A registry of API-key accounts alone has no window to draw, and an empty ring reads as exhausted.
         <EmptyState title="No subscription accounts" body="A subscription account reports the window this card draws." />
       ) : figures.rows.length === 0 ? (
+        // Where no listed account carries the window, a sentence about unsized tiers would say nothing true.
         <>
-          <p className="muted remaining__none">No listed account's tier is sized for the {windowId === '5h' ? '5-hour' : '7-day'} window.</p>
+          <p className="muted remaining__none">{figures.carried ? `No listed account's tier is sized for the ${RING_WINDOW[windowId]}.` : `No account with a ${RING_WINDOW[windowId]}.`}</p>
           <LeftOut accounts={figures.leftOut} />
         </>
       ) : (
@@ -238,9 +242,11 @@ function RemainingCard({ title, subtitle, windowId, accounts, costs, now, failur
 function WeighedRing({ figures, slotOf }: { figures: RingFigures; slotOf: (id: string) => number | null }) {
   const ink = useChartInk();
   const [hover, setHover] = useState<string | null>(null);
-  const { anchor, capacity, left, leftOut, rows } = figures;
+  const { capacity, left, leftOut, rows } = figures;
   const share = (r: RingRow) => r.weight * r.remaining;
-  const titleOf = (r: RingRow) => `${r.label}: ${fmtWindows(share(r))} of ${fmtWindows(capacity)} ${anchor} windows, ${fmtPct(share(r) / capacity)} of the pooled capacity`;
+  const titleOf = (r: RingRow) => ringRowTitle(figures, r);
+  // The Fable ring draws no line under the Pro week, since Pro has no Fable week, and keeps its ring and rows.
+  const line = ringLine(figures);
   return (
     <div className="remaining">
       <Donut
@@ -259,9 +265,7 @@ function WeighedRing({ figures, slotOf }: { figures: RingFigures; slotOf: (id: s
           </li>
         ))}
       </ul>
-      <p className="remaining__line">
-        {fmtWindows(left)} of {fmtWindows(capacity)} {anchor} windows left
-      </p>
+      {line !== null && <p className="remaining__line">{line}</p>}
       {leftOut.length > 0 && <LeftOut accounts={leftOut} />}
     </div>
   );

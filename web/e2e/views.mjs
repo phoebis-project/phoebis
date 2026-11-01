@@ -3740,6 +3740,36 @@ async function windowBarLines(theme, path) {
     if (projects(r) && r.parts.length !== 2) say(`the ${kind}'s projection ${JSON.stringify(r.words)} draws ${r.parts.length} parts, not its share and its horizon as two`);
     if (r.parts.length === 0 ? r.line.lines > 1 : r.parts.some((part) => part.lines > 1) || r.line.lines > r.parts.length) say(`the ${kind}'s line ${JSON.stringify(r.words)} wraps inside ${r.parts.length === 0 ? 'itself' : 'a part'}, over ${r.line.lines} lines`);
   }
+  // A slot of a window the account's poll does not carry names the window muted in the share's place, on the line and
+  // in the ink of the neighboring bar's label, inside its own slot, its title holding the words whole where a narrow
+  // compact slot cuts them.
+  const absent = await page.evaluate(() =>
+    [...document.querySelectorAll('.wbars .wbar--absent')].map((bar) => {
+      const words = bar.querySelector('.wbar__pct');
+      const neighbor = [...bar.parentElement.children].find((b) => b !== bar && b.classList.contains('wbar') && !b.classList.contains('wbar--absent'));
+      const type = (el) => (el ? { ink: getComputedStyle(el).color, top: Math.round(el.getBoundingClientRect().top) } : null);
+      return {
+        compact: bar.closest('.wbars--compact') !== null,
+        cut: words ? words.scrollWidth > words.clientWidth : null,
+        label: type(neighbor?.querySelector('.wbar__label') ?? null),
+        muted: words?.classList.contains('muted') ?? false,
+        right: words ? Math.round(words.getBoundingClientRect().right * 10) / 10 : null,
+        slot: Math.round(bar.getBoundingClientRect().right * 10) / 10,
+        title: bar.getAttribute('title'),
+        type: type(words),
+        words: words?.textContent?.trim() ?? '',
+      };
+    }),
+  );
+  measurements.push(`${theme} ${path} absent window slots ${JSON.stringify(absent.map((a) => [a.compact ? 'compact' : 'whole', a.words, a.type, a.label, a.cut, a.right, a.slot]))}`);
+  if (mock && ['/', '/accounts'].includes(path) && !absent.some((a) => a.words === 'no 5-hour window')) say("the story's approved Ultra account carries no 5-hour window, yet no slot names it");
+  for (const a of absent) {
+    const kind = `the ${a.compact ? 'compact ' : ''}slot's words ${JSON.stringify(a.words)}`;
+    if (!a.muted) say(`${kind} read outside the muted ink's class`);
+    if (a.title !== a.words) say(`${kind} carry the title ${JSON.stringify(a.title)}, not their own words`);
+    if (a.right === null || a.right > a.slot + 0.5) say(`${kind} end at ${a.right}px, past their slot's ${a.slot}px`);
+    if (a.label !== null) for (const what of compare(a.type, a.label, ['ink', 'top'], `${kind} against the neighboring bar's label`)) say(what);
+  }
   const slowed = read.filter((r) => r.speed !== null);
   measurements.push(`${theme} ${path} window bar speed chips ${JSON.stringify(slowed.map((r) => [r.compact ? 'compact' : 'whole', r.speed]))}`);
   if (mock && path === '/accounts/studio' && !slowed.some((r) => !r.compact)) say("the story slows studio, yet its Usage card's 5-hour bar draws no speed chip");
@@ -4055,6 +4085,37 @@ async function quotaCards(theme) {
   if (read.names.includes('sunset')) say('a card names sunset, whose plan ended');
   if (counted !== read.names.length) say(`the bar counts ${JSON.stringify(read.count)} over ${read.names.length} cards`);
   for (const what of compare(read.first, read.neighbour, ['height', 'top', 'width'], 'the first card against its neighbor on the same row')) say(what);
+  // A window the account's poll does not carry keeps its row, its words in the muted ink in the reset label's place,
+  // in the type size of a live row's label of the same card and ending at its right edge, the chip naming the window
+  // alone. The soonest window's label reads in the accent ink, so the muted ink is read off the page's own class.
+  const absent = await page.evaluate(() =>
+    [...document.querySelectorAll('.qcard')].flatMap((card) => {
+      const grid = card.querySelector('.qcard__windows');
+      const resets = [...card.querySelectorAll('.qcard__windows .qwin__reset')];
+      const live = resets.find((r) => !r.classList.contains('muted'));
+      const probe = document.createElement('span');
+      probe.className = 'muted';
+      grid?.append(probe);
+      const muted = getComputedStyle(probe).color;
+      probe.remove();
+      const type = (el) => (el ? { fontSize: getComputedStyle(el).fontSize, right: Math.round(el.getBoundingClientRect().right) } : null);
+      return resets
+        .filter((r) => /^no .+ window$/.test(r.textContent?.trim() ?? ''))
+        .map((r) => {
+          const chip = r.previousElementSibling?.previousElementSibling ?? null;
+          return { card: card.querySelector('.qcard__name')?.textContent?.trim() ?? '', chip: chip ? [chip.textContent?.trim() ?? '', chip.getAttribute('title')] : null, ink: [getComputedStyle(r).color, muted], live: type(live), muted: r.classList.contains('muted'), type: type(r), words: r.textContent?.trim() ?? '' };
+        });
+    }),
+  );
+  measurements.push(`${theme} /quota absent window rows ${JSON.stringify(absent)}`);
+  if (mock && !absent.some((a) => a.card === 'workshop' && a.words === 'no 5-hour window')) say("the story's approved Ultra account carries no 5-hour window, yet its card's row does not name it");
+  for (const a of absent) {
+    const kind = `${a.card}'s row ${JSON.stringify(a.words)}`;
+    if (!a.muted) say(`${kind} reads outside the muted ink's class`);
+    if (a.chip === null || a.chip[1] !== a.words || /%|n\/a/.test(a.chip[0])) say(`${kind} stands beside the chip ${JSON.stringify(a.chip)}, not one naming the window alone with the words on its title`);
+    if (a.ink[0] !== a.ink[1]) say(`${kind} reads in ${a.ink[0]}, not the muted ink ${a.ink[1]}`);
+    for (const what of compare(a.type, a.live, ['fontSize', 'right'], `${kind} against a live row's reset label`)) say(what);
+  }
 }
 
 /**
@@ -4745,7 +4806,7 @@ async function remainingCards(theme) {
   );
   for (const card of cards) measurements.push(`${theme} / remaining list ${JSON.stringify({ rows: card.rows, slices: card.slices, title: card.title })}`);
   if (cards.length !== 2) {
-    failures.push(`${theme} /: ${cards.length} remaining cards, expected 5h and 7d`);
+    failures.push(`${theme} /: ${cards.length} remaining cards, expected 7d and Fable week`);
     return;
   }
   if (!mock) {
@@ -4812,20 +4873,27 @@ async function errorStateBox(theme) {
 
 /**
  * The line under each quota ring and the accounts it leaves out read across the ring's whole grid, under the ring and
- * the legend both, rather than wrapping inside the 148 px ring column. The router's seed has no subscription account,
- * so only the story's pass draws a ring.
+ * the legend both, rather than wrapping inside the 148 px ring column, each from its card title's left edge. The story
+ * draws both rings with their lines in the default Ultra week, and the Fable ring names the Pro seeds under it. The
+ * router's seed has no subscription account, so only the story's pass draws a ring.
  */
 async function ringLinesSpan(theme) {
   const read = await page.evaluate(() =>
     [...document.querySelectorAll('.remaining > .remaining__line, .remaining > .remaining__left-out')].map((el) => {
       const box = el.getBoundingClientRect();
-      return { grid: Math.round(el.parentElement.getBoundingClientRect().left), left: Math.round(box.left), text: el.textContent?.trim().slice(0, 60) ?? '', width: Math.round(box.width) };
+      const title = el.closest('.card')?.querySelector('.card__title') ?? null;
+      return { card: title?.textContent ?? '', grid: Math.round(el.parentElement.getBoundingClientRect().left), kind: el.classList.contains('remaining__line') ? 'line' : 'left out', left: Math.round(box.left), text: el.textContent?.trim().slice(0, 60) ?? '', title: title ? Math.round(title.getBoundingClientRect().left) : null, width: Math.round(box.width) };
     }),
   );
   measurements.push(`${theme} / ring lines ${JSON.stringify(read)}`);
   if (mock && read.length === 0) failures.push(`${theme} /: the story weighs subscription accounts, yet no ring draws its line`);
+  if (mock) {
+    const drawn = (card, kind) => read.some((r) => r.card === card && r.kind === kind);
+    for (const [card, kind] of [['7d remaining', 'line'], ['Fable week remaining', 'line'], ['Fable week remaining', 'left out']]) if (!drawn(card, kind)) failures.push(`${theme} /: the "${card}" card draws no ${kind === 'line' ? 'line' : 'left-out list'} under its ring`);
+  }
   for (const line of read) {
     if (line.left !== line.grid) failures.push(`${theme} /: "${line.text}" starts at ${line.left}px, not at its ring grid's left edge (${line.grid}px)`);
+    for (const what of compare({ left: line.left }, { left: line.title }, ['left'], `the "${line.card}" card's ${line.kind} "${line.text}" against its title`)) failures.push(`${theme} /: ${what}`);
     if (line.width <= 148) failures.push(`${theme} /: "${line.text}" is ${line.width}px wide, inside the ring column`);
   }
 }
@@ -5607,7 +5675,7 @@ async function analyticsAllowanceTable(theme) {
 }
 
 /**
- * A week priced at the tier it ran under, under the default unit. On the studio account's detail the allowance block's
+ * A week priced at the tier it ran under, in the default Ultra week. On the studio account's detail the allowance block's
  * 7-day column draws its third-newest week, which ran under Pro before the upgrade, in the type size, weight and right
  * edge of the second-newest week's figure and from the right edge of the head's figure, the figures and the total
  * recorded. On the Analytics view's Accounts tab the unused allowance card's studio row draws its 7-day four weeks'
@@ -5631,7 +5699,7 @@ async function allowancePricedWeek(theme) {
     measurements.push(`${theme} /accounts/studio allowance block priced weeks ${JSON.stringify(block)}`);
     for (const what of compare(block.pro, block.second, ['fontSize', 'fontWeight', 'right'], "the Pro week's figure against the second-newest week's")) say(what);
     for (const what of compare(block.pro, block.head, ['right'], "the Pro week's figure against the head's")) say(what);
-    for (const [name, read] of Object.entries(block)) if (!/ 20x 7d$/.test(read?.text ?? '')) say(`the block's ${name} figure reads ${JSON.stringify(read?.text ?? null)}, not a 20x 7-day equivalent`);
+    for (const [name, read] of Object.entries(block)) if (!/ Ultra week$/.test(read?.text ?? '')) say(`the block's ${name} figure reads ${JSON.stringify(read?.text ?? null)}, not a share of the Ultra week`);
 
     await loadAtOrigin('/analytics', '.analytics-section#traffic');
     if (!(await tabTo(theme, 'Accounts'))) return;
@@ -5650,7 +5718,7 @@ async function allowancePricedWeek(theme) {
     });
     measurements.push(`${theme} /analytics Unused allowance by account studio's four weeks ${JSON.stringify(card)}`);
     for (const what of compare(card.studio, card.next, ['fontSize', 'fontWeight', 'right'], "studio's 7-day four weeks' figure against the next row's")) say(what);
-    if (!/ 20x 7d$/.test(card.studio?.text ?? '')) say(`studio's 7-day four weeks' figure reads ${JSON.stringify(card.studio?.text ?? null)}, not a 20x 7-day equivalent`);
+    if (!/ Ultra week$/.test(card.studio?.text ?? '')) say(`studio's 7-day four weeks' figure reads ${JSON.stringify(card.studio?.text ?? null)}, not a share of the Ultra week`);
     if (card.studio?.text !== block.total?.text) say(`studio's 7-day four weeks' figure ${JSON.stringify(card.studio?.text ?? null)} is not the block's total ${JSON.stringify(block.total?.text ?? null)}`);
     await tabTo(theme, 'Traffic');
     await atRest();
@@ -7819,9 +7887,10 @@ async function accountFreeBadge(theme) {
  * The sentence an account whose plan ended reads in its window bars' place. On `/` and `/accounts` the plan-ended
  * account's card or row reads the compact form, from the left edge inside its card of the nearest neighbor's window
  * bars and in the type size and ink of their first label, and on `/` both quota rings name the usage-based seat with
- * its reason. On `/accounts/sunset` the Usage card's long form reads in the ink of the Identity card's note, the two
- * sizes recorded, since the sentence keeps the body size of the card's other state sentences. Each text is recorded.
- * The router's seed holds no such account, so only the story's pass reads it.
+ * its reason, the Fable ring the Pro seeds without a Fable week beside it. On `/accounts/sunset` the Usage card's long
+ * form reads in the ink of the Identity card's note, the two sizes recorded, since the sentence keeps the body size of
+ * the card's other state sentences. Each text is recorded. The router's seed holds no such account, so only the
+ * story's pass reads it.
  */
 async function planEndedLines(theme, path) {
   if (!mock) return;
@@ -7861,9 +7930,10 @@ async function planEndedLines(theme, path) {
   if (!read.sentence?.muted || !/^No window since the plan ended .+ ago$/.test(read.sentence.text)) say(`the plan-ended account's ${kind} reads ${JSON.stringify(read.sentence ?? null)} in its window bars' place, not the compact plan-ended sentence with its age, muted`);
   for (const what of compare(read.sentence, read.neighbor, ['fontSize', 'ink', 'left'], `the plan-ended account's ${kind} sentence against the neighboring ${kind}'s window bars and their first label`)) say(what);
   if (path === '/') {
-    const want = JSON.stringify(['contract: a usage-based seat']);
-    for (const ring of read.rings) if (JSON.stringify(ring.names) !== want) say(`the "${ring.title}" card names ${JSON.stringify(ring.names)} under its ring, not the usage-based seat alone with its reason`);
-    if (read.rings.length !== 2) say(`${read.rings.length} remaining cards, expected 5h and 7d`);
+    const seat = 'contract: a usage-based seat';
+    const want = { '7d remaining': [seat], 'Fable week remaining': ['secondary: no Fable week', 'reserve: no Fable week', seat] };
+    for (const ring of read.rings) if (JSON.stringify(ring.names) !== JSON.stringify(want[ring.title] ?? null)) say(`the "${ring.title}" card names ${JSON.stringify(ring.names)} under its ring, not ${JSON.stringify(want[ring.title] ?? null)}`);
+    if (read.rings.length !== 2) say(`${read.rings.length} remaining cards, expected 7d and Fable week`);
   }
 }
 

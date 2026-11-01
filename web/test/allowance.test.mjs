@@ -13,8 +13,8 @@ const iso = (ms) => new Date(ms).toISOString();
 const near = (a, b) => Math.abs(a - b) < 1e-9;
 
 /**
- * The cost model's members the figures read, with capacities of the file's own: Pro's week a twentieth of the anchor's
- * and Max 5x's two fifths, the Fable week a model week of the 7-day window.
+ * The cost model's members the figures read, anchored on the Pro 7-day window: Ultra's week twenty Pro weeks and Max's
+ * eight, and the Fable week a model week of the 7-day window at half its capacity.
  */
 const COSTS = {
   capacity: {
@@ -22,14 +22,14 @@ const COSTS = {
     default_claude_max_20x: { fiveHour: 20_000, sevenDay: 100_000 },
     default_claude_max_5x: { fiveHour: 5_000, sevenDay: 40_000 },
   },
-  modelWindows: { seven_day_fable: { capacityFactor: 0.25, of: 'seven_day' } },
-  unit: { tier: 'default_claude_max_20x', window: 'five_hour' },
+  modelWindows: { seven_day_fable: { capacityFactor: 0.5, of: 'seven_day' } },
+  unit: { tier: 'default_claude_ai', window: 'seven_day' },
 };
 const PRO = { plan: 'pro', tier: 'default_claude_ai' };
 const MAX_5X = { plan: 'max_5x', tier: 'default_claude_max_5x' };
 const MAX_20X = { plan: 'max_20x', tier: 'default_claude_max_20x' };
 const FREE = { plan: 'free', tier: 'default_claude_ai' };
-const EQUIVALENT_UNITS = ['native', 'all', 'usd', 'equivalent'];
+const WEEKS = ['ultra', 'max', 'pro'];
 
 const NOW = Date.UTC(2026, 9, 25, 18, 0);
 /**
@@ -60,37 +60,42 @@ test("the newest four resets total the answer's figures where it lists four or f
   assert.deepEqual([d.newestResets(ended).counted, d.newestResets(ended).total, d.newestResets(ended).resets[0].source], [4, 1.125, 'term_ended']);
 });
 
-test("a figure is the share of the account's own window under Window shares and its 20x window equivalent under every other position", () => {
-  assert.deepEqual(d.allowanceFigure(0.33, 'seven_day', PRO, COSTS, 'share'), { kind: 'share', share: 0.33, text: d.fmtShare(0.33) });
-  assert.equal(d.allowanceFigure(0.33, 'seven_day', PRO, COSTS, 'share').text, '33%');
-  for (const unit of EQUIVALENT_UNITS) {
-    // A Pro week is a twentieth of the anchor's, so 33% of it is 1.65% of a Max 20x week.
-    const pro = d.allowanceFigure(0.33, 'seven_day', PRO, COSTS, unit);
-    assert.equal(pro.kind, 'equivalent', unit);
-    assert.ok(near(pro.share, 0.0165), `${unit}: ${pro.share}`);
-    assert.equal(pro.text, d.equivalentShort('seven_day', pro.share), unit);
-    assert.equal(pro.text, '1.65% 20x 7d', unit);
-    // A model week prices through the shared window it divides, whose capacity factor every tier shares.
-    const fable = d.allowanceFigure(0.5, 'seven_day_fable', MAX_5X, COSTS, unit);
-    assert.deepEqual([fable.kind, fable.text], ['equivalent', '20% 20x 7-day Fable'], unit);
-    assert.equal(d.allowanceFigure(0.25, 'seven_day', MAX_20X, COSTS, unit).text, '25% 20x 7d', `${unit}: the anchor's own share`);
-  }
+test("a figure is the account's own share priced in the chosen week, a Fable-week reset at half its 7-day figure", () => {
+  // Half of a Max week is four Pro weeks: a fifth of an Ultra week, half a Max week. Half of its Fable week, a week of
+  // half the capacity, is two Pro weeks.
+  const figures = (share, window, plan) => WEEKS.map((week) => d.allowanceFigure(share, window, plan, COSTS, week));
+  assert.deepEqual(figures(0.5, 'seven_day', MAX_5X).map((f) => [f.kind, f.text]), [
+    ['equivalent', '20% Ultra week'],
+    ['equivalent', '50% Max week'],
+    ['equivalent', '400% Pro week'],
+  ]);
+  assert.deepEqual(figures(0.5, 'seven_day_fable', MAX_5X).map((f) => [f.kind, f.text]), [
+    ['equivalent', '10% Ultra week'],
+    ['equivalent', '25% Max week'],
+    ['equivalent', '200% Pro week'],
+  ]);
+  assert.ok(near(d.allowanceFigure(0.5, 'seven_day_fable', MAX_5X, COSTS, 'ultra').share, 0.1), 'the figure a row ranks and adds by is the chosen week\'s');
+  // A Pro week is a twentieth of an Ultra week, and an Ultra account's own share reads as it stands under the Ultra
+  // week.
+  assert.deepEqual(figures(0.33, 'seven_day', PRO).map((f) => f.text), ['1.65% Ultra week', '4.13% Max week', '33% Pro week']);
+  assert.equal(d.allowanceFigure(0.25, 'seven_day', MAX_20X, COSTS, 'ultra').text, '25% Ultra week');
 });
 
 test('a figure reads a dash where the plan is Free, the cost model sizes no capacity for the tier or no reading stands, and never an estimate', () => {
-  for (const unit of EQUIVALENT_UNITS) {
-    const free = d.allowanceFigure(0.33, 'seven_day', FREE, COSTS, unit);
-    assert.deepEqual(free, { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${unit}: a Free plan reads its Pro tier's capacity no more`);
-    assert.deepEqual(d.allowanceFigure(0.33, 'seven_day', { plan: 'max_20x', tier: 'default_claude_team' }, COSTS, unit).kind, 'unpriced', `${unit}: a tier the cost model lacks`);
-    assert.deepEqual(d.allowanceFigure(0.33, 'seven_day_fable', { plan: 'pro', tier: null }, COSTS, unit).kind, 'unpriced', `${unit}: no stored tier`);
+  for (const week of WEEKS) {
+    const free = d.allowanceFigure(0.33, 'seven_day', FREE, COSTS, week);
+    assert.deepEqual(free, { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${week}: a Free plan reads its Pro tier's capacity no more`);
+    assert.deepEqual(d.allowanceFigure(0.33, 'seven_day', { plan: 'max_20x', tier: 'default_claude_team' }, COSTS, week).kind, 'unpriced', `${week}: a tier the cost model lacks`);
+    assert.deepEqual(d.allowanceFigure(0.33, 'seven_day_fable', { plan: 'pro', tier: null }, COSTS, week).kind, 'unpriced', `${week}: no stored tier`);
+    assert.deepEqual(d.allowanceFigure(null, 'seven_day', PRO, COSTS, week), { kind: 'none', text: '-', title: d.NO_READING_TITLE }, week);
+    // An arm the pages never draw, since they hold the skeleton while the cost model loads.
+    assert.deepEqual(d.allowanceFigure(0.33, 'seven_day', PRO, null, week), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${week}: no cost model`);
   }
   assert.equal(d.ALLOWANCE_UNPRICED_TITLE, "Unpriced: the cost model holds no capacity for this account's plan");
   assert.notEqual(d.ALLOWANCE_UNPRICED_TITLE, d.UNPRICED_TITLE, "the analytics library's own title keeps its words beside this one");
-  assert.equal(d.allowanceFigure(0.33, 'seven_day', FREE, COSTS, 'share').text, '33%', 'Window shares reads a Free account its shares');
-  for (const unit of ['share', ...EQUIVALENT_UNITS]) assert.deepEqual(d.allowanceFigure(null, 'seven_day', PRO, COSTS, unit), { kind: 'none', text: '-', title: d.NO_READING_TITLE }, unit);
   assert.equal(d.NO_READING_TITLE, 'no reading at this reset');
-  assert.equal(d.FREE_NOTE, 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it. Window shares reads the shares.');
-  const texts = [0, 0.004, 0.33, 0.999].flatMap((share) => ['share', ...EQUIVALENT_UNITS].flatMap((unit) => [PRO, MAX_5X, FREE].flatMap((plan) => ['seven_day', 'seven_day_fable'].map((w) => d.allowanceFigure(share, w, plan, COSTS, unit).text))));
+  assert.equal(d.FREE_NOTE, 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it.');
+  const texts = [0, 0.004, 0.33, 0.999].flatMap((share) => WEEKS.flatMap((week) => [PRO, MAX_5X, FREE].flatMap((plan) => ['seven_day', 'seven_day_fable'].map((w) => d.allowanceFigure(share, w, plan, COSTS, week).text))));
   assert.deepEqual(texts.filter((t) => t.includes('~')), [], 'no model is priced here, so no figure is estimated');
 });
 
@@ -103,55 +108,49 @@ test('a Team or Enterprise seat prices through its tier where the cost model hol
   ];
   for (const [seat, same] of held) {
     for (const window of ['seven_day', 'seven_day_fable']) {
-      for (const unit of EQUIVALENT_UNITS) {
-        const figure = d.allowanceFigure(0.5, window, seat, COSTS, unit);
-        assert.equal(figure.kind, 'equivalent', `${seat.plan} on ${seat.tier}, ${window}, ${unit}`);
-        assert.deepEqual(figure, d.allowanceFigure(0.5, window, same, COSTS, unit), `${seat.plan} on ${seat.tier}, ${window}, ${unit}: the tier's weight`);
+      for (const week of WEEKS) {
+        const figure = d.allowanceFigure(0.5, window, seat, COSTS, week);
+        assert.equal(figure.kind, 'equivalent', `${seat.plan} on ${seat.tier}, ${window}, ${week}`);
+        assert.deepEqual(figure, d.allowanceFigure(0.5, window, same, COSTS, week), `${seat.plan} on ${seat.tier}, ${window}, ${week}: the tier's weight`);
       }
-      assert.deepEqual(d.allowanceFigure(0.5, window, seat, COSTS, 'share'), { kind: 'share', share: 0.5, text: '50%' }, `${seat.plan} on ${seat.tier}, ${window}: Window shares reads the share`);
     }
   }
   // The file's costs hold no Team row, so an Enterprise seat on that tier prices nothing, as the router's does.
   const unheld = { plan: 'enterprise', tier: 'default_claude_team' };
-  for (const unit of EQUIVALENT_UNITS) assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', unheld, COSTS, unit), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${unit}: a tier the cost model lacks`);
-  // The Team account leaves three of its Max 20x weeks against the Max 20x account's one, so it ranks first.
+  for (const week of WEEKS) assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', unheld, COSTS, week), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${week}: a tier the cost model lacks`);
+  // The Team account leaves three of its Ultra weeks against the Ultra account's one, so it ranks first.
   const answer = {
     accounts: [accountOf('max', MAX_20X, [windowOf('seven_day', [0.25, 0.25, 0.25, 0.25])]), accountOf('team', { plan: 'team', tier: 'default_claude_max_20x' }, [windowOf('seven_day', [0.75, 0.75, 0.75, 0.75])])],
     from: iso(NOW - 29 * DAY),
     to: iso(NOW),
   };
-  const rows = d.allowanceRows(answer, COSTS, 'native');
+  const rows = d.allowanceRows(answer, COSTS, 'ultra');
   assert.deepEqual(rows.map((r) => [r.accountId, r.unpriced]), [['team', false], ['max', false]]);
-  assert.equal(d.fleetFigures(rows, 'native').note, '2 accounts priced');
+  assert.equal(d.fleetFigures(rows, 'ultra').note, '2 accounts priced');
 });
 
-/** The cost model of the per-reset cases: Max 5x's 7-day capacity a quarter of the anchor's, Pro's a twentieth. */
+/** The cost model of the per-reset cases: Max's 7-day capacity a quarter of Ultra's, five Pro weeks. */
 const QUARTER = { ...COSTS, capacity: { ...COSTS.capacity, default_claude_max_5x: { fiveHour: 5_000, sevenDay: 25_000 } } };
 const NO_PAIR = { plan: null, tier: null };
 
 test("a reset prices at the plan and the tier it ran under, and at the account's current pair where it carries none", () => {
-  for (const unit of EQUIVALENT_UNITS) {
-    const bare = d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, unit);
-    assert.deepEqual([bare.kind, bare.share], ['equivalent', 0.5], `${unit}: the anchor's own week`);
-    assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, unit, NO_PAIR), bare, `${unit}: a reset the router recorded no pair for`);
+  for (const week of WEEKS) {
+    const bare = d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, week);
+    assert.equal(bare.kind, 'equivalent', week);
+    assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, week, NO_PAIR), bare, `${week}: a reset the router recorded no pair for`);
     // A reset built without the two keys reads as one the router recorded no pair for, the wire writing both or
     // neither.
-    assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, unit, {}), bare, `${unit}: a reset without the keys`);
-    const earlier = d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, unit, MAX_5X);
-    assert.equal(earlier.kind, 'equivalent', unit);
-    assert.ok(near(earlier.share, bare.share / 4), `${unit}: a week under Max 5x reads a quarter of the same share at Max 20x, ${earlier.share}`);
-    assert.equal(earlier.text, d.equivalentShort('seven_day', 0.125), unit);
-    assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, unit, FREE), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${unit}: a week whose own pair prices nothing, though the account's would`);
+    assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, week, {}), bare, `${week}: a reset without the keys`);
+    const earlier = d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, week, MAX_5X);
+    assert.equal(earlier.kind, 'equivalent', week);
+    assert.ok(near(earlier.share, bare.share / 4), `${week}: a week under Max reads a quarter of the same share at Ultra, ${earlier.share}`);
+    assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, week, FREE), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${week}: a week whose own pair prices nothing, though the account's would`);
   }
-  // The shares price nothing, so the pair changes no share, with no cost model as with one.
-  for (const costs of [QUARTER, null]) {
-    for (const pair of [MAX_5X, FREE, NO_PAIR]) assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_20X, costs, 'share', pair), { kind: 'share', share: 0.5, text: '50%' }, `${pair.plan} ${costs === null ? 'without' : 'with'} a cost model`);
-  }
+  assert.equal(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, 'ultra', MAX_5X).text, '12.5% Ultra week');
 });
 
-test('the subtitle names the unit the figures read in', () => {
-  assert.equal(d.allowanceSubtitle('share'), 'The share of each weekly window left unused when it reset, the last four weeks');
-  for (const unit of EQUIVALENT_UNITS) assert.equal(d.allowanceSubtitle(unit), 'Each weekly window left unused when it reset, in 20x window equivalents, the last four weeks', unit);
+test('the subtitle names the chosen week the figures read in', () => {
+  assert.equal(d.allowanceSubtitle(), 'Each weekly window left unused when it reset, as a share of the chosen week, the last four weeks');
 });
 
 test("an account's windows and the card's column pairs read the 7-day window first, then each model week in the console's order", () => {
@@ -174,6 +173,13 @@ test("a reset's hover names its instant and the reading's source in the block's 
   assert.deepEqual([d.resetDate(iso(at)), d.resetInstant(iso(at)), d.resetInstant(iso(Date.UTC(2026, 9, 25, 7, 5)))], ['Sep 12', 'Sep 12 20:10', 'Oct 25 07:05']);
 });
 
+test("a reset's own share reads on its hover with the plan and the window named in words", () => {
+  assert.deepEqual(
+    [d.ownShareHover('Ultra', 'seven_day', 0.39), d.ownShareHover('Max', 'seven_day_fable', 0.12), d.ownShareHover('Max', 'seven_day_opus', 0.5)],
+    ['Ultra: 39% of the 7-day window left', 'Max: 12% of the Fable week left', 'Max: 50% of seven_day_opus left'],
+  );
+});
+
 /**
  * Six accounts whose four weeks' 7-day shares tie three ways at one week's worth, told apart by the Fable figure and
  * then the id, beside a Free account with the most left and an account whose latest reset is its term's end.
@@ -191,40 +197,27 @@ const RANKED = {
   to: iso(NOW),
 };
 
-test('the rows sort most left first on the four weeks\' 7-day figure, then the Fable figure, then the id, an unpriced account last under the equivalents', () => {
-  const shares = d.allowanceRows(RANKED, COSTS, 'share');
-  // Window shares reads the Free account's shares, so it ranks in its share's place.
-  assert.deepEqual(shares.map((r) => r.accountId), ['charlie', 'alpha', 'delta', 'echo', 'bravo', 'foxtrot']);
-  for (const unit of EQUIVALENT_UNITS) {
-    // Pro's weeks weigh a twentieth of Max 20x's, so alpha's two weeks' worth reads a tenth of one anchor week.
-    assert.deepEqual(d.allowanceRows(RANKED, COSTS, unit).map((r) => r.accountId), ['delta', 'echo', 'bravo', 'alpha', 'foxtrot', 'charlie'], unit);
+test("the rows sort most left first on the four weeks' 7-day figure, then the Fable figure, then the id, an unpriced account last", () => {
+  for (const week of WEEKS) {
+    // Pro's weeks weigh a twentieth of Ultra's, so alpha's two weeks' worth reads a tenth of one Ultra week.
+    assert.deepEqual(d.allowanceRows(RANKED, COSTS, week).map((r) => r.accountId), ['delta', 'echo', 'bravo', 'alpha', 'foxtrot', 'charlie'], week);
   }
-  const byId = Object.fromEntries(shares.map((r) => [r.accountId, r]));
+  const rows = d.allowanceRows(RANKED, COSTS, 'ultra');
+  const byId = Object.fromEntries(rows.map((r) => [r.accountId, r]));
   assert.deepEqual(Object.keys(byId.delta.figures), ['seven_day', 'seven_day_fable'], 'keyed by the wire key in the drawn order');
-  assert.deepEqual(byId.delta.figures.seven_day, { counted: 4, last: d.allowanceFigure(0.25, 'seven_day', MAX_20X, COSTS, 'share'), weeks: d.allowanceFigure(1, 'seven_day', MAX_20X, COSTS, 'share') });
+  assert.deepEqual(byId.delta.figures.seven_day, { counted: 4, last: d.allowanceFigure(0.25, 'seven_day', MAX_20X, COSTS, 'ultra'), weeks: d.allowanceFigure(1, 'seven_day', MAX_20X, COSTS, 'ultra') });
   assert.deepEqual(byId.bravo.figures.seven_day_fable.counted, 1);
   assert.deepEqual(Object.values(byId).map((r) => [r.accountId, r.resets, r.unpriced]), [
-    ['charlie', 4, true],
-    ['alpha', 4, false],
     ['delta', 4, false],
     ['echo', 4, false],
     ['bravo', 4, false],
+    ['alpha', 4, false],
     ['foxtrot', 4, false],
+    ['charlie', 4, true],
   ]);
   // The latest reset of the account whose term ended is the term's end, so its row carries the mark at that instant.
-  assert.deepEqual(shares.map((r) => [r.accountId, r.termEndedAt]).filter(([, at]) => at !== null), [['foxtrot', iso(NOW - 3 * DAY)]]);
-  const charlie = d.allowanceRows(RANKED, COSTS, 'native').find((r) => r.accountId === 'charlie');
-  assert.deepEqual([charlie.figures.seven_day.last.kind, charlie.figures.seven_day.weeks.kind], ['unpriced', 'unpriced']);
-});
-
-test('under Window shares the rows read the shares with no cost model, the unpriced mark read off the plan word', () => {
-  // The shares price nothing, so the card draws them before the cost model lands or after its read failed.
-  const bare = d.allowanceRows(RANKED, null, 'share');
-  assert.deepEqual(bare, d.allowanceRows(RANKED, COSTS, 'share'));
-  assert.deepEqual(bare.map((r) => [r.accountId, r.unpriced]), [['charlie', true], ['alpha', false], ['delta', false], ['echo', false], ['bravo', false], ['foxtrot', false]]);
-  assert.deepEqual(d.fleetFigures(bare, 'share'), d.fleetFigures(d.allowanceRows(RANKED, COSTS, 'share'), 'share'));
-  // An equivalent with no cost model reads the dash, an arm the pages never draw, since they wait on the model there.
-  for (const unit of EQUIVALENT_UNITS) assert.deepEqual(d.allowanceFigure(0.33, 'seven_day', PRO, null, unit), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, unit);
+  assert.deepEqual(rows.map((r) => [r.accountId, r.termEndedAt]).filter(([, at]) => at !== null), [['foxtrot', iso(NOW - 3 * DAY)]]);
+  assert.deepEqual([byId.charlie.figures.seven_day.last.kind, byId.charlie.figures.seven_day.weeks.kind], ['unpriced', 'unpriced']);
 });
 
 /** Nine accounts with 17 resets of the 7-day window and three of the Fable week, the ninth on a Free plan. */
@@ -239,26 +232,24 @@ const FLEET = {
   to: iso(NOW),
 };
 
-test("the fleet figures read the mean share per reset under Window shares and the priced accounts' equivalents added under every other position", () => {
-  // 8 accounts leave 0.75 of a week over two resets and the Free one 0.25 over one: 6.25 over 17 resets. The Fable
-  // weeks leave 1.75 over three resets.
-  assert.deepEqual(d.fleetFigures(d.allowanceRows(FLEET, COSTS, 'share'), 'share'), {
-    fable: d.fmtShare(1.75 / 3),
-    note: "17 resets on 9 accounts, each a share of its account's own week",
-    sevenDay: d.fmtShare(6.25 / 17),
-  });
-  for (const unit of EQUIVALENT_UNITS) {
-    assert.deepEqual(d.fleetFigures(d.allowanceRows(FLEET, COSTS, unit), unit), { fable: d.equivalentShort('seven_day_fable', 1.75), note: '8 accounts priced, a9 left out unpriced', sevenDay: d.equivalentShort('seven_day', 6) }, unit);
-  }
+test("the fleet figures add the priced accounts' figures in the chosen week and name the unpriced accounts", () => {
+  // 8 Ultra accounts leave 0.75 of a week each, 6 Ultra weeks, and 1.75 of their Fable weeks, 0.875 of an Ultra week.
+  assert.deepEqual(
+    WEEKS.map((week) => d.fleetFigures(d.allowanceRows(FLEET, COSTS, week), week)),
+    [
+      { fable: '87.5% Ultra week', note: '8 accounts priced, a9 left out unpriced', sevenDay: '600% Ultra week' },
+      { fable: '219% Max week', note: '8 accounts priced, a9 left out unpriced', sevenDay: '1500% Max week' },
+      { fable: '1750% Pro week', note: '8 accounts priced, a9 left out unpriced', sevenDay: '12000% Pro week' },
+    ],
+  );
   const priced = { ...FLEET, accounts: FLEET.accounts.slice(0, 1) };
-  assert.deepEqual(d.fleetFigures(d.allowanceRows(priced, COSTS, 'usd'), 'usd').note, '1 account priced');
-  assert.deepEqual(d.fleetFigures(d.allowanceRows({ ...FLEET, accounts: FLEET.accounts.slice(8) }, COSTS, 'share'), 'share'), { fable: '-', note: "1 reset on 1 account, each a share of its account's own week", sevenDay: d.fmtShare(0.25) });
-  assert.deepEqual(d.fleetFigures([], 'native'), { fable: '-', note: '0 accounts priced', sevenDay: '-' });
+  assert.deepEqual(d.fleetFigures(d.allowanceRows(priced, COSTS, 'pro'), 'pro').note, '1 account priced');
+  assert.deepEqual(d.fleetFigures([], 'ultra'), { fable: '-', note: '0 accounts priced', sevenDay: '-' });
 });
 
 /**
- * A Max 20x account whose newest 7-day week carries no pair and whose second ran under Max 5x, each leaving a whole
- * week, beside a Max 20x account whose four weeks leave half a week, and an account one of whose weeks ran on Free.
+ * An Ultra account whose newest 7-day week carries no pair and whose second ran under Max, each leaving a whole week,
+ * beside an Ultra account whose four weeks leave half a week, and an account one of whose weeks ran on Free.
  */
 const MIXED = {
   accounts: [
@@ -269,38 +260,29 @@ const MIXED = {
   to: iso(NOW),
 };
 
-test("the four weeks' figure, the rows and the fleet total add each week's equivalent at the tier it ran under", () => {
-  const [mixed, steady] = MIXED.accounts;
+test("the four weeks' figure, the rows and the fleet total add each week's figure at the tier it ran under", () => {
+  const [mixed] = MIXED.accounts;
   const [window] = mixed.windows;
-  for (const unit of EQUIVALENT_UNITS) {
-    // 1 week at Max 20x and 1 at Max 5x read 1.25 anchor weeks, where the summed shares priced at Max 20x read 2.
-    const weeks = d.weeksFigure(window, mixed, QUARTER, unit);
-    assert.equal(weeks.kind, 'equivalent', unit);
-    assert.ok(near(weeks.share, 1.25), `${unit}: ${weeks.share}`);
-    assert.equal(weeks.text, d.equivalentShort('seven_day', 1.25), unit);
-    const row = d.allowanceRows(MIXED, QUARTER, unit).find((r) => r.accountId === 'mixed');
-    assert.ok(near(row.figures.seven_day.weeks.share, 1.25) && near(row.figures.seven_day.last.share, 1), `${unit}: weeks ${row.figures.seven_day.weeks.share}, last ${row.figures.seven_day.last.share}`);
-    assert.equal(row.unpriced, false, unit);
-    // 1.25 beside steady's 0.5, where the summed shares priced once read 2.5.
-    assert.equal(d.fleetFigures(d.allowanceRows(MIXED, QUARTER, unit), unit).sevenDay, d.equivalentShort('seven_day', 1.75), unit);
-  }
-  assert.deepEqual(d.weeksFigure(window, mixed, QUARTER, 'share'), { kind: 'share', share: 2, text: d.fmtShare(2) }, "Window shares adds the shares as the answer's total");
-  assert.deepEqual(d.allowanceRows(MIXED, QUARTER, 'share').find((r) => r.accountId === 'mixed').figures.seven_day.weeks, { kind: 'share', share: 2, text: d.fmtShare(2) });
-  assert.deepEqual(d.weeksFigure(steady.windows[0], steady, null, 'share'), { kind: 'share', share: 0.5, text: d.fmtShare(0.5) }, 'the shares with no cost model');
+  // 1 week at Ultra and 1 at Max read 25 Pro weeks, 1.25 Ultra weeks, where the summed shares priced at Ultra read 2.
+  const sums = WEEKS.map((week) => d.weeksFigure(window, mixed, QUARTER, week).share);
+  assert.ok([1.25, 5, 25].every((sum, i) => near(sums[i], sum)), `the sums under the Ultra, Max and Pro weeks: ${sums}`);
+  const weeks = d.weeksFigure(window, mixed, QUARTER, 'ultra');
+  assert.deepEqual([weeks.kind, weeks.text], ['equivalent', '125% Ultra week']);
+  const row = d.allowanceRows(MIXED, QUARTER, 'ultra').find((r) => r.accountId === 'mixed');
+  assert.ok(near(row.figures.seven_day.weeks.share, 1.25) && near(row.figures.seven_day.last.share, 1), `weeks ${row.figures.seven_day.weeks.share}, last ${row.figures.seven_day.last.share}`);
+  assert.equal(row.unpriced, false);
+  // 1.25 beside steady's 0.5, where the summed shares priced once read 2.5.
+  assert.equal(d.fleetFigures(d.allowanceRows(MIXED, QUARTER, 'ultra'), 'ultra').sevenDay, '175% Ultra week');
 
-  // A week on Free prices nothing, so the four weeks it joins read the dash, and the row is marked under every unit.
+  // A week on Free prices nothing, so the four weeks it joins read the dash, and the row is marked under every week.
   const freed = accountOf('freed', MAX_20X, [windowOf('seven_day', [0.5, 0.5], { pairs: [NO_PAIR, FREE] })]);
   const answer = { ...MIXED, accounts: [...MIXED.accounts, freed] };
-  for (const unit of EQUIVALENT_UNITS) {
-    assert.deepEqual(d.weeksFigure(freed.windows[0], freed, QUARTER, unit), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, unit);
-    const rows = d.allowanceRows(answer, QUARTER, unit);
-    const row = rows.find((r) => r.accountId === 'freed');
-    assert.deepEqual([row.figures.seven_day.last.kind, row.figures.seven_day.weeks.kind, row.unpriced], ['equivalent', 'unpriced', true], unit);
-    assert.deepEqual(rows.map((r) => r.accountId), ['mixed', 'steady', 'freed'], `${unit}: the unpriced row last`);
-    assert.deepEqual(d.fleetFigures(rows, unit), { fable: '-', note: '2 accounts priced, freed left out unpriced', sevenDay: d.equivalentShort('seven_day', 1.75) }, unit);
-  }
-  for (const costs of [QUARTER, null]) {
-    const marks = d.allowanceRows(answer, costs, 'share').map((r) => [r.accountId, r.unpriced]);
-    assert.deepEqual(marks, [['mixed', false], ['freed', true], ['steady', false]], `Window shares ${costs === null ? 'without' : 'with'} a cost model`);
+  for (const week of WEEKS) {
+    assert.deepEqual(d.weeksFigure(freed.windows[0], freed, QUARTER, week), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, week);
+    const rows = d.allowanceRows(answer, QUARTER, week);
+    const freedRow = rows.find((r) => r.accountId === 'freed');
+    assert.deepEqual([freedRow.figures.seven_day.last.kind, freedRow.figures.seven_day.weeks.kind, freedRow.unpriced], ['equivalent', 'unpriced', true], week);
+    assert.deepEqual(rows.map((r) => r.accountId), ['mixed', 'steady', 'freed'], `${week}: the unpriced row last`);
+    assert.equal(d.fleetFigures(rows, week).note, '2 accounts priced, freed left out unpriced', week);
   }
 });

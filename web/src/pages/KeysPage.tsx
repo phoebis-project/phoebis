@@ -76,9 +76,7 @@ export const nativeSidesOf = (s: FundedSum): { billed: number | undefined; equiv
  * each unit rather than nothing. A null value is the skeleton native draws while the scale is out.
  */
 export function sumTileOf(unit: UnitPosition, s: FundedSum, reading: WeekReading): { title?: string; value: ReactNode | null } {
-  // The `share` position is the one no select offers.
-  const position = unit === 'share' ? 'native' : unit;
-  if (position !== 'native') return { value: fmtUsd(dollarsUnder(position, s)) };
+  if (unit !== 'native') return { value: fmtUsd(dollarsUnder(unit, s)) };
   if (reading.scale === null) return { value: null };
   const native = nativeFiguresOf(nativeSidesOf(s), reading.week, reading.scale);
   return { title: native.unpriced ? UNPRICED_TITLE : undefined, value: figuresValue(native.figures) };
@@ -89,9 +87,7 @@ export function sumTileOf(unit: UnitPosition, s: FundedSum, reading: WeekReading
  * accounts, so no one account's windows bound it and it carries no hint. Null under native while the scale is out.
  */
 function keyFigureOf(unit: UnitPosition, s: FundedSum, empty: string, reading: WeekReading): { text: string; title?: string } | null {
-  // The `share` position is the one no select offers.
-  const position = unit === 'share' ? 'native' : unit;
-  if (position !== 'native') return { text: fmtUsd(dollarsUnder(position, s)) };
+  if (unit !== 'native') return { text: fmtUsd(dollarsUnder(unit, s)) };
   const sides = nativeSidesOf(s);
   if (sides.equivalent === undefined && sides.billed === undefined) return { text: '-', title: empty };
   if (reading.scale === null) return null;
@@ -104,9 +100,7 @@ function keyFigureOf(unit: UnitPosition, s: FundedSum, empty: string, reading: W
  * priced rows alone would draw a length the key's traffic does not have. A dollar position ranks by its dollars.
  */
 export const keyRankOf = (unit: UnitPosition, lifetime: FundedSum): number | null => {
-  // The `share` position is the one no select offers.
-  const position = unit === 'share' ? 'native' : unit;
-  return position === 'native' ? lifetime.equivalent : dollarsUnder(position, lifetime);
+  return unit === 'native' ? lifetime.equivalent : dollarsUnder(unit, lifetime);
 };
 
 /** A key's figure while the scale is out: the skeleton, or the settings read's failure as a dash titled with it. */

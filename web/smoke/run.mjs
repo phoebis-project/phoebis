@@ -66,11 +66,8 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandSentence, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, MAX_BURN_LINES, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, recordedCalls, regimeNames, regimeTitle, regimeWord, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareHint, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, weekShort, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandSentence, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, MAX_BURN_LINES, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, recordedCalls, regimeNames, regimeTitle, regimeWord, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareHint, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, weekShort, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
-/** The Window shares position's two notes, which that position's own cases read. */
-const NAMED_ACCOUNT_NOTE = "Shares of one account's windows alone: name one account in the Accounts filter.";
-const ACCOUNT_GROUPING_NOTE = "Shares of one account's windows alone: group by account, or name one account in the Accounts filter.";
 /** The dash's title where a plan row priced nothing, the words a tile and its hover carry. */
 const UNPRICED_TITLE = 'No subscription request priced: its model has no weight in the cost model';
 /** The hover of the Requests view's chip on an answer the upstream refused, the page's sentence. */
@@ -1023,7 +1020,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
 }
 
 let m = await mount('/');
-expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', 'Refused, 24h', '5h remaining', '7d remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'n/a']);
+expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', 'Refused, 24h', '7d remaining', 'Fable week remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'no Fable window', 'no 5-hour window']);
 {
   const tiles = [...m.container.querySelectorAll('.stat-grid > .stat')];
   const read = (t) => [t?.querySelector('.stat__label')?.textContent ?? null, t?.querySelector('.stat__value')?.textContent ?? null, t?.querySelector('.stat__note')?.textContent ?? null];
@@ -1071,48 +1068,55 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     missing: [`${sessionRows} session rows against ${PINS} pins`, hero?.textContent ?? 'absent'],
   });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
-  // the tier match reads in camelCase.
+  // the tier match reads in camelCase, in the week the shell names, the default Ultra week.
   const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
   const listed = await api.listAccounts();
-  const figures = { '5h': ringFigures(listed, '5h', costs, Date.now()), '7d': ringFigures(listed, '7d', costs, Date.now()) };
+  const shownWeek = shellWeek(m)?.value ?? 'none';
+  const figures = { '7d': ringFigures(listed, '7d', costs, 'ultra', Date.now()), '7d_fable': ringFigures(listed, '7d_fable', costs, 'ultra', Date.now()) };
   const ringCard = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
-  const rings = { '5h': ringCard('5h remaining'), '7d': ringCard('7d remaining') };
+  const rings = { '7d': ringCard('7d remaining'), '7d_fable': ringCard('Fable week remaining') };
   const labels = [...m.container.querySelectorAll('.donut__label')].map((l) => l.textContent);
-  const center = rings['5h']?.querySelector('.donut__value')?.textContent ?? '';
-  const f5 = figures['5h'];
+  const center = rings['7d']?.querySelector('.donut__value')?.textContent ?? '';
   const f7 = figures['7d'];
+  const fF = figures['7d_fable'];
   results.push({
     name: '/ donut center says of capacity left',
-    ok: JSON.stringify(labels) === JSON.stringify(['of capacity left', 'of capacity left']) && f5.capacity > 0 && center === fmtPct(f5.left / f5.capacity),
-    missing: [JSON.stringify(labels), `5-hour center ${center || 'absent'} against ${fmtPct(f5.left / f5.capacity)}`],
+    ok: JSON.stringify(labels) === JSON.stringify(['of capacity left', 'of capacity left']) && f7.capacity > 0 && center === fmtPct(f7.left / f7.capacity),
+    missing: [JSON.stringify(labels), `7-day center ${center || 'absent'} against ${fmtPct(f7.left / f7.capacity)}`],
   });
   const lineOf = (id) => rings[id]?.querySelector('.remaining__line')?.textContent ?? '';
-  const lineFrom = (f) => `${fmtWindows(f.left)} of ${fmtWindows(f.capacity)} ${f.anchor} windows left`;
+  const lineFrom = (f, weeks) => `${fmtWindows(f.left)} of ${fmtWindows(f.capacity)} ${weeks} left`;
   results.push({
-    name: '/ the line under each ring reads the weighed figures',
-    ok: lineOf('5h') === lineFrom(f5) && lineOf('7d') === lineFrom(f7) && f5.rows.length === 5 && JSON.stringify(f7.rows.map((r) => r.id).sort()) === JSON.stringify(['nightly', 'primary', 'reserve', 'secondary', 'studio']),
-    missing: [`5-hour ${JSON.stringify(lineOf('5h'))} against ${JSON.stringify(lineFrom(f5))}`, `7-day ${JSON.stringify(lineOf('7d'))} against ${JSON.stringify(lineFrom(f7))}`, `rows ${f5.rows.map((r) => r.id)} and ${f7.rows.map((r) => r.id)}`],
+    name: '/ the line under each ring reads the weighed figures in Ultra weeks',
+    ok:
+      shownWeek === 'ultra' &&
+      lineOf('7d') === lineFrom(f7, 'Ultra weeks') &&
+      lineOf('7d_fable') === lineFrom(fF, 'Ultra Fable weeks') &&
+      JSON.stringify(f7.rows.map((r) => r.id).sort()) === JSON.stringify(['nightly', 'primary', 'reserve', 'secondary', 'studio', 'workshop']) &&
+      JSON.stringify(fF.rows.map((r) => r.id).sort()) === JSON.stringify(['nightly', 'primary', 'studio', 'workshop']),
+    missing: [`the week ${shownWeek}`, `7-day ${JSON.stringify(lineOf('7d'))} against ${JSON.stringify(lineFrom(f7, 'Ultra weeks'))}`, `Fable ${JSON.stringify(lineOf('7d_fable'))} against ${JSON.stringify(lineFrom(fF, 'Ultra Fable weeks'))}`, `rows ${f7.rows.map((r) => r.id)} and ${fF.rows.map((r) => r.id)}`],
   });
   const named = (id) => [...(rings[id]?.querySelectorAll('.remaining__left-out li') ?? [])].map((li) => li.textContent ?? '');
   const onRing = (id) => [...(rings[id]?.querySelectorAll('.remaining__list a, .remaining__left-out li') ?? [])].map((e) => (e.textContent ?? '').split(':')[0]);
-  const strays = ['5h', '7d'].flatMap((id) => onRing(id).filter((n) => n === 'legacy' || n === 'spare' || n === 'sunset').map((n) => `${n} on the ${id} ring`));
+  const strays = ['7d', '7d_fable'].flatMap((id) => onRing(id).filter((n) => n === 'legacy' || n === 'spare' || n === 'sunset').map((n) => `${n} on the ${id} ring`));
   // The contract seed is a usage-based seat, which the router prices no tier for and which reports no plan window, so
-  // both rings name it with the gate's word.
-  const seat = JSON.stringify(['contract: a usage-based seat']);
+  // both rings name it with the gate's word. The Pro seeds carry no Fable week, so the Fable ring names them too.
+  const seat = ['contract: a usage-based seat'];
+  const fableNamed = ['secondary: no Fable week', 'reserve: no Fable week', ...seat];
   results.push({
-    name: '/ every listed tier is sized on both windows, so each ring names the usage-based seat alone, with its reason',
-    ok: lineOf('5h') !== '' && lineOf('7d') !== '' && JSON.stringify(named('7d')) === seat && JSON.stringify(named('5h')) === seat && JSON.stringify(f5.leftOut.map((o) => `${o.label}: ${o.reason}`)) === seat && strays.length === 0,
-    missing: [`7-day ${JSON.stringify(named('7d'))}`, `5-hour ${JSON.stringify(named('5h'))}`, ...strays],
+    name: '/ every listed tier is sized on both rings, so the 7-day ring names the usage-based seat alone and the Fable ring the Pro seeds without a Fable week beside it',
+    ok: lineOf('7d') !== '' && lineOf('7d_fable') !== '' && JSON.stringify(named('7d')) === JSON.stringify(seat) && JSON.stringify(named('7d_fable')) === JSON.stringify(fableNamed) && JSON.stringify(fF.leftOut.map((o) => `${o.label}: ${o.reason}`)) === JSON.stringify(fableNamed) && strays.length === 0,
+    missing: [`7-day ${JSON.stringify(named('7d'))}`, `Fable ${JSON.stringify(named('7d_fable'))}`, ...strays],
   });
-  const titled = (id) => {
+  const titled = (id, weeks) => {
     const f = figures[id];
-    const want = f.rows.map((r) => `${r.label}: ${fmtWindows(r.weight * r.remaining)} of ${fmtWindows(f.capacity)} ${f.anchor} windows, ${fmtPct((r.weight * r.remaining) / f.capacity)} of the pooled capacity`);
+    const want = f.rows.map((r) => `${r.label}: ${fmtWindows(r.weight * r.remaining)} of ${fmtWindows(f.capacity)} ${weeks}, ${fmtPct((r.weight * r.remaining) / f.capacity)} of the pooled capacity`);
     const legend = [...(rings[id]?.querySelectorAll('.remaining__list li') ?? [])];
     // The gray remainder is the spent arc, which carries its own title.
     const slices = [...(rings[id]?.querySelectorAll('svg.donut circle > title') ?? [])].map((t) => t.textContent ?? '').filter((t) => !t.startsWith('Spent: '));
     return { id, legend: legend.map((li) => li.getAttribute('title')), shares: legend.map((li) => li.querySelector('.num')?.textContent ?? ''), slices, want, wantShares: f.rows.map((r) => fmtPct(r.remaining)) };
   };
-  const titles = ['5h', '7d'].map(titled);
+  const titles = [titled('7d', 'Ultra weeks'), titled('7d_fable', 'Ultra Fable weeks')];
   results.push({
     name: '/ legend rows and slices carry the weighed share in their titles',
     ok: titles.every((t) => t.want.length > 0 && JSON.stringify(t.legend) === JSON.stringify(t.want) && JSON.stringify(t.slices) === JSON.stringify(t.want) && JSON.stringify(t.shares) === JSON.stringify(t.wantShares)),
@@ -1141,18 +1145,71 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 }
 {
   // Each remaining list reads in its ring's order, the account with the most of its own window left first, so the
-  // shares it prints run down the list. On the story the registry's order of its five routable subscription accounts
-  // runs down on neither window.
+  // shares it prints run down the list. On the story the registry's order runs down on neither ring, which weighs the
+  // six routable subscription accounts on the 7-day window and the four that carry the Fable week on the other.
   const listOf = (title) => {
     const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
     return [...(card?.querySelectorAll('.remaining__list li') ?? [])].map((li) => [li.querySelector('a')?.textContent ?? '', li.querySelector('.num')?.textContent ?? '']);
   };
-  const lists = ['5h remaining', '7d remaining'].map((title) => ({ rows: listOf(title), title }));
+  const lists = [
+    { count: 6, rows: listOf('7d remaining'), title: '7d remaining' },
+    { count: 4, rows: listOf('Fable week remaining'), title: 'Fable week remaining' },
+  ];
   const descending = (rows) => rows.every(([, share], i) => i === 0 || Number.parseFloat(share) <= Number.parseFloat(rows[i - 1][1]));
   results.push({
     name: '/ each remaining list reads the account with the most of its own window left first, the shares it prints running down the list',
-    ok: lists.every((l) => l.rows.length === 5 && l.rows.every(([label, share]) => label !== '' && /^\d+%$/.test(share)) && descending(l.rows)),
+    ok: lists.every((l) => l.rows.length === l.count && l.rows.every(([label, share]) => label !== '' && /^\d+%$/.test(share)) && descending(l.rows)),
     missing: lists.map((l) => `${l.title}: ${JSON.stringify(l.rows)}`),
+  });
+}
+{
+  // The week control reads both rings in its week, each account weighed by its tier's 7-day capacity over the week's
+  // tier's. Pro has no Fable week, so under the Pro week the Fable ring draws no line, and its ring, its center and its
+  // rows still draw.
+  const page = await mount('/');
+  const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
+  const listed = await api.listAccounts();
+  const WEEKS_WORD = { '7d': { max: 'Max weeks', pro: 'Pro weeks', ultra: 'Ultra weeks' }, '7d_fable': { max: 'Max Fable weeks', pro: null, ultra: 'Ultra Fable weeks' } };
+  const TITLES = { '7d': '7d remaining', '7d_fable': 'Fable week remaining' };
+  const read = (id) => {
+    const card = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === TITLES[id]);
+    return { center: card?.querySelector('.donut__value')?.textContent ?? null, line: card?.querySelector('.remaining__line')?.textContent ?? null, rows: card?.querySelectorAll('.remaining__list li').length ?? 0 };
+  };
+  const want = (id, week) => {
+    const f = ringFigures(listed, id, costs, week, Date.now());
+    const weeks = WEEKS_WORD[id][week];
+    return { center: fmtPct(f.left / f.capacity), line: weeks === null ? null : `${fmtWindows(f.left)} of ${fmtWindows(f.capacity)} ${weeks} left`, rows: f.rows.length };
+  };
+  const drawn = [];
+  for (const week of ['pro', 'max', 'ultra']) {
+    await chooseWeek(page, week);
+    for (const id of ['7d', '7d_fable']) drawn.push({ drawn: read(id), id, want: want(id, week), week });
+  }
+  localStorage.removeItem('phoebis.week');
+  await chooseWeek(page, 'ultra');
+  page.unmount();
+  const off = drawn.filter((d) => JSON.stringify(d.drawn) !== JSON.stringify(d.want));
+  const proFable = drawn.find((d) => d.week === 'pro' && d.id === '7d_fable');
+  results.push({
+    name: "/ the week control reads both rings' lines in its week, and under the Pro week the Fable ring draws its ring, its center and its rows with no line",
+    ok: drawn.length === 6 && off.length === 0 && proFable?.drawn.line === null && (proFable?.drawn.rows ?? 0) > 0 && proFable?.drawn.center !== null,
+    missing: off.map((d) => JSON.stringify(d)),
+  });
+}
+{
+  // The workshop seed is the approved Ultra account, whose poll carries no 5-hour window: its card keeps the triple's
+  // first slot and names the window there in the muted ink, where primary, an unapproved Ultra account, draws its bar.
+  const cardOf = (id) => [...m.container.querySelectorAll('a.account-mini')].find((c) => idOf(c) === id);
+  const firstSlot = (id) => {
+    const slot = cardOf(id)?.querySelector('.wbars--3 > .wbar');
+    const pct = slot?.querySelector('.wbar__pct');
+    return { absent: slot?.classList.contains('wbar--absent') ?? null, muted: pct?.classList.contains('muted') ?? null, reset: slot?.querySelector('.wbar__reset')?.textContent ?? null, title: slot?.getAttribute('title') ?? null, words: pct?.textContent ?? null };
+  };
+  const slots = { primary: firstSlot('primary'), workshop: firstSlot('workshop') };
+  results.push({
+    name: '/ the workshop card names its missing 5-hour window in the slot\'s place, muted, where primary draws its bar',
+    ok: JSON.stringify(slots.workshop) === JSON.stringify({ absent: true, muted: true, reset: 'not reported', title: 'no 5-hour window', words: 'no 5-hour window' }) && slots.primary.absent === false,
+    missing: [JSON.stringify(slots)],
   });
 }
 {
@@ -1425,7 +1482,7 @@ const quotaListed = (a) => a.kind === 'oauth' && a.status !== 'reauth_required' 
 m = await mount('/quota');
 // secondary's backoff and reserve's failed poll are the listed rows needing attention, legacy's failing poll leaving
 // with its card. The sunset seed's plan ended, so its card and its place in the count leave too.
-expect('/quota', m.text(), [`${(await api.listAccounts()).filter(quotaListed).length} accounts`, '2 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'polled', 'rate limited', 'backing off']);
+expect('/quota', m.text(), [`${(await api.listAccounts()).filter(quotaListed).length} accounts`, '2 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'no 5-hour window', 'no Fable window', 'not reported', 'resets in', 'polled', 'rate limited', 'backing off']);
 /**
  * The story's count on the bar, `{n} accounts, {n} need attention`, as its two figures. A funding_required account
  * under an override keeps its place in both, read against these after the shared mount has gone.
@@ -2468,6 +2525,17 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
     missing: [foot('primary'), foot('legacy'), cardOf('Pools') ? 'a Pools card' : 'no Pools card', JSON.stringify(rows)],
   });
 }
+{
+  // The workshop seed, the approved Ultra account, carries no 5-hour window, so its list row's triple names the window
+  // in the first slot's place, muted, beside its 7-day and Fable bars.
+  const row = m.container.querySelector('a.account-row[href="/accounts/workshop"]');
+  const slots = [...(row?.querySelectorAll('.wbars--3 > .wbar') ?? [])].map((b) => [b.classList.contains('wbar--absent'), b.querySelector('.wbar__pct')?.textContent ?? null, b.querySelector('.wbar__pct')?.classList.contains('muted') ?? null]);
+  results.push({
+    name: '/accounts the workshop row names its missing 5-hour window in the first slot, muted, beside its 7-day and Fable bars',
+    ok: JSON.stringify(slots.map(([absent]) => absent)) === '[true,false,false]' && JSON.stringify(slots[0]) === JSON.stringify([true, 'no 5-hour window', true]),
+    missing: [JSON.stringify(slots)],
+  });
+}
 // The story's usage-based seat across the views: contract (mock/accounts.ts) has spent $1,025.00 of its $2,500.00
 // monthly limit, a share of 0.41, with its reset estimated at 00:00 UTC on the first of the next month, as the one
 // member of the pool contract behind the key fleet, which three story rows bill as usage-based. The smoke runs under
@@ -2526,7 +2594,7 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
   }
   {
     // The router answers a seat's spend object before its first reading with neither amounts nor a share: the row and
-    // the Usage card read the empty reading's sentence where the triple reads "No quota windows".
+    // the Usage card read the empty reading's sentence where the triple reads "Not read yet".
     const { listAccounts } = api;
     api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'contract' ? { ...a, spend: { ...a.spend, amounts: null, utilization: null } } : a));
     try {
@@ -3601,7 +3669,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   cancels.restore();
 }
 await m.navigate('/accounts/legacy');
-expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'n/a', 'Payment method declined']);
+expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'no Fable window', 'Payment method declined']);
 {
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pool');
   results.push({ name: '/accounts/legacy reads in its Pool card that it is in no pool', ok: card?.querySelector('p.muted')?.textContent === 'Not a member of a pool.', missing: [card?.textContent ?? 'no Pool card'] });
@@ -3816,7 +3884,7 @@ expect('/accounts/secondary', m.text(), [
   'Clear',
   "A deadline is the upstream's own reset or retry-after plus a one-second margin, or the configured fallback when the upstream named none.",
   'rate_limit (5h window exhausted)',
-  'n/a',
+  'no Fable window',
   'Pro since',
   'Trial ends',
 ]);
@@ -4705,14 +4773,17 @@ m.unmount();
 {
   // "Allowance left at reset" over the story's weekly resets (`WEEKLY_RESETS` in mock/routingLog.ts), each a week
   // before the window's current reset: primary's 7-day window left 0.32, 0.41, 0.27 and 0.38 of its week at its last
-  // four resets, newest first, and its Fable week 0.05, 0.12, 0.08 and 0.03. Under Native a figure prices through the
-  // cost model the page reads, the account's tier against the anchor's on the 7-day window. The smoke runs under
-  // TZ=UTC, so each date reads its UTC text, where a viewer's zone would move its day and hour.
+  // four resets, newest first, and its Fable week 0.05, 0.12, 0.08 and 0.03. A figure prices in the chosen week
+  // through the cost model the page reads, the account's tier's 7-day capacity against the anchor's, a model week at
+  // its capacity factor, and each week's hover adds the reset's own share under the account's plan. The smoke runs
+  // under TZ=UTC, so each date reads its UTC text, where a viewer's zone would move its day and hour.
   const WEEK = 7 * 24 * 3_600_000;
   const text = (el) => el?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
   const day = (ms) => new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
   const instantOf = (ms) => `${day(ms)} ${new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' })}`;
   const hoverOf = (ms, source) => `${fmtAbsolute(new Date(ms).toISOString())}, read from ${source}`;
+  const HOVER_WINDOW = { seven_day: 'the 7-day window', seven_day_fable: 'the Fable week' };
+  const ownShare = (plan, window, share) => `${plan}: ${fmtShare(share)} of ${HOVER_WINDOW[window]} left`;
   const blockOf = (page) => {
     const card = [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Allowance left at reset');
     if (!card) return null;
@@ -4739,26 +4810,30 @@ m.unmount();
   };
   const costs = (await api.getSettings()).subscriptionCosts;
   const story = new Map((await api.listAccounts()).map((a) => [a.id, a]));
-  /** The figures under Native: the share times the tier's 7-day capacity over the anchor's, a model week's alike. */
-  const nativeOf = (tier) => (share, window) => equivalentShort(window, share * (tierCapacity(costs, tier, 'seven_day') / tierCapacity(costs, anchorTier(costs), 'seven_day')));
-  const shareFigure = (share) => fmtShare(share);
+  const anchor = tierCapacity(costs, anchorTier(costs), 'seven_day');
+  const factorOf = (window) => (window === 'seven_day' ? 1 : costs.modelWindows[window].capacityFactor);
+  /** A week's figure in `week`: the share times the tier's 7-day capacity at the window's factor over the anchor's,
+   *  in Pro weeks, times the anchor's capacity over the week's tier's. */
+  const figureIn = (share, tier, window, week = 'ultra') => share * ((tierCapacity(costs, tier, 'seven_day') * factorOf(window)) / anchor) * (anchor / tierCapacity(costs, WEEK_TIERS[week], 'seven_day'));
+  const weekOf = (tier, week = 'ultra') => (shares, window) => weekShort(shares.reduce((a, s) => a + figureIn(s, tier, window, week), 0), week);
   const sum = (shares) => shares.reduce((a, b) => a + b, 0);
   const resetsBack = (resetsAt, n) => Array.from({ length: n }, (_, k) => Date.parse(resetsAt) - (k + 1) * WEEK);
-  const columnOf = (label, window, shares, resets, figure, latest = { line: `left at the reset of ${instantOf(resets[0])}`, badge: null, title: hoverOf(resets[0], 'a usage sample') }) => ({
-    head: [label, figure(shares[0], window)],
+  const columnOf = (label, window, shares, resets, figure, plan, latest = { line: `left at the reset of ${instantOf(resets[0])}`, badge: null, title: hoverOf(resets[0], 'a usage sample') }) => ({
+    head: [label, figure([shares[0]], window)],
     reset: latest.line,
     resetBadge: latest.badge,
-    resetTitle: latest.title,
-    rows: shares.slice(1).map((s, i) => [day(resets[i + 1]), figure(s, window)]),
-    rowTitles: resets.slice(1).map((ms) => hoverOf(ms, 'a usage sample')),
-    total: [`Total, ${shares.length} weeks`, figure(sum(shares), window)],
+    resetTitle: `${latest.title}\n${ownShare(plan, window, shares[0])}`,
+    rows: shares.slice(1).map((s, i) => [day(resets[i + 1]), figure([s], window)]),
+    rowTitles: resets.slice(1).map((ms, i) => `${hoverOf(ms, 'a usage sample')}\n${ownShare(plan, window, shares[i + 1])}`),
+    total: [`Total, ${shares.length} weeks`, figure(shares, window)],
   });
   const primary = story.get('primary');
   const SEVEN = [0.32, 0.41, 0.27, 0.38];
   const FABLE = [0.05, 0.12, 0.08, 0.03];
+  // primary carries the display name Ultra.
   const primaryColumns = (figure) => [
-    columnOf('7-day', 'seven_day', SEVEN, resetsBack(primary.windows.find((w) => w.id === '7d').resetsAt, 4), figure),
-    columnOf('7-day Fable', 'seven_day_fable', FABLE, resetsBack(primary.fableWindow.resetsAt, 4), figure),
+    columnOf('7-day', 'seven_day', SEVEN, resetsBack(primary.windows.find((w) => w.id === '7d').resetsAt, 4), figure, 'Ultra'),
+    columnOf('7-day Fable', 'seven_day_fable', FABLE, resetsBack(primary.fableWindow.resetsAt, 4), figure, 'Ultra'),
   ];
   const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
   const native = blockOf(page);
@@ -4767,39 +4842,40 @@ m.unmount();
     ok: native !== null && native.first && native.grid === 'detail__grid detail__grid--meter' && native.after === '7-day trend' && native.before === 'detail__grid' && JSON.stringify(native.columns.map((c) => c.head[0])) === '["7-day","7-day Fable"]',
     missing: [JSON.stringify(native && { after: native.after, before: native.before, first: native.first, grid: native.grid, heads: native.columns.map((c) => c.head) })],
   });
-  const nativeWant = primaryColumns(nativeOf(primary.subscription.rateLimitTier));
+  const nativeWant = primaryColumns(weekOf(primary.subscription.rateLimitTier));
   results.push({
-    name: "/accounts/primary under Native the block reads each week's 20x window equivalent, the latest reset in the head with its reset line, the three weeks before it and the four weeks' total",
-    ok: native?.subtitle === 'Each weekly window left unused when it reset, in 20x window equivalents, the last four weeks' && JSON.stringify(native?.columns) === JSON.stringify(nativeWant) && native?.note === null,
-    missing: [native?.subtitle ?? 'no block', JSON.stringify(native?.columns ?? null), JSON.stringify(nativeWant)],
+    name: "/accounts/primary the block reads each week in the Ultra week, the latest reset in the head with its reset line, the three weeks before it and the four weeks' total, each week's hover adding the reset's own share",
+    ok: shellWeek(page)?.value === 'ultra' && native?.subtitle === 'Each weekly window left unused when it reset, as a share of the chosen week, the last four weeks' && JSON.stringify(native?.columns) === JSON.stringify(nativeWant) && native?.note === null,
+    missing: [shellWeek(page)?.value ?? 'no control', native?.subtitle ?? 'no block', JSON.stringify(native?.columns ?? null), JSON.stringify(nativeWant)],
   });
-  await chooseUnit(page, 'share');
-  const shares = blockOf(page);
-  const sharesWant = primaryColumns(shareFigure);
+  await chooseWeek(page, 'pro');
+  const proWeeks = blockOf(page);
+  const proWant = primaryColumns(weekOf(primary.subscription.rateLimitTier, 'pro'));
   results.push({
-    name: "/accounts/primary under Window shares the block reads the share of each week the account left, through the top bar's switch",
-    ok: shellUnit(page)?.value === 'share' && shares?.subtitle === 'The share of each weekly window left unused when it reset, the last four weeks' && JSON.stringify(shares?.columns) === JSON.stringify(sharesWant),
-    missing: [shellUnit(page)?.value ?? 'no switch', shares?.subtitle ?? 'no block', JSON.stringify(shares?.columns ?? null), JSON.stringify(sharesWant)],
+    name: "/accounts/primary the block reads each week in the week the top bar's control names",
+    ok: shellWeek(page)?.value === 'pro' && JSON.stringify(proWeeks?.columns) === JSON.stringify(proWant),
+    missing: [shellWeek(page)?.value ?? 'no control', JSON.stringify(proWeeks?.columns ?? null), JSON.stringify(proWant)],
   });
-  await chooseUnit(page, 'native');
+  localStorage.removeItem('phoebis.week');
+  await chooseWeek(page, 'ultra');
   page.unmount();
-  localStorage.removeItem('phoebis.unit');
 
   // Sunset's saved end passed three days back inside its week, so its latest reset is the term's end, read off the last
   // sample of its 7-day series before the end, its seed's reading 0.46: 0.54 of its week. Its three weeks before left
   // 0.52, 0.48 and 0.57, each under the Pro pair the account held before its plan ended (`WEEKLY_RESETS`), so under
   // Native each prices at Pro's tier. The term's end carries no pair and reads at the account's plan, free, which the
-  // router prices no capacity for, so its figure and the total it joins read a dash beside the Free note.
+  // router prices no capacity for, so its figure and the total it joins read a dash beside the Free note. Each hover
+  // names the Pro tier the week ran on, since the account carries no display name.
   const sunset = story.get('sunset');
   const end = Date.parse(sunset.subscription.endsAt);
   const sunsetResets = [end, ...resetsBack(new Date(end + 4 * 24 * 3_600_000).toISOString(), 3)];
   const ended = await mount('/accounts/sunset', { now: CLOCK_ORIGIN });
   const term = blockOf(ended);
-  const termColumn = columnOf('7-day', 'seven_day', [1 - 0.46, 0.52, 0.48, 0.57], sunsetResets, nativeOf('default_claude_ai'), { line: `left at ${instantOf(end)} term ended`, badge: 'term ended', title: hoverOf(end, "the term's end") });
+  const termColumn = columnOf('7-day', 'seven_day', [1 - 0.46, 0.52, 0.48, 0.57], sunsetResets, weekOf('default_claude_ai'), 'Pro', { line: `left at ${instantOf(end)} term ended`, badge: 'term ended', title: hoverOf(end, "the term's end") });
   const termWant = [{ ...termColumn, head: ['7-day', '-'], total: ['Total, 4 weeks', '-'] }];
-  const freeNote = 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it. Window shares reads the shares.';
+  const freeNote = 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it.';
   results.push({
-    name: "/accounts/sunset the week its term ended inside reads as its latest reset, \"left at\" its end with the neutral \"term ended\" badge, and under Native its weeks before the end at Pro's tier, a dash for the term's end and the total, with the Free note while its plan reads free",
+    name: "/accounts/sunset the week its term ended inside reads as its latest reset, \"left at\" its end with the neutral \"term ended\" badge, and its weeks before the end at Pro's tier, a dash for the term's end and the total, with the Free note while its plan reads free",
     ok: sunset.subscription.plan === 'free' && JSON.stringify(term?.columns) === JSON.stringify(termWant) && term?.note === freeNote,
     missing: [sunset.subscription.plan, JSON.stringify(term?.columns ?? null), JSON.stringify(termWant), term?.note ?? 'no note'],
   });
@@ -4809,24 +4885,23 @@ m.unmount();
     // Studio's seed (`claude_max` on `default_claude_max_5x` in mock/accounts.ts) started its subscription 16 days
     // back, an upgrade from Pro inside its second-newest week, so its weekly resets (`WEEKLY_RESETS`) at or before that
     // start carry Pro's pair and the newer ones its own. Its 7-day window left 0.44, 0.39, 0.5 and 0.47 of its week,
-    // newest first, and its Fable week 0.79, 0.84, 0.76 and 0.82, read here off the route with each reset's pair. Under
-    // Native a week prices at the tier it ran under: the Pro week's figure stands to the one its share reads at Max 5x
-    // as Pro's 7-day capacity stands to Max 5x's on the cost table the page reads, and the total adds the weeks' own
-    // figures rather than pricing the summed shares at the current tier.
+    // newest first, and its Fable week 0.79, 0.84, 0.76 and 0.82, read here off the route with each reset's pair. A
+    // week prices at the tier it ran under: the week under Pro reads to the one its share reads at Max as Pro's 7-day
+    // capacity stands to Max's on the cost table the page reads, and the total adds the weeks' own figures rather than
+    // pricing the summed shares at the current tier.
     const studio = story.get('studio');
     const since = Date.parse(studio.subscription.since);
     const span = { from: new Date(CLOCK_ORIGIN - 29 * 24 * 3_600_000).toISOString(), to: new Date(CLOCK_ORIGIN).toISOString() };
     const windows = (await api.getAnalyticsUnusedAllowance(span, { accountIds: ['studio'] })).accounts[0]?.windows ?? [];
     const ranUnder = (r) => (Date.parse(r.resetAt) <= since ? 'default_claude_ai' : studio.subscription.rateLimitTier);
-    const weekWeight = (tier) => tierCapacity(costs, tier, 'seven_day') / tierCapacity(costs, anchorTier(costs), 'seven_day');
     const ratio = tierCapacity(costs, 'default_claude_ai', 'seven_day') / tierCapacity(costs, studio.subscription.rateLimitTier, 'seven_day');
     const columnWant = (label, window) => {
       const resets = windows.find((w) => w.window === window)?.resets ?? [];
-      const own = resets.map((r) => r.shareLeft * weekWeight(ranUnder(r)));
+      const own = resets.map((r) => figureIn(r.shareLeft, ranUnder(r), window));
       return {
-        head: [label, equivalentShort(window, own[0])],
-        rows: resets.slice(1).map((r, i) => [day(Date.parse(r.resetAt)), equivalentShort(window, own[i + 1])]),
-        total: [`Total, ${resets.length} weeks`, equivalentShort(window, sum(own))],
+        head: [label, weekShort(own[0], 'ultra')],
+        rows: resets.slice(1).map((r, i) => [day(Date.parse(r.resetAt)), weekShort(own[i + 1], 'ultra')]),
+        total: [`Total, ${resets.length} weeks`, weekShort(sum(own), 'ultra')],
       };
     };
     const upgraded = await mount('/accounts/studio', { now: CLOCK_ORIGIN });
@@ -4835,12 +4910,12 @@ m.unmount();
     const sevenDay = windows.find((w) => w.window === 'seven_day')?.resets ?? [];
     const pairs = windows.map((w) => `${w.window} ${w.resets.map((r) => r.plan).join(',')}`);
     const want = [columnWant('7-day', 'seven_day'), columnWant('7-day Fable', 'seven_day_fable')];
-    // The Pro week through the ratio: what its share reads at the newest week's tier, times Pro's capacity over
-    // Max 5x's.
-    const proWeek = equivalentShort('seven_day', (sevenDay[2]?.shareLeft ?? NaN) * weekWeight(studio.subscription.rateLimitTier) * ratio);
-    const atCurrent = equivalentShort('seven_day', sum(sevenDay.map((r) => r.shareLeft)) * weekWeight(studio.subscription.rateLimitTier));
+    // The week under Pro through the ratio: what its share reads at the newest week's tier, times Pro's capacity over
+    // Max's.
+    const proWeek = weekShort(figureIn(sevenDay[2]?.shareLeft ?? NaN, studio.subscription.rateLimitTier, 'seven_day') * ratio, 'ultra');
+    const atCurrent = weekShort(figureIn(sum(sevenDay.map((r) => r.shareLeft)), studio.subscription.rateLimitTier, 'seven_day'), 'ultra');
     results.push({
-      name: "/accounts/studio under Native each week prices at the tier it ran under, the weeks before the upgrade at Pro's and the total adding the weeks' own figures",
+      name: "/accounts/studio each week prices at the tier it ran under, the weeks before the upgrade at Pro's and the total adding the weeks' own figures",
       ok:
         JSON.stringify(pairs) === '["seven_day max_5x,max_5x,pro,pro","seven_day_fable max_5x,max_5x,pro,pro"]' &&
         JSON.stringify(drawn) === JSON.stringify(want) &&
@@ -4850,9 +4925,10 @@ m.unmount();
     });
   }
 
-  // The clock walk announced nightly's third 7-day reset, which the second of its week rows reads.
+  // The clock walk announced nightly's third 7-day reset, which the second of its week rows reads on its hover's first
+  // line, the reset's own share following on the second.
   const nightly = await mount('/accounts/nightly', { now: CLOCK_ORIGIN });
-  const walked = blockOf(nightly)?.columns[0]?.rowTitles ?? [];
+  const walked = (blockOf(nightly)?.columns[0]?.rowTitles ?? []).map((t) => t?.split('\n')[0] ?? null);
   const nightlyResets = resetsBack(story.get('nightly').windows.find((w) => w.id === '7d').resetsAt, 4);
   results.push({
     name: "/accounts/nightly a week row's hover names its reset's instant and the reading's source, the clock walk's in the block's own words",
@@ -4899,20 +4975,18 @@ m.unmount();
   });
   failed.unmount();
 
-  // Window shares price nothing, so with every settings read failing the block draws its shares with no skeleton and
-  // no error. The detail mounts once the list answers, after the shell's own read, so every read fails, not the next.
-  localStorage.setItem('phoebis.unit', 'share');
+  // Every figure prices through the cost model, so with every settings read failing the block draws the error state
+  // in its figures' place. The detail mounts once the list answers, after the shell's own read, so every read fails,
+  // not the next.
   const outage = failCalls({ getSettings: '/admin/settings' }, 'the configuration store is unavailable');
   const unmodeled = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
   const bare = blockOf(unmodeled);
-  const skeleton = [...unmodeled.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Allowance left at reset')?.querySelector('.skeleton') ?? null;
   unmodeled.unmount();
   outage.restore();
-  localStorage.removeItem('phoebis.unit');
   results.push({
-    name: '/accounts/primary under Window shares with the settings read failing the block draws its shares, with no skeleton and no error',
-    ok: bare !== null && bare.error === null && skeleton === null && JSON.stringify(bare.columns) === JSON.stringify(sharesWant),
-    missing: [JSON.stringify(bare), skeleton === null ? 'no skeleton' : 'a skeleton', JSON.stringify(sharesWant)],
+    name: '/accounts/primary with the settings read failing the block draws its error state and no figure',
+    ok: bare !== null && bare.error === 'Could not load the weekly resets' && bare.columns.length === 0,
+    missing: [JSON.stringify(bare)],
   });
 
   // The block reads once per account, again on the bar's Refresh and once the list's poll answers a weekly window past
@@ -18276,9 +18350,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       JSON.stringify(native.subs) === JSON.stringify([['sunset', `term ended ${instantOf(end)}`]]),
     missing: [JSON.stringify(native && { after: native.after, classes: native.classes, heads: native.heads, ids: native.ids, subs: native.subs, subtitle: native.subtitle })],
   });
-  // Under Native the order and the totals read the shipped cost model's capacities, so the figures' labels alone.
+  // The order and the totals read the shipped cost model's capacities, so the figures' labels alone.
   results.push({
-    name: '/analytics under Native the card heads its fleet figures with the priced totals',
+    name: '/analytics the card heads its fleet figures with the priced totals',
     ok: JSON.stringify(native?.totals.map(([label]) => label)) === JSON.stringify(['7-day, fleet total', 'Fable, fleet total', null]),
     missing: [JSON.stringify(native?.totals ?? null)],
   });
@@ -18288,40 +18362,38 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // that start carry Pro's pair, and its row reads its newest week at Max 5x's tier and its four weeks the weeks' own
     // figures added, the block's total. Sunset's term's end carries no pair and reads at its free plan, so its row
     // reads a dash for both and the fleet's note leaves it out. The 7-day fleet total adds the other rows' four weeks,
-    // derived from the cost table the page reads and the shares off the route, since the drawn texts round.
+    // derived from the cost table the page reads and the shares off the route, since the drawn texts round, in the
+    // Ultra week the shell names and then in the Pro week the top bar's control picks.
     const sum = (values) => values.reduce((a, b) => a + b, 0);
     const costs = (await api.getSettings()).subscriptionCosts;
     const story = new Map((await api.listAccounts()).map((a) => [a.id, a]));
     const since = Date.parse(story.get('studio').subscription.since);
     const answer = await api.getAnalyticsUnusedAllowance({ from: new Date(CLOCK_ORIGIN - 29 * DAY_MS).toISOString(), to: new Date(CLOCK_ORIGIN).toISOString() });
     const ranUnder = (id, r) => (id === 'studio' && Date.parse(r.resetAt) <= since ? 'default_claude_ai' : story.get(id).subscription.rateLimitTier);
-    const weekWeight = (tier) => tierCapacity(costs, tier, 'seven_day') / tierCapacity(costs, anchorTier(costs), 'seven_day');
+    const anchor = tierCapacity(costs, anchorTier(costs), 'seven_day');
+    const weekWeight = (tier) => tierCapacity(costs, tier, 'seven_day') / anchor;
+    const scaleOf = (week) => anchor / tierCapacity(costs, WEEK_TIERS[week], 'seven_day');
     const weeksOf = (a) => (a.windows.find((w) => w.window === 'seven_day')?.resets ?? []).slice(0, 4);
-    const fourWeeks = (a) => sum(weeksOf(a).map((r) => r.shareLeft * weekWeight(ranUnder(a.accountId, r))));
+    const fourWeeks = (a, week) => sum(weeksOf(a).map((r) => r.shareLeft * weekWeight(ranUnder(a.accountId, r)) * scaleOf(week)));
     const studio = answer.accounts.find((a) => a.accountId === 'studio');
-    const rowOf = (id) => native?.rows[native.ids.indexOf(id)]?.slice(2, 4) ?? null;
-    const studioWant = studio === undefined ? null : [equivalentShort('seven_day', weeksOf(studio)[0].shareLeft * weekWeight(story.get('studio').subscription.rateLimitTier)), equivalentShort('seven_day', fourWeeks(studio))];
-    const fleet = equivalentShort('seven_day', sum(answer.accounts.filter((a) => a.accountId !== 'sunset').map(fourWeeks)));
+    const rowOf = (drawn, id) => drawn?.rows[drawn.ids.indexOf(id)]?.slice(2, 4) ?? null;
+    const studioWant = (week) => (studio === undefined ? null : [weekShort(weeksOf(studio)[0].shareLeft * weekWeight(story.get('studio').subscription.rateLimitTier) * scaleOf(week), week), weekShort(fourWeeks(studio, week), week)]);
+    const fleet = (week) => weekShort(sum(answer.accounts.filter((a) => a.accountId !== 'sunset').map((a) => fourWeeks(a, week))), week);
     results.push({
-      name: "/analytics under Native the unused allowance card prices each week at the tier it ran under, studio's four weeks at their own tiers, sunset's row a dash and the fleet total over the priced rows",
-      ok: studioWant !== null && JSON.stringify(rowOf('studio')) === JSON.stringify(studioWant) && JSON.stringify(rowOf('sunset')) === '["-","-"]' && native?.totals[0]?.[1] === fleet && native.totals[2]?.[2] === '4 accounts priced, sunset left out unpriced',
-      missing: [JSON.stringify(rowOf('studio')), JSON.stringify(studioWant), JSON.stringify(rowOf('sunset')), JSON.stringify(native?.totals ?? null), fleet],
+      name: "/analytics the unused allowance card prices each week in the Ultra week at the tier it ran under, studio's four weeks at their own tiers, sunset's row a dash and the fleet total over the priced rows",
+      ok: shellWeek(page)?.value === 'ultra' && studioWant('ultra') !== null && JSON.stringify(rowOf(native, 'studio')) === JSON.stringify(studioWant('ultra')) && JSON.stringify(rowOf(native, 'sunset')) === '["-","-"]' && native?.totals[0]?.[1] === fleet('ultra') && native.totals[2]?.[2] === '4 accounts priced, sunset left out unpriced',
+      missing: [shellWeek(page)?.value ?? 'no control', JSON.stringify(rowOf(native, 'studio')), JSON.stringify(studioWant('ultra')), JSON.stringify(rowOf(native, 'sunset')), JSON.stringify(native?.totals ?? null), fleet('ultra')],
+    });
+    await chooseWeek(page, 'pro');
+    const pro = read(page);
+    localStorage.removeItem('phoebis.week');
+    await chooseWeek(page, 'ultra');
+    results.push({
+      name: "/analytics the unused allowance card reads its rows and its fleet total in the week the top bar's control names",
+      ok: JSON.stringify(rowOf(pro, 'studio')) === JSON.stringify(studioWant('pro')) && pro?.totals[0]?.[1] === fleet('pro') && JSON.stringify(pro?.ids) === JSON.stringify(native?.ids),
+      missing: [JSON.stringify(rowOf(pro, 'studio')), JSON.stringify(studioWant('pro')), JSON.stringify(pro?.totals ?? null), fleet('pro')],
     });
   }
-  await chooseUnit(page, 'share');
-  const shares = read(page);
-  // The 7-day mean sums the seeded shares of secondary, sunset (its three weeks and its 0.54 term-end reset), studio,
-  // primary and nightly over their 20 resets, and the Fable mean those of primary, nightly and studio over 12.
-  results.push({
-    name: "/analytics under Window shares the rows rank on the four weeks' 7-day share left, and the fleet figures read the mean share per reset with the resets and accounts counted",
-    ok:
-      shellUnit(page)?.value === 'share' &&
-      JSON.stringify(shares?.ids) === '["secondary","sunset","studio","primary","nightly"]' &&
-      JSON.stringify(shares?.rows.map((r) => r[1])) === '["4","4","4","4","4"]' &&
-      JSON.stringify(shares?.rows[0].slice(2, 4)) === JSON.stringify([fmtShare(0.61), fmtShare(0.61 + 0.55 + 0.7 + 0.58)]) &&
-      JSON.stringify(shares?.totals) === JSON.stringify([['7-day, mean per reset', fmtShare((2.44 + 2.11 + 1.8 + 1.38 + 0.84) / 20), null], ['Fable, mean per reset', fmtShare((0.28 + 1.35 + 3.21) / 12), null], [null, null, "20 resets on 5 accounts, each a share of its account's own week"]]),
-    missing: [shellUnit(page)?.value ?? 'no switch', JSON.stringify(shares?.ids ?? null), JSON.stringify(shares?.rows ?? null), JSON.stringify(shares?.totals ?? null)],
-  });
   // The card reads the last four weeks whatever the range, so a 1-hour range draws the same rows and reads nothing new.
   const ranged = countCalls('getAnalyticsUnusedAllowance');
   await page.navigate('/analytics?range=1h#accounts');
@@ -18329,12 +18401,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   ranged.restore();
   results.push({
     name: '/analytics a 1-hour range draws the same unused allowance rows, the range not applying to the card',
-    ok: hour !== null && JSON.stringify(hour.rows) === JSON.stringify(shares?.rows) && ranged.calls.length === 0,
+    ok: hour !== null && JSON.stringify(hour.rows) === JSON.stringify(native?.rows) && ranged.calls.length === 0,
     missing: [JSON.stringify(hour?.rows ?? null), `${ranged.calls.length} reads`],
   });
-  await chooseUnit(page, 'native');
   page.unmount();
-  localStorage.removeItem('phoebis.unit');
 
   const filtered = countCalls('getAnalyticsUnusedAllowance');
   const one = await mount('/analytics?accounts=studio#accounts', { now: CLOCK_ORIGIN });
@@ -18357,26 +18427,13 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   failed.unmount();
   delete api.getAnalyticsUnusedAllowance;
   results.push({ name: '/analytics a failed unused allowance read draws the error state in the card', ok: down?.error === 'Could not load the unused allowance' && down.ids.length === 0, missing: [JSON.stringify(down)] });
-  // Window shares price nothing, so with the settings read failing the card draws its rows with their shares and no
-  // error, while under Native, which prices through the cost model, the same failure draws the card's error state.
-  localStorage.setItem('phoebis.unit', 'share');
-  failNextCall('getSettings', '/admin/settings', 'the configuration store is unavailable');
-  const unmodeled = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
-  const bare = read(unmodeled);
-  unmodeled.unmount();
-  delete api.getSettings;
-  localStorage.removeItem('phoebis.unit');
-  results.push({
-    name: '/analytics under Window shares with the settings read failing the unused allowance card draws its rows with their shares and no error',
-    ok: bare !== null && bare.error === null && JSON.stringify(bare.ids) === '["secondary","sunset","studio","primary","nightly"]' && JSON.stringify(bare.rows) === JSON.stringify(shares?.rows) && JSON.stringify(bare.totals) === JSON.stringify(shares?.totals),
-    missing: [JSON.stringify(bare && { error: bare.error, ids: bare.ids, rows: bare.rows, totals: bare.totals })],
-  });
+  // Every figure prices through the cost model, so the settings read failing draws the card's error state.
   failNextCall('getSettings', '/admin/settings', 'the configuration store is unavailable');
   const unpriced = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
   const refused = read(unpriced);
   unpriced.unmount();
   delete api.getSettings;
-  results.push({ name: '/analytics under Native with the settings read failing the unused allowance card draws its error state', ok: refused?.error === 'Could not load the unused allowance' && refused.ids.length === 0, missing: [JSON.stringify(refused)] });
+  results.push({ name: '/analytics with the settings read failing the unused allowance card draws its error state', ok: refused?.error === 'Could not load the unused allowance' && refused.ids.length === 0, missing: [JSON.stringify(refused)] });
 
   // A weekly row changes once a week, so the card reads once per Accounts filter and again once the registry's poll
   // answers a weekly window past its reset, never at the list's 5 s cadence, under a custom range whose end is still
@@ -18641,269 +18698,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     window.HTMLElement.prototype.getBoundingClientRect = function () {
       return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
     };
-    localStorage.removeItem('phoebis.unit');
-    const shares = await mount('/analytics#cost');
-    const cardIn = (t) => [...shares.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
-    const legendIn = (t) => [...(cardIn(t)?.querySelectorAll('.legend li') ?? [])].map((li) => [[...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), li.querySelector('.legend__value')?.textContent?.trim() ?? '']);
-    const tableIn = (t) => [...shares.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith(t));
-    const areasIn = (t) => cardIn(t)?.querySelectorAll('.recharts-area').length ?? 0;
-    const isShare = (c) => /^\d[\d.]*%$/.test(c);
-    const isCount = (c) => /^\d[\d,]*$/.test(c);
-    // Native stacks the equivalent under the same title, so the dollar areas are read under All in dollars.
-    await chooseUnit(shares, 'all');
-    const dollarAreas = areasIn('Cost by key');
-    await chooseUnit(shares, 'share');
-    await groupPage(shares, 'account');
-    const accountCard = cardIn('Cost by account');
-    const lineChart = { areas: areasIn('Cost by account'), legend: legendIn('Cost by account').map(([label]) => label), note: accountCard?.textContent?.includes(ACCOUNT_GROUPING_NOTE) ?? false, wrapper: accountCard?.querySelector('.recharts-wrapper') !== null };
-    // The legend names the subscription accounts whose groups carry a share map, each by its 7-day line and, where
-    // a bucket priced its model week, the week's dashed line, and no API key account: read off the route's own
-    // answers for the page's day.
-    const day = { from: new Date(Date.now() - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date().toISOString() };
-    const weekOf = (g) => Object.entries(g.costShares ?? {}).find(([k]) => k !== 'five_hour' && k !== 'seven_day')?.[1] ?? null;
-    const points = await api.getAnalyticsSeries(day);
-    const sharing = [...new Set(points.flatMap((p) => p.groups.filter((g) => g.costShares !== null).map((g) => g.key)))].sort();
-    const expectedLegend = sharing.flatMap((a) => [`${a} (7-day)`, ...(points.some((p) => p.groups.some((g) => g.key === a && weekOf(g) !== null)) ? [`${a} (7-day Fable)`] : [])]);
-    const apiKeys = (await api.listAccounts()).filter((a) => a.kind === 'api_key').map((a) => a.id);
-    // The chart's tooltip names each account's 5-hour share beside the two lines: the hover walks the chart until a
-    // bucket with a priced 5-hour share answers.
-    const tipOf = async (card, x) => {
-      card?.querySelector('.recharts-wrapper')?.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: 60 }));
-      await shares.settle(200);
-      return [...(card?.querySelectorAll('.chart-tip .chart-tip__row') ?? [])].map((row) => [row.querySelector('.chart-tip__label')?.textContent?.trim() ?? '', row.querySelector('.chart-tip__value')?.textContent?.trim() ?? '']);
-    };
-    let tip = [];
-    for (let x = 40; x <= 580 && !tip.some(([label, value]) => label.endsWith('(5-hour)') && isShare(value)); x += 60) tip = await tipOf(cardIn('Cost by account'), x);
-    const tipNamed = tip.some(([label, value]) => label.endsWith('(5-hour)') && isShare(value)) && sharing.every((a) => tip.some(([label]) => label === `${a} (5-hour)`));
-    const table = tableIn('Cost by account');
-    const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
-    const rowsOf = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', [...tr.querySelectorAll('td.num')].map((td) => td.textContent?.trim() ?? '')]);
-    const cellsOf = (account) => rowsOf.find(([label]) => label === account)?.[1] ?? [];
-    const reads = (cells, want) => cells.length === want.length && cells.every((c, i) => (want[i] === 'share' ? isShare(c) : want[i] === 'count' ? isCount(c) : c === '-'));
-    // nightly's and primary's mornings ran Fable on the plan, so their rows price three windows, primary's Sonnet 4.5
-    // turns among them. The cost model has no weight for Sonnet 4.5, so those turns and secondary's, which serves it
-    // alone, price at their model tier's latest weight on the two shared windows. studio's one row ran a laptop-lane
-    // model with no 7-day Fable window. Every other row counts its plan requests, none on an API key account, and
-    // prices no share.
-    const tableRead = {
-      nightly: reads(cellsOf('nightly'), ['count', 'share', 'share', 'share', 'share', 'share']),
-      primary: reads(cellsOf('primary'), ['count', 'share', 'share', 'share', 'share', 'share']),
-      secondary: reads(cellsOf('secondary'), ['count', 'share', 'share', 'dash', 'share', 'share']),
-      studio: reads(cellsOf('studio'), ['count', 'share', 'share', 'dash', 'share', 'share']),
-      rest: rowsOf.filter(([label]) => !['nightly', 'primary', 'secondary', 'studio'].includes(label)).every(([, cells]) => reads(cells, ['count', 'dash', 'dash', 'dash', 'dash', 'dash'])),
-    };
-    const tiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
-    await groupPage(shares, 'model');
-    const modelCard = cardIn('Cost by model');
-    const noted = { note: modelCard?.textContent?.includes(ACCOUNT_GROUPING_NOTE) ?? false, tableNote: tableIn('Cost by model') === undefined && [...shares.container.querySelectorAll('#cost .card')].some((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost by model' && c !== modelCard && c.textContent?.includes(ACCOUNT_GROUPING_NOTE)), wrapper: modelCard?.querySelector('.recharts-wrapper') !== null };
-    const modelTiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
-    results.push({
-      name: '/analytics under Window shares the Cost chart draws a line per subscription account with the account grouping and, with no account named, the note naming the grouping and the filter under the model grouping',
-      ok: dollarAreas > 0 && lineChart.areas === 0 && lineChart.wrapper && !lineChart.note && expectedLegend.length > 0 && JSON.stringify(lineChart.legend) === JSON.stringify(expectedLegend) && !lineChart.legend.some((l) => apiKeys.some((id) => l.startsWith(`${id} `))) && noted.note && !noted.wrapper && noted.tableNote,
-      missing: [`dollar areas ${dollarAreas}`, `account ${JSON.stringify(lineChart)}`, `expected legend ${JSON.stringify(expectedLegend)}`, `model ${JSON.stringify(noted)}`],
-    });
-    results.push({
-      name: "/analytics under Window shares with the account grouping the share table reads nightly's and primary's three windows, secondary's two shared windows through its model tier, studio's two windows and every other account's plan count, and the chart's tooltip names the 5-hour share",
-      ok: JSON.stringify(heads) === JSON.stringify(['Account', 'Plan requests', '5-hour', '7-day', '7-day Fable', 'Per request', 'Per 1k output']) && Object.values(tableRead).every(Boolean) && tipNamed,
-      missing: [heads.join(','), JSON.stringify(rowsOf), JSON.stringify(tableRead), `tooltip ${JSON.stringify(tip)}`],
-    });
-    results.push({
-      name: '/analytics under Window shares the Cost tiles read per account below under the account grouping with none named, and under another grouping a dash under the note that names the Accounts filter',
-      ok: JSON.stringify(tiles.slice(0, 3)) === JSON.stringify([['Window share', 'per account below', ''], ['Per request', 'per account below', ''], ['Per 1k output', 'per account below', '']]) && tiles[3]?.[0] === 'Fast mode spend' && modelTiles.slice(0, 3).every(([value, note]) => value === '-' && note === NAMED_ACCOUNT_NOTE),
-      missing: [JSON.stringify(tiles), JSON.stringify(modelTiles)],
-    });
-    await groupPage(shares, 'account');
-    await tab(shares, 'Cache');
-    const cacheUnit = shellUnit(shares)?.value;
-    const cacheNote = cardIn('Write cost vs read cost')?.querySelector('p.muted')?.textContent?.trim() ?? '';
-    // A table's cost cells from column `from` on, per row label, and its subtitle.
-    const costCells = (t, from) => [...(tableIn(t)?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', [...tr.querySelectorAll('td.num')].slice(from).map((td) => td.textContent?.trim() ?? '')]);
-    const subtitleIn = (t) => tableIn(t)?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
-    const modelNoted = { cells: costCells('Cache by model', 5), subtitle: subtitleIn('Cache by model') };
-    await tab(shares, 'Cache warming');
-    const warmingUnit = shellUnit(shares)?.value;
-    const probeTile = () => {
-      const t = [...shares.container.querySelectorAll('#cache-warming .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
-      return [t?.querySelector('.stat__value')?.textContent?.trim(), t?.querySelector('.stat__note')?.textContent?.trim()];
-    };
-    const wastedRead = () => ({
-      ending: cardIn('Wasted probes')?.querySelector('.card__subtitle')?.textContent?.trim().endsWith("says the parked ceilings do. In the one account's window shares.") ?? false,
-      tiles: [...(cardIn('Wasted probes')?.querySelectorAll('.stat') ?? [])].slice(1).map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']),
-    });
-    // A tile's value, its note and whether the value carries the critical ink.
-    const tileRead = (label) => {
-      const t = [...shares.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === label);
-      return [t?.querySelector('.stat__value')?.textContent?.trim(), t?.querySelector('.stat__note')?.textContent?.trim(), t?.querySelector('.stat__value')?.classList.contains('is-critical') ?? false];
-    };
-    const probeNoted = probeTile();
-    const wastedNoted = wastedRead();
-    const savingNoted = [tileRead('Saved by probes'), tileRead('Net saving')];
-    const poolNoted = costCells('Cache warming by pool', 6);
-    results.push({
-      name: "/analytics under Window shares grouped by account with no account named the Saved by probes and Net saving tiles dash under the note that names the Accounts filter",
-      ok: JSON.stringify(savingNoted) === JSON.stringify([['-', NAMED_ACCOUNT_NOTE, false], ['-', NAMED_ACCOUNT_NOTE, false]]),
-      missing: [JSON.stringify(savingNoted)],
-    });
-    results.push({
-      name: "/analytics under Window shares grouped by account with no account named the cache cost card, Cache by model, the Probe cost tile and the Wasted cost tile dash under the note that names the Accounts filter alone, and the by-pool table dashes, the blurb ending in the one account's window shares",
-      ok:
-        cacheUnit === 'share' && warmingUnit === 'share' && cacheNote === NAMED_ACCOUNT_NOTE &&
-        modelNoted.cells.length > 0 && modelNoted.cells.every(([, cells]) => JSON.stringify(cells) === '["-","-"]') && modelNoted.subtitle === NAMED_ACCOUNT_NOTE &&
-        JSON.stringify(probeNoted) === JSON.stringify(['-', NAMED_ACCOUNT_NOTE]) &&
-        wastedNoted.ending && JSON.stringify(wastedNoted.tiles) === JSON.stringify([['Wasted cost', '-', NAMED_ACCOUNT_NOTE], ['Share of probe cost', '-', '']]) &&
-        poolNoted.length > 0 && poolNoted.every(([, cells]) => JSON.stringify(cells) === '["-","-"]'),
-      missing: [`unit on Cache ${cacheUnit}`, `unit on Cache warming ${warmingUnit}`, `cache note ${cacheNote}`, `model ${JSON.stringify(modelNoted)}`, `probe tile ${JSON.stringify(probeNoted)}`, `wasted ${JSON.stringify(wastedNoted)}`, `pools ${JSON.stringify(poolNoted)}`],
-    });
-    // One account named, nightly, whose plan rows price every window: the cache card's legend reads its two 7-day
-    // shares, the Probe cost tile its 7-day probe share over the other windows and the probe count, and the Cost
-    // tiles its 7-day share over the other windows, its share per plan-funded request and per 1k output tokens.
-    const namedReads = countCalls('getAnalyticsBreakdown');
-    await pick(shares, 'Account', 'nightly');
-    await closeBoxes(shares);
-    await shares.settle(200);
-    const probeNamed = probeTile();
-    const wastedNamed = wastedRead();
-    const savingNamed = [tileRead('Saved by probes'), tileRead('Net saving')];
-    const poolNamed = costCells('Cache warming by pool', 6);
-    await tab(shares, 'Cache');
-    const namedCard = cardIn('Write cost vs read cost');
-    const namedLegend = legendIn('Write cost vs read cost');
-    // The table orders its models by cache reads, so its rows and the route's compare in label order.
-    const byLabel = (rows) => [...rows].sort((a, b) => a[0].localeCompare(b[0]));
-    const modelNamed = { account: byLabel(costCells('Cache by model', 5)), subtitle: subtitleIn('Cache by model') };
-    await groupPage(shares, 'model');
-    modelNamed.model = byLabel(costCells('Cache by model', 5));
-    await groupPage(shares, 'account');
-    namedReads.restore();
-    // The route's own answers for the reads the page made with nightly named, each the last of its shape.
-    const namedAnswer = async (match) => {
-      const q = namedReads.calls.map(([x]) => x).filter((x) => x?.keyIds !== undefined && x.funding === undefined && match(x)).pop();
-      return q === undefined ? [] : await api.getAnalyticsBreakdown(q);
-    };
-    const nightlyProbes = (await namedAnswer((q) => q.groupBy === 'account' && q.includeProbes === true)).find((g) => g.key === 'nightly')?.probeShares ?? null;
-    const shareOrDashOf = (shares, read) => (shares?.seven_day === undefined || read(shares.seven_day) === null ? '-' : shareLabel('seven_day', read(shares.seven_day)));
-    // A share an estimate priced leads with the tilde, as a native cell does.
-    const markedShare = (g, shares, read) => ((figure) => (figure !== '-' && g.estimated ? `~${figure}` : figure))(shareOrDashOf(shares, read));
-    const modelShares = (groups) => byLabel(groups.map((g) => [g.label, [markedShare(g, g.cacheShares, (x) => x.read), markedShare(g, g.cacheShares, (x) => x.write)]]));
-    const byModelNamed = await namedAnswer((q) => q.groupBy === 'model' && q.accountIds?.length === 1);
-    const probeWeekOf = (shares) => Object.keys(shares ?? {}).find((k) => k !== 'five_hour' && k !== 'seven_day');
-    const wastedOthers = ['five_hour', probeWeekOf(nightlyProbes)].flatMap((k) => (k === undefined || nightlyProbes?.[k]?.wasted === undefined || nightlyProbes[k].wasted === null ? [] : [shareLabel(k, nightlyProbes[k].wasted)]));
-    const wastedWant = nightlyProbes?.seven_day === undefined ? null : [
-      ['Wasted cost', shareOrDashOf(nightlyProbes, (x) => x.wasted), wastedOthers.join(', ')],
-      ['Share of probe cost', fmtPct(nightlyProbes.seven_day.wasted / nightlyProbes.seven_day.cost, 1), `of ${shareLabel('seven_day', nightlyProbes.seven_day.cost)} on probes`],
-    ];
-    const poolWant = (await namedAnswer((q) => q.groupBy === 'pool')).map((g) => [g.label, [markedShare(g, g.probeShares, (x) => x.cost), markedShare(g, g.savingShares, (x) => x)]]);
-    {
-      // The account's saving reads its 7-day saving share with the other windows and its credited requests in the
-      // note, and the net each window's saving less its probe share: a window with no plan-funded credit or answered
-      // probe behind it counts zero, and so does a model week its rows ran off, while a shared window the route priced
-      // none on reads a dash.
-      const nightly = (await namedAnswer((q) => q.groupBy === 'account' && q.includeProbes === true)).find((g) => g.key === 'nightly') ?? null;
-      const kept = nightly?.keptWarm?.planRequests ?? 0;
-      const probed = nightly?.probes.planOk ?? 0;
-      const shared = (k) => k === 'five_hour' || k === 'seven_day';
-      const savingAt = (k) => (kept <= 0 ? 0 : nightly?.savingShares && Object.hasOwn(nightly.savingShares, k) ? nightly.savingShares[k] : shared(k) ? null : 0);
-      const probeAt = (k) => (probed <= 0 ? 0 : nightly?.probeShares && Object.hasOwn(nightly.probeShares, k) ? nightly.probeShares[k].cost : shared(k) ? null : 0);
-      const netAt = (k) => (savingAt(k) === null || probeAt(k) === null ? null : savingAt(k) - probeAt(k));
-      const weekKey = probeWeekOf(nightly?.savingShares) ?? probeWeekOf(nightly?.probeShares);
-      const credits = `${fmtInt(nightly?.keptWarm?.requests ?? 0)} requests kept warm`;
-      const savingOthers = ['five_hour', probeWeekOf(nightly?.savingShares)].flatMap((k) => (k === undefined || !nightly?.savingShares || !Object.hasOwn(nightly.savingShares, k) ? [] : [shareLabel(k, nightly.savingShares[k])]));
-      const netOthers = ['five_hour', weekKey].flatMap((k) => (k === undefined || netAt(k) === null ? [] : [shareLabel(k, netAt(k))]));
-      const want = nightly === null ? null : [
-        [shareOrDashOf(nightly.savingShares, (x) => x), [...savingOthers, credits].join(', '), false],
-        [netAt('seven_day') === null ? '-' : shareLabel('seven_day', netAt('seven_day')), [...netOthers, 'less the probe cost'].join(', '), netAt('seven_day') !== null && netAt('seven_day') < 0],
-      ];
-      results.push({
-        name: "/analytics under Window shares with one account named the Saved by probes tile reads the account's 7-day saving share over the other windows and the credited requests, and Net saving each window's saving less its probe share",
-        ok: want !== null && kept > 0 && JSON.stringify(savingNamed) === JSON.stringify(want),
-        missing: [JSON.stringify(savingNamed), `want ${JSON.stringify(want)}`],
-      });
-    }
-    results.push({
-      name: "/analytics under Window shares with one account named Cache by model reads each model's 7-day read and write shares as the route answers them under the account and the model grouping, and the Wasted probes card and the by-pool table the account's probe shares",
-      ok:
-        byModelNamed.length > 0 && modelShares(byModelNamed).some(([, cells]) => cells[0] !== '-') && modelNamed.subtitle === "Totals for the selected range and filters, one account's 7-day window shares" &&
-        JSON.stringify(modelNamed.account) === JSON.stringify(modelShares(byModelNamed)) && JSON.stringify(modelNamed.model) === JSON.stringify(modelShares(byModelNamed)) &&
-        wastedWant !== null && wastedNamed.ending && JSON.stringify(wastedNamed.tiles) === JSON.stringify(wastedWant) &&
-        poolWant.some(([, cells]) => cells[0] !== '-') && JSON.stringify(poolNamed) === JSON.stringify(poolWant),
-      missing: [`model ${JSON.stringify(modelNamed)}`, `want ${JSON.stringify(modelShares(byModelNamed))}`, `wasted ${JSON.stringify(wastedNamed)} against ${JSON.stringify(wastedWant)}`, `pools ${JSON.stringify(poolNamed)} against ${JSON.stringify(poolWant)}`],
-    });
-    {
-      // With secondary named, whose Sonnet 4.5 traffic the story prices through its model tier's fallback, that
-      // model's share cells and the by-pool probe share carry the tilde and the estimate's title, as the native cells
-      // do, each read off the route's own answer.
-      const asked = countCalls('getAnalyticsBreakdown');
-      const estimatedPage = await mount('/analytics?accounts=secondary&unit=share#cache', { now: CLOCK_ORIGIN });
-      const cellsOf = (t) =>
-        [...([...estimatedPage.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t)?.querySelectorAll('tbody tr') ?? [])].map((tr) => ({
-          cells: [...tr.querySelectorAll('td.num')].map((td) => [td.textContent?.trim() ?? '', td.querySelector('[title]')?.getAttribute('title') ?? '']),
-          label: tr.children[0]?.textContent?.trim() ?? '',
-          title: tr.children[0]?.getAttribute('title') ?? '',
-        }));
-      const models = cellsOf('Cache by model');
-      await tab(estimatedPage, 'Cache warming');
-      const pools = cellsOf('Cache warming by pool');
-      // The cells skip the label column, so a column's cell sits one before its head.
-      const probeColumn = [...([...estimatedPage.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cache warming by pool')?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '').indexOf('Probe cost') - 1;
-      estimatedPage.unmount();
-      asked.restore();
-      localStorage.removeItem('phoebis.unit');
-      const answerOf = async (groupBy) => {
-        const q = asked.calls.map(([x]) => x).filter((x) => x?.groupBy === groupBy && x.accountIds?.length === 1 && x.funding === undefined).pop();
-        return q === undefined ? [] : await api.getAnalyticsBreakdown(q);
-      };
-      const model = (await answerOf('model')).find((g) => g.estimated && g.cacheShares?.seven_day !== undefined);
-      const pool = (await answerOf('pool')).find((g) => g.estimated && g.probeShares?.seven_day !== undefined);
-      const modelRow = models.find((r) => r.label === model?.label);
-      const poolRow = pools.find((r) => r.label === pool?.label);
-      const marked = (cell, label) => cell !== undefined && cell[0] === `~${label}` && cell[1].endsWith(`${ESTIMATED_TITLE}.`);
-      results.push({
-        name: "/analytics under Window shares with one account named an estimated model's cache share cells and an estimated pool's probe share carry the tilde and the estimate's title",
-        ok:
-          model !== undefined && modelRow !== undefined && modelRow.title === `${model.label}. ${ESTIMATED_TITLE}.` &&
-          marked(modelRow.cells.at(-2), shareLabel('seven_day', model.cacheShares.seven_day.read)) && marked(modelRow.cells.at(-1), shareLabel('seven_day', model.cacheShares.seven_day.write)) &&
-          pool !== undefined && probeColumn >= 0 && marked(poolRow?.cells[probeColumn], shareLabel('seven_day', pool.probeShares.seven_day.cost)),
-        missing: [`model ${model?.label}: ${JSON.stringify(modelRow)}`, `pool ${pool?.label}: ${JSON.stringify(poolRow)} at ${probeColumn}`],
-      });
-    }
-    await tab(shares, 'Cost');
-    const namedTiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
-    const sevenDay = (v) => /^\d[\d.]*% of 7-day$/.test(v ?? '');
-    const others = (v) => /^\d[\d.]*% of 5-hour, \d[\d.]*% of 7-day Fable$/.test(v ?? '');
-    results.push({
-      name: '/analytics under Window shares with one account named the cost tiles, the cache cost card and the Probe cost tile read shares with the window named',
-      ok:
-        namedLegend.length === 2 && namedLegend[0][0] === 'Write share' && sevenDay(namedLegend[0][1]) && namedLegend[1][0] === 'Read share' && sevenDay(namedLegend[1][1]) &&
-        !(namedCard?.textContent?.includes(NAMED_ACCOUNT_NOTE) ?? true) &&
-        sevenDay(probeNamed[0]) &&
-        /^\d[\d.]*% of 5-hour, \d[\d.]*% of 7-day Fable, \d[\d,]* probes$/.test(probeNamed[1] ?? '') &&
-        namedTiles.length >= 3 && namedTiles[0][0] === 'Window share' && sevenDay(namedTiles[0][1]) && others(namedTiles[0][2]) &&
-        JSON.stringify(namedTiles.slice(1, 3).map(([label, value, note]) => [label, isShare(value ?? ''), note])) === JSON.stringify([['Per request', true, 'of the 7-day window per plan-funded request'], ['Per 1k output', true, 'of the 7-day window per 1k plan-funded output tokens']]),
-      missing: [`legend ${JSON.stringify(namedLegend)}`, `card note ${namedCard?.textContent?.includes(NAMED_ACCOUNT_NOTE)}`, `probe tile ${JSON.stringify(probeNamed)}`, `tiles ${JSON.stringify(namedTiles)}`],
-    });
-    {
-      // The route answers the named account's shares on every group under any grouping, so under the model grouping
-      // the tiles read the account's whole, its model groups summed, the Cost chart draws a line per model named as
-      // the grouping names it, and the share table lists each model.
-      await groupPage(shares, 'model');
-      const modelNamedTiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
-      const modelChart = { legend: legendIn('Cost by model').map(([label]) => label), subtitle: cardIn('Cost by model')?.querySelector('.card__subtitle')?.textContent ?? '' };
-      const modelTable = [...(tableIn('Cost by model')?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', [...tr.querySelectorAll('td.num')].map((td) => td.textContent?.trim() ?? '')]);
-      const answered = await api.getAnalyticsBreakdown({ accountIds: ['nightly'], from: new Date(Date.now() - 24 * 3_600_000).toISOString(), groupBy: 'model', to: new Date().toISOString() });
-      const sharing = answered.filter((g) => g.costShares !== null && g.costShares.seven_day !== undefined).map((g) => g.label);
-      await groupPage(shares, 'account');
-      results.push({
-        name: "/analytics under Window shares with one account named under the model grouping the Cost tiles read the account's whole, the chart draws a line per model named by the model, and the share table lists the models",
-        ok:
-          JSON.stringify(modelNamedTiles.slice(0, 3)) === JSON.stringify(namedTiles.slice(0, 3)) &&
-          sharing.length > 0 &&
-          sharing.every((label) => modelChart.legend.includes(`${label} (7-day)`)) &&
-          modelChart.subtitle === "Each group's share of the named account's 7-day window per bucket, solid, and of its model week, dashed" &&
-          sharing.every((label) => modelTable.some(([row, cells]) => row === label && isShare(cells[2] ?? ''))),
-        missing: [`tiles ${JSON.stringify(modelNamedTiles)} against ${JSON.stringify(namedTiles)}`, `legend ${JSON.stringify(modelChart)}`, `sharing ${sharing.join(',')}`, `table ${JSON.stringify(modelTable)}`],
-      });
-    }
-    shares.unmount();
+    // The page's day, the span the Pace cases below read the samples over.
+    const day = { from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() };
     {
       // The one-sided paths under native, read on an account whose range ran on one funding alone: an API-key account
       // bills every row, and a subscription account with no fast-mode or overage answer pays every row from its plan.
@@ -19805,7 +19601,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     {
       // A session view folds request rows, which carry no probe count, so the tile's note says so rather than zero.
       const served = requests.find((r) => r.sessionId !== null && r.status === 200 && r.accountId !== null && r.attempts[r.attempts.length - 1]?.accountKind === 'oauth' && r.attempts[r.attempts.length - 1]?.overageInUse !== true && r.attempts[r.attempts.length - 1]?.response.speed !== 'fast');
-      const session = await mount(`/analytics?session=${encodeURIComponent(served.sessionId)}&key=${encodeURIComponent(`${served.keyId}@${served.keyGeneration}`)}&unit=share#cache-warming`);
+      const session = await mount(`/analytics?session=${encodeURIComponent(served.sessionId)}&key=${encodeURIComponent(`${served.keyId}@${served.keyGeneration}`)}#cache-warming`);
       await groupPage(session, 'account');
       await pick(session, 'Account', served.accountId);
       await closeBoxes(session);
@@ -19814,7 +19610,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const read = [tile?.querySelector('.stat__value')?.textContent?.trim(), tile?.querySelector('.stat__note')?.textContent?.trim()];
       const meta = session.container.querySelector('#cache-warming .analytics-section__meta')?.textContent ?? '';
       results.push({
-        name: '/analytics a session view under Window shares with one account named reads the Probe cost tile as not in the request log',
+        name: '/analytics a session view under Native with one account named reads the Probe cost tile as not in the request log',
         ok: meta.startsWith('From the request log') && JSON.stringify(read) === JSON.stringify(['-', 'not in the request log']),
         missing: [`served ${served?.id} on ${served?.accountId}`, `meta ${meta.slice(0, 40)}`, `tile ${JSON.stringify(read)}`],
       });
@@ -19833,12 +19629,12 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const name = '/analytics a session view reads the Probe cost tile as not in the request log where its fold holds no group';
       if (!billedOnly || !planOnly) results.push({ name, ok: false, missing: [`billed-only session ${billedOnly?.sessionId}`, `plan-only session ${planOnly?.sessionId}`] });
       else {
-        const billed = await mount(`/analytics?session=${encodeURIComponent(billedOnly.sessionId)}&key=${encodeURIComponent(`${billedOnly.keyId}@${billedOnly.keyGeneration}`)}&unit=share#cache-warming`);
+        const billed = await mount(`/analytics?session=${encodeURIComponent(billedOnly.sessionId)}&key=${encodeURIComponent(`${billedOnly.keyId}@${billedOnly.keyGeneration}`)}#cache-warming`);
         await groupPage(billed, 'account');
         await pick(billed, 'Account', billedOnly.accountId);
         await closeBoxes(billed);
         await billed.settle(200);
-        const underShares = probeTile(billed);
+        const underNative = probeTile(billed);
         billed.unmount();
         const plan = await mount(`/analytics?session=${encodeURIComponent(planOnly.sessionId)}&key=${encodeURIComponent(`${planOnly.keyId}@${planOnly.keyGeneration}`)}&unit=usd#cache-warming`);
         await plan.settle(900);
@@ -19846,8 +19642,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         plan.unmount();
         results.push({
           name,
-          ok: JSON.stringify(underShares) === JSON.stringify(['-', 'not in the request log']) && JSON.stringify(underBilled) === JSON.stringify(['-', 'not in the request log']),
-          missing: [`${billedOnly.sessionId} on ${billedOnly.accountId} under shares ${JSON.stringify(underShares)}`, `${planOnly.sessionId} under billed dollars ${JSON.stringify(underBilled)}`],
+          ok: JSON.stringify(underNative) === JSON.stringify(['-', 'not in the request log']) && JSON.stringify(underBilled) === JSON.stringify(['-', 'not in the request log']),
+          missing: [`${billedOnly.sessionId} on ${billedOnly.accountId} under Native ${JSON.stringify(underNative)}`, `${planOnly.sessionId} under billed dollars ${JSON.stringify(underBilled)}`],
         });
       }
     }
@@ -25571,11 +25367,11 @@ m.unmount();
     missing: fromPools.map((p) => p.join(': ')),
   });
   const dash = await mount('/');
-  const ring = [...dash.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === '5h remaining');
+  const ring = [...dash.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === '7d remaining');
   const ringSubtitle = ring?.querySelector('.card__subtitle')?.textContent ?? '';
   const fromDash = await opened(dash, linkIn(ring?.querySelector('.card__subtitle')));
   dash.unmount();
-  results.push({ name: "/ the 5-hour ring's subtitle opens the cost reference on Tiers and peak band", ok: ringSubtitle === 'Subscription accounts, 5-hour window, weighed by tier Cost reference' && fromDash === 'Tiers and peak band', missing: [ringSubtitle, fromDash] });
+  results.push({ name: "/ the 7-day ring's subtitle opens the cost reference on Tiers and peak band", ok: ringSubtitle === 'Subscription accounts, 7-day window, weighed by tier Cost reference' && fromDash === 'Tiers and peak band', missing: [ringSubtitle, fromDash] });
 
   // The plan card's subtitle carries the cost reference link, which opens the dialog on Tiers and peak band.
   const analytics = await mount('/analytics#burn', { now: CLOCK_ORIGIN });
@@ -27249,7 +27045,7 @@ m.unmount();
   const buttons = [...page.container.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Try again');
   const drawn = [...page.container.querySelectorAll('.empty--error')].map((e) => ({ body: e.querySelector('.empty__body')?.textContent ?? '', title: e.querySelector('.empty__title')?.textContent ?? '' }));
   const where = {
-    rings: ['5h remaining', '7d remaining'].map((t) => failure(cardTitled(page, t))?.querySelector('.empty__title')?.textContent ?? 'none'),
+    rings: ['7d remaining', 'Fable week remaining'].map((t) => failure(cardTitled(page, t))?.querySelector('.empty__title')?.textContent ?? 'none'),
     sessions: failure(cardTitled(page, 'Sessions'))?.querySelector('.empty__title')?.textContent ?? 'none',
     strip: failure(strip(page))?.querySelector('.empty__title')?.textContent ?? 'none',
     stripGrid: strip(page)?.querySelector('.account-strip') !== null,
@@ -27291,7 +27087,7 @@ m.unmount();
   outage = failCalls(READS, 'ledger locked');
   page = await mount('/', { now: CLOCK_ORIGIN });
   outage.recover();
-  const ring = await step('5-hour ring', cardTitled(page, '5h remaining'), () => cardTitled(page, '5h remaining')?.querySelector('svg.donut') !== null && failure(cardTitled(page, '5h remaining')) === null);
+  const ring = await step('7-day ring', cardTitled(page, '7d remaining'), () => cardTitled(page, '7d remaining')?.querySelector('svg.donut') !== null && failure(cardTitled(page, '7d remaining')) === null);
   const both = await step('sessions, both reads', cardTitled(page, 'Sessions'), () => page.container.querySelector('.sess-summary') !== null && tilesDrawn(page));
   outage.restore();
   page.unmount();
@@ -27304,13 +27100,13 @@ m.unmount();
 
   outage = failCalls({ getSettings: '/admin/settings' }, 'ledger locked');
   page = await mount('/', { now: CLOCK_ORIGIN });
-  const ringTitles = ['5h remaining', '7d remaining'].map((t) => failure(cardTitled(page, t))?.querySelector('.empty__title')?.textContent ?? 'none');
-  const ringBodies = ['5h remaining', '7d remaining'].map((t) => failure(cardTitled(page, t))?.querySelector('.empty__body')?.textContent ?? 'none');
+  const ringTitles = ['7d remaining', 'Fable week remaining'].map((t) => failure(cardTitled(page, t))?.querySelector('.empty__title')?.textContent ?? 'none');
+  const ringBodies = ['7d remaining', 'Fable week remaining'].map((t) => failure(cardTitled(page, t))?.querySelector('.empty__body')?.textContent ?? 'none');
   outage.recover();
   const settingsBefore = outage.calls.getSettings.length;
   const pressed = await tryAgain(page, cardTitled(page, '7d remaining'));
   const settingsAfter = outage.calls.getSettings.length;
-  const rings = ['5h remaining', '7d remaining'].map((t) => cardTitled(page, t)?.querySelector('svg.donut') !== null);
+  const rings = ['7d remaining', 'Fable week remaining'].map((t) => cardTitled(page, t)?.querySelector('svg.donut') !== null);
   outage.restore();
   page.unmount();
   results.push({
@@ -27381,9 +27177,10 @@ m.unmount();
 }
 
 {
-  // With no tier's 7-day capacity in the cost model no account of the story is sized for that window, so that ring
-  // weighs nobody and names each of the five, while the 5-hour ring still weighs all five. Both name the contract seed,
-  // a usage-based seat the router prices no tier for, with the gate's word.
+  // With no tier's 7-day capacity in the cost model no account of the story is sized for that window, nor for the
+  // Fable week, a factor of it, so both rings weigh nobody. Their accounts carry the window, so each ring says no tier
+  // is sized and names every account with its own tier, the Pro seeds without a Fable week by that reason, and the
+  // contract seed, a usage-based seat the router prices no tier for, with the gate's word.
   const { getSettings } = api;
   api.getSettings = async () => {
     const settings = await getSettings.call(api);
@@ -27394,23 +27191,70 @@ m.unmount();
   api.getSettings = getSettings;
   const ringCard = (title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
   const named = (card) => [...(card?.querySelectorAll('.remaining__left-out li') ?? [])].map((li) => li.textContent ?? '');
-  const week = ringCard('7d remaining');
-  const fiveHour = ringCard('5h remaining');
-  const sentence = week?.querySelector('p.muted');
-  const drawn = {
-    fiveHour: { names: named(fiveHour), ring: !!fiveHour?.querySelector('svg.donut') },
-    week: { listAfter: sentence?.nextElementSibling?.matches('.remaining__left-out') ?? false, names: named(week), ring: !!week?.querySelector('svg.donut'), sentence: sentence?.textContent ?? 'none' },
+  const drawnOf = (card) => {
+    const sentence = card?.querySelector('p.muted');
+    return { listAfter: sentence?.nextElementSibling?.matches('.remaining__left-out') ?? false, names: named(card), ring: !!card?.querySelector('svg.donut'), sentence: sentence?.textContent ?? 'none' };
   };
+  const drawn = { fable: drawnOf(ringCard('Fable week remaining')), week: drawnOf(ringCard('7d remaining')) };
   page.unmount();
   results.push({
     name: '/ a ring that weighs no account says so and names every account it left out',
     ok:
-      !drawn.week.ring &&
-      drawn.week.sentence === "No listed account's tier is sized for the 7-day window." &&
-      drawn.week.listAfter &&
-      JSON.stringify(drawn.week.names) === JSON.stringify(['primary: Max 20x 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 5x 7-day capacity not measured', 'studio: Max 5x 7-day capacity not measured', 'reserve: Pro 7-day capacity not measured', 'contract: a usage-based seat']) &&
-      drawn.fiveHour.ring &&
-      JSON.stringify(drawn.fiveHour.names) === JSON.stringify(['contract: a usage-based seat']),
+      JSON.stringify(drawn.week) ===
+        JSON.stringify({
+          listAfter: true,
+          names: ['primary: Ultra 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 7-day capacity not measured', 'studio: Max 7-day capacity not measured', 'reserve: Pro 7-day capacity not measured', 'contract: a usage-based seat', 'workshop: Ultra 7-day capacity not measured'],
+          ring: false,
+          sentence: "No listed account's tier is sized for the 7-day window.",
+        }) &&
+      JSON.stringify(drawn.fable) ===
+        JSON.stringify({
+          listAfter: true,
+          names: ['primary: Ultra Fable week capacity not measured', 'secondary: no Fable week', 'nightly: Max Fable week capacity not measured', 'studio: Max Fable week capacity not measured', 'reserve: no Fable week', 'contract: a usage-based seat', 'workshop: Ultra Fable week capacity not measured'],
+          ring: false,
+          sentence: "No listed account's tier is sized for the Fable week.",
+        }),
+    missing: [JSON.stringify(drawn)],
+  });
+}
+
+{
+  // An account whose poll has read no window yet is named "not read yet" under both rings, where its card reads the
+  // same while an API-key account's card, which no poll reads, keeps "No quota windows", and a fleet whose polls carry
+  // no Fable week reads that sentence over the Fable ring's list in place of one about unsized tiers. The answer drops every Fable week and reserve's windows, a Pro seed listed and routable with
+  // no plan end.
+  const { listAccounts } = api;
+  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => ({ ...a, fableWindow: null, ...(a.id === 'reserve' ? { windows: [] } : {}) }));
+  const page = await mount('/', { now: CLOCK_ORIGIN });
+  api.listAccounts = listAccounts;
+  const ringCard = (title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
+  const named = (card) => [...(card?.querySelectorAll('.remaining__left-out li') ?? [])].map((li) => li.textContent ?? '');
+  const fable = ringCard('Fable week remaining');
+  const sentence = fable?.querySelector('p.muted');
+  const reserve = page.container.querySelector('a.account-mini[href="/accounts/reserve"] .wbar__none');
+  const annex = page.container.querySelector('a.account-mini[href="/accounts/annex"] .wbar__none');
+  const drawn = {
+    card: [reserve?.textContent ?? null, reserve?.classList.contains('muted') ?? null],
+    key: annex?.textContent ?? null,
+    fable: { listAfter: sentence?.nextElementSibling?.matches('.remaining__left-out') ?? false, names: named(fable), ring: !!fable?.querySelector('svg.donut'), sentence: sentence?.textContent ?? 'none' },
+    week: { names: named(ringCard('7d remaining')), ring: !!ringCard('7d remaining')?.querySelector('svg.donut') },
+  };
+  page.unmount();
+  results.push({
+    name: '/ an account with no window read yet is named "not read yet" under both rings and on its card, an API-key card keeping "No quota windows", and a fleet with no Fable week says so over the Fable ring\'s list',
+    ok:
+      JSON.stringify(drawn) ===
+      JSON.stringify({
+        card: ['Not read yet', true],
+        key: 'No quota windows',
+        fable: {
+          listAfter: true,
+          names: ['primary: no Fable week', 'secondary: no Fable week', 'nightly: no Fable week', 'studio: no Fable week', 'reserve: not read yet', 'contract: a usage-based seat', 'workshop: no Fable week'],
+          ring: false,
+          sentence: 'No account with a Fable week.',
+        },
+        week: { names: ['reserve: not read yet', 'contract: a usage-based seat'], ring: true },
+      }),
     missing: [JSON.stringify(drawn)],
   });
 }

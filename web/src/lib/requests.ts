@@ -59,7 +59,6 @@ const COST_HEADER_TITLE: Record<UnitPosition, string> = {
   all: 'Dollar equivalent for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
   equivalent: 'Dollar equivalent for a request a subscription window paid, a dash for an API key, fast mode, overage or usage-based request',
   native: 'A share of the chosen week for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
-  share: 'Window shares for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
   usd: 'A dash for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
 };
 
@@ -85,12 +84,10 @@ export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costEquivalent' | '
   const last = r.attempts[r.attempts.length - 1];
   if (last === undefined) return { kind: 'unserved', usd };
   const funding = fundingOf(last);
-  // The `share` position is the one no select offers.
-  const position = unit === 'share' ? 'native' : unit;
-  if (position === 'native' && nativeOf(funding) === 'equivalent') return r.costEquivalent === null ? { kind: 'unpriced', usd } : { figure: r.costEquivalent, hint, kind: 'equivalent', reason, usd };
+  if (unit === 'native' && nativeOf(funding) === 'equivalent') return r.costEquivalent === null ? { kind: 'unpriced', usd } : { figure: r.costEquivalent, hint, kind: 'equivalent', reason, usd };
   // A billed request has no subscription equivalent to read, and a subscription request bills no dollars.
-  if (funding !== 'plan') return position === 'equivalent' ? { kind: 'dash', title: NO_EQUIVALENT_TITLE, usd } : { funding, kind: 'dollars', usd };
-  if (position === 'usd') return { kind: 'dash', title: NOTHING_BILLED_TITLE, usd };
+  if (funding !== 'plan') return unit === 'equivalent' ? { kind: 'dash', title: NO_EQUIVALENT_TITLE, usd } : { funding, kind: 'dollars', usd };
+  if (unit === 'usd') return { kind: 'dash', title: NOTHING_BILLED_TITLE, usd };
   return r.costEquivalent === null ? { kind: 'unpriced', usd } : { figure: r.costEquivalent, hint, kind: 'equivalent_dollars', reason, usd };
 }
 

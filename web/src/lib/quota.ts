@@ -63,8 +63,8 @@ export type UnpricedReason = 'no priced capacity for a free plan' | 'a usage-bas
  * The tier the router prices an account's capacity at, its snapshot's `priced_tier` and the capacity lookup behind it
  * folded into one answer: the stored tier under `pro`, `max`, `max_5x`, `max_20x`, `team` and `enterprise` while the
  * cost table holds a row for it, and none with the reason for `free`, `usage_based`, no plan, a word outside the eight,
- * no tier or a tier the table lacks. With no table (`costs` null) the six words answer the stored tier, since Window
- * shares prices no figure and the plan word alone decides there.
+ * no tier or a tier the table lacks. With no table (`costs` null) the six words answer the stored tier, the plan word
+ * alone deciding.
  */
 export function pricedTier(plan: PlanWord | null, tier: string | null, costs: SubscriptionCosts | null): { tier: string } | { reason: UnpricedReason; tier: null } {
   if (plan === 'free') return { reason: 'no priced capacity for a free plan', tier: null };

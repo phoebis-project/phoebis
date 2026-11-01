@@ -3772,8 +3772,17 @@
   font-size: 11.5px;
 }
 
+/* The label keeps its room and the words naming the missing window give way, cut behind an ellipsis in a compact slot
+   too narrow for them, where the slot's title holds them whole. */
 .wbar--absent .wbar__label {
+  flex-shrink: 0;
   color: var(--ink-2);
+}
+
+.wbar--absent .wbar__pct {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .meter--absent {
@@ -4263,7 +4272,7 @@
 }
 
 /* A link that closes a card's subtitle reads in the sentence's flow and takes no padding of its own, so the Dashboard's
-   5-hour ring keeps its subtitle on one line at 1280 px, level with the 7-day ring beside it. */
+   7-day ring keeps its subtitle on one line at 1280 px, level with the Fable-week ring beside it. */
 .card__subtitle .link-btn {
   padding: 0;
 }

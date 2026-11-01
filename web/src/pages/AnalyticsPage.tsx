@@ -417,8 +417,7 @@ export function AnalyticsPage() {
   const byEffort = useAsync(() => (tab === 'traffic' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation], reload);
   // A dollar side narrows the three cost-bearing sections to the rows that side paid for, a filter the page's reads
   // cannot carry (Traffic, Latency and the Cache token charts read every row), so those sections read a second query
-  // while one of them shows. A share sums plan-funded rows alone whatever the filter, so that position and the whole
-  // read the page's own.
+  // while one of them shows. The whole reads the page's own.
   const fundedTab = tab === 'cache' || tab === 'cache-warming' || tab === 'cost';
   const funded = sessionId === null && (unit === 'usd' || unit === 'equivalent');
   const costSeries = useAsync(() => (funded && fundedTab ? api.getAnalyticsSeries({ ...query, funding }) : Promise.resolve<AnalyticsPoint[] | null>(null)), [query, funding, funded, fundedTab, generation], reload);
@@ -535,7 +534,7 @@ export function AnalyticsPage() {
   const { keptWarm } = totals;
   const probesUnmeasured = totals.fromRequests === true;
   // The cost-bearing sections' rows under the position: the funded query's under a dollar side, the page's own under
-  // the whole and under shares, and in a session view the rows folded by who paid for them.
+  // the whole, and in a session view the rows folded by who paid for them.
   const costPoints = useMemo(() => {
     if (sessionId !== null) return funding === undefined ? points : stale ? [] : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy, { ...foldOptions, funding });
     return funded ? (costSeries.stale ? [] : (costSeries.data ?? [])) : points;
@@ -1107,8 +1106,7 @@ export function AnalyticsPage() {
         <Section id="accounts" shown={shown} title="Accounts" meta="Peak utilization, window usage, pace, ineligible time, and pin churn per account">
           <AccountsSection
             accountIds={filters.accountId}
-            // The shares price nothing, so under Window shares a failed settings read leaves the card standing.
-            allowance={{ answer: unusedAllowance.stale ? null : unusedAllowance.data, costs: costSettings.data?.subscriptionCosts ?? null, error: unusedAllowance.error ?? (unit === 'share' ? null : costSettings.error) }}
+            allowance={{ answer: unusedAllowance.stale ? null : unusedAllowance.data, costs: costSettings.data?.subscriptionCosts ?? null, error: unusedAllowance.error ?? costSettings.error }}
             bucketMs={bucketMs}
             error={accountRollups.error}
             loading={accountRollups.data === null || accountRollups.stale}
@@ -1117,7 +1115,7 @@ export function AnalyticsPage() {
             slotOf={slotOf}
             span={span}
             axis={axis}
-            unit={unit}
+            week={week}
           />
         </Section>
       )}
@@ -1503,8 +1501,6 @@ const WASTED_PROBE_UNIT: Record<UnitPosition, string> = {
   all: 'In dollars at list prices.',
   equivalent: 'In dollars at list prices.',
   native: "In the unit each probe's funding pays in.",
-  // The `share` entry is the position no select offers.
-  share: "In the unit each probe's funding pays in.",
   usd: 'In dollars at list prices.',
 };
 
@@ -2607,7 +2603,7 @@ function AccountsSection({
   rollups: all,
   slotOf,
   span,
-  unit,
+  week,
 }: {
   accountIds: string[];
   /** The unused allowance card's read, its answer null while it runs, and the cost model its figures price through. */
@@ -2620,7 +2616,7 @@ function AccountsSection({
   rollups: AccountRollup[] | null;
   slotOf: (id: string) => number | null;
   span: { fromMs: number; toMs: number };
-  unit: UnitPosition;
+  week: WeekPosition;
 }) {
   const ink = useChartInk();
   const rollups = useMemo(() => (all === null ? null : accountIds.length === 0 ? all : all.filter((r) => accountIds.includes(r.accountId))), [all, accountIds]);
@@ -2747,7 +2743,7 @@ function AccountsSection({
           ],
         }))}
       />
-      <AllowanceTable {...allowance} unit={unit} />
+      <AllowanceTable {...allowance} week={week} />
     </>
   );
 }
@@ -2771,26 +2767,24 @@ const allowanceCell = (key: string, figure: AllowanceFigure | undefined) => (
 
 /**
  * "Unused allowance by account": each subscription account's weekly windows over the last four weeks under the
- * Accounts filter, ranked most left first, with the fleet's two figures over the table. A failed read, its own or under
- * an equivalent unit the cost model's, draws in place of the rows and the figures, so no figure stands without the read
+ * Accounts filter in the chosen week, ranked most left first, with the fleet's two figures over the table. A failed
+ * read, its own or the cost model's, draws in place of the rows and the figures, so no figure stands without the read
  * it prices.
  */
-function AllowanceTable({ answer, costs, error, unit }: { answer: UnusedAllowanceAnswer | null; costs: SubscriptionCosts | null; error: string | null; unit: UnitPosition }) {
-  // Window shares price nothing, so the rows draw without waiting on the cost model.
-  const rows = useMemo(() => (answer === null || (costs === null && unit !== 'share') ? null : allowanceRows(answer, costs, unit)), [answer, costs, unit]);
+function AllowanceTable({ answer, costs, error, week }: { answer: UnusedAllowanceAnswer | null; costs: SubscriptionCosts | null; error: string | null; week: WeekPosition }) {
+  const rows = useMemo(() => (answer === null || costs === null ? null : allowanceRows(answer, costs, week)), [answer, costs, week]);
   const windows = useMemo(() => weeklyKeys(answer?.accounts ?? []), [answer]);
-  const fleet = rows === null ? null : fleetFigures(rows, unit);
-  const shares = unit === 'share';
+  const fleet = rows === null ? null : fleetFigures(rows, week);
   return (
     <Card title="Unused allowance by account" subtitle="Each subscription account's weekly windows left unused at their resets, the last four weeks, under the Accounts filter. The range does not apply here" padded={false} className="card--table accounts-range allowance-table">
       {error === null && (
         <div className="req-totals">
           <div>
-            <span className="stat__label">{shares ? '7-day, mean per reset' : '7-day, fleet total'}</span>
+            <span className="stat__label">7-day, fleet total</span>
             <span className="stat__value">{fleet === null ? <Skeleton width={80} /> : fleet.sevenDay}</span>
           </div>
           <div>
-            <span className="stat__label">{shares ? 'Fable, mean per reset' : 'Fable, fleet total'}</span>
+            <span className="stat__label">Fable, fleet total</span>
             <span className="stat__value">{fleet === null ? <Skeleton width={80} /> : fleet.fable}</span>
           </div>
           <div>

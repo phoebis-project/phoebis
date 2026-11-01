@@ -18,7 +18,8 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, E
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, METER_CODEC, sortAddressOf, sortDirOf } from '@/lib/address';
-import { FREE_NOTE, allowanceFigure, allowanceSpan, allowanceSubtitle, allowanceWindows, newestResets, resetDate, resetHover, resetInstant, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
+import { FREE_NOTE, allowanceFigure, allowanceSpan, allowanceSubtitle, allowanceWindows, newestResets, ownShareHover, resetDate, resetHover, resetInstant, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
+import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
@@ -29,7 +30,7 @@ import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope, planEndedSent
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { speedHover } from '@/lib/selection';
 import { joinTrend } from '@/lib/trend';
-import type { UnitPosition } from '@/lib/unit';
+import type { WeekPosition } from '@/lib/unit';
 import { WINDOW_HOURS, WINDOW_LABEL, windowKeyId } from '@/lib/windows';
 
 /** The Status dimension's options, in the labels' order. */
@@ -266,9 +267,9 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
 function AccountDetail({ account, awaitingReading, generation, now, onBusyChange, onToast, onPair, onChanged }: { account: Account; awaitingReading: boolean; generation: number; now: number; onBusyChange: (busy: boolean) => void; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void }) {
   const navigate = useNavigate();
   const history = useAsync(() => api.getQuotaHistory(account.id), [account.id]);
-  // The cost model the allowance block's equivalents price through.
+  // The cost model the allowance block's figures price through.
   const settings = useAsync(() => api.getSettings(), []);
-  const { unit } = useAppSettings();
+  const { week } = useAppSettings();
   // An API-key account and a usage-based seat report no weekly window, so neither draws the block nor reads its route.
   const allowanceShown = account.kind === 'oauth' && !account.usageBased;
   // A weekly row changes once a week, so the block reads again on the bar's Refresh and once the list's poll answers a
@@ -732,13 +733,13 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
           <AllowanceCard
             answer={allowance.data === null ? undefined : (allowance.data.accounts.find((a) => a.accountId === account.id) ?? null)}
             costs={settings.data?.subscriptionCosts ?? null}
-            // The shares price nothing, so under Window shares a failed settings read leaves the block standing.
-            error={allowance.error ?? (unit === 'share' ? null : settings.error)}
+            error={allowance.error ?? settings.error}
+            holder={account}
             onRetry={() => {
               allowance.reload();
               settings.reload();
             }}
-            unit={unit}
+            week={week}
           />
           <DriftCard accountId={account.id} answer={drift.data} error={drift.error} onRetry={drift.reload} />
         </div>
@@ -829,11 +830,11 @@ function AllowanceText({ className, figure }: { className: string; figure: Allow
 /**
  * "Allowance left at reset", one column per weekly window: the latest reset's figure in the Usage card's head shape
  * and its reset line, the three weeks before it, then the total. `answer` is undefined while the read runs and null
- * for an account the route lists no reset for.
+ * for an account the route lists no reset for. `holder` is the registry's account, whose display name the hover reads.
  */
-function AllowanceCard({ answer, costs, error, onRetry, unit }: { answer: AllowanceAccount | null | undefined; costs: SubscriptionCosts | null; error: string | null; onRetry: () => void; unit: UnitPosition }) {
+function AllowanceCard({ answer, costs, error, holder, onRetry, week }: { answer: AllowanceAccount | null | undefined; costs: SubscriptionCosts | null; error: string | null; holder: Pick<Account, 'subscription'>; onRetry: () => void; week: WeekPosition }) {
   return (
-    <Card title="Allowance left at reset" subtitle={allowanceSubtitle(unit)}>
+    <Card title="Allowance left at reset" subtitle={allowanceSubtitle()}>
       {error !== null ? (
         <ErrorState
           title="Could not load the weekly resets"
@@ -844,8 +845,7 @@ function AllowanceCard({ answer, costs, error, onRetry, unit }: { answer: Allowa
             </Button>
           }
         />
-      ) : answer === undefined || (costs === null && unit !== 'share') ? (
-        // Window shares price nothing, so the shares draw without waiting on the cost model.
+      ) : answer === undefined || costs === null ? (
         <Skeleton height={120} />
       ) : answer === null ? (
         <p className="muted">{"No weekly reset recorded yet. The first shows once this account's week ends."}</p>
@@ -853,10 +853,10 @@ function AllowanceCard({ answer, costs, error, onRetry, unit }: { answer: Allowa
         <>
           <div className="allowance">
             {allowanceWindows(answer).map((w) => (
-              <AllowanceColumn key={w.window} account={answer} costs={costs} unit={unit} window={w} />
+              <AllowanceColumn key={w.window} account={answer} costs={costs} holder={holder} week={week} window={w} />
             ))}
           </div>
-          {answer.plan === 'free' && unit !== 'share' && <p className="muted detail__note">{FREE_NOTE}</p>}
+          {answer.plan === 'free' && <p className="muted detail__note">{FREE_NOTE}</p>}
         </>
       )}
     </Card>
@@ -914,10 +914,16 @@ function DriftCard({ accountId, answer, error, onRetry }: { accountId: string; a
   );
 }
 
-function AllowanceColumn({ account, costs, unit, window: w }: { account: AllowanceAccount; costs: SubscriptionCosts | null; unit: UnitPosition; window: AllowanceWindow }) {
+function AllowanceColumn({ account, costs, holder, week, window: w }: { account: AllowanceAccount; costs: SubscriptionCosts | null; holder: Pick<Account, 'subscription'>; week: WeekPosition; window: AllowanceWindow }) {
   const { counted, resets } = newestResets(w);
   const [latest, ...before] = resets;
-  const figure = (reset: AllowanceReset | undefined) => allowanceFigure(reset?.shareLeft ?? null, w.window, account, costs, unit, reset);
+  const figure = (reset: AllowanceReset | undefined) => allowanceFigure(reset?.shareLeft ?? null, w.window, account, costs, week, reset);
+  // The figure reads the chosen week, so the hover adds the reset's own share of the account's window, named by the
+  // display name where the account carries one and else by the tier the reset ran on.
+  const hover = (reset: AllowanceReset) => {
+    const plan = hintPlan(holder, reset.tier ?? account.tier);
+    return plan === null ? resetHover(reset) : `${resetHover(reset)}\n${ownShareHover(plan, w.window, reset.shareLeft)}`;
+  };
   const ended = <Badge tone="neutral">term ended</Badge>;
   return (
     <div className="allowance__col">
@@ -926,7 +932,7 @@ function AllowanceColumn({ account, costs, unit, window: w }: { account: Allowan
         <AllowanceText className="wbar__pct num" figure={figure(latest)} />
       </div>
       {latest && (
-        <div className="wbar__reset allowance__reset" title={resetHover(latest)}>
+        <div className="wbar__reset allowance__reset" title={hover(latest)}>
           {latest.source === 'term_ended' ? (
             <>
               {`left at ${resetInstant(latest.resetAt)}`} {ended}
@@ -937,7 +943,7 @@ function AllowanceColumn({ account, costs, unit, window: w }: { account: Allowan
         </div>
       )}
       {before.map((r) => (
-        <div key={r.resetAt} className="allowance__row" title={resetHover(r)}>
+        <div key={r.resetAt} className="allowance__row" title={hover(r)}>
           <span className="allowance__date">
             {resetDate(r.resetAt)}
             {r.source === 'term_ended' && <> {ended}</>}
@@ -947,7 +953,7 @@ function AllowanceColumn({ account, costs, unit, window: w }: { account: Allowan
       ))}
       <div className="allowance__row allowance__total">
         <span>{counted === 1 ? 'Total, 1 week' : `Total, ${counted} weeks`}</span>
-        <AllowanceText className="num" figure={weeksFigure(w, account, costs, unit)} />
+        <AllowanceText className="num" figure={weeksFigure(w, account, costs, week)} />
       </div>
     </div>
   );

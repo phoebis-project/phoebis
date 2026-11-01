@@ -245,9 +245,9 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
           <p className="qcard__note muted">No quota windows reported yet.</p>
         ) : (
           <div className="qcard__windows">
-            <QuotaWindow name="5h" window={w5} end={end} now={now} soon={soonest === '5h'} slowDown={slowedOf(account, now)} />
-            <QuotaWindow name="7d" window={w7} end={end} now={now} soon={soonest === '7d'} />
-            <QuotaWindow name="Fable" window={account.fableWindow} end={end} now={now} soon={soonest === '7d_fable'} />
+            <QuotaWindow name="5h" absent="no 5-hour window" window={w5} end={end} now={now} soon={soonest === '5h'} slowDown={slowedOf(account, now)} />
+            <QuotaWindow name="7d" absent="no 7-day window" window={w7} end={end} now={now} soon={soonest === '7d'} />
+            <QuotaWindow name="Fable" absent="no Fable window" window={account.fableWindow} end={end} now={now} soon={soonest === '7d_fable'} />
           </div>
         )}
       </div>
@@ -295,13 +295,13 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   );
 }
 
-/** The short name and the remaining share, in the meter's own color; an expired window has no share to give. */
-function WindowChip({ name, window: w, className, now }: { className: string; name: string; now: number; window: RateLimitWindow | null }) {
+/** The short name and the remaining share, in the meter's own color. An expired window has no share to give, and a
+ *  window the account does not carry names itself in the reset's cell, `absent` the chip's title. */
+function WindowChip({ absent, name, window: w, className, now }: { absent: string; className: string; name: string; now: number; window: RateLimitWindow | null }) {
   if (!w) {
     return (
-      <span className={`${className} qchip qchip--absent`} title={`This plan reports no ${name} window`}>
+      <span className={`${className} qchip qchip--absent`} title={absent}>
         <span className="qchip__name">{name}</span>
-        <span className="qchip__pct">n/a</span>
       </span>
     );
   }
@@ -327,9 +327,10 @@ function WindowChip({ name, window: w, className, now }: { className: string; na
  * behind it on its hover. The grid sizes the chip and the reset to their content and hands the meter the rest, and
  * `qwin__chip` names the chip's cell for the checks that read a row by its cells. Under 900 px the reset label takes a
  * row of its own under the meter. A slowed account's 5-hour window, passed its `slowDown`, closes its reset label with
- * the speed chip.
+ * the speed chip. A window the account's poll does not carry keeps its row, so the cards align, with `absent`'s words
+ * ("no 5-hour window") muted in the reset label's place.
  */
-function QuotaWindow({ end, name, window: w, now, slowDown = null, soon }: { end: number | null; name: string; now: number; slowDown?: AccountSlowDown | null; soon: boolean; window: RateLimitWindow | null }) {
+function QuotaWindow({ absent, end, name, window: w, now, slowDown = null, soon }: { absent: string; end: number | null; name: string; now: number; slowDown?: AccountSlowDown | null; soon: boolean; window: RateLimitWindow | null }) {
   // The last reading describes a window that has since reset, so its share says nothing until the next one.
   const live = w && !isExpired(w, now) ? w : null;
   const pace = live ? paceWords(live, now, end) : null;
@@ -338,7 +339,7 @@ function QuotaWindow({ end, name, window: w, now, slowDown = null, soon }: { end
   const burn = live ? burnWords(live) : null;
   return (
     <>
-      <WindowChip name={name} window={w} now={now} className="qwin__chip" />
+      <WindowChip absent={absent} name={name} window={w} now={now} className="qwin__chip" />
       {live ? (
         <Meter value={remainingOf(live)} tone={meterTone(remainingOf(live))} thin label={reading} title={reading} mark={remainingTimeShare(live) ?? undefined} />
       ) : (
@@ -368,7 +369,7 @@ function QuotaWindow({ end, name, window: w, now, slowDown = null, soon }: { end
           expired {fmtRelative(w.resetsAt, now)}
         </span>
       ) : (
-        <span className="qwin__reset muted">not reported</span>
+        <span className="qwin__reset muted">{absent}</span>
       )}
     </>
   );

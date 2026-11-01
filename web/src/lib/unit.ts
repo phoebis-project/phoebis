@@ -4,25 +4,22 @@ import type { FundingFilter } from '@/api/types';
  * The console-wide unit position. Named apart from `CostUnit` in `web/src/lib/requests.ts` (a request's native unit),
  * since the test entry re-exports both modules and one name for two types would clash.
  */
-export type UnitPosition = 'all' | 'equivalent' | 'native' | 'share' | 'usd';
+export type UnitPosition = 'all' | 'equivalent' | 'native' | 'usd';
 /** The select's order: native first, the default, then the Cost section's three. */
 export const UNIT_POSITIONS: readonly UnitPosition[] = ['native', 'all', 'usd', 'equivalent'];
-// The `share` entries of the four tables below are the position no select offers.
-export const UNIT_LABEL: Record<UnitPosition, string> = { all: 'All in dollars', equivalent: 'Dollar equivalent', native: 'Native', share: 'Window shares', usd: 'Billed dollars' };
+export const UNIT_LABEL: Record<UnitPosition, string> = { all: 'All in dollars', equivalent: 'Dollar equivalent', native: 'Native', usd: 'Billed dollars' };
 /** The labels the top bar's select shows at 900 px and below, where the bar spans a viewport as narrow as a phone's. */
-export const UNIT_SHORT: Record<UnitPosition, string> = { all: 'All $', equivalent: 'Equivalent $', native: 'Native', share: 'Shares', usd: 'Billed $' };
+export const UNIT_SHORT: Record<UnitPosition, string> = { all: 'All $', equivalent: 'Equivalent $', native: 'Native', usd: 'Billed $' };
 /**
- * The funding side a position's second read asks for: the Analytics page's second query under `usd` and `equivalent`
- * (its own reads serve under `all` and `share`, since a share sums plan-funded rows alone whatever the filter) and the
- * session fold's under `usd`, `share` and `equivalent`. `native` reads both sides of one answer.
+ * The funding side a position's second read asks for: the Analytics page's second query and the session fold's under
+ * `usd` and `equivalent`, the page's own reads serving under `all`. `native` reads both sides of one answer.
  */
-export const UNIT_FUNDING: Record<UnitPosition, FundingFilter | undefined> = { all: undefined, equivalent: 'plan', native: undefined, share: 'plan', usd: 'billed' };
+export const UNIT_FUNDING: Record<UnitPosition, FundingFilter | undefined> = { all: undefined, equivalent: 'plan', native: undefined, usd: 'billed' };
 /** One line per position in the legend, beside the labels so the console and its checks read one source. */
 export const UNIT_LEGEND: Record<UnitPosition, string> = {
   all: 'Every request in dollars at the API price list, a subscription request at its dollar equivalent.',
   equivalent: 'The subscription requests alone at the API price list.',
   native: 'Each request in the unit its funding pays in: a subscription request as a share of the week the week control names, an API key, fast-mode, overage or usage-based request in dollars.',
-  share: "A subscription account's requests as shares of its own 5-hour, 7-day and model-week windows. Reads where one account is named, since shares of different accounts' windows do not add.",
   usd: 'The API key, fast-mode, overage and usage-based requests alone, the dollars the account holder is charged.',
 };
 /**

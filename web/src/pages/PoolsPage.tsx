@@ -607,9 +607,7 @@ function PoolCost({ pool, reading }: { pool: Pool; reading: WeekReading }) {
     </dd>
   );
   const day = dayOf(pool);
-  // The `share` position is the one no select offers.
-  const position = unit === 'share' ? 'native' : unit;
-  if (position !== 'native') return <dd className="num">{fmtUsd(dollarsUnder(position, day))}</dd>;
+  if (unit !== 'native') return <dd className="num">{fmtUsd(dollarsUnder(unit, day))}</dd>;
   const sides = nativeSidesOf(day);
   if (sides.equivalent === undefined && sides.billed === undefined) return dash('No request in the last 24 hours');
   const { scale, week } = reading;

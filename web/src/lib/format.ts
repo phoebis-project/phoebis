@@ -79,8 +79,6 @@ export const weekShort = (share: number, week: WeekPosition): string => `${fmtSh
 const EQUIVALENT_WINDOW: ByWindow<string> = { '5h': '5-hour', '7d': '7-day', '7d_fable': '7-day Fable' };
 /** A 20x equivalent's window word: "5-hour", "7-day", "7-day Fable", a window the pages do not know under its key. */
 export const equivalentWord = (windowKey: string): string => EQUIVALENT_WINDOW[windowKeyId(windowKey) ?? ''] ?? windowKey;
-/** The short form for a cell: "1.47% 20x 5h", "0.244% 20x 7d", "2.22% 20x 7-day Fable". */
-export const equivalentShort = (windowKey: string, share: number): string => `${fmtShare(share)} 20x ${WINDOW_SHORT[windowKeyId(windowKey) ?? ''] ?? windowKey}`;
 /**
  * The hover text of every estimated figure, the one sentence the console says about an estimate: the routes answer
  * the flag and no donor, so no surface names the model whose weight stands in. "Model tier", since the drawer's title

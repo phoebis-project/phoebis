@@ -1,8 +1,9 @@
 import type { AllowanceAccount, AllowanceReset, AllowanceWindow, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
-import { anchorTier, pricedWindow, tierCapacity } from '@/lib/costs';
-import { equivalentShort, fmtAbsolute, fmtShare, fmtShortTime } from '@/lib/format';
+import { HINT_WINDOW, own } from '@/lib/analytics';
+import { anchorTier, pricedWindow, tierCapacity, weekScale } from '@/lib/costs';
+import { fmtAbsolute, fmtShare, fmtShortTime, weekShort } from '@/lib/format';
 import { pricedTier } from '@/lib/quota';
-import type { UnitPosition } from '@/lib/unit';
+import type { WeekPosition } from '@/lib/unit';
 import { WINDOW_LABEL, WINDOW_ORDER, windowKeyId } from '@/lib/windows';
 
 /** The weeks the Accounts block and the Analytics card read: the latest reset and the three before it. */
@@ -24,33 +25,32 @@ export function newestResets(window: AllowanceWindow, weeks = ALLOWANCE_WEEKS): 
   return { counted: resets.length, resets, total: resets.reduce((sum, r) => sum + r.shareLeft, 0) };
 }
 
-/** A figure in the console's unit: the share of the account's own window under Window shares, else the share's 20x
- *  window equivalent through the tier's capacity over the anchor's on the window (a model week through its priced
- *  shared window), a dash where the router prices no capacity for the plan or the cost model sizes none for the tier
- *  on that window. */
-export type AllowanceFigure = { kind: 'share'; share: number; text: string } | { kind: 'equivalent'; share: number; text: string } | { kind: 'unpriced'; text: '-'; title: string } | { kind: 'none'; text: '-'; title: string };
+/** A figure in the chosen week: the share of the account's own window priced through the tier's 7-day capacity over
+ *  the chosen week's tier's (a model week at its capacity factor), `share` the figure in that week, and a dash where
+ *  the router prices no capacity for the plan or the cost model sizes none for the tier on that window. */
+export type AllowanceFigure = { kind: 'equivalent'; share: number; text: string } | { kind: 'unpriced'; text: '-'; title: string } | { kind: 'none'; text: '-'; title: string };
 
 /** The dash's hover where the plan prices no capacity. Named apart from `lib/analytics.ts`'s `UNPRICED_TITLE`, whose
  *  words differ, so the test bundle's star exports keep both. */
 export const ALLOWANCE_UNPRICED_TITLE = "Unpriced: the cost model holds no capacity for this account's plan";
 export const NO_READING_TITLE = 'no reading at this reset';
-export const FREE_NOTE = 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it. Window shares reads the shares.';
+export const FREE_NOTE = 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it.';
 
 /**
- * What one share of the account's own window weighs in the anchor's: the tier's capacity over the anchor's on the
- * shared window the week prices on. A model week's capacity divides by one factor for every tier, so its weight is its
- * shared window's. Null with no cost model, for a plan the router prices no tier for, a null tier, an unpriced window,
- * and where the cost model sizes either side at nothing.
+ * What one share of the account's own week weighs in Pro weeks: the tier's 7-day capacity times the window's capacity
+ * factor (1 for the 7-day window, the model week's own for a model week) over the anchor's 7-day capacity, so a
+ * Fable-week reset reads half its 7-day figure. Null with no cost model, for a plan the router prices no tier for, a
+ * null tier, a window that is no week of the 7-day window, and where the cost model sizes either side at nothing.
  */
 function capacityWeight(account: Pick<AllowanceAccount, 'plan' | 'tier'>, window: string, costs: SubscriptionCosts | null): number | null {
   if (costs === null) return null;
   const gate = pricedTier(account.plan, account.tier, costs);
   if (gate.tier === null) return null;
   const priced = pricedWindow(costs, window);
-  if (priced === null) return null;
-  const own = tierCapacity(costs, gate.tier, priced.priced);
-  const anchor = tierCapacity(costs, anchorTier(costs), priced.priced);
-  return own === null || anchor === null || anchor === 0 ? null : own / anchor;
+  if (priced === null || priced.priced !== 'seven_day') return null;
+  const capacity = tierCapacity(costs, gate.tier, 'seven_day');
+  const anchor = tierCapacity(costs, anchorTier(costs), 'seven_day');
+  return capacity === null || anchor === null || anchor === 0 ? null : (capacity * priced.divisor) / anchor;
 }
 
 /**
@@ -60,39 +60,36 @@ function capacityWeight(account: Pick<AllowanceAccount, 'plan' | 'tier'>, window
 const pairOf = (account: Pick<AllowanceAccount, 'plan' | 'tier'>, reset?: Pick<AllowanceReset, 'plan' | 'tier'>): Pick<AllowanceAccount, 'plan' | 'tier'> =>
   reset !== undefined && (reset.plan ?? null) !== null && (reset.tier ?? null) !== null ? reset : account;
 
-/** With no cost model an equivalent reads the unpriced dash, an arm the pages never draw, since they hold the skeleton
- *  under an equivalent unit while the model loads. */
-export function allowanceFigure(share: number | null, window: string, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts | null, unit: UnitPosition, reset?: Pick<AllowanceReset, 'plan' | 'tier'>): AllowanceFigure {
+/** With no cost model a figure reads the unpriced dash, an arm the pages never draw, since they hold the skeleton
+ *  while the model loads. */
+export function allowanceFigure(share: number | null, window: string, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts | null, week: WeekPosition, reset?: Pick<AllowanceReset, 'plan' | 'tier'>): AllowanceFigure {
   if (share === null) return { kind: 'none', text: '-', title: NO_READING_TITLE };
-  if (unit === 'share') return { kind: 'share', share, text: fmtShare(share) };
   const weight = capacityWeight(pairOf(account, reset), window, costs);
-  if (weight === null) return { kind: 'unpriced', text: '-', title: ALLOWANCE_UNPRICED_TITLE };
-  const equivalent = share * weight;
-  return { kind: 'equivalent', share: equivalent, text: equivalentShort(window, equivalent) };
+  const scale = weekScale(costs, week);
+  if (weight === null || scale === null) return { kind: 'unpriced', text: '-', title: ALLOWANCE_UNPRICED_TITLE };
+  const figure = share * weight * scale;
+  return { kind: 'equivalent', share: figure, text: weekShort(figure, week) };
 }
 
 /**
- * A window's four weeks' figure: the shares added under Window shares (the answer's total as `newestResets` hands it),
- * else each reset's equivalent at its own pair added, so a week before a tier change weighs at the tier it ran under.
- * A reset that prices nothing leaves the total unpriced, since a sum without that week would count fewer weeks than
- * its label names.
+ * A window's four weeks' figure: each reset's figure at its own pair added, so a week before a tier change weighs at
+ * the tier it ran under. A reset that prices nothing leaves the total unpriced, since a sum without that week would
+ * count fewer weeks than its label names.
  */
-export function weeksFigure(window: AllowanceWindow, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts | null, unit: UnitPosition): AllowanceFigure {
+export function weeksFigure(window: AllowanceWindow, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts | null, week: WeekPosition): AllowanceFigure {
   const { resets, total } = newestResets(window);
-  if (unit === 'share' || resets.length === 0) return allowanceFigure(total, window.window, account, costs, unit);
+  if (resets.length === 0) return allowanceFigure(total, window.window, account, costs, week);
   let sum = 0;
   for (const reset of resets) {
-    const figure = allowanceFigure(reset.shareLeft, window.window, account, costs, unit, reset);
+    const figure = allowanceFigure(reset.shareLeft, window.window, account, costs, week, reset);
     if (figure.kind !== 'equivalent') return figure;
     sum += figure.share;
   }
-  return { kind: 'equivalent', share: sum, text: equivalentShort(window.window, sum) };
+  return { kind: 'equivalent', share: sum, text: weekShort(sum, week) };
 }
 
-/** The block's subtitle by unit. */
-export function allowanceSubtitle(unit: UnitPosition): string {
-  return unit === 'share' ? 'The share of each weekly window left unused when it reset, the last four weeks' : 'Each weekly window left unused when it reset, in 20x window equivalents, the last four weeks';
-}
+/** The block's subtitle, which the week control's position leaves alike. */
+export const allowanceSubtitle = (): string => 'Each weekly window left unused when it reset, as a share of the chosen week, the last four weeks';
 
 /** A weekly window's place in the console's order, a week the console does not know after every known one. */
 const rankOf = (window: string): number => {
@@ -127,6 +124,10 @@ const SOURCE_WORD = new Map([
 /** A reset's hover: its absolute instant and where its reading came from, a word the router adds read as sent. */
 export const resetHover = (reset: AllowanceReset): string => `${fmtAbsolute(reset.resetAt)}, read from ${SOURCE_WORD.get(reset.source) ?? reset.source}`;
 
+/** A reset's own share for the week's hover, in the hint's words: "Ultra: 39% of the 7-day window left", "Max: 12% of
+ *  the Fable week left", a week the console does not know under its key. */
+export const ownShareHover = (plan: string, window: string, shareLeft: number): string => `${plan}: ${fmtShare(shareLeft)} of ${own(HINT_WINDOW, window) ? HINT_WINDOW[window] : window} left`;
+
 /** A reset's day, "Sep 12": a week's reset lies days back, so the day is always written. */
 export const resetDate = (isoTime: string): string => new Date(isoTime).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
 
@@ -136,7 +137,7 @@ export const resetInstant = (isoTime: string): string => `${resetDate(isoTime)} 
 /** One account of the Analytics card: each weekly window's last and four weeks' figures with the resets counted,
  *  keyed by the wire key, the 7-day window's count, the instant of a latest reset that is the term's end, and whether
  *  one of the newest 7-day weeks prices no capacity at the pair it ran under, the account's own pair standing in where
- *  it holds no 7-day reset, and the plan word alone deciding where no cost model answered. */
+ *  it holds no 7-day reset. */
 export interface AllowanceRow {
   accountId: string;
   figures: Record<string, { counted: number; last: AllowanceFigure; weeks: AllowanceFigure }>;
@@ -149,33 +150,30 @@ export interface AllowanceRow {
 const valueOf = (figure: AllowanceFigure | undefined): number | null => (figure === undefined || figure.kind === 'none' || figure.kind === 'unpriced' ? null : figure.share);
 
 /** One row of the Analytics card per account: its resets count, each weekly window's last and four weeks' figures, the
- *  term-ended mark of its latest reset where one is, sorted most left first on the four weeks' 7-day figure in the unit
- *  shown, then the Fable figure, then the id, an unpriced account last under the equivalent units. */
-export function allowanceRows(answer: UnusedAllowanceAnswer, costs: SubscriptionCosts | null, unit: UnitPosition): AllowanceRow[] {
+ *  term-ended mark of its latest reset where one is, sorted with an unpriced account last, then most left first on the
+ *  four weeks' 7-day figure in the chosen week, then the Fable figure, then the id. */
+export function allowanceRows(answer: UnusedAllowanceAnswer, costs: SubscriptionCosts | null, week: WeekPosition): AllowanceRow[] {
   const rows = answer.accounts.map((account): AllowanceRow => {
     const figures: AllowanceRow['figures'] = {};
     let termEndedAt: string | null = null;
     for (const w of allowanceWindows(account)) {
       const { counted, resets } = newestResets(w);
       if (resets.length === 0) continue;
-      figures[w.window] = { counted, last: allowanceFigure(resets[0].shareLeft, w.window, account, costs, unit, resets[0]), weeks: weeksFigure(w, account, costs, unit) };
+      figures[w.window] = { counted, last: allowanceFigure(resets[0].shareLeft, w.window, account, costs, week, resets[0]), weeks: weeksFigure(w, account, costs, week) };
       if (termEndedAt === null && resets[0].source === 'term_ended') termEndedAt = resets[0].resetAt;
     }
-    // Read off each newest 7-day week's own pair under every unit, so the fleet's note names every account the sum
-    // leaves out. Without the model the shares price nothing, so the plan word alone marks a pair the router prices no
-    // tier for.
+    // Read off each newest 7-day week's own pair, so the fleet's note names every account the sum leaves out.
     const sevenDay = account.windows.find((w) => w.window === 'seven_day');
     const pairs = sevenDay === undefined || sevenDay.resets.length === 0 ? [account] : newestResets(sevenDay).resets.map((r) => pairOf(account, r));
-    const unpriced = pairs.some((pair) => (costs === null ? pricedTier(pair.plan, pair.tier, null).tier === null : capacityWeight(pair, 'seven_day', costs) === null));
+    const unpriced = pairs.some((pair) => capacityWeight(pair, 'seven_day', costs) === null);
     return { accountId: account.accountId, figures, resets: figures.seven_day?.counted ?? 0, termEndedAt, unpriced };
   });
   const lead = (r: AllowanceRow, window: string) => valueOf(r.figures[window]?.weeks) ?? Number.NEGATIVE_INFINITY;
   // A dash ranks under every figure, so an equal pair of dashes compares as a tie rather than as NaN.
   const by = (a: number, b: number) => (a === b ? 0 : b - a);
-  const ranked = unit !== 'share';
   return rows.sort(
     (a, b) =>
-      (ranked ? Number(a.unpriced) - Number(b.unpriced) : 0) ||
+      Number(a.unpriced) - Number(b.unpriced) ||
       by(lead(a, 'seven_day'), lead(b, 'seven_day')) ||
       by(lead(a, 'seven_day_fable'), lead(b, 'seven_day_fable')) ||
       (a.accountId < b.accountId ? -1 : a.accountId > b.accountId ? 1 : 0),
@@ -184,29 +182,11 @@ export function allowanceRows(answer: UnusedAllowanceAnswer, costs: Subscription
 
 const counted = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
 
-/** The two fleet figures: under Window shares the mean share per reset with the resets and accounts counted, under
- *  every other position the priced accounts' equivalents added with the unpriced accounts named. */
-export function fleetFigures(rows: AllowanceRow[], unit: UnitPosition): { fable: string; note: string; sevenDay: string } {
-  if (unit === 'share') {
-    // A mean of shares is a fleet reading where a sum is not, since each share is of its account's own week.
-    const mean = (window: string) => {
-      let total = 0;
-      let resets = 0;
-      for (const r of rows) {
-        const value = valueOf(r.figures[window]?.weeks);
-        if (value === null) continue;
-        total += value;
-        resets += r.figures[window].counted;
-      }
-      return resets === 0 ? '-' : fmtShare(total / resets);
-    };
-    const resets = rows.reduce((n, r) => n + r.resets, 0);
-    const accounts = rows.filter((r) => r.resets > 0).length;
-    return { fable: mean('seven_day_fable'), note: `${counted(resets, 'reset')} on ${counted(accounts, 'account')}, each a share of its account's own week`, sevenDay: mean('seven_day') };
-  }
+/** The two fleet figures: the priced accounts' figures in the chosen week added, with the unpriced accounts named. */
+export function fleetFigures(rows: AllowanceRow[], week: WeekPosition): { fable: string; note: string; sevenDay: string } {
   const sum = (window: string) => {
     const values = rows.map((r) => valueOf(r.figures[window]?.weeks)).filter((v): v is number => v !== null);
-    return values.length === 0 ? '-' : equivalentShort(window, values.reduce((a, b) => a + b, 0));
+    return values.length === 0 ? '-' : weekShort(values.reduce((a, b) => a + b, 0), week);
   };
   const priced = rows.filter((r) => !r.unpriced).length;
   const unpriced = rows

@@ -211,8 +211,9 @@ export function sizedAccounts(accounts: Account[], costs: SubscriptionCosts, win
 }
 
 const SHARED_WINDOWS = ['five_hour', 'seven_day'];
-/** The hint's words for a window, a sentence's words apart from `shareLabel`'s ("of 5-hour") on the quota views. */
-const HINT_WINDOW: Readonly<Record<string, string>> = { five_hour: 'the 5-hour window', seven_day: 'the 7-day window', seven_day_fable: 'the Fable week' };
+/** The hint's words for a window, a sentence's words apart from `shareLabel`'s ("of 5-hour") on the quota views, which
+ *  the allowance's week hover reads too. */
+export const HINT_WINDOW: Readonly<Record<string, string>> = { five_hour: 'the 5-hour window', seven_day: 'the 7-day window', seven_day_fable: 'the Fable week' };
 
 /**
  * The hint's parts: the plan's label, then one line per window the route answered a share of, 5-hour, 7-day, then the
@@ -306,12 +307,9 @@ export function keptWarmNote(k: { requests: number; tokens1h: number; tokens5m: 
 }
 
 /** The positions a dollar figure of the Analytics page reads under. */
-export type DollarPosition = Exclude<UnitPosition, 'native' | 'share'>;
-/**
- * Native reads both sides of one answer with no funding filter, so its dollar figures are the whole's. The `share`
- * position is the one no select offers.
- */
-export const dollarsOf = (unit: UnitPosition): DollarPosition => (unit === 'native' || unit === 'share' ? 'all' : unit);
+export type DollarPosition = Exclude<UnitPosition, 'native'>;
+/** Native reads both sides of one answer with no funding filter, so its dollar figures are the whole's. */
+export const dollarsOf = (unit: UnitPosition): DollarPosition => (unit === 'native' ? 'all' : unit);
 /** A dollar position's requests, as the Cost chart's and table's subtitles and the first tile's note name them. */
 export const UNIT_SUBSET: Record<DollarPosition, string> = { all: 'all requests', equivalent: "the subscription accounts' requests at the API price list", usd: 'the API key, fast mode, overage and usage-based requests at the API price list' };
 /**
@@ -420,15 +418,12 @@ export interface CostHead {
  * draws as its skeleton. A dollar position reads its dollars under its own words, and reads no scale.
  */
 export function costHeadOf(unit: UnitPosition, totals: AnalyticsGroup, week: WeekPosition, scale: number | null): CostHead | null {
-  // The `share` position is the one no select offers, read in dollars as `dollarsOf` reads it for the page's other
-  // sections.
-  const position = unit === 'share' ? 'all' : unit;
-  if (position === 'native') {
+  if (unit === 'native') {
     if (scale === null) return null;
     const { figures, unpriced } = nativeFiguresOf(sidesOf(totals), week, scale);
     return { meta: `${figures.map((f) => f.text).join(' and ')} in range`, subset: NATIVE_SUBSET, tile: { figures, label: 'Cost', note: NATIVE_SUBSET }, unpriced };
   }
-  const dollars = dollarsOf(position);
+  const dollars = dollarsOf(unit);
   const figure = fmtUsd(totals.costUsd);
   return { meta: `${figure} in range, ${UNIT_META[dollars]}`, subset: UNIT_SUBSET[dollars], tile: { figures: [{ text: figure }], label: UNIT_TILE_LABEL[dollars], note: dollars === 'all' ? 'at the effective price list' : UNIT_SUBSET[dollars] }, unpriced: false };
 }
