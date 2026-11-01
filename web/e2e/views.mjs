@@ -775,9 +775,9 @@ async function attentionLineNarrow(theme) {
 /**
  * The dashboard's stat grid at the pass's viewport, at 1024 by 768 inside its two-column band and at 400 by 900: all
  * five tiles drawn, wrapping as the grid's columns let them, none past the grid's right edge, no tile's figure wider
- * than the tile's content box, since the cost tile's figure keeps its window's name on one line, and the fifth tile
- * across the grid's whole width. The tiles, the rows they fill, the fifth tile's width against the grid's and any
- * figure past its tile go to the measurements at each width, and the viewport is the pass's again after.
+ * than the tile's content box, since a figure that spills past its tile runs into the gap and the next tile, and the
+ * fifth tile across the grid's whole width. The tiles, the rows they fill, the fifth tile's width against the grid's
+ * and any figure past its tile go to the measurements at each width, and the viewport is the pass's again after.
  */
 async function statGrid(theme) {
   const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
@@ -869,7 +869,7 @@ async function dashboardTiles(theme) {
       const opening = grid.tiles[perRow];
       const share = (grid.row - (perRow - 1) * grid.gap) / perRow;
       if (Math.abs(closing.width - share) > 1) say(`draw the ${TILE_ORDINALS[perRow - 1]} tile ${closing.width} px wide, not its share of the ${grid.row} px row at ${perRow} to a row (${Math.round(share * 10) / 10} px)`);
-      for (const what of compare(closing, first, ['top'], `the ${TILE_ORDINALS[perRow - 1]} tile against the first`)) say(what);
+      if (perRow > 1) for (const what of compare(closing, first, ['top'], `the ${TILE_ORDINALS[perRow - 1]} tile against the first`)) say(what);
       if (opening.top <= first.top) say(`draw the ${TILE_ORDINALS[perRow]} tile at ${opening.top}, not on a row under the first tile's at ${first.top}`);
       for (const what of compare(opening, first, ['left'], `the ${TILE_ORDINALS[perRow]} tile against the first`)) say(what);
       if (Math.abs(fifth.width - grid.row) > 1) say(`draw the fifth tile ${fifth.width} px wide, not the ${grid.row} px row`);
@@ -889,17 +889,19 @@ const COMMON_WEEK_FIGURE = '12.5% of an Ultra week';
  * The Dashboard's Estimated cost, 24h tile at 360 by 800, 900 by 800, 1280 by 800 and 1440 by 900 with the widest week
  * figure written into its subscription line, where the story's day draws the unpriced dash: the figure ends inside the
  * tile's content box, breaking between its words where the tile is narrower, from the left edge and in the type of the
- * billed line's figure, the rows its line then takes recorded. The dash is restored in the same read, so the shot and
- * the measures after it read the tile as it drew. At 1280 by 800 the widths of the widest and the common week figure on
- * one line are read off a range over a span in the subscription line, which takes the line's 15 px and the value's
- * letter spacing, for the day grid's width comments. The mock pass's alone, since the router's seed holds no
- * subscription account and so draws no subscription line.
+ * billed line's figure, the rows its line then takes recorded. At 1280 by 800 and 1440 by 900, where the day grid holds
+ * four tiles to a row, the common week figure written into the same line takes one line of its own, its lines counted
+ * off the figure's text since the funding's word may still move to a row of its own. The dash is restored in the same
+ * read, so the shot and the measures after it read the tile as it drew. At 1280 by 800 the widths of the widest and the
+ * common week figure on one line are read off a range over a span in the subscription line, which takes the line's
+ * 15 px and the value's letter spacing, for the day grid's width comments. The mock pass's alone, since the router's
+ * seed holds no subscription account and so draws no subscription line.
  */
 async function dashboardWidestFigure(theme) {
   const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
-  const read = (forms) =>
+  const read = (forms, common) =>
     page.evaluate(
-      ({ forms, written }) => {
+      ({ common, forms, written }) => {
         const tile = [...document.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent === 'Estimated cost, 24h');
         const lineOf = (word) => [...(tile?.querySelectorAll('.stat__pair-line') ?? [])].find((l) => l.querySelector('.stat__pair-word')?.textContent === word) ?? null;
         const subscription = lineOf('subscription');
@@ -935,8 +937,14 @@ async function dashboardWidestFigure(theme) {
         const ink = rangeOver(figure).getBoundingClientRect();
         // The line's own boxes would count the word's lower baseline as a row, so the rows are its height in lines.
         const rows = Math.round(subscription.getBoundingClientRect().height / parseFloat(getComputedStyle(subscription).lineHeight));
+        let lines = null;
+        if (common !== null) {
+          text.nodeValue = common;
+          lines = new Set([...rangeOver(figure).getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top))).size;
+        }
         const measured = {
           billed: { left: round(rangeOver(billed).getBoundingClientRect().left), type: type(billed) },
+          common: lines,
           figure: { left: round(ink.left), right: round(ink.right), type: type(figure) },
           inner: round(box.right - parseFloat(s.paddingRight) - parseFloat(s.borderRightWidth)),
           rows,
@@ -946,19 +954,19 @@ async function dashboardWidestFigure(theme) {
         text.nodeValue = drawn;
         return measured;
       },
-      { forms, written: WIDEST_WEEK_FIGURE },
+      { common, forms, written: WIDEST_WEEK_FIGURE },
     );
   try {
-    for (const size of [
-      { height: 800, width: 360 },
-      { height: 800, width: 900 },
-      { height: 800, width: 1280 },
-      { height: 900, width: 1440 },
+    for (const { common, ...size } of [
+      { common: null, height: 800, width: 360 },
+      { common: null, height: 800, width: 900 },
+      { common: COMMON_WEEK_FIGURE, height: 800, width: 1280 },
+      { common: COMMON_WEEK_FIGURE, height: 900, width: 1440 },
     ]) {
       await page.setViewportSize(size);
       await settle();
       const forms = size.width === 1280 ? [COMMON_WEEK_FIGURE, WIDEST_WEEK_FIGURE] : [];
-      const got = await read(forms);
+      const got = await read(forms, common);
       const where = `at ${size.width} by ${size.height}`;
       measurements.push(`${theme} / Estimated cost, 24h tile with ${JSON.stringify(WIDEST_WEEK_FIGURE)} ${where} ${JSON.stringify(got)}`);
       const say = (what) => failures.push(`${theme} /: ${where} the Estimated cost, 24h tile ${what}`);
@@ -971,6 +979,7 @@ async function dashboardWidestFigure(theme) {
         measurements.push(`${theme} / the widest week figure at 15 px: ${got.widths[1]}`);
       }
       if (got.figure.right > got.inner + 0.5) say(`draws ${JSON.stringify(WIDEST_WEEK_FIGURE)} to ${got.figure.right} px, past its content's right edge at ${got.inner} px`);
+      if (common !== null && got.common !== 1) say(`draws ${JSON.stringify(common)} over ${got.common} lines, not one`);
       for (const what of compare(got.figure, got.billed, ['left', 'type'], "the subscription line's widest week figure against the billed line's figure")) say(what);
     }
   } finally {

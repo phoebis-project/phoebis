@@ -32,8 +32,9 @@ tile's top edge, the tile after it opening the next row at the first tile's left
 width, every width recorded), the Estimated cost, 24h tile with the widest week figure, "0.00998% of an Ultra week",
 written into its subscription line (mock pass, at the same four widths: the figure inside the tile's content box,
 breaking between its words where the tile is narrower, from the left edge and in the type of the billed line's figure,
-with the rows its line takes recorded and the dash restored after, and at 1280 by 800 the widths of that figure and of
-the common "12.5% of an Ultra week" on one line at 15 px, the two figures that the day grid's width comments cite,
+with the rows its line takes recorded, at 1280 by 800 and 1440 by 900 the common "12.5% of an Ultra week" written in on
+one line of its own, the dash restored after, and at 1280 by 800 the widths of both figures on one line at 15 px, which
+the day grid's width comments cite as the common week figure and the widest one a share at or above 0.001% draws,
 recorded), the Dashboard's tile words (the Estimated cost, 24h tile's subscription line a share of an Ultra week, `0%`
 on a day without subscription cost, or the dash under the unpriced title on the story's day, and its note a figure per
 hour, and the Refused, 24h tile's hover naming the router's own refusals beside the Requests, 24h tile's hover, the two
