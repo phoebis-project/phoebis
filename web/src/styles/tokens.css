@@ -33,6 +33,10 @@
   --warning-ink: #7a5200;
   --warning-soft: #fdf0d2;
   --warning-track: #fbe6b6;
+  /* The info badge: its ink on its fill contrasts less than the warning badge's, since its item costs nothing, and
+     still reads at 4.5:1 or better. */
+  --info-ink: #41698f;
+  --info-soft: #e4ecf4;
   --serious: #ec835a;
   --serious-ink: #9b3f19;
   --serious-soft: #fce6dc;
@@ -112,6 +116,8 @@
   --warning-ink: #f8c65a;
   --warning-soft: #3a2d10;
   --warning-track: #4a3a14;
+  --info-ink: #86abcf;
+  --info-soft: #18273a;
   --serious: #ec835a;
   --serious-ink: #f3a17e;
   --serious-soft: #3d2418;

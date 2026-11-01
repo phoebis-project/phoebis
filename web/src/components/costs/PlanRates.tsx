@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import type { ModelPrice, SubscriptionCosts } from '@/api/types';
 import { Segmented } from '@/components/ui/primitives';
-import { anchorTier, bandNow, latestWeighted, modelTierOf, modelWeeks, regimeNames, regimeTitle, regimeWord, shareIn, tierCapacity, tierGroups, unreachableBand, weightedWindows, weightOf, weightOrFallback, withRegime, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
-import { ESTIMATED_TITLE, fmtShare, undatedModel, upperFirst, withEstimate } from '@/lib/format';
+import { anchorTier, bandNow, MODEL_WEEK_TIERS, modelWeeks, regimeNames, regimeTitle, regimeWord, shareIn, tierCapacity, tierGroups, unreachableBand, weightedWindows, weightOf, withRegime, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
+import { fmtShare, undatedModel, upperFirst } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 import { nowLine } from './PeakBand';
 import { BandSwitch } from './WindowsByTier';
@@ -47,7 +47,9 @@ export function FoldRow({ cols, count, onToggle, open }: { cols: number; count: 
  * model tier with its newest model, the older models folded under a row of their own.
  */
 export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { costs: SubscriptionCosts; now: number; olderOpen: boolean; onToggleOlder: () => void; prices: ModelPrice[] }) {
-  const tiers = Object.keys(costs.capacity).filter((tier) => WINDOWS.some((w) => tierCapacity(costs, tier, w.key) !== null));
+  // The anchor's tier first, since every figure the console prints is a share of its week, then the file's order.
+  const sized = Object.keys(costs.capacity).filter((tier) => WINDOWS.some((w) => tierCapacity(costs, tier, w.key) !== null));
+  const tiers = [...sized.filter((tier) => tier === anchorTier(costs)), ...sized.filter((tier) => tier !== anchorTier(costs))];
   const [tier, setTier] = useState(() => anchorTier(costs));
   const regimes = regimeNames(costs);
   // The interactive regime first where the model names it, since the interactive client is the traffic an operator
@@ -81,11 +83,10 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
   const groups = tierGroups(models, costs);
   const shown = groups.map((g) => g.models[0]);
   const older = groups.flatMap((g) => g.models.slice(1));
-  // The lightest is a model weighed on the 5-hour window itself: a model weighed on the week alone has no 5-hour weight
-  // there, and an estimate listed ahead of its donor would name itself the lightest. The heaviest reads every model,
-  // since an estimate takes its donor's base weight, which can sit above the donor's own 5-hour weight, and a bar
-  // scaled to less would run past its track.
-  const fiveHourWeighted = models.filter((model) => weightOrFallback(costs, model, 'five_hour')?.estimated === false);
+  // The lightest is a model weighed on the 5-hour window itself, since a model weighed on the week alone has no 5-hour
+  // weight there. The heaviest reads every model's own 5-hour weight, an unweighed model counting nothing, so no bar
+  // runs past its track.
+  const fiveHourWeighted = models.filter((model) => weightOf(costs, model, 'five_hour') !== null);
   const fiveHourWeight = (model: string) => weightOf(costs, model, 'five_hour') ?? 0;
   const lightest = fiveHourWeighted.reduce<string | null>((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
   const heaviest = Math.max(0, ...models.map(fiveHourWeight));
@@ -95,7 +96,6 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
   /** `what` names the window in the cell's title: "5-hour window", "7-day Fable". */
   const cell = (model: string, window: string, what: string, type: (typeof TOKEN_TYPES)[number], i: number) => {
     const share = shareIn(priced, window, tier, model, { ...ZERO, [type.key]: tokens * 1_000_000 }, chosen);
-    const estimated = weightOrFallback(priced, model, window)?.estimated === true;
     const sep = i === 0 ? 'cost-ref__sep' : '';
     if (share === null) {
       return (
@@ -109,16 +109,14 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
       <td
         key={`${window}-${type.key}`}
         className={`right num ${sep}${full ? ' is-full' : ''}`}
-        title={withEstimate(`${model}, ${type.label.toLowerCase()}: ${fmtTokens(tokens)} tokens spend ${fmtShare(share)} of a ${tierName} ${what}${full ? ', more than a full one' : ''}`, estimated)}
+        title={`${model}, ${type.label.toLowerCase()}: ${fmtTokens(tokens)} tokens spend ${fmtShare(share)} of a ${tierName} ${what}${full ? ', more than a full one' : ''}`}
       >
-        {estimated ? '~' : ''}
         {fmtShare(share)}
       </td>
     );
   };
   const weightCell = (model: string) => {
-    // A window the model weighs itself keeps its own weight, so the estimate fills only the others.
-    const windows = weightedWindows(costs, model).filter((w) => weightOrFallback(costs, model, w)?.estimated === false);
+    const windows = weightedWindows(costs, model);
     // A null shared weight under window weights has no one figure to scale, so the cell names each window's own.
     if (Object.prototype.hasOwnProperty.call(costs.modelWeight, model) && costs.modelWeight[model] === null && windows.length > 0) {
       const named = windows.map((w) => `${weightOf(costs, model, w)} on the ${windowLabel(w)}`).join(', ');
@@ -142,24 +140,13 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
       );
     }
     const multiple = `${Number((weight / base).toPrecision(3))}x`;
-    // The one place the console names the model an estimate reads, from the table's own cost model.
-    const tierOfModel = modelTierOf(costs, model);
-    const donor = weightOrFallback(costs, model, 'five_hour')?.estimated === true && tierOfModel !== null ? latestWeighted(costs, tierOfModel) : null;
     return (
       <td>
-        <div className="cost-ref__weight" title={donor === null ? `${model}: ${multiple} the share of ${lightest} per token of the same type on the 5-hour window` : ESTIMATED_TITLE}>
+        <div className="cost-ref__weight" title={`${model}: ${multiple} the share of ${lightest} per token of the same type on the 5-hour window`}>
           <span className="cost-ref__track">
             <span className="cost-ref__bar" style={{ width: `${(weight / heaviest) * 100}%` }} />
           </span>
-          <span className={`cost-ref__val${donor === null ? '' : ' cost-ref__val--estimated'}`}>
-            {donor === null ? (
-              multiple
-            ) : (
-              <>
-                estimated, as <span className="cost-ref__donor">{donor}</span>
-              </>
-            )}
-          </span>
+          <span className="cost-ref__val">{multiple}</span>
         </div>
       </td>
     );
@@ -169,7 +156,8 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
   const rows = (models: string[], from: number) =>
     models.flatMap((model, i) => {
       const alt = (from + i) % 2 ? 'is-alt' : '';
-      const weeks = modelWeeks(costs, model).filter((week) => weightOf(costs, model, week) !== null);
+      // A model week draws under a tier whose plan carries it alone, so no row names a Fable week against Pro.
+      const weeks = modelWeeks(costs, model).filter((week) => weightOf(costs, model, week) !== null && (MODEL_WEEK_TIERS[week]?.includes(tier) ?? false));
       return [
         <tr key={model} className={`${alt}${weeks.length ? ' has-sub' : ''}`}>
           <td className="mono">{model}</td>
@@ -237,7 +225,7 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
           Share of a {tierName} window per {fmtTokens(tokens)} tokens under {regimeTitle(costs, shownRegime || null)}
           {chosen ? ', a request completing inside the peak band' : ''}
         </b>
-        <span className="muted">A shaded cell is more than one full window. A ~ marks an estimate: the model reads the latest weighed model of its model tier.</span>
+        <span className="muted">A shaded cell is more than one full window.</span>
       </div>
       <div className="table-wrap cost-ref__wrap">
         <table className="table cost-ref__table table--plain">

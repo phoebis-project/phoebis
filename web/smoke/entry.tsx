@@ -40,14 +40,14 @@ export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, Pill, Switche
 export { GuardrailDialog } from '@/pages/GuardrailsPage';
 // The figures and the model form a Dashboard check computes its expectation from, so the check and the page read one
 // derivation; the cost reference's and the About card's checks read theirs the same way.
-export { anchorTier, bandFactor, bandRuns, bandSentence, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, regimeClients, regimeNames, regimeTitle, regimeWord, revisionAt, shareOf, smallestTier, tierCapacity, tierGroups, tierOrder, weekScale, weightOf, weightOrFallback, windowMultiple, withRegime } from '@/lib/costs';
+export { anchorTier, bandFactor, bandSentence, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, regimeClients, regimeNames, regimeTitle, regimeWord, revisionAt, shareOf, smallestTier, tierCapacity, tierGroups, tierOrder, weekScale, weightOf, windowMultiple, withRegime } from '@/lib/costs';
 // The Cache miss reasons, their labels and short words in the page's order, so the filter and Analytics table checks
 // read the words the pages draw.
 export { CACHE_MISS_LABEL, CACHE_MISS_REASONS, CACHE_MISS_SHORT, missLabel, missShort } from '@/lib/cache';
 // The strip's model and its buttons' names, so a card check spells the stations a record draws and the names a reader
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
-export { earlierHolderLabel, ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, shortModel, spanText, undatedModel, weekShort } from '@/lib/format';
+export { earlierHolderLabel, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, shortModel, spanText, undatedModel, weekShort } from '@/lib/format';
 // The pace mark's offset, so the check and the meter place it by one arithmetic.
 export { remainingTimeShare } from '@/lib/quota';
 // The projection's phrase, its burn and the span it spells, so a check computes the words a window draws from the one

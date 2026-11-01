@@ -45,13 +45,11 @@ test("an override replaces the multiplier and the window's weight it names and l
   close(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-haiku-4-5', usage({ input: 1 }), OUT), 0.005, "Haiku's input on the 5-hour window, 0.5 x 1 / 100");
 });
 
-test("a model an override weighs on the week alone prices the week at its own weight, and the fallback reads the 5-hour window at its model tier's latest", () => {
+test('a model an override weighs on the week alone is weighted and prices the week at its own weight', () => {
   // The test table leaves Opus 5 at null; this copy weighs it 3 on the week through an override.
   const weekOnly = { ...costs, overrides: { ...costs.overrides, 'claude-opus-5': { weightByWindow: { seven_day: 3 } } } };
   assert.equal(d.isWeighted(weekOnly, 'claude-opus-5'), true, 'weighted through the override');
-  assert.equal(d.weightOrFallback(weekOnly, 'claude-opus-5', 'five_hour')?.estimated, true, 'an estimate on the 5-hour window');
   close(d.shareOf(weekOnly, 'seven_day', MAX_20X, 'claude-opus-5', usage({ input: 1 }), OUT), 0.003, 'the week, 3 x 1 / 1000');
-  assert.equal(d.weightOrFallback(weekOnly, 'claude-opus-5', 'seven_day')?.estimated, false, 'its own weight on the week');
 });
 
 test('a Fable model an override weighs on the 7-day Fable window alone is weighted, a dash on the shared windows and a share on its week', () => {
@@ -129,7 +127,6 @@ test('a peak zone the browser cannot read leaves the band state unknown, so a sh
   assert.equal(d.shareOf(unzoned, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), IN), null, 'no share on an assumed state');
   close(d.shareIn(unzoned, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), true), 0.04, 'inside the band, 2 / 100 / 0.5');
   close(d.shareIn(unzoned, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), false), 0.02, 'outside it, 2 / 100');
-  assert.deepEqual(d.bandRuns(unzoned, IN - 86_400_000, IN + 86_400_000), [], 'no hours to shade');
   assert.equal(d.nextLocalChange(unzoned, IN, 'Europe/Berlin'), null);
   const clock = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
   assert.equal(d.bandCaption(unzoned, IN, 'Europe/Berlin', clock), 'Mon to Fri, 05:00 to 11:00 in AZone (Not/AZone), the zone the cost model names.', 'the hours in the zone the file names alone');
@@ -155,7 +152,6 @@ test("a band day's interval is its hours in the band's own zone, read through th
 // The band in a zone. Wednesday 16 September 2026 at 14:30 UTC, 07:30 in Los Angeles: inside the test table's band of
 // weekdays 5 to 11 there, which reads 12:00 to 18:00 UTC while Los Angeles keeps summer time.
 const NOW = Date.parse('2026-09-16T14:30:00Z');
-const HOUR = 3_600_000;
 const run = (from, to) => ({ from, to });
 const clock24 = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 const WEEK_LABELS = ['Mon 14 Sep', 'Tue 15 Sep', 'Wed 16 Sep', 'Thu 17 Sep', 'Fri 18 Sep', 'Sat 19 Sep', 'Sun 20 Sep'];
@@ -192,20 +188,6 @@ test('a band on at every hour leaves Outside out of reach and says why, and a ba
   const always = { ...costs, peak: { ...costs.peak, fromHour: 0, toHour: 24, weekdays: false } };
   assert.deepEqual(d.unreachableBand(d.bandNow(always, NOW)), { inside: false, title: 'The band is on at every hour.' });
   assert.equal(d.unreachableBand(d.bandNow(costs, NOW)), null);
-});
-
-test("the band's runs between two instants are its own hours, clipped to the bounds, never a bucket's", () => {
-  // A week of standard time from Monday 7 December 2026: 5 to 11 in Los Angeles at UTC-8 is 13:00 to 19:00 UTC.
-  const at = (day, hour) => Date.UTC(2026, 11, day, hour);
-  const week = d.bandRuns(costs, at(7, 0), at(14, 0));
-  assert.deepEqual(week, [7, 8, 9, 10, 11].map((day) => run(at(day, 13), at(day, 19))));
-  assert.ok(week.every((r) => r.from % (6 * HOUR) !== 0), 'no run starts on a six-hour bucket boundary');
-  // Sixty days hold eight weeks and four weekdays: forty-four runs on the same hours.
-  const sixty = d.bandRuns(costs, at(7, 0), at(7, 0) + 60 * 24 * HOUR);
-  assert.equal(sixty.length, 44);
-  assert.ok(sixty.every((r) => new Date(r.from).getUTCHours() === 13 && r.to - r.from === 6 * HOUR), 'every run 13:00 to 19:00 UTC');
-  assert.ok(sixty.every((r) => r.from % (24 * HOUR) !== 0), 'no run starts on a midnight bucket boundary');
-  assert.deepEqual(d.bandRuns(costs, at(7, 15), at(7, 17)), [run(at(7, 15), at(7, 17))]);
 });
 
 test("the next change of the band's local hours runs from the first later band day that differs from today's until one reads as today's, and none in its own zone", () => {
@@ -481,50 +463,6 @@ test("a model's tier is its model_tier entry, then its undated id's, then the ti
   assert.equal(d.modelTierOf(costs, 'claude-nova-1'), null, 'a tier the order does not list');
   assert.equal(d.modelTierOf({ ...costs, modelTier: { ...costs.modelTier, 'claude-nova-1': 'opus' } }, 'claude-nova-1'), 'opus', 'the entry wins over the id');
   assert.equal(d.modelTierOf({ modelTier: {}, tierOrder: [] }, OPUS), null, 'a cost model with no tiers names none');
-});
-
-test("a model tier's latest weighed model is its weighted model of the newest version, and a tier with none has none", () => {
-  assert.deepEqual(
-    tables.subscription_costs.content.tier_order.map((tier) => d.latestWeighted(costs, tier)),
-    ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-4-5', null],
-    'the test tables weigh one model per tier but the fifth, and Opus 5 carries a null weight',
-  );
-  const newer = { ...costs, modelTier: { ...costs.modelTier, 'claude-opus-6': 'opus' }, modelWeight: { ...costs.modelWeight, 'claude-opus-6': 3 } };
-  assert.equal(d.latestWeighted(newer, 'opus'), 'claude-opus-6', 'a newer weighted model takes over');
-  assert.equal(d.latestWeighted(costs, 'nova'), null, 'a tier the order does not list');
-  // The fallback reads the donor's base weight, so a newer model weighed by its overrides alone stands in for no one.
-  const overridden = {
-    ...costs,
-    modelTier: { ...costs.modelTier, 'claude-opus-6': 'opus' },
-    modelWeight: { ...costs.modelWeight, 'claude-opus-6': null },
-    overrides: { ...costs.overrides, 'claude-opus-6': { weightByWindow: { five_hour: 3, seven_day: 3 } } },
-  };
-  const donor = d.latestWeighted(costs, 'opus');
-  assert.equal(d.latestWeighted(overridden, 'opus'), donor, 'a model with a null base weight is no donor, its overrides notwithstanding');
-  assert.deepEqual(d.weightOrFallback(overridden, 'claude-opus-4-8', 'five_hour'), { estimated: true, weight: costs.modelWeight[donor] }, "an unweighted model still reads the weighed donor's base weight");
-});
-
-test("a model the cost model weighs reads its own weight, and an unweighted model of a weighted tier its tier's latest base weight, marked estimated", () => {
-  assert.deepEqual(d.weightOrFallback(costs, OPUS, 'five_hour'), { estimated: false, weight: costs.modelWeight[OPUS] });
-  const donor = d.latestWeighted(costs, 'opus');
-  for (const model of ['claude-opus-4-8', 'claude-opus-5', 'claude-opus-9']) {
-    for (const window of ['five_hour', 'seven_day']) assert.deepEqual(d.weightOrFallback(costs, model, window), { estimated: true, weight: costs.modelWeight[donor] }, `${model} on ${window}`);
-  }
-  assert.equal(d.weightOrFallback(costs, 'claude-mystery-2', 'five_hour'), null, 'a tier with no weighted model');
-  assert.equal(d.weightOrFallback(costs, 'gpt-5', 'five_hour'), null, 'a model of no tier');
-  const haiku = 'claude-haiku-4-5';
-  assert.deepEqual(d.weightOrFallback(costs, haiku, 'seven_day'), { estimated: false, weight: costs.overrides[haiku].weightByWindow.seven_day }, "a model's own override counts");
-});
-
-test("the fallback reads the donor's base weight and never the donor's override", () => {
-  // A Haiku model the file lists without a weight, beside a donor whose week carries an override at another weight.
-  const unweighted = 'claude-haiku-9';
-  const tables = { ...costs, modelTier: { ...costs.modelTier, [unweighted]: 'haiku' }, modelWeight: { ...costs.modelWeight, [unweighted]: null } };
-  const donor = d.latestWeighted(tables, 'haiku');
-  const override = tables.overrides[donor].weightByWindow.seven_day;
-  assert.notEqual(override, tables.modelWeight[donor], "the donor's week weighs otherwise than its base");
-  for (const window of ['five_hour', 'seven_day']) assert.deepEqual(d.weightOrFallback(tables, unweighted, window), { estimated: true, weight: tables.modelWeight[donor] }, window);
-  assert.deepEqual(d.weightOrFallback(tables, donor, 'seven_day'), { estimated: false, weight: override }, 'the donor itself keeps its override');
 });
 
 test('every helper that reads a weight answers for a weighted model and returns nothing for a model without a weight of its own', () => {

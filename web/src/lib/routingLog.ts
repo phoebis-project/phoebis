@@ -1,10 +1,10 @@
 import { iso, PIN_RELEASE_REASON_VALUES } from '@/api/decode';
 import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { ROUTING_LOG_CODEC, type RangeValue } from './address';
-import { moveLabel, own } from './analytics';
+import { moveLabel, own, type WeekReading } from './analytics';
 import { compareByModelTier } from './costs';
 import type { ChipText } from './filterBar';
-import { equivalentWord, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, shortModel } from './format';
+import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, shortModel, weekShort } from './format';
 import { PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL } from './quota';
 import { speedWord } from './selection';
 import { ageWord, HOUR, MINUTE, span } from './time';
@@ -1276,7 +1276,7 @@ const VERDICT_BADGE: Record<string, string> = { held_on: 'held on', not_needed: 
 const PARTITION_WORD: Record<string, string> = { above_ceiling: 'above the ceiling', at_cap: 'at its cap', floor: 'at the Pace floor', spent: 'window spent', winding_down: 'winding down' };
 
 /**
- * The plan beneath a member's account: `Max 20x`, `Free`, `API key`. The record's resolved word reads through the label
+ * The plan beneath a member's account: `Ultra`, `Free`, `API key`. The record's resolved word reads through the label
  * table, and an older record's tier word through `planLabel`.
  */
 const planWord = (c: RecordCandidate) => (c.kind === 'api_key' ? 'API key' : c.planTier === null ? 'OAuth' : own(PLAN_WORD_LABEL, c.planTier) ? PLAN_WORD_LABEL[c.planTier] : planLabel(c.planTier));
@@ -1758,10 +1758,27 @@ const SOURCE_WORD: Record<string, string> = { clock: 'the clock walk', head: 'th
 const hourlyShare = (perHour: number) => `${(perHour * 100).toFixed(1)} %/h`;
 /** A move's destination fit as the gate worded it. */
 const FIT_WORD: Record<string, string> = { fits: 'fits', least_bad: 'least bad', rewrite_only: 'rewrite only' };
+/** The window a shedding round's pin names in `rewrite_window`, in the words an earlier build's rewrite label read. */
+const REWRITE_WINDOW_WORD: Record<string, string> = { five_hour: '5-hour', seven_day: '7-day', seven_day_fable: '7-day Fable' };
+/**
+ * A pin's Rewrite cell. A round that names its `rewrite_unit` stored the Pro-week figure, which reads in the chosen
+ * week titled with the window the pick compared on, a dash while the scale is out. An earlier build's round stored its
+ * window's 20x equivalent, which prints as stored under that label, since a conversion would read it as a Pro-week
+ * figure. A pin that names no window prints its bare share.
+ */
+const rewriteCell = (rewrite: number | null, window: string | null, unit: string | null, week: WeekReading): Chip => {
+  if (rewrite === null) return plain('-');
+  if (window === null) return plain(fmtShare(rewrite));
+  const word = own(REWRITE_WINDOW_WORD, window) ? REWRITE_WINDOW_WORD[window] : window;
+  if (unit !== 'pro_week') return plain(`${fmtShare(rewrite)} of 20x ${word}`);
+  if (week.scale === null) return week.error === null ? plain('-') : { ...plain('-'), title: week.error };
+  return { ...plain(weekShort(rewrite * week.scale, week.week)), title: `compared on the ${word} window` };
+};
 
 /** An event's detail as pairs: When, Account and Pool first, then the kind's own. `rows` are the rows the page holds,
- *  which a model rejection reads its cooldown's until off. */
-export function detailPairs(row: RoutingEvent, now: number, rows: readonly RoutingLogRow[]): DetailPair[] {
+ *  which a model rejection reads its cooldown's until off, and `week` the chosen week a shedding round's Pro-week
+ *  rewrite reads in. */
+export function detailPairs(row: RoutingEvent, now: number, rows: readonly RoutingLogRow[], week: WeekReading): DetailPair[] {
   const d = row.detail;
   const pairs: DetailPair[] = [{ chips: [plain(fmtAbsolute(row.at))], label: 'When' }];
   if (row.accountId !== null) pairs.push({ chips: [accountChip(row.accountId)], label: 'Account' });
@@ -2070,6 +2087,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Burn average', average === null ? null : plain(span(average * 1_000)));
       add('Warm sessions', text(d.warm_sessions));
       const pins = list(d.pins).map(rec);
+      const rewriteUnit = str(d.rewrite_unit);
       if (pins.length > 0) {
         pairs.push({
           chips: [],
@@ -2090,7 +2108,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
                 plain(p.cold === true ? 'cold' : 'warm'),
                 plain(b === null ? '-' : hourlyShare(b)),
                 plain(last === null ? '-' : fmtCompact(last)),
-                plain(rewrite === null ? '-' : rewriteWindow === null ? fmtShare(rewrite) : `${fmtShare(rewrite)} of 20x ${equivalentWord(rewriteWindow)}`),
+                rewriteCell(rewrite, rewriteWindow, rewriteUnit, week),
                 planned === null ? plain('-') : accountChip(planned),
                 plain(p.marked === true ? 'marked' : skip !== null ? words(skip) : (str(p.note) ?? '-')),
               ];

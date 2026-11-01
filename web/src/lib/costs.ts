@@ -113,25 +113,6 @@ export const modelTierOf = (costs: ModelTiers, model: string): string | null => 
   return costs.tierOrder.includes(named) ? named : null;
 };
 
-/** The model tier's latest weighed model: the first by version descending, then id, among the models of the tier with a
- *  base weight, since the fallback reads the donor's base weight and an override names its own model alone. */
-export const latestWeighted = (costs: SubscriptionCosts, tier: string): string | null =>
-  Object.keys(costs.modelWeight)
-    .filter((model) => modelTierOf(costs, model) === tier && costs.modelWeight[model] !== null)
-    .sort(newestFirst)[0] ?? null;
-
-/** The weight the cost reference draws for a model on `window`, and whether it stands in: the model's own (an override
- *  counts), else the model tier's latest weighed model's base weight marked estimated, else null. The donor's override
- *  names the donor alone, so it never reaches another model. */
-export const weightOrFallback = (costs: SubscriptionCosts, model: string, window: string): { estimated: boolean; weight: number } | null => {
-  const weight = weightOf(costs, model, window);
-  if (weight !== null) return { estimated: false, weight };
-  const tier = modelTierOf(costs, model);
-  const donor = tier === null ? null : latestWeighted(costs, tier);
-  const base = donor === null ? null : costs.modelWeight[donor];
-  return base === null || base === undefined ? null : { estimated: true, weight: base };
-};
-
 /** The model weeks a model carries: `seven_day_fable` for a Fable model, by the family its undated id names. */
 export const modelWeeks = (costs: SubscriptionCosts, model: string): string[] =>
   Object.keys(costs.modelWindows).filter((key) => costs.modelWindows[key].of === 'seven_day' && undatedModel(model).startsWith(`claude-${key.slice('seven_day_'.length)}`));
@@ -522,15 +503,6 @@ export const bandNow = (costs: SubscriptionCosts, at: number): BandNow => {
  *  are in reach. A zone the browser reads and `from_hour` below `to_hour` flip the band within eight days, so only the
  *  band on at every hour leaves a state out of reach; a zone it cannot read leaves both to the viewer. */
 export const unreachableBand = (now: BandNow): { inside: boolean; title: string } | null => ('unresolved' in now || now.at !== null || !now.inside ? null : { inside: false, title: 'The band is on at every hour.' });
-
-/** The band's in-band intervals between two instants, `{ from, to }` pairs clipped to them; none for a zone this
- *  browser cannot read. */
-export const bandRuns = (costs: SubscriptionCosts, fromMs: number, toMs: number): { from: number; to: number }[] => {
-  const { zone } = costs.peak;
-  if (!readable(zone) || toMs <= fromMs) return [];
-  const spans = spansBetween(costs.peak, addDays(partsIn(fromMs, zone).date, -1), addDays(partsIn(toMs, zone).date, 1));
-  return spans.filter((s) => s.end > fromMs && s.start < toMs).map((s) => ({ from: Math.max(s.start, fromMs), to: Math.min(s.end, toMs) }));
-};
 
 /** A coming change of the band's local hours: its first and last band day, `to` null for one that lasts. */
 export interface LocalChange { from: string; lasting: boolean; moved: boolean; text: string; to: string | null }

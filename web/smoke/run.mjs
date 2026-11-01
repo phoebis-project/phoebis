@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandSentence, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, MAX_BURN_LINES, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, recordedCalls, regimeNames, regimeTitle, regimeWord, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareHint, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, weekShort, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandSentence, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, MAX_BURN_LINES, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, recordedCalls, regimeNames, regimeTitle, regimeWord, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareHint, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weekShort, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 /** The dash's title where a plan row priced nothing, the words a tile and its hover carry. */
 const UNPRICED_TITLE = 'No subscription request priced: its model has no weight in the cost model';
@@ -153,14 +153,12 @@ const columnsMarked = (name, table, fill) => {
 };
 /**
  * Every fill cell of `table` carries its own text as its title, the whole value the column's ellipsis cuts, for the
- * hover. With `estimated` the table marks an estimate on its label, so at least one cell's title reads the estimate's
- * sentence after its text and no other title is allowed.
+ * hover.
  */
-const fillTitles = (name, table, estimated = false) => {
+const fillTitles = (name, table) => {
   const cells = [...(table?.querySelectorAll('tbody td.col-fill') ?? [])];
-  const marked = (td) => estimated && (td.getAttribute('title') ?? '') === `${td.textContent?.trim() ?? ''}. ${ESTIMATED_TITLE}.`;
-  const off = cells.filter((td) => (td.getAttribute('title') ?? '') !== (td.textContent?.trim() ?? '') && !marked(td)).map((td) => `${JSON.stringify(td.textContent?.trim())}: ${td.getAttribute('title') ?? 'no title'}`);
-  results.push({ name, ok: cells.length > 0 && off.length === 0 && (!estimated || cells.some(marked)), missing: [`${cells.length} fill cells, ${cells.filter(marked).length} marked`, ...off.slice(0, 5)] });
+  const off = cells.filter((td) => (td.getAttribute('title') ?? '') !== (td.textContent?.trim() ?? '')).map((td) => `${JSON.stringify(td.textContent?.trim())}: ${td.getAttribute('title') ?? 'no title'}`);
+  results.push({ name, ok: cells.length > 0 && off.length === 0, missing: [`${cells.length} fill cells`, ...off.slice(0, 5)] });
 };
 /**
  * The declarations `pages.css` gives `selector` in its top-level rules whose selector list names it, a later rule's
@@ -683,9 +681,9 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   const target = (href) => href?.split('?')[0] ?? null;
   const listed = await badges();
   const read = listed.map((b) => [b.text, b.tone, target(b.href), members(b.title)]);
-  // The model's item counts the story's own Sonnet 4.5 plan requests and names its tier's latest weighted model, so
-  // its members are read off the mock's answer rather than written here.
-  const unweighted = (await api.getAttention()).find((i) => i.kind === 'model_unweighted');
+  // The model's item counts the story's own Sonnet 4.5 plan requests that priced nothing, so its members are read off
+  // the mock's answer rather than written here.
+  const unpriced = (await api.getAttention()).find((i) => i.kind === 'model_unpriced');
   // The meter drift's windows are read off the answer too, each end the route sends in milliseconds read as a date.
   const drift = (await api.getAttention()).find((i) => i.kind === 'meter_drift');
   const want = [
@@ -698,10 +696,9 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     ['Certificate expiring: proxy.tls', 'badge--warning', null, ["The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (<instant>). Replace the pair and run phoebis tls reload.", 'cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', 'expires: <instant>']],
     ['Priced record parked: jobs', 'badge--serious', '/pools#jobs', ['accounts: ["research"]', 'count: 1', 'pool: jobs']],
     ['Usage poll backing off: secondary', 'badge--warning', '/accounts/secondary', ['account: secondary', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
-    // The model's item ranks after the poll backoff and before the routing conditions, the route's order of the kinds.
-    ...(unweighted
-      ? [['Model weight estimated: claude-sonnet-4-5', 'badge--warning', null, [attentionDetail(unweighted, Date.now()), `model: ${unweighted.detail.model}`, `requests: ${unweighted.detail.requests}`, `tier: ${unweighted.detail.tier}`, `weight_of: ${unweighted.detail.weight_of}`]]]
-      : []),
+    // The model's item ranks after the poll backoff and before the meter drift, the route's order of the kinds, in the
+    // info tone, since an unpriced model costs nothing and asks for a weight in the cost model.
+    ...(unpriced ? [['Model unpriced: claude-sonnet-4-5', 'badge--info', null, [attentionDetail(unpriced, Date.now()), `model: ${unpriced.detail.model}`, `requests: ${unpriced.detail.requests}`]]] : []),
     // Nightly's meter drift ranks after the model's item and before the routing conditions, reads its off window and
     // opens the Meter view on the account.
     ['nightly: 5h charged 2.0x the table, since 13:11', 'badge--warning', '/meter', [`effective: ${drift?.detail.effective}`, 'source: shipped', `windows: ${JSON.stringify(drift?.detail.windows.map((w) => ({ ...w, window_end: fmtAbsolute(new Date(w.window_end).toISOString()) })))}`]],
@@ -746,7 +743,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all seventeen while no layout folds it",
     ok:
       lead() === '17 need attention' &&
-      unweighted !== undefined &&
+      unpriced !== undefined &&
       drift !== undefined &&
       JSON.stringify(read) === JSON.stringify(want) &&
       /^started 1[34]m ago$/.test(ages[0] ?? '') &&
@@ -15883,6 +15880,19 @@ m.unmount();
       missing: [shed ? `${shed.step} ${shed.verdict}: ${rowsRead(fired)}` : 'no shed station', JSON.stringify(ddWords(mark?.dd)), ran ? rowsRead(roundGroup) : 'no round station', `${marks.length} marks of ${sessions.length}`],
     });
     results.push({ name: "/routing-log the open card's verdict badge carries its row's tone class", ok: toneClasses.every((c) => c.split(' ').includes('badge--warning')), missing: toneClasses });
+    // The 11:00 round is an earlier build's, which names no rewrite unit, so each marked pin's Rewrite cell prints the
+    // 7-day window's 20x equivalent it stored under that label, in the Ultra week the shell names as in any other, with
+    // no hover. The figures are the mock's 11:00 round seed's.
+    const at = Date.parse(round.record.request.at);
+    const earlier = (await api.listRoutingLog({ from: iso(at - MINUTE), kinds: ['shedding_round'], limit: 25, request: round.record.requestId, to: iso(at + MINUTE) })).rows[0];
+    const earlierDetail = earlier === undefined ? null : ((await openRow(round.page, `event/${earlier.id}`))?.querySelector('.event-detail') ?? null);
+    const stored = [...(earlierDetail?.querySelectorAll('.event-detail__pins tbody tr') ?? [])].map((tr) => [tr.children[5]?.textContent ?? '', tr.children[5]?.getAttribute('title') ?? null]);
+    const storedWant = (earlier?.detail.pins ?? []).flatMap((p, i) => (p.marked ? [[stored[i], p.rewrite === null || p.rewrite_window !== 'seven_day' ? null : [`${fmtShare(p.rewrite)} of 20x 7-day`, null]]] : []));
+    results.push({
+      name: "/routing-log an earlier build's round, which names no rewrite unit, prints each marked pin's stored rewrite under its 20x label with no hover",
+      ok: earlier !== undefined && !('rewrite_unit' in earlier.detail) && storedWant.length === 2 && storedWant.every(([cell, want]) => want !== null && JSON.stringify(cell) === JSON.stringify(want)),
+      missing: [earlier === undefined ? 'no shedding round at 11:00' : JSON.stringify(earlier.detail.rewrite_unit ?? null), ...storedWant.map((pair) => JSON.stringify(pair))],
+    });
     round.page.unmount();
   }
   {
@@ -16287,16 +16297,18 @@ m.unmount();
           const detail = e === undefined ? null : ((await openRow(page, `event/${e.id}`))?.querySelector('.event-detail') ?? null);
           scan('round fired by the stretch', detail);
           const pairs = Object.fromEntries(kvRows(detail?.querySelector(':scope > .kv')).map((p) => [p.label, ddWords(p.dd)]));
-          // Each marked pin's Rewrite cell reads its rewrite as the Max 20x equivalent of the 7-day window, on the
-          // API-key annex the pick planned it for as much as on a plan.
-          const rewrites = [...(detail?.querySelectorAll('.event-detail__pins tbody tr') ?? [])].map((tr) => tr.children[5]?.textContent ?? '');
-          const marked = (e?.detail.pins ?? []).flatMap((p, i) => (p.marked ? [[rewrites[i], p.rewrite === null ? null : `${fmtShare(p.rewrite)} of 20x 7-day`]] : []));
+          // The round names its rewrite unit, so each marked pin's Rewrite cell reads its Pro-week rewrite in the Ultra
+          // week the shell names, titled with the 7-day window the pick compared on, on the API-key annex the pick
+          // planned it for as much as on a plan.
+          const rewrites = [...(detail?.querySelectorAll('.event-detail__pins tbody tr') ?? [])].map((tr) => [tr.children[5]?.textContent ?? '', tr.children[5]?.getAttribute('title') ?? null]);
+          const marked = (e?.detail.pins ?? []).flatMap((p, i) => (p.marked ? [[rewrites[i], p.rewrite === null || p.rewrite_window !== 'seven_day' ? null : [weekCell(p.rewrite), 'compared on the 7-day window']]] : []));
           return (
             named &&
             (popoverRowOf(round, 'fired by') ?? []).includes('fired by slow-down') && (popoverRowOf(round, 'stretch') ?? []).includes('stretch 42 min') && (popoverRowOf(round, 'round') ?? []).includes('round ran') &&
             e?.detail.trigger === 'slow_down' &&
+            e.detail.rewrite_unit === 'pro_week' &&
             JSON.stringify([pairs.Trigger, pairs.Demand, pairs['Fired by']]) === JSON.stringify([['5h stretch 42 min over the threshold 30 min'], ['12.9 %/h to the reset at 15:29'], ['the slow-down']]) &&
-            marked.length === 2 && marked.every(([cell, want]) => want !== null && cell === want)
+            marked.length === 2 && marked.every(([cell, want]) => want !== null && JSON.stringify(cell) === JSON.stringify(want))
           );
         },
         what: 'round fired by the stretch',
@@ -17394,7 +17406,7 @@ m.unmount();
   };
   const opened = openRead();
   const cellsOf = (tr) => [...tr.children].map(text);
-  const rowWant = (r) => [instantOf(r.windowEnd), fmtShare(r.observedRise), `${r.estimated > 0 ? '~' : ''}${fmtShare(r.predictedShare)}`, r.ratio.toFixed(2), fmtInt(r.requests), ''];
+  const rowWant = (r) => [instantOf(r.windowEnd), fmtShare(r.observedRise), fmtShare(r.predictedShare), r.ratio.toFixed(2), fmtInt(r.requests), ''];
   const firstRows = opened.rows.map(cellsOf);
   results.push({
     name: "/meter nightly's 5-hour line opens to its newest ten windows, the badge on the newest, then the count line with Show 25 more",
@@ -17414,21 +17426,17 @@ m.unmount();
   const more = openRead();
   const shown = Math.min(35, nightlyRows.length);
   const unjudgedAt = nightlyRows.slice(0, shown).findIndex((r) => !judged(r));
-  const estimatedAt = nightlyRows.slice(0, shown).findIndex((r) => r.estimated > 0);
   const unjudgedCell = more.rows[unjudgedAt]?.children[3].querySelector('.num');
-  const estimatedCell = more.rows[estimatedAt]?.children[2];
   results.push({
-    name: "/meter Show 25 more lists 25 more of nightly's windows, a ratio the band does not judge muted with its reason, an estimated share under its ~",
+    name: "/meter Show 25 more lists 25 more of nightly's windows, a ratio the band does not judge muted with its reason",
     ok:
       more.rows.length === shown &&
       JSON.stringify(more.rows.map(cellsOf)) === JSON.stringify(nightlyRows.slice(0, shown).map(rowWant)) &&
       JSON.stringify(more.more) === JSON.stringify(shown < nightlyRows.length ? [`${shown} of ${nightlyRows.length} windows, newest first`, 'Show 25 more'] : [null, null]) &&
       unjudgedAt >= 0 &&
       unjudgedCell?.classList.contains('muted') === true &&
-      unjudgedCell.getAttribute('title') === `${nightlyRows[unjudgedAt].ratio.toFixed(4)}, ${UNJUDGED}` &&
-      estimatedAt >= 0 &&
-      estimatedCell?.getAttribute('title') === `${fmtShare(nightlyRows[estimatedAt].predictedShare)}. ${ESTIMATED_TITLE}.`,
-    missing: [`${more.rows.length} rows of ${shown}`, JSON.stringify(more.more), `unjudged at ${unjudgedAt}: ${unjudgedCell?.outerHTML ?? 'none'}`, `estimated at ${estimatedAt}: ${estimatedCell?.outerHTML ?? 'none'}`],
+      unjudgedCell.getAttribute('title') === `${nightlyRows[unjudgedAt].ratio.toFixed(4)}, ${UNJUDGED}`,
+    missing: [`${more.rows.length} rows of ${shown}`, JSON.stringify(more.more), `unjudged at ${unjudgedAt}: ${unjudgedCell?.outerHTML ?? 'none'}`],
   });
 
   // Enter on a focused line opens it as a click does, and Expand all opens every group of its own card.
@@ -18478,16 +18486,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const BREAKDOWNS = [
     ['Traffic', 'Traffic by key', ['Key']],
     ['Cache', 'Misses by reason by key', ['Key']],
-    // Under native the story's Sonnet 4.5 model prices through its model tier, so its label carries the estimate.
-    ['Cache', 'Cache by model', ['Model'], true],
+    ['Cache', 'Cache by model', ['Model']],
   ];
   let read = 0;
-  for (const [label, title, fill, estimated] of BREAKDOWNS) {
+  for (const [label, title, fill] of BREAKDOWNS) {
     await tab(m, label);
     const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.querySelector('table');
     if (table) read += 1;
     columnsMarked(`/analytics every breakdown table marks its group column fill and its figures fit: ${title}`, table, fill);
-    fillTitles(`/analytics every group cell of a breakdown table carries its own text as its title${estimated ? ', an estimated one with the estimate after it' : ''}: ${title}`, table, estimated);
+    fillTitles(`/analytics every group cell of a breakdown table carries its own text as its title: ${title}`, table);
   }
   results.push({ name: '/analytics every breakdown table marks its group column fill and its figures fit: three tables read', ok: read === BREAKDOWNS.length, missing: [`${read} of ${BREAKDOWNS.length} tables`] });
 }
@@ -24787,7 +24794,7 @@ m.unmount();
       await pg.settle(200);
     }
   };
-  const CAPTION_NOTE = 'A shaded cell is more than one full window. A ~ marks an estimate: the model reads the latest weighed model of its model tier.';
+  const CAPTION_NOTE = 'A shaded cell is more than one full window.';
   // The cost model's models and the price file's, a dated price row under its undated id, tier by tier whatever order
   // the files keep: each tier's newest model shown, the rest folded.
   const listed = [...Object.keys(costs.modelWeight), ...prices.map((p) => p.model)].filter((model, i, all) => all.findIndex((m) => undatedModel(m) === undatedModel(model)) === i);
@@ -24795,11 +24802,10 @@ m.unmount();
   const leaders = groups.map((g) => g.models[0]);
   const older = groups.flatMap((g) => g.models.slice(1));
   const models = [...leaders, ...older];
-  const estimatedOn = (model, window) => weightOrFallback(costs, model, window)?.estimated === true;
   const fiveHourWeight = (model) => weightOf(costs, model, 'five_hour');
   const lightest = models.filter((model) => fiveHourWeight(model) !== null).reduce((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
-  const shareText = (model, window, share) => (share === null ? '-' : `${estimatedOn(model, window) ? '~' : ''}${fmtShare(share)}`);
-  const expected = (model, tier, tokens, at, under) => WINDOWS.flatMap((w) => TYPES.map((t) => shareText(model, w, shareOf(under, w, tier, model, usage(t, tokens), at))));
+  const shareText = (share) => (share === null ? '-' : fmtShare(share));
+  const expected = (model, tier, tokens, at, under) => WINDOWS.flatMap((w) => TYPES.map((t) => shareText(shareOf(under, w, tier, model, usage(t, tokens), at))));
   // `under` is the model the cells price through: the regime's overlay, or the base once Headless is pressed.
   const wrongCells = (tier, tokens, at, under) => models.filter((model) => JSON.stringify(cellsOf(rowOf(model))) !== JSON.stringify(expected(model, tier, tokens, at, under))).map((model) => `${model}: ${JSON.stringify(cellsOf(rowOf(model)))} against ${JSON.stringify(expected(model, tier, tokens, at, under))}`);
   const regimeButtons = () => [...(rates()?.querySelectorAll('[aria-label="Regime"] button') ?? [])];
@@ -24832,6 +24838,18 @@ m.unmount();
       missing: [JSON.stringify(pressed('Tier')), JSON.stringify(pressed('Peak band')), spinner()?.value ?? 'no spinner', JSON.stringify(pressed('Token count')), JSON.stringify(shown), JSON.stringify(leaders), `fold at ${fold} of ${rows.length}`, button?.outerHTML ?? 'no fold', caption()],
     });
   }
+  {
+    // The chooser lists the anchor's tier first, since every figure the console prints is a share of its week, then
+    // the cost model's order, each sized tier by its plan's name.
+    const sized = tiers.filter((tier) => WINDOWS.some((w) => tierCapacity(costs, tier, w) !== null));
+    const options = [...(rates()?.querySelectorAll('[aria-label="Tier"] button') ?? [])].map((b) => b.textContent?.trim());
+    const want = [anchor, ...sized.filter((tier) => tier !== anchor)].map(planLabel);
+    results.push({
+      name: "/sessions plan rates list the anchor's plan first in the Tier chooser, then the cost model's order, the anchor's pressed",
+      ok: options[0] === 'Pro' && JSON.stringify(options) === JSON.stringify(want) && JSON.stringify(pressed('Tier')) === JSON.stringify(['Pro']),
+      missing: [JSON.stringify(options), JSON.stringify(want), JSON.stringify(pressed('Tier'))],
+    });
+  }
   // Every check below reads every model, so the older ones show from here on.
   foldOf(rates())?.click();
   await page.settle(200);
@@ -24844,7 +24862,7 @@ m.unmount();
       missing: [foldOf(rates())?.outerHTML ?? 'no fold', JSON.stringify(after), JSON.stringify(older)],
     });
   }
-  results.push({ name: '/sessions plan rates price every 5-hour and 7-day cell of every model by the share rule for a million tokens of its type, an estimated cell marked', ok: models.length > 0 && wrongCells(anchor, 1_000_000, OUT, regimeCosts).length === 0, missing: wrongCells(anchor, 1_000_000, OUT, regimeCosts) });
+  results.push({ name: '/sessions plan rates price every 5-hour and 7-day cell of every model by the share rule for a million tokens of its type, a dash where the model has no weight', ok: models.length > 0 && wrongCells(anchor, 1_000_000, OUT, regimeCosts).length === 0, missing: wrongCells(anchor, 1_000_000, OUT, regimeCosts) });
   {
     const labels = [...(rates()?.querySelectorAll('.cost-ref__controls > .cost-ref__control') ?? [])].map((c) => c.firstElementChild?.textContent ?? '');
     const options = regimeButtons().map((b) => b.textContent?.trim());
@@ -24871,19 +24889,32 @@ m.unmount();
     });
   }
   {
-    const fable = rowOf('claude-fable-5-1');
-    const week = fable?.nextElementSibling;
+    // Pro has no Fable access, so its plan draws no Fable week row, and the Ultra plan, whose tier the model week's
+    // tier list names, draws it priced on the week alone. The checks after this one read the anchor's tier again.
+    const ultra = tiers.find((tier) => planLabel(tier) === 'Ultra');
+    const pressTier = async (label) => {
+      [...(rates()?.querySelectorAll('[aria-label="Tier"] button') ?? [])].find((b) => b.textContent?.trim() === label)?.click();
+      await page.settle(200);
+    };
+    const subOf = () => {
+      const next = rowOf('claude-fable-5-1')?.nextElementSibling;
+      return next?.classList.contains('cost-ref__sub') ? next : null;
+    };
+    const onPro = subOf()?.children[0]?.textContent ?? null;
+    await pressTier('Ultra');
+    const week = subOf();
     const weekCells = [...(week?.children ?? [])].slice(2).map((td) => td.textContent?.trim());
-    const want = [...TYPES.map(() => ''), ...TYPES.map((t) => fmtShare(shareOf(regimeCosts, 'seven_day_fable', anchor, 'claude-fable-5-1', usage(t, 1_000_000), OUT)))];
+    const want = ultra === undefined ? null : [...TYPES.map(() => ''), ...TYPES.map((t) => fmtShare(shareOf(regimeCosts, 'seven_day_fable', ultra, 'claude-fable-5-1', usage(t, 1_000_000), OUT)))];
+    await pressTier(planLabel(anchor));
     results.push({
-      name: '/sessions plan rates carry a 7-day Fable row under Fable 5.1, priced on its week alone',
-      ok: week?.classList.contains('cost-ref__sub') === true && week.children[0]?.textContent === '7-day Fable' && JSON.stringify(weekCells) === JSON.stringify(want),
-      missing: [week?.children[0]?.textContent ?? 'no sub-row', JSON.stringify(weekCells), JSON.stringify(want)],
+      name: '/sessions plan rates carry a 7-day Fable row under Fable 5.1 on the Ultra plan, priced on its week alone, and none on the Pro plan',
+      ok: planLabel(anchor) === 'Pro' && onPro === null && week?.children[0]?.textContent === '7-day Fable' && want !== null && JSON.stringify(weekCells) === JSON.stringify(want) && JSON.stringify(pressed('Tier')) === JSON.stringify(['Pro']),
+      missing: [`under Pro ${JSON.stringify(onPro)}`, week?.children[0]?.textContent ?? 'no sub-row under Ultra', JSON.stringify(weekCells), JSON.stringify(want)],
     });
   }
   {
     const heads = [...(rates()?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
-    const own = models.filter((model) => fiveHourWeight(model) !== null && !estimatedOn(model, 'five_hour'));
+    const own = models.filter((model) => fiveHourWeight(model) !== null);
     const multiples = own.map((model) => rowOf(model)?.children[1]?.textContent?.trim());
     const want = own.map((model) => `${figure(fiveHourWeight(model) / fiveHourWeight(lightest))}x`);
     results.push({
@@ -24893,29 +24924,24 @@ m.unmount();
     });
   }
   {
-    // A price row the cost model weighs through its model tier's latest, picked off the wire.
-    const model = prices.map((p) => p.model).find((m) => estimatedOn(m, 'five_hour'));
+    // The story's Sonnet 4.5 has no weight in the served cost model, the mock's `TABLES`, so it prices nothing: every
+    // cell a dash with no title, its weight cell "not weighed", and no cell of the table borrows another model's weight.
+    const model = 'claude-sonnet-4-5';
     const row = rowOf(model);
     const cells = cellsOf(row);
-    const titles = [...(row?.children ?? [])].slice(2).map((td) => td.getAttribute('title') ?? '');
+    const titles = [...(row?.children ?? [])].slice(2).map((td) => td.getAttribute('title'));
     const weight = row?.children[1];
-    const donor = weight?.querySelector('.cost-ref__donor')?.textContent ?? '';
     results.push({
-      name: "/sessions plan rates mark every cell of a model priced at its model tier's latest weight with a tilde and the estimate's title, its weight cell naming the model it reads, and the caption says what the mark means",
+      name: '/sessions plan rates draw every cell of a model the cost model does not weigh as a dash, its weight cell not weighed',
       ok:
-        model !== undefined &&
+        ['five_hour', 'seven_day'].every((w) => weightOf(costs, model, w) === null) &&
         cells.length === 10 &&
-        cells.every((c) => c.startsWith('~')) &&
-        titles.every((t) => t.endsWith(`${ESTIMATED_TITLE}.`)) &&
-        (weight?.textContent ?? '').startsWith('estimated, as ') &&
-        // The id keeps its own span, so a wrapped cell breaks before it rather than inside it.
-        donor !== '' &&
-        weight?.textContent?.trim() === `estimated, as ${donor}` &&
-        !estimatedOn(donor, 'five_hour') &&
-        weightOf(costs, donor, 'five_hour') === weightOf(costs, model, 'five_hour') &&
-        weight?.querySelector('[title]')?.getAttribute('title') === ESTIMATED_TITLE &&
-        (rates()?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === CAPTION_NOTE,
-      missing: [String(model), JSON.stringify(cells), weight?.textContent ?? 'no weight cell', weight?.querySelector('[title]')?.getAttribute('title') ?? 'no title', ...titles.filter((t) => !t.endsWith(`${ESTIMATED_TITLE}.`))],
+        cells.every((c) => c === '-') &&
+        titles.every((t) => t === null) &&
+        weight?.textContent?.trim() === 'not weighed' &&
+        weight.querySelector('[title]')?.getAttribute('title') === 'No weight in the subscription cost model, so its traffic prices no window share' &&
+        rates()?.querySelector('.cost-ref__val--estimated, .cost-ref__donor') === null,
+      missing: [JSON.stringify(cells), JSON.stringify(titles), weight?.textContent ?? 'no weight cell', weight?.querySelector('[title]')?.getAttribute('title') ?? 'no title'],
     });
   }
   {
@@ -24966,7 +24992,7 @@ m.unmount();
       const cells = cellsOf(rowOf(model));
       const five = TYPES.map((t) => {
         const share = shareOf(costs, 'five_hour', anchor, model, usage(t, 10_000_000), OUT);
-        return shareText(model, 'five_hour', share === null ? null : share * factor);
+        return shareText(share === null ? null : share * factor);
       });
       return JSON.stringify(cells.slice(0, 5)) !== JSON.stringify(five);
     });
@@ -25439,8 +25465,8 @@ m.unmount();
 
   // On the test tables' entry in force at the pinned clock, Fable 5.1 with a null shared weight and a weight of 10 on
   // the 7-day Fable window alone, and Opus 5 with a weight of 3 on the 7-day window alone: each prices the window it
-  // is weighed on, and Opus 5's 5-hour window reads its model tier's latest weight, marked. Fable 5.1 is its tier's
-  // one model, so no weight stands in for its shared windows.
+  // is weighed on and draws a dash on the others. The cells read on the Ultra plan, whose tier the model week's tier
+  // list names, so Fable 5.1 draws its 7-day Fable row.
   {
     const { getSettings } = api;
     const tables = JSON.parse(readFileSync(new URL('../test/fixtures/test_tables.json', import.meta.url), 'utf8')).body;
@@ -25451,13 +25477,15 @@ m.unmount();
     content.overrides['claude-fable-5-1'] = { weight_by_window: { seven_day_fable: 10 } };
     content.overrides['claude-opus-5'] = { weight_by_window: { seven_day: 3 } };
     const wired = decodeSettings({ ...SETTINGS_WIRE, api_prices: tables.api_prices, subscription_costs: envelope });
-    const drawnCosts = revisionAt(wired.subscriptionCosts.revisions, CLOCK_ORIGIN).content;
     api.getSettings = async (...args) => ({ ...(await getSettings.apply(api, args)), apiPrices: wired.apiPrices, subscriptionCosts: wired.subscriptionCosts });
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     linkIn(page.container.querySelector('.page-head'))?.click();
     await page.settle(400);
     const dlg = topDialog();
     await openFold(page, dlg);
+    [...(shownPanel(dlg)?.querySelectorAll('[aria-label="Tier"] button') ?? [])].find((b) => b.textContent?.trim() === 'Ultra')?.click();
+    await page.settle(200);
+    const tier = [...(shownPanel(dlg)?.querySelectorAll('[aria-label="Tier"] button[aria-pressed="true"]') ?? [])].map((b) => b.textContent?.trim());
     const rows = [...(shownPanel(dlg)?.querySelectorAll('tbody tr') ?? [])];
     const rowOf = (model) => rows.find((r) => !r.classList.contains('cost-ref__sub') && !isFold(r) && nameOf(r) === model);
     const cellsOf = (row) => [...(row?.children ?? [])].slice(2).map((td) => td.textContent?.trim());
@@ -25468,10 +25496,8 @@ m.unmount();
     const opus5 = rowOf('claude-opus-5');
     const dashes = (n) => Array.from({ length: n }, () => '-');
     // A million tokens of each type, input, cache read, the two writes and output at multipliers 1, 0.1, 2, 2 and 10,
-    // on the Max 20x week of 1000: Fable's 10 x m x 1e6 / 1000 / 0.5 on the 7-day Fable window, and Opus 5's
+    // on the Ultra week of 1000: Fable's 10 x m x 1e6 / 1000 / 0.5 on the 7-day Fable window, and Opus 5's
     // 3 x m x 1e6 / 1000.
-    // Opus 5's 5-hour cells read the entry's Opus 5.5 weight, outside the band the dialog opens on.
-    const fiveHour = TYPES.map((t) => `~${fmtShare(shareOf(drawnCosts, 'five_hour', anchorTier(drawnCosts), 'claude-opus-5', usage(t, 1_000_000), OUT))}`);
     const drawn = {
       fable: { cells: cellsOf(fable), weight: weightIn(fable) },
       opus5: { cells: cellsOf(opus5), sub: opus5?.nextElementSibling?.classList.contains('cost-ref__sub') ?? false, titles: titlesOf(opus5), weight: weightIn(opus5) },
@@ -25481,20 +25507,21 @@ m.unmount();
     page.unmount();
     api.getSettings = getSettings;
     results.push({
-      name: "/sessions plan rates price a model weighed by window alone on the windows it weighs, read its weight cell by window, and fill a window it does not weigh at its model tier's latest, marked on those cells alone",
+      name: '/sessions plan rates price a model weighed by window alone on the windows it weighs, read its weight cell by window, and draw a dash on a window it does not weigh',
       ok:
+        JSON.stringify(tier) === JSON.stringify(['Ultra']) &&
         JSON.stringify(drawn.fable.cells) === JSON.stringify(dashes(10)) &&
         drawn.fable.weight.text === 'by window' &&
         drawn.fable.weight.title === 'claude-fable-5-1 carries no shared weight, only a weight per window: 10 on the 7-day Fable window' &&
         drawn.week.label === '7-day Fable' &&
         JSON.stringify(drawn.week.cells) === JSON.stringify([...Array(5).fill(''), fmtShare(20_000), fmtShare(2_000), fmtShare(40_000), fmtShare(40_000), fmtShare(200_000)]) &&
         !drawn.opus5.sub &&
-        JSON.stringify(drawn.opus5.cells) === JSON.stringify([...fiveHour, fmtShare(3_000), fmtShare(300), fmtShare(6_000), fmtShare(6_000), fmtShare(30_000)]) &&
-        drawn.opus5.titles.slice(0, 5).every((t) => t.endsWith(`${ESTIMATED_TITLE}.`)) &&
-        drawn.opus5.titles.slice(5).every((t) => t !== '' && !t.includes(ESTIMATED_TITLE)) &&
+        JSON.stringify(drawn.opus5.cells) === JSON.stringify([...dashes(5), fmtShare(3_000), fmtShare(300), fmtShare(6_000), fmtShare(6_000), fmtShare(30_000)]) &&
+        drawn.opus5.titles.slice(0, 5).every((t) => t === '') &&
+        drawn.opus5.titles.slice(5).every((t) => t !== '') &&
         drawn.opus5.weight.text === 'by window' &&
         drawn.opus5.weight.title === 'claude-opus-5 carries no shared weight, only a weight per window: 3 on the 7-day window',
-      missing: [JSON.stringify(drawn), JSON.stringify(fiveHour)],
+      missing: [JSON.stringify(tier), JSON.stringify(drawn)],
     });
   }
 
@@ -25728,8 +25755,9 @@ m.unmount();
     });
 
     // A zone this browser cannot read: the card gives the band's hours in that zone and says it cannot read it, and
-    // Plan rates leaves the state to the viewer, Inside first. One Opus 5.5 input token on the Max 20x 5-hour window is
-    // 2 / 100 / 0.5 inside the band and 2 / 100 outside, a million of them 40,000 and 20,000 windows.
+    // Plan rates leaves the state to the viewer, Inside first. It opens on the anchor's tier, Pro, where one Opus 5.5
+    // input token on the 5-hour window is 2 / 5 / 0.5 inside the band and 2 / 5 outside, a million of them 800,000 and
+    // 400,000 windows.
     const unzoned = { ...tested, peak: { ...tested.peak, zone: 'Not/AZone' } };
     const card = await mountNode(React.createElement(PeakBand, { costs: unzoned, now: CLOCK_ORIGIN }));
     const drawnCard = {
@@ -25774,41 +25802,43 @@ m.unmount();
         missing: [JSON.stringify(read)],
       });
     }
-    // A null weight listed ahead of the lightest model, its model tier's latest weighed one, reads its weight as an
-    // estimate, which never sets the light end of the weight column's scale: every multiple's title names the lightest
-    // model weighed on its own.
+    // A model with no weight listed ahead of the lightest model reads "not weighed" and never sets the light end of
+    // the weight column's scale: every multiple's title names the lightest model the cost model weighs on the 5-hour
+    // window.
     {
       const lead = 'claude-haiku-4';
       const ahead = { ...tested, modelWeight: { [lead]: null, ...tested.modelWeight } };
       const shown = await mountNode(React.createElement(PlanRates, { costs: ahead, now: CLOCK_ORIGIN, olderOpen: true, onToggleOlder: () => {}, prices: wired.apiPrices.models }));
-      const own = Object.keys(ahead.modelWeight).filter((model) => weightOrFallback(ahead, model, 'five_hour')?.estimated === false);
+      const own = Object.keys(ahead.modelWeight).filter((model) => weightOf(ahead, model, 'five_hour') !== null);
       const lightest = own.reduce((low, model) => (low === null || weightOf(ahead, model, 'five_hour') < weightOf(ahead, low, 'five_hour') ? model : low), null);
-      const opus = [...shown.container.querySelectorAll('tbody tr')].find((r) => r.children[0]?.textContent?.trim() === 'claude-opus-5-5');
-      const title = opus?.children[1]?.querySelector('[title]')?.getAttribute('title') ?? 'no title';
+      const rowOf = (model) => [...shown.container.querySelectorAll('tbody tr')].find((r) => r.children[0]?.textContent?.trim() === model);
+      const title = rowOf('claude-opus-5-5')?.children[1]?.querySelector('[title]')?.getAttribute('title') ?? 'no title';
+      const unweighed = rowOf(lead)?.children[1]?.textContent?.trim() ?? 'no row';
       shown.unmount();
       const multiple = `${figure(weightOf(ahead, 'claude-opus-5-5', 'five_hour') / weightOf(ahead, lightest, 'five_hour'))}x`;
       results.push({
-        name: '/sessions plan rates scale the weight column against the lightest model weighed on its own, never an estimate listed ahead of it',
-        ok: weightOrFallback(ahead, lead, 'five_hour')?.estimated === true && weightOf(ahead, lead, 'five_hour') === weightOf(ahead, lightest, 'five_hour') && title === `claude-opus-5-5: ${multiple} the share of ${lightest} per token of the same type on the 5-hour window`,
-        missing: [title, String(lightest)],
+        name: '/sessions plan rates scale the weight column against the lightest model the cost model weighs, never a model without a weight listed ahead of it',
+        ok: lightest !== null && lightest !== lead && unweighed === 'not weighed' && title === `claude-opus-5-5: ${multiple} the share of ${lightest} per token of the same type on the 5-hour window`,
+        missing: [title, String(lightest), unweighed],
       });
     }
-    // An estimate takes its donor's base weight, which can sit above the donor's own 5-hour override. A donor whose
-    // base outweighs every model's 5-hour weight lends it to an unweighted model of its tier, and every bar stays
-    // inside its track.
+    // The heavy end reads every model's own 5-hour weight, an override among them, so a model whose 5-hour override
+    // outweighs every base weight sets it, a model without a weight counting nothing, and every bar stays inside its
+    // track.
     {
-      const top = Math.max(...Object.keys(tested.modelWeight).map((model) => weightOf(tested, model, 'five_hour') ?? 0));
-      const donor = 'claude-opus-98';
-      const lent = 'claude-opus-97';
-      const heavy = { ...tested, modelWeight: { ...tested.modelWeight, [donor]: top * 2, [lent]: null }, overrides: { ...tested.overrides, [donor]: { weightByWindow: { five_hour: top } } } };
+      const top = Math.max(...Object.keys(tested.modelWeight).map((model) => tested.modelWeight[model] ?? 0));
+      const over = 'claude-opus-98';
+      const unweighed = 'claude-opus-97';
+      const heavy = { ...tested, modelWeight: { ...tested.modelWeight, [over]: top / 2, [unweighed]: null }, overrides: { ...tested.overrides, [over]: { weightByWindow: { five_hour: top * 2 } } } };
       const shown = await mountNode(React.createElement(PlanRates, { costs: heavy, now: CLOCK_ORIGIN, olderOpen: true, onToggleOlder: () => {}, prices: wired.apiPrices.models }));
+      const rowOf = (model) => [...shown.container.querySelectorAll('tbody tr')].find((r) => r.children[0]?.textContent?.trim() === model);
       const widths = [...shown.container.querySelectorAll('.cost-ref__bar')].map((bar) => Number.parseFloat(bar.style.width));
+      const read = { over: Number.parseFloat(rowOf(over)?.querySelector('.cost-ref__bar')?.style.width ?? 'NaN'), unweighed: rowOf(unweighed)?.children[1]?.textContent?.trim() ?? 'no row' };
       shown.unmount();
-      const borrowed = weightOrFallback(heavy, lent, 'five_hour');
       results.push({
-        name: "/sessions plan rates scale the weight column's heavy end over every model, an estimate at its donor's base above the donor's own 5-hour weight among them, so no bar runs past its track",
-        ok: top > 0 && borrowed?.estimated === true && borrowed.weight === top * 2 && weightOf(heavy, donor, 'five_hour') === top && widths.length > 0 && widths.every((w) => w <= 100) && widths.includes(100),
-        missing: [JSON.stringify(widths), JSON.stringify(borrowed)],
+        name: "/sessions plan rates scale the weight column's heavy end over every model's own 5-hour weight, an override above every base weight among them, so no bar runs past its track",
+        ok: top > 0 && weightOf(heavy, over, 'five_hour') === top * 2 && read.over === 100 && read.unweighed === 'not weighed' && widths.length > 0 && widths.every((w) => w <= 100),
+        missing: [JSON.stringify(widths), JSON.stringify(read)],
       });
     }
     const rates = await mountNode(React.createElement(PlanRates, { costs: unzoned, now: CLOCK_ORIGIN, prices: wired.apiPrices.models }));
@@ -25826,9 +25856,9 @@ m.unmount();
         JSON.stringify(first.pressed) === JSON.stringify(['Inside']) &&
         first.disabled === 0 &&
         first.now === 'This browser cannot read the zone Not/AZone, so pick the band state yourself.' &&
-        first.cell === fmtShare(40_000) &&
+        first.cell === fmtShare(800_000) &&
         JSON.stringify(outside.pressed) === JSON.stringify(['Outside']) &&
-        outside.cell === fmtShare(20_000),
+        outside.cell === fmtShare(400_000),
       missing: [JSON.stringify(first), JSON.stringify(outside)],
     });
   }

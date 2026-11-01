@@ -631,8 +631,11 @@ async function attentionLine(theme) {
 
 /**
  * The list the attention line's "+N more" badge opens: every item, one badge per row, each inside the box, the box 8 px
- * under the badge and 8 px inside the window, the badge marked expanded while it stands. Escape closes it and hands the
- * focus back to the badge.
+ * under the badge and 8 px inside the window, the badge marked expanded while it stands. The unpriced model's info
+ * badge compares against the first warning badge in height, left edge and type, its ink on its own fill contrasting
+ * less than the warning badge's (WCAG's relative luminance over the computed colors) and at 4.5 to 1 or more, since
+ * the line at 1280 px folds it and one badge per row gives each its own box. Escape closes it and hands the focus back
+ * to the badge.
  */
 async function attentionList(theme) {
   const say = (what) => failures.push(`${theme} /: the attention line's list ${what}`);
@@ -646,8 +649,30 @@ async function attentionList(theme) {
     const at = fold.getBoundingClientRect();
     const rows = [...box.children].map((row) => row.getBoundingClientRect());
     const badges = [...box.querySelectorAll('.badge')].map((b) => b.getBoundingClientRect());
+    // A fill with any transparency reads through to what lies under it, so it has no contrast of its own to read.
+    const channels = (color) => {
+      const m = /^rgba?\(([^)]+)\)$/.exec(color);
+      if (!m) return null;
+      const [red, green, blue, alpha = 1] = m[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+      return alpha < 1 ? null : [red, green, blue];
+    };
+    const luminance = (rgb) => {
+      const [red, green, blue] = rgb.map((v) => (v / 255 <= 0.03928 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4));
+      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    };
+    const tone = (b) => {
+      if (!b) return null;
+      const s = getComputedStyle(b);
+      const edge = b.getBoundingClientRect();
+      const ink = channels(s.color);
+      const fill = channels(s.backgroundColor);
+      const [high, low] = ink && fill ? [luminance(ink), luminance(fill)].sort((x, y) => y - x) : [null, null];
+      return { contrast: high === null ? null : Math.round(((high + 0.05) / (low + 0.05)) * 100) / 100, fill: s.backgroundColor, font: `${s.fontSize} ${s.fontWeight}`, height: edge.height, ink: s.color, left: Math.round(edge.left), text: b.textContent?.trim() ?? '' };
+    };
     return {
       badges: badges.length,
+      info: tone(box.querySelector('.badge--info')),
+      warning: tone(box.querySelector('.badge--warning')),
       bottom: Math.round(r.bottom),
       expanded: fold.getAttribute('aria-expanded'),
       gap: Math.round((r.top - at.bottom) * 10) / 10,
@@ -671,6 +696,11 @@ async function attentionList(theme) {
     if (read.role !== 'dialog' || read.label !== 'Needs attention' || read.expanded !== 'true') say(`is ${read.role} named ${JSON.stringify(read.label)} under a badge expanded ${read.expanded}`);
     if (read.gap !== 8) say(`stands ${read.gap} px under its badge, not 8`);
     if (read.left < 8 || read.right > read.view.width - 8 || read.bottom > read.view.height - 8) say(`spans ${read.left} to ${read.right} and down to ${read.bottom}, outside the window less 8 px`);
+    if (read.info?.text !== 'Model unpriced: claude-sonnet-4-5') say(`draws ${JSON.stringify(read.info?.text ?? null)} in the info tone, not the story's unpriced model`);
+    failures.push(...compare(read.info, read.warning, ['font', 'height', 'left'], `${theme} /: the attention line's list's info badge against its first warning badge`));
+    if (read.info?.contrast === null || read.warning?.contrast === null || !(read.info?.contrast < read.warning?.contrast) || !(read.info?.contrast >= 4.5)) {
+      say(`draws the info badge's ink ${read.info?.ink} on ${read.info?.fill} at a contrast of ${read.info?.contrast ?? 'none'}, not under the warning badge's ${read.warning?.contrast ?? 'none'} and at 4.5 or more`);
+    }
   }
   await page.keyboard.press('Escape');
   await settle();
@@ -1571,6 +1601,61 @@ async function routingLogEventPanels(theme) {
   const [blocked, named, key] = read.answer ?? [];
   if (blocked?.text !== 'guardrail blocked' || !named?.text.startsWith('guardrail') || !key?.text.startsWith('key')) say(`the guardrail record's Answer row reads ${JSON.stringify(read.answer)}`);
   else for (const chip of [blocked, named]) failures.push(...compare(chip, key, ['fontSize', 'height', 'top'], what(`the guardrail record's ${chip.text} chip against the key chip on its Answer row`)));
+}
+
+/**
+ * The shedding round panel's Rewrite cells on the story's two rounds that mark pins, each opened on its request under
+ * the 24-hour range: studio's 14:05 round names its rewrite unit, so each marked pin's cell reads its Pro-week rewrite
+ * in the week the top bar's Week select names, titled with the 7-day window the pick compared on, and secondary's
+ * 11:00 round, an earlier build's, reads each stored figure under its 20x label with no title. Each Rewrite cell
+ * compares against its row's Burn cell in type and top edge, the texts and titles recorded. The router's seed holds no
+ * round, so the mock pass alone reads them. The bare log loads again after.
+ */
+async function shedRewriteCells(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const ROUNDS = { earlier: 'req_1eaa9bc1-a18', unit: 'req_9f2e7c5a-c49' };
+  const read = { week: null };
+  try {
+    for (const [round, request] of Object.entries(ROUNDS)) {
+      await loadAtOrigin(`/routing-log?range=24h&kinds=shedding_round&request=${request}`, '.routing-log__table');
+      const row = page.locator('.routing-log__table > tbody > tr.routing-log__row').first();
+      if ((await row.count()) === 0) {
+        read[round] = null;
+        continue;
+      }
+      await row.locator('td.routing-log__kind').click();
+      await advance(LOAD_MS);
+      read.week = await page.evaluate(() => {
+        const week = document.querySelector('.topbar select[aria-label="Week"]');
+        return week?.selectedOptions[0]?.textContent ?? null;
+      });
+      read[round] = await row.evaluate((tr) => {
+        const panel = tr.nextElementSibling?.classList.contains('routing-log__panel') ? tr.nextElementSibling : null;
+        const cell = (td) => {
+          if (!td) return null;
+          const s = getComputedStyle(td);
+          return { text: td.textContent ?? '', title: td.getAttribute('title'), top: Math.round(td.getBoundingClientRect().top * 10) / 10, type: `${s.fontSize} ${s.fontWeight} ${s.fontFamily}` };
+        };
+        return [...(panel?.querySelectorAll('.event-detail__pins tbody tr') ?? [])].filter((r) => r.children[7]?.textContent === 'marked').map((r) => ({ burn: cell(r.children[3]), rewrite: cell(r.children[5]) }));
+      });
+    }
+  } finally {
+    await loadAtOrigin('/routing-log', '.routing-log__table');
+  }
+  measurements.push(`${theme} /routing-log shed rewrite cells ${JSON.stringify(read)}`);
+  const figure = '\\d+(\\.\\d+)?%';
+  const branches = [
+    ['unit', new RegExp(`^${figure} ${read.week ?? 'no week'}$`), 'compared on the 7-day window', "studio's 14:05 round, which names its rewrite unit,"],
+    ['earlier', new RegExp(`^${figure} of 20x 7-day$`), null, "secondary's 11:00 round, an earlier build's,"],
+  ];
+  for (const [round, text, title, which] of branches) {
+    const cells = read[round];
+    if (!cells || cells.length !== 2 || !cells.every((c) => text.test(c.rewrite?.text ?? '') && c.rewrite?.title === title)) {
+      say(`${which} reads its marked pins' Rewrite cells ${JSON.stringify(cells)}, not two that match ${text} titled ${JSON.stringify(title)}`);
+      continue;
+    }
+    for (const c of cells) failures.push(...compare(c.rewrite, c.burn, ['top', 'type'], `${theme} /routing-log: ${which} Rewrite cell ${c.rewrite.text} against its row's Burn cell`));
+  }
 }
 
 /**
@@ -10950,11 +11035,13 @@ async function costReference(theme) {
 }
 
 /**
- * The cost reference's headline words from Sessions at 1280 by 800, as the walk reads the dialog. On Tiers and peak
- * band the Windows by tier group rows read the Interactive title, then the Headless title, the first group row's cell
- * in the type size of the table's first head and above its weight, and the Peak band card's subtitle reads the shipped
- * band sentence after "This week.". On Plan rates the Regime control's pressed option reads Interactive. The texts, the
- * caption and both weights are recorded. The mock pass's alone, since the subtitle's week word reads the pinned clock.
+ * The cost reference's headline words from Sessions at 1280 by 800, as the walk reads the dialog. Its tabs read Tiers
+ * and peak band, Plan rates and API prices. On Tiers and peak band the Windows by tier group rows read the Interactive
+ * title, then the Headless title, the first group row's cell in the type size of the table's first head and above its
+ * weight, and the Peak band card's subtitle reads the shipped band sentence after "This week.". On Plan rates the
+ * Regime control's pressed option reads Interactive, and the Tier chooser lists the anchor's plan, Pro, first and
+ * pressed, its first option in the Regime control's first option's height, top edge and type. The texts, the caption
+ * and both weights are recorded. The mock pass's alone, since the subtitle's week word reads the pinned clock.
  */
 async function costReferenceHeadlines(theme) {
   const say = (what) => failures.push(`${theme} /sessions cost reference headlines: ${what}`);
@@ -10969,6 +11056,9 @@ async function costReferenceHeadlines(theme) {
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
     await advance(LOAD_MS);
     await dialog.locator('.cost-ref__panel:not([hidden]) tbody tr td.num').first().waitFor({ timeout: 15_000 });
+    const tabs = await page.evaluate(() => [...([...document.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('[role="tab"]') ?? [])].map((t) => t.textContent?.trim() ?? ''));
+    measurements.push(`${theme} /sessions cost reference headlines tabs ${JSON.stringify(tabs)}`);
+    if (JSON.stringify(tabs) !== JSON.stringify(['Tiers and peak band', 'Plan rates', 'API prices'])) say(`the tabs read ${JSON.stringify(tabs)}, not Tiers and peak band, Plan rates and API prices`);
     await dialog.getByRole('tab', { name: 'Tiers and peak band', exact: true }).click();
     await settle();
     const tiers = await page.evaluate(() => {
@@ -10996,13 +11086,24 @@ async function costReferenceHeadlines(theme) {
     await settle();
     const rates = await page.evaluate(() => {
       const panel = [...document.querySelectorAll('dialog[open]')].pop()?.querySelector('.cost-ref__panel:not([hidden])');
+      const option = (b) => {
+        if (!b) return null;
+        const s = getComputedStyle(b);
+        const at = b.getBoundingClientRect();
+        return { height: Math.round(at.height * 10) / 10, text: b.textContent?.trim() ?? '', top: Math.round(at.top * 10) / 10, type: `${s.fontSize} ${s.fontWeight} ${s.fontFamily}` };
+      };
       return {
         caption: panel?.querySelector('.cost-ref__caption b')?.textContent ?? null,
         pressed: [...(panel?.querySelectorAll('[aria-label="Regime"] button[aria-pressed="true"]') ?? [])].map((b) => b.textContent?.trim() ?? ''),
+        regime: option(panel?.querySelector('[aria-label="Regime"] button') ?? null),
+        tier: option(panel?.querySelector('[aria-label="Tier"] button') ?? null),
+        tierPressed: [...(panel?.querySelectorAll('[aria-label="Tier"] button[aria-pressed="true"]') ?? [])].map((b) => b.textContent?.trim() ?? ''),
       };
     });
     measurements.push(`${theme} /sessions cost reference headlines plan rates ${JSON.stringify(rates)}`);
     if (JSON.stringify(rates.pressed) !== JSON.stringify(['Interactive'])) say(`the Regime control shows ${JSON.stringify(rates.pressed)}, not Interactive`);
+    if (rates.tier?.text !== 'Pro' || JSON.stringify(rates.tierPressed) !== JSON.stringify(['Pro'])) say(`the Tier chooser's first option reads ${JSON.stringify(rates.tier?.text ?? null)} with ${JSON.stringify(rates.tierPressed)} pressed, not Pro first and pressed`);
+    for (const what of compare(rates.tier, rates.regime, ['height', 'top', 'type'], "the Tier chooser's first option against the Regime control's")) say(what);
   } catch (error) {
     say(`the cost reference never drew its headlines (${error instanceof Error ? error.message : String(error)})`);
   } finally {
@@ -12111,6 +12212,7 @@ try {
         await routingLogClearedChip(theme);
         if (mock) await pinShedMark(theme);
         if (mock) await routingLogEventPanels(theme);
+        if (mock) await shedRewriteCells(theme);
         await firstDecisionOpen(theme);
         await pagerControls(theme, view.path);
       }

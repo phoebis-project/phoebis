@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import type { RoutingEvent, RoutingLogRow } from '@/api/types';
 import { ChipView, rowValue } from '@/components/ChipView';
 import { KeyValue } from '@/components/ui/primitives';
+import type { WeekReading } from '@/lib/analytics';
 import { detailPairs, type DetailPair, entityHref, logHref, requestLink } from '@/lib/routingLog';
 
 /** The shedding round's pins, one row each in the round's order. */
@@ -19,7 +20,9 @@ function PinTable({ table }: { table: NonNullable<DetailPair['table']> }) {
         {table.rows.map((cells, i) => (
           <tr key={i}>
             {cells.map((c, j) => (
-              <td key={j}>{j === 0 ? <ChipView chip={c} /> : c.value}</td>
+              <td key={j} title={j === 0 ? undefined : c.title}>
+                {j === 0 ? <ChipView chip={c} /> : c.value}
+              </td>
             ))}
           </tr>
         ))}
@@ -29,8 +32,8 @@ function PinTable({ table }: { table: NonNullable<DetailPair['table']> }) {
 }
 
 /** An event row opened: When, Account and Pool, then the kind's own pairs, and the request it names in the foot. */
-export function EventDetail({ now, row, rows }: { now: number; row: RoutingEvent; rows: readonly RoutingLogRow[] }) {
-  const pairs = detailPairs(row, now, rows);
+export function EventDetail({ now, row, rows, week }: { now: number; row: RoutingEvent; rows: readonly RoutingLogRow[]; week: WeekReading }) {
+  const pairs = detailPairs(row, now, rows, week);
   return (
     <div className="event-detail">
       <KeyValue rows={pairs.map((p) => ({ label: p.label, value: p.table ? <PinTable table={p.table} /> : rowValue(p.chips) }))} />

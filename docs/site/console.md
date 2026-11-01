@@ -98,30 +98,27 @@ The Dashboard reads its figures again every 30 seconds. A line above the tiles n
 first, each item a badge that opens the account, pool or key where it is fixed, and reads "Nothing needs attention"
 otherwise. The line keeps one row of items and folds the badges past it behind a "+N more" badge that opens the full
 list, so the tiles hold still. An item with no such place (a drift refusal that named no key, a parked record without a
-pool, a pool deleted since, one of the router's own writers, the model weight estimated item, whose estimate shows in
-the cost reference dialog, a page unknown to the console or a condition the console does not know, which reads "Unknown
-condition" with its kind on hover) stays a plain badge. The
-conditions are the ones the `phoebis_attention` gauge exports ([Conditions and
-gauges](statistics.md#conditions-and-gauges)), and the pool exhausted item opens the [routing log](#routing-log) on the
-pool's exhausted decisions from the moment the condition began. The four routing conditions read as one sentence each,
-the subject first, then the count, the
-settings they name (with the pool's values where the item carries them) and the start, such as
-`main: 4 rounds marked nothing, no destination had runway, window_ceiling 95 %, since 14:45` for a pool whose rounds
-found no destination with runway. An account's count reads `2 moves landed and the 5h window was spent within the hour`
-where moves onto it were followed by a spent window, or `1 wall reached on the 5h window` where it reached its wall,
-followed by `the last round projected 96 %` where a projection round on that window came before, or by
-`the wall came 25 min before the reset` where a slow-down round came before (`the wall came at the reset` for a wall at
-or after the reset). An account slowed past twice its pool's stretch threshold within the day reads, under the label
-"Slowed past twice the stretch",
-`studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12`, the
-bar after `over`, the lowest factor of its spans and the pool's threshold. Each opens the [routing log](#routing-log) on
-the pool's shedding rounds, the account's moves and spent windows, its spent windows, or its slow-down starts and ends,
-from the moment the condition began. An account whose meter drifted reads
-`acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`, each off window with the ratio the meter charged against the
-cost model, under the label "Meter drift against the table", and opens the [Meter](#meter) view on the account. A
-parked ledger record adds "Replay parked records", which answers
-`Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button with its
-answer together, the button and its answer take a second row.
+pool, a pool deleted since, one of the router's own writers, the unpriced model item, whose model the cost reference
+dialog's Plan rates draws with dashes, a page unknown to the console or a condition the console does not know, which
+reads "Unknown condition" with its kind on hover) stays a plain badge. The conditions are the ones the
+`phoebis_attention` gauge exports ([Conditions and gauges](statistics.md#conditions-and-gauges)), and the pool exhausted
+item opens the [routing log](#routing-log) on the pool's exhausted decisions from the moment the condition began. The
+four routing conditions read as one sentence each, the subject first, then the count, the settings they name (with the
+pool's values where the item carries them) and the start, such as `main: 4 rounds marked nothing, no destination had
+runway, window_ceiling 95 %, since 14:45` for a pool whose rounds found no destination with runway. An account's count
+reads `2 moves landed and the 5h window was spent within the hour` where moves onto it were followed by a spent window,
+or `1 wall reached on the 5h window` where it reached its wall, followed by `the last round projected 96 %` where a
+projection round on that window came before, or by `the wall came 25 min before the reset` where a slow-down round came
+before (`the wall came at the reset` for a wall at or after the reset). An account slowed past twice its pool's stretch
+threshold within the day reads, under the label "Slowed past twice the stretch", `studio: slowed 2 h 8 min of the last
+24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12`, the bar after `over`, the lowest factor of
+its spans and the pool's threshold. Each opens the [routing log](#routing-log) on the pool's shedding rounds, the
+account's moves and spent windows, its spent windows, or its slow-down starts and ends, from the moment the condition
+began. An account whose meter drifted reads `acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`, each off window
+with the ratio the meter charged against the cost model, under the label "Meter drift against the table", and opens the
+[Meter](#meter) view on the account. A parked ledger record adds "Replay parked records", which answers `Landed {n}, {n}
+still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button with its answer together,
+the button and its answer take a second row.
 
 Five tiles follow, each with a sparkline over the last 24 hours: "Requests, 24h" with `{n} per hour`, "Tokens, 24h"
 with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, "Error rate, 24h" with "No requests",
@@ -1119,37 +1116,35 @@ The console has no import control: a table is replaced by a file at that path, r
 ![The cost reference dialog on Plan rates](assets/cost-reference-plan-rates-light.png#only-light)
 ![The cost reference dialog on Plan rates](assets/cost-reference-plan-rates-dark.png#only-dark)
 
-Tiers and peak band draws Windows by tier, a row per tier the cost model sizes with its 5-hour and 7-day window as
-bars labeled as a multiple of the smallest tier's window, a Peak band switch that redraws them for a request completing
-inside the band, and the Peak band card: a week, Monday to Sunday in the browser's time zone, with the band's hours on
-each day it covers, a marker at now, a caption naming this week's hours here and in the zone the cost model defines
-them in, whether the band runs now and until when, the next change of the local hours, and each window's capacity
-factor. Plan rates draws the share of a tier's 5-hour and 7-day window that a token count of each type spends, per
-model, for a request completing outside or inside the band, with a tier chooser (the anchor tier Max 20x first), the
-band control and a token field in millions with quick picks for 100k, 1M and 10M, a weight column per model, a Fable
-week row under a Fable model's 7-day group, and a warning tint on a cell past a full window. Under a regime of the cost
-model ([Plan meter](statistics.md#plan-meter)), Windows by tier draws the regime's part first, a headline row naming the
-regime and the clients it prices, "Interactive (Claude Code CLI, Claude Desktop, Claude VSCode)" for the shipped model,
-then a row per tier the regime names, and the base rows under their own headline, "Headless (Claude Code CLI headless
-mode, the Agent SDK, Claude in Slack, etc.)", the multiples against the base's smallest tier. The Peak band card's
-subtitle names the traffic the band applies to and the sessions that hold the full window at every hour ("The band
-applies to Headless traffic only: a request completing inside it spends more of its 5-hour window. Interactive sessions
-hold the full window at every hour."), and its factor rows add one per regime that holds a window differently inside the
-band, named by its headline word. Plan rates adds a Regime control beside Tier offering each regime's headline word and
-Headless for the base rows, opening on Interactive where the model names it, the caption naming the shown headline and
-its clients. A model the cost model does not weigh, on a model tier with a weighed model, reads that tier's latest
-weighed model, each of its cells marked with a `~` and its weight cell reading `estimated, as {model}`, and the caption
-adds "A ~ marks an estimate: the model reads the latest weighed model of its model tier." A model of no model tier, or
-of one with no weighed model, keeps its dashes and reads "not weighed". API prices draws the dollar list prices per
-million tokens, input, cache read, cache write 5m, cache write 1h and output, with a fast-mode row under each model that
-serves fast mode and a row under each model priced by prompt length, under the caption "USD per million tokens at list
-price" and its note "An API-key account pays these. A subscription account pays them in overage and for fast-mode
-answers." Both tables show one row per model tier, its newest model, in the cost model's `tier_order` with `model_tier`
-naming each model's tier and a model of no tier last, and fold the older models under one row at the table's foot that
-names their count, "1 older model" or `{n} older models`, and expands to them in the same order. The fold is shared by
-both tables and starts closed at each opening. The price rows, the weights and how a probe is priced are on
-[Pricing](statistics.md#pricing), which lists the shipped revision in force, and the dialog shows an earlier entry under
-the Revision select.
+Tiers and peak band draws Windows by tier, a row per tier the cost model sizes, named by its plan (Pro, Max, Ultra),
+with its 5-hour and 7-day window as bars labeled as a multiple of the smallest tier's window, a Peak band switch that
+redraws them for a request completing inside the band, and the Peak band card: a week, Monday to Sunday in the browser's
+time zone, with the band's hours on each day it covers, a marker at now, a caption naming this week's hours here and in
+the zone the cost model defines them in, whether the band runs now and until when, the next change of the local hours,
+and each window's capacity factor. Plan rates draws the share of a tier's 5-hour and 7-day window that a token count of
+each type spends, per model, for a request completing outside or inside the band, with a tier chooser (the anchor tier
+Pro first, then the cost model's order), the band control and a token field in millions with quick picks for 100k, 1M
+and 10M, a weight column per model, a Fable week row under a Fable model's 7-day group on a tier with Fable access and
+none under Pro, and a warning tint on a cell past a full window. Under a regime of the cost model ([Plan
+meter](statistics.md#plan-meter)), Windows by tier draws the regime's part first, a headline row naming the regime and
+the clients it prices, "Interactive (Claude Code CLI, Claude Desktop, Claude VSCode)" for the shipped model, then a row
+per tier the regime names, and the base rows under their own headline, "Headless (Claude Code CLI headless mode, the
+Agent SDK, Claude in Slack, etc.)", the multiples against the base's smallest tier. The Peak band card's subtitle names
+the traffic the band applies to and the sessions that hold the full window at every hour ("The band applies to Headless
+traffic only: a request completing inside it spends more of its 5-hour window. Interactive sessions hold the full window
+at every hour."), and its factor rows add one per regime that holds a window differently inside the band, named by its
+headline word. Plan rates adds a Regime control beside Tier offering each regime's headline word and Headless for the
+base rows, opening on Interactive where the model names it, the caption naming the shown headline and its clients. A
+model the cost model does not weigh prices no window share, so its cells read dashes and its weight cell "not weighed".
+API prices draws the dollar list prices per million tokens, input, cache read, cache write 5m, cache write 1h and
+output, with a fast-mode row under each model that serves fast mode and a row under each model priced by prompt length,
+under the caption "USD per million tokens at list price" and its note "An API-key account pays these. A subscription
+account pays them in overage and for fast-mode answers." Both tables show one row per model tier, its newest model, in
+the cost model's `tier_order` with `model_tier` naming each model's tier and a model of no tier last, and fold the older
+models under one row at the table's foot that names their count, "1 older model" or `{n} older models`, and expands to
+them in the same order. The fold is shared by both tables and starts closed at each opening. The price rows, the weights
+and how a probe is priced are on [Pricing](statistics.md#pricing), which lists the shipped revision in force, and the
+dialog shows an earlier entry under the Revision select.
 
 ## Settings
 
@@ -1328,19 +1323,20 @@ panel reads Started by, Trigger (`5h projection 99% at 18:20 over the ceiling 95
 `7d projection 96% in 5 h over the ceiling 95%`, or `5h stretch 42 min over the threshold 30 min` for a round the
 stretch fired, followed by Demand, `12.0 %/h to the reset at 18:20`), Fired by (`the projection` or `the slow-down`),
 Excess (`9.5 %/h`), Cap with the target and the burn removed, Unit, Burn average, Warm sessions, the Pins table
-(Session, Agent, Warmth, Burn, Last prompt, Rewrite as the Max 20x equivalent of the pin's weekly window, labeled
-`of 20x 7-day` or `of 20x 7-day Fable`, Destination, Mark), Skipped (one chip per pin, its session and its reason,
-`off window` for a pin whose model does not draw the window that fired), Planned destinations, Outcome (`marked 2`,
-`nothing to mark: no runway`, or `nothing to mark: off window` for a round that walked no pin and left one out off the
-window that fired), Next round after, Dwell and Survive a restart. A mark cleared panel reads the pin, Reason
-(`healed: the 5h projection read 91% under the ceiling`, `healed: the stretch read 24 min under the threshold 30 min`
-for a mark the stretch made, `moved` or `released`), Marked (when, on which account) and Standing for, and a reservation
-expired panel reads Request, Attempt, Cause, Reserved (`5h 10.4%`, `7d 1.2%`), Held for and the Effect
-`the booked share left the account's prediction`. A slow-down started panel reads Speed (`0.5x`), Stretch
-(`42 min of 30 min`, the threshold after `of`), Demand (`12.0 %/h`), Reset and the Effect
-`requests of the account's sessions wait their cycle times the slow-down up to the hold`, and a slow-down ended panel
-Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
-`requests of the account's sessions pass unheld again`. The kinds and what each row records:
+(Session, Agent, Warmth, Burn, Last prompt, Rewrite as the share of the chosen week the pin's rewrite takes, `0.111%
+Ultra week`, with `compared on the 7-day window` on hover naming the window the pick compared on, or on an earlier
+build's round, which names no unit, the figure as stored under its old label, Destination, Mark), Skipped (one chip per
+pin, its session and its reason, `off window` for a pin whose model does not draw the window that fired), Planned
+destinations, Outcome (`marked 2`, `nothing to mark: no runway`, or `nothing to mark: off window` for a round that
+walked no pin and left one out off the window that fired), Next round after, Dwell and Survive a restart. A mark cleared
+panel reads the pin, Reason (`healed: the 5h projection read 91% under the ceiling`, `healed: the stretch read 24 min
+under the threshold 30 min` for a mark the stretch made, `moved` or `released`), Marked (when, on which account) and
+Standing for, and a reservation expired panel reads Request, Attempt, Cause, Reserved (`5h 10.4%`, `7d 1.2%`), Held for
+and the Effect `the booked share left the account's prediction`. A slow-down started panel reads Speed (`0.5x`), Stretch
+(`42 min of 30 min`, the threshold after `of`), Demand (`12.0 %/h`), Reset and the Effect `requests of the account's
+sessions wait their cycle times the slow-down up to the hold`, and a slow-down ended panel Lasted, Slowest (`0.35x`),
+Held (the time the span held requests) and the Effect `requests of the account's sessions pass unheld again`. The kinds
+and what each row records:
 
 | Event | What it records |
 | --- | --- |
@@ -1417,9 +1413,9 @@ reported draws no group. A collapsed group is one line: Account (a link to the a
 "5-hour"), Latest ratio, Off (the count of off windows, or "none"), "Ratio, 30 days" (the spark), Latest end (its date
 always written) and Windows (the count). A click on the line or Enter on it opens the group, its chevron turning down,
 and a second closes it. An open group lists its windows newest first, the newest 10 of a 5-hour group and the newest 25
-of a weekly one, under Ended, Rise, Predicted (with the charts' `~` and its estimate hover where an attempt in it was
-priced at a model tier's estimate), Ratio and Requests, then, while windows stay unlisted, `{n} of {m} windows, newest
-first` with "Show 25 more". A group's open state belongs to the page, so a reload or a link opens every group shut.
+of a weekly one, under Ended, Rise, Predicted, Ratio and Requests, then, while windows stay unlisted, `{n} of {m}
+windows, newest first` with "Show 25 more". A group's open state belongs to the page, so a reload or a link opens every
+group shut.
 
 The spark charts the group's windows over the 30 days to the newest window the view lists, so every line reads one axis:
 the ratio's base-2 log clipped to 0.5 and 2, the band 0.8 to 1.25 shaded with the 1.0 line in it, the windows the band

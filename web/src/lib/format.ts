@@ -76,19 +76,6 @@ export const WEEK_WORD: Record<WeekPosition, string> = { max: 'a Max week', pro:
 export const fmtWeek = (share: number, week: WeekPosition): string => (share === 0 ? '0%' : `${fmtShare(share)} of ${WEEK_WORD[week]}`);
 /** The short form for a cell: "0.11% Ultra week". */
 export const weekShort = (share: number, week: WeekPosition): string => `${fmtShare(share)} ${WEEK_LABEL[week]}`;
-const EQUIVALENT_WINDOW: ByWindow<string> = { '5h': '5-hour', '7d': '7-day', '7d_fable': '7-day Fable' };
-/** A 20x equivalent's window word: "5-hour", "7-day", "7-day Fable", a window the pages do not know under its key. */
-export const equivalentWord = (windowKey: string): string => EQUIVALENT_WINDOW[windowKeyId(windowKey) ?? ''] ?? windowKey;
-/**
- * The hover text of every estimated figure, the one sentence the console says about an estimate: the routes answer
- * the flag and no donor, so no surface names the model whose weight stands in. "Model tier", since the drawer's title
- * joins it to "Account tier".
- */
-export const ESTIMATED_TITLE = "Estimated at the model tier's latest weighted model";
-/**
- * A figure's title with the estimate after it as a sentence of its own, or the title alone for a figure not estimated.
- */
-export const withEstimate = (title: string, estimated: boolean): string => (!estimated ? title : title === '' ? `${ESTIMATED_TITLE}.` : `${title}. ${ESTIMATED_TITLE}.`);
 export const fmtMs = (ms: number | null) => (ms === null ? '-' : ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
 export const fmtCredits = (credits: number, exponent = 2) => usd.format(credits / 10 ** exponent);
 const minorDecimal = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });

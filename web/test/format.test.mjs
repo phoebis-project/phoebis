@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, ESTIMATED_TITLE, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtHourTick, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
+const { earlierHolderLabel, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtHourTick, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
 
 test("a fork reads its base cut at the session's width and the depth where one is known", () => {
   const base = '1a2b3c4d-5e6f-4a7b-9c8d-7e6f5a4b3c2d';
@@ -201,13 +201,6 @@ test('a share of the chosen week reads as a percent of that week, zero as 0%, an
   assert.equal(fmtWeek(0.0011, 'ultra'), '0.11% of an Ultra week');
   assert.equal(fmtWeek(0, 'pro'), '0%');
   assert.equal(weekShort(0.0022, 'max'), '0.22% Max week');
-});
-
-test('the estimated title is one sentence that names the model tier and no model', () => {
-  assert.equal(typeof ESTIMATED_TITLE, 'string');
-  assert.match(ESTIMATED_TITLE, /^Estimated [^.;:]+[^.;:\s]$/, 'one sentence, with no stop, semicolon or colon inside it and none at its end');
-  assert.match(ESTIMATED_TITLE, /\bmodel tier\b/, 'the model tier named apart from the account tier');
-  assert.doesNotMatch(ESTIMATED_TITLE, /claude-|fable|haiku|opus|sonnet/i, 'no model or family named, since the routes answer no donor');
 });
 
 test('a dated model id reads undated, any other as sent', () => {

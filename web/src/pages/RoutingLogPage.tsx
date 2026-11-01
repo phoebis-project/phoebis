@@ -12,7 +12,9 @@ import type { Option } from '@/components/ui/OptionList';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft } from '@/components/ui/icons';
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, useDescription } from '@/components/ui/primitives';
 import { addressWindow, type LogFilters, RANGE_PRESETS, ROUTING_LOG_CODEC } from '@/lib/address';
+import type { WeekReading } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
+import { weekScale } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, readEnd, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtDatedTime, fmtInt, fmtTime, upperFirst } from '@/lib/format';
@@ -58,7 +60,12 @@ export function RoutingLogPage() {
   // `compareModels` reads the tiers the shell sets from its settings answer, which can land after the catalog. The
   // settings' tiers are the dependency that sorts the list again when they land, and the memo reads them so its
   // dependency list can name them.
-  const { modelTiers } = useAppSettings();
+  const { modelTiers, week } = useAppSettings();
+  // The cost model whose capacities scale a shedding round's Pro-week rewrite to the chosen week. The Pro week reads
+  // without it.
+  const settings = useAsync(() => api.getSettings(), []);
+  const scale = weekScale(settings.data?.subscriptionCosts ?? null, week);
+  const reading: WeekReading = { error: scale === null ? settings.error : null, scale, week };
   const modelOptions = useMemo<Option[]>(() => {
     void modelTiers;
     return (catalog.data ?? [])
@@ -127,6 +134,7 @@ export function RoutingLogPage() {
     setFollowed(null);
     setLoadedAt(clock.now());
     log.reload();
+    settings.reload();
   };
 
   const now = clock.now();
@@ -219,7 +227,7 @@ export function RoutingLogPage() {
                         <LogRow row={row} rows={rows} isNew={fresh.has(id)} now={now} open={open.has(id)} onToggle={() => toggle(id)} />
                         {open.has(id) && (
                           <tr className="routing-log__panel table__detail">
-                            <td colSpan={9}>{row.type === 'decision' ? <DecisionCard now={now} onWiden={widen} row={row} /> : <EventDetail now={now} row={row} rows={rows} />}</td>
+                            <td colSpan={9}>{row.type === 'decision' ? <DecisionCard now={now} onWiden={widen} row={row} /> : <EventDetail now={now} row={row} rows={rows} week={reading} />}</td>
                           </tr>
                         )}
                       </Fragment>

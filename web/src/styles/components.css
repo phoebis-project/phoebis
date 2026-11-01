@@ -344,6 +344,11 @@
   background: var(--warning-soft);
 }
 
+.badge--info {
+  color: var(--info-ink);
+  background: var(--info-soft);
+}
+
 .badge--serious {
   color: var(--serious-ink);
   background: var(--serious-soft);
