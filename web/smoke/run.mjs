@@ -11110,11 +11110,17 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     // the settings the mock answers.
     await m.navigate(`/requests/${sharedRow.id}`);
     await m.settle(300);
-    const costValue = () => [...m.container.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost')?.querySelector('td:last-child') ?? null;
+    const costRowOf = () => [...m.container.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost') ?? null;
+    const costValue = () => costRowOf()?.querySelector('td:last-child') ?? null;
+    // The hint's chips stand on a row of their own under the cost row.
+    const hintRowOf = () => {
+      const next = costRowOf()?.nextElementSibling ?? null;
+      return next?.classList.contains('usage-table__hint') ? next : null;
+    };
     const readRow = () => {
       const value = costValue();
       return {
-        chips: [...(value?.querySelectorAll('.chip') ?? [])].map((c) => c.textContent?.trim() ?? ''),
+        chips: [...(value?.querySelectorAll('.chip') ?? []), ...(hintRowOf()?.querySelectorAll('.chip') ?? [])].map((c) => c.textContent?.trim() ?? ''),
         ends: value?.querySelector(':scope > .usage-table__end')?.lastElementChild?.classList.contains('muted') === true,
         equivalent: value?.querySelector('.muted')?.textContent?.trim() ?? null,
         figure: value?.querySelector(':scope > b')?.textContent?.trim() ?? null,
@@ -11125,7 +11131,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     const native = readRow();
     const [figureChip, planChip, ...shareChips] = native.chips;
     results.push({
-      name: "/requests the drawer's cost row of a subscription row reads its figure in the Ultra week as one chip with the hint's lines as chips after it and the dollars after them, and its title names the hint and the account tier as the attempt stored it and the two revisions in force",
+      name: "/requests the drawer's cost row of a subscription row reads its figure in the Ultra week as one chip with the dollars after it and the hint's lines as chips on a row of their own under it, and its title names the hint and the account tier as the attempt stored it and the two revisions in force",
       ok: figureChip === weekFull(sharedRow.costEquivalent) && sharedHint !== null && `${planChip}: ${shareChips.join(', ')}` === sharedHint && shareChips.length >= 2 && native.equivalent === `${fmtUsd(sharedRow.costUsd)} equivalent` && native.ends && sharedRow.tier !== null && native.title === `${sharedHint}. ${tiered}`,
       missing: [sharedRow.id, JSON.stringify(native), String(sharedHint), tiered],
     });
@@ -11203,6 +11209,65 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
         last(standard)?.value === 'tier standard' && tier(standard).length === 1 &&
         counted !== null && tier(counted).length === 0,
       missing: [JSON.stringify(last(seed)), drawn?.id ?? 'no drawn standard row', JSON.stringify(last(standard)), count?.id ?? 'no token count', JSON.stringify(counted)],
+    });
+  }
+  {
+    // A week figure waits on the cost model's scale, so under the Ultra week, the stored default, a failed settings
+    // read draws a dash titled with the read's message where the figure stands, never a placeholder for ever: on the
+    // Cost cells, on the drawer's cost row and on the Dashboard's recent Cost cells. The Requests bar's Refresh reads
+    // the settings again.
+    localStorage.removeItem('phoebis.unit');
+    localStorage.removeItem('phoebis.week');
+    const FAILED = 'the settings read failed';
+    const { getSettings } = api;
+    api.getSettings = () => Promise.reject(new Error(FAILED));
+    const cellRead = (td) => ({ skeleton: td?.querySelector('.skeleton') !== null && td !== undefined, text: td?.textContent?.trim() ?? '', title: td?.getAttribute('title') ?? null });
+    const costCells = (page, table) => {
+      const at = [...page.container.querySelectorAll(`${table} thead th`)].findIndex((th) => th.textContent?.trim() === 'Cost');
+      return [...page.container.querySelectorAll(`${table} tbody tr`)].map((tr) => ({ id: tr.querySelector('a[href^="/requests/"]')?.getAttribute('href')?.slice('/requests/'.length).split('?')[0] ?? null, ...cellRead(tr.children[at]) }));
+    };
+    const failedCell = (c) => c.text === '-' && c.title === FAILED;
+    const list = await mount('/requests');
+    const listed = costCells(list, '.requests__table');
+    results.push({
+      name: '/requests with the settings read failing under the Ultra week each Cost cell a week figure would fill reads a dash titled with the read\'s message, and none waits on a placeholder',
+      ok: listed.length > 0 && listed.every((c) => !c.skeleton) && listed.some(failedCell),
+      missing: [JSON.stringify(listed.slice(0, 6))],
+    });
+    // The drawer of a row whose cell the failed read left without its figure.
+    const pending = listed.find((c) => c.skeleton || failedCell(c)) ?? null;
+    let row = null;
+    if (pending?.id) {
+      await list.navigate(`/requests/${pending.id}`);
+      await list.settle(300);
+      row = cellRead([...list.container.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost')?.querySelector('td:last-child'));
+    }
+    results.push({
+      name: "/requests with the settings read failing under the Ultra week the drawer's cost row of a subscription request reads a dash, its title leading with the read's message",
+      ok: row !== null && !row.skeleton && row.text === '-' && (row.title ?? '').startsWith(`${FAILED}. `),
+      missing: [pending?.id ?? 'no pending row', JSON.stringify(row)],
+    });
+    await list.navigate('/requests');
+    await list.settle(300);
+    api.getSettings = getSettings;
+    list.container.querySelector('.refresh-control__body[aria-label="Refresh"]')?.click();
+    await list.settle(700);
+    const refreshed = costCells(list, '.requests__table');
+    list.unmount();
+    results.push({
+      name: '/requests Refresh reads the settings again, so the Cost cells a failed read left dashed read their week figures',
+      ok: refreshed.length > 0 && !refreshed.some((c) => c.skeleton || failedCell(c)) && refreshed.some((c) => /% Ultra week$/.test(c.text)),
+      missing: [JSON.stringify(refreshed.slice(0, 6))],
+    });
+    api.getSettings = () => Promise.reject(new Error(FAILED));
+    const dash = await mount('/');
+    const recent = costCells(dash, '.dash__recent');
+    dash.unmount();
+    api.getSettings = getSettings;
+    results.push({
+      name: "/ with the settings read failing under the Ultra week each recent Cost cell a week figure would fill reads a dash titled with the read's message, and none waits on a placeholder",
+      ok: recent.length > 0 && recent.every((c) => !c.skeleton) && recent.some(failedCell),
+      missing: [JSON.stringify(recent.slice(0, 6))],
     });
   }
   await m.navigate('/requests');
@@ -12960,8 +13025,11 @@ m.unmount();
     await facet.navigate(`/requests/${freeCalls[0].id}`);
     await facet.settle(300);
     const standing = sectionRow(facet, 'Request shape', 'Classifier');
-    const costValue = [...facet.container.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost')?.querySelector('td:last-child') ?? null;
-    const cost = { chips: [...(costValue?.querySelectorAll('.chip') ?? [])].map((c) => c.textContent?.trim() ?? ''), title: costValue?.getAttribute('title') ?? null };
+    const costRow = [...facet.container.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost') ?? null;
+    const costValue = costRow?.querySelector('td:last-child') ?? null;
+    // The hint's chips stand on a row of their own under the cost row.
+    const hintRow = costRow?.nextElementSibling?.classList.contains('usage-table__hint') ? costRow.nextElementSibling : null;
+    const cost = { chips: [...(costValue?.querySelectorAll('.chip') ?? []), ...(hintRow?.querySelectorAll('.chip') ?? [])].map((c) => c.textContent?.trim() ?? ''), title: costValue?.getAttribute('title') ?? null };
     const item = sectionRow(facet, 'Outcome', 'Client contract');
     results.push({
       name: "/requests the drawer of a classifier call reads Classifier client under Request shape, and its Estimated cost row's 0% figure and zero shares under the free sentence",
@@ -19095,7 +19163,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       results.push({
         name: "/analytics under native grouped by account each subscription account's Cost cell carries its hint on its hover, its plan and its share of each window it has, and an API key account's carries none",
         // The cells skip the label column, so the Cost cell's title is the second one, after the requests'.
-        ok: (rowOf('nightly')?.titles[1] ?? '').startsWith('Max: ') && (rowOf('workshop')?.titles[1] ?? '').startsWith('Ultra: ') && !(rowOf('workshop')?.titles[1] ?? '').includes('5-hour') && !(rowOf('overflow')?.titles[1] ?? '').includes(': '),
+        ok: (rowOf('nightly')?.titles[1] ?? '').startsWith('Max: ') && (rowOf('workshop')?.titles[1] ?? '').startsWith('Ultra: ') && !(rowOf('workshop')?.titles[1] ?? '').includes('5-hour') && rowOf('overflow') !== undefined && !(rowOf('overflow')?.titles[1] ?? '').includes(': '),
         missing: [JSON.stringify(['nightly', 'workshop', 'overflow'].map((l) => rowOf(l) ?? l))],
       });
       // The other three positions keep today's surfaces: one dollar tile, one ring and the eight-column table, and no
@@ -19316,7 +19384,6 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const legendOf = (t) => [...(cardOf(t)?.querySelectorAll('.legend li') ?? [])].map((li) => ({ label: [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), title: li.getAttribute('title'), value: li.querySelector('.legend__value')?.textContent?.trim() ?? '' }));
       const subtitleOf = (t) => cardOf(t)?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
       const ticksOf = (t) => [...(cardOf(t)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((x) => x.textContent?.trim() ?? '');
-      const titleOf = (full) => full;
       // A figure cell reads its figure, the line under it and the full reading on its title, as the Cost table's do.
       const cellOf = (td) => {
         const figure = td.cloneNode(true);
@@ -19343,7 +19410,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
           ...(sides.plan ? [equivalent === null ? { full: null, short: '-' } : { full: weekFull(equivalent[side]), short: weekCell(equivalent[side]) }] : []),
           ...(sides.billed ? [{ full: `${fmtUsd(dollars)} billed`, short: fmtUsd(dollars) }] : []),
         ];
-        return { main: shown[0].short, sub: shown[1]?.full ?? '', title: titleOf(shown.flatMap((s) => (s.full === null ? [] : [s.full])).join(', ')) };
+        return { main: shown[0].short, sub: shown[1]?.full ?? '', title: shown.flatMap((s) => (s.full === null ? [] : [s.full])).join(', ') };
       };
       const models = (await answerOf((q) => q.groupBy === 'model' && q.funding === undefined && !q.includeProbes)) ?? [];
       const cacheRows = rowsOf('Cache by model');
@@ -19477,7 +19544,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
           ...(sides.plan ? [equivalent === null ? { full: null, short: '-' } : { full: weekFull(equivalent), short: `${weekCell(equivalent)}` }] : []),
           ...(sides.billed ? [{ full: `${fmtUsd(b?.probeCostUsd ?? 0)} billed`, short: fmtUsd(b?.probeCostUsd ?? 0) }] : []),
         ];
-        return { main: shown[0].short, sub: shown[1]?.full ?? '', title: titleOf(shown.flatMap((s) => (s.full === null ? [] : [s.full])).join(', ')) };
+        return { main: shown[0].short, sub: shown[1]?.full ?? '', title: shown.flatMap((s) => (s.full === null ? [] : [s.full])).join(', ') };
       };
       const savedCellOf = (g) => {
         const s = savingSides(g, (billedPools ?? []).find((x) => x.key === g.key), false);
@@ -19485,7 +19552,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
           ...(s.equivalent === undefined ? [] : [s.equivalent === null ? { full: null, short: '-' } : { full: weekFull(s.equivalent), short: `${weekCell(s.equivalent)}` }]),
           ...(s.billed === undefined ? [] : [{ full: `${fmtUsd(s.billed)} billed`, short: fmtUsd(s.billed) }]),
         ];
-        return { main: shown[0].short, sub: shown[1]?.full ?? '', title: titleOf(shown.flatMap((x) => (x.full === null ? [] : [x.full])).join(', ')) };
+        return { main: shown[0].short, sub: shown[1]?.full ?? '', title: shown.flatMap((x) => (x.full === null ? [] : [x.full])).join(', ') };
       };
       const poolRows = rowsOf('Cache warming by pool');
       // The cells skip the label column, so a column's cell sits one before its head.
@@ -20353,13 +20420,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     localStorage.setItem('phoebis.week', 'pro');
     const pro = await mount('/analytics#burn');
     const proPlan = cardIn(pro, PLAN);
+    const proCard = [...pro.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === PLAN);
+    const proEntries = proCard?.querySelectorAll('.legend li').length ?? 0;
     pro.unmount();
     localStorage.removeItem('phoebis.week');
     api.getSettings = getSettings;
     results.push({
       name: "/analytics a failed settings read draws the plan card's error under the Ultra week and leaves Spend per minute under the key grouping, and the Pro week reads the plan card without the cost model",
-      ok: failed.plan.includes('Could not load plan per hour') && !failed.spend.includes('Could not load') && !proPlan.includes('Could not load'),
-      missing: [`plan: ${failed.plan.slice(0, 120)}`, `spend: ${failed.spend.slice(0, 120)}`, `pro: ${proPlan.slice(0, 120)}`],
+      ok: failed.plan.includes('Could not load plan per hour') && !failed.spend.includes('Could not load') && !proPlan.includes('Could not load') && proEntries > 0,
+      missing: [`plan: ${failed.plan.slice(0, 120)}`, `spend: ${failed.spend.slice(0, 120)}`, `pro: ${proPlan.slice(0, 120)}`, `${proEntries} legend entries on the Pro card`],
     });
   }
   await burnGroup('key');
@@ -25508,8 +25577,7 @@ m.unmount();
   dash.unmount();
   results.push({ name: "/ the 5-hour ring's subtitle opens the cost reference on Tiers and peak band", ok: ringSubtitle === 'Subscription accounts, 5-hour window, weighed by tier Cost reference' && fromDash === 'Tiers and peak band', missing: [ringSubtitle, fromDash] });
 
-  // The plan card's note carries the cost reference link the three window cards' notes carried, which opens the dialog
-  // on Tiers and peak band.
+  // The plan card's subtitle carries the cost reference link, which opens the dialog on Tiers and peak band.
   const analytics = await mount('/analytics#burn', { now: CLOCK_ORIGIN });
   const plan = [...analytics.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour');
   const fromAnalytics = await opened(analytics, linkIn(plan?.querySelector('.card__subtitle')));

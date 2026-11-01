@@ -795,13 +795,13 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
   ledger holds no instant for reading "not measured".
 - Usage: Input (uncached), Cache read, "Cache write, 5m", "Cache write, 1h", "Output, thinking", "Output, plain", Server
   tool calls and Estimated cost in the top bar's unit: a subscription request's figure in the chosen week under Native
-  as one chip, the hint's plan and its shares as chips after it and the dollar equivalent after them, its dollar
-  equivalent with `equivalent` under All in dollars and Dollar equivalent and a dash under Billed dollars, and a billed
-  request's dollars, or a dash under Dollar equivalent. Its hover names why a dollar figure or a dash stands, as the
-  Cost cell's hover does, then the hint, the serving account's tier (`Account tier {tier}`) and the price list and cost
-  model in force when the request arrived (`Priced at the API prices of {date} and the cost model of {date}`). A client
-  classifier call's row reads its zero figure under Native and its dollar equivalent under All in dollars and Dollar
-  equivalent, with the hover "Free on the plan: a client classifier call takes no window share".
+  as one chip with the dollar equivalent after it and the hint's plan and its shares as chips on a row of their own
+  under it, its dollar equivalent with `equivalent` under All in dollars and Dollar equivalent and a dash under Billed
+  dollars, and a billed request's dollars, or a dash under Dollar equivalent. Its hover names why a dollar figure or a
+  dash stands, as the Cost cell's hover does, then the hint, the serving account's tier (`Account tier {tier}`) and the
+  price list and cost model in force when the request arrived (`Priced at the API prices of {date} and the cost model of
+  {date}`). A client classifier call's row reads its zero figure under Native and its dollar equivalent under All in
+  dollars and Dollar equivalent, with the hover "Free on the plan: a client classifier call takes no window share".
 - Request: Session, Agent, Client with the request class badge and the fork line where the session branched from another
   conversation, User agent (such as `claude-cli/2.1.310 (external, cli)`), Key, Pool, Kind, and one `Attempt {n}` row
   per attempt with the upstream's request id and, on the answer that served, its message id.
@@ -901,21 +901,21 @@ error rate, the cache figures or the latency.
 
 Burn follows the page's grouping, and "Session (Burn only)" groups it by session while every other section keeps the key
 grouping, since no rollup carries a session. Of the filters, the Accounts filter and the user agent groups alone apply
-to it, which its head says while another filter is set. The card "Plan per hour" ("The subscription traffic per hour
-as a share of the chosen week") draws one line per group, named as the breakdown names it, the requests with no
-classifier call listed as `none` under the classifier grouping, each the group's subscription traffic per hour in the
-chosen week, the legend's figure in full on hover and its highest hour on the entry's hover. A bucket the cost model
-could not price stays a gap, under a "model unlisted" entry with the hover "A bucket whose traffic ran on a model
-without a weight in the cost model prices no share and draws no point", and an idle bucket reads zero. Where one account
-is named, under the account grouping or with one account in the Accounts filter, a bucket's tooltip adds the hint the
-Requests view's Cost column describes under the account's line, with no band word, since a bucket holds no one
-request's completion. Under that grouping or filter a subscription account charts as a plan line where the router sizes
-its tier or the range holds a priced bucket of it, so an account whose range ran on unpriced models alone keeps its line
-with its gaps, and an account the router prices no tier for (a free plan, no tier on file or one the cost model does not
-hold) whose range holds no priced bucket reads "tier unknown", while a usage-based seat draws no line on the card. The
-note carries a "Cost reference" link that opens the dialog on Tiers and peak band. Spend per minute charts the dollars
-alone, among them a usage-based seat's whole spend and a subscription account's fast-mode and overage answers, and the
-two cards share a row. The section closes on Member budgets, Pool, Account, Spent, Budget and
+to it, which its head says while another filter is set. The card "Plan per hour" ("The subscription traffic per hour as
+a share of the chosen week") draws one line per group, named as the breakdown names it, the requests with no classifier
+call listed as `none` under the classifier grouping, each the group's subscription traffic per hour in the chosen week,
+the legend's figure in full on hover and its highest hour on the entry's hover. A bucket the cost model could not price
+stays a gap, under a "model unlisted" entry with the hover "A bucket whose traffic ran on a model without a weight in
+the cost model prices no share and draws no point", and an idle bucket reads zero. Where one account is named, under the
+account grouping or with one account in the Accounts filter, a bucket's tooltip adds the hint the Requests view's Cost
+column describes under the account's line, with no band word, since a bucket holds no one request's completion. Under
+that grouping or filter a subscription account charts as a plan line where the router sizes its tier or the range holds
+a priced bucket of it, so an account whose range ran on unpriced models alone keeps its line with its gaps, and an
+account the router prices no tier for (a free plan, no tier on file or one the cost model does not hold) whose range
+holds no priced bucket reads "tier unknown", while a usage-based seat draws no line on the card. The note carries a
+"Cost reference" link that opens the dialog on Tiers and peak band. Spend per minute charts the dollars alone, among
+them a usage-based seat's whole spend and a subscription account's fast-mode and overage answers, and the two cards
+share a row where the grid fits two columns. The section closes on Member budgets, Pool, Account, Spent, Budget and
 Period ends, one row per budget a member carries, a member at its budget marked and one the ledger has not reported on
 reading "not reported".
 
@@ -941,25 +941,26 @@ upstream's comparison was still running when the answer went out. Every count in
 links to the Requests view on those requests with the page's filters carried over, and a count the Requests view cannot
 list exactly stays plain with the reason on hover.
 
-Cost reads in the top bar's unit. Under Native the tiles read Cost, the subscription requests' figure in the chosen
-week over the billed requests' dollars, a side with no requests left out, and Cost per request and Cost per 1k output
-tokens the same two ways. Where one account is named in the Accounts filter, the Cost tile's hover carries the hint the
-Requests view's Cost column describes, and under the account grouping each row's Cost cell does, while a figure that
-sums several accounts carries none. Cost by the chosen group stacks the figure per bucket with "Billed by {group}"
-beside it in dollars, the Cost split draws a ring per side by token kind, the subscription requests' with its figure in
-the chosen week in the center (each token kind's figure in full on hover) and the billed requests' in dollars, and the
-table reads Requests, Cost, Per request and Per 1k output, each with the billed dollars on a line under the figure. A
-subscription side the route could not price, as when a request ran on a model without a weight in the cost model, reads
-a dash, its bucket on the Cost by chart a gap, and the Cost split draws no ring for it. The Cost tile's dash carries the
-Dashboard's hover, and the Cost by chart names the groups it draws that read unpriced on a line under its subtitle,
-`{group} unpriced in {m} buckets, drawn as gaps` for one group (`research unpriced in 1 bucket, drawn as a gap`), the
-groups' labels joined by middle dots for up to three, and `{n} groups unpriced in {m} buckets, drawn as gaps` past
-three. Under the Max and Ultra weeks the figures wait on the settings, so the section draws its placeholders until they
-answer. Under All in dollars, Billed dollars and Dollar equivalent Cost draws the tiles Estimated cost, Billed dollars
-or Dollar equivalent, Cost per request and Cost per 1k output tokens, then Cost by the chosen group as a chart and a
-table (Requests, Cost, Input, Cache read, Cache write, Output, Per request, Per 1k output) and the Cost split as one
-ring in dollars (Input, Cache read, Cache write, Output). Every position draws Fast mode spend. The prices behind the
-dollars are on [Pricing](statistics.md#pricing), and the cost model behind the subscription figures on [Plan
+Cost reads in the top bar's unit. Under Native the tiles read Cost, the subscription requests' figure in the chosen week
+over the billed requests' dollars, a side with no requests left out, and Cost per request and Cost per 1k output tokens
+the same two ways. Where one account is named in the Accounts filter, the Cost tile's hover carries the hint the
+Requests view's Cost column describes, and each row's Cost cell does under the account grouping, or under any grouping
+while one account is named, since every row is then that account's, while a figure that sums several accounts carries
+none. Cost by the chosen group stacks the figure per bucket with "Billed by {group}" beside it in dollars, the Cost
+split draws a ring per side by token kind, the subscription requests' with its figure in the chosen week in the center
+(each token kind's figure in full on hover) and the billed requests' in dollars, and the table reads Requests, Cost, Per
+request and Per 1k output, each with the billed dollars on a line under the figure. A subscription side the route could
+not price, as when a request ran on a model without a weight in the cost model, reads a dash, its bucket on the Cost by
+chart a gap, and the Cost split draws no ring for it. The Cost tile's dash carries the Dashboard's hover, and the Cost
+by chart names the groups it draws that read unpriced on a line under its subtitle, `{group} unpriced in {m} buckets,
+drawn as gaps` for one group (`research unpriced in 1 bucket, drawn as a gap`), the groups' labels joined by middle dots
+for up to three, and `{n} groups unpriced in {m} buckets, drawn as gaps` past three. Under the Max and Ultra weeks the
+figures wait on the settings, so the section draws its placeholders until they answer. Under All in dollars, Billed
+dollars and Dollar equivalent Cost draws the tiles Estimated cost, Billed dollars or Dollar equivalent, Cost per request
+and Cost per 1k output tokens, then Cost by the chosen group as a chart and a table (Requests, Cost, Input, Cache read,
+Cache write, Output, Per request, Per 1k output) and the Cost split as one ring in dollars (Input, Cache read, Cache
+write, Output). Every position draws Fast mode spend. The prices behind the dollars are on
+[Pricing](statistics.md#pricing), and the cost model behind the subscription figures on [Plan
 meter](statistics.md#plan-meter).
 
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-light.png#only-light)

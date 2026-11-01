@@ -2245,6 +2245,13 @@
   padding-right: 12px;
 }
 
+/* Every column of the default set stands at its floor at 1280 px, so the Cost cells take 1 px on their left, 5 px from
+   the Tokens figures, and the widest figure in the Ultra week ("0.00233% Ultra week") keeps the set inside the 990 px
+   card. The header keeps its 4 px, since the column's width is read off its cells. */
+.requests__table td.requests__cost {
+  padding-left: 1px;
+}
+
 /* A figure and its unit read as one value, so the room comes from the request id's cut rather than from a split. */
 .requests__table td.num {
   white-space: nowrap;
@@ -4816,8 +4823,8 @@
   white-space: nowrap;
 }
 
-/* A pool card's tile is half of a phone's card, narrower than a figure in the Ultra week, which then breaks between
-   its words rather than widening the card past the window. */
+/* A pool card's tile is a third of the card's width, or half of it on a phone, and both are narrower than a figure in
+   the Ultra week, which then breaks between its words rather than widening the card. */
 .pool__stats .cost-figure {
   white-space: normal;
 }

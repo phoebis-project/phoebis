@@ -6310,8 +6310,10 @@ async function warmingLoneCard(theme) {
  * the Cache warming tab's, the Wasted probes card's row among them, no tile's figure (each `.cost-figure`, the nowrap
  * run that keeps the figure whole) is wider than its tile's content box, and in the Cache warming grid a card
  * alone on its row spans the grid's width, while a last card that shares its row stands on its neighbor's top edge.
- * Every figure's width against its tile's and every card's box go to the measurements, and the viewport and the Traffic
- * tab are the pass's again after.
+ * The mock pass reads them under the Accounts filter naming nightly, whose range prices, since the story's default
+ * range reads its subscription side as a dash on Sonnet 4.5: each row must hold a figure in the Ultra week, the widest
+ * text a tile draws. Every figure's width against its tile's and every card's box go to the measurements, and the
+ * viewport, the bare page and the Traffic tab are the pass's again after.
  */
 async function analyticsTiles(theme) {
   const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
@@ -6326,7 +6328,9 @@ async function analyticsTiles(theme) {
         return [...t.querySelectorAll('.cost-figure')].map((f) => ({ figure: Math.round(f.getBoundingClientRect().width * 10) / 10, label, text: f.textContent ?? '', tile: Math.round(inner * 10) / 10 }));
       });
     }, section);
+  const WEEK_FIGURE = /% of an Ultra week$/;
   try {
+    if (mock) await loadAtOrigin('/analytics?accounts=nightly', '.analytics-section#traffic');
     for (const size of [
       { height: 800, width: 1280 },
       { height: 900, width: 1440 },
@@ -6348,6 +6352,8 @@ async function analyticsTiles(theme) {
       for (const f of [...cost, ...warming]) if (f.figure > f.tile + 0.5) say(`the ${f.label} tile's figure ${JSON.stringify(f.text)} is ${f.figure} px wide in a ${f.tile} px tile`);
       if (cost.length === 0) say('the Cost tiles row draws no figure to measure');
       if (warming.length === 0) say('the Cache warming tiles row draws no figure to measure');
+      if (mock && !cost.some((f) => WEEK_FIGURE.test(f.text))) say('no Cost tile reads a figure in the Ultra week, so the row is measured without the widest text');
+      if (mock && !warming.some((f) => WEEK_FIGURE.test(f.text))) say('no Cache warming tile reads a figure in the Ultra week, so the row is measured without the widest text');
       if (grid === null || grid.cards.length < 2) {
         say(`the Cache warming grid draws ${JSON.stringify(grid)}`);
         continue;
@@ -6361,7 +6367,8 @@ async function analyticsTiles(theme) {
   } finally {
     await page.setViewportSize(viewport);
     await settle();
-    await tabTo(theme, 'Traffic');
+    if (mock) await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    else await tabTo(theme, 'Traffic');
     await atRest();
   }
 }
@@ -7968,8 +7975,9 @@ async function fastLane(theme, path) {
  * line whole. At 375 by 800 the drawer stacks under the list and the compact set, wider than the phone's card, scrolls
  * inside it. Every chip the drawer draws, the Answer row's and the upstream ids', takes the status badge's type and
  * height, and the request class badge its box. The Estimated cost row of a request a subscription window paid draws its
- * figure chip and the hint's chips after it in the same type, each on one line inside the cell, with the muted
- * equivalent on one line after them (a request billed in dollars draws no chip there, which is recorded). The mock pass
+ * figure chip with the muted equivalent on one line after it inside the cell, and the hint's chips on a row of their
+ * own under it, in the same type, each on one line inside the row's one cell, which spans the table (a request billed
+ * in dollars draws no chip there, which is recorded). The mock pass
  * reads them again on the story's plan-funded Fable answer, whose chips read the figure in the Ultra week, the plan,
  * then a 5-hour, a 7-day and a Fable week share in that order. The Phases
  * legend lists the seven phases, and the token bar draws a segment wherever the Usage table holds tokens (a request
@@ -7997,12 +8005,17 @@ async function requestDrawerCompact(theme) {
       if (mock) say(`${where}: the cost row draws no equivalent chip`);
       return;
     }
-    const inside = (e) => e.left >= got.cost.cell.left && e.right <= got.cost.cell.right;
-    for (const c of got.cost.chips) {
-      if (got.reference !== null && c.box !== got.reference) say(`${where}: the cost row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
-      if (c.lines !== 1) say(`${where}: the cost row's "${c.text}" chip takes ${c.lines} lines`);
-      if (!inside(c.edges)) say(`${where}: the cost row's "${c.text}" chip ${JSON.stringify(c.edges)} leaves its cell ${JSON.stringify(got.cost.cell)}`);
-    }
+    const insideOf = (cell) => (e) => e.left >= cell.left && e.right <= cell.right;
+    const inside = insideOf(got.cost.cell);
+    const chipsIn = (chips, cell, row) => {
+      for (const c of chips) {
+        if (got.reference !== null && c.box !== got.reference) say(`${where}: the ${row}'s "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
+        if (c.lines !== 1) say(`${where}: the ${row}'s "${c.text}" chip takes ${c.lines} lines`);
+        if (!insideOf(cell)(c.edges)) say(`${where}: the ${row}'s "${c.text}" chip ${JSON.stringify(c.edges)} leaves its cell ${JSON.stringify(cell)}`);
+      }
+    };
+    chipsIn(got.cost.chips, got.cost.cell, 'cost row');
+    if (got.cost.hint !== null) chipsIn(got.cost.hint.chips, got.cost.hint.cell, 'hint row');
     if (got.cost.equivalent === null) say(`${where}: the cost row's chips carry no equivalent after them`);
     else {
       if (got.cost.equivalent.lines !== 1) say(`${where}: the cost row's equivalent "${got.cost.equivalent.text}" takes ${got.cost.equivalent.lines} lines`);
@@ -8046,9 +8059,13 @@ async function requestDrawerCompact(theme) {
         const r = el.getBoundingClientRect();
         return { bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top) };
       };
-      // The Estimated cost row's value cell: the share chips and the muted equivalent of a plan-funded request.
-      const costCell = [...document.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost')?.querySelector('td:last-child') ?? null;
+      // The Estimated cost row's value cell: the figure chip and the muted equivalent of a plan-funded request, and the
+      // row under it whose one cell spans the table with the hint's chips.
+      const costRow = [...document.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost') ?? null;
+      const costCell = costRow?.querySelector('td:last-child') ?? null;
+      const hintCell = costRow?.nextElementSibling?.classList.contains('usage-table__hint') ? costRow.nextElementSibling.querySelector('td') : null;
       const equivalent = costCell?.querySelector('.muted') ?? null;
+      const chipRead = (c) => ({ box: box(c), edges: edges(c), lines: lines(c), text: c.textContent });
       return {
         answer: rowOf('Answer')?.textContent ?? null,
         badge: requestClass && status ? { box: badgeBox(requestClass), reference: badgeBox(status), text: requestClass.textContent } : null,
@@ -8058,8 +8075,9 @@ async function requestDrawerCompact(theme) {
             ? null
             : {
                 cell: edges(costCell),
-                chips: [...costCell.querySelectorAll('.chip')].map((c) => ({ box: box(c), edges: edges(c), lines: lines(c), text: c.textContent })),
+                chips: [...costCell.querySelectorAll('.chip')].map(chipRead),
                 equivalent: equivalent === null ? null : { edges: edges(equivalent), lines: lines(equivalent), text: equivalent.textContent },
+                hint: hintCell === null ? null : { cell: edges(hintCell), chips: [...hintCell.querySelectorAll('.chip')].map(chipRead) },
               },
         document: { inner: window.innerWidth, scroll: document.documentElement.scrollWidth },
         drawer: Math.round(document.querySelector('.drawer')?.getBoundingClientRect().width ?? 0),
@@ -8153,9 +8171,10 @@ async function requestDrawerCompact(theme) {
       const got = await read();
       measurements.push(`${theme} /requests ${where} cost row ${JSON.stringify(got.cost)}`);
       costRow(where, got);
-      const [figure, plan, ...shares] = (got.cost?.chips ?? []).map((c) => c.text);
+      const texts = [...(got.cost?.chips ?? []), ...(got.cost?.hint?.chips ?? [])].map((c) => c.text);
+      const [figure, plan, ...shares] = texts;
       const windows = shares.map((t) => t.replace(/^\S+ of /, '').replace(/ \(in the band\)$/, ''));
-      if (!/^\d[\d.]*% of an Ultra week$/.test(figure ?? '') || plan !== 'Ultra' || JSON.stringify(windows) !== JSON.stringify(['the 5-hour window', 'the 7-day window', 'the Fable week'])) say(`${where}: the cost row's chips read ${JSON.stringify((got.cost?.chips ?? []).map((c) => c.text))}, not the figure in the Ultra week, the plan, and a 5-hour, a 7-day and a Fable week share in that order`);
+      if ((got.cost?.chips.length ?? 0) !== 1 || !/^\d[\d.]*% of an Ultra week$/.test(figure ?? '') || plan !== 'Ultra' || JSON.stringify(windows) !== JSON.stringify(['the 5-hour window', 'the 7-day window', 'the Fable week'])) say(`${where}: the cost rows' chips read ${JSON.stringify(texts)}, not the figure in the Ultra week alone in the cost row, then the plan, and a 5-hour, a 7-day and a Fable week share in that order`);
     }
     await page.setViewportSize({ height: 800, width: 1280 });
     await settle();

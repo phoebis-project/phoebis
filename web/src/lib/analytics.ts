@@ -420,8 +420,9 @@ export interface CostHead {
  * draws as its skeleton. A dollar position reads its dollars under its own words, and reads no scale.
  */
 export function costHeadOf(unit: UnitPosition, totals: AnalyticsGroup, week: WeekPosition, scale: number | null): CostHead | null {
-  // The `share` position is the one no select offers.
-  const position = unit === 'share' ? 'native' : unit;
+  // The `share` position is the one no select offers, read in dollars as `dollarsOf` reads it for the page's other
+  // sections.
+  const position = unit === 'share' ? 'all' : unit;
   if (position === 'native') {
     if (scale === null) return null;
     const { figures, unpriced } = nativeFiguresOf(sidesOf(totals), week, scale);

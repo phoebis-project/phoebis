@@ -31,6 +31,14 @@ test('a Max row that completed inside the band reads the band after its 5-hour s
   assert.equal(d.shareHint('Max', shares, 'claude_max_5x', null), 'Max: 2.67% of the 5-hour window, 0.22% of the 7-day window, 0.44% of the Fable week', 'a surface that cannot read the band names none');
 });
 
+test('a request that starts before the band and completes inside it reads the band at its completion', () => {
+  // A band of 13:00 to 19:00 UTC on weekdays, and a Wednesday request from 12:59 to 13:01.
+  const costs = { peak: { fromHour: 13, toHour: 19, weekdays: true, zone: 'UTC' } };
+  const shares = { five_hour: 0.0267, seven_day: 0.0022 };
+  const row = { accountId: 'nightly', at: '2026-09-16T12:59:00Z', costShares: shares, durationMs: 120_000, tier: 'default_claude_max_5x' };
+  assert.deepEqual(d.requestHintArgs(row, [{ id: 'nightly', subscription: null }], costs), ['Max', shares, 'default_claude_max_5x', true]);
+});
+
 test('a row whose shares are null, or name no window the route priced, reads no hint', () => {
   assert.equal(d.shareHint('Ultra', null, 'default_claude_max_20x', false), null);
   assert.equal(d.shareHint('Ultra', { five_hour: null, seven_day: null }, 'default_claude_max_20x', false), null, 'a window the route could not price names nothing');

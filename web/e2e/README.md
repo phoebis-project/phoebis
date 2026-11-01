@@ -187,9 +187,10 @@ and the upstream's hover recorded), the Agent filter's chip on both logs (mock p
 size, its text recorded, and no `user agent:` chip), the table with Time turned off (`table--no-fill` at its content
 width at 1280 by 800 and 1920 by 1080), the Cache warming grid (an odd last card spanning its row, its title in the type
 of the card before it), the Analytics tiles rows and the Cache warming grid at 1280 by 800 and 1440 by 900 (no figure on
-the Cost and Cache warming tiles rows, the Wasted probes card's among them, wider than its tile, a Cache warming card
-alone on its row spanning the grid and a last card that shares its row on its neighbor's top edge, each figure and card
-recorded), the Traffic table grouped by model (its Error rate column, and the no model row's Error rate a dash in the
+the Cost and Cache warming tiles rows, the Wasted probes card's among them, wider than its tile, each row holding a
+figure in the Ultra week in the mock pass under the Accounts filter naming nightly, a Cache warming card alone on its
+row spanning the grid and a last card that shares its row on its neighbor's top edge, each figure and card recorded),
+the Traffic table grouped by model (its Error rate column, and the no model row's Error rate a dash in the
 muted ink and in the type of the rate cell beside it, which reads a percent, the row required in the mock pass alone
 since the router's seed holds no request without a model), the request pages' widths, walked on a load of their own once
 every view's shot is taken, the pagers of both logs (three buttons 32 px square on each, the request log's page-size
@@ -244,9 +245,10 @@ own under the mock's build switch, the Pools view at 1280 by 800 and the Keys vi
 row's top edge 16 px under the sticky block's bottom once the view moves to its hash, within 1 px), the fast lane, the
 request drawer, which opens once the request list's shot is taken (its compact table with Time the fill as wide as its
 card at 1280 by 800 and 1440 by 900 with every id whole in the mock pass, and at 375 by 800 under the list scrolling
-inside its card, its chips in the status badge's type, and the Estimated cost row's figure chip, its hint's chips and
-the muted equivalent on one line each inside the cell at 1280 by 800 and 1440 by 900, the story's Fable request reading
-its figure in the Ultra week, its plan, and a 5-hour, a 7-day and a Fable week share in that order), a reasons panel
+inside its card, its chips in the status badge's type, and the Estimated cost row's figure chip and muted equivalent
+on one line each inside the cell and its hint's chips on a row of their own under it, each on one line inside that row's
+one cell across the table, at 1280 by 800 and 1440 by 900, the story's Fable request reading its figure in the Ultra
+week alone on the cost row, then its plan, and a 5-hour, a 7-day and a Fable week share in that order), a reasons panel
 link landing on a list whose first row's drawer reads the reason (mock pass, on a load of its own once every view's shot
 is taken), the find field of a captured body (after the wide dialog's Escape, the trimmed text of a line the copied body
 first holds past a third of the box typed into the Request block's field, the find row at the 400 px drawer inside its

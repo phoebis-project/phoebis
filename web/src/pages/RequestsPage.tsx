@@ -140,10 +140,12 @@ const routingLogHref = (r: RequestLog, now: number) => {
 };
 
 /** The figure's context a request's cost reads: the accounts read and the cost model the hint is composed from, and the
- *  chosen week with its scale, null while the cost model is out. */
+ *  chosen week with its scale, null while the cost model is out. `error` is the settings read's failure, which a figure
+ *  waiting on the scale draws as a dash titled with it. */
 interface CostContext {
   accounts: Account[] | null;
   costs: SubscriptionCosts | null;
+  error: string | null;
   scale: number | null;
   week: WeekPosition;
 }
@@ -156,19 +158,23 @@ function requestCost(request: RequestLog, unit: UnitPosition, context: CostConte
 }
 
 /**
- * The Cost cell: the position's main line over its second, the hint and the dollar equivalent on the title, and the
- * skeleton while the scale is out.
+ * The Cost cell: the position's main line over its second, the hint and the dollar equivalent on the title, the
+ * skeleton while the scale is out, and a dash titled with the settings read's failure where it failed.
  */
 function CostCell({ context, request, unit }: { context: CostContext; request: RequestLog; unit: UnitPosition }) {
   const cell = costCellOf(requestCost(request, unit, context).unit, context.week, context.scale);
   if (cell === null)
-    return (
-      <td className="right num col-fit">
+    return context.error === null ? (
+      <td className="right num col-fit requests__cost">
         <Skeleton width={72} />
+      </td>
+    ) : (
+      <td className="right num col-fit requests__cost" title={context.error}>
+        -
       </td>
     );
   return (
-    <td className="right num col-fit" title={cell.title || undefined}>
+    <td className="right num col-fit requests__cost" title={cell.title || undefined}>
       {cell.main}
       {cell.sub && <span className="sub">{cell.sub}</span>}
     </td>
@@ -186,19 +192,19 @@ function HeldBadge({ held }: { held: CohortHold }) {
 }
 
 /**
- * The drawer's cost row: the figure in the chosen week as one chip with the hint's lines as chips after it and the
- * dollar equivalent muted after them, the dollars, the dollar equivalent with `equivalent` muted after it, or the dash
- * of a position that reads nothing for the request. The figure waits on the scale, so it draws its skeleton while the
- * cost model is out.
+ * The drawer's cost value: the figure in the chosen week as one chip with the dollar equivalent muted after it, the
+ * dollars, the dollar equivalent with `equivalent` muted after it, or the dash of a position that reads nothing for the
+ * request. The figure waits on the scale, so it draws its skeleton while the cost model is out and a dash where the
+ * settings read failed.
  */
-function costRowValue(unit: CostUnit, hint: string[], week: WeekPosition, scale: number | null) {
+function costRowValue(unit: CostUnit, context: CostContext) {
+  const { error, scale, week } = context;
   switch (unit.kind) {
     case 'equivalent':
-      return scale === null ? (
-        <Skeleton width={120} />
-      ) : (
+      if (scale === null) return error === null ? <Skeleton width={120} /> : <b>-</b>;
+      return (
         <span className="usage-table__end">
-          <Chips chips={[fmtWeek(unit.figure * scale, week), ...hint].map((value) => ({ value }))} />
+          <Chips chips={[{ value: fmtWeek(unit.figure * scale, week) }]} />
           <span className="muted">{fmtUsd(unit.usd)} equivalent</span>
         </span>
       );
@@ -218,20 +224,39 @@ function costRowValue(unit: CostUnit, hint: string[], week: WeekPosition, scale:
 }
 
 /**
- * The drawer's cost value under one title: why a dollar figure, a dash or a free call's figure stands where it does,
- * the hint, the serving account's tier as the attempt stored it, and the price list and the cost model in force at the
- * request's instant while the settings are at hand. A title on an element inside the cell would hide the row's own
- * wherever the figure is hovered.
+ * The drawer's Estimated cost row under one title: the settings read's failure where the figure waits on it, why a
+ * dollar figure, a dash or a free call's figure stands where it does, the hint, the serving account's tier as the
+ * attempt stored it, and the price list and the cost model in force at the request's instant while the settings are at
+ * hand. A title on an element inside the cell would hide the row's own wherever the figure is hovered. The hint's
+ * lines follow the figure as chips on a row of their own across the table, since the 5-hour line with its band word
+ * runs wider than the value column of the 400 px drawer.
  */
-function CostRowCell({ context, request: r, settings, unit }: { context: CostContext; request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
+function CostRows({ context, request: r, settings, unit }: { context: CostContext; request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
   const { hint, unit: cost } = requestCost(r, unit, context);
+  const failed = cost.kind === 'equivalent' && context.scale === null ? context.error : null;
   const why = (cost.kind === 'equivalent' || cost.kind === 'equivalent_dollars') && cost.reason !== null ? FREE_SHARE_TITLE : cost.kind === 'dollars' ? `Billed in dollars: ${FUNDING_WORD[cost.funding]}` : cost.kind === 'unpriced' ? NO_SHARE_TITLE : cost.kind === 'dash' ? cost.title : null;
   const shown = cost.kind === 'equivalent' || cost.kind === 'equivalent_dollars' ? cost.hint : null;
-  const title = [why, shown, r.tier === null ? null : `Account tier ${r.tier}`, revisionsTitle(settings, r.at)].filter((part) => part !== null).join('. ');
+  const title = [failed, why, shown, r.tier === null ? null : `Account tier ${r.tier}`, revisionsTitle(settings, r.at)].filter((part) => part !== null).join('. ');
   return (
-    <td className="right num" title={title || undefined}>
-      {costRowValue(cost, cost.kind === 'equivalent' ? hint : [], context.week, context.scale)}
-    </td>
+    <>
+      <tr>
+        <td>
+          <b>Estimated cost</b>
+        </td>
+        <td className="right num" title={title || undefined}>
+          {costRowValue(cost, context)}
+        </td>
+      </tr>
+      {cost.kind === 'equivalent' && context.scale !== null && hint.length > 0 && (
+        <tr className="usage-table__hint">
+          <td colSpan={2} className="right" title={title || undefined}>
+            <span className="usage-table__end">
+              <Chips chips={hint.map((value) => ({ value }))} />
+            </span>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -273,7 +298,7 @@ export function RequestsPage() {
   const settings = useAsync(() => api.getSettings(), []);
   const { timeFormat, unit, week } = useAppSettings();
   const costs = settings.data?.subscriptionCosts ?? null;
-  const context: CostContext = { accounts: accounts.data, costs, scale: weekScale(costs, week), week };
+  const context: CostContext = { accounts: accounts.data, costs, error: settings.error, scale: weekScale(costs, week), week };
 
   const { address, filters: read, replace } = useQueryFilters(REQUESTS_CODEC);
   const filters = useMemo<Filters>(() => ({ ...read, outcomes: outcomesOf(read.outcomes), rows: Number(read.rows), statuses: read.statuses.filter((code) => /^\d+$/.test(code)) }), [read]);
@@ -332,6 +357,7 @@ export function RequestsPage() {
     resetPaging();
     setFollowed(null);
     setLoadedAt(clock.now());
+    settings.reload();
   };
   // The page size is how the operator reads the log rather than what it narrows to, so Reset filters keeps it.
   const reset = () => replace({ ...DEFAULTS, rows: read.rows });
@@ -712,12 +738,7 @@ function RequestDrawer({ context, guardrails, request, requestId, now, onClose, 
                     {fmtInt(r.usage.webSearch)} search, {fmtInt(r.usage.webFetch)} fetch
                   </td>
                 </tr>
-                <tr>
-                  <td>
-                    <b>Estimated cost</b>
-                  </td>
-                  <CostRowCell context={context} request={r} settings={settings} unit={unit} />
-                </tr>
+                <CostRows context={context} request={r} settings={settings} unit={unit} />
               </tbody>
             </table>
           </section>

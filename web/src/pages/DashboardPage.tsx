@@ -186,7 +186,7 @@ export function DashboardPage() {
 
       <div className="dash-bottom">
         <Card title="Recent requests" subtitle="Last 10 across every pool" actions={<Link to="/requests">All requests</Link>} padded={false} className="card--table">
-          <RecentTable rows={requests.data?.requests ?? null} error={requests.error} settings={settings.data} accounts={accounts.data} scale={scale} />
+          <RecentTable rows={requests.data?.requests ?? null} error={requests.error} settings={settings.data} settingsError={settings.error} accounts={accounts.data} scale={scale} />
         </Card>
         <Card title="Sessions" subtitle="Sticky pins and cache-warming agents" actions={<Link to="/sessions">Open</Link>}>
           {failedFirst(overview) || failedFirst(sessions) ? (
@@ -328,15 +328,19 @@ const MODEL_CHARS = 12;
 /**
  * A recent request's Cost cell, read under each position as the Requests cell reads it, with the hint composed from the
  * accounts read and the cost model and the revisions in force on a native figure's title. The skeleton stands while
- * the scale is out.
+ * the scale is out, and a dash titled with the settings read's failure where it failed.
  */
-function RecentCost({ accounts, request, scale, settings, unit, week }: { accounts: Account[] | null; request: RequestLog; scale: number | null; settings: Settings | null; unit: UnitPosition; week: WeekPosition }) {
+function RecentCost({ accounts, error, request, scale, settings, unit, week }: { accounts: Account[] | null; error: string | null; request: RequestLog; scale: number | null; settings: Settings | null; unit: UnitPosition; week: WeekPosition }) {
   const args = requestHintArgs(request, accounts, settings?.subscriptionCosts ?? null);
   const cell = glanceCellOf(costUnitOf(request, unit, args === null ? null : shareHint(...args)), revisionsTitle(settings, request.at), week, scale);
   if (cell === null)
-    return (
+    return error === null ? (
       <td className="right num col-fit">
         <Skeleton width={72} />
+      </td>
+    ) : (
+      <td className="right num col-fit" title={error}>
+        -
       </td>
     );
   return (
@@ -347,7 +351,7 @@ function RecentCost({ accounts, request, scale, settings, unit, week }: { accoun
   );
 }
 
-function RecentTable({ accounts, rows, error, scale, settings }: { accounts: Account[] | null; error: string | null; rows: RequestLog[] | null; scale: number | null; settings: Settings | null }) {
+function RecentTable({ accounts, rows, error, scale, settings, settingsError }: { accounts: Account[] | null; error: string | null; rows: RequestLog[] | null; scale: number | null; settings: Settings | null; settingsError: string | null }) {
   const { unit, week } = useAppSettings();
   return (
     <div className="table-wrap">
@@ -408,7 +412,7 @@ function RecentTable({ accounts, rows, error, scale, settings }: { accounts: Acc
                       {fmtCompact(tokensTotal(r.usage))}
                       <span className="sub">{fmtCompact(r.usage.cacheRead)} cached</span>
                     </td>
-                    <RecentCost accounts={accounts} request={r} scale={scale} settings={settings} unit={unit} week={week} />
+                    <RecentCost accounts={accounts} error={settingsError} request={r} scale={scale} settings={settings} unit={unit} week={week} />
                   </tr>
                 );
               })}
