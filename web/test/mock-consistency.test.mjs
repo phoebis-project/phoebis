@@ -452,7 +452,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const oauth = s.accounts.filter((a) => a.kind === 'oauth');
     // Each stored profile's word: the usage-based class first, then the organization type, a Max organization read by
     // its tier's size, and none without a profile.
-    const resolved = { contract: 'usage_based', legacy: 'pro', nightly: 'max_5x', primary: 'max_20x', reserve: 'pro', secondary: 'pro', spare: null, studio: 'max_5x', sunset: 'free' };
+    const resolved = { contract: 'usage_based', legacy: 'pro', nightly: 'max_5x', primary: 'max_20x', reserve: 'pro', secondary: 'pro', spare: null, studio: 'max_5x', sunset: 'free', workshop: 'max_20x' };
     for (const a of oauth) {
       const plan = a.subscription?.plan ?? null;
       assert.equal(plan, resolved[a.id], `${a.id}'s plan`);
