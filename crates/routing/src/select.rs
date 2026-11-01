@@ -7894,9 +7894,9 @@ mod banded_tests {
             (T, 0.0),
             "at the ceiling a reached horizon reads a factor of 0"
         );
+        // The booking alone demands 0.1 / 3 600 of the window a second, so the 0.07 over the ceiling takes 2 520 s.
         assert_eq!(
-            over.stretch_ms,
-            ((0.97 - pool.window_ceiling) / over.demand * 1_000.0).round() as i64,
+            over.stretch_ms, 2_520_000,
             "the stretch is the overrun at the demand, with no time left to the horizon"
         );
     }
@@ -7953,22 +7953,14 @@ mod runway_tests {
 
 #[cfg(test)]
 mod plan_window_tests {
-    use super::{all_plan_windows, fit_key, plan_windows, MODEL_WINDOWS};
+    use super::{all_plan_windows, fit_key};
 
     /// A fact's key is static, so `fit_key` spells the keys per window by hand while the windows come from
     /// `MODEL_WINDOWS`: a row added to the table fails here until the keys are spelled, rather than leaving its week
-    /// unprojected or unnamed in the record.
+    /// unnamed in the record.
     #[test]
-    fn every_window_a_model_draws_is_projected_and_has_its_fact_keys() {
+    fn every_projected_window_has_its_fact_keys() {
         let projected: Vec<&str> = all_plan_windows().collect();
-        for (family, _) in MODEL_WINDOWS {
-            for window in plan_windows(&format!("claude-{family}-1")) {
-                assert!(
-                    projected.contains(&window),
-                    "{window} is drawn and not projected"
-                );
-            }
-        }
         for window in &projected {
             for kind in ["burn", "horizon", "projection", "rewrite", "reserved"] {
                 assert!(

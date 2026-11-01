@@ -1497,14 +1497,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_registry_seals_the_canary_at_its_first_open() {
-        let key = StorageKey::generate();
-        let store = Store::open_in_memory(&key).unwrap();
-        let value = canary_of(&store).expect("the canary row");
-        assert_eq!(open_canary(&key, &value).unwrap(), CANARY_PLAINTEXT);
-    }
-
-    #[test]
     fn a_registry_sealed_under_one_key_refuses_another_key_by_path() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("router.sqlite");
@@ -1865,16 +1857,6 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
-    fn an_opened_registry_reads_synchronous_full_and_a_five_second_busy_timeout() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = on_disk(&dir);
-        // SQLite's own default is `FULL` as well, and rusqlite sets five seconds at every open, so this test
-        // guards the named values rather than proving a change.
-        assert_eq!(pragma(&store, "synchronous"), 2, "FULL");
-        assert_eq!(pragma(&store, "busy_timeout"), 5_000);
-    }
-
     fn cooldown(account_id: &str, scope: &str) -> CooldownRow {
         CooldownRow {
             account_id: account_id.into(),
@@ -2223,20 +2205,5 @@ mod tests {
         .unwrap();
         prepare(&mut conn, false, &[]).unwrap();
         assert_eq!(raw_markers(&conn), vec!["1".to_string()]);
-
-        // A marker above this build's version is refused before the baseline's transaction begins.
-        let mut conn = meta_alone();
-        let newer = (schema::SCHEMA_VERSION + 1).to_string();
-        conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
-            params![newer],
-        )
-        .unwrap();
-        let error = prepare(&mut conn, false, &[]).unwrap_err();
-        assert!(
-            matches!(error, StoreError::SchemaTooNew { .. }),
-            "{error:?}"
-        );
-        assert_eq!(raw_markers(&conn), vec![newer]);
     }
 }

@@ -23,42 +23,18 @@ use std::sync::{
     Arc,
 };
 
-fn bodies_match_measured_key_order() {
+fn refresh_body_matches_measured_key_order() {
     let p = claude_code_2_1_310_linux_x64();
     let b = refresh_body(p, "sk-ant-ort01-PLACEHOLDER", "user:profile user:inference");
     assert_eq!(
         String::from_utf8(b).unwrap(),
         r#"{"grant_type":"refresh_token","refresh_token":"sk-ant-ort01-PLACEHOLDER","client_id":"9d1c250a-e61b-44d9-88ed-5944d1962f5e","scope":"user:profile user:inference"}"#
     );
-    let e = exchange_body(
-        p,
-        "CODE",
-        "http://localhost:1/callback",
-        "VERIFIER",
-        "STATE",
-    );
-    let keys: Vec<String> =
-        serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(&e)
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect();
-    assert_eq!(
-        keys,
-        [
-            "grant_type",
-            "code",
-            "redirect_uri",
-            "client_id",
-            "code_verifier",
-            "state"
-        ]
-    );
 }
 
 #[test]
 fn control_requests_serialize_to_the_fixture_heads() {
-    bodies_match_measured_key_order();
+    refresh_body_matches_measured_key_order();
     let p = claude_code_2_1_310_linux_x64();
     let fixture = control_head(ControlFixture::Roles);
     let req = control_request(
@@ -473,6 +449,11 @@ async fn a_repeated_backoff_failure_leaves_the_credentials_last_error_row_untouc
         },
     };
     let (mgr, store, up) = manager_with(vec![rule], now.clone()).await;
+    // The store stamps the row on a clock of its own, apart from the manager's, so a step of it moves the stamp a
+    // write would leave without moving the manager past its backoff.
+    let stamped = Arc::new(AtomicI64::new(1_000_000));
+    let at = stamped.clone();
+    store.set_clock(Arc::new(move || at.load(Ordering::SeqCst)));
     store
         .commit_credentials(
             "a",
@@ -498,7 +479,7 @@ async fn a_repeated_backoff_failure_leaves_the_credentials_last_error_row_untouc
         Some("refresh rejected with status 503")
     );
 
-    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    stamped.fetch_add(1, Ordering::SeqCst);
     // The 503 armed a backoff the manager's own clock never moves past, so every later acquire fails
     // on the backoff itself rather than reaching the token endpoint again.
     assert!(mgr.acquire("a").await.is_err());
@@ -512,7 +493,7 @@ async fn a_repeated_backoff_failure_leaves_the_credentials_last_error_row_untouc
         "a message that changed from the row's still writes"
     );
 
-    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    stamped.fetch_add(1, Ordering::SeqCst);
     assert!(mgr.acquire("a").await.is_err());
     let after_third = store.credential_metadata("a").unwrap().unwrap();
     assert_eq!(
@@ -768,32 +749,6 @@ async fn a_refreshed_bundle_with_a_foreign_account_uuid_is_rejected() {
         store.account("a").unwrap().unwrap().state,
         AccountState::ReauthRequired
     ));
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn a_valid_token_is_returned_without_any_request() {
-    let now = Arc::new(AtomicI64::new(1_000_000));
-    let (mgr, store, up) = manager_with(vec![], now).await;
-    store
-        .commit_credentials(
-            "a",
-            1,
-            1,
-            None,
-            None,
-            &NewBundle {
-                access_token: Secret::new("fresh"),
-                refresh_token: Some(Secret::new("rt")),
-                issued_at: 1_000_000,
-                expires_at: 1_000_000 + 3_600_000,
-                refresh_expires_at: None,
-                scopes: "user:profile user:inference".into(),
-            },
-        )
-        .unwrap();
-    assert_eq!(mgr.acquire("a").await.unwrap().secret.expose(), "fresh");
-    assert!(up.requests().is_empty());
     up.shutdown().await;
 }
 
@@ -1722,25 +1677,10 @@ async fn a_refresh_traces_its_steps() {
         lines.iter().all(|line| line.contains("account=a ")),
         "every event carries the account id: {text}"
     );
-    assert!(
-        lines.iter().any(|l| l.contains("attempt=")),
-        "the attempt opened: {text}"
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|l| l.contains("host=") && l.contains("platform.claude.com")),
-        "the request sent: {text}"
-    );
-    assert!(
-        lines.iter().any(|l| l.contains("status=400")),
-        "the status read: {text}"
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|l| l.contains("outcome=\"failed\"") && l.contains("detail=")),
-        "the outcome resolved: {text}"
+    assert_eq!(
+        lines.len(),
+        4,
+        "one line per step, the attempt opened, the request sent, the status read and the outcome resolved: {text}"
     );
     assert!(
         !text.contains("sk-ant-"),

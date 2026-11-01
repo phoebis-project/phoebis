@@ -1400,39 +1400,3 @@ impl Captured {
         String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
     }
 }
-
-/// One seeded request's row as the readers price it: at the start of its hour, at the cells its prompt selects, with
-/// no account tier, which the Pro-week figure never reads, and read at that hour.
-pub fn priced_row(
-    model: &str,
-    funding: phoebis_ledger::Funding,
-    at: i64,
-    usage: phoebis_routing::PinUsage,
-) -> phoebis_ledger::Priced {
-    let prices = phoebis_ledger::PriceRevisions::shipped();
-    let hour = at.div_euclid(3_600_000) * 3_600_000;
-    let prompt = phoebis_ledger::prompt_tokens(
-        usage.input,
-        usage.cache_read,
-        usage.write_5m,
-        usage.write_1h,
-    );
-    phoebis_ledger::price_row(
-        &prices,
-        &phoebis_ledger::PlanTables::shipped(),
-        &phoebis_ledger::RowKey {
-            model,
-            speed: phoebis_ledger::Speed::Standard,
-            band: prices.in_force(hour).band_of(model, prompt),
-            funding,
-            kind: "inference",
-            tier: None,
-            entrypoint: None,
-            classifier: false,
-            at: hour,
-            band_at: None,
-            now: hour,
-        },
-        usage,
-    )
-}

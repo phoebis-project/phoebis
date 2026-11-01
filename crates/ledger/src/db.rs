@@ -1110,13 +1110,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_in_memory_ledger_serves_reads_and_writes_from_one_connection() {
-        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-        db.insert_request(&request("r1"), &[], None).unwrap();
-        assert!(db.request("r1").await.unwrap().is_some());
-    }
-
-    #[tokio::test]
     async fn a_read_runs_off_the_runtime_thread_and_answers_on_it() {
         let db = Arc::new(LedgerDb::open_in_memory().unwrap());
         let caller = std::thread::current().id();

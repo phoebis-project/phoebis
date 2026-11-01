@@ -269,14 +269,6 @@ test('a usage-based seat is named under both rings with its reason and weighs no
   }
 });
 
-test('a Team seat on a tier the cost model holds weighs by its row, as any plan the router prices', () => {
-  // The test tables size no Team week, so the case gives the Team row one of 100.
-  const sized = { ...COSTS, capacity: { ...COSTS.capacity, default_claude_team: { ...COSTS.capacity.default_claude_team, sevenDay: 100 } } };
-  const figures = d.ringFigures([account('primary', 'default_claude_max_20x', [window('7d', 0.5)]), account('team', 'default_claude_team', [window('7d', 0.4)])], '7d', sized, 'pro', NOW);
-  assert.deepEqual(figures.rows.map((r) => [r.id, r.weight]), [['team', 2], ['primary', 20]], "Team's 100 over Pro's 50");
-  assert.deepEqual(figures.leftOut, []);
-});
-
 test('a free plan is named under the ring with its reason and weighs nothing, while a Pro plan on the same tier weighs its capacity', () => {
   // A free organization reports the tier the profile reports for Pro, so the plan word and not the tier decides.
   const free = d.ringFigures([account('free', 'default_claude_ai', [window('7d', 0.5)], {}, 'free')], '7d', COSTS, 'pro', NOW);

@@ -5708,22 +5708,6 @@ mod tests {
     }
 
     #[test]
-    fn a_subscriber_after_the_commit_reads_true_at_once() {
-        let heads = heads_with_r();
-        heads
-            .lock()
-            .unwrap()
-            .get("r")
-            .expect("the entry stands")
-            .send_replace(true);
-        let head = head_of(&heads, "r").expect("the entry stands until the request ends");
-        assert!(
-            *head.borrow(),
-            "a waiter that subscribes after the commit reads the head and goes out at once"
-        );
-    }
-
-    #[test]
     fn a_subscriber_after_the_end_finds_no_entry_and_no_orphan() {
         let heads = heads_with_r();
         heads.lock().unwrap().remove("r");

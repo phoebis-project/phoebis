@@ -685,15 +685,6 @@ test('the catalog union names each model once and a failed fetch contributes not
   assert.deepEqual(await api.listCatalogOf([]), []);
 });
 
-test('a refusal never carries an error code, which the router sets for an unavailable registry alone', async () => {
-  const api = await signedIn();
-  const missing = [
-    () => api.renameAccount('nobody', 'x'),
-    () => api.rotateKey('nothing'),
-  ];
-  for (const call of missing) await assert.rejects(call, (e) => e instanceof d.ApiError && e.status === 404 && e.code === null);
-});
-
 test('an unknown id is refused with the route\'s own 404 text, which the console shows as the toast body', async () => {
   const api = await signedIn();
   await assert.rejects(() => api.renameAccount('nobody', 'x'), refusedAs(404, 'account not found'));
@@ -745,19 +736,6 @@ test('the mock answers each captured bound probe with the route\'s status and se
     assert.equal(answer.reason.status, status, label);
     // A value past the field's type fails the route's parse, whose sentence the capture leaves out.
     if (error !== undefined) assert.equal(answer.reason.message, error, label);
-  }
-});
-
-test('the mock refuses a burn average or a shed dwell past two hours and admits two hours', async () => {
-  const api = await signedIn();
-  const base = await storyPool(api);
-  for (const [field, error] of [
-    ['burnAverageSeconds', 'burn_average_seconds is between 600 and 7200'],
-    ['shedDwellSeconds', 'shed_dwell_seconds is between 300 and 7200'],
-  ]) {
-    await assert.rejects(() => api.updatePool('all', { ...base, [field]: 7_201 }), refusedAs(400, error), `${field} 7201`);
-    const admitted = await api.updatePool('all', { ...base, [field]: 7_200 });
-    assert.equal(admitted[field], 7_200, `${field} 7200`);
   }
 });
 
@@ -841,12 +819,11 @@ test('a_guardrail_is_created_edited_attached_and_deleted_on_the_mock_with_the_ro
 });
 
 test("a login with Stay logged in checked keeps the flag in the signed-in mark for a reload, and the smoke's bare mark reads a login left unchecked", async () => {
-  // The mark lives in the browser's storage, which the case lends the mock as a stand-in it can read back.
+  // The mark lives in the browser's storage, which the case lends the mock as a stand-in that a reload reads.
   const stored = new Map();
   globalThis.localStorage = { getItem: (key) => stored.get(key) ?? null, removeItem: (key) => stored.delete(key), setItem: (key, value) => stored.set(key, String(value)) };
   try {
     await new d.MockApi().login('admin', true);
-    assert.equal(stored.get('phoebis.mockSession'), JSON.stringify({ persistent: true, user: 'admin' }));
     // A reload builds the mock anew, whose session reads the mark alone.
     assert.deepEqual(await new d.MockApi().getSession(), { persistent: true, sessionId: 'mock-admin' }, 'a reload after a checked login');
     stored.set('phoebis.mockSession', 'admin');

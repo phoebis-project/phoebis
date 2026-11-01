@@ -1820,91 +1820,98 @@ async fn a_credit_on_the_standard_lane_leaves_the_fast_probe_kept_beside_it_to_s
     );
 }
 
+/// The rollups of the lineage trace above when the fourth request arrives `offset` ms after the standard probe
+/// refreshed its five-minute entry 560 s in.
+async fn fourth_request_rows(offset: i64) -> Vec<RollupRow> {
+    let arrived = 560_000 + offset;
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let standard = opus_body();
+    let fast = standard.replacen('{', r#"{"speed":"fast","#, 1);
+    open_request_with(&r, "first", &fast, 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").unanswered),
+        (1, 1),
+        "arrived {arrived} ms in: a covering fast probe"
+    );
+    r.advance_attended(10_000);
+    r.engine.observe(r.observed("second", "main", &standard));
+    r.engine.observe(r.selected("second", "a"));
+    r.engine.observe(failed(&r, "second", None));
+    r.advance_attended(10_000);
+    open_request_with(&r, "third", &standard, 0, 2_000);
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").unanswered),
+        (2, 2),
+        "arrived {arrived} ms in: a covering standard probe landed while the third request streamed"
+    );
+    r.engine.bus_gap(1, 0);
+    // The standard probe refreshed its five-minute entry 560 s in, so it lapses 860 s in.
+    r.advance_attended(offset);
+    open_request_with(&r, "fourth", &standard, 2_000, 0);
+    r.engine.observe(completed(&r, "fourth", 2_000));
+    assert_eq!(r.status("main").unanswered, 0, "arrived {arrived} ms in");
+    final_rollups(&r).await
+}
+
 /// A kept-warm credit needs the entry the covering probe kept to be there when the credited request arrives, on the
 /// instant the settlement and the scheduler read as the entry gone. On the lineage trace above, the standard probe
 /// refreshes its five-minute entry 560 s in and nothing is admitted until the fourth request, which arrives one
-/// millisecond before that entry lapses, as it lapses, or a minute after: only the first is credited, and from the
-/// lapse on the standard probe settles as expired. The fast probe's entry lapsed 570 s in, before any of them, so it
-/// settles as expired in all three.
+/// millisecond before that entry lapses or as it lapses: only the first is credited, and at the lapse the standard
+/// probe settles as expired. The fast probe's entry lapsed 570 s in, before either, so it settles as expired in both.
 #[tokio::test]
 async fn a_kept_warm_credit_needs_the_covering_entry_alive_when_the_request_arrives() {
-    for (offset, credited) in [(299_999, 1), (300_000, 0), (360_000, 0)] {
-        let arrived = 560_000 + offset;
-        let mut r = rig(RigSpec {
-            accounts: vec![api_key("a", A, 0)],
-            ..RigSpec::default()
-        })
-        .await;
-        let standard = opus_body();
-        let fast = standard.replacen('{', r#"{"speed":"fast","#, 1);
-        open_request_with(&r, "first", &fast, 0, 2_000);
-        r.engine.observe(completed(&r, "first", 0));
-        r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
-        r.advance_attended(270_000);
-        r.step().await;
-        assert_eq!(
-            (r.status("main").probes, r.status("main").unanswered),
-            (1, 1),
-            "arrived {arrived} ms in: a covering fast probe"
-        );
-        r.advance_attended(10_000);
-        r.engine.observe(r.observed("second", "main", &standard));
-        r.engine.observe(r.selected("second", "a"));
-        r.engine.observe(failed(&r, "second", None));
-        r.advance_attended(10_000);
-        open_request_with(&r, "third", &standard, 0, 2_000);
-        r.advance_attended(270_000);
-        r.step().await;
-        assert_eq!(
-            (r.status("main").probes, r.status("main").unanswered),
-            (2, 2),
-            "arrived {arrived} ms in: a covering standard probe landed while the third request streamed"
-        );
-        r.engine.bus_gap(1, 0);
-        // The standard probe refreshed its five-minute entry 560 s in, so it lapses 860 s in.
-        r.advance_attended(offset);
-        open_request_with(&r, "fourth", &standard, 2_000, 0);
-        r.engine.observe(completed(&r, "fourth", 2_000));
-        assert_eq!(r.status("main").unanswered, 0, "arrived {arrived} ms in");
-        r.ledger.clone().shutdown().await.unwrap();
-        let rows =
-            r.db.read_blocking(|c| {
-                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
-            })
-            .unwrap();
-        let (fast_probes, standard_probes) =
-            (probe_rows_at(&rows, true), probe_rows_at(&rows, false));
-        let expired = BTreeMap::from([("expired".to_string(), 1)]);
-        let standard_settled = if credited == 1 {
-            (0, BTreeMap::new())
-        } else {
-            (1, expired.clone())
-        };
-        assert_eq!(
+    let expired = BTreeMap::from([("expired".to_string(), 1)]);
+    let rows = fourth_request_rows(299_999).await;
+    let (fast_probes, standard_probes) = (probe_rows_at(&rows, true), probe_rows_at(&rows, false));
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            fast_probes.wasted_probe_reasons.clone(),
             (
-                inference_rows(&rows).kept_warm_requests,
-                fast_probes.wasted_probe_reasons.clone(),
-                (
-                    standard_probes.wasted_probes,
-                    standard_probes.wasted_probe_reasons.clone()
-                ),
+                standard_probes.wasted_probes,
+                standard_probes.wasted_probe_reasons.clone()
             ),
-            (credited, expired, standard_settled),
-            "arrived {arrived} ms in"
-        );
-        assert!(
-            tokens(fast_probes.wasted_usage()) > 0
-                && fast_probes.wasted_usage() == fast_probes.usage(),
-            "arrived {arrived} ms in: {fast_probes:?}"
-        );
-        if credited == 0 {
-            assert!(
-                tokens(standard_probes.wasted_usage()) > 0
-                    && standard_probes.wasted_usage() == standard_probes.usage(),
-                "arrived {arrived} ms in: {standard_probes:?}"
-            );
-        }
-    }
+        ),
+        (1, expired.clone(), (0, BTreeMap::new())),
+        "arrived 859999 ms in"
+    );
+    assert!(
+        tokens(fast_probes.wasted_usage()) > 0 && fast_probes.wasted_usage() == fast_probes.usage(),
+        "arrived 859999 ms in: {fast_probes:?}"
+    );
+    let rows = fourth_request_rows(300_000).await;
+    let (fast_probes, standard_probes) = (probe_rows_at(&rows, true), probe_rows_at(&rows, false));
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            fast_probes.wasted_probe_reasons.clone(),
+            (
+                standard_probes.wasted_probes,
+                standard_probes.wasted_probe_reasons.clone()
+            ),
+        ),
+        (0, expired.clone(), (1, expired)),
+        "arrived 860000 ms in"
+    );
+    assert!(
+        tokens(fast_probes.wasted_usage()) > 0 && fast_probes.wasted_usage() == fast_probes.usage(),
+        "arrived 860000 ms in: {fast_probes:?}"
+    );
+    assert!(
+        tokens(standard_probes.wasted_usage()) > 0
+            && standard_probes.wasted_usage() == standard_probes.usage(),
+        "arrived 860000 ms in: {standard_probes:?}"
+    );
 }
 
 /// The lane check refuses a credit on its own. A fast recipe on a one-hour write is covered by a fast probe, and a
@@ -2187,17 +2194,6 @@ async fn probe_row_funding(in_overage: bool, head_flag: &str) -> String {
     fundings[0].clone()
 }
 
-/// A probe's request row files under the overage fact its answer's head reported: with the account in overage and the
-/// head agreeing, it reads `overage`.
-#[tokio::test]
-async fn an_overage_probe_s_request_row_files_under_the_overage_its_answer_reported() {
-    assert_eq!(
-        probe_row_funding(true, "true").await,
-        "overage",
-        "the probe's row files under the overage its answer reported"
-    );
-}
-
 /// The head decides. A probe placed on the plan whose answer reports overage in use (the account entered overage
 /// between the selection and the answer) files its row under `overage`, never under the plan the selection stood on.
 #[tokio::test]
@@ -2221,8 +2217,9 @@ async fn a_probe_placed_in_overage_whose_answer_reports_the_plan_files_its_row_u
 }
 
 /// The agent's overage follows a real request's head as the relay's unified parse reads it, so the header spelled in
-/// mixed case with spaces around `TRUE` puts the current observation in overage. A probe's answer never reaches that
-/// reading, so the request's own answer carries the header.
+/// mixed case with spaces around `TRUE` puts the current observation in overage, and the skip of a due probe a gate
+/// withholds from that recipe files under `overage`. A probe's answer never reaches that reading, so the request's own
+/// answer carries the header.
 #[tokio::test]
 async fn a_request_whose_answer_spells_the_overage_header_in_mixed_case_reads_the_agent_in_overage()
 {
@@ -2243,14 +2240,22 @@ async fn a_request_whose_answer_spells_the_overage_header_in_mixed_case_reads_th
         },
     );
     r.observe_with("main", &priced_body()).await;
-    let (_, agents) = r.engine.persist_rows();
-    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
-    assert_eq!(
-        payload["current"]["in_overage"].as_bool(),
-        Some(true),
-        "the head put the agent in overage: {}",
-        payload["current"]
-    );
+    let mut pool = r.h.store.pool("main").unwrap().unwrap();
+    pool.enabled = false;
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").reason, Reason::PoolDisabled);
+    let rows = final_rollups(&r).await;
+    let skipped: Vec<&str> = rows
+        .iter()
+        .filter(|row| row.probes_skipped > 0)
+        .map(|row| row.funding.as_str())
+        .collect();
+    assert_eq!(skipped, ["overage"], "the head put the agent in overage");
 }
 
 /// Each wasted probe files under the funding its own answer took, as its cost row does: one probe on the plan and one in
@@ -3237,7 +3242,9 @@ async fn a_turn_whose_completion_the_engine_missed_starts_the_next_kept_warm_gap
 
 /// A compaction that arrives while a turn is open ends no turn: the turn stays pending for its own completion to
 /// decide, so the compaction moves no answered instant, and a failure of that turn the engine then observes leaves the
-/// gap to the turn that answered before it.
+/// gap to the turn that answered before it. On the timeline of the case above, a compaction at 480 s over the turn
+/// opened at 200 s leaves the request at 490 s a gap from the request at 0 s, so the probe at 470 s earns the credit.
+/// The compaction arrives after the probe because an open compaction holds the recipe unprobed.
 #[tokio::test]
 async fn a_compaction_over_an_open_turn_moves_no_answered_instant_and_that_turns_failure_keeps_it()
 {
@@ -3246,29 +3253,32 @@ async fn a_compaction_over_an_open_turn_moves_no_answered_instant_and_that_turns
         ..RigSpec::default()
     })
     .await;
-    let first_at = r.now();
     open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000);
     r.engine.observe(completed(&r, "first", 0));
     r.advance_attended(200_000);
     open_request_as(&r, "second", OTHER_CLIENT, 2_000, 0);
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").unanswered),
+        (1, 1),
+        "the probe landed while the second turn was open"
+    );
     r.advance_attended(10_000);
     r.engine
         .observe(compaction_named(&r, "compaction", "claude-sonnet-4-5"));
-    let answered_at = |r: &Rig| {
-        let (_, agents) = r.engine.persist_rows();
-        let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
-        payload["last_answered_at"].as_i64()
-    };
-    assert_eq!(
-        answered_at(&r),
-        Some(first_at),
-        "the compaction left the open turn to its own completion"
-    );
     r.engine.observe(failed(&r, "second", Some(40)));
+    r.advance_attended(10_000);
+    open_request_as(&r, "third", OTHER_CLIENT, 2_000, 0);
+    r.engine.observe(completed(&r, "third", 2_000));
+    let rows = final_rollups(&r).await;
     assert_eq!(
-        answered_at(&r),
-        Some(first_at),
-        "the open turn's failure kept the gap on the turn that answered"
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the compaction and the open turn's failure kept the gap on the turn that answered"
     );
 }
 
@@ -3827,108 +3837,115 @@ async fn an_expiry_swept_by_a_reader_settles_from_that_call() {
     }
 }
 
+/// A rig whose first probe of main the upstream has received and holds until `release`, its sessions expiring after
+/// `session_expiry`.
+async fn a_paid_probe_held_upstream(session_expiry: Duration) -> Rig {
+    let mut r = rig(RigSpec {
+        session_expiry,
+        ..RigSpec::default()
+    })
+    .await;
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &priced_body()).await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(probe_answer(2_000, 0))),
+    );
+    r.advance_attended(270_000);
+    r.engine.step().await;
+    wait_for(Duration::from_secs(5), || {
+        (r.up.requests().len() == 2).then_some(())
+    })
+    .await;
+    r
+}
+
+/// Lets the held probe's answer through and returns the rollups once its counts landed: the upstream served it, so
+/// it is paid for whatever the fence said, and a result whose recipe had stopped settles as one wasted probe under
+/// that stop.
+async fn served_probe_rows(r: &Rig) -> Vec<RollupRow> {
+    r.up.release();
+    r.engine.wait_idle().await;
+    rollups(r, |rows| tokens(probe_rows(rows).usage()) > 0).await
+}
+
 #[tokio::test]
 async fn a_late_or_orphaned_probe_is_still_paid_for() {
-    for action in ["close", "expire", "new_request", "release", "replace"] {
-        let mut r = rig(RigSpec {
-            // The expiry case sweeps the session out from under the probe in flight; the others keep the
-            // rig's day-long expiry.
-            session_expiry: match action {
-                "expire" => Duration::from_secs(600),
-                _ => RigSpec::default().session_expiry,
+    let day = RigSpec::default().session_expiry;
+    // A restart cancels the exchange before any answer, so nothing was served and no recipe is left for the probe
+    // to be wasted by. The ledger is drained rather than polled, since what this case asserts is that no row lands
+    // at all.
+    let r = a_paid_probe_held_upstream(day).await;
+    r.engine.close();
+    r.up.release();
+    r.engine.wait_idle().await;
+    let probe = probe_rows(&final_rollups(&r).await);
+    assert_eq!(
+        (probe.wasted_probes, tokens(probe.usage())),
+        (0, 0),
+        "close: {probe:?}"
+    );
+
+    // The expiry case sweeps the session out from under the probe in flight, past the 600-second expiry from the
+    // last heartbeat.
+    let r = a_paid_probe_held_upstream(Duration::from_secs(600)).await;
+    r.advance(600_000);
+    r.engine.expire();
+    let rows = served_probe_rows(&r).await;
+    let probe = probe_rows(&rows);
+    assert!(read_dollars(&r, &rows).0 > 0.0, "expire");
+    assert_eq!(
+        probe.wasted_probe_reasons.get("session_ended").copied(),
+        Some(1),
+        "expire: {probe:?}"
+    );
+
+    let mut r = a_paid_probe_held_upstream(day).await;
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &priced_body()).await;
+    let rows = served_probe_rows(&r).await;
+    let probe = probe_rows(&rows);
+    assert!(read_dollars(&r, &rows).0 > 0.0, "new_request");
+    assert_eq!(
+        probe.wasted_probes, 0,
+        "new_request: the request answered it"
+    );
+
+    let mut r = a_paid_probe_held_upstream(day).await;
+    r.state("main", "released");
+    let rows = served_probe_rows(&r).await;
+    let probe = probe_rows(&rows);
+    assert!(read_dollars(&r, &rows).0 > 0.0, "release");
+    assert_eq!(
+        probe.wasted_probe_reasons.get("released").copied(),
+        Some(1),
+        "release: {probe:?}"
+    );
+
+    let r = a_paid_probe_held_upstream(day).await;
+    r.engine
+        .apply_event(
+            "desktop",
+            r.generation("desktop"),
+            Event {
+                event: "session_start".into(),
+                session_id: "session".into(),
+                instance_id: "second".into(),
+                sequence: 1,
+                previous_instance_id: Some("instance".into()),
+                ..Default::default()
             },
-            ..RigSpec::default()
-        })
-        .await;
-        let body = priced_body();
-        r.up.push_credential_rule(A, "/v1/messages", cold_answer());
-        r.observe_with("main", &body).await;
-        r.up.push_credential_rule(
-            A,
-            "/v1/messages",
-            Respond::Gated(Box::new(probe_answer(2_000, 0))),
-        );
-        r.advance_attended(270_000);
-        r.engine.step().await;
-        wait_for(Duration::from_secs(5), || {
-            (r.up.requests().len() == 2).then_some(())
-        })
-        .await;
-        match action {
-            "close" => r.engine.close(),
-            // Past the 600-second expiry from the last heartbeat.
-            "expire" => {
-                r.advance(600_000);
-                r.engine.expire();
-            }
-            "new_request" => {
-                r.up.push_credential_rule(A, "/v1/messages", cold_answer());
-                r.observe_with("main", &body).await;
-            }
-            "release" => r.state("main", "released"),
-            _ => {
-                r.engine
-                    .apply_event(
-                        "desktop",
-                        r.generation("desktop"),
-                        Event {
-                            event: "session_start".into(),
-                            session_id: "session".into(),
-                            instance_id: "second".into(),
-                            sequence: 1,
-                            previous_instance_id: Some("instance".into()),
-                            ..Default::default()
-                        },
-                    )
-                    .unwrap();
-            }
-        }
-        r.up.release();
-        r.engine.wait_idle().await;
-        if action == "close" {
-            // A restart cancels the exchange before any answer, so nothing was served and no recipe is left
-            // for the probe to be wasted by. The ledger is drained rather than polled, since what this case
-            // asserts is that no row lands at all.
-            r.ledger.clone().shutdown().await.unwrap();
-            let rows =
-                r.db.read_blocking(|c| {
-                    read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
-                })
-                .unwrap();
-            let probe = probe_rows(&rows);
-            assert_eq!(
-                (probe.wasted_probes, tokens(probe.usage())),
-                (0, 0),
-                "{action}: {probe:?}"
-            );
-            continue;
-        }
-        // The upstream served it, so it is paid for whatever the fence said: the probe row carries its counts,
-        // and a result whose recipe had stopped settles as one wasted probe under that stop.
-        let rows = rollups(&r, |rows| tokens(probe_rows(rows).usage()) > 0).await;
-        let probe = probe_rows(&rows);
-        assert!(read_dollars(&r, &rows).0 > 0.0, "{action}");
-        match action {
-            "expire" => assert_eq!(
-                probe.wasted_probe_reasons.get("session_ended").copied(),
-                Some(1),
-                "{action}: {probe:?}"
-            ),
-            "new_request" => {
-                assert_eq!(probe.wasted_probes, 0, "{action}: the request answered it")
-            }
-            "release" => assert_eq!(
-                probe.wasted_probe_reasons.get("released").copied(),
-                Some(1),
-                "{action}: {probe:?}"
-            ),
-            _ => assert_eq!(
-                probe.wasted_probe_reasons.get("replaced").copied(),
-                Some(1),
-                "{action}: {probe:?}"
-            ),
-        }
-    }
+        )
+        .unwrap();
+    let rows = served_probe_rows(&r).await;
+    let probe = probe_rows(&rows);
+    assert!(read_dollars(&r, &rows).0 > 0.0, "replace");
+    assert_eq!(
+        probe.wasted_probe_reasons.get("replaced").copied(),
+        Some(1),
+        "replace: {probe:?}"
+    );
 }
 
 /// A probe's answer reading the 2,000-token prefix back, served fast.
@@ -4411,9 +4428,30 @@ async fn a_request_kept_warm_on_a_plan_funded_account_is_credited() {
     assert!(row(&r, &kept).await.kept_warm);
 }
 
-/// The unit and the tier of the first probe a plan-funded account on the Pro tier leaves unanswered, its stored profile
-/// naming `organization_type`, on the suite's own cost tables.
-async fn probe_on_the_pro_tier_of(organization_type: &str) -> (Option<String>, Option<String>) {
+/// The Pro-week figure the wasted probes of `rows` spent on account `o`, as the analytics answer it under the account
+/// grouping, `None` where a wasted count priced nothing.
+fn wasted_probe_figure(r: &Rig, rows: &[RollupRow]) -> Option<f64> {
+    phoebis_ledger::breakdown(
+        rows,
+        "account",
+        true,
+        &phoebis_ledger::LiveKeys::default(),
+        &[],
+        Some(phoebis_ledger::SharePricing { tables: &r.tables }),
+        &r.pricing,
+        &r.tables,
+        r.now(),
+    )
+    .into_iter()
+    .find(|group| group.key == "o")?
+    .probe_equivalent
+    .map(|probe| probe.wasted)
+}
+
+/// The tier the settlement of the first probe a plan-funded account on the Pro tier leaves unanswered files under, its
+/// stored profile naming `organization_type`, on the suite's own cost tables, and the Pro-week figure the settlement's
+/// counts price at. The operator's release settles the probe as wasted.
+async fn probe_on_the_pro_tier_of(organization_type: &str) -> (String, Option<f64>) {
     let mut r = rig(RigSpec {
         tables: phoebis_ledger::test_tables::subscription_costs(),
         tier: Some("default_claude_ai"),
@@ -4440,31 +4478,31 @@ async fn probe_on_the_pro_tier_of(organization_type: &str) -> (Option<String>, O
     r.advance(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1, "{organization_type}");
-    let (_, agents) = r.engine.persist_rows();
-    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
-    let probe = &payload["unanswered"][0];
-    (
-        probe["unit"].as_str().map(String::from),
-        probe["tier"].as_str().map(String::from),
-    )
+    r.engine.release("desktop", "session").unwrap();
+    let rows = final_rollups(&r).await;
+    let settled = rows
+        .iter()
+        .find(|row| row.wasted_probes > 0)
+        .expect("the settlement's row");
+    (settled.tier.clone(), wasted_probe_figure(&r, &rows))
 }
 
-/// A free organization reports the Pro tier and its plan prices no capacity, so its probe settles in dollars and files
-/// under no tier, as its request row does, while a Pro organization's settles in the window share under the stored
-/// tier.
+/// A free organization reports the Pro tier and its plan prices no capacity, so its probe files under no tier, as its
+/// request row does, while a Pro organization's files under the stored tier. The Pro-week figure reads no account tier,
+/// so both wasted probes price one figure: the probe read the 2,000-token Opus 5.5 prefix back, 2,000 x 2 x 0.1 = 400
+/// units over the Pro tier's 50 on the week of the test table.
 #[tokio::test]
-async fn a_free_organizations_probe_settles_in_dollars_under_no_tier_beside_a_pro_ones_window_share(
-) {
+async fn a_free_organizations_probe_files_under_no_tier_beside_a_pro_ones_under_its_tier() {
     assert_eq!(
         (
             probe_on_the_pro_tier_of("claude_free").await,
             probe_on_the_pro_tier_of("claude_pro").await,
         ),
         (
-            (Some("usd".into()), None),
-            (Some("window_share".into()), Some("default_claude_ai".into())),
+            (UNATTRIBUTED.to_string(), Some(8.0)),
+            ("default_claude_ai".to_string(), Some(8.0)),
         ),
-        "the free organization's probe settles in dollars under no tier, the Pro one's in the share under its tier"
+        "the free organization's probe files under no tier, the Pro one's under its tier, both at one figure"
     );
 }
 
@@ -4593,36 +4631,10 @@ async fn a_credit_keys_its_requests_tier_and_band_and_reaches_the_saving_figure(
         .find(|group| group.key == "o")
         .and_then(|group| group.saving_equivalent)
         .expect("the account grouping answers the account's saving in the Pro-week figure");
-    let key = phoebis_ledger::RowKey {
-        model: &credit.canonical_model,
-        speed: phoebis_ledger::Speed::of(Some(credit.speed.as_str())),
-        band: phoebis_ledger::Band::of_rollup(&credit.band),
-        funding: phoebis_ledger::Funding::of_rollup(&credit.funding),
-        kind: &credit.kind,
-        tier: Some(&credit.tier),
-        entrypoint: None,
-        classifier: false,
-        at: credit.hour * 1_000,
-        band_at: None,
-        now: r.now(),
-    };
-    let figure = |usage: PinUsage| {
-        phoebis_ledger::price_row(&r.pricing, &r.tables, &key, usage)
-            .equivalent
-            .expect("the Pro week prices the credit")
-    };
-    let write = figure(PinUsage {
-        write_5m: credit.kept_warm_5m_tokens,
-        write_1h: credit.kept_warm_1h_tokens,
-        ..PinUsage::default()
-    });
-    let read = figure(PinUsage {
-        cache_read: credit.kept_warm_5m_tokens + credit.kept_warm_1h_tokens,
-        ..PinUsage::default()
-    });
+    // At Haiku 5.5's January weight of 0.5 the 2,000 tokens the credit kept warm are 2,000 x 0.5 x 2 = 2,000 units
+    // written and 2,000 x 0.5 x 0.1 = 100 read, so the saving is 1,900 units, over the Pro tier's 50 on the week.
     assert_eq!(
-        saving,
-        write - read,
+        saving, 38.0,
         "the write's figure less the read's at the credit's own key"
     );
 }
@@ -4743,10 +4755,11 @@ async fn a_credit_answered_across_a_revision_boundary_files_at_its_requests_arri
     );
 }
 
-/// A plan-funded probe on a model without a weight settles in dollars whatever its model tier: the test table leaves
-/// Opus 5 null beside Opus 5.5 at 2, and the settlement reads `priced`, which reads the model's own weight alone.
+/// A plan-funded probe on a model without a weight prices nothing whatever its model tier: the test table leaves Opus 5
+/// null beside Opus 5.5 at 2, so the wasted probe's Pro-week figure reads null. The operator's release settles the
+/// probe as wasted.
 #[tokio::test]
-async fn a_plan_funded_probe_on_a_model_without_a_weight_settles_in_dollars() {
+async fn a_plan_funded_probe_on_a_model_without_a_weight_prices_no_figure() {
     let mut r = rig(RigSpec {
         tables: phoebis_ledger::test_tables::subscription_costs(),
         tier: Some("default_claude_max_20x"),
@@ -4759,21 +4772,20 @@ async fn a_plan_funded_probe_on_a_model_without_a_weight_settles_in_dollars() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
-    let (_, agents) = r.engine.persist_rows();
-    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
-    let probe = &payload["unanswered"][0];
+    r.engine.release("desktop", "session").unwrap();
+    let rows = final_rollups(&r).await;
+    let settled = rows
+        .iter()
+        .find(|row| row.wasted_probes > 0)
+        .expect("the settlement's row");
     assert_eq!(
         (
-            probe["model"].as_str(),
-            probe["unit"].as_str(),
-            probe["tier"].as_str()
+            settled.canonical_model.as_str(),
+            settled.tier.as_str(),
+            wasted_probe_figure(&r, &rows)
         ),
-        (
-            Some("claude-opus-5"),
-            Some("usd"),
-            Some("default_claude_max_20x")
-        ),
-        "the probe settled in dollars on the Max 20x account: {probe}"
+        ("claude-opus-5", "default_claude_max_20x", None),
+        "the probe settled on the Ultra account and prices no Pro-week figure"
     );
 }
 

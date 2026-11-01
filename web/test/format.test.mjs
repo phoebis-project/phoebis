@@ -175,7 +175,6 @@ test("a share's short form names its window in a word, and every spelling of a w
   assert.equal(shareShort('seven_day', 0.0012), '0.12% 7d');
   assert.equal(shareShort('seven_day_fable', 0.0012), '0.12% 7-day Fable');
   assert.equal(shareShort('seven_day_opus', 0.5), '50% seven_day_opus', 'a window the pages do not know keeps its key');
-  assert.equal(shareLabel('seven_day_fable', 0.0012), '0.12% of 7-day Fable', 'the full form stays for the titles and the other pages');
 });
 
 test('an amount in minor units reads in dollars at its exponent, two digits where the reading names none', () => {

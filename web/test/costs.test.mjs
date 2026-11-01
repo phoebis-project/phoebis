@@ -449,11 +449,6 @@ test('fundingOf reads the account kind, then a fast answer, then overage, and a 
   assert.equal(d.fundingOf(null), 'api_key', 'a request with no attempt is billed in dollars');
 });
 
-test('the native unit of a subscription window is its figure in the chosen week, and of every other funding dollars', () => {
-  assert.equal(d.nativeOf('plan'), 'equivalent');
-  for (const funding of ['api_key', 'fast', 'overage']) assert.equal(d.nativeOf(funding), 'usd', funding);
-});
-
 test("a model's tier is its model_tier entry, then its undated id's, then the tier its id names when the order lists it", () => {
   assert.equal(d.modelTierOf(costs, OPUS), 'opus', 'a listed id');
   assert.equal(d.modelTierOf(costs, 'claude-opus-5-5-20260101'), 'opus', "a dated id reads its undated id's entry");

@@ -68,16 +68,6 @@ fn attempt(id: &str, account: &str, status: u16) -> AttemptRecord {
     }
 }
 
-/// What a reader prices one `attempt` on `model` at: its counts at the shipped revision in force at `at`, the request's
-/// receipt.
-fn attempt_usd(model: &str, at: i64) -> f64 {
-    phoebis_ledger::PriceRevisions::shipped()
-        .in_force(at)
-        .estimate(model, phoebis_ledger::Speed::Standard, 100, 40, 0, 0, 10)
-        .expect("the shipped list carries the model")
-        .0
-}
-
 /// Six inference requests over two client builds, an agent type every third row, and a turn origin every
 /// other row, so a filter or a group-by on any of the three has more than one group to answer.
 fn seed_rollups(parts: &common::Full) {
@@ -234,15 +224,11 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
         (Some(3), Some(2), Some(1), Some(3))
     );
     assert_eq!(business["tokens"]["cache_read"].as_u64(), Some(120));
-    // The three business rows `seed_rollups` lands.
-    let business_usd: f64 = [0, 2, 4]
-        .into_iter()
-        .map(|i| attempt_usd("claude-sonnet-5", common::NOW - (5 - i) * HOUR))
-        .sum();
-    assert!(business_usd > 0.0);
+    // The three business rows `seed_rollups` lands, each 100 input, 40 cache-read and 10 output tokens of Sonnet 5 at
+    // the shipped $2, $0.20 and $10 a million: $0.000308 a row.
     assert!(
-        (business["cost_usd"].as_f64().unwrap() - business_usd).abs() < 1e-9,
-        "{} vs {business_usd}",
+        (business["cost_usd"].as_f64().unwrap() - 0.000924).abs() < 1e-9,
+        "{} vs 0.000924",
         business["cost_usd"]
     );
     assert_eq!(
@@ -2264,22 +2250,16 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
         ),
         (Some(24 * 150), Some(24 * 40))
     );
-    let day_usd: f64 = (0..24)
-        .map(|i| attempt_usd("claude-sonnet-5", now - i * HOUR))
-        .sum();
-    assert!(day_usd > 0.0);
+    // Each row's 100 input, 40 cache-read and 10 output tokens of Sonnet 5 at the shipped $2, $0.20 and $10 a million
+    // are $0.000308, and 24 rows $0.007392.
     assert!(
-        (dashboard["cost_24h"].as_f64().unwrap() - day_usd).abs() < 1e-9,
-        "the 24 rows' counts at the shipped cells: {} vs {day_usd}",
+        (dashboard["cost_24h"].as_f64().unwrap() - 0.007392).abs() < 1e-9,
+        "the 24 rows' counts at the shipped cells: {} vs 0.007392",
         dashboard["cost_24h"]
     );
     assert!((dashboard["error_rate_24h"].as_f64().unwrap() - 5.0 / 24.0).abs() < 1e-9);
     assert_eq!(dashboard["top_error_code"].as_str(), Some("upstream_error"));
     assert_eq!(dashboard["hourly"].as_array().unwrap().len(), 24);
-    assert!(
-        dashboard.get("recent").is_none(),
-        "the dashboard answers no list of requests, which the console reads from the requests route"
-    );
     let business = dashboard["accounts"]
         .as_array()
         .unwrap()

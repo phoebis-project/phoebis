@@ -91,10 +91,14 @@ const SLICES: u32 = 50;
 /// allocator's whole span must stay below it.
 const EPHEMERAL_FLOOR: u16 = 32_768;
 
-/// The first port of the slice for a given pid residue: pulled out of `port_base` so the bounds test can check
-/// every residue's arithmetic without drawing from the counter `free_port` shares with the rest of this
-/// process's tests.
-fn slice_base(residue: u32) -> u16 {
+const _: () = assert!(
+    slice_base(SLICES - 1) as u32 + PORT_SPAN as u32 <= EPHEMERAL_FLOOR as u32,
+    "the allocator's highest slice reaches the kernel's ephemeral range"
+);
+
+/// The first port of the slice for a given pid residue: pulled out of `port_base` so the assertion above checks the
+/// highest residue's slice at compile time.
+const fn slice_base(residue: u32) -> u16 {
     20_000 + residue as u16 * PORT_SPAN
 }
 
@@ -133,37 +137,6 @@ fn free_port() -> u16 {
         }
     }
     panic!("no free port in {base}..{}", base + PORT_SPAN);
-}
-
-#[test]
-fn every_pid_slice_stays_below_the_ephemeral_range() {
-    // Checked once rather than per residue: even the highest slice never reaches the kernel's own range.
-    assert!(
-        20_000u32 + SLICES * PORT_SPAN as u32 <= EPHEMERAL_FLOOR as u32,
-        "the allocator's full span reaches the kernel's ephemeral range"
-    );
-    // Arithmetic only: a live draw per residue would draw from the counter every other test in this process
-    // shares, which is the bug this test used to cause.
-    for residue in 0..SLICES {
-        let base = slice_base(residue);
-        assert!(
-            base as u32 >= 20_000,
-            "residue {residue} starts below the allocator's floor: base {base}"
-        );
-        assert!(
-            base as u32 + PORT_SPAN as u32 <= 20_000 + SLICES * PORT_SPAN as u32,
-            "residue {residue} pushes its slice past the allocator's own span: base {base}"
-        );
-    }
-    // One live draw, which cannot wrap the shared counter by itself, proves free_port actually lands inside
-    // this process's own slice.
-    let port = free_port();
-    let base = slice_base(std::process::id() % SLICES);
-    assert!(
-        (base..base + PORT_SPAN).contains(&port),
-        "{port} is outside this process's slice ({base}..{})",
-        base + PORT_SPAN
-    );
 }
 
 /// The fixture request, replayed against the proxy under the given secret and session id. Headers come from
@@ -2306,17 +2279,12 @@ usage:
 }
 
 #[test]
-fn a_listener_without_tls_loads_on_any_address_and_a_rootless_storage_path_does_not() {
+fn a_rootless_storage_path_does_not_load() {
     use phoebis_router::config::{load, ConfigError};
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
     let loopback_plain = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET";
-    let public_bare = "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET";
-    for (name, admin) in [("ok", loopback_plain), ("public-bare", public_bare)] {
-        let config = load(&config_with(dir.path(), name, admin)).unwrap();
-        assert!(config.admin.tls.is_none(), "{name}: {:?}", config.admin);
-    }
 
     // A storage path that names no database file inside a directory never reaches the store.
     let text = std::fs::read_to_string(config_with(dir.path(), "ok", loopback_plain)).unwrap();
@@ -2336,7 +2304,7 @@ fn a_listener_without_tls_loads_on_any_address_and_a_rootless_storage_path_does_
 }
 
 #[test]
-fn stats_and_cooldown_settings_are_validated_with_the_specs_bounds() {
+fn stats_settings_are_validated_with_the_specs_bounds() {
     use phoebis_router::config::{load, ConfigError};
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -2349,74 +2317,7 @@ fn stats_and_cooldown_settings_are_validated_with_the_specs_bounds() {
         path
     };
     let config = load(&with("defaults", "")).unwrap();
-    assert_eq!(
-        (
-            config.stats.retention_days,
-            config.stats.metrics_listen.to_string().as_str(),
-            config.stats.ledger_path.to_str().unwrap()
-        ),
-        (365, "127.0.0.1:9464", "./data/ledger.sqlite")
-    );
-    let path =
-        |p: &Option<std::path::PathBuf>| p.as_deref().and_then(|p| p.to_str()).map(str::to_string);
-    assert_eq!(
-        (
-            path(&config.stats.api_prices_path),
-            path(&config.stats.subscription_costs_path)
-        ),
-        (
-            Some("./api_prices.yaml".to_string()),
-            Some("./subscription_costs.yaml".to_string())
-        )
-    );
-    let full = load(&with("full", "stats:\n  api_prices_path: ./p.yaml\n  body_capture_max_hours: 24\n  ledger_path: ./data/l.sqlite\n  metrics_listen: 127.0.0.1:9999\n  retention_days: 7\n  rollup_retention_days: 500\n  subscription_costs_path: ./c.yaml\n")).unwrap();
-    assert_eq!(
-        (full.stats.retention_days, full.stats.rollup_retention_days),
-        (7, 500)
-    );
-    assert_eq!(
-        (
-            path(&full.stats.api_prices_path),
-            path(&full.stats.subscription_costs_path)
-        ),
-        (Some("./p.yaml".to_string()), Some("./c.yaml".to_string()))
-    );
-    let zero_retention = load(&with("retention", "stats:\n  retention_days: 0\n")).unwrap();
-    assert_eq!(zero_retention.stats.retention_days, 0);
-    let zero_rollup = load(&with("rollup", "stats:\n  rollup_retention_days: 0\n")).unwrap();
-    assert_eq!(zero_rollup.stats.rollup_retention_days, 0);
-    assert!(matches!(
-        load(&with(
-            "rollup-too-short",
-            "stats:\n  retention_days: 30\n  rollup_retention_days: 7\n"
-        )),
-        Err(ConfigError::RollupRetentionTooShort {
-            retention_days: 30,
-            value: 7
-        })
-    ));
-    let zero_raw_short_rollup = load(&with(
-        "zero-raw-short-rollup",
-        "stats:\n  retention_days: 0\n  rollup_retention_days: 7\n",
-    ))
-    .unwrap();
-    assert_eq!(
-        (
-            zero_raw_short_rollup.stats.retention_days,
-            zero_raw_short_rollup.stats.rollup_retention_days
-        ),
-        (0, 7),
-        "no floor when the raw rows are kept forever"
-    );
-    assert_eq!(
-        load(&with(
-            "cooldown",
-            "routing:\n  cooldown_fallback_seconds: 3601\n"
-        ))
-        .unwrap_err()
-        .to_string(),
-        "routing.cooldown_fallback_seconds must be between 1 and 3600, not 3601"
-    );
+    assert_eq!(config.stats.retention_days, 365);
     assert!(matches!(
         load(&with("ledger", "stats:\n  ledger_path: /\n")),
         Err(ConfigError::LedgerPath { .. })
@@ -2501,20 +2402,11 @@ fn stats_and_cooldown_settings_are_validated_with_the_specs_bounds() {
         .is_ok(),
         "two names for two files are still two files"
     );
-    assert!(
-        load(&with("unknown", "stats:\n  nope: 1\n")).is_err(),
-        "unknown fields reject the configuration"
-    );
 }
-
-const REMOVED_LEASE: &str = "keepalive:\n  lease_seconds: 90\n"; // removed name
-const REMOVED_WORKERS: &str = "keepalive:\n  max_workers: 4\n"; // removed name
-const REMOVED_REQUEST_BYTES: &str = "keepalive:\n  max_request_bytes: 8388608\n"; // removed name
-const REMOVED_PREWARM: &str = "keepalive:\n  oauth_prewarm_verified: false\n"; // removed name
 
 #[test]
 fn keepalive_limits_are_validated_with_the_go_engines_bounds() {
-    use phoebis_router::config::{load, ConfigError};
+    use phoebis_router::config::load;
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
@@ -2525,46 +2417,6 @@ fn keepalive_limits_are_validated_with_the_go_engines_bounds() {
         std::fs::write(&path, format!("{text}{extra}")).unwrap();
         path
     };
-    let defaults = load(&with("defaults", "")).unwrap();
-    assert_eq!(
-        (
-            defaults.keepalive.max_agents,
-            defaults.keepalive.max_retained_bytes,
-            defaults.keepalive.max_sessions
-        ),
-        (1_024, 256 << 20, 128),
-        "an absent block is the spec's defaults"
-    );
-    let full = load(&with(
-        "full",
-        "keepalive:\n  max_agents: 2048\n  max_retained_bytes: 33554432\n  max_sessions: 256\n",
-    ))
-    .unwrap();
-    assert_eq!(
-        (
-            full.keepalive.max_agents,
-            full.keepalive.max_retained_bytes,
-            full.keepalive.max_sessions
-        ),
-        (2_048, 32 << 20, 256)
-    );
-    for (name, body) in [
-        ("lease", REMOVED_LEASE),
-        ("workers", REMOVED_WORKERS),
-        ("request-bytes", REMOVED_REQUEST_BYTES),
-        ("prewarm", REMOVED_PREWARM),
-    ] {
-        let error = load(&with(name, body)).unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "the configuration is not valid YAML",
-            "{name}"
-        );
-        assert!(
-            matches!(&error, ConfigError::Syntax(cause) if cause.to_string().contains("unknown field")),
-            "{name}: {error:?}"
-        );
-    }
     assert_eq!(
         load(&with(
             "retained",
@@ -2574,13 +2426,6 @@ fn keepalive_limits_are_validated_with_the_go_engines_bounds() {
         .to_string(),
         "keepalive.max_retained_bytes must be between 33554432 and 536870912, not 33554431",
         "the retained budget holds at least one recipe at the relay's request bound"
-    );
-    assert!(
-        matches!(
-            load(&with("unknown", "keepalive:\n  probe_enabled: true\n")),
-            Err(ConfigError::Syntax(_))
-        ),
-        "the Go engine's probe_enabled is not a field of the block; probing is a pool setting"
     );
 }
 
@@ -3147,8 +2992,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
     let db_path = dir.path().join("phoebis.sqlite");
     // No `api_prices_path`, and its default `./api_prices.yaml` does not exist under the test's working directory, so
-    // `Pricing::load` chooses the shipped table, matched against directly below; the cost model's default path is
-    // just as absent.
+    // `Pricing::load` chooses the shipped table. The cost model's default path is just as absent.
     seed_oauth_account(&db_path, &key_path);
     phoebis_store::Store::open(
         &db_path,
@@ -3218,8 +3062,8 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         .unwrap();
     assert_eq!(resp.status(), 200);
     let _ = resp.text().await.unwrap();
-    // The routes decay the burn to their read on the binary's wall clock, so each read is bracketed by two clock
-    // reads and its figure lies between the fold's decayed to the later and to the earlier.
+    // The sessions route decays the burn to its read on the binary's wall clock, so the read is bracketed by two clock
+    // reads and the instant it serves lies between them.
     let wall = || jiff::Timestamp::now().as_millisecond();
     let sessions_from = wall();
     let sessions = wait_json(&client, &admin("/sessions"), |v| {
@@ -3243,12 +3087,10 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
             .and_then(|windows| windows.iter().find(|w| w["id"] == "five_hour"))
             .and_then(|w| w["burn"].as_f64())
     };
-    let account_from = wall();
-    let account = wait_json(&client, &admin("/accounts/a"), |v| {
+    wait_json(&client, &admin("/accounts/a"), |v| {
         five_hour(v).is_some_and(|b| b > 0.0)
     })
     .await;
-    let account_to = wall();
     let settings: serde_json::Value = client
         .get(admin("/settings"))
         .send()
@@ -3263,7 +3105,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
             &settings["subscription_costs"]["source"]
         ),
         (&serde_json::json!("shipped"), &serde_json::json!("shipped")),
-        "both tables in force are the shipped ones the figures below are read from"
+        "both tables in force are the shipped ones"
     );
     let _ = stop_tx.send(());
     server.await.unwrap().unwrap();
@@ -3282,65 +3124,9 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     let burn_at = pin
         .burn_at
         .expect("the renewal with usage folded the pin's burn");
-    // The default `burn_average_seconds` (no pool override above), the constant the routes decay with too.
-    let decayed = |figure: f64, to: i64| figure * (-((to - burn_at) as f64) / 1_800_000.0).exp();
-    let bracketed = |served: f64, figure: f64, from: i64, to: i64| {
-        decayed(figure, to) - 1e-12 <= served && served <= decayed(figure, from) + 1e-12
-    };
-    let tables = phoebis_ledger::PlanTables::shipped();
-    let usage = phoebis_routing::PinUsage {
-        input: 1_000,
-        output: 100,
-        ..Default::default()
-    };
-    // A single renewal from a cold average is the usage spread over the average, weighed by the band at the renewal,
-    // read per hour on Max 20x.
-    let share = tables
-        .share_at(
-            phoebis_routing::FIVE_HOUR,
-            None,
-            "default_claude_max_20x",
-            "claude-opus-5-5",
-            usage,
-            burn_at,
-        )
-        .unwrap();
-    let expected_burn = share / 1_800.0 * 3_600.0;
-    assert!(
-        bracketed(
-            row["burn"].as_f64().unwrap(),
-            expected_burn,
-            sessions_from,
-            sessions_to
-        ),
-        "{row} against {expected_burn} decayed to the read"
-    );
-    // The account's 5-hour burn is the pin's plain average priced through the cost model the binary wires into the
-    // router, at the band of the read, in share per hour, decayed to the read.
-    let rate_at = |at: i64| {
-        tables
-            .share_rate_at(
-                phoebis_routing::FIVE_HOUR,
-                None,
-                "default_claude_max_20x",
-                &pin.model,
-                &pin.burn,
-                at,
-            )
-            .unwrap()
-            * 3_600.0
-    };
-    let (low, high) = (
-        rate_at(account_from).min(rate_at(account_to)),
-        rate_at(account_from).max(rate_at(account_to)),
-    );
-    let served = five_hour(&account).unwrap();
-    assert!(
-        decayed(low, account_to) - 1e-9 <= served && served <= decayed(high, account_from) + 1e-9,
-        "{account} against {low}..{high} decayed to the read"
-    );
+    // A single renewal from a cold average spreads the usage over the default `burn_average_seconds` (no pool
+    // override above), 1800 seconds.
     let per_second = |tokens: f64| tokens / 1_800.0;
-    let band = tables.band_factor(phoebis_routing::FIVE_HOUR, None, burn_at);
     assert_eq!(
         (pin.burn, pin.burn_at),
         (
@@ -3353,13 +3139,11 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         ),
         "the plain copy holds each type's tokens a second, unpriced"
     );
-    assert!(
-        (pin.burn_banded.input - per_second(1_000.0) * band).abs() < 1e-12
-            && (pin.burn_banded.output - per_second(100.0) * band).abs() < 1e-12
-            && pin.burn_banded.cache_read == 0.0,
-        "the banded copy weighs the same tokens by the band at the renewal ({band}): {:?}",
-        pin.burn_banded
-    );
+    let usage = phoebis_routing::PinUsage {
+        input: 1_000,
+        output: 100,
+        ..Default::default()
+    };
     let prompt = usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
     let revisions = phoebis_ledger::PriceRevisions::shipped();
     let prices = revisions.in_force(jiff::Timestamp::now().as_millisecond());

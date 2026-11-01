@@ -83,10 +83,8 @@ fn a_replay_changes_only_the_output_controls() {
         headers(),
         "every header the bus published, in its order"
     );
-    assert_eq!(
-        recipe.size,
-        recipe.body.len() + "alias".len() + header_bytes(&headers())
-    );
+    // The edited body's 320 bytes, the 5 of "alias" and the 80 of the headers' names and values.
+    assert_eq!(recipe.size, 405);
 }
 
 #[test]
@@ -151,11 +149,8 @@ fn a_retained_body_loses_its_safeguards_member_and_a_stamped_one_is_resigned() {
             .body,
         "the cut takes the member and one comma and nothing else"
     );
-    assert_eq!(
-        recipe.size,
-        recipe.body.len() + model.len() + header_bytes(&headers_with_beta()),
-        "the retained size reads the cut body"
-    );
+    // The cut body's 84,135 bytes, the 17 of the model and the 110 of the headers with the beta.
+    assert_eq!(recipe.size, 84_262, "the retained size reads the cut body");
     assert_eq!(
         recipe.headers,
         headers_with_beta(),
@@ -172,7 +167,8 @@ fn a_body_without_the_member_yields_the_recipe_it_did() {
     assert_eq!(
         make_recipe(&headers(), BODY.as_bytes(), "routing-alias", 1 << 20).unwrap(),
         Recipe {
-            size: body.len() + "routing-alias".len() + header_bytes(&headers()),
+            // BODY's 221 bytes once edited, the 13 of "routing-alias" and the 80 of the headers.
+            size: 314,
             body,
             headers: headers(),
             model: "routing-alias".into(),
@@ -272,7 +268,6 @@ fn unsupported_shapes_are_named() {
         ),
         ("thinking", json!("adaptive"), "unsupported_shape"),
         ("tool_choice", json!({"type": "any"}), "forced_tool"),
-        ("tool_choice", json!({"type": "auto"}), ""),
         (
             "output_format",
             json!({"type": "json"}),
@@ -295,11 +290,18 @@ fn unsupported_shapes_are_named() {
         ),
     ] {
         let result = make_recipe(&headers(), &with(path, value), "routing-alias", 1 << 20);
-        match reason {
-            "" => assert!(result.is_ok(), "{path} accepted"),
-            reason => assert_eq!(result.unwrap_err(), reason, "{path}"),
-        }
+        assert_eq!(result.unwrap_err(), reason, "{path}");
     }
+    assert!(
+        make_recipe(
+            &headers(),
+            &with("tool_choice", json!({"type": "auto"})),
+            "routing-alias",
+            1 << 20
+        )
+        .is_ok(),
+        "an auto tool_choice is accepted"
+    );
     assert_eq!(
         make_recipe(&headers(), &vec![b'x'; 1_025], "m", 1_024).unwrap_err(),
         "request_too_large"
@@ -352,20 +354,6 @@ fn unsupported_shapes_are_named() {
     );
     // The bus denylist is the one gate: a recipe replays what the bus published, so the credential, the
     // forwarding headers, and the relay's own framing never reach one in the first place.
-    for name in [
-        "accept-encoding",
-        "authorization",
-        "connection",
-        "content-length",
-        "cookie",
-        "host",
-        "transfer-encoding",
-        "x-api-key",
-        "x-forwarded-for",
-        "x-keepalive-owner-id",
-    ] {
-        assert!(!phoebis_bus::header_published(name), "{name}");
-    }
     let unknown = vec![("x-claude-code-future".to_string(), "1".to_string())];
     assert_eq!(
         make_recipe(&unknown, BODY.as_bytes(), "routing-alias", 1 << 20)

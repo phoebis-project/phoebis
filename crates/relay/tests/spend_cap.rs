@@ -54,14 +54,13 @@ async fn a_spend_cap_answer_excludes_the_account_and_the_exhaustion_claims_overa
             .map(|v| v.to_str().unwrap()),
         Some("overage")
     );
-    // Every cooldown deadline carries a one-second margin past the clock it was computed against.
-    let expected_reset =
-        (phoebis_relay::next_month_start(h.clock.load(Ordering::SeqCst)) + 1_000) / 1_000;
+    // The harness clock reads 1970-01-01T00:16:40Z, so the cap lifts at 1970-02-01T00:00:00Z, 2_678_400 s in, and
+    // every cooldown deadline carries a one-second margin past it.
     assert_eq!(
         resp.headers()
             .get("anthropic-ratelimit-unified-reset")
             .map(|v| v.to_str().unwrap()),
-        Some(expected_reset.to_string().as_str())
+        Some("2678401")
     );
     let cooldowns = h.router.cooldowns().await.unwrap();
     assert_eq!(

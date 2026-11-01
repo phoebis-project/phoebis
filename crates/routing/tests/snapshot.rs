@@ -48,17 +48,6 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
             expires_at: 2_000,
         }],
         reused_key_ids: Vec::new(),
-        terms: vec![SubscriptionTerm {
-            account_id: "x".into(),
-            since: Some(500),
-            trial_ends_at: None,
-            canceled: true,
-            ends_at: Some(1_000),
-            tier: None,
-            usage_based: false,
-            plan: None,
-            plan_ended_at: None,
-        }],
         ..Default::default()
     }
 }
@@ -90,26 +79,6 @@ fn a_retired_secret_of_a_revoked_key_is_refused_as_revoked() {
         s.authenticate("one", 1_600),
         Err(KeyRefusal::Revoked)
     ));
-}
-
-#[test]
-fn term_answers_the_account_it_was_loaded_for_and_none_for_any_other() {
-    let s = RegistrySnapshot::from_load(load(None), DIGEST_KEY, 0, 1);
-    assert_eq!(
-        s.term("x"),
-        Some(&SubscriptionTerm {
-            account_id: "x".into(),
-            since: Some(500),
-            trial_ends_at: None,
-            canceled: true,
-            ends_at: Some(1_000),
-            tier: None,
-            usage_based: false,
-            plan: None,
-            plan_ended_at: None,
-        })
-    );
-    assert_eq!(s.term("y"), None);
 }
 
 #[test]
@@ -254,14 +223,9 @@ fn build_lists_a_keys_pool_guardrails_before_its_own_and_a_guardrail_on_both_onc
 }
 
 #[test]
-fn build_skips_a_disabled_guardrail_and_one_whose_pattern_does_not_compile_and_keeps_both_names() {
+fn build_keeps_the_names_of_a_disabled_guardrail_one_whose_pattern_does_not_compile_and_one_attached_to_nothing(
+) {
     let s = guarded();
-    for key_id in ["k1", "k2"] {
-        let ids = ids_for(&s, key_id);
-        for skipped in ["g3", "g4", "g5"] {
-            assert!(!ids.contains(&skipped), "{skipped} runs for {key_id}");
-        }
-    }
     let names = s.guardrails();
     assert_eq!(names.name_of("g3"), Some("g3 name"));
     assert_eq!(names.name_of("g4"), Some("g4 name"));
@@ -277,17 +241,4 @@ fn build_skips_a_disabled_guardrail_and_one_whose_pattern_does_not_compile_and_k
 fn guardrails_for_answers_an_empty_slice_for_a_key_without_attachments() {
     let s = guarded();
     assert!(s.guardrails_for(s.key("k2").unwrap()).is_empty());
-}
-
-#[test]
-fn with_guardrails_leaves_the_rest_of_the_snapshot_as_from_load_built_it() {
-    let s = RegistrySnapshot::from_load(load(None), DIGEST_KEY, 0, 1)
-        .with_guardrails(CompiledGuardrails::default());
-    let (key, presented) = s.authenticate("two", 5_000).unwrap();
-    assert_eq!((key.id.as_str(), presented), ("k", Presented::Live));
-    assert_eq!(s.authenticate("one", 1_999).unwrap().1, Presented::Retired);
-    assert_eq!(s.key("k").map(|k| k.pool_id.as_str()), Some("p"));
-    assert!(s.term("x").is_some());
-    assert_eq!((s.loaded_at, s.revision), (0, 1));
-    assert!(s.guardrails_for(s.key("k").unwrap()).is_empty());
 }

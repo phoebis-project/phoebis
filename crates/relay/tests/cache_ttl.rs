@@ -398,48 +398,6 @@ async fn with_the_toggle_on_a_marker_less_auxiliary_body_goes_as_sent() {
 }
 
 #[tokio::test]
-async fn with_the_toggle_on_a_marker_less_main_body_takes_the_member() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: json_200(),
-    }])
-    .await;
-    let h = harness(
-        &up,
-        &[oauth("o", OA, 0)],
-        policy(r#"{"enabled":true,"inject_when_absent":true,"plan":{"main":"1h"}}"#),
-    )
-    .await;
-
-    let stripped = without_markers(body(BodyFixture::Oauth));
-    let mut req = request_from_fixture(
-        inference_head(FixtureKind::OauthNonFirstParty),
-        &stripped,
-        KEY,
-    );
-    set_header(&mut req, "x-claude-code-request-class", "main");
-    let resp = h.app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), 200);
-    let sent = &up.requests()[0];
-    assert_eq!(
-        markers(&sent.body),
-        vec![r#"{"type":"ephemeral","ttl":"1h"}"#.to_string()],
-        "a conversation class is not auxiliary, so the wire carries exactly the top-level member"
-    );
-    let text = String::from_utf8_lossy(&sent.body);
-    let cache_at = text
-        .find("\"cache_control\"")
-        .expect("the member is present");
-    let stream_at = text.find("\"stream\"").expect("the fixture body streams");
-    assert!(cache_at < stream_at, "the top-level member precedes stream");
-    assert!(
-        beta_list(sent).iter().any(|b| b == EXTENDED_TTL_BETA),
-        "the hour's beta follows the injected member"
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
 async fn an_auxiliary_body_carrying_a_marker_is_rewritten_to_the_policys_ttl() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),

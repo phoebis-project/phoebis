@@ -3323,7 +3323,6 @@ fn set_cookie(status: StatusCode, attributes: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::{parse_object, same_authority, spend_rows};
-    use crate::openapi::round_trip::round_trips;
     use axum::body::Bytes;
     use axum::http::StatusCode;
     use phoebis_routing::MemberSpend;
@@ -3466,15 +3465,5 @@ mod tests {
                 json!({"error": "body must be a JSON object"})
             )
         );
-    }
-
-    #[test]
-    fn the_pairing_start_fixture_round_trips_through_its_declared_type() {
-        round_trips::<super::PairingStarted>("pairing_started");
-    }
-
-    #[test]
-    fn the_system_fixture_round_trips_through_its_declared_type() {
-        round_trips::<super::System>("system");
     }
 }

@@ -41,11 +41,6 @@ impl BodyBudget {
     fn shrink(&self, bytes: u64) {
         self.held.fetch_sub(bytes, Ordering::AcqRel);
     }
-
-    #[cfg(test)]
-    fn held(&self) -> u64 {
-        self.held.load(Ordering::Acquire)
-    }
 }
 
 /// Released on drop; `resize` moves it to the bytes the body turned out to hold (grown to an inflated size, it
@@ -123,11 +118,12 @@ mod tests {
         let first = budget.try_reserve(60).expect("under the cap");
         assert!(budget.try_reserve(41).is_none(), "past the cap");
         let second = budget.try_reserve(40).expect("exactly at the cap");
-        assert_eq!(budget.held(), 100);
+        assert!(budget.try_reserve(1).is_none(), "100 bytes held");
         drop(first);
-        assert_eq!(budget.held(), 40);
+        assert!(budget.try_reserve(60).is_some(), "40 bytes held");
+        assert!(budget.try_reserve(61).is_none(), "40 bytes held");
         drop(second);
-        assert_eq!(budget.held(), 0);
+        assert!(budget.try_reserve(100).is_some(), "nothing held");
     }
 
     #[test]
@@ -135,19 +131,23 @@ mod tests {
         let budget = BodyBudget::new(100);
         let mut reservation = budget.try_reserve(80).unwrap();
         assert_eq!(reservation.resize(10), Ok(()));
-        assert_eq!(budget.held(), 10);
+        assert!(budget.try_reserve(90).is_some(), "10 bytes held");
+        assert!(budget.try_reserve(91).is_none(), "10 bytes held");
         let other = budget.try_reserve(50).unwrap();
         assert_eq!(reservation.resize(51), Err(()), "51 and 50 pass the cap");
-        assert_eq!(
-            budget.held(),
-            60,
+        assert!(
+            budget.try_reserve(40).is_some(),
+            "a refused growth leaves the reservation as it was"
+        );
+        assert!(
+            budget.try_reserve(41).is_none(),
             "a refused growth leaves the reservation as it was"
         );
         assert_eq!(reservation.resize(50), Ok(()));
-        assert_eq!(budget.held(), 100);
+        assert!(budget.try_reserve(1).is_none(), "100 bytes held");
         drop(other);
         drop(reservation);
-        assert_eq!(budget.held(), 0);
+        assert!(budget.try_reserve(100).is_some(), "nothing held");
     }
 
     #[test]

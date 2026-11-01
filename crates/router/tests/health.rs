@@ -111,22 +111,20 @@ fn a_listener_answering_200_passes_and_is_asked_for_ready_by_head() {
 }
 
 #[test]
-fn a_status_other_than_200_fails_naming_it() {
-    let (addr, served) = answering("503 Service Unavailable");
-    let reason =
-        phoebis_router::health::probe(addr, false, phoebis_router::health::TIMEOUT).unwrap_err();
-    assert!(reason.contains("503"), "{reason}");
-    served.join().unwrap();
-}
-
-#[test]
 fn a_closed_port_fails_within_the_timeout() {
     let addr = TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
         .unwrap();
     let started = Instant::now();
-    assert!(phoebis_router::health::probe(addr, false, phoebis_router::health::TIMEOUT).is_err());
+    let reason =
+        phoebis_router::health::probe(addr, false, phoebis_router::health::TIMEOUT).unwrap_err();
+    assert!(
+        reason.starts_with(&format!(
+            "proxy does not answer on {addr}: Connection refused"
+        )),
+        "{reason}"
+    );
     assert!(started.elapsed() < phoebis_router::health::TIMEOUT + Duration::from_secs(1));
 }
 

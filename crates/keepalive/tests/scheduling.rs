@@ -274,32 +274,63 @@ async fn a_ledger_behind_hold_lifted_after_the_expiry_sends_no_probe() {
     );
 }
 
-#[tokio::test]
-async fn overage_under_prefer_plan_holds_and_under_allow_does_not() {
-    for (policy, held) in [
-        (OveragePolicy::PreferPlan, true),
-        (OveragePolicy::Never, true),
-        (OveragePolicy::Allow, false),
-    ] {
-        let mut r = armed(RigSpec {
-            accounts: vec![api_key("a", A, 0)],
-            pool: PoolSpec {
-                overage_policy: policy,
-                ..PoolSpec::default()
+/// A rig whose pool runs under `policy`, its account `a` reported in overage, at the tick main's first probe is due.
+async fn in_overage_at_the_due_probe(policy: OveragePolicy) -> Rig {
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        pool: PoolSpec {
+            overage_policy: policy,
+            ..PoolSpec::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.h.router
+        .report(Report::Overage {
+            account_id: "a".into(),
+            evidence: OverageEvidence {
+                in_use: true,
+                since: Some(r.now()),
+                // Ahead of the `now` the gate reads after the advance below: this test is about the policy,
+                // not the predicate's own reset or fallback handling.
+                reset: Some(r.now() + 1_000_000),
+                observed_at: r.now(),
+                source: EvidenceSource::Head,
+                incarnation: 1,
             },
-            ..RigSpec::default()
+            incarnation: 1,
         })
         .await;
+    settled(&r, |r| async move {
+        r.h.router
+            .overage("a")
+            .await
+            .unwrap()
+            .is_some_and(|e| e.in_use)
+    })
+    .await;
+    r.advance(270_000);
+    r.step().await;
+    r
+}
+
+#[tokio::test]
+async fn overage_under_prefer_plan_holds_and_under_allow_does_not() {
+    for policy in [OveragePolicy::PreferPlan, OveragePolicy::Never] {
+        let mut r = in_overage_at_the_due_probe(policy).await;
+        let status = r.status("main");
+        assert_eq!(
+            (policy, status.probes, status.reason),
+            (policy, 0, Reason::Overage)
+        );
         r.h.router
             .report(Report::Overage {
                 account_id: "a".into(),
                 evidence: OverageEvidence {
-                    in_use: true,
-                    since: Some(r.now()),
-                    // Ahead of the `now` the gate reads after the advance below: this test is about the policy,
-                    // not the predicate's own reset or fallback handling.
-                    reset: Some(r.now() + 1_000_000),
-                    observed_at: r.now(),
+                    in_use: false,
+                    since: None,
+                    reset: None,
+                    observed_at: r.now() + 1,
                     source: EvidenceSource::Head,
                     incarnation: 1,
                 },
@@ -311,55 +342,20 @@ async fn overage_under_prefer_plan_holds_and_under_allow_does_not() {
                 .overage("a")
                 .await
                 .unwrap()
-                .is_some_and(|e| e.in_use)
+                .is_none_or(|e| !e.in_use)
         })
         .await;
-        r.advance(270_000);
         r.step().await;
-        let status = r.status("main");
         assert_eq!(
-            (policy, status.probes, status.reason),
-            (
-                policy,
-                if held { 0 } else { 1 },
-                if held {
-                    Reason::Overage
-                } else {
-                    Reason::Scheduled
-                }
-            )
+            r.status("main").probes,
+            1,
+            "{policy:?}: ran once the overage ended"
         );
-        if held {
-            r.h.router
-                .report(Report::Overage {
-                    account_id: "a".into(),
-                    evidence: OverageEvidence {
-                        in_use: false,
-                        since: None,
-                        reset: None,
-                        observed_at: r.now() + 1,
-                        source: EvidenceSource::Head,
-                        incarnation: 1,
-                    },
-                    incarnation: 1,
-                })
-                .await;
-            settled(&r, |r| async move {
-                r.h.router
-                    .overage("a")
-                    .await
-                    .unwrap()
-                    .is_none_or(|e| !e.in_use)
-            })
-            .await;
-            r.step().await;
-            assert_eq!(
-                r.status("main").probes,
-                1,
-                "{policy:?}: ran once the overage ended"
-            );
-        }
     }
+    let status = in_overage_at_the_due_probe(OveragePolicy::Allow)
+        .await
+        .status("main");
+    assert_eq!((status.probes, status.reason), (1, Reason::Scheduled));
 }
 
 #[tokio::test]
@@ -1632,90 +1628,6 @@ async fn the_retention_rules_reach_a_paused_recipe() {
             .get("idle_limit")
             .copied(),
         Some(1)
-    );
-}
-
-/// The idle limit ends the recipe and keeps what it paid for: the probe stays among the kept ones under the pending label
-/// `idle_limit` with its funding and its coverage, and the first tick at its entry's end settles it under that label.
-#[tokio::test]
-async fn the_idle_limit_ends_the_recipe_with_its_probe_kept_pending_until_the_entry_lapses() {
-    let mut r = armed(RigSpec {
-        accounts: vec![api_key("a", A, 0)],
-        policy: KeepalivePolicy {
-            max_idle_seconds: 500,
-            ..RigSpec::default().policy
-        },
-        ..RigSpec::default()
-    })
-    .await;
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 1, "one probe before the limit");
-    r.advance(270_000);
-    r.step().await;
-    let status = r.status("main");
-    assert_eq!(
-        (
-            status.reason,
-            r.engine.stats().retained_bytes,
-            status.unanswered
-        ),
-        (Reason::IdleLimit, 0, 1),
-        "the recipe ended with its probe kept: {status:?}"
-    );
-    let (_, agents) = r.engine.persist_rows();
-    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
-    let kept = &payload["kept"];
-    assert_eq!(
-        (
-            kept.as_array().map(Vec::len),
-            kept[0]["pending"].as_str(),
-            kept[0]["kind"].as_str(),
-            kept[0]["in_overage"].as_bool(),
-            kept[0]["covered"].as_bool(),
-            kept[0]["unit"].as_str(),
-            kept[0]["entry_expires"].as_i64(),
-        ),
-        (
-            Some(1),
-            Some("idle_limit"),
-            Some("api_key"),
-            Some(false),
-            Some(true),
-            Some("usd"),
-            Some(NOW + 570_000)
-        ),
-        "{kept}"
-    );
-    r.advance(29_999);
-    r.step().await;
-    assert_eq!(
-        r.status("main").unanswered,
-        1,
-        "pending a millisecond before its entry ends"
-    );
-    r.advance(1);
-    r.step().await;
-    assert_eq!(r.status("main").unanswered, 0, "settled at its entry's end");
-    // The settlement reaches the ledger with the save that drops the probe, which the production flusher runs.
-    r.engine.flush_persisted().await;
-    let rows = wait_for(std::time::Duration::from_secs(5), || {
-        let rows =
-            r.db.read_blocking(|c| {
-                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
-            })
-            .unwrap();
-        rows.iter()
-            .any(|row| row.wasted_probes == 1)
-            .then_some(rows)
-    })
-    .await;
-    assert_eq!(
-        rows.iter()
-            .find(|row| row.wasted_probes == 1)
-            .unwrap()
-            .wasted_probe_reasons,
-        std::collections::BTreeMap::from([("idle_limit".to_string(), 1)])
     );
 }
 

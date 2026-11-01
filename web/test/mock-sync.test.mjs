@@ -2,16 +2,24 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { test } from 'node:test';
 import { render } from '../scripts/sync-mock.mjs';
-import * as d from './dist/api.js';
 import { same, shapeOf } from './shape.mjs';
+
+// The mock skips its draws by the local hour, so the file runs in UTC whatever the host's zone. `node --test` gives each
+// file a process of its own.
+process.env.TZ = 'UTC';
+// The mock draws its story from the clock it loads at, and the routing log's range and the allowance span read the clock
+// again on each call, so the file holds the instant the smoke run pins for its whole run.
+const AT = Date.parse('2026-09-16T14:30:00Z');
+Date.now = () => AT;
+const d = await import('./dist/api.js');
 
 const fixturesDir = new URL('./fixtures/', import.meta.url);
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8')).body;
 const names = readdirSync(fixturesDir).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)).sort();
 
 const camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
-const day = new Date(Date.now() - 86_400_000).toISOString();
-const now = new Date().toISOString();
+const day = new Date(AT - 86_400_000).toISOString();
+const now = new Date(AT).toISOString();
 const query = { from: day, groupBy: 'key', to: now };
 // Signed in as the admin: several rows write, and the gate refuses those writes to anyone else.
 const admin = async () => {
@@ -183,14 +191,11 @@ for (const [name, paths] of Object.entries(CLOSED)) {
  */
 const poolInputOf = ({ guardrails: _, ...p }) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, priority: m.priority })) });
 
-test('the mock refuses the affinity and the keepalive values the route refuses', async () => {
+test('the mock refuses the affinity values the route refuses', async () => {
   const api = await admin();
   const all = (await api.listPools()).find((p) => p.id === 'all');
   const refused = async (input, message) => assert.rejects(api.updatePool('all', input), (e) => e.status === 400 && e.message === message);
   await refused({ ...poolInputOf(all), affinityTtlSeconds: 30, keepalive: { ...all.keepalive, enabled: false } }, 'affinity_ttl_seconds is 0 or at least 60');
-  await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, maxIdleSeconds: 31_536_001 } }, 'keepalive.max_idle_seconds must be between 0 and 31536000, not 31536001');
-  await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, maxParkedSeconds: 59 } }, 'keepalive.max_parked_seconds must be between 60 and 604800, not 59');
-  await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, scheduledHorizonSeconds: 604_801 } }, 'keepalive.scheduled_horizon_seconds must be between 60 and 604800, not 604801');
   await refused({ ...poolInputOf(all), affinityTtlSeconds: 120 }, 'keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed');
   assert.equal((await api.listPools()).find((p) => p.id === 'all').affinityTtlSeconds, all.affinityTtlSeconds, 'a refused save stores nothing');
   const saved = await api.updatePool('all', { ...poolInputOf(all), windowCeiling: 0.8, keepalive: { ...all.keepalive, enabled: false }, returnToPlan: 'when_cold', slowDown: true, slowDownStretchSeconds: 2_400 });

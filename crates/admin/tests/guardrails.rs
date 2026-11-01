@@ -4,14 +4,13 @@
 //! bodies of a pool or a key.
 mod common;
 
-use std::collections::BTreeSet;
 use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
 use axum::Router;
 use common::{admin_parts_full, delete, get, json, login, patch, post, Captured, Full};
-use phoebis_guardrails::{presets, Condition, GuardrailAction, GuardrailMode, Preset};
+use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode, Preset};
 use phoebis_ledger::{BodyRecord, RequestRecord};
 use phoebis_store::GuardrailRow;
 use serde_json::{json as j, Value};
@@ -1284,25 +1283,24 @@ fn row_of(list: &Value, member: &str, id: &str) -> Value {
 async fn the_presets_route_answers_the_tables_current_versions() {
     let (parts, cookie) = seeded().await;
     let answer = show(&parts.app, &cookie, "/admin/guardrails/presets").await;
-    let ids: BTreeSet<&str> = presets().iter().map(|preset| preset.id).collect();
-    let expected: Vec<Value> = ids
+    let listed: Vec<(&str, u64)> = answer["presets"]
+        .as_array()
+        .unwrap()
         .iter()
-        .map(|id| {
-            let preset = Preset::current(id).unwrap();
-            j!({
-                "id": preset.id,
-                "version": preset.version,
-                "name": preset.name,
-                "description": preset.description,
-                "measured_on": preset.measured_on,
-                "suggested_mode": preset.suggested_mode.as_str(),
-                "conditions": views(&preset.conditions),
-            })
+        .map(|preset| {
+            (
+                preset["id"].as_str().unwrap(),
+                preset["version"].as_u64().unwrap(),
+            )
         })
         .collect();
     assert_eq!(
-        answer,
-        j!({"presets": expected}),
+        listed,
+        [
+            ("away-recap", 1),
+            ("prompt-suggestion", 1),
+            ("subagent-status-summary", 1)
+        ],
         "one entry per preset at its current version, ordered by id"
     );
     let entry = row(&answer, "presets", SUMMARY);

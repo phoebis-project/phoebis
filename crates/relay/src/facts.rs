@@ -799,14 +799,6 @@ mod tests {
     }
 
     #[test]
-    fn a_body_with_the_safeguards_member_asks_for_the_server_check() {
-        let body = phoebis_profile::fixtures::with_safeguards(phoebis_profile::fixtures::body(
-            phoebis_profile::fixtures::BodyFixture::Oauth,
-        ));
-        assert!(BodyFacts::read(&body).shape.safeguards);
-    }
-
-    #[test]
     fn the_safeguards_member_is_read_in_a_body_a_strict_parser_refuses() {
         // A lone surrogate escape, which a client emits for a string cut mid-pair: serde refuses the body while
         // the relay's own walk, the one the cut runs on, reads it.

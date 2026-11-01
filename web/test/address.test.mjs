@@ -42,6 +42,7 @@ test('the Sessions codec writes the filters off their defaults alone, in the bar
   const set = { ...defaults, companion: true, released: true };
   assert.equal(write(d.SESSIONS_CODEC, set), 'companion=1&released=1');
   assert.deepEqual(read(d.SESSIONS_CODEC, 'companion=1&age=6h&released=1'), set);
+  assert.equal(write(d.SESSIONS_CODEC, { ...defaults, companion: true, dir: 'asc', released: true, sort: 'activity' }), 'companion=1&released=1&sort=activity&dir=asc', 'the control follows the filters in the bar');
   const reset = Object.fromEntries(d.SESSIONS_DIMENSIONS.map((x) => [x.field, d.emptyValue(x)]));
   assert.equal(write(d.SESSIONS_CODEC, { ...set, finished: true, ...reset }), '');
 });
@@ -59,7 +60,6 @@ test("both logs' codecs carry the agent id as agent_id, and agent stays the Requ
 
 test("the Accounts codec carries the sort's direction after its key, written only where it differs from the key's own", () => {
   const bare = read(d.ACCOUNTS_CODEC, '');
-  assert.deepEqual(bare, { dir: '', search: '', sort: 'name', status: 'all' });
   assert.equal(write(d.ACCOUNTS_CODEC, { ...bare, dir: 'asc', sort: 'usage' }), 'sort=usage&dir=asc');
   assert.equal(write(d.ACCOUNTS_CODEC, { ...bare, dir: '', sort: 'usage' }), 'sort=usage', "the key's own direction leaves the address");
   assert.equal(write(d.ACCOUNTS_CODEC, { ...bare, dir: '', sort: 'name' }), '');
@@ -69,38 +69,6 @@ test("the Accounts codec carries the sort's direction after its key, written onl
   assert.equal(d.sortDirOf(d.ACCOUNT_SORT_KEYS, { dir: 'asc', sort: 'usage' }), 'asc');
   assert.deepEqual(d.sortAddressOf(d.ACCOUNT_SORT_KEYS, { dir: 'desc', sort: 'usage' }), { dir: '', sort: 'usage' });
   assert.deepEqual(d.sortAddressOf(d.ACCOUNT_SORT_KEYS, { dir: 'asc', sort: 'usage' }), { dir: 'asc', sort: 'usage' });
-  assert.deepEqual(
-    d.ACCOUNT_SORT_KEYS.map((k) => [k.id, k.label, k.defaultDir]),
-    [
-      ['name', 'Name', 'asc'],
-      ['reset', 'Soonest reset', 'asc'],
-      ['usage', 'Most used', 'desc'],
-      ['status', 'Status', 'asc'],
-    ],
-  );
-});
-
-test("the Sessions codec carries the sort's direction after its key and the filters, each written only off its default, both keys newest first", () => {
-  const bare = read(d.SESSIONS_CODEC, '');
-  assert.deepEqual([bare.sort, bare.dir], ['created', '']);
-  assert.equal(write(d.SESSIONS_CODEC, { ...bare, dir: '', sort: 'activity' }), 'sort=activity', "the key's own direction leaves the address");
-  assert.equal(write(d.SESSIONS_CODEC, { ...bare, dir: 'asc', sort: 'activity' }), 'sort=activity&dir=asc');
-  assert.equal(write(d.SESSIONS_CODEC, { ...bare, dir: 'asc' }), 'dir=asc');
-  assert.equal(write(d.SESSIONS_CODEC, { ...bare, companion: true, dir: 'asc', released: true, sort: 'activity' }), 'companion=1&released=1&sort=activity&dir=asc', 'the control follows the filters in the bar');
-  assert.equal(read(d.SESSIONS_CODEC, 'dir=bogus').dir, '');
-  assert.equal(read(d.SESSIONS_CODEC, 'sort=bogus').sort, 'created');
-  // A bare address and a bogus direction both mean the key's own direction, newest first.
-  assert.equal(d.sortDirOf(d.SESSION_SORT_KEYS, bare), 'desc');
-  assert.equal(d.sortDirOf(d.SESSION_SORT_KEYS, read(d.SESSIONS_CODEC, 'sort=activity&dir=bogus')), 'desc');
-  assert.equal(d.sortDirOf(d.SESSION_SORT_KEYS, read(d.SESSIONS_CODEC, 'sort=activity&dir=asc')), 'asc');
-  assert.deepEqual(d.sortAddressOf(d.SESSION_SORT_KEYS, { dir: 'desc', sort: 'activity' }), { dir: '', sort: 'activity' });
-  assert.deepEqual(
-    d.SESSION_SORT_KEYS.map((k) => [k.id, k.label, k.defaultDir]),
-    [
-      ['created', 'Created', 'desc'],
-      ['activity', 'Last activity', 'desc'],
-    ],
-  );
 });
 
 test('every filter at its default leaves a bare address', () => {
@@ -158,9 +126,6 @@ test('the Accounts codec round-trips its search, sort and status and writes noth
   assert.deepEqual(read(d.ACCOUNTS_CODEC, ''), { dir: '', search: '', sort: 'name', status: 'all' });
   assert.equal(write(d.ACCOUNTS_CODEC, read(d.ACCOUNTS_CODEC, '')), '');
   for (const sort of ['name', 'reset', 'usage', 'status']) assert.equal(read(d.ACCOUNTS_CODEC, `sort=${sort}`).sort, sort, sort);
-  // Every status the list labels is a value of the codec, so a link to any of them lands on its rows.
-  assert.ok(d.ACCOUNT_STATUSES.length > 1);
-  for (const status of d.ACCOUNT_STATUSES) assert.equal(read(d.ACCOUNTS_CODEC, `status=${status}`).status, status, status);
   assert.deepEqual(read(d.ACCOUNTS_CODEC, 'sort=newest&status=disabled'), { dir: '', search: '', sort: 'name', status: 'all' });
 });
 
@@ -216,9 +181,8 @@ test('an unknown key is absent after a round trip', () => {
   assert.equal(write(d.KEYS_CODEC, read(d.KEYS_CODEC, 'pool=jobs&search=lap')), 'search=lap');
 });
 
-test("addressWindow reads a preset from now and a custom span as its own instants, apart from the quota helper's windowOf", () => {
+test('addressWindow reads a preset from now and a custom span as its own instants', () => {
   const now = Date.parse('2026-10-10T16:30:00Z');
-  assert.equal(typeof d.windowOf, 'function');
   assert.deepEqual(d.addressWindow(read(d.ROUTING_LOG_CODEC, 'range=6h').range, d.RANGE_PRESETS, '1h', now), { from: now - 6 * 3_600_000, to: now });
   assert.deepEqual(d.addressWindow(read(d.ROUTING_LOG_CODEC, '').range, d.RANGE_PRESETS, '1h', now), { from: now - 3_600_000, to: now });
   assert.deepEqual(d.addressWindow(CUSTOM, d.RANGE_PRESETS, '1h', now), { from: Date.parse(FROM), to: Date.parse(TO) });

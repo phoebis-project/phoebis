@@ -144,28 +144,61 @@ async fn released(
     }
 }
 
-/// How the fresh pin leaves: a client error the caller reads releases it, and an authentication failure the
-/// router answers itself fails over, which invalidates it when the failed refresh left the account unmarked (the
-/// token endpoint's `503` here), so the session's next placement is a move.
-#[derive(Clone, Copy)]
-enum Released {
-    ClientError,
-    Failover,
+/// A client error the caller reads releases the fresh pin, so the session's next request is a fresh placement.
+async fn a_fresh_pins_client_error_releases_it(status: u16, respond: Respond) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond,
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        status,
+        "{status}: the caller's answer"
+    );
+    drain(resp).await;
+    assert_eq!(
+        released(&mut events, "s1").await,
+        vec!["client_error"],
+        "{status}: the release names the one reason"
+    );
+    assert!(
+        !pinned(&h, "s1").await,
+        "{status}: the router holds no pin for the session"
+    );
+    let trace = next_trace(&h, "s1").await;
+    assert_eq!(
+        (trace.renewed, trace.moved),
+        (false, None),
+        "{status}: the session's next request is a fresh placement"
+    );
+    up.shutdown().await;
 }
 
-/// `held` is whether the token endpoint's `503` holds the request on the account for the floor, which the test
-/// steps past.
-async fn a_fresh_pins_client_error_ends_as_the_variant_says(
-    status: u16,
-    respond: Respond,
-    answer: u16,
-    released_by: Released,
-    held: bool,
-) {
+#[tokio::test]
+async fn a_fresh_pins_400_releases_it_and_the_sessions_next_request_is_a_fresh_placement() {
+    a_fresh_pins_client_error_releases_it(400, json(400, INVALID_REQUEST)).await;
+}
+
+/// An authentication failure the router answers itself fails over, which invalidates the fresh pin when the failed
+/// refresh left the account unmarked (the token endpoint's `503` here), so the session's next placement is a move.
+#[tokio::test]
+async fn a_fresh_pins_401_fails_over_and_the_sessions_next_placement_moves_off_it() {
     let up = FakeUpstream::start(vec![
         Rule {
             path_prefix: "/v1/messages".into(),
-            respond,
+            respond: json(
+                401,
+                r#"{"type":"error","error":{"type":"authentication_error","message":"expired"}}"#,
+            ),
         },
         // A 401 is refreshed first; a token endpoint that fails leaves the account to fail over.
         Rule {
@@ -179,124 +212,61 @@ async fn a_fresh_pins_client_error_ends_as_the_variant_says(
     let app = h.app.clone();
     let inflight =
         tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
-    if held {
-        step_to_backoff(&h, &up, "a").await;
-    }
+    // The token endpoint's `503` holds the request on the account for the floor, which the test steps past.
+    step_to_backoff(&h, &up, "a").await;
     let resp = inflight.await.unwrap();
-    assert_eq!(
-        resp.status().as_u16(),
-        answer,
-        "{status}: the caller's answer"
-    );
+    assert_eq!(resp.status().as_u16(), 503, "the caller's answer");
     drain(resp).await;
-    match released_by {
-        Released::ClientError => {
-            assert_eq!(
-                released(&mut events, "s1").await,
-                vec!["client_error"],
-                "{status}: the release names the one reason"
-            );
-            assert!(
-                !pinned(&h, "s1").await,
-                "{status}: the router holds no pin for the session"
-            );
-            let trace = next_trace(&h, "s1").await;
-            assert_eq!(
-                (trace.renewed, trace.moved),
-                (false, None),
-                "{status}: the session's next request is a fresh placement"
-            );
-        }
-        Released::Failover => {
-            wait_for_async(Duration::from_secs(5), || async {
-                (!pinned(&h, "s1").await).then_some(())
-            })
-            .await;
-            let trace = next_trace(&h, "s1").await;
-            assert_eq!(
-                (trace.renewed, trace.moved),
-                (false, Some("mark")),
-                "{status}: the session's next placement moves off the invalidated pin"
-            );
-            // The token endpoint's 503 left the account unmarked, so the relay reported no mark to name.
-            loop {
-                match next_event(&mut events).await {
-                    RouterEvent::PinMigrated {
-                        session_id,
-                        reason,
-                        cause,
-                        ..
-                    } if session_id == "s1" => {
-                        assert_eq!(
-                            (reason.as_str(), cause),
-                            ("mark", None),
-                            "{status}: a failover with neither a cooldown nor a mark moves with no cause"
-                        );
-                        break;
-                    }
-                    _ => {}
-                }
+    wait_for_async(Duration::from_secs(5), || async {
+        (!pinned(&h, "s1").await).then_some(())
+    })
+    .await;
+    let trace = next_trace(&h, "s1").await;
+    assert_eq!(
+        (trace.renewed, trace.moved),
+        (false, Some("mark")),
+        "the session's next placement moves off the invalidated pin"
+    );
+    // The token endpoint's 503 left the account unmarked, so the relay reported no mark to name.
+    loop {
+        match next_event(&mut events).await {
+            RouterEvent::PinMigrated {
+                session_id,
+                reason,
+                cause,
+                ..
+            } if session_id == "s1" => {
+                assert_eq!(
+                    (reason.as_str(), cause),
+                    ("mark", None),
+                    "a failover with neither a cooldown nor a mark moves with no cause"
+                );
+                break;
             }
+            _ => {}
         }
     }
     up.shutdown().await;
-}
-
-#[tokio::test]
-async fn a_fresh_pins_400_releases_it_and_the_sessions_next_request_is_a_fresh_placement() {
-    a_fresh_pins_client_error_ends_as_the_variant_says(
-        400,
-        json(400, INVALID_REQUEST),
-        400,
-        Released::ClientError,
-        false,
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn a_fresh_pins_401_fails_over_and_the_sessions_next_placement_moves_off_it() {
-    a_fresh_pins_client_error_ends_as_the_variant_says(
-        401,
-        json(
-            401,
-            r#"{"type":"error","error":{"type":"authentication_error","message":"expired"}}"#,
-        ),
-        503,
-        Released::Failover,
-        true,
-    )
-    .await;
 }
 
 /// A 403 that is neither an authentication nor a permission error, as an edge in front of the upstream
 /// answers, commits as the client's own to read.
 #[tokio::test]
 async fn a_fresh_pins_403_releases_it_and_the_sessions_next_request_is_a_fresh_placement() {
-    a_fresh_pins_client_error_ends_as_the_variant_says(
+    a_fresh_pins_client_error_releases_it(
         403,
         Respond::Json {
             status: 403,
             headers: vec![("content-type".into(), "text/html".into())],
             body: b"<html><body><h1>403 Forbidden</h1></body></html>".to_vec(),
         },
-        403,
-        Released::ClientError,
-        false,
     )
     .await;
 }
 
 #[tokio::test]
 async fn a_fresh_pins_404_releases_it_and_the_sessions_next_request_is_a_fresh_placement() {
-    a_fresh_pins_client_error_ends_as_the_variant_says(
-        404,
-        json_404_plain(),
-        404,
-        Released::ClientError,
-        false,
-    )
-    .await;
+    a_fresh_pins_client_error_releases_it(404, json_404_plain()).await;
 }
 
 #[tokio::test]

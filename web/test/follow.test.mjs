@@ -572,8 +572,6 @@ test("Next from the first page keeps the first page's cursor on the stack, and P
 });
 
 test('an ended span polls nothing', () => {
-  assert.equal(d.effectiveInterval(5_000, true), 0);
-  assert.equal(d.effectiveInterval(5_000, false), 5_000);
   const clock = frozen();
   const f = follow({ intervalMs: d.effectiveInterval(5_000, true) });
   act(() => clock.tick(5_000));
@@ -616,13 +614,6 @@ test('the instant the page took its range moves with the range alone, so a filte
   act(() => clock.tick(1_000));
   act(() => root.render(h(Taken, { range: { from: '', preset: '6h', to: '' } })));
   assert.equal(seen.at(-1), ORIGIN + 121_000, 'a preset is taken when it is chosen and kept while it stands');
-});
-
-test('a poll and an older page on a custom span read to the span\'s own end, and a preset reads up to the instant given', () => {
-  const end = Date.UTC(2026, 8, 16, 13, 0);
-  const polled = Date.UTC(2026, 8, 16, 14, 30, 5);
-  assert.equal(d.readEnd(true, end, polled), end);
-  assert.equal(d.readEnd(false, end, polled), polled);
 });
 
 test("a preset poll under a watermark sends no end, so the route reads to its own clock, and a custom range's poll keeps its end and marks it fixed", async () => {

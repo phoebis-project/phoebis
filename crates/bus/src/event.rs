@@ -711,10 +711,4 @@ mod tests {
         // "é" is two bytes and starts at the last byte the bound keeps, so the cut lands before it.
         assert_eq!(user_agent_cut(&format!("{under}é")), under);
     }
-
-    #[test]
-    fn the_classifier_word_is_client_and_the_default_facts_carry_none() {
-        assert_eq!(Classifier::Client.as_str(), "client");
-        assert!(ClientFacts::default().classifier.is_none());
-    }
 }

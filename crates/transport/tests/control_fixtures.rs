@@ -147,14 +147,27 @@ async fn a_timeout_after_the_body_was_handed_over_is_not_unreachable() {
     let resolver: Resolver =
         Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
     let client = ControlClient::new(profile, b.build(), resolver);
-    let error = client
-        .send(
-            token_request(),
-            "platform.claude.com",
-            Duration::from_millis(300),
-        )
+    let sending = tokio::spawn(async move {
+        client
+            .send(
+                token_request(),
+                "platform.claude.com",
+                Duration::from_secs(60),
+            )
+            .await
+            .map(|_| ())
+    });
+    // The handshake and the write run on the real clock, which the timeout outlasts. The clock stops once the
+    // upstream holds the whole request, and with nothing left to arrive on the socket the paused runtime moves it
+    // straight to the timeout.
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        (!up.requests().is_empty()).then_some(())
+    })
+    .await;
+    tokio::time::pause();
+    let error = sending
         .await
-        .map(|_| ())
+        .unwrap()
         .expect_err("the gated upstream never answers");
     assert!(matches!(error, TransportError::Io(_)), "{error:?}");
     up.shutdown().await;

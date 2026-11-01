@@ -184,15 +184,6 @@ fn skipped_now(r: &Rig) -> u64 {
     .sum()
 }
 
-/// The due probes the ledger counts as withheld, once `want` of them have landed.
-async fn skipped(r: &Rig, want: u64) -> u64 {
-    wait_for(Duration::from_secs(5), || {
-        let total = skipped_now(r);
-        (total == want).then_some(total)
-    })
-    .await
-}
-
 /// The wasted probes the ledger has settled, by reason, once `probes` of them have landed.
 async fn wasted(r: &Rig, probes: u64) -> BTreeMap<String, u64> {
     wait_for(Duration::from_secs(5), || {
@@ -337,22 +328,6 @@ async fn an_idle_window_above_the_break_even_runs_to_its_set_limit() {
         &mut r,
         "main",
         start + 3_600_000,
-        Reason::IdleLimit,
-        "idle_limit",
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn a_zero_idle_window_resolves_to_the_break_even() {
-    let mut r = rig(plan(policy(|p| p.max_idle_seconds = 0))).await;
-    r.observe("main").await;
-    let start = r.now();
-    r.state("main", "idle");
-    ends_at(
-        &mut r,
-        "main",
-        start + 11_760_000,
         Reason::IdleLimit,
         "idle_limit",
     )
@@ -602,10 +577,10 @@ async fn a_horizon_hold_ends_expired_once_its_entry_lapses_and_shows_no_probe_du
         BTreeMap::from([("horizon".to_string(), held.probes)]),
         "the hold settled every probe, so the lapse settles none"
     );
-    assert_eq!(skipped(&r, 1).await, 1, "the withheld probe counts once");
-    // The ledger takes its rows a moment after the tick, so a second count would land behind the first: the total has
-    // to hold at one a while.
-    fake_upstream::stays_for(Duration::from_millis(200), || skipped_now(&r) == 1).await;
+    // The ledger takes its rows a moment after the tick, so a second count would land behind the first: the count is
+    // read once the ledger's shutdown has landed every row it was sent.
+    r.ledger.clone().shutdown().await.unwrap();
+    assert_eq!(skipped_now(&r), 1, "the withheld probe counts once");
 }
 
 #[tokio::test]

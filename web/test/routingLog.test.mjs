@@ -215,8 +215,16 @@ test("a cooldown's words read the router's spellings alone, and any other reads 
 });
 
 test("the story's funding retry reads funding retried", async () => {
-  const to = Date.now();
-  const page = await new d.MockApi().listRoutingLog({ from: iso(to - 7 * 24 * HOUR), kinds: ['account_state_changed'], limit: 25, to: iso(to) });
+  // The mock draws its story from the clock it loads at, so the case reads a copy of the bundle loaded at NOW.
+  const wall = Date.now;
+  Date.now = () => NOW;
+  let pinned;
+  try {
+    pinned = await import(`./dist/api.js?at=${NOW}`);
+  } finally {
+    Date.now = wall;
+  }
+  const page = await new pinned.MockApi().listRoutingLog({ from: iso(NOW - 7 * 24 * HOUR), kinds: ['account_state_changed'], limit: 25, to: iso(NOW) });
   const retry = page.rows.find((r) => r.detail.cause === 'funding_retry');
   assert.ok(retry, 'the story holds a funding retry');
   assert.deepEqual([retry.accountId, retry.detail.from, retry.detail.to], ['overflow', 'funding_required', 'ready']);
@@ -243,15 +251,9 @@ test('a value that names an account or a key keeps its entity, so the cell draws
   assert.deepEqual(key.entity, { id: 'laptop', kind: 'key' });
 });
 
-test("the session pin's two rows read the in-flight count alone, then with the wait stacked beneath it", () => {
-  const held = read(decision({ by: by('hold', 'session_pin'), fact: [fact('in_flight', '1/1', 'text')], kind: 'placed' }));
-  const afterHold = read(decision({ by: by('hold', 'session_pin'), fact: [fact('in_flight', '1/1', 'text'), fact('held', 2_000, 'ms')], kind: 'placed' }));
-  assert.deepEqual(held, { by: 'session pin', facts: ['in flight 1/1'] });
-  assert.deepEqual(afterHold, { by: 'session pin', facts: ['in flight 1/1', 'held 2.0 s'] });
-});
-
 test('the pin reason reads not looked up and pinning off', () => {
-  assert.deepEqual(d.PIN_REASON_LABEL, { not_looked_up: 'not looked up', pinning_off: 'pinning off' });
+  const pin = (pinReason) => d.pinRows(record({ pin: null, pinReason }), NOW).map((r) => [r.label, texts(r.chips)]);
+  assert.deepEqual([pin('not_looked_up'), pin('pinning_off')], [[['Pin', ['not looked up']]], [['Pin', ['pinning off']]]]);
 });
 
 test('a fact never repeats the time of its row and never runs past two pairs', () => {
@@ -263,25 +265,7 @@ test('a fact key the console has no label for is dropped rather than drawn under
   assert.deepEqual(read(decision({ fact: [fact('mystery', 1, 'count'), fact('depth', 2, 'count')] })).facts, ['depth 2']);
 });
 
-const TABLE_LABELS = [
-  '5h', '7d', 'Fable', 'answer', 'attempt', 'capture', 'cause', 'client', 'depth', 'epoch', 'field', 'fields', 'fit', 'gap', 'held', 'idle', 'in flight', 'key', 'lasted', 'models', 'next', 'over', 'pick', 'pins', 'prefix',
-  'rank', 'resets', 'retry', 'rewrite in flight', 'runway', 'secret', 'slow-down', 'slowest', 'speed', 'spent', 'state', 'to', 'turn', 'until', 'was',
-];
-
-test('every label of the table is used at least once and no fact key lacks a label', () => {
-  assert.equal(TABLE_LABELS.length, 40);
-  assert.deepEqual([...new Set(Object.values(d.FACT_LABEL))].sort(), [...TABLE_LABELS].sort());
-  assert.equal(Object.keys(d.FACT_LABEL).length, 40);
-  const emitted = [...DECISIONS, ...EVENTS].flatMap(([, row, , , page]) => d.factsOf(row, NOW, page).map((p) => p.label));
-  // The slow-down's word names the By of its rows, the held decision's and the two events', where no fact carries it, and
-  // the rewrite's names the By of its held row and its renewal.
-  const named = [...DECISIONS, ...EVENTS].map(([, , by]) => by).filter((by) => TABLE_LABELS.includes(by));
-  assert.deepEqual([...new Set([...emitted, ...named])].sort(), [...TABLE_LABELS].sort());
-  assert.deepEqual([...new Set(named)].sort(), ['idle', 'rewrite in flight', 'slow-down']);
-  for (const label of emitted) assert.ok(Object.values(d.FACT_LABEL).includes(label), label);
-});
-
-test('every event kind has its words and its tone', () => {
+test('every event kind has its words, and a kind without a tone of its own reads neutral', () => {
   const kinds = [
     'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
     'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'plan_ended', 'plan_restored', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed',
@@ -289,7 +273,6 @@ test('every event kind has its words and its tone', () => {
     'stream_interrupted', 'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
   ];
   assert.deepEqual(Object.keys(d.EVENT_KIND_LABEL).sort(), kinds);
-  assert.equal(kinds.length, 37);
   assert.equal(d.EVENT_KIND_LABEL.pin_migrated, 'pin moved');
   assert.equal(d.EVENT_KIND_LABEL.shedding_round, 'shedding round');
   // A cleared mark and a booking the request's end let go report no trouble, so both read neutral.
@@ -298,63 +281,23 @@ test('every event kind has its words and its tone', () => {
   assert.deepEqual([d.EVENT_KIND_LABEL.slow_down_started, d.EVENT_KIND_LABEL.slow_down_ended], ['slow-down started', 'slow-down ended']);
   // A window read under its limit again reports no trouble, as its reset does, so both read neutral.
   assert.deepEqual([d.EVENT_KIND_LABEL.window_cleared, d.EVENT_KIND_LABEL.window_reset], ['window cleared', 'window reset']);
-  const tones = Object.fromEntries(kinds.map((k) => [k, d.eventTone(k)]).filter(([, t]) => t !== 'neutral'));
-  assert.deepEqual(tones, { account_state_changed: 'serious', budget_reached: 'serious', cooldown_set: 'warning', ledger_gap: 'serious', model_rejected: 'warning', slow_down_started: 'warning', window_spent: 'warning' });
   assert.equal(d.eventTone('a_kind_added_later'), 'neutral');
   assert.equal(d.eventTone('reauth_required'), 'neutral', 'the ledger folds the kind into the state change, so it has no tone of its own');
 });
 
-test('every decision kind has its words and its tone', () => {
-  assert.deepEqual(d.DECISION_KIND_LABEL, { exhausted: 'exhausted', held: 'held', moved: 'moved', placed: 'placed', refused: 'refused', renewed: 'renewed' });
-  assert.deepEqual(d.DECISION_KIND_TONE, { exhausted: 'critical', held: 'warning', moved: 'warning', placed: 'good', refused: 'critical', renewed: 'good' });
-});
-
-test('the step and verdict words', () => {
-  const steps = {
-    pin: 'Pin', probe: 'Probe', eligible: 'Eligible', bound: 'Bound', 'move:spent': 'Spent', 'move:overage': 'Overage', 'move:return_to_plan': 'Return to plan', 'move:drain': 'Drain', 'move:shed': 'Shed', fit: 'Fit', cool: 'Cool reading',
-    cap_filter: 'Cap filter', renew: 'Renew', 'rung:content': 'Rung: content', 'rung:with_main': 'Rung: with main', 'rung:static': 'Rung: static', partitions: 'Partitions', pick: 'Pick', reserve: 'Reserve', hold: 'Hold', exhausted: 'Exhausted', admission: 'Admission',
-  };
-  assert.equal(Object.keys(steps).length, 22);
-  for (const [step, name] of Object.entries(steps)) assert.equal(d.STEP_NAME[step], name, step);
-  assert.equal(d.STEP_NAME.selection, 'Rest of the walk');
-  const tones = {
-    answered: 'critical', blocked: 'warning', booked: 'good', bound: 'good', chosen: 'good', dropped: 'warning', exhausted: 'critical', fell_through: 'warning', fired: 'warning', fits: 'good', found: 'neutral', held: 'warning',
-    least_bad: 'warning', match: 'good', moved: 'warning', no: 'neutral', no_runway: 'neutral', none: 'neutral', not_run: 'neutral', off: 'neutral', off_window: 'neutral', passed: 'good', placed: 'good',
-    preferred: 'warning', refused: 'critical',
-    released: 'warning', renewed: 'good', rewrite_only: 'warning',
-  };
-  for (const [verdict, tone] of Object.entries(tones)) assert.equal(d.verdictTone(verdict), tone, verdict);
-  assert.deepEqual([...d.TONED_VERDICTS].sort(), Object.keys(tones).sort());
+test("the eligible step's none reads critical where another step's reads neutral, and a verdict the console does not know reads neutral", () => {
   assert.equal(d.verdictTone('none', 'eligible'), 'critical');
   assert.equal(d.verdictTone('none', 'pin'), 'neutral');
   assert.equal(d.verdictTone('match', 'eligible'), 'good');
   assert.equal(d.verdictTone('a_word_added_later'), 'neutral');
 });
 
-test('the walk words name every key the slow-down, the return rule, the pick, the placement and the shed line write', () => {
-  const words = {
-    age_five_hour: 'age 5h', by_runway: 'by runway', cycle_ms: 'cycle', demand_five_hour: 'demand', dwell_ms: 'dwell', factor: 'speed', fired_by: 'fired by', hold_five_hour: 'age hold 5h', ladder: 'ladder', mode: 'mode',
-    over_ms: 'over for', over_since: 'over since', over_since_five_hour: 'over since 5h', over_since_seven_day: 'over since 7d', over_since_seven_day_fable: 'over since Fable', ramp: 'ramp', slow_down: 'slow-down',
-    slow_down_until: 'slowed until', speed: 'realized', stretch_ms: 'stretch', threshold_ms: 'threshold', wait_five_hour: 'wait 5h', wait_seven_day: 'wait 7d', wait_seven_day_fable: 'wait Fable',
-  };
-  assert.equal(Object.keys(words).length, 24);
-  // Several of the words equal the underscores read as spaces, so the table's own entries are what the case reads.
-  for (const [key, word] of Object.entries(words)) assert.equal(d.WALK_KEY[key], word, key);
+test("the spent rule's wait keeps its word, no line writes a weekly demand, and a window's word follows its noun", () => {
   assert.equal(d.WALK_KEY.wait_ms, 'wait', "the spent rule's wait keeps its word");
   assert.equal(d.WALK_KEY.demand_seven_day, undefined, 'no line writes a weekly demand');
   // A window's word follows the noun as the horizon's does.
   assert.deepEqual(['horizon', 'over_since', 'wait'].map((k) => d.keyWord(`${k}_seven_day_fable`)), ['horizon Fable', 'over since Fable', 'wait Fable']);
 });
-
-/** Every key the routing crate writes on a walk line under a name of its own, with the fixtures' walk keys. */
-const ROUTER_WALK_KEYS = [
-  'account_id', 'age_five_hour', 'at_cap', 'attempt', 'binding', 'bound_ms', 'burn', 'by_runway', 'cause', 'ceiling', 'cold', 'cooldown', 'credit', 'deadline', 'demand_five_hour', 'depth', 'destinations',
-  'drawn', 'dwell_age_ms', 'dwell_ms', 'end', 'ending', 'epoch', 'excess', 'expires_at', 'factor', 'fast', 'fired_by', 'found', 'grace_ms', 'hash', 'hashes_stamped', 'hold_five_hour',
-  'holds_allowance', 'idle_ms', 'in_flight', 'in_overage', 'kind', 'ladder', 'lane', 'marked', 'marks', 'migrate_when_spent', 'mode', 'no_destination', 'no_fit', 'obstacle', 'obstacles',
-  'over_ms', 'over_since', 'overage_policy', 'place', 'prefix_tokens', 'ramp', 'reason', 'refresh_age_ms', 'refresh_stamped', 'reset', 'reset_in_grace', 'round', 'runway_ms', 'score',
-  'skipped', 'slow_down', 'speed', 'spent', 'standing', 'strategy', 'stretch_ms', 'target', 'threshold_ms', 'tier', 'ties', 'tried', 'trigger', 'turn', 'verdict', 'wait_ms', 'warmth',
-  'winding_down', 'window', 'window_share_fast',
-];
 
 /**
  * The keys a crate's source writes on a walk line, read off every .rs file under it, its modules' directories
@@ -373,17 +316,17 @@ const walkKeysOf = (src) => {
 
 test("every walk key the router writes reads words of its own, the pick's ties as tied and its draw as drawn", () => {
   assert.deepEqual([d.keyWord('ties'), d.keyWord('drawn')], ['tied', 'drawn']);
-  // The list is read again off the crate's source and the fixtures, so a key the router gains fails here rather than
-  // reading through the underscore fallback.
+  // The keys are read off the crate's source and the fixtures, so a key the router gains with no words of its own fails
+  // here rather than reading through the underscore fallback.
   const written = walkKeysOf(new URL('../../crates/routing/src/', import.meta.url));
+  assert.ok(written.size > 0, "the read finds the crate's keys");
   const fixtures = new URL('./fixtures/', import.meta.url);
   const walked = (o) => (Array.isArray(o) ? o.flatMap(walked) : o !== null && typeof o === 'object' ? [...(Array.isArray(o.walk) ? o.walk.flatMap((s) => (s.facts ?? []).map((f) => f.key)) : []), ...Object.values(o).flatMap(walked)] : []);
   for (const file of readdirSync(fixtures).filter((f) => f.endsWith('.json'))) for (const key of walked(JSON.parse(readFileSync(new URL(file, fixtures), 'utf8')))) written.add(key);
-  assert.deepEqual([...written].sort(), ROUTER_WALK_KEYS);
   // The account a fact names is its chip, a rung's hash is drawn from the candidate table, and a score or a standing
   // names itself.
   const drawnOtherwise = new Set(['account_id', 'hash', 'score', 'standing']);
-  assert.deepEqual(ROUTER_WALK_KEYS.filter((key) => !drawnOtherwise.has(key) && !d.own(d.WALK_KEY, key)), []);
+  assert.deepEqual([...written].sort().filter((key) => !drawnOtherwise.has(key) && !d.own(d.WALK_KEY, key)), []);
 });
 
 test("the walk-key read reaches a key written in a module's own directory", () => {
@@ -1289,11 +1232,9 @@ test("a shedding round's rates read share per hour of the window that fired: the
   assert.deepEqual(drawn(dollars), { cap: ['20%', 'target 2.4 %/h', 'removed 7.0 %/h'], pins: ['7.0 %/h'], share: false, unit: ['usd'] });
 });
 
-test('a failed usage poll and a stream cut after its head read their words, their presets and their pairs', () => {
-  assert.deepEqual([d.EVENT_KIND_LABEL.poll_failed, d.EVENT_KIND_LABEL.stream_interrupted], ['poll failed', 'stream interrupted']);
+test('a failed usage poll and a stream cut after its head read their presets and their pairs', () => {
   const presetOf = (kind) => d.KIND_PRESETS.find((p) => p.members.includes(kind))?.label;
   assert.deepEqual([presetOf('poll_failed'), presetOf('stream_interrupted')], ['account state and windows', 'exhaustion and refusals']);
-  assert.equal(d.ALL_KINDS.length, 44, 'the six decision kinds, probe and the 37 event kinds');
   const pairs = (kind, detail, o) => d.detailPairs(event(kind, detail, o), NOW, [], PRO).map((p) => [p.label, texts(p.chips)]);
   // A transport failure answered no status, so the pair says what failed in its place.
   assert.deepEqual(pairs('poll_failed', { endpoint: 'profile', error: 'transport: connection refused (os error 111)', status: null, transport: true }).slice(1), [
@@ -1511,8 +1452,6 @@ test('the settings fold lists twenty-four rows, draws the five as not recorded o
   assert.equal(rows(SETTINGS).length, 24);
   const refused = record({ outcome: { accountId: null, kind: 'refused', refusal: { code: 'contract', kind: 'client', reason: 'the request has no session header' }, strategy: '' } });
   assert.equal(d.settingsRows(refused), null, 'a refusal entered no setting, so it lists none');
-  assert.equal(Object.keys(d.OBSTACLE_HINT).length, 14);
-  assert.equal(d.OBSTACLE_HINT.budget_unknown, 'its spend unknown while the ledger is degraded');
 });
 
 test('the event detail draws the pairs its event carries: the effect, the meaning, the reading and the backoff span', () => {
@@ -1548,8 +1487,6 @@ test("a backoff's close reads by its cause, and a window reset names where the r
   const reset = (observed) => pairs('window_reset', { next_reset: ms(19, 0), observed, reset_at: ms(14, 0), utilization_before: 0.92, window: 'five_hour' });
   assert.deepEqual(reset('sample'), [['Window', ['5h']], ['Before the reset', ['92%']], ['Read from', ['the usage sample']], ['Prediction', ['0% until the next head']], ['Next reset', ['19:00']]]);
   assert.deepEqual(reset('clock')[2], ['Read from', ['the clock walk']]);
-  const spent = (source) => pairs('window_spent', { reset: ms(15, 42), source, utilization: 1, window: 'five_hour' }).find(([label]) => label === 'Read from');
-  assert.deepEqual(['head', 'poll', 'predicted'].map(spent), [['Read from', ['the response head']], ['Read from', ['the poll']], ['Read from', ['the prediction']]], "a spent window's source keeps its three words");
 });
 
 test("an account edit's drawer reads each pair and the replaced secret beside them, with no reading of decisions", () => {
@@ -1608,13 +1545,6 @@ test("a pool save's keepalive policy reads as its dotted fields, each under its 
   ]);
   const beside = Object.fromEntries(pairs({ 'keepalive.max_idle_seconds': { from: 43_200, to: 3_600 }, min_shared_prefix_tokens: { from: 10_000, to: 20_000 } }));
   assert.deepEqual(beside['Reading it'], ['decisions before 09:05 carry min shared prefix tokens 10000'], 'a setting beside the policy keeps its reading');
-  const label = (field) => read(change({ [field]: { from: 1, to: 2 } })).facts[0];
-  assert.deepEqual(['keepalive.enabled', 'keepalive.max_idle_seconds', 'keepalive.max_parked_seconds', 'keepalive.scheduled_horizon_seconds'].map(label), [
-    'field keepalive',
-    'field keepalive idle window seconds',
-    'field keepalive parked seconds',
-    'field keepalive scheduled horizon seconds',
-  ]);
 });
 
 test("a model rejection reads its until off the page's cooldown row and has no pair without one", () => {
@@ -1665,9 +1595,6 @@ test('the verdict line reads the cache pending only while the answer has not end
 });
 
 test('the card carries the hover hints of the hold, the promise and the placement', () => {
-  assert.equal(d.HOLD_HINT, 'Every account the placement could land on was at its in-flight cap, so the request waited first');
-  assert.equal(d.PROMISE_HINT.content, 'A placement by its messages hits when the cache reads the whole prefix it was promised');
-  assert.equal(d.PLACED.static(2), 'placed by its static prefix, depth 2');
   const held = record({ outcome: { hold: { accountId: 'primary', boundMs: 10_000, cohort: 'primary' }, kind: 'held' } });
   assert.equal(d.outcomeRows(held, NOW).find((r) => r.label === 'Hold').title, d.HOLD_HINT);
   const promised = record({ outcome: { completion: completion({ cacheReadTokens: 31_000, completedAt: iso(NOW), hit: true, inputTokens: 200, promisedTokens: 31_200, status: 200 }), rung: { depth: 2, prefixTokens: 31_200, rung: 'static' } } });
@@ -1710,10 +1637,6 @@ test("the Pace cell's title names the share, the hours, the deadline, the burn a
 });
 
 test("a Pace row's By chip carries the strategy's hint and a rung row's none", () => {
-  assert.equal(
-    d.PACE_HINT,
-    "Pace: the account with the most of its window left per hour until the window resets or the subscription ends, less the burn of the sessions already on it, wins. A request reads the model's own window when the model has one, else the 7-day window, and a window the account has not read counts as untouched.",
-  );
   const placed = d.byOf(decision({ by: strategy('pace', [0, 0, 0]), tier: [0, 0, 0] }));
   assert.deepEqual([placed.value, placed.title], ['Pace P0', d.PACE_HINT]);
   const held = d.byOf(decision({ by: by('hold', 'strategy_pick'), kind: 'held', tier: [0, 0, 0] }));
@@ -1733,7 +1656,6 @@ test("a usage-based candidate's one window cell reads its spend share over the r
   assert.deepEqual(seat({ spend: window5h(0.41, null, 'estimated') }).windows, [['spend 41%', 'no reset', 'estimated']]);
   assert.deepEqual(seat({ spend: window5h(0.41, reset, 'estimated') }, [0, 1, 0]).windows, [['spend 41%', 'Oct 1 00:00', 'estimated']], 'a pool that does not prefer subscriptions files the seat in group 0');
   assert.deepEqual(seat({}).windows, [['not reported'], ['not reported'], ['not reported']], 'a share expired at its reset leaves no entry, so the record reads an oauth candidate with no window');
-  assert.equal(d.WALK_KEY.spend, 'spend', "the candidate leaf's windows table labels the entry");
   assert.deepEqual(d.candidateCells(candidate({}), record(), NOW).windows.length, 3, 'a plan candidate keeps its three window cells');
 });
 

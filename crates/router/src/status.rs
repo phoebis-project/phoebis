@@ -1154,12 +1154,6 @@ mod tests {
         );
 
         let system = fixture("system");
-        let dead: Vec<&str> = system["dead"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|d| d.as_str().unwrap())
-            .collect();
         assert!(
             lines[0].starts_with(&format!(
                 "phoebis {}, up ",
@@ -1167,14 +1161,8 @@ mod tests {
             )),
             "{screen}"
         );
-        if dead.is_empty() {
-            assert!(lines[0].ends_with(", ready"), "{screen}");
-        } else {
-            assert!(
-                lines[0].ends_with(&format!("not ready: {}", dead.join(", "))),
-                "{screen}"
-            );
-        }
+        // The captured system answer is ready and names no dead component.
+        assert!(lines[0].ends_with(", ready"), "{screen}");
         assert_eq!(
             lines[1],
             format!("  build {}", system["build"].as_str().unwrap()),
@@ -1187,20 +1175,20 @@ mod tests {
             "{screen}"
         );
 
-        let items = fixture("attention")["items"].as_array().unwrap().clone();
-        assert!(!items.is_empty());
-        let named: Vec<String> = items
-            .iter()
-            .map(|item| {
-                format!(
-                    "    {} {} since {}",
-                    item["kind"].as_str().unwrap(),
-                    item["subject"]["label"].as_str().unwrap(),
-                    hh_mm(item["since"].as_i64().unwrap())
-                )
-            })
-            .collect();
-        assert_eq!(block(&lines, "  attention:"), named, "{screen}");
+        // The captured items in their order, each `since` on the fixtures' clock in UTC.
+        assert_eq!(
+            block(&lines, "  attention:"),
+            [
+                "    pool_exhausted Main since 12:16",
+                "    ledger_record_parked Main since 12:16",
+                "    model_unpriced claude-opus-99 since 12:15",
+                "    meter_drift Business since 10:16",
+                "    wall_reached Business since 11:56",
+                "    destination_spent Business since 11:26",
+                "    shed_no_runway Main since 11:21",
+            ],
+            "{screen}"
+        );
 
         let pools_block = block(&lines, "pools");
         let accounts = fixture("accounts");
@@ -1213,41 +1201,10 @@ mod tests {
                 .map(|a| a["label"].as_str().unwrap().to_owned())
                 .unwrap()
         };
-        let mut pools = pools_answer["pools"].as_array().unwrap().clone();
-        pools.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        // `lab` and its two members, then `main` and the fixture's three members on priorities 0, 1 and 2.
         assert_eq!(
-            pools
-                .iter()
-                .map(|p| p["id"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            ["lab", "main"]
-        );
-        let mut at = 0;
-        for pool in &pools {
-            let header = pools_block[at];
-            assert!(
-                header.starts_with(&format!("  {} ", pool["id"].as_str().unwrap()))
-                    && header.contains(pool["status"].as_str().unwrap()),
-                "{screen}"
-            );
-            let mut members = pool["members"].as_array().unwrap().clone();
-            members.sort_by(|a, b| {
-                (a["priority"].as_i64(), a["account_id"].as_str())
-                    .cmp(&(b["priority"].as_i64(), b["account_id"].as_str()))
-            });
-            for (offset, member) in members.iter().enumerate() {
-                let line = pools_block[at + 1 + offset];
-                assert!(
-                    line.starts_with("    ")
-                        && line.contains(&label_of(member["account_id"].as_str().unwrap())),
-                    "{line}: {screen}"
-                );
-            }
-            at += 1 + members.len();
-        }
-        assert_eq!(
-            at,
             pools_block.len(),
+            7,
             "one line per pool and member: {screen}"
         );
         assert!(
@@ -1256,6 +1213,14 @@ mod tests {
                 && pools_block[2].starts_with("    Direct ")
                 && pools_block[3].starts_with("  main "),
             "the pools by id, a priority's members by account id: {screen}"
+        );
+        assert!(
+            pools_block[0].contains("degraded")
+                && pools_block[3].contains("active")
+                && pools_block[4].starts_with("    Business ")
+                && pools_block[5].starts_with("    Direct ")
+                && pools_block[6].starts_with("    Seat "),
+            "each pool's header carries its status and each member line its label: {screen}"
         );
         let cooldown_until = fixture("accounts")["accounts"]
             .as_array()
@@ -1918,30 +1883,5 @@ mod tests {
             ..fixture_reads()
         };
         assert_eq!(exit_code(&unread), 1, "a system answer that was not read");
-
-        let file_free = Listeners {
-            admin: "http://127.0.0.1:8081".to_owned(),
-            metrics: None,
-            proxy: None,
-            certificates: Vec::new(),
-        };
-        let screen = render(
-            &skipped,
-            &file_free,
-            "9.9.9",
-            "unknown",
-            now(),
-            &TimeZone::UTC,
-            false,
-        );
-        let lines: Vec<&str> = screen.lines().collect();
-        assert!(lines[0].ends_with(", ready"), "{screen}");
-        assert!(lines[1].starts_with("  build "), "{screen}");
-        assert_eq!(lines[2], "  admin http://127.0.0.1:8081", "{screen}");
-        assert_eq!(
-            lines[3], "  proxy: not probed, no configuration file names the listener",
-            "{screen}"
-        );
-        assert!(render_json(&skipped)["health"].is_null());
     }
 }

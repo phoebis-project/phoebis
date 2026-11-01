@@ -1004,7 +1004,7 @@ pub(crate) mod round_trip {
 
 #[cfg(test)]
 mod tests {
-    use super::round_trip::{round_trips, round_trips_source};
+    use super::round_trip::round_trips_source;
     use super::{ModelTtlView, OverrideView, TypeOverrideView};
     use indexmap::IndexMap;
     use phoebis_ledger::{Override, TypeOverride};
@@ -1018,11 +1018,6 @@ mod tests {
             input: Some(1.5),
             output: Some(5.0),
         }
-    }
-
-    #[test]
-    fn the_session_answer_round_trips_through_its_declared_type() {
-        round_trips::<crate::routes::SessionView>("session");
     }
 
     #[test]

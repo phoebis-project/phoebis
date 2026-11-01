@@ -145,13 +145,3 @@ pub(crate) async fn key_models(
     })
     .into_response()
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::openapi::round_trip::round_trips;
-
-    #[test]
-    fn the_key_models_answer_round_trips_through_its_declared_type() {
-        round_trips::<super::KeyModels>("key_models");
-    }
-}

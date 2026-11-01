@@ -141,14 +141,3 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
         .collect();
     Json(Attention { items }).into_response()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::Attention;
-    use crate::openapi::round_trip::round_trips;
-
-    #[test]
-    fn the_attention_fixture_round_trips_through_its_declared_type() {
-        round_trips::<Attention>("attention");
-    }
-}

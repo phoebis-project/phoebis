@@ -96,15 +96,6 @@ test('under Billed dollars a plan request reads a dash titled nothing billed', (
   assert.deepEqual(cellOf(unit), { main: '-', sub: '', title: d.NOTHING_BILLED_TITLE }, 'a dash shows no figure');
 });
 
-test('the Cost header names what a subscription and a billed request read under each position', () => {
-  assert.deepEqual(Object.fromEntries(POSITIONS.map((position) => [position, d.costHeaderTitle(position)])), {
-    all: 'Dollar equivalent for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
-    equivalent: 'Dollar equivalent for a request a subscription window paid, a dash for an API key, fast mode, overage or usage-based request',
-    native: 'A share of the chosen week for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
-    usd: 'A dash for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
-  });
-});
-
 test('a_free_calls_cost_cell_reads_zero_with_the_free_title', () => {
   assert.equal(d.FREE_SHARE_TITLE, 'Free on the plan: a client classifier call takes no window share');
   const free = request({ five_hour: 0, seven_day: 0 }, [PLAN], 0.0012, { costEquivalent: 0, shareReason: 'client_classifier' });

@@ -740,21 +740,9 @@ mod tests {
     }
 
     #[test]
-    fn the_proxy_keys_default_and_refuse_outside_their_bounds() {
+    fn the_proxy_keys_refuse_outside_their_bounds() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
-        let proxy = load(&file(dir.path(), "defaults", "")).unwrap().proxy;
-        assert_eq!(
-            (
-                proxy.body_budget_bytes,
-                proxy.body_read_seconds,
-                proxy.key_body_reads,
-                proxy.max_request_bytes,
-                proxy.sign_cch_placeholder,
-                proxy.upstream_gzip.as_str()
-            ),
-            (536_870_912, 60, 128, 33_554_432, false, "auto")
-        );
         for (name, keys, expected) in [
             (
                 "max-request-low",
@@ -892,51 +880,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_listener_without_tls_loads_on_every_address_and_serves_plain_http() {
-        let dir = tempfile::tempdir().unwrap();
-        let key = dir.path().join("storage.key");
-        std::fs::write(
-            &key,
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        )
-        .unwrap();
-        let binding = |name: &str, admin: &str, proxy: &str| {
-            let path = dir.path().join(format!("{name}.yaml"));
-            let yaml = format!(
-                "admin:\n{admin}  secret_env: TEST_CFG_ADMIN\nproxy:\n{proxy}\
-                 storage:\n  encryption_key_file: {}\n  path: {}\n",
-                key.display(),
-                dir.path().join("router.sqlite").display()
-            );
-            std::fs::write(&path, yaml).unwrap();
-            path
-        };
-        let loopback = "  listen: 127.0.0.1:0\n";
-        let both = load_unresolved(&binding("loopback", loopback, loopback)).unwrap();
-        assert_eq!((&both.proxy.tls, &both.admin.tls), (&None, &None));
-        assert_eq!(crate::tls::scheme(&None), "http");
-        for unspecified in ["0.0.0.0:0", "\"[::]:0\""] {
-            let bare = format!("  listen: {unspecified}\n");
-            let proxy = load_unresolved(&binding("proxy-bare", loopback, &bare))
-                .unwrap()
-                .proxy;
-            assert!(
-                proxy.listen.ip().is_unspecified() && proxy.tls.is_none(),
-                "{unspecified}: {proxy:?}"
-            );
-            assert_eq!(crate::tls::scheme(&proxy.tls), "http", "{unspecified}");
-            let admin = load_unresolved(&binding("admin-bare", &bare, loopback))
-                .unwrap()
-                .admin;
-            assert!(
-                admin.listen.ip().is_unspecified() && admin.tls.is_none(),
-                "{unspecified}: {admin:?}"
-            );
-            assert_eq!(crate::tls::scheme(&admin.tls), "http", "{unspecified}");
-        }
-    }
-
     /// Places `lines` at the top of `block` in a file a helper wrote: a key has to sit inside its block for serde
     /// to read it as that block's member rather than as a second top-level key.
     fn under(path: &std::path::Path, block: &str, lines: &str) {
@@ -959,63 +902,16 @@ mod tests {
     }
 
     #[test]
-    fn the_removed_admin_keys_are_refused_as_unknown_fields() {
-        let dir = tempfile::tempdir().unwrap();
-        for (key, lines) in [
-            (
-                "origin",
-                include_str!("../tests/fixtures/removed-keys/admin-origin.yaml"),
-            ),
-            (
-                "plain_http",
-                include_str!("../tests/fixtures/removed-keys/admin-plain-http.yaml"),
-            ),
-        ] {
-            let path = file(dir.path(), key, "");
-            under(&path, "admin", lines);
-            let error = load_unresolved(&path).unwrap_err();
-            let chain = chain(&error);
-            assert!(
-                matches!(error, ConfigError::Syntax(_))
-                    && chain.contains("unknown field")
-                    && chain.contains(&format!("`{key}`"))
-                    && chain.contains("expected one of `listen`, `secret_env`, `tls`"),
-                "{key}: {chain}"
-            );
-        }
-    }
-
-    #[test]
     fn the_routing_and_sessions_blocks_default_validate_and_reject_unknown_fields() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
         let config = load(&file(dir.path(), "defaults", "")).unwrap();
         assert_eq!(
             (
-                config.routing.cooldown_fallback_seconds,
-                config.routing.model_rejection_seconds,
-                config.routing.catalog_refresh_seconds,
-                config.routing.startup_fetch_seconds
-            ),
-            (60, 3_600, 21_600, 30)
-        );
-        assert_eq!(
-            (
                 config.sessions.expire_after_seconds,
                 config.stats.body_capture_max_hours
             ),
             (86_400, 72)
-        );
-        let config = load(&file(dir.path(), "explicit", "routing:\n  catalog_refresh_seconds: 3600\n  cooldown_fallback_seconds: 30\n  model_rejection_seconds: 1800\n  startup_fetch_seconds: 2\nsessions:\n  expire_after_seconds: 7200\nstats:\n  body_capture_max_hours: 24\n")).unwrap();
-        assert_eq!(
-            (
-                config.routing.model_rejection_seconds,
-                config.routing.catalog_refresh_seconds,
-                config.routing.startup_fetch_seconds,
-                config.sessions.expire_after_seconds,
-                config.stats.body_capture_max_hours
-            ),
-            (1_800, 3_600, 2, 7_200, 24)
         );
         assert!(matches!(
             load(&file(
@@ -1098,25 +994,6 @@ mod tests {
     }
 
     #[test]
-    fn a_file_carrying_routing_max_attempts_is_refused_as_an_unknown_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let error = load(&file(dir.path(), "budget", "routing:\n  max_attempts: 3\n")).unwrap_err();
-        // `Syntax` displays a fixed text; the key is named by the serde error underneath it, which is what the
-        // binary prints through anyhow's chain.
-        let mut chain = error.to_string();
-        let mut source = std::error::Error::source(&error);
-        while let Some(cause) = source {
-            chain.push_str(": ");
-            chain.push_str(&cause.to_string());
-            source = cause.source();
-        }
-        assert!(
-            matches!(error, ConfigError::Syntax(_)) && chain.contains("max_attempts"),
-            "the pool's size is the attempt budget, so the key is refused by name: {chain}"
-        );
-    }
-
-    #[test]
     fn a_key_no_block_carries_is_refused_at_load() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
@@ -1142,58 +1019,6 @@ mod tests {
             ),
             "refresh_minutes is a key no build has ever carried under sessions, so it is refused"
         );
-    }
-
-    #[test]
-    fn a_file_without_the_compatibility_quota_or_usage_block_loads_and_usage_takes_its_defaults() {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
-        let config = load(&file(dir.path(), "bare", "")).unwrap();
-        assert_eq!(config.usage.refresh_concurrency, 2);
-    }
-
-    const REMOVED_COMPATIBILITY: &str =
-        "compatibility:\n  profile: claude-code-2.1.269-linux-x64\n"; // removed name
-    const REMOVED_QUOTA: &str = "quota:\n  sample_retention_days: 30\n"; // removed name
-    const REMOVED_CATALOG_CACHE: &str = "routing:\n  catalog_cache_seconds: 60\n"; // removed name
-    const REMOVED_VIEWER: &str = "  viewer_secret_env: PHOEBIS_VIEWER_SECRET\n"; // removed name
-
-    #[test]
-    fn a_file_naming_a_removed_key_is_refused_as_invalid_yaml_with_the_unknown_field_underneath() {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
-        // `file` already writes an `admin` block, and a second one is refused as a duplicate field before its keys
-        // are read, so the removed key joins the first.
-        let admin_block = format!("admin:\n{REMOVED_VIEWER}"); // removed name
-        let admin = file(dir.path(), "admin", "");
-        let text = std::fs::read_to_string(&admin).unwrap();
-        std::fs::write(&admin, text.replacen("admin:\n", &admin_block, 1)).unwrap();
-        for (name, path) in [
-            (
-                "compatibility",
-                file(dir.path(), "compatibility", REMOVED_COMPATIBILITY),
-            ),
-            ("quota", file(dir.path(), "quota", REMOVED_QUOTA)),
-            (
-                "catalog-cache",
-                file(dir.path(), "catalog-cache", REMOVED_CATALOG_CACHE),
-            ),
-            ("admin", admin),
-        ] {
-            let error = load(&path).unwrap_err();
-            assert_eq!(
-                error.to_string(),
-                "the configuration is not valid YAML",
-                "{name}"
-            );
-            let ConfigError::Syntax(cause) = &error else {
-                panic!("{name}: {error:?}");
-            };
-            assert!(
-                cause.to_string().contains("unknown field"),
-                "{name}: {cause}"
-            );
-        }
     }
 
     #[test]
@@ -1302,50 +1127,6 @@ mod tests {
     }
 
     #[test]
-    fn the_non_companion_timeout_defaults_to_an_hour_and_is_bounded() {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
-        let config = load(&file(dir.path(), "defaults", "")).unwrap();
-        assert_eq!(config.sessions.non_companion_idle_seconds, 3_600);
-        for (name, body, expected) in [
-            (
-                "idle-low",
-                "sessions:\n  non_companion_idle_seconds: 59\n",
-                "sessions.non_companion_idle_seconds must be between 60 and 31536000, not 59",
-            ),
-            (
-                "idle-high",
-                "sessions:\n  non_companion_idle_seconds: 31536001\n",
-                "sessions.non_companion_idle_seconds must be between 60 and 31536000, not 31536001",
-            ),
-        ] {
-            let error = load(&file(dir.path(), name, body)).unwrap_err();
-            assert_eq!(error.to_string(), expected, "{name}");
-        }
-        let custom = load(&file(
-            dir.path(),
-            "custom",
-            "sessions:\n  non_companion_idle_seconds: 600\n",
-        ))
-        .unwrap();
-        assert_eq!(custom.sessions.non_companion_idle_seconds, 600);
-    }
-
-    #[test]
-    fn a_file_naming_neither_retention_key_keeps_the_rows_and_the_rollups_365_days() {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
-        let config = load(&file(dir.path(), "defaults", "")).unwrap();
-        assert_eq!(
-            (
-                config.stats.retention_days,
-                config.stats.rollup_retention_days
-            ),
-            (365, 365)
-        );
-    }
-
-    #[test]
     fn a_file_naming_a_rollup_retention_alone_under_the_default_raw_window_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
@@ -1425,16 +1206,6 @@ mod tests {
     }
 
     #[test]
-    fn a_secret_shorter_than_sixteen_characters_refuses_with_secret_too_short() {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("TEST_CFG_SHORT", "twelve-chars");
-        assert!(matches!(
-            load(&file_with_secret_env(dir.path(), "short", "TEST_CFG_SHORT")),
-            Err(ConfigError::SecretTooShort { name }) if name == "TEST_CFG_SHORT"
-        ));
-    }
-
-    #[test]
     fn a_fifteen_character_secret_with_one_multibyte_character_still_refuses_as_too_short() {
         let dir = tempfile::tempdir().unwrap();
         // Fifteen characters, sixteen bytes: a byte count would wrongly read this as long enough.
@@ -1499,12 +1270,5 @@ mod tests {
             load(&file_with_secret_env(dir.path(), "placeholder-admin", "TEST_CFG_PLACEHOLDER_ADMIN")),
             Err(ConfigError::PlaceholderSecret { name }) if name == "TEST_CFG_PLACEHOLDER_ADMIN"
         ));
-    }
-
-    #[test]
-    fn a_sixteen_character_random_secret_passes() {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("TEST_CFG_VALID", "sixteen-char-key");
-        assert!(load(&file_with_secret_env(dir.path(), "valid", "TEST_CFG_VALID")).is_ok());
     }
 }

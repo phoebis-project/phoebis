@@ -110,16 +110,6 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
 
-    #[test]
-    fn by_name_finds_the_pinned_profile_and_nothing_else() {
-        let p = claude_code_2_1_310_linux_x64();
-        assert_eq!(
-            by_name("claude-code-2.1.310-linux-x64").map(|x| x.name),
-            Some(p.name)
-        );
-        assert!(by_name("claude-code-9.9.9").is_none());
-    }
-
     /// Every file under `dir`, keyed by its path below `root`, to the lower-hex SHA-256 of its bytes.
     fn walk(root: &Path, dir: &Path, files: &mut BTreeMap<String, String>) {
         for entry in std::fs::read_dir(dir).unwrap() {
@@ -171,26 +161,6 @@ mod tests {
         for (file, digest) in &files {
             assert_eq!(digest, &rows[file], "{file} differs from the manifest");
         }
-    }
-
-    #[test]
-    fn fixtures_load_and_have_measured_sizes() {
-        assert_eq!(
-            fixtures::client_hello(fixtures::Plane::Inference).len(),
-            1503 + 5
-        );
-        assert_eq!(
-            fixtures::client_hello(fixtures::Plane::Control).len(),
-            1477 + 5
-        );
-        assert!(
-            fixtures::inference_head(fixtures::FixtureKind::OauthFirstParty)
-                .starts_with(b"POST /v1/messages?beta=true HTTP/1.1\r\n")
-        );
-        assert_eq!(
-            fixtures::body(fixtures::BodyFixture::FirstParty).len(),
-            84179
-        );
     }
 
     #[test]

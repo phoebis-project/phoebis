@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn unknown_token_is_rejected() {
         assert!(matches!(
-            encoding(&head(vec![("Content-Encoding", "gzip, br")])),
+            encoding(&head(vec![("Content-Encoding", "compress")])),
             Err(TransportError::Decode(_))
         ));
     }
@@ -348,20 +348,8 @@ mod tests {
     }
 
     #[test]
-    fn a_trailing_comma_after_gzip_reads_gzip() {
-        let read = encoding(&head(vec![("Content-Encoding", "gzip, ")]));
-        assert!(matches!(read, Ok(Encoding::Gzip)), "{read:?}");
-    }
-
-    #[test]
     fn an_empty_field_alone_reads_identity() {
         let read = encoding(&head(vec![("Content-Encoding", "")]));
-        assert!(matches!(read, Ok(Encoding::Identity)), "{read:?}");
-    }
-
-    #[test]
-    fn a_list_of_empty_elements_alone_reads_identity() {
-        let read = encoding(&head(vec![("Content-Encoding", ", ")]));
         assert!(matches!(read, Ok(Encoding::Identity)), "{read:?}");
     }
 

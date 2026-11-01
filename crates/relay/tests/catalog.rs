@@ -359,13 +359,8 @@ async fn a_dropped_fetch_future_lowers_the_in_flight_count_so_a_later_miss_does_
     fut.abort();
     let _ = fut.await;
     h.catalog_up.release();
-    let start = std::time::Instant::now();
     let canonical = h.catalog.canonical_for("claude-nope").await;
     assert_eq!(canonical, "claude-nope");
-    assert!(
-        start.elapsed() < STARTUP_BOUND,
-        "the guard lowered the count on the drop, so this miss did not wait the bound"
-    );
     assert_ne!(
         h.catalog.warmth(),
         Warmth::Filling,
@@ -521,7 +516,19 @@ async fn the_first_request_after_a_restart_carries_the_dated_id_from_the_persist
     )
     .await;
     assert_eq!(h.catalog.warmth(), Warmth::Cold);
-    let start = std::time::Instant::now();
+    // On the paused clock a miss that waited for a fill would move the clock to its bound.
+    tokio::time::pause();
+    let start = tokio::time::Instant::now();
+    assert_eq!(
+        h.catalog.canonical_for("claude-sonnet-4-5").await,
+        "claude-sonnet-4-5-20250929"
+    );
+    assert_eq!(
+        tokio::time::Instant::now(),
+        start,
+        "the persisted mapping answers with no wait"
+    );
+    tokio::time::resume();
     let resp = h
         .app
         .clone()
@@ -529,10 +536,6 @@ async fn the_first_request_after_a_restart_carries_the_dated_id_from_the_persist
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert!(
-        start.elapsed() < Duration::from_millis(200),
-        "the persisted mapping answers with no wait"
-    );
     assert!(h
         .router
         .pins()
@@ -555,6 +558,25 @@ async fn a_cold_services_request_waits_the_bound_then_falls_back_to_the_spelling
     }])
     .await;
     let h = harness_with_catalog(&up, catalog_up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    // On the paused clock the miss's wait for the held fill is the bound itself, whatever the machine's load.
+    tokio::time::pause();
+    let start = tokio::time::Instant::now();
+    assert_eq!(
+        h.catalog.canonical_for("claude-sonnet-4-5").await,
+        "claude-sonnet-4-5"
+    );
+    let elapsed = start.elapsed();
+    tokio::time::resume();
+    assert!(
+        elapsed >= STARTUP_BOUND,
+        "{elapsed:?} did not reach the bound"
+    );
+    assert!(
+        elapsed < STARTUP_BOUND * 2,
+        "{elapsed:?} waited past twice the bound"
+    );
+    // The request dials the fake, so the paused clock cannot time it. On the real clock only a wait the relay
+    // skipped can fail a lower bound.
     let start = std::time::Instant::now();
     let resp = h
         .app
@@ -563,14 +585,9 @@ async fn a_cold_services_request_waits_the_bound_then_falls_back_to_the_spelling
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    let elapsed = start.elapsed();
     assert!(
-        elapsed >= STARTUP_BOUND,
-        "{elapsed:?} did not reach the bound"
-    );
-    assert!(
-        elapsed < STARTUP_BOUND * 2,
-        "{elapsed:?} waited past twice the bound"
+        start.elapsed() >= STARTUP_BOUND,
+        "the request itself waited the bound before it fell back to the spelling"
     );
     assert!(
         h.router
@@ -624,7 +641,15 @@ async fn a_failed_startup_fetch_answers_at_once_and_is_retried_in_the_background
         json_list(&["claude-sonnet-4-5-20250929"]),
     );
     let h = harness_with_catalog(&up, catalog_up, &[oauth("a", A, 0)], PoolSpec::default()).await;
-    let start = std::time::Instant::now();
+    // On the paused clock a miss that waited for a fill would move the clock to its bound.
+    tokio::time::pause();
+    let start = tokio::time::Instant::now();
+    assert_eq!(
+        h.catalog.canonical_for("claude-sonnet-4-5").await,
+        "claude-sonnet-4-5"
+    );
+    assert_eq!(tokio::time::Instant::now(), start);
+    tokio::time::resume();
     let resp = h
         .app
         .clone()
@@ -632,7 +657,6 @@ async fn a_failed_startup_fetch_answers_at_once_and_is_retried_in_the_background
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert!(start.elapsed() < Duration::from_millis(200));
     past_the_error_hold().await;
     wait_for(Duration::from_secs(2), || {
         (h.catalog.warmth() == Warmth::Warm).then_some(())
@@ -915,65 +939,66 @@ async fn a_router_already_past_the_catalogs_own_bookkeeping_is_never_walked_back
     );
 }
 
+/// Account a lists the spelling's older snapshot and b its newer one, with one of the two listings held at the
+/// fake. `first` is the dated id the listing that was not held publishes alone.
+async fn both_fills_end_on_the_newer_snapshot(a_listing: Respond, b_listing: Respond, first: &str) {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(vec![]).await;
+    catalog_up.push_credential_rule(A, "/v1/models?limit=1000", a_listing);
+    catalog_up.push_credential_rule(B, "/v1/models?limit=1000", b_listing);
+    let h = harness_with_catalog(
+        &up,
+        catalog_up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    assert_eq!(
+        h.catalog.lookup("claude-sonnet-4-5").as_deref(),
+        Some(first),
+        "the account that was not gated landed alone first"
+    );
+    h.catalog_up.release();
+    // `listings_for` alone only proves the gated request was sent, not that its answer landed and
+    // published; the lookup itself is the signal that the newer snapshot has actually moved.
+    wait_for(Duration::from_secs(2), || {
+        (h.catalog.lookup("claude-sonnet-4-5").as_deref() == Some("claude-sonnet-4-5-20250929"))
+            .then_some(())
+    })
+    .await;
+    assert_eq!(
+        listings_for(&h.catalog_up),
+        2,
+        "both accounts' listings landed after {first}"
+    );
+    let resolutions = h.store.resolutions().unwrap();
+    assert_eq!(resolutions.len(), 1);
+    assert_eq!(resolutions[0].dated_id, "claude-sonnet-4-5-20250929");
+    assert_eq!(
+        h.router
+            .canonicals(vec!["claude-sonnet-4-5".into()])
+            .await
+            .unwrap(),
+        vec!["claude-sonnet-4-5-20250929".to_string()]
+    );
+}
+
 #[tokio::test]
 async fn two_fills_landing_together_end_on_the_newer_snapshot_whichever_is_acknowledged_first() {
-    for gated in [A, B] {
-        let up = FakeUpstream::start(vec![]).await;
-        let catalog_up = FakeUpstream::start(vec![]).await;
-        let dates = [
-            (A, "claude-sonnet-4-5-20250601"),
-            (B, "claude-sonnet-4-5-20250929"),
-        ];
-        for (credential, dated) in dates {
-            let respond = json_list(&[dated]);
-            let respond = if credential == gated {
-                Respond::Gated(Box::new(respond))
-            } else {
-                respond
-            };
-            catalog_up.push_credential_rule(credential, "/v1/models?limit=1000", respond);
-        }
-        let h = harness_with_catalog(
-            &up,
-            catalog_up,
-            &[oauth("a", A, 0), oauth("b", B, 1)],
-            PoolSpec::default(),
-        )
-        .await;
-        let immediate_dated = if gated == A {
-            "claude-sonnet-4-5-20250929"
-        } else {
-            "claude-sonnet-4-5-20250601"
-        };
-        assert_eq!(
-            h.catalog.lookup("claude-sonnet-4-5").as_deref(),
-            Some(immediate_dated),
-            "the account that was not gated landed alone first"
-        );
-        h.catalog_up.release();
-        // `listings_for` alone only proves the gated request was sent, not that its answer landed and
-        // published; the lookup itself is the signal that the newer snapshot has actually moved.
-        wait_for(Duration::from_secs(2), || {
-            (h.catalog.lookup("claude-sonnet-4-5").as_deref() == Some("claude-sonnet-4-5-20250929"))
-                .then_some(())
-        })
-        .await;
-        assert_eq!(
-            listings_for(&h.catalog_up),
-            2,
-            "both accounts' listings landed: {gated}"
-        );
-        let resolutions = h.store.resolutions().unwrap();
-        assert_eq!(resolutions.len(), 1);
-        assert_eq!(resolutions[0].dated_id, "claude-sonnet-4-5-20250929");
-        assert_eq!(
-            h.router
-                .canonicals(vec!["claude-sonnet-4-5".into()])
-                .await
-                .unwrap(),
-            vec!["claude-sonnet-4-5-20250929".to_string()]
-        );
-    }
+    // a's older listing is held, so b's newer one is acknowledged first.
+    both_fills_end_on_the_newer_snapshot(
+        Respond::Gated(Box::new(json_list(&["claude-sonnet-4-5-20250601"]))),
+        json_list(&["claude-sonnet-4-5-20250929"]),
+        "claude-sonnet-4-5-20250929",
+    )
+    .await;
+    // b's newer listing is held, so a's older one is acknowledged first.
+    both_fills_end_on_the_newer_snapshot(
+        json_list(&["claude-sonnet-4-5-20250601"]),
+        Respond::Gated(Box::new(json_list(&["claude-sonnet-4-5-20250929"]))),
+        "claude-sonnet-4-5-20250601",
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1139,22 +1164,26 @@ async fn a_dated_id_and_an_exactly_listed_spelling_skip_the_miss_wait_but_an_unl
     )
     .await;
     assert_eq!(h.catalog.warmth(), Warmth::Warm, "b's listing landed");
+    // On the paused clock a call that waited on a's gated fill would move the clock to its bound.
+    tokio::time::pause();
     for spelling in ["claude-opus-5", "claude-sonnet-4-5-20250929"] {
-        let start = std::time::Instant::now();
+        let start = tokio::time::Instant::now();
         let canonical = h.catalog.canonical_for(spelling).await;
         assert_eq!(canonical, spelling);
-        assert!(
-            start.elapsed() < Duration::from_millis(200),
+        assert_eq!(
+            tokio::time::Instant::now(),
+            start,
             "{spelling} is already the union's own entry and does not wait on a's gated fill"
         );
     }
-    let start = std::time::Instant::now();
+    let start = tokio::time::Instant::now();
     let canonical = h.catalog.canonical_for("claude-nope").await;
     assert_eq!(canonical, "claude-nope");
     assert!(
         start.elapsed() >= STARTUP_BOUND,
         "a spelling the union has never listed still waits the bound"
     );
+    tokio::time::resume();
     h.catalog_up.release();
 }
 

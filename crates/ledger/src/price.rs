@@ -547,18 +547,24 @@ mod tests {
             kind: "probe",
             ..plan_row()
         };
-        for at in [JANUARY_2026, FEBRUARY_2026] {
-            let rates = api_prices().fallback_rates(at);
-            let cell = |tokens: u64, rate: Option<f64>| tokens as f64 * rate.unwrap();
-            let want = CostSplit {
-                input_usd: cell(counts.input, rates.input),
-                cache_read_usd: cell(counts.cache_read, rates.cache_read),
-                cache_write_usd: cell(counts.write_5m, rates.write_5m)
-                    + cell(counts.write_1h, rates.write_1h),
-                output_usd: cell(counts.output, rates.output),
-            };
+        // The test table's dearest standard cells are Opus 5.5's: 10 input, 1 cache read, 12.5 and 20 for the two
+        // writes and 50 output per million in January, each doubled in February.
+        for (at, [input_usd, cache_read_usd, cache_write_usd, output_usd]) in [
+            (JANUARY_2026, [0.01, 0.002, 0.01175, 0.0025]),
+            (FEBRUARY_2026, [0.02, 0.004, 0.0235, 0.005]),
+        ] {
             let priced = price(&RowKey { at, ..probe }, counts);
-            assert_eq!(priced.usd, Some(want), "{at}");
+            let usd = priced
+                .usd
+                .as_ref()
+                .expect("a probe row prices at the fallback");
+            assert!(
+                close(Some(usd.input_usd), input_usd)
+                    && close(Some(usd.cache_read_usd), cache_read_usd)
+                    && close(Some(usd.cache_write_usd), cache_write_usd)
+                    && close(Some(usd.output_usd), output_usd),
+                "{at}: {usd:?}"
+            );
             assert_eq!(
                 priced.equivalent, None,
                 "a model without a weight prices no Pro-week figure: {priced:?}"
@@ -573,31 +579,6 @@ mod tests {
             );
             assert_eq!(inference.usd, None, "{at}");
         }
-    }
-
-    #[test]
-    fn a_row_in_february_reads_the_doubled_cells_and_weights() {
-        let january = price(&plan_row(), input(1));
-        let february = price(
-            &RowKey {
-                at: FEBRUARY_2026,
-                ..plan_row()
-            },
-            input(1),
-        );
-        let input_usd = |p: &Priced| p.usd.as_ref().unwrap().input_usd;
-        assert_eq!(input_usd(&february), 2.0 * input_usd(&january));
-        for window in [FIVE_HOUR, SEVEN_DAY] {
-            let share = |p: &Priced| p.shares.as_ref().unwrap()[window];
-            assert!(
-                close(share(&february), 2.0 * share(&january).unwrap()),
-                "shares on {window}"
-            );
-        }
-        assert!(close(
-            february.equivalent,
-            2.0 * january.equivalent.unwrap()
-        ));
     }
 
     // `at` in January keeps Opus 5.5's weight of 2, and `band_at` inside the band divides the 5-hour window's units

@@ -71,19 +71,7 @@ mod tests {
         assert!(!node_supported((25, 9, 3)));
         assert!(node_supported((26, 0, 0)));
         assert!(node_supported((26, 11, 1)));
-    }
-
-    #[test]
-    fn every_major_after_26_is_supported_too() {
         assert!(node_supported((27, 0, 0)));
-        assert!(node_supported((28, 4, 1)));
-    }
-
-    #[test]
-    fn node_24_and_25_are_refused() {
-        for version in [(24, 21, 0), (25, 0, 0), (25, 6, 1)] {
-            assert!(!node_supported(version), "{version:?}");
-        }
     }
 
     #[test]

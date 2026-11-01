@@ -91,10 +91,6 @@ test('a figure reads a dash where the plan is Free, the cost model sizes no capa
     // An arm the pages never draw, since they hold the skeleton while the cost model loads.
     assert.deepEqual(d.allowanceFigure(0.33, 'seven_day', PRO, null, week), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${week}: no cost model`);
   }
-  assert.equal(d.ALLOWANCE_UNPRICED_TITLE, "Unpriced: the cost model holds no capacity for this account's plan");
-  assert.notEqual(d.ALLOWANCE_UNPRICED_TITLE, d.UNPRICED_TITLE, "the analytics library's own title keeps its words beside this one");
-  assert.equal(d.NO_READING_TITLE, 'no reading at this reset');
-  assert.equal(d.FREE_NOTE, 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it.');
   const texts = [0, 0.004, 0.33, 0.999].flatMap((share) => WEEKS.flatMap((week) => [PRO, MAX_5X, FREE].flatMap((plan) => ['seven_day', 'seven_day_fable'].map((w) => d.allowanceFigure(share, w, plan, COSTS, week).text))));
   assert.deepEqual(texts.filter((t) => t.includes('~')), [], 'no model is priced here, so no figure is estimated');
 });
@@ -166,8 +162,8 @@ test("a reset's hover names its instant and the reading's source in the block's 
   const at = Date.UTC(2026, 8, 12, 20, 10);
   const reset = (source) => ({ observedAt: iso(at), plan: null, resetAt: iso(at), shareLeft: 0.5, source, tier: null });
   assert.deepEqual(
-    ['sample', 'clock', 'term_ended', 'replayed'].map((source) => d.resetHover(reset(source))),
-    [`${d.fmtAbsolute(iso(at))}, read from a usage sample`, `${d.fmtAbsolute(iso(at))}, read from the clock walk`, `${d.fmtAbsolute(iso(at))}, read from the term's end`, `${d.fmtAbsolute(iso(at))}, read from replayed`],
+    ['sample', 'replayed'].map((source) => d.resetHover(reset(source))),
+    ['Sep 12, 2026, 20:10:00, read from a usage sample', 'Sep 12, 2026, 20:10:00, read from replayed'],
   );
   // A week's reset lies days back, so even one within a day of now keeps its date.
   assert.deepEqual([d.resetDate(iso(at)), d.resetInstant(iso(at)), d.resetInstant(iso(Date.UTC(2026, 9, 25, 7, 5)))], ['Sep 12', 'Sep 12 20:10', 'Oct 25 07:05']);

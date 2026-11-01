@@ -2,7 +2,7 @@
 mod common;
 use std::time::Duration;
 
-use common::{delete, get, json, login, post, priced_row, wait_json};
+use common::{delete, get, json, login, post, wait_json};
 use fake_upstream::{stays_for, wait_for};
 use phoebis_bus::Delivery;
 use phoebis_ledger::{AttemptRecord, EventRecord, ParkedRecord, Record, RequestRecord};
@@ -48,11 +48,6 @@ fn record_at(id: &str, at: i64, model: &str, session: &str, key_generation: i64)
         }],
         bodies: None,
     }
-}
-
-/// A priced row's dollars, zero for a model the revision lacks.
-fn usd_of(priced: &phoebis_ledger::Priced) -> f64 {
-    priced.usd.as_ref().map_or(0.0, |usd| usd.total())
 }
 
 fn close_to(got: &serde_json::Value, want: f64) -> bool {
@@ -257,12 +252,10 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     let pricing = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
     assert_eq!(
         pricing,
-        serde_json::to_value(phoebis_admin::table_envelopes(
-            &revisions,
-            &loaded,
-            common::NOW
-        ))
-        .unwrap(),
+        serde_json::json!({
+            "api_prices": settings["api_prices"],
+            "subscription_costs": settings["subscription_costs"],
+        }),
         "the price route answers both envelopes the settings echo carries"
     );
     assert!(
@@ -1068,33 +1061,12 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
         parts.db.request("t4").await.unwrap()
     })
     .await;
-    let seeded: Vec<phoebis_ledger::Priced> = (0..5)
-        .map(|i| {
-            let funding = if i == OVERAGE {
-                phoebis_ledger::Funding::Overage
-            } else {
-                phoebis_ledger::Funding::Plan
-            };
-            priced_row(
-                "claude-sonnet-5",
-                funding,
-                now - i * HOUR,
-                phoebis_routing::PinUsage {
-                    input: 1_000,
-                    output: 100,
-                    ..phoebis_routing::PinUsage::default()
-                },
-            )
-        })
-        .collect();
-    let billed = usd_of(&seeded[OVERAGE as usize]);
-    let dollars: f64 = seeded.iter().map(usd_of).sum();
-    // The overage row carries no figure, since dollars fund it, and the plan rows each carry theirs.
-    let figure: f64 = seeded.iter().filter_map(|p| p.equivalent).sum();
-    assert!(
-        billed > 0.0 && billed < dollars && figure > 0.0,
-        "the seed prices both sides: {billed} of {dollars}, {figure}"
-    );
+    // Each row's 1,000 input and 100 output tokens of Sonnet 5 at the shipped $2 and $10 a million are $0.003, so the
+    // five rows make $0.015 and the overage row $0.003 billed. At Sonnet 5's own weight 1.5 a row is
+    // 1.5 * (1,000 + 100 * 5) = 2,250 units, 0.000025 of the Pro tier's 90,000,000 on the week, so the four plan rows
+    // make 0.0001.
+    let (dollars, billed) = (0.015, 0.003);
+    let figure = 0.0001;
     let traffic = json(
         get(
             &parts.app,
@@ -1482,27 +1454,14 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_nulls_the_p
 
 #[tokio::test]
 async fn a_plan_request_on_a_model_the_cost_model_does_not_weight_reads_a_null_figure() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
+    let (parts, cookie) = on_test_costs().await;
     let now = common::NOW;
-    let tables = phoebis_ledger::PlanTables::shipped();
-    assert!(
-        tables
-            .revisions
-            .in_force(now)
-            .weight("claude-opus-4-7", phoebis_routing::SEVEN_DAY)
-            .is_none()
-            && tables
-                .tier_of("claude-opus-4-7", now)
-                .and_then(|tier| tables.latest_weighted(tier, now))
-                .is_some(),
-        "the shipped cost model has no weight for Opus 4.7 and weighs a model of its model tier"
-    );
+    // The test cost model leaves Opus 5 unweighted under the `opus` tier, whose Opus 5.5 carries a weight.
     // The landing records the account's Ultra tier on each attempt. One request on the plan, one answered in
     // overage.
     set_max_20x(&parts).await;
-    let plan = record("opus-plan", now - HOUR, "claude-opus-4-7", "s0");
-    let mut billed = record("opus-billed", now - HOUR, "claude-opus-4-7", "s1");
+    let plan = record("opus-plan", now - HOUR, "claude-opus-5", "s0");
+    let mut billed = record("opus-billed", now - HOUR, "claude-opus-5", "s1");
     let Record::Request { attempts, .. } = &mut billed else {
         unreachable!("record builds a request")
     };
@@ -1775,8 +1734,7 @@ async fn set_max_20x(parts: &common::Full) {
 
 #[tokio::test]
 async fn the_burn_route_answers_each_subscription_points_share_of_both_windows() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
+    let (parts, cookie) = on_test_costs().await;
     let now = common::NOW;
     // An hour of a million input tokens on `business`.
     let million = |id: &str, at: i64, model: &str| {
@@ -1813,7 +1771,7 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     );
     set_max_20x(&parts).await;
     parts.ledger.record(opus("burn-1", now - HOUR));
-    // Fable is the one model the shipped table gives a week of its own.
+    // Fable is the one model the test cost model gives a week of its own.
     parts
         .ledger
         .record(million("burn-fable", now - 3 * HOUR, "claude-fable-5-1"));
@@ -1837,30 +1795,14 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
         "each point counts every token type, its cached and uncached input among them: {burn}"
     );
     let point = business(&burn, now - HOUR);
-    let tables = phoebis_ledger::PlanTables::shipped();
     let hour = point["at"].as_i64().unwrap();
-    let usage = phoebis_routing::PinUsage {
-        input: 1_000_000,
-        ..phoebis_routing::PinUsage::default()
-    };
-    let share = |window: &str| {
-        tables
-            .share_at(
-                window,
-                None,
-                "default_claude_max_20x",
-                "claude-opus-5-5",
-                usage,
-                hour,
-            )
-            .unwrap()
-    };
-    let five_hour = share(phoebis_routing::FIVE_HOUR);
+    // On the test cost model a million Opus 5.5 input tokens at its weight 4 are 4,000,000 units, over Ultra's 100 on
+    // the 5-hour window and 1,000 on the week, outside the weekday peak band on the rig's Sunday.
+    let (five_hour, seven_day) = (40_000.0, 4_000.0);
     assert!(
         (point["five_hour_share"].as_f64().unwrap() - five_hour).abs() < 1e-9,
         "a million Opus 5.5 input tokens read the model's 5-hour share on Ultra: {point} against {five_hour}"
     );
-    let seven_day = share(phoebis_routing::SEVEN_DAY);
     assert!(
         (point["seven_day_share"].as_f64().unwrap() - seven_day).abs() < 1e-9,
         "and its 7-day share: {point} against {seven_day}"
@@ -1870,11 +1812,8 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
         (&serde_json::json!("window_share"), &serde_json::json!(0.0)),
         "a subscription spends no dollars: {point}"
     );
-    // A rollup row keeps no completion, so its hour is its band instant, and the route reads at its own clock.
-    let figure = |model: &str, at: i64| {
-        phoebis_ledger::price_equivalent(&tables, None, model, usage, at, at, now).unwrap()
-    };
-    let opus_figure = figure("claude-opus-5-5", hour);
+    // The same 4,000,000 units over the Pro tier's 50 on the week.
+    let opus_figure = 80_000.0;
     assert!(
         close_to(&point["equivalent"], opus_figure) && point["unpriced"] == false,
         "beside its shares the bucket reads the Pro-week figure, its model weighted: {point}"
@@ -1885,17 +1824,9 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     );
     let fable = business(&burn, now - 3 * HOUR);
     let fable_hour = fable["at"].as_i64().unwrap();
-    let week_share = tables
-        .share_at(
-            phoebis_routing::SEVEN_DAY_FABLE,
-            None,
-            "default_claude_max_20x",
-            "claude-fable-5-1",
-            usage,
-            fable_hour,
-        )
-        .unwrap();
-    let fable_figure = figure("claude-fable-5-1", fable_hour);
+    // A million Fable input tokens at its weight 20 are 20,000,000 units, over half the week's 1,000 on the Fable week
+    // and over the Pro tier's 50 on the week for the figure.
+    let (week_share, fable_figure) = (40_000.0, 400_000.0);
     assert!(
         close_to(&fable["model_week_share"], week_share) && close_to(&fable["equivalent"], fable_figure),
         "a Fable row reads its model week's share beside the shared windows and its figure: {fable}"
@@ -3572,79 +3503,6 @@ async fn the_series_points_carry_the_same_shares_per_bucket() {
     }
 }
 
-#[tokio::test]
-async fn funding_billed_keeps_the_overage_fast_and_api_key_rows_and_drops_the_plan_row() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    for row in funded_rows() {
-        parts.ledger.record(row);
-    }
-    landed(
-        &parts,
-        &[
-            "fund-overage",
-            "fund-fast",
-            "fund-direct",
-            "fund-plan",
-            "fund-gone",
-        ],
-    )
-    .await;
-    let billed = json(
-        get(
-            &parts.app,
-            "/admin/analytics/breakdown?range=24h&group_by=account&funding=billed",
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(
-        request_counts(&billed),
-        [("business".to_string(), 2), ("direct".to_string(), 1)],
-        "the overage and fast rows and the api_key row, and neither plan row: {billed}"
-    );
-}
-
-#[tokio::test]
-async fn funding_plan_keeps_the_plan_row_and_one_of_an_account_the_registry_no_longer_holds() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    for row in funded_rows() {
-        parts.ledger.record(row);
-    }
-    landed(
-        &parts,
-        &[
-            "fund-overage",
-            "fund-fast",
-            "fund-direct",
-            "fund-plan",
-            "fund-gone",
-        ],
-    )
-    .await;
-    let read = |funding: &str| {
-        let url = format!("/admin/analytics/breakdown?range=24h&group_by=account{funding}");
-        let (app, cookie) = (&parts.app, &cookie);
-        async move { request_counts(&json(get(app, &url, Some(cookie)).await).await) }
-    };
-    let plan = read("&funding=plan").await;
-    assert_eq!(
-        plan,
-        [("business".to_string(), 1), ("gone".to_string(), 1)],
-        "the plan row and the row of the account the registry does not hold"
-    );
-    let sum = |rows: &[(String, u64)]| rows.iter().map(|(_, n)| n).sum::<u64>();
-    let billed = read("&funding=billed").await;
-    let every = read("").await;
-    assert_eq!(
-        (sum(&billed) + sum(&plan), sum(&every)),
-        (5, 5),
-        "the two filtered sums add up to the unfiltered sum: {billed:?} and {plan:?}"
-    );
-}
-
 /// The partition is recorded with each row, so the registry's later state moves no dollar between the two sides: the
 /// api_key account's row stays billed once the account is deleted and once its id comes back as an oauth account.
 #[tokio::test]
@@ -3681,6 +3539,24 @@ async fn the_funding_partition_holds_when_an_api_key_account_is_deleted_and_its_
             vec![("business".to_string(), 1), ("gone".to_string(), 1)]
         ),
         "the partition as the rows were recorded"
+    );
+    let every = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=account",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        request_counts(&every),
+        [
+            ("business".to_string(), 3),
+            ("direct".to_string(), 1),
+            ("gone".to_string(), 1)
+        ],
+        "all five rows, the one of the account the registry no longer holds among them: {every}"
     );
     assert_eq!(
         delete(&parts.app, "/admin/accounts/direct", Some(&cookie))
@@ -3857,20 +3733,8 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         .find(|p| p["group"] == "s-mid" && p["usd"].as_f64().unwrap_or(0.0) > 0.0)
         .unwrap_or_else(|| panic!("s-mid's bucket carries its dollar price: {points:?}"));
     assert_eq!(mid_point["uncached_tokens"].as_u64(), Some(1_000));
-    // The attempt's counts at the shipped revision in force when its request arrived.
-    let mid_usd = phoebis_ledger::PriceRevisions::shipped()
-        .in_force(now - 100)
-        .estimate(
-            "claude-sonnet-5",
-            phoebis_ledger::Speed::Standard,
-            1_000,
-            0,
-            0,
-            0,
-            100,
-        )
-        .expect("the shipped list carries the model")
-        .0;
+    // The attempt's 1,000 input and 100 output tokens of Sonnet 5 at the shipped $2 and $10 a million.
+    let mid_usd = 0.003;
     assert!(
         (mid_point["usd"].as_f64().unwrap() - mid_usd).abs() < 1e-12,
         "s-mid's bucket reads its attempt's dollars at read time: {mid_point} vs {mid_usd}"
@@ -3888,12 +3752,6 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         "the session grouping answers no share with no filter naming one account, a tier on file or not: \
          {points:?}"
     );
-    let tables = phoebis_ledger::PlanTables::shipped();
-    let usage = phoebis_routing::PinUsage {
-        input: 2_000,
-        output: 200,
-        ..phoebis_routing::PinUsage::default()
-    };
     let one_account = json(
         get(
             &parts.app,
@@ -3908,6 +3766,11 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         named.iter().all(|p| p["group"] != "s-mid"),
         "the sessions rank by the named account's attempts alone: {one_account}"
     );
+    // Each s-big attempt's 2,000 input and 200 output tokens of Sonnet 5 at its shipped weight 1.5 are
+    // 1.5 * (2,000 + 200 * 5) = 4,500 units: 0.00003 of Ultra's 150,000,000 on the 5-hour window and 0.000005 of its
+    // 900,000,000 on the week, outside the weekday peak band on the rig's Sunday, and 0.00005 of the Pro tier's
+    // 90,000,000 on the week.
+    let (five_hour, seven_day, figure) = (0.00003, 0.000005, 0.00005);
     for started in [now - HOUR - 100, now - 100] {
         let bucket_of = |points: &[serde_json::Value]| {
             points
@@ -3918,40 +3781,16 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
                 .cloned()
                 .unwrap_or_else(|| panic!("s-big's bucket of {started}: {points:?}"))
         };
-        // The band reads at the attempt's completion, the request's finish half a second after its start.
-        let completed = started + 500;
-        let figure = phoebis_ledger::price_equivalent(
-            &tables,
-            None,
-            "claude-sonnet-5",
-            usage,
-            started,
-            completed,
-            now,
-        )
-        .unwrap();
         let any = bucket_of(points);
         assert!(
             close_to(&any["equivalent"], figure),
             "a session's bucket reads its attempt's Pro-week figure with no account named: {any}"
         );
-        let share = |window: &str| {
-            tables
-                .share_at(
-                    window,
-                    None,
-                    "default_claude_max_20x",
-                    "claude-sonnet-5",
-                    usage,
-                    completed,
-                )
-                .unwrap()
-        };
         let one = bucket_of(named);
         assert!(
             one["unit"] == "window_share"
-                && close_to(&one["five_hour_share"], share(phoebis_routing::FIVE_HOUR))
-                && close_to(&one["seven_day_share"], share(phoebis_routing::SEVEN_DAY)),
+                && close_to(&one["five_hour_share"], five_hour)
+                && close_to(&one["seven_day_share"], seven_day),
             "with one account named, the bucket reads the shares of the tier its attempt recorded: {one}"
         );
     }
@@ -4367,20 +4206,9 @@ async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ra
         .iter()
         .rfind(|p| p["group"] == "business")
         .unwrap();
-    let seven_day = phoebis_ledger::PlanTables::shipped()
-        .share_at(
-            phoebis_routing::SEVEN_DAY,
-            None,
-            "default_claude_max_20x",
-            "claude-sonnet-5-5",
-            phoebis_routing::PinUsage {
-                input: 500,
-                output: 50,
-                ..phoebis_routing::PinUsage::default()
-            },
-            phoebis_ledger::hour_of(now) * 1_000,
-        )
-        .unwrap();
+    // 500 input and 50 output tokens of Sonnet 5.5 at its shipped weight 1.5 are 1.5 * (500 + 50 * 5) = 1,125 units,
+    // 0.00000125 of Max 20x's 900,000,000 on the week.
+    let seven_day = 0.00000125;
     assert!(
         account_trailing["five_hour_share"].as_f64().unwrap_or(0.0) > 0.0
             && (account_trailing["seven_day_share"].as_f64().unwrap() - seven_day).abs() < 1e-9,
@@ -5649,117 +5477,6 @@ async fn the_routing_log_filters_on_the_stream_interrupted_kind() {
 }
 
 #[tokio::test]
-async fn the_routing_log_filters_on_the_plan_ended_kind() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    let now = common::NOW;
-    let free = serde_json::json!({"organization": {
-        "organization_type": "claude_free",
-        "rate_limit_tier": "default_claude_ai",
-        "subscription_status": "canceled",
-    }});
-    parts.ledger.record(phoebis_ledger::plan_ended(
-        "direct",
-        now - 3_000,
-        "usage_403",
-        &free,
-    ));
-    parts.ledger.record(phoebis_ledger::plan_restored(
-        "direct",
-        now - 2_000,
-        "pairing",
-        &free,
-    ));
-    let route = |kinds: &str| {
-        format!(
-            "/admin/routing-log?from={}&to={}&kinds={kinds}",
-            now - 10_000,
-            now - 1
-        )
-    };
-    let first = get(&parts.app, &route("plan_ended"), Some(&cookie)).await;
-    let status = first.status();
-    assert_eq!(status, 200, "{}", json(first).await);
-    // Both rows landed before the filtered read, so the restore's absence is the filter's.
-    wait_json(
-        &parts.app,
-        &route("plan_ended,plan_restored"),
-        &cookie,
-        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 2),
-    )
-    .await;
-    let page = json(get(&parts.app, &route("plan_ended"), Some(&cookie)).await).await;
-    let rows = page["rows"].as_array().unwrap();
-    assert_eq!(
-        rows.iter()
-            .map(|row| (row["kind"].as_str(), row["detail"]["source"].as_str()))
-            .collect::<Vec<_>>(),
-        [(Some("plan_ended"), Some("usage_403"))],
-        "the flag's row alone, the restore left out"
-    );
-    assert_eq!(
-        rows[0]["detail"],
-        serde_json::json!({
-            "source": "usage_403",
-            "organization_type": "claude_free",
-            "rate_limit_tier": "default_claude_ai",
-            "subscription_status": "canceled",
-        })
-    );
-}
-
-#[tokio::test]
-async fn the_routing_log_filters_on_the_poll_failed_kind() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    let now = common::NOW;
-    parts.ledger.record(phoebis_ledger::poll_failed(
-        "direct",
-        now - 2_000,
-        &phoebis_oauth::PollFault {
-            endpoint: "usage",
-            status: Some(403),
-            transport: false,
-            text: "usage request rejected with status 403".into(),
-        },
-    ));
-    parts
-        .ledger
-        .record(routing_event(now - 1_000, "cooldown_set"));
-    let route = |kinds: &str| {
-        format!(
-            "/admin/routing-log?from={}&to={}&kinds={kinds}",
-            now - 10_000,
-            now - 1
-        )
-    };
-    let first = get(&parts.app, &route("poll_failed"), Some(&cookie)).await;
-    let status = first.status();
-    assert_eq!(status, 200, "{}", json(first).await);
-    // Both rows landed before the filtered read, so the cooldown's absence is the filter's.
-    wait_json(
-        &parts.app,
-        &route("cooldown_set,poll_failed"),
-        &cookie,
-        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 2),
-    )
-    .await;
-    let page = json(get(&parts.app, &route("poll_failed"), Some(&cookie)).await).await;
-    let rows = page["rows"].as_array().unwrap();
-    assert_eq!(
-        rows.iter()
-            .map(|row| (row["type"].as_str(), row["kind"].as_str()))
-            .collect::<Vec<_>>(),
-        [(Some("event"), Some("poll_failed"))],
-        "the fault's row alone, the cooldown left out"
-    );
-    assert_eq!(
-        (&rows[0]["detail"]["endpoint"], &rows[0]["detail"]["status"]),
-        (&serde_json::json!("usage"), &serde_json::json!(403))
-    );
-}
-
-#[tokio::test]
 async fn an_empty_kinds_reads_as_every_kind() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -6340,6 +6057,37 @@ async fn the_system_page_counts_the_refusals_the_router_s_mailbox_refused() {
     let cookie = login(&parts.app, "admin-secret").await;
     let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
     assert_eq!(system["router"]["dropped_refusals"], 0);
+    // A stopped router's closed mailbox refuses the record.
+    parts.router.shutdown().await.unwrap();
+    parts.router.record_refusal(
+        phoebis_routing::RefusedRequest {
+            request_id: "r-refused".into(),
+            attempt: 1,
+            seq: 1,
+            at: common::NOW,
+            key_id: "desktop".into(),
+            key_generation: 1,
+            agent_id: "main".into(),
+            parent_agent_id: None,
+            session_id: None,
+            request_class: None,
+            canonical_model: "claude-sonnet-5-5".into(),
+            lane: Default::default(),
+            flags: Default::default(),
+            chain: Default::default(),
+            attempted: Vec::new(),
+            holds: Vec::new(),
+            client: phoebis_routing::ClientClass::ClaudeCode,
+            client_version: None,
+        },
+        phoebis_routing::RefusalFacts {
+            kind: "guardrail",
+            code: "guardrail_blocked",
+            reason: "a block".into(),
+        },
+    );
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(system["router"]["dropped_refusals"], 1, "{system}");
 }
 
 #[tokio::test]

@@ -380,8 +380,8 @@ read rather than dropping it:
   its list of words no page carries, and a bare `api_key` outside a code span. It drops fenced blocks and code spans
   before it reads.
 
-`bash scripts/tests/check-docs.sh` runs the checker's own cases against throwaway trees, and the favicon case and the
-unit case at the end against the real one, so the checker fails on what it exists to catch.
+`bash scripts/tests/check-docs.sh` runs the checker's own cases against throwaway trees, and the favicon case at the end
+against the real one, so the checker fails on what it exists to catch.
 
 ## Continuous checks
 

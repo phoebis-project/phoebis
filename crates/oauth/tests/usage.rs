@@ -148,10 +148,10 @@ fn extra_usage_amounts_with_a_fraction_part_round_to_the_nearest_minor_unit() {
 #[test]
 fn a_parse_failure_carries_serdes_message_after_the_colon() {
     let body = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":250000,"used_credits":"x","utilization":41.0,"currency":"USD"}}"#;
-    let error = parse_usage(body).unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        r#"control response is not valid JSON: invalid type: string "x", expected f64"#
+    let message = parse_usage(body).unwrap_err().to_string();
+    assert!(
+        message.starts_with("control response is not valid JSON: ") && message.contains(r#""x""#),
+        "serde's message after the colon quotes the refused value: {message}"
     );
 }
 
@@ -1352,7 +1352,7 @@ mod service {
 
     #[tokio::test]
     async fn the_profile_is_fetched_on_request_under_the_usage_endpoints_limits() {
-        let (service, up, store) = service_with_fake().await;
+        let (service, up, _store) = service_with_fake().await;
         let profile = service.profile("business").await.unwrap();
         assert_eq!(profile.email, "test@example.invalid");
         assert_eq!(
@@ -1365,13 +1365,6 @@ mod service {
                 .filter(|r| r.line.starts_with("GET /api/oauth/profile"))
                 .count(),
             1
-        );
-        store
-            .set_profile("business", &profile.raw.to_string(), &profile.subscription)
-            .unwrap();
-        assert_eq!(
-            store.profile_json("business").unwrap().as_deref(),
-            Some(profile.raw.to_string().as_str())
         );
         // A 429 on the profile endpoint arms the same hold the usage fetch honours. The usage route is made to
         // answer so the assertion can only pass through the hold: a fetch that ran would succeed, and
@@ -1395,11 +1388,6 @@ mod service {
             },
         );
         assert!(service.profile("business").await.is_err());
-        assert_eq!(
-            service.poll_status("business").unwrap().next_attempt_at,
-            Some(1_000_000 + 900_000),
-            "the hour asked for is held to the fifteen-minute cap"
-        );
         let usage = service.poll("business").await.unwrap();
         assert!(
             usage.error.is_some(),

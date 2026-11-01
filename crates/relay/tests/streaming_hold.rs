@@ -234,7 +234,11 @@ async fn a_stream_that_never_commits_is_relayed_as_received_after_the_hold_timeo
         upstream_gzip: phoebis_relay::UpstreamGzip::Auto,
     };
     let h = harness_with(&up, &[oauth("a", A, 0)], PoolSpec::default(), limits).await;
-    let started = std::time::Instant::now();
+    // On the paused clock the hold's 200 ms bound and the ten-second ones read apart whatever the machine's load.
+    // The harness's 20 ms catalog refresh tick bounds every automatic step, so a step taken while the handshake waits
+    // on its socket cannot carry the clock to a ten-second bound or past the two seconds asserted below.
+    tokio::time::pause();
+    let started = tokio::time::Instant::now();
     let resp = h
         .app
         .clone()
@@ -246,6 +250,7 @@ async fn a_stream_that_never_commits_is_relayed_as_received_after_the_hold_timeo
         started.elapsed() < Duration::from_secs(2),
         "the head is answered once the hold gives up"
     );
+    tokio::time::resume();
     up.release();
     assert!(collect(resp).await.contains("event: ping\n"));
     up.shutdown().await;
@@ -565,7 +570,10 @@ async fn a_disconnect_during_a_stalled_pre_commit_read_closes_the_upstream_conne
             .await
             .unwrap()
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for(Duration::from_secs(5), || {
+        (up.requests().len() == 1).then_some(())
+    })
+    .await;
     assert!(
         !pending.is_finished(),
         "the hold is waiting on the stalled stream"

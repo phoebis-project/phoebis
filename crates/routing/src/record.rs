@@ -1000,6 +1000,8 @@ pub(crate) fn settings_of(pool: &PoolRow) -> Settings {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     fn entry(hash: &str, depth: u32, refused_by: Option<&'static str>) -> PrefixEntry {
@@ -1239,7 +1241,9 @@ mod tests {
         );
     }
 
-    fn keys(value: &serde_json::Value) -> Vec<&str> {
+    /// The object's member names as a set: the console's decoder reads the record by name, so the order serde writes
+    /// them in is no contract.
+    fn keys(value: &serde_json::Value) -> BTreeSet<&str> {
         value
             .as_object()
             .expect("an object")
@@ -1249,11 +1253,11 @@ mod tests {
     }
 
     #[test]
-    fn a_record_serializes_its_blocks_in_the_walk_s_order() {
+    fn a_record_serializes_its_blocks_settings_and_prefix_entries_under_their_wire_names() {
         let value = serde_json::to_value(renewal()).expect("the record serializes");
         assert_eq!(
             keys(&value),
-            [
+            BTreeSet::from([
                 "version",
                 "request",
                 "pin",
@@ -1262,13 +1266,12 @@ mod tests {
                 "candidates",
                 "walk",
                 "outcome"
-            ],
-            "the blocks follow the walk: what came in, the pin, the settings, the members, the steps, the answer"
+            ]),
+            "the blocks: what came in, the pin, the settings, the members, the steps, the answer"
         );
-        assert_eq!(value["version"], 3);
         assert_eq!(
             keys(&value["settings"]),
-            [
+            BTreeSet::from([
                 "strategy",
                 "prefer_subscription",
                 "overage_policy",
@@ -1294,19 +1297,19 @@ mod tests {
                 "in_flight_cap",
                 "retry_in_place_seconds",
                 "pool_updated_at"
-            ],
+            ]),
             "the settings, each named by the `PoolRow` field it is read from"
         );
         let prefix = &value["candidates"][0]["prefix"];
         assert_eq!(
             keys(prefix),
-            [
+            BTreeSet::from([
                 "content",
                 "content_match",
                 "static",
                 "static_match",
                 "with_main"
-            ]
+            ])
         );
         assert_eq!(
             (&prefix["static"]["hash"], &prefix["static"]["refused_by"]),

@@ -58,18 +58,9 @@ test('a pool input refuses the affinity the router refuses', () => {
   assert.equal(d.validatePoolInput({ ...input, affinityTtlSeconds: 120, keepalive: { ...input.keepalive, enabled: true } }, accounts), false, 'warming needs a pin of five minutes');
 });
 
-test('a pool input refuses every keepalive bound the policy check refuses', () => {
-  const bounds = {
-    maxIdleSeconds: [0, 31_536_000],
-    maxParkedSeconds: [60, 604_800],
-    scheduledHorizonSeconds: [60, 604_800],
-  };
-  for (const [key, [min, max]] of Object.entries(bounds)) {
-    assert.equal(d.validatePoolInput(tuned({ [key]: min }), accounts), true, `${key} ${min} is inside`);
-    assert.equal(d.validatePoolInput(tuned({ [key]: max }), accounts), true, `${key} ${max} is inside`);
-    assert.equal(d.validatePoolInput(tuned({ [key]: min - 1 }), accounts), false, `${key} ${min - 1} is below the floor`);
-    assert.equal(d.validatePoolInput(tuned({ [key]: max + 1 }), accounts), false, `${key} ${max + 1} is past the ceiling`);
-  }
+test('a pool input refuses a keepalive idle below 0, a fraction of a second and an empty ceiling, and takes a null one', () => {
+  // The captured route probes hold each field's bound pairs, and none sends an idle below its floor of 0.
+  assert.equal(d.validatePoolInput(tuned({ maxIdleSeconds: -1 }), accounts), false, 'maxIdleSeconds -1 is below the floor');
   assert.equal(d.validatePoolInput(tuned({ maxIdleSeconds: 2.5 }), accounts), false, 'seconds are whole');
   assert.equal(d.validatePoolInput(tuned({ maxParkedSeconds: null, scheduledHorizonSeconds: null }), accounts), true, 'a null ceiling is the break-even');
   assert.equal(d.validatePoolInput(tuned({ maxParkedSeconds: Number.NaN }), accounts), false, 'a switched-on ceiling left empty is held');
@@ -104,31 +95,21 @@ test('a pool input refuses thresholds outside their range and an empty name', ()
   assert.equal(d.validatePoolInput({ ...input, shedCap: 1.01 }, accounts), false);
 });
 
-test('a pool input holds every engine bound', () => {
-  const whole = {
-    burnAverageSeconds: [600, 7_200],
-    inFlightCap: [1, 4_294_967_295],
-    overageMoveGraceMinutes: [0, 300],
-    retryInPlaceSeconds: [0, 300],
-    returnToPlanDwellSeconds: [0, 86_400],
-    shedDwellSeconds: [300, 7_200],
-    slowDownHoldSeconds: [1, 300],
-    slowDownStretchSeconds: [60, 18_000],
-    windDownMinutes: [0, 10_080],
+test('a pool input refuses a half step on every whole engine field and a choice outside its list, each refusal in its group', () => {
+  // The captured route probes and the test that drops every field below its floor hold the bounds. Half a step past
+  // each floor is a value neither sends.
+  const halves = {
+    burnAverageSeconds: 600.5,
+    inFlightCap: 1.5,
+    overageMoveGraceMinutes: 0.5,
+    retryInPlaceSeconds: 0.5,
+    returnToPlanDwellSeconds: 0.5,
+    shedDwellSeconds: 300.5,
+    slowDownHoldSeconds: 1.5,
+    slowDownStretchSeconds: 60.5,
+    windDownMinutes: 0.5,
   };
-  for (const [field, [min, max]] of Object.entries(whole)) {
-    assert.equal(d.validatePoolInput({ ...input, [field]: min }, accounts), true, `${field} ${min} is inside`);
-    assert.equal(d.validatePoolInput({ ...input, [field]: min - 1 }, accounts), false, `${field} ${min - 1} is below the floor`);
-    assert.equal(d.validatePoolInput({ ...input, [field]: min + 0.5 }, accounts), false, `${field} is whole`);
-    if (max !== null) {
-      assert.equal(d.validatePoolInput({ ...input, [field]: max }, accounts), true, `${field} ${max} is inside`);
-      assert.equal(d.validatePoolInput({ ...input, [field]: max + 1 }, accounts), false, `${field} ${max + 1} is past the ceiling`);
-    }
-  }
-  for (const [field, floor] of [['shedCap', 0.1], ['windowCeiling', 0.5]]) {
-    for (const v of [floor, 0.6, 1]) assert.equal(d.validatePoolInput({ ...input, [field]: v }, accounts), true, `${field} ${v} is inside`);
-    for (const v of [floor - 0.01, 1.01, Number.NaN]) assert.equal(d.validatePoolInput({ ...input, [field]: v }, accounts), false, `${field} ${v} is not`);
-  }
+  for (const [field, value] of Object.entries(halves)) assert.equal(d.validatePoolInput({ ...input, [field]: value }, accounts), false, `${field} is whole`);
   for (const mode of ['always', 'never', 'when_needed']) assert.equal(d.validatePoolInput({ ...input, warmSessions: mode }, accounts), true);
   assert.equal(d.validatePoolInput({ ...input, warmSessions: 'sometimes' }, accounts), false);
   assert.equal(d.validatePoolInput({ ...input, migrateWhenSpent: false }, accounts), true);
@@ -155,11 +136,7 @@ test('a pool input holds every engine bound', () => {
   );
 });
 
-test('a pool input carries the store defaults for the pin and placement fields, and each unknown spelling is refused', () => {
-  assert.deepEqual(
-    [input.affinityMode, input.subagentPlacement, input.sessionPlacement, input.minSharedPrefixTokens],
-    ['always', 'by_strategy', 'by_strategy', 20_000],
-  );
+test('a pool input takes each listed spelling of the pin and placement fields, and each unknown spelling is refused', () => {
   const spellings = {
     affinityMode: [['always', 'when_cached'], 'sometimes'],
     sessionPlacement: [['by_strategy', 'by_warm_prefix'], 'by_luck'],

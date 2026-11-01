@@ -12,24 +12,6 @@ use phoebis_ledger::{
     UNATTRIBUTED,
 };
 
-/// The dollars of `counts` on Sonnet 5 at the shipped revision in force at `at`, the list `insert_request` folds with
-/// and the readers here price at.
-fn sonnet_usd(at: i64, input: u64, cache_read: u64, output: u64) -> f64 {
-    PriceRevisions::shipped()
-        .in_force(at)
-        .estimate(
-            "claude-sonnet-5",
-            Speed::Standard,
-            input,
-            cache_read,
-            0,
-            0,
-            output,
-        )
-        .expect("the shipped list carries the model")
-        .0
-}
-
 fn delta(at: i64, kind: &str) -> KeepaliveDelta {
     KeepaliveDelta {
         at,
@@ -314,16 +296,14 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         ),
         (1, 1, 1, 2)
     );
-    // The probe's own request row's counts and the settlement's, each priced when read.
-    let (probe_usd, wasted_usd) = (sonnet_usd(at, 0, 2_000, 0), sonnet_usd(at, 100, 0, 20));
-    assert!(probe_usd > 0.0 && wasted_usd > 0.0);
-    assert_eq!(
-        (
-            desktop.probe_cost_usd,
-            desktop.wasted_probes,
-            desktop.wasted_probe_usd
-        ),
-        (probe_usd, 3, wasted_usd)
+    // The probe's own request row's counts and the settlement's, each priced when read on the shipped list's first
+    // entry, in force before its date: Sonnet 5 reads cache at $0.20 per million, so the probe's 2,000 read tokens
+    // cost $0.0004, and the settlement's 100 input tokens at $2 and 20 output tokens at $10 per million $0.0002 each.
+    assert!(
+        (desktop.probe_cost_usd - 0.0004).abs() < 1e-12
+            && desktop.wasted_probes == 3
+            && (desktop.wasted_probe_usd - 0.0004).abs() < 1e-12,
+        "{desktop:?}"
     );
     // A request without a user agent shares the reserved row with the credits of its key. Replacing it under
     // another account moves its own counters and leaves the credit where it was.

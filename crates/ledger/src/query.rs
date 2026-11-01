@@ -4965,21 +4965,18 @@ mod tests {
         row.input_tokens = 1_000;
         row.cache_read_tokens = 500;
         row.output_tokens = 100;
-        let usage = row.usage();
         let at = HOUR * 1_000;
         let entrypoint = entrypoint_of_client(&row.client);
-        let whole = price_equivalent(&tables, entrypoint, model, usage, at, at, at);
-        assert!(whole.is_some(), "Sonnet 5.5 is weighted");
-        let priced_whole = std::cell::Cell::new(0);
+        // A figure no pricing of the row's usage answers, so a sum that priced it again reads another one.
         let mut sums = EquivalentSums::default();
-        sums.add_priced(&row, true, whole, |priced| {
-            if priced == usage {
-                priced_whole.set(priced_whole.get() + 1);
-            }
+        sums.add_priced(&row, true, Some(0.0625), |priced| {
             price_equivalent(&tables, entrypoint, model, priced, at, at, at)
         });
-        assert_eq!(priced_whole.get(), 0, "the whole usage is not priced again");
-        assert_eq!(sums.cost.figure(), whole);
+        assert_eq!(
+            sums.cost.figure(),
+            Some(0.0625),
+            "the whole usage is not priced again"
+        );
     }
 
     /// No reader of a priced row reads its shares, since the shares a route answers come from the share fold under

@@ -5840,12 +5840,13 @@ mod tests {
             .pend(Report::Accounting { degraded: false })
             .is_none());
         assert_eq!(
-            handle.dropped_reports(),
-            Report::KINDS
-                .iter()
-                .map(|kind| (*kind, u64::from(*kind == "accounting")))
-                .collect::<Vec<_>>(),
+            dropped(&handle),
+            1,
             "after the final drain nothing takes the reading"
+        );
+        assert!(
+            handle.dropped_reports().contains(&("accounting", 1)),
+            "the drop counts under the reading's kind"
         );
     }
 

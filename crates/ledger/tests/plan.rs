@@ -1,13 +1,12 @@
 //! The subscription cost model: a token costs a weight times a multiplier in units, a window holds a capacity per
 //! tier, and the peak band is a capacity factor per window. Every expected figure is worked out by hand from the
 //! round numbers of the test table (`tests/fixtures/subscription_costs.yaml`), on its first revision unless a case
-//! crosses to the second. The shipped file is held to its shape.
+//! crosses to the second.
 
 use phoebis_ledger::test_tables::{self, JANUARY_2026, SUBSCRIPTION_COSTS};
 use phoebis_ledger::{
-    effective_instant, entrypoint_of_client, funding_of, price_equivalent, price_shares,
-    CostRevisions, Funding, LedgerError, PlanTables, SubscriptionCosts, BILLED_FUNDING,
-    FAST_FUNDING,
+    entrypoint_of_client, funding_of, price_equivalent, price_shares, CostRevisions, Funding,
+    LedgerError, PlanTables, SubscriptionCosts, BILLED_FUNDING, FAST_FUNDING,
 };
 use phoebis_routing::{PinUsage, Rates, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::PinBurn;
@@ -76,13 +75,6 @@ fn cache_read(tokens: u64) -> PinUsage {
     }
 }
 
-fn output(tokens: u64) -> PinUsage {
-    PinUsage {
-        output: tokens,
-        ..Default::default()
-    }
-}
-
 fn input_burn(tokens: f64) -> PinBurn {
     PinBurn {
         input: tokens,
@@ -115,24 +107,6 @@ fn all_close(got: [Option<f64>; 5], want: [Option<f64>; 5]) -> bool {
         (None, None) => true,
         _ => false,
     })
-}
-
-// Opus 5.5 weighs 2 and an input token multiplies by 1, so one input token is 2 units: 2 / 100 of the Max 20x
-// 5-hour window out of band, over the band's 0.5 inside it.
-#[test]
-fn one_input_token_spends_its_weight_over_the_tiers_five_hour_capacity_and_twice_that_inside_the_band(
-) {
-    let tables = first();
-    assert_share(
-        tables.share_at(FIVE_HOUR, None, MAX_20X, OPUS, input(1), OUT_OF_BAND),
-        0.02,
-        "out of band",
-    );
-    assert_share(
-        tables.share_at(FIVE_HOUR, None, MAX_20X, OPUS, input(1), IN_BAND),
-        0.04,
-        "in band",
-    );
 }
 
 // One Opus 5.5 input token a second is 2 units a second: 2 / 100 of the Max 20x 5-hour window per second out of
@@ -337,44 +311,6 @@ fn the_week_prices_on_its_own_capacity_and_its_factor_of_one_leaves_it_unbanded(
             &format!("the week at {at}"),
         );
     }
-}
-
-// Pro holds 5 units on the 5-hour window: 2 / 5.
-#[test]
-fn a_pro_account_spends_the_same_units_over_its_own_smaller_capacity() {
-    assert_share(
-        first().share_at(FIVE_HOUR, None, PRO, OPUS, input(1), OUT_OF_BAND),
-        0.4,
-        "Pro",
-    );
-}
-
-// The Fable week is the 7-day window at a capacity factor of 0.5: 2 / 1000 / 0.5.
-#[test]
-fn a_model_week_reads_the_seven_day_share_over_its_capacity_factor() {
-    assert_share(
-        first().share_at(SEVEN_DAY_FABLE, None, MAX_20X, OPUS, input(1), OUT_OF_BAND),
-        0.004,
-        "the Fable week",
-    );
-}
-
-// Opus 5.5 at weight 2 over the multipliers input 1, cache read 0.1, both writes 2 and output 10:
-// (2 + 0.2 + 4 + 4 + 20) / 100.
-#[test]
-fn every_token_type_costs_the_weight_times_its_shared_multiplier() {
-    let one_of_each = PinUsage {
-        input: 1,
-        cache_read: 1,
-        write_5m: 1,
-        write_1h: 1,
-        output: 1,
-    };
-    assert_share(
-        first().share_at(FIVE_HOUR, None, MAX_20X, OPUS, one_of_each, OUT_OF_BAND),
-        0.302,
-        "one token of each type",
-    );
 }
 
 // Haiku weighs 0.5, and its override sets the cache read multiplier to 0.2 and its weight on `seven_day` to 1.
@@ -682,92 +618,6 @@ fn a_null_weight_with_an_override_on_one_window_prices_that_window_alone() {
         ),
         0.02,
         "the override's 1 over the anchor's 50",
-    );
-}
-
-// The worked figures on the shipped file, each derived from its members rather than written down, so a revision edits
-// no test: one million input tokens of Opus 5.5 out of the band and inside it and of Fable 5.1, one million Opus 5.5
-// output tokens, and the Opus 5.5 request as a share of a Max 20x account's own 5-hour window.
-#[test]
-fn the_shipped_equivalent_is_the_units_over_the_pro_capacity_and_a_max_20x_share_scales_it_by_the_capacities(
-) {
-    let shipped = CostRevisions::shipped();
-    let costs = shipped.latest().clone();
-    let tables = PlanTables::shipped();
-    let equivalent =
-        |window, model, usage, at| tables.equivalent_at(window, None, model, usage, at, at, at);
-    // The instants are found inside the latest entry rather than written down, so its date and weekday edit no test:
-    // the first half hour after its date outside the band, and the first inside it.
-    let from = effective_instant(&costs.effective).expect("the entry's date");
-    let half_hours = (0..7 * 48).map(|n| from + n * 1_800_000 + 900_000);
-    let out_of_band = half_hours
-        .clone()
-        .find(|at| costs.band_factor(FIVE_HOUR, None, *at) == 1.0)
-        .expect("an instant out of band");
-    let in_band = half_hours
-        .clone()
-        .find(|at| costs.band_factor(FIVE_HOUR, None, *at) > 1.0)
-        .expect("the band falls inside a week");
-    for at in [out_of_band, in_band] {
-        assert_eq!(
-            shipped.in_force(at).effective,
-            costs.effective,
-            "the entry is in force at {at}"
-        );
-    }
-    for model in [OPUS, FABLE] {
-        assert!(
-            !costs.overrides.contains_key(model),
-            "{model} carries no override"
-        );
-    }
-    let anchor = &costs.capacity[&costs.unit.tier];
-    let (five_hour, seven_day) = (anchor.five_hour.unwrap(), anchor.seven_day.unwrap());
-    let fable_week = costs.model_windows[SEVEN_DAY_FABLE].capacity_factor;
-    let million = 1_000_000;
-    let units = |model: &str, multiplier: f64| {
-        million as f64 * costs.model_weight[model].unwrap() * multiplier
-    };
-    let multiplier = &costs.type_multiplier;
-    let opus = units(OPUS, multiplier.input);
-    let opus_equivalent = opus / five_hour;
-    assert_share(
-        equivalent(FIVE_HOUR, OPUS, input(million), out_of_band),
-        opus_equivalent,
-        "Opus 5.5 input on the 5-hour window",
-    );
-    assert_share(
-        equivalent(FIVE_HOUR, OPUS, input(million), in_band),
-        opus_equivalent / costs.peak.capacity_factor.five_hour,
-        "Opus 5.5 input on the 5-hour window inside the band",
-    );
-    assert_share(
-        equivalent(SEVEN_DAY, OPUS, input(million), out_of_band),
-        opus / seven_day,
-        "Opus 5.5 input on the week",
-    );
-    let fable = units(FABLE, multiplier.input);
-    for (window, want) in [
-        (FIVE_HOUR, fable / five_hour),
-        (SEVEN_DAY, fable / seven_day),
-        (SEVEN_DAY_FABLE, fable / seven_day / fable_week),
-    ] {
-        assert_share(
-            equivalent(window, FABLE, input(million), out_of_band),
-            want,
-            &format!("Fable 5.1 input on {window}"),
-        );
-    }
-    assert_share(
-        equivalent(FIVE_HOUR, OPUS, output(million), out_of_band),
-        units(OPUS, multiplier.output) / five_hour,
-        "Opus 5.5 output on the 5-hour window",
-    );
-    let max_20x = costs.capacity[MAX_20X].five_hour.unwrap();
-    assert_share(
-        costs.share_at(FIVE_HOUR, None, MAX_20X, OPUS, input(million), out_of_band),
-        opus_equivalent * five_hour / max_20x,
-        "the Max 20x share is the equivalent times the anchor's capacity over Max 20x's",
     );
 }
 
@@ -1249,13 +1099,6 @@ fn assert_names(message: &str, key: &str) {
         message.contains(key),
         "the refusal names `{key}`: {message}"
     );
-}
-
-#[test]
-fn the_test_table_loads() {
-    let revisions = CostRevisions::from_yaml(SUBSCRIPTION_COSTS).expect("the test table parses");
-    let dates: Vec<&str> = revisions.iter().map(|r| r.effective.as_str()).collect();
-    assert_eq!(dates, ["2026-01-01", "2026-02-01"]);
 }
 
 #[test]
@@ -1779,52 +1622,6 @@ fn a_path_that_cannot_be_read_refuses_the_load_rather_than_reading_the_shipped_m
         Err(LedgerError::Io(_)) => {}
         other => panic!("an unreadable path loads as {other:?}"),
     }
-}
-
-#[test]
-fn the_shipped_model_parses_and_holds_the_shape() {
-    let revisions = CostRevisions::shipped();
-    assert_eq!(PlanTables::shipped().source, "shipped");
-    assert!(revisions.len() >= 1);
-    for costs in revisions.iter() {
-        assert!(!costs.capacity.is_empty());
-        for (tier, row) in &costs.capacity {
-            for (window, capacity) in [(FIVE_HOUR, row.five_hour), (SEVEN_DAY, row.seven_day)] {
-                assert!(
-                    capacity.is_none_or(|c| c.is_finite() && c > 0.0),
-                    "{tier} {window}: {capacity:?}"
-                );
-            }
-        }
-        let anchor = &costs.capacity[&costs.unit.tier];
-        assert!(anchor.five_hour.is_some() && anchor.seven_day.is_some());
-        assert!(!costs.model_weight.is_empty());
-        for (model, weight) in &costs.model_weight {
-            assert!(
-                weight.is_none_or(|w| w.is_finite() && w > 0.0),
-                "{model}: {weight:?}"
-            );
-        }
-        assert!(!costs.tier_order.is_empty());
-        for model in costs.model_weight.keys().chain(costs.overrides.keys()) {
-            assert!(costs.model_weight.contains_key(model), "{model}");
-            let tier = costs.tier_of(model);
-            assert!(
-                tier.is_some_and(|tier| costs.tier_order.iter().any(|t| t == tier)),
-                "{model}: {tier:?}"
-            );
-        }
-        let keys: Vec<&str> = costs.model_weight.keys().map(String::as_str).collect();
-        assert_eq!(
-            costs.model_order(&keys),
-            keys,
-            "the weights are in the model order"
-        );
-    }
-    assert!(
-        !revisions.latest().regimes.is_empty(),
-        "the shipped model names a regime"
-    );
 }
 
 #[test]

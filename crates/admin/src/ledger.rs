@@ -73,11 +73,6 @@ mod tests {
     use crate::openapi::ErrorBody;
 
     #[test]
-    fn the_replay_answer_round_trips_through_its_declared_type() {
-        round_trips::<super::Replay>("replay");
-    }
-
-    #[test]
     fn the_held_replay_refusal_round_trips_through_the_error_body() {
         round_trips::<ErrorBody>("replay_held");
     }

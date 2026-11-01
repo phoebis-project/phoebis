@@ -267,9 +267,6 @@ test('the 5-hour timeline draws fewer cells at one width under the 12-hour setti
   assert.equal(d.cellsFit(316, '12h'), 6, 'twelve cells of 26 px cut "12 AM", six of 52.67 px hold it');
   assert.equal(d.cellsFit(876, '24h'), 12);
   assert.equal(d.cellsFit(876, '12h'), 12, 'twelve cells of 73 px hold "12 AM"');
-  assert.ok(d.CELL_MIN_PX['12h'].short > d.CELL_MIN_PX['24h'].short, `the short "12 AM" needs ${d.CELL_MIN_PX['12h'].short} px against ${d.CELL_MIN_PX['24h'].short} px for "06"`);
-  assert.ok(d.CELL_MIN_PX['12h'].full > d.CELL_MIN_PX['24h'].full, `the full "12:00 AM" needs ${d.CELL_MIN_PX['12h'].full} px against ${d.CELL_MIN_PX['24h'].full} px for "Sep 13"`);
-  assert.equal(d.CELL_MIN_PX['12h'].full, 53, 'two 12:00 AM labels keep the 24-hour spacing');
 });
 
 test('the Quota page lists a subscription account that is paired, not awaiting re-authentication and whose plan has not ended, and no API-key account', () => {

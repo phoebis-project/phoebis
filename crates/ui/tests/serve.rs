@@ -72,12 +72,33 @@ async fn the_shell_is_served_for_every_app_path_and_never_cached() {
     assert_security_headers(&headers, "POST /pools");
 }
 
+/// A bundle's hashed script is cached for a year and typed, and its theme script and favicon are served uncached. The
+/// placeholder carries the shell alone, so the files a bundle ships answer as a missing file does. Either way a hashed
+/// asset the build lacks is a 404.
 #[tokio::test]
 async fn hashed_assets_are_immutable_and_typed_and_a_missing_asset_is_a_404() {
-    let asset = phoebis_ui::asset_paths()
-        .into_iter()
-        .find(|p| p.starts_with("assets/") && p.ends_with(".js"));
-    if let Some(asset) = asset {
+    let (status, headers, _) = send("GET", "/assets/missing-0000.js").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(headers["cache-control"], "no-store");
+    if phoebis_ui::is_placeholder() {
+        for path in ["/theme.js", "/favicon.svg"] {
+            let (status, headers, body) = send("GET", path).await;
+            assert_eq!(
+                (
+                    status,
+                    headers["content-type"].to_str().unwrap(),
+                    headers["cache-control"].to_str().unwrap()
+                ),
+                (StatusCode::NOT_FOUND, "application/json", "no-store"),
+                "{path}"
+            );
+            assert_eq!(body, r#"{"error":"not found"}"#, "{path}");
+        }
+    } else {
+        let asset = phoebis_ui::asset_paths()
+            .into_iter()
+            .find(|p| p.starts_with("assets/") && p.ends_with(".js"))
+            .expect("the build embedded a bundle with a script under assets/");
         let (status, headers, body) = send("GET", &format!("/{asset}")).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
@@ -97,29 +118,13 @@ async fn hashed_assets_are_immutable_and_typed_and_a_missing_asset_is_a_404() {
         assert_eq!(head_headers["content-type"], headers["content-type"]);
         assert_eq!(head_headers["content-length"], bytes.len().to_string());
         assert!(head_body.is_empty(), "a HEAD answer carries no body");
-    } else {
-        assert!(
-            phoebis_ui::is_placeholder(),
-            "a real bundle carries at least one script under assets/"
-        );
-    }
-    let (status, headers, _) = send("GET", "/assets/missing-0000.js").await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(headers["cache-control"], "no-store");
-    let (status, headers, body) = send("GET", "/theme.js").await;
-    if phoebis_ui::is_placeholder() {
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    } else {
+        let (status, headers, body) = send("GET", "/theme.js").await;
         assert_eq!(
             (status, headers["cache-control"].to_str().unwrap()),
             (StatusCode::OK, "no-store")
         );
         assert!(body.contains("data-theme"));
-    }
-    let (status, headers, body) = send("GET", "/favicon.svg").await;
-    if phoebis_ui::is_placeholder() {
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    } else {
+        let (status, headers, body) = send("GET", "/favicon.svg").await;
         assert_eq!(status, StatusCode::OK);
         assert!(headers["content-type"]
             .to_str()
@@ -155,25 +160,38 @@ async fn the_admin_and_metrics_routes_are_never_shadowed() {
 }
 
 /// The API reference page lives at its directory and its index, never under the console's shell rule, and
-/// anything else under the directory is a JSON 404, so a typo there never shows the console.
+/// anything else under the directory is a JSON 404, so a typo there never shows the console. A placeholder build
+/// carries no page, so the directory and its index answer the same JSON 404, and never the placeholder shell.
 #[tokio::test]
 async fn the_api_reference_page_is_served_at_its_directory_and_nothing_else_under_it() {
-    for path in [
+    let page = [
         "/api-reference",
         "/api-reference/",
         "/api-reference/index.html",
-    ] {
-        let (status, headers, body) = send("GET", path).await;
-        assert_eq!(headers["cache-control"], "no-store", "{path}");
-        assert_security_headers(&headers, path);
-        if phoebis_ui::is_placeholder() {
+    ];
+    if phoebis_ui::is_placeholder() {
+        for path in page {
+            let (status, headers, body) = send("GET", path).await;
             assert_eq!(
-                status,
-                StatusCode::NOT_FOUND,
-                "{path}: a placeholder build carries no reference page"
+                (
+                    status,
+                    headers["content-type"].to_str().unwrap(),
+                    headers["cache-control"].to_str().unwrap()
+                ),
+                (StatusCode::NOT_FOUND, "application/json", "no-store"),
+                "{path}"
             );
-            assert!(body.contains("not found"), "{path}");
-        } else {
+            assert_security_headers(&headers, path);
+            assert_eq!(body, r#"{"error":"not found"}"#, "{path}");
+        }
+        let (status, _, body) = send("HEAD", "/api-reference/").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.is_empty(), "a HEAD carries no body");
+    } else {
+        for path in page {
+            let (status, headers, body) = send("GET", path).await;
+            assert_eq!(headers["cache-control"], "no-store", "{path}");
+            assert_security_headers(&headers, path);
             assert_eq!(status, StatusCode::OK, "{path}");
             assert!(
                 headers["content-type"]
@@ -199,6 +217,10 @@ async fn the_api_reference_page_is_served_at_its_directory_and_nothing_else_unde
                 "{path}: the entry is loaded from the hashed assets"
             );
         }
+        let (status, headers, body) = send("HEAD", "/api-reference/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(headers.contains_key("content-length"));
+        assert!(body.is_empty(), "a HEAD carries no body");
     }
     for path in [
         "/api-reference/x",
@@ -213,12 +235,6 @@ async fn the_api_reference_page_is_served_at_its_directory_and_nothing_else_unde
             "{path}: JSON, never a shell"
         );
     }
-    let (status, headers, body) = send("HEAD", "/api-reference/").await;
-    if !phoebis_ui::is_placeholder() {
-        assert_eq!(status, StatusCode::OK);
-        assert!(headers.contains_key("content-length"));
-    }
-    assert!(body.is_empty(), "a HEAD carries no body");
     let (status, headers, _) = send("POST", "/api-reference/").await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(headers["allow"], "GET, HEAD");

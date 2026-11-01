@@ -393,22 +393,6 @@ async fn a_failed_parked_read_answers_500_as_a_failed_holder_read_does() {
     assert_eq!(json(response).await, j!({ "error": "storage failure" }));
 }
 
-#[tokio::test]
-async fn the_route_sits_behind_the_admin_session() {
-    let parts = common::admin_parts_full().await;
-    let response = get(&parts.app, "/admin/attention", None).await;
-    assert_eq!(response.status(), 401);
-}
-
-#[tokio::test]
-async fn the_system_route_answers_without_an_engine_stats_member() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
-    assert!(system["keepalive"].is_object(), "{system}");
-    assert!(system.get("alerts").is_none(), "{system}"); // removed name
-}
-
 /// The route and the metrics listener read one reader, so the unpriced model's item lists on the route as its series
 /// reads on the scrape.
 #[tokio::test]

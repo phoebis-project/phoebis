@@ -1012,8 +1012,23 @@ mod tests {
     #[test]
     fn the_rendered_file_loads_and_carries_the_plans_values() {
         let dir = tempfile::tempdir().unwrap();
+        // Each shape names the pairs its file carries (proxy, admin), the key file and the two table files, then the
+        // metrics address. A relative path is read against the shape's directory, where the bootstrap file sits, and
+        // an absolute one, a path inside the image, stands as written.
+        let beside_the_file = ["storage.key", "api_prices.yaml", "subscription_costs.yaml"];
+        let in_the_image = [
+            "/run/secrets/router-storage-key",
+            "/var/lib/phoebis/api_prices.yaml",
+            "/var/lib/phoebis/subscription_costs.yaml",
+        ];
         let shapes = [
-            ("loopback", args(&[])),
+            (
+                "loopback",
+                args(&[]),
+                (false, false),
+                beside_the_file,
+                "127.0.0.1:9464",
+            ),
             (
                 "off-loopback",
                 args(&[
@@ -1030,8 +1045,17 @@ mod tests {
                     "--data-dir",
                     "odd # dir",
                 ]),
+                (false, true),
+                beside_the_file,
+                "127.0.0.1:9464",
             ),
-            ("container", args(&["--container"])),
+            (
+                "container",
+                args(&["--container"]),
+                (false, false),
+                in_the_image,
+                "0.0.0.0:9464",
+            ),
             (
                 "proxy-pair",
                 args(&[
@@ -1042,6 +1066,9 @@ mod tests {
                     "--proxy-key",
                     "k.pem",
                 ]),
+                (true, false),
+                beside_the_file,
+                "127.0.0.1:9464",
             ),
             (
                 "container-pairs",
@@ -1056,45 +1083,25 @@ mod tests {
                     "--admin-key",
                     "k.pem",
                 ]),
+                (true, true),
+                in_the_image,
+                "0.0.0.0:9464",
             ),
         ];
-        for (name, shape) in &shapes {
+        for (name, shape, (proxy_pair, admin_pair), files, metrics) in &shapes {
             let config = dir.path().join(name).join("config.yaml");
             let plan = plan(&config, shape).unwrap();
             std::fs::create_dir_all(config.parent().unwrap()).unwrap();
             std::fs::write(&config, render(&plan)).unwrap();
             let loaded = crate::config::load_unresolved(&config)
                 .unwrap_or_else(|error| panic!("{name}: {error}\n{}", render(&plan)));
-            // Two absent pairs compare equal, so a shape that passes a pair proves it arrived on both sides first.
-            let (proxy_pair, admin_pair) = (
-                matches!(*name, "proxy-pair" | "container-pairs"),
-                matches!(*name, "off-loopback" | "container-pairs"),
-            );
+            // Two absent pairs compare equal, so whether each listener carries a pair is read from the shape before
+            // the two sides' pairs are compared.
             assert_eq!(loaded.proxy.listen, plan.proxy.listen, "{name}");
-            assert_eq!(
-                loaded.proxy.tls.is_some(),
-                plan.proxy.tls.is_some(),
-                "{name}"
-            );
-            if proxy_pair {
-                assert!(
-                    loaded.proxy.tls.is_some() && plan.proxy.tls.is_some(),
-                    "{name}"
-                );
-            }
+            assert_eq!(loaded.proxy.tls.is_some(), *proxy_pair, "{name}");
             assert_eq!(loaded.proxy.tls, plan.proxy.tls, "{name}");
             assert_eq!(loaded.admin.listen, plan.admin.listen, "{name}");
-            assert_eq!(
-                loaded.admin.tls.is_some(),
-                plan.admin.tls.is_some(),
-                "{name}"
-            );
-            if admin_pair {
-                assert!(
-                    loaded.admin.tls.is_some() && plan.admin.tls.is_some(),
-                    "{name}"
-                );
-            }
+            assert_eq!(loaded.admin.tls.is_some(), *admin_pair, "{name}");
             assert_eq!(loaded.admin.tls, plan.admin.tls, "{name}");
             assert_eq!(loaded.admin.secret_env, plan.secret_env, "{name}");
             assert_eq!(
@@ -1107,28 +1114,13 @@ mod tests {
                 plan.data_dir.join("ledger.sqlite"),
                 "{name}"
             );
-            let (key_file, tables, metrics) = if plan.container {
-                (
-                    PathBuf::from("/run/secrets/router-storage-key"),
-                    PathBuf::from("/var/lib/phoebis"),
-                    "0.0.0.0:9464",
-                )
-            } else {
-                (
-                    plan.key_file.clone(),
-                    dir.path().join(name),
-                    "127.0.0.1:9464",
-                )
-            };
+            let [key_file, api_prices, subscription_costs] =
+                files.map(|path| dir.path().join(name).join(path));
             assert_eq!(loaded.storage.encryption_key_file, key_file, "{name}");
-            assert_eq!(
-                loaded.stats.api_prices_path,
-                Some(tables.join("api_prices.yaml")),
-                "{name}"
-            );
+            assert_eq!(loaded.stats.api_prices_path, Some(api_prices), "{name}");
             assert_eq!(
                 loaded.stats.subscription_costs_path,
-                Some(tables.join("subscription_costs.yaml")),
+                Some(subscription_costs),
                 "{name}"
             );
             assert_eq!(
