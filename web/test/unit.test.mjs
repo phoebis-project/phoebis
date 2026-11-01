@@ -73,7 +73,15 @@ test('a stored week the console does not know reads the Ultra week, the default'
 test('native reads both sides of one answer and every other position its funding side', () => {
   assert.ok(Object.hasOwn(d.UNIT_FUNDING, 'native'), 'native is a position of the map');
   assert.equal(d.UNIT_FUNDING.native, undefined);
-  assert.deepEqual(d.UNIT_FUNDING, { all: undefined, equivalent: 'plan', native: undefined, share: 'plan', usd: 'billed' });
+  assert.deepEqual(
+    d.UNIT_POSITIONS.map((p) => [p, d.UNIT_FUNDING[p]]),
+    [
+      ['native', undefined],
+      ['all', undefined],
+      ['usd', 'billed'],
+      ['equivalent', 'plan'],
+    ],
+  );
 });
 
 test('the legend takes the focus as it opens and hands it back to its button on Escape', () => {

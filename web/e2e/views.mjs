@@ -900,10 +900,12 @@ async function topbarHeights(theme) {
  * The week control beside the unit switch. At 1280 by 800 and 1440 by 900 the Week select sits in the bar's right
  * group after the Unit select and before the legend's button, its three long labels whole in its text box, in the Unit
  * select's height, top edge, type and ink. At 900 by 800 and 360 by 800 it reads the three short labels whole, on the
- * Unit select's line, and at 360 the legend's button has given way. Under All in dollars it reads disabled with its
- * title, and under Native again enabled with none. On the Settings page's Unit row at 1280 and 400 px the week select
- * sits on the position select's line to its right, both under the row's label at 400, as the row's other controls.
- * The pass's viewport and Native stand again after.
+ * Unit select's line, and at 360 the legend's button has given way. The bar is one 52 px line at 1280, 1440 and 900
+ * and two lines, 90 px, at 360. Under All in dollars the Week select reads disabled with its title, and under Native
+ * again enabled with none. On the Settings page's Unit row at 1280, 400 and 360 px the position select, the week
+ * select and the legend's button stand inside the Appearance card's content box, at 1280 and 400 the week select on
+ * the position select's line to its right, and at 400 and 360 the controls under the row's label, as the row's other
+ * controls. The pass's viewport and Native stand again after.
  */
 async function weekControl(theme) {
   const LONG = ['Pro week', 'Max week', 'Ultra week'];
@@ -947,11 +949,11 @@ async function weekControl(theme) {
       };
     });
   try {
-    for (const { height, width } of [
-      { height: 800, width: 1280 },
-      { height: 900, width: 1440 },
-      { height: 800, width: 900 },
-      { height: 800, width: 360 },
+    for (const { bar, height, width } of [
+      { bar: 52, height: 800, width: 1280 },
+      { bar: 52, height: 900, width: 1440 },
+      { bar: 52, height: 800, width: 900 },
+      { bar: 90, height: 800, width: 360 },
     ]) {
       const say = (what) => failures.push(`${theme} /: at ${width} by ${height} ${what}`);
       await page.setViewportSize({ height, width });
@@ -962,6 +964,7 @@ async function weekControl(theme) {
         say('the top bar draws no Week select beside its Unit select');
         continue;
       }
+      if (read.bar.height !== bar) say(`the top bar is ${read.bar.height} px tall, not ${bar}`);
       const [unitSlot, weekSlot, legendSlot] = read.slots;
       if (!(unitSlot >= 0 && weekSlot > unitSlot && legendSlot > weekSlot)) say(`the Week select is not between the Unit select and the legend's button in the bar's right group, slots ${JSON.stringify(read.slots)}`);
       if (read.week.left < 0 || read.week.right > read.width || read.week.top < read.bar.top || read.week.bottom > read.bar.bottom) say(`the Week select ${JSON.stringify(read.week)} leaves the bar ${JSON.stringify(read.bar)} or the ${read.width} px viewport`);
@@ -984,7 +987,7 @@ async function weekControl(theme) {
     if (states.all.disabled !== true || states.all.title !== TITLE) failures.push(`${theme} /: under All in dollars the Week select reads ${JSON.stringify(states.all)}, not disabled with the title ${JSON.stringify(TITLE)}`);
     if (states.native.disabled !== false || states.native.title !== null) failures.push(`${theme} /: under Native the Week select reads ${JSON.stringify(states.native)}, not enabled with no title`);
     await loadAtOrigin('/settings', '.settings select[aria-label="Week"]');
-    for (const width of [1280, 400]) {
+    for (const width of [1280, 400, 360]) {
       const say = (what) => failures.push(`${theme} /settings: at ${width} px ${what}`);
       await page.setViewportSize({ height: 800, width });
       await settle();
@@ -996,18 +999,30 @@ async function weekControl(theme) {
         };
         const unit = document.querySelector('.settings select[aria-label="Unit"]');
         const week = document.querySelector('.settings select[aria-label="Week"]');
+        const legend = unit?.closest('.unit-setting')?.querySelector('button[aria-label="What the units mean"]') ?? null;
         const label = unit?.closest('.setting-row')?.firstElementChild ?? null;
-        return { label: box(label), sameRow: unit !== null && week !== null && unit.closest('.setting-row') === week.closest('.setting-row'), unit: box(unit), week: box(week) };
+        // The card's content box: its border box less the border and the padding on each side.
+        const card = unit?.closest('.card') ?? null;
+        const inner = (() => {
+          if (!card) return null;
+          const b = card.getBoundingClientRect();
+          const s = getComputedStyle(card);
+          return { left: Math.round(b.left + parseFloat(s.borderLeftWidth) + parseFloat(s.paddingLeft)), right: Math.round(b.right - parseFloat(s.borderRightWidth) - parseFloat(s.paddingRight)) };
+        })();
+        return { card: inner, label: box(label), legend: box(legend), sameRow: unit !== null && week !== null && unit.closest('.setting-row') === week.closest('.setting-row'), unit: box(unit), week: box(week) };
       });
       measurements.push(`${theme} /settings week control at ${width} px ${JSON.stringify(row)}`);
-      if (row.unit === null || row.week === null || !row.sameRow) {
-        say('the Unit row draws no week select beside its position select');
+      if (row.unit === null || row.week === null || row.legend === null || row.card === null || !row.sameRow) {
+        say('the Unit row draws no week select and legend button beside its position select in a card');
         continue;
       }
+      for (const [name, b] of [['the position select', row.unit], ['the week select', row.week], ['the legend button', row.legend]]) {
+        if (b.left < row.card.left || b.right > row.card.right) say(`${name} ${JSON.stringify(b)} leaves the Appearance card's content box ${JSON.stringify(row.card)}`);
+      }
       const middle = (b) => (b.top + b.bottom) / 2;
-      if (Math.abs(middle(row.unit) - middle(row.week)) > 2 || row.week.left < row.unit.right) say(`the week select ${JSON.stringify(row.week)} is not on the position select's line to its right ${JSON.stringify(row.unit)}`);
+      if (width !== 360 && (Math.abs(middle(row.unit) - middle(row.week)) > 2 || row.week.left < row.unit.right)) say(`the week select ${JSON.stringify(row.week)} is not on the position select's line to its right ${JSON.stringify(row.unit)}`);
       // A pixel of slack, as the Appearance rows' read allows a label over its control.
-      if (width === 400 && (row.label === null || row.label.bottom > Math.min(row.unit.top, row.week.top) + 1)) say(`the week and position selects ${JSON.stringify([row.unit, row.week])} are not under the row's label ${JSON.stringify(row.label)}`);
+      if (width !== 1280 && (row.label === null || row.label.bottom > Math.min(row.unit.top, row.week.top) + 1)) say(`the week and position selects ${JSON.stringify([row.unit, row.week])} are not under the row's label ${JSON.stringify(row.label)}`);
     }
   } finally {
     await page.setViewportSize({ height: 800, width: 1280 });

@@ -273,7 +273,7 @@
   color: var(--ink);
 }
 
-/* The Settings row's select and the legend's button keep one line. */
+/* The Settings row's position select, week select and legend button keep one line where the card has room for them. */
 .unit-setting {
   display: flex;
   flex: none;
@@ -2299,7 +2299,14 @@ textarea.input {
     position: static;
   }
 
-  /* The row wraps the select and the button onto its last line, so the popover hangs from the row's bottom. */
+  /* The two selects keep their long labels, and with the button they outgrow a phone's card on one line, so the
+     controls wrap inside the card. */
+  .unit-setting {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+
+  /* The row ends on the controls' last line, wherever the button lands, so the popover hangs from the row's bottom. */
   .unit-setting .unit-legend {
     top: 100%;
     right: 0;
@@ -2309,15 +2316,11 @@ textarea.input {
   }
 }
 
-/* Under 375 px the bar's line of controls and the Settings page's Unit row are at their narrowest, so the bar, its
-   right group and the row close up further and the switches' text and padding shrink. */
+/* Under 375 px the controls' line is at its narrowest, so the bar and its right group close up further and the
+   switches' text and padding shrink. */
 @media (max-width: 374px) {
   .topbar {
     column-gap: 4px;
-  }
-
-  .unit-setting {
-    gap: 4px;
   }
 
   .topbar__right {

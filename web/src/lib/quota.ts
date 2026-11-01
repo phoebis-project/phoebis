@@ -23,9 +23,11 @@ const TIER_LABEL: Readonly<Record<string, string>> = {
 
 /**
  * A tier's label, for the cost reference's tiers, the rings' anchor and reasons, and an older decision record's tier
- * word: `default_claude_max_20x` reads as "Ultra", `default_claude_max_5x` as "Max" and `default_claude_ai`, the tier
- * the profile reports for Pro, as "Pro", and anything else is shown as sent. An account's own plan reads the profile's
- * display name first where it carries one (`planName`), since a record or a capacity row carries the tier alone.
+ * word: `claude_max_20x` and `default_claude_max_20x` read as "Ultra", `claude_max_5x` and `default_claude_max_5x` as
+ * "Max", `claude_pro` and `default_claude_ai`, the tier the profile reports for Pro, as "Pro", and the Team and
+ * Enterprise ids with and without `default_` as "Team" and "Enterprise", every other id as sent. An account's own plan
+ * reads the profile's display name first where it carries one (`planName`), since a record or a capacity row carries
+ * the tier alone.
  */
 export function planLabel(tier: string): string {
   return own(TIER_LABEL, tier) ? TIER_LABEL[tier] : tier;
