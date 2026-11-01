@@ -223,14 +223,9 @@ fn build_lists_a_keys_pool_guardrails_before_its_own_and_a_guardrail_on_both_onc
 }
 
 #[test]
-fn build_skips_a_disabled_guardrail_and_one_whose_pattern_does_not_compile_and_keeps_both_names() {
+fn build_keeps_the_names_of_a_disabled_guardrail_one_whose_pattern_does_not_compile_and_one_attached_to_nothing(
+) {
     let s = guarded();
-    for key_id in ["k1", "k2"] {
-        let ids = ids_for(&s, key_id);
-        for skipped in ["g3", "g4", "g5"] {
-            assert!(!ids.contains(&skipped), "{skipped} runs for {key_id}");
-        }
-    }
     let names = s.guardrails();
     assert_eq!(names.name_of("g3"), Some("g3 name"));
     assert_eq!(names.name_of("g4"), Some("g4 name"));

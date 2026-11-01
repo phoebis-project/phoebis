@@ -193,11 +193,22 @@ mod tests {
         assert_eq!(within_pattern.chars().count(), MAX_PATTERN_CHARS);
         assert_eq!(within_name.chars().count(), MAX_NAME_CHARS);
 
+        assert!(
+            matches(&within_pattern, &within_name),
+            "a pattern and a name at the bound fill the table and match"
+        );
+        // 256 tokens, the last a literal b the name never holds: a backtracking matcher finds the matching pair above
+        // in about 256 steps, so only a pair it cannot match shows an exponential walk.
+        let missing = format!("{}*b", "*a".repeat(127));
         let start = std::time::Instant::now();
-        matches(&within_pattern, &within_name);
+        let missed = matches(&missing, &within_name);
         assert!(
             start.elapsed() < std::time::Duration::from_secs(1),
             "a table-filled match must stay bounded, never explore one path per star split"
+        );
+        assert!(
+            !missed,
+            "a pattern at the bound whose last literal the name lacks answers no match"
         );
 
         let over_pattern = format!("{within_pattern}a");

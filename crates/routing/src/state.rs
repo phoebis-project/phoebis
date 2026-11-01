@@ -3930,6 +3930,31 @@ mod tests {
         assert_eq!(state.credits("a"), None);
     }
 
+    /// A registry that reads `a` ready under incarnation 1 at `revision`, off the mark: a reconcile against it keeps
+    /// a funding entry only while the writer has not acknowledged its mark at a revision above `revision`.
+    fn ready_at(revision: u64) -> RegistrySnapshot {
+        RegistrySnapshot::from_load(
+            phoebis_store::RegistryLoad {
+                accounts: vec![phoebis_store::AccountRow {
+                    id: "a".into(),
+                    kind: AccountKind::Oauth,
+                    label: "a".into(),
+                    enabled: true,
+                    identity: None,
+                    lifecycle_generation: 1,
+                    incarnation: 1,
+                    revision,
+                    state: AccountState::Ready,
+                    state_cause: StateCause::Operator,
+                }],
+                ..phoebis_store::RegistryLoad::default()
+            },
+            [0; 32],
+            0,
+            1,
+        )
+    }
+
     #[test]
     fn two_funding_marks_in_one_millisecond_take_two_ordinals_and_only_the_second_ones_acknowledgment_credits_it(
     ) {
@@ -3941,19 +3966,30 @@ mod tests {
             (1, 2),
             "an account's ordinals start at 1 and each mark takes the next one"
         );
-        let retry = state.funding_retries["a"];
         assert_eq!(
-            (retry.ordinal, retry.retry_at),
-            (second, 301_000),
+            (
+                state.funding_retries(),
+                state.funding_marked_since("a", first),
+                state.funding_marked_since("a", second)
+            ),
+            (vec![("a".to_string(), 301_000)], true, false),
             "the second mark's entry stands under its own ordinal"
         );
         state.funding_written("a", 1, first, None);
+        state.reconcile_funding_retries(&ready_at(4));
         assert_eq!(
-            state.funding_retries["a"].mark_revision, None,
+            state.funding_retries(),
+            vec![("a".to_string(), 301_000)],
             "the first write's acknowledgment names the entry the second mark replaced"
         );
         state.funding_written("a", 1, second, Some(5));
-        assert_eq!(state.funding_retries["a"].mark_revision, Some(5));
+        state.reconcile_funding_retries(&ready_at(4));
+        assert_eq!(state.funding_retries().len(), 1);
+        state.reconcile_funding_retries(&ready_at(5));
+        assert!(
+            state.funding_retries().is_empty(),
+            "the second write's acknowledgment credits its entry at revision 5"
+        );
     }
 
     #[test]
@@ -3962,19 +3998,30 @@ mod tests {
         let mut state = RoutingState::from_load(RoutingLoad::default());
         let first = state.funding_marked("a", 1, 10_000, 300_000);
         let second = state.funding_marked("a", 1, 5_000, 300_000);
-        let retry = state.funding_retries["a"];
         assert_eq!(
-            (retry.ordinal, retry.retry_at),
-            (first + 1, 305_000),
+            (
+                state.funding_retries(),
+                state.funding_marked_since("a", first),
+                state.funding_marked_since("a", first + 1)
+            ),
+            (vec![("a".to_string(), 305_000)], true, false),
             "the second entry takes the first's ordinal plus one and retries from the stepped-back clock"
         );
         state.funding_written("a", 1, first, Some(4));
+        state.reconcile_funding_retries(&ready_at(4));
         assert_eq!(
-            state.funding_retries["a"].mark_revision, None,
+            state.funding_retries(),
+            vec![("a".to_string(), 305_000)],
             "the first write's acknowledgment names its own ordinal"
         );
         state.funding_written("a", 1, second, Some(5));
-        assert_eq!(state.funding_retries["a"].mark_revision, Some(5));
+        state.reconcile_funding_retries(&ready_at(4));
+        assert_eq!(state.funding_retries().len(), 1);
+        state.reconcile_funding_retries(&ready_at(5));
+        assert!(
+            state.funding_retries().is_empty(),
+            "the second write's acknowledgment credits its entry at revision 5"
+        );
     }
 
     #[test]
@@ -4073,9 +4120,9 @@ mod tests {
         };
         assert_eq!(
             state
-                .pins
-                .iter()
-                .map(|(key, p)| (key.clone(), p.burn_unmetered))
+                .pins()
+                .into_iter()
+                .map(|p| (p.key(), p.burn_unmetered))
                 .collect::<Vec<_>>(),
             vec![(dated.clone(), unmetered)],
             "the rekey carries the unmetered usage to the dated id"
@@ -4097,8 +4144,8 @@ mod tests {
         state.remove_pin(&dated);
         assert!(
             !state
-                .pins
-                .values()
+                .pins()
+                .iter()
                 .any(|p| p.burn_unmetered != PinBurn::default()),
             "the unmetered usage leaves with the pin"
         );
@@ -4213,8 +4260,8 @@ mod tests {
         };
         assert_eq!(
             state
-                .pins
-                .values()
+                .pins()
+                .iter()
                 .map(|p| (p.key(), p.auxiliary_only))
                 .collect::<Vec<_>>(),
             vec![(dated.clone(), true)],
@@ -5487,13 +5534,10 @@ mod tests {
         );
         let next = paused + AVERAGE_MS - 1;
         state.fold_pace(&paced(), next, AVERAGE_MS);
+        // The mean of the three 30 s gaps and the fourth of 1 799 999 ms: 1 889 999 / 4.
         assert_eq!(
             read(&state),
-            (
-                4,
-                Some(30_000.0 + (AVERAGE_MS - 1 - 30_000) as f64 / 4.0),
-                next
-            ),
+            (4, Some(472_499.75), next),
             "a gap one millisecond under the burn average folds"
         );
     }
@@ -5837,9 +5881,9 @@ mod tests {
         let speed = state
             .write_slow_down("p", "a", &read_of(0.5), 1.0, AVERAGE_MS / 2, AVERAGE_MS)
             .speed;
-        let w = (-0.5_f64).exp();
+        // 1 - 0.5 x e^-0.5: the old speed's shortfall of a half under the realized 1, kept at e^-0.5.
         assert!(
-            (speed - (0.5 * w + 1.0 * (1.0 - w))).abs() < 1e-12,
+            (speed - 0.696_734_670_143_683_3).abs() < 1e-12,
             "half a burn average after the last read keeps e^-0.5 of the old speed: {speed}"
         );
     }
