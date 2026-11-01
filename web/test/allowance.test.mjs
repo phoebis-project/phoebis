@@ -23,7 +23,7 @@ const COSTS = {
     default_claude_max_5x: { fiveHour: 5_000, sevenDay: 40_000 },
   },
   modelWindows: { seven_day_fable: { capacityFactor: 0.25, of: 'seven_day' } },
-  unit: { definedBy: { band: 'off_peak', tier: 'default_claude_max_20x', window: 'five_hour' }, unitsPerWindow: 20_000 },
+  unit: { tier: 'default_claude_max_20x', window: 'five_hour' },
 };
 const PRO = { plan: 'pro', tier: 'default_claude_ai' };
 const MAX_5X = { plan: 'max_5x', tier: 'default_claude_max_5x' };

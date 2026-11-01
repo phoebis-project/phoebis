@@ -26,7 +26,7 @@ import { KEYS_CODEC } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, SHARE_NOTE, UNPRICED_TITLE, equivalentOrDash, moveLabel, nativeFiguresOf } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { clock } from '@/lib/clock';
-import { fmtAbsolute, fmtCompact, fmtDuration, fmtEquivalent, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, shareLabel, shortModel, withEstimate } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, shareLabel, shortModel, withEstimate } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
@@ -333,13 +333,8 @@ export function PoolsPage() {
         day: {
           billedUsd: pools.data.reduce((s, p) => s + p.billed24h, 0),
           cost: pools.data.reduce((s, p) => s + p.cost24h, 0),
-          // A pool's flag holds in the total, since that pool's sum holds its priced rows alone.
-          equivalent: {
-            fiveHour: pools.data.reduce((s, p) => s + p.equivalent24h.fiveHour, 0),
-            sevenDay: pools.data.reduce((s, p) => s + p.equivalent24h.sevenDay, 0),
-            unpriced: { fiveHour: pools.data.some((p) => p.equivalent24h.unpriced.fiveHour), sevenDay: pools.data.some((p) => p.equivalent24h.unpriced.sevenDay) },
-          },
-          estimated: pools.data.some((p) => p.estimated24h),
+          // A pool that priced nothing nulls the total, since the priced pools alone would read as the whole.
+          equivalent: pools.data.reduce<number | null>((s, p) => (s === null || p.equivalent24h === null ? null : s + p.equivalent24h), 0),
         },
       }
     : null;
@@ -591,14 +586,14 @@ function CacheTtlOverrides({
 }
 
 const DAY_MS = 24 * 3_600_000;
-const dayOf = (p: Pool): FundedSum => ({ billedUsd: p.billed24h, cost: p.cost24h, equivalent: p.equivalent24h, estimated: p.estimated24h });
+const dayOf = (p: Pool): FundedSum => ({ billedUsd: p.billed24h, cost: p.cost24h, equivalent: p.equivalent24h });
 
 /**
- * A pool card's Cost 24h under the unit. Native stacks the day's 20x 7-day equivalent over its billed dollars, a side
- * with no rows left out, the 5-hour figure on the title, and a day whose 7-day window a plan row priced nothing on
- * reads the dash under `UNPRICED_TITLE`. Under the shares a card whose one member is a subscription account reads that
- * account's own 7-day share of the pool's day, which the breakdown route prices when a read names the one account, and
- * the console converts no equivalent into a share. Every other card names no one account.
+ * A pool card's Cost 24h under the unit. Native stacks the day's Pro-week figure over its billed dollars, a side with
+ * no rows left out, and a day a plan row priced nothing on reads the dash under `UNPRICED_TITLE`. Under the shares a
+ * card whose one member is a subscription account reads that account's own 7-day share of the pool's day, which the
+ * breakdown route prices when a read names the one account, and the console converts no equivalent into a share.
+ * Every other card names no one account.
  */
 function PoolCost({ pool, accountById }: { accountById: Map<string, Account>; pool: Pool }) {
   const { unit } = useAppSettings();
@@ -624,8 +619,7 @@ function PoolCost({ pool, accountById }: { accountById: Map<string, Account>; po
     if (group === undefined || typeof seven !== 'number') return dash(`No share of ${accountById.get(member)?.label ?? member}'s 7-day window priced in the last 24 hours`);
     const five = group.costShares?.five_hour;
     return (
-      <dd className="num" title={withEstimate([shareLabel('seven_day', seven), ...(typeof five === 'number' ? [shareLabel('five_hour', five)] : [])].join(', '), group.estimated)}>
-        {group.estimated ? '~' : ''}
+      <dd className="num" title={[shareLabel('seven_day', seven), ...(typeof five === 'number' ? [shareLabel('five_hour', five)] : [])].join(', ')}>
         {shareLabel('seven_day', seven)}
       </dd>
     );
@@ -633,11 +627,8 @@ function PoolCost({ pool, accountById }: { accountById: Map<string, Account>; po
   if (unit !== 'native') return <dd className="num">{fmtUsd(dollarsUnder(unit, day))}</dd>;
   const sides = nativeSidesOf(day);
   if (sides.equivalent === undefined && sides.billed === undefined) return dash('No request in the last 24 hours');
-  // The 5-hour figure reads its own window's flag, as a tile does, so a window a plan row priced nothing on reads the
-  // dash rather than a partial sum.
-  const fiveHour = equivalentOrDash('five_hour', day.equivalent.unpriced.fiveHour ? null : day.equivalent.fiveHour);
-  const reading = [...(sides.equivalent === undefined ? [] : [`${fmtEquivalent('seven_day', day.equivalent.sevenDay)}, ${fiveHour}`]), ...(sides.billed === undefined ? [] : [`${fmtUsd(sides.billed)} billed`])];
-  const native = nativeFiguresOf('seven_day', sides, day.estimated);
+  const reading = [...(sides.equivalent === undefined ? [] : [equivalentOrDash('seven_day', sides.equivalent)]), ...(sides.billed === undefined ? [] : [`${fmtUsd(sides.billed)} billed`])];
+  const native = nativeFiguresOf('seven_day', sides, false);
   return (
     <dd className="num" title={native.unpriced ? UNPRICED_TITLE : withEstimate(reading.join(', '), native.marked)}>
       {sumTileOf(unit, day).value}

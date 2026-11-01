@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '@/api';
 import { slug } from '@/api/http';
-import type { ApiKey, CreatedApiKey, Guardrail, GuardrailRef, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool, SharedEquivalent } from '@/api/types';
+import type { ApiKey, CreatedApiKey, Guardrail, GuardrailRef, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -55,21 +55,20 @@ export interface FundedSum {
   /** The rows no subscription window paid, in dollars. */
   billedUsd: number;
   cost: number;
-  /** The plan rows' 20x equivalents. */
-  equivalent: SharedEquivalent;
-  estimated: boolean;
+  /** The plan rows as the Pro-week figure, null where a plan row priced nothing. */
+  equivalent: number | null;
 }
 /** A dollar position's dollars of a sum: every row's, the billed rows', or the plan rows' at the API price list. */
 export const dollarsUnder = (unit: DollarPosition, s: FundedSum): number => (unit === 'all' ? s.cost : unit === 'usd' ? s.billedUsd : s.cost - s.billedUsd);
 /**
- * A sum's two sides on the 7-day window, the window its figure leads with, each undefined where it has no rows, so a
- * sum of one funding shows one figure and no "0%" side. The subscription side reads the window's flag: a window a plan
- * row priced nothing on is a side with rows whatever the sum, and a zero reads as no plan rows only where it is unset.
+ * A sum's two sides, each undefined where it has no rows, so a sum of one funding shows one figure and no "0%" side.
+ * A null figure is a plan row priced nothing, a side with rows whatever the other rows priced, and a zero reads as no
+ * plan rows.
  */
-export const nativeSidesOf = (s: FundedSum): { billed: number | undefined; equivalent: number | undefined; unpriced: boolean } => ({
+export const nativeSidesOf = (s: FundedSum): { billed: number | undefined; equivalent: number | null | undefined; unpriced: boolean } => ({
   billed: s.billedUsd > 0 ? s.billedUsd : undefined,
-  equivalent: s.equivalent.sevenDay > 0 || s.equivalent.unpriced.sevenDay ? s.equivalent.sevenDay : undefined,
-  unpriced: s.equivalent.unpriced.sevenDay,
+  equivalent: s.equivalent === null || s.equivalent > 0 ? s.equivalent : undefined,
+  unpriced: s.equivalent === null,
 });
 /** The title of a sum's native figure: the unpriced window's, else the estimate's where the equivalent is marked. */
 const nativeTitleOf = (f: { marked: boolean; unpriced: boolean }): string | undefined => (f.unpriced ? UNPRICED_TITLE : f.marked ? ESTIMATED_TITLE : undefined);
@@ -81,7 +80,7 @@ const nativeTitleOf = (f: { marked: boolean; unpriced: boolean }): string | unde
 export function sumTileOf(unit: UnitPosition, s: FundedSum): { title?: string; value: ReactNode } {
   if (unit === 'share') return { title: SHARE_NOTE, value: '-' };
   if (unit !== 'native') return { value: fmtUsd(dollarsUnder(unit, s)) };
-  const native = nativeFiguresOf('seven_day', nativeSidesOf(s), s.estimated);
+  const native = nativeFiguresOf('seven_day', nativeSidesOf(s), false);
   return { title: nativeTitleOf(native), value: figuresValue(native.figures) };
 }
 /**
@@ -94,7 +93,7 @@ function keyFigureOf(unit: UnitPosition, s: FundedSum, empty: string): { text: s
   if (unit !== 'native') return { text: fmtUsd(dollarsUnder(unit, s)) };
   const sides = nativeSidesOf(s);
   if (sides.equivalent === undefined && sides.billed === undefined) return { text: '-', title: empty };
-  const native = nativeFiguresOf('seven_day', sides, s.estimated);
+  const native = nativeFiguresOf('seven_day', sides, false);
   return { text: native.figures.map((f) => (f.word === 'billed' ? `${f.text} billed` : f.text)).join(', '), title: nativeTitleOf(native) };
 }
 /**
@@ -104,7 +103,7 @@ function keyFigureOf(unit: UnitPosition, s: FundedSum, empty: string): { text: s
  * reads a share to rank by.
  */
 export const keyRankOf = (unit: UnitPosition, lifetime: FundedSum): number | null => {
-  if (unit === 'native') return lifetime.equivalent.unpriced.sevenDay ? null : lifetime.equivalent.sevenDay;
+  if (unit === 'native') return lifetime.equivalent;
   return unit === 'share' ? 0 : dollarsUnder(unit, lifetime);
 };
 
@@ -240,13 +239,8 @@ export function KeysPage() {
         lifetime: {
           billedUsd: keys.data.reduce((s, k) => s + k.lifetime.billedUsd, 0),
           cost: keys.data.reduce((s, k) => s + k.lifetime.cost, 0),
-          // A key's flag holds in the total, since that key's sum holds its priced rows alone.
-          equivalent: {
-            fiveHour: keys.data.reduce((s, k) => s + k.lifetime.equivalent.fiveHour, 0),
-            sevenDay: keys.data.reduce((s, k) => s + k.lifetime.equivalent.sevenDay, 0),
-            unpriced: { fiveHour: keys.data.some((k) => k.lifetime.equivalent.unpriced.fiveHour), sevenDay: keys.data.some((k) => k.lifetime.equivalent.unpriced.sevenDay) },
-          },
-          estimated: keys.data.some((k) => k.lifetime.estimated),
+          // A key that priced nothing nulls the total, since the priced keys alone would read as the whole.
+          equivalent: keys.data.reduce<number | null>((s, k) => (s === null || k.lifetime.equivalent === null ? null : s + k.lifetime.equivalent), 0),
         },
       }
     : null;

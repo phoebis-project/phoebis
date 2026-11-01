@@ -691,7 +691,7 @@ test('the attention read is one GET, and its failures reach no toast, since the 
     body.items.map((i) => [i.kind, i.subject.id, i.link && ATTENTION_PAGE_VALUES.includes(i.link.page) ? { id: i.link.id, page: i.link.page } : null]),
     'every captured kind decodes as itself, its link whole where its page is one the console knows and null otherwise',
   );
-  assert.ok(items.some((i) => i.kind === 'model_unweighted'), "the capture's unweighted model among them");
+  assert.ok(items.some((i) => i.kind === 'model_unpriced'), "the capture's unpriced model among them");
   assert.deepEqual(
     items.filter((i) => ['wall_reached', 'destination_spent', 'shed_no_runway'].includes(i.kind)).map((i) => [i.kind, i.subject.id, i.link]),
     [

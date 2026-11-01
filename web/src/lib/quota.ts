@@ -267,7 +267,7 @@ export const ACCOUNT_STATUSES = Object.keys(STATUS_LABEL) as Account['status'][]
 /** How the usage poll last answered, in the words the Quota page and the routing log share. */
 export const POLL_OUTCOME_LABEL: Record<PollOutcome, string> = { clean: 'clean', failed: 'failed', rate_limited: 'rate limited' };
 
-export type BadgeTone = 'accent' | 'critical' | 'good' | 'neutral' | 'serious' | 'warning';
+export type BadgeTone = 'accent' | 'critical' | 'good' | 'info' | 'neutral' | 'serious' | 'warning';
 
 export const STATUS_TONE: Record<Account['status'], BadgeTone> = {
   cooldown: 'warning',

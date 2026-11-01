@@ -336,14 +336,14 @@ const unpricedStory = (): boolean => {
  *  under its switch. */
 const ledgerRollups = () => (emptyStore() ? [] : unpricedStory() ? [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS] : ALL_ROLLUPS);
 /**
- * The key the unpriced request lands on, its lifetime and its week flagged on both windows under the switch, since the
- * request prices neither and falls inside the week. The keys' fold runs once at load, so the flag lands at the read,
- * and the key's figures stay the story's.
+ * The key the unpriced request lands on, its lifetime and its week read null under the switch, since the request
+ * prices nothing and falls inside the week. The keys' fold runs once at load, so the null lands at the read, and the
+ * key's other figures stay the story's.
  */
 const unpricedKey = (k: ApiKey): ApiKey => {
   if (!unpricedStory() || k.id !== UNPRICED_REQUEST.keyId || Date.parse(k.createdAt) !== UNPRICED_REQUEST.keyGeneration) return k;
-  const flagged = <S extends Pick<ApiKey['lifetime'], 'equivalent'>>(s: S): S => ({ ...s, equivalent: { ...s.equivalent, unpriced: { fiveHour: true, sevenDay: true } } });
-  return { ...k, lifetime: flagged(k.lifetime), usage7d: flagged(k.usage7d) };
+  const nulled = <S extends Pick<ApiKey['lifetime'], 'equivalent'>>(s: S): S => ({ ...s, equivalent: null });
+  return { ...k, lifetime: nulled(k.lifetime), usage7d: nulled(k.usage7d) };
 };
 /** The detail's cut as the route lifts it, off the newest `stream_interrupted` row that names the request. */
 const streamCutOf = (requestId: string) => {
@@ -907,8 +907,8 @@ export class MockApi implements Api {
       lastUsedAt: null,
       notes: input.notes,
       bodyCaptureHours: input.bodyCaptureHours,
-      usage7d: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0, unpriced: { fiveHour: false, sevenDay: false } }, estimated: false, requests: 0, tokens: 0 },
-      lifetime: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0, unpriced: { fiveHour: false, sevenDay: false } }, estimated: false, requests: 0 },
+      usage7d: { billedUsd: 0, cost: 0, equivalent: 0, requests: 0, tokens: 0 },
+      lifetime: { billedUsd: 0, cost: 0, equivalent: 0, requests: 0 },
     };
     this.keys = [key, ...this.keys];
     return latency({ key: this.keyView(key), secret }, 300);
@@ -1172,7 +1172,6 @@ export class MockApi implements Api {
       cost24h: cost,
       equivalent24h: day.equivalent,
       errorRate24h: rated.length ? rated.filter((r) => r.outcome !== 'succeeded').length / rated.length : null,
-      estimated24h: day.estimated,
       hourly: [...hourlyMap.values()],
       refused24h: last24h.length - rated.length,
       requests24h: rated.length,
@@ -1422,7 +1421,7 @@ export class MockApi implements Api {
       return Promise.reject(new ApiError(409, 'the account changed while the edit was being saved', 'stale_edit'));
     }
     // The route answers a subscription block for a canceled OAuth row even before it pairs, so its end has a place.
-    const blank: Subscription = { billingType: '', endsAt: null, organizationType: '', plan: null, rateLimitTier: '', since: null, trialEndsAt: null };
+    const blank: Subscription = { billingType: '', endsAt: null, organizationType: '', plan: null, planDisplayName: null, rateLimitTier: '', since: null, trialEndsAt: null };
     const base = a.subscription ?? (patch.canceled ? blank : null);
     const subscription = base ? { ...base, endsAt: patch.canceled ? patch.subscriptionEndsAt : null } : null;
     return latency(this.withPool(this.putAccount(revised({ ...a, canceled: patch.canceled, subscription }))), 250);

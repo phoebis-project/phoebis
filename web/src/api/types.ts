@@ -95,6 +95,9 @@ export interface Subscription {
   organizationType: string;
   /** The plan the router resolved from the profile's organization type and tier, null while no profile document stands. */
   plan: PlanWord | null;
+  /** `organization.plan_display_name` of the stored profile (`Ultra` on the `default_claude_max_20x` tier), null when
+   *  the document lacks it. */
+  planDisplayName: string | null;
   rateLimitTier: string;
   /** Epoch milliseconds on the wire, decoded to the ISO string every other timestamp carries, and `null` when the
    *  profile does not report it. */
@@ -303,7 +306,7 @@ export interface QuotaSnapshot {
  * The conditions that need the operator, worst first: the order the route ranks by and the dashboard's line draws,
  * so not alphabetical.
  */
-export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unweighted', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'] as const;
+export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unpriced', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'] as const;
 /** `unknown` stands for a kind this console does not know, which the route never answers under that name. */
 export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number] | 'unknown';
 
@@ -314,7 +317,7 @@ export interface AttentionItem {
   kind: AttentionKind;
   /**
    * Where the operator fixes it, null for a drift refusal that carried no key, a router subject, a deleted pool, the
-   * model weight estimated item and a kind the console does not know.
+   * unpriced model item and a kind the console does not know.
    */
   link: { id: string; page: 'accounts' | 'keys' | 'pools' } | null;
   /** The pools the item belongs to, which a pool card filters the same list by. */
@@ -379,26 +382,14 @@ export interface PoolCacheTtl {
   plan: TtlRules;
 }
 
-/** The two shared windows' 20x equivalents, where a figure sums across models and draws no model week. */
-export interface SharedEquivalent {
-  fiveHour: number;
-  sevenDay: number;
-  /**
-   * Per window, whether a plan row with tokens priced nothing on it (a model with no tier, or a tier with no weighted
-   * model): the sum then holds the other rows alone, and a zero with the flag unset is a sum with no plan row.
-   */
-  unpriced: { fiveHour: boolean; sevenDay: boolean };
-}
-
 export interface TrafficBucket {
   at: string;
   /** The dollars of the bucket's requests no subscription window paid. */
   billedUsd: number;
   costUsd: number;
-  /** The plan-funded requests' 20x equivalents. */
-  equivalent: SharedEquivalent;
-  /** True when any request of the bucket priced through the model tier's fallback weight. */
-  estimated: boolean;
+  /** The plan-funded requests as the Pro-week figure, null where a request priced nothing and 0 with no plan-funded
+   *  request. */
+  equivalent: number | null;
   failed: number;
   requests: number;
   tokens: number;
@@ -483,10 +474,9 @@ export interface Pool {
   /** Always answered; `enabled` off is how a pool that rewrites no breakpoint reads. */
   cacheTtl: PoolCacheTtl;
   cost24h: number;
-  /** The day's plan-funded requests' 20x equivalents. */
-  equivalent24h: SharedEquivalent;
-  /** True when any request of the day priced through the model tier's fallback weight. */
-  estimated24h: boolean;
+  /** The day's plan-funded requests as the Pro-week figure, whatever tier served them, null where a request priced
+   *  nothing and 0 with no plan-funded request. */
+  equivalent24h: number | null;
   /** The pool's own guardrails, which run before a key's, ordered by `position`. */
   guardrails: GuardrailRef[];
   id: string;
@@ -572,9 +562,9 @@ export interface ApiKey {
   /** Sessions on this key never receive cache-warming probes. */
   keepaliveOptOut: boolean;
   lastUsedAt: string | null;
-  /** `billedUsd` is the dollars of the requests no subscription window paid, `equivalent` the plan-funded requests'
-   *  20x equivalents, and `estimated` true when any request priced through the model tier's fallback weight. */
-  lifetime: { billedUsd: number; cost: number; equivalent: SharedEquivalent; estimated: boolean; requests: number };
+  /** `billedUsd` is the dollars of the requests no subscription window paid, and `equivalent` the plan-funded requests
+   *  as the Pro-week figure, null where a request priced nothing and 0 with no plan-funded request. */
+  lifetime: { billedUsd: number; cost: number; equivalent: number | null; requests: number };
   /** Whether `GET /v1/models` under this key lists an `id[1m]` twin beside every long-context model. */
   longContextTwins: boolean;
   modelRules: ModelRule[];
@@ -597,7 +587,7 @@ export interface ApiKey {
   /** The stamp of the row's last write, which `revision` carries. */
   updatedAt: string;
   /** The week's figures, read as `lifetime`'s. */
-  usage7d: { billedUsd: number; cost: number; equivalent: SharedEquivalent; estimated: boolean; requests: number; tokens: number };
+  usage7d: { billedUsd: number; cost: number; equivalent: number | null; requests: number; tokens: number };
 }
 
 export interface CreatedApiKey {
@@ -769,8 +759,9 @@ export interface RequestPhases {
 }
 
 /** A plan-funded request's shares of its account's windows, keyed by the ledger's window ids, every window the model
- *  applies to a key and null on one the cost model could not price. Null for a request billed in dollars, and an
- *  empty object for one whose account the route's tiers lack or hold without a tier. */
+ *  applies to a key and null on one the cost model could not price, a shared window the account's window set lacks
+ *  left out. Null for a request billed in dollars, and an empty object for one whose account the route's tiers lack or
+ *  hold without a tier. */
 export type CostShares = Record<string, number | null>;
 
 export interface RequestLog {
@@ -797,18 +788,16 @@ export interface RequestLog {
   compaction: string | null;
   contextCompacted: string | null;
   /**
-   * The plan request's 20x equivalents by window key, a window the model has no weight on kept as its key with null,
-   * as the route's `WindowShares` answers it, and null for a billed request.
+   * The serving attempt's usage as the share of the Pro 7-day window, whatever account tier served it: the Pro-week
+   * figure. Null for a billed request and for a plan-funded request on a model without a weight.
    */
-  costEquivalent: Record<string, number | null> | null;
+  costEquivalent: number | null;
   costShares: CostShares | null;
   costUsd: number;
   /** The member's source on the serving leg's body, and `null` for a body that went without one. */
   diagnosticsSource: DiagnosticsSource | null;
   durationMs: number | null;
   errorCode: string | null;
-  /** True when the request's figures priced through the model tier's fallback weight. */
-  estimated: boolean;
   /** A request whose session branched from another: the depth where the two part, and the session it branched from. */
   forkDepth: number | null;
   forkedFrom: string | null;
@@ -1480,40 +1469,34 @@ export interface AnalyticsGroup {
   /** The dollars of the billed rows alone by token kind, the cache halves null on a fold as `cost`'s are. */
   billed: AnalyticsGroup['cost'];
   billedUsd: number;
-  /** The plan rows' 20x window equivalents by window key, `read` and `write` apart, and empty on a fold. */
-  cacheEquivalent: Record<string, { read: number; write: number }>;
+  /** The plan rows' cache reads and writes in the Pro-week figure, null as `costEquivalent` is and on a fold, whose
+   *  rows carry one total. */
+  cacheEquivalent: { read: number; write: number } | null;
   cacheHits: number;
   cacheMisses: number;
   /** The eight known reasons always, beside any other name the route answered. */
   cacheMissReasons: Record<CacheMissReason, number>;
-  /**
-   * Keyed by the ledger's window ids. Null for an api_key group, under a grouping other than account unless the
-   * query names exactly one account, and on a group folded from request rows, which prices no cache share. A window is
-   * absent where the group's models do not apply to it or where a row could not be priced on it. `probeShares` is
-   * keyed the same.
-   */
-  cacheShares: Record<string, { read: number; write: number }> | null;
   /** The cache read and write costs are null on a group folded from request rows, which carry one total. */
   cost: Omit<CostSplit, 'cacheRead' | 'cacheWrite'> & { cacheRead: number | null; cacheWrite: number | null };
   /**
-   * The plan rows' 20x window equivalent by window key (`five_hour`, `seven_day`, a model week), under every grouping.
+   * The plan rows as the Pro-week figure, whatever tier served them, under every grouping: null where a plan-funded
+   * row with tokens priced nothing, a model without a weight, and 0 for a group with no plan-funded row.
    */
-  costEquivalent: Record<string, number>;
+  costEquivalent: number | null;
   /**
    * Keyed by the ledger's window ids. Null for an api_key group, under a grouping other than account unless the
    * query names exactly one account, and on a group folded from request rows with no plan-funded row or with one
-   * whose account the route could not price. A
-   * window is absent where the group's models do not apply to it. The route answers a window a row could not be
-   * priced on as absent too, while a fold of the request rows carries such a window as a key with null, so a reader
-   * treats the two alike.
+   * whose account the route could not price. A window is absent where the group's models do not apply to it, and a
+   * shared window where the account's window set lacks it. The route answers a window a row could not be priced on as
+   * absent too, while a fold of the request rows carries such a window as a key with null, so a reader treats the two
+   * alike.
    */
   costShares: Record<string, number | null> | null;
   costUsd: number;
-  /** The plan rows' 20x 7-day equivalent by token kind, null on a fold, which carries one total. */
+  /** The plan rows' Pro-week figure by token kind, summing to `costEquivalent`, null where a row priced nothing and on
+   *  a fold, which carries one total. */
   equivalentSplit: CostSplit | null;
   errors: Record<string, number>;
-  /** True when any plan row priced through the model tier's fallback weight. */
-  estimated: boolean;
   exhausted: number;
   expiredBetweenTurns: number;
   failed: number;
@@ -1548,27 +1531,20 @@ export interface AnalyticsGroup {
   planOutputTokens: number | null;
   planRequests: number | null;
   probeCostUsd: number;
-  /** The plan-funded probes' 20x window equivalents by window key, `cost` and `wasted` apart, and empty without one. */
-  probeEquivalent: Record<string, { cost: number; wasted: number }>;
-  /** True when a plan probe row priced through the model tier's fallback weight, which `estimated` covers too. */
-  probeEstimated: boolean;
+  /** The plan-funded probes and their wasted part in the Pro-week figure, 0 without one, null where a plan probe row
+   *  priced nothing and on a fold, which measures no probe. */
+  probeEquivalent: { cost: number; wasted: number } | null;
   /** `planOk` is the part of `ok` a plan account served. */
   probes: { failed: number; held: number; migrated: number; ok: number; planOk: number; skipped: number };
-  /** `wasted` is null while the group's probe dollars are zero, and the map is null whole on a fold, which prices no probe share. */
-  probeShares: Record<string, { cost: number; wasted: number | null }> | null;
-  /** Keyed as `unpriced`, for the plan probe rows, whose windows `probeEquivalent` leaves out the same way. */
-  probeUnpriced: Record<string, boolean>;
   rateLimited: number;
   /** The refused requests of the group by error code, each counted here and in `refused`, never in `requests`. */
   refusals: Record<string, number>;
   refused: number;
   rejected: number;
   requests: number;
-  /** The kept-warm saving in the 20x window equivalent by window key, empty without one. */
-  savingEquivalent: Record<string, number>;
-  /** The kept-warm saving as a share of the one account's windows by window key, null under the rules `probeShares`
-   *  follows. */
-  savingShares: Record<string, number> | null;
+  /** The kept-warm saving in the Pro-week figure, 0 without one, null where a kept-warm count priced nothing and on a
+   *  fold, which carries no kept-warm fact. */
+  savingEquivalent: number | null;
   /** The kept-warm requests' saving in dollars, gross of the probes: the writes they avoided less the reads they
    *  paid. */
   savingUsd: number;
@@ -1577,12 +1553,6 @@ export interface AnalyticsGroup {
    * thinking share and the rest. */
   tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; plainOutput?: number; thinking: number; uncachedInput: number; webFetch: number; webSearch: number };
   uncached: number;
-  /**
-   * Per window key, both shared windows always and the model week where the group's rows name one, whether a plan row
-   * with tokens priced nothing on it (a model with no tier, or a tier with no weighted model). Such a window is absent
-   * from `costEquivalent` and `cacheEquivalent`, and one absent with the flag unset is a window no plan row reached.
-   */
-  unpriced: Record<string, boolean>;
   wastedProbeReasons: Record<WastedProbeReason, number>;
   wastedProbeUsd: number;
   wastedProbes: number;
@@ -1643,39 +1613,29 @@ export interface BurnPoint {
   at: string;
   /** Cache-read tokens. */
   cachedTokens: number;
-  /** True when any plan row of the bucket priced through the model tier's fallback weight. */
-  estimated: boolean;
-  /** The bucket's plan rows as a 20x 5-hour equivalent, the band weighed in, under every grouping. A billed row adds a
-   *  zero, so a bucket with tokens and no plan row reads 0. Null for an idle bucket and for one holding a row the cost
-   *  model cannot price on the window. */
-  fiveHourEquivalent: number | null;
+  /** The bucket's plan rows as the Pro-week figure, under every grouping. A billed row adds a zero, so a bucket with
+   *  tokens and no plan row reads 0. Null for an idle bucket and for one holding a row the cost model cannot price. */
+  equivalent: number | null;
   /** A subscription account's spend in the bucket as a fraction of its own 5-hour window, the band weighed in, and
-   *  `null` for an API-key account, one whose tier is unknown, a bucket with no row the cost model prices (an idle hour
-   *  among them) or one holding a row the cost model cannot price, and wherever the group holds more than one account's
-   *  rows (every grouping but the account one, unless the Accounts filter names exactly one account). */
+   *  `null` for an API-key account, one whose tier is unknown, one whose window set lacks the window, a bucket with no
+   *  row the cost model prices (an idle hour among them) or one holding a row the cost model cannot price, and wherever
+   *  the group holds more than one account's rows (every grouping but the account one, unless the Accounts filter names
+   *  exactly one account). */
   fiveHourShare: number | null;
-  /** Whether the bucket holds a plan row with tokens the cost model could not price on the 5-hour window, so a null
-   *  `fiveHourEquivalent` with the flag unset is an idle bucket. The shares carry no flag of their own. */
-  fiveHourUnpriced: boolean;
   group: string;
-  /** The same plan rows as a 20x equivalent of the model's own week, null where no row of the bucket is on a model
-   *  with a week of its own. */
-  modelWeekEquivalent: number | null;
-  /** The same spend as a fraction of the account's model week, null where `fiveHourShare` is and where no row of the
+  /** The same spend as a fraction of the account's model week, null where `sevenDayShare` is and where no row of the
    *  bucket is on a model with a week of its own. */
   modelWeekShare: number | null;
-  /** `fiveHourUnpriced` on the model week. */
-  modelWeekUnpriced: boolean;
-  /** The same plan rows as a 20x 7-day equivalent, unbanded. */
-  sevenDayEquivalent: number | null;
-  /** The same spend as a fraction of the account's 7-day window, unbanded. */
+  /** The same spend as a fraction of the account's 7-day window, unbanded, null where `fiveHourShare` is for any
+   *  reason but the window set. */
   sevenDayShare: number | null;
-  /** `fiveHourUnpriced` on the 7-day window. */
-  sevenDayUnpriced: boolean;
   /** Every token of the bucket, all five types: zero for a bucket with no traffic the ledger can attribute. */
   tokens: number;
   /** Uncached input tokens. */
   uncachedTokens: number;
+  /** Whether the bucket holds a plan row with tokens the cost model could not price, so a null `equivalent` with the
+   *  flag unset is an idle bucket. The shares carry no flag of their own. */
+  unpriced: boolean;
   /** What the account spends in: a subscription's window share, even while no tier prices it, or an API key's
    *  dollars. Null where the shares are, and for an account the registry no longer holds. */
   unit: BurnUnit | null;
@@ -1723,8 +1683,6 @@ export interface Reconciliation {
   accountId: string;
   /** When the ledger reconciled the window, as an ISO instant. */
   computedAt: string;
-  /** The attempts priced at a model tier's estimate. */
-  estimated: number;
   firstReadingAt: string;
   lastReadingAt: string;
   /** The last reading's utilization less the first's, as a fraction of the window. */
@@ -1824,17 +1782,21 @@ export interface Session {
   /** The pin's own agent: `main`, or a subagent's id, and `null` for a session with no pin. */
   agentId: string | null;
   agents: number;
-  /** The pin's typed burn per hour in `burnUnit`, priced when read; 0 for a pin never renewed with usage, null with
-   *  no pin at all, with one whose account left the registry, on a subscription account whose tier is unknown, or
-   *  on a model it has no weight for, or a tier it has no capacity for on that window. */
+  /** The pin's typed burn per hour in `burnUnit`, priced when read, on plan quota the share of the account's own window
+   *  `burnWindow` names. It reads 0 for a pin never renewed with usage, and null with no pin at all, with one whose
+   *  account left the registry, on a subscription account whose tier is unknown, or on a model it has no weight for, or
+   *  a tier it has no capacity for on that window. */
   burn: number | null;
   /** The instant the served burn is decayed to, null with no pin or for a pin never folded. */
   burnAt: string | null;
-  /** A plan pin's burn per hour as a 20x 5-hour equivalent, read under no account tier. Null where `burn` is and for a
-   *  pin that spends dollars. */
+  /** The Pro-week burn per hour, the share of the Pro 7-day window a Pro account would spend on it, null where
+   *  `burnUnit` is not `window_share` or the model has no weight. */
   burnEquivalent: number | null;
   /** Null for a session with no pin, or one whose account left the registry: no kind is left to pick a unit from. */
   burnUnit: BurnUnit | null;
+  /** The window `burn` is read on: `five_hour` where the account's shared window set has it, `seven_day` otherwise,
+   *  null where `burnUnit` is not `window_share`. */
+  burnWindow: string | null;
   /** The cache TTL in force at the pin's last refresh, and `null` for a session with no pin. */
   cacheTtlMs: number | null;
   companion: CompanionState;
@@ -1847,8 +1809,6 @@ export interface Session {
   /** The effective effort of the pin's last turn, the word as the client sent it, and `null` with none or no pin. */
   effort: string | null;
   epoch: number | null;
-  /** True when the pin's burn priced through the model tier's fallback weight. */
-  estimated: boolean;
   /** The depth where a forked session parts from its base, and `null` with `forkedFrom`. */
   forkDepth: number | null;
   /** The session this one branched from, null for one that branched from none. */
@@ -2058,7 +2018,9 @@ export interface SubscriptionCosts {
   /** The model tiers in display order. */
   tierOrder: string[];
   typeMultiplier: TypeMultiplier;
-  unit: { definedBy: { band: string; tier: string; window: string }; unitsPerWindow: number };
+  /** The anchor every figure divides by, the envelope's one unit handed to every revision: its tier's row on its
+   *  window. */
+  unit: { tier: string; window: string };
 }
 
 /** The two members every model tier order reads, so a caller with the cost model's members alone can order models. */
@@ -2127,13 +2089,12 @@ export interface Overview {
   /** The day's dollars of the requests no subscription window paid. */
   billed24h: number;
   cost24h: number;
-  /** The day's plan-funded requests' 20x equivalents. */
-  equivalent24h: SharedEquivalent;
+  /** The day's plan-funded requests as the Pro-week figure, whatever tier served them, null where a request priced
+   *  nothing. */
+  equivalent24h: number | null;
   errorRate24h: number | null;
-  /** True when any request of the day priced through the model tier's fallback weight. */
-  estimated24h: boolean;
   /** `billed` and `equivalent` split each hour as `billed24h` and `equivalent24h` split the day. */
-  hourly: { at: string; billed: number; cost: number; equivalent: SharedEquivalent; errors: number; refused: number; requests: number; tokens: number }[];
+  hourly: { at: string; billed: number; cost: number; equivalent: number | null; errors: number; refused: number; requests: number; tokens: number }[];
   /** The requests the router refused before any account was asked, not in `requests24h`. */
   refused24h: number;
   requests24h: number;

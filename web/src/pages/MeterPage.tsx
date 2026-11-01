@@ -9,7 +9,7 @@ import { Button, Card, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { METER_CODEC, type MeterAddress } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { METER_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
-import { fmtAbsolute, fmtDated, fmtInt, fmtShare, instant, withEstimate } from '@/lib/format';
+import { fmtAbsolute, fmtDated, fmtInt, fmtShare, instant } from '@/lib/format';
 import { useAsync, useQueryFilters } from '@/lib/hooks';
 import { GROUP_PAGE, GROUP_STEP, METER_HINT, meterGroups, meterWindowWord, SPARK, sparkOf, sparkY, type MeterGroup } from '@/lib/meter';
 
@@ -63,9 +63,7 @@ function GroupWindows({ group, now, onMore, shown }: { group: MeterGroup; now: n
                 <span className="num">{instant(Date.parse(r.windowEnd), now)}</span>
               </td>
               <td className="right num col-fit">{fmtShare(r.observedRise)}</td>
-              <td className="right num col-fit" title={r.estimated > 0 ? withEstimate(fmtShare(r.predictedShare), true) : undefined}>
-                {r.estimated > 0 ? `~${fmtShare(r.predictedShare)}` : fmtShare(r.predictedShare)}
-              </td>
+              <td className="right num col-fit">{fmtShare(r.predictedShare)}</td>
               <td className="right num col-fit">
                 <MeterRatio row={r} />
               </td>

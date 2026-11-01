@@ -1,10 +1,10 @@
 import type { AgentContext, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, RecipeCause, RecipeState, Session } from '@/api/types';
-import { anchorTier, tierCapacity, weightOrFallback } from '@/lib/costs';
-import { accountById } from './accounts';
+import { anchorTier, tierCapacity, type CostWindow } from '@/lib/costs';
+import { accountById, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById } from './pools';
-import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID } from './requests';
+import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID, WORKSHOP_SESSION_ID, ownWeighted } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
 import { HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
@@ -229,18 +229,18 @@ for (const r of REQUESTS) {
   if (seen === undefined || r.at < seen) firstRequestAt.set(id, r.at);
 }
 
-/** The weight `model` prices at on the 5-hour window (a dated id reads its undated name), its model tier's latest
- *  weighed model's where it has none of its own. Null for a model of no weighted tier, which has no share for any
- *  usage. */
-const pinWeight = (model: string) => weightOrFallback(TABLES, model, 'five_hour');
-
-/** A pin's burn as a 20x 5-hour equivalent: the account tier's own share scaled by its capacity over the anchor's. */
-const burnEquivalentOf = (burn: number | null, accountId: string): number | null => {
+/**
+ * A pin's burn as the Pro-week figure per hour: the account tier's own share of `window` scaled by the tier's capacity
+ * there over the anchor tier's 7-day capacity, the Pro week the figure is a share of.
+ */
+export const burnEquivalentOf = (burn: number | null, accountId: string, window: CostWindow): number | null => {
   const tier = accountById.get(accountId)?.subscription?.rateLimitTier;
-  const own = tier === undefined ? null : tierCapacity(TABLES, tier, 'five_hour');
-  const anchor = tierCapacity(TABLES, anchorTier(TABLES), 'five_hour');
+  const own = tier === undefined ? null : tierCapacity(TABLES, tier, window);
+  const anchor = tierCapacity(TABLES, anchorTier(TABLES), 'seven_day');
   return burn === null || own === null || anchor === null ? null : (burn * own) / anchor;
 };
+/** The window a plan pin's burn is a share of: the 5-hour window where the account's set has it, else the 7-day one. */
+const burnWindowOf = (accountId: string): CostWindow => (sharedWindowsOf(accountId).includes('five_hour') ? 'five_hour' : 'seven_day');
 
 /**
  * A pinned row's runway, set from the row's index rather than drawn, so the rows after it keep their rolls: the pinned
@@ -325,9 +325,10 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const burnAtRoll = ago((written ? written.burnAtMinutes : rng.int(2, 40)) * MINUTE);
   const lastInputRoll = written ? written.lastInputTokens : rng.int(500, 20_000);
   const lastRefreshRoll = ago((written ? written.lastRefreshMinutes : rng.int(2, 40)) * MINUTE);
-  // A pin on a model of no weighted tier has no burn to rank by, as the route answers it.
-  const weight = pinned && unit === 'window_share' ? pinWeight(spec.model) : null;
-  const burn = !pinned ? null : unit === 'usd' ? burnUsdRoll : weight !== null ? burnRoll : null;
+  // A pin on a model without a weight of its own has no burn to rank by, as the route answers it.
+  const weighted = pinned && unit === 'window_share' && ownWeighted(spec.model);
+  const burn = !pinned ? null : unit === 'usd' ? burnUsdRoll : weighted ? burnRoll : null;
+  const window = unit === 'window_share' ? burnWindowOf(spec.accountId) : null;
   // The ledger names a session's fork from its requests, so a session it never saw records none.
   const fork = REQUESTS.find((r) => r.sessionId === sessionId && r.forkedFrom !== null);
   return {
@@ -350,8 +351,9 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     requests: seen ? seen.requests : 0,
     burn,
     burnAt: pinned ? burnAtRoll : null,
-    burnEquivalent: unit === 'window_share' ? burnEquivalentOf(burn, spec.accountId) : null,
+    burnEquivalent: window === null ? null : burnEquivalentOf(burn, spec.accountId, window),
     burnUnit: unit,
+    burnWindow: window,
     cacheTtlMs: pinned ? 5 * MINUTE : null,
     effort: pinned && !spec.noEffort ? effortAt(i) : null,
     lastInputTokens: pinned ? lastInputRoll : null,
@@ -364,7 +366,6 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     agents: spec.agents,
     companion: spec.companion,
     companionSince: spec.companion === 'silent' ? ago(rng.int(12, 150) * MINUTE) : null,
-    estimated: weight?.estimated ?? false,
     keepalive: {
       state: spec.state,
       // Filled in from the recipes below, so a row and its agents cannot disagree.
@@ -678,8 +679,9 @@ SLOWED_PINS.forEach((pin, k) => {
     agents: pin.agents.length,
     burn: pin.burn,
     burnAt: lastAttempt.startedAt,
-    burnEquivalent: burnEquivalentOf(pin.burn, 'studio'),
+    burnEquivalent: burnEquivalentOf(pin.burn, 'studio', burnWindowOf('studio')),
     burnUnit: 'window_share',
+    burnWindow: burnWindowOf('studio'),
     cacheTtlMs: HOUR,
     companion: 'none',
     companionSince: null,
@@ -687,7 +689,6 @@ SLOWED_PINS.forEach((pin, k) => {
     cycleMs: pin.cycleMs,
     effort,
     epoch: 1,
-    estimated: false,
     forkDepth: null,
     forkedFrom: null,
     historical: false,
@@ -754,6 +755,7 @@ if (FLEET_PINS.length > 0) {
     burnAt: lastAttempt.startedAt,
     burnEquivalent: null,
     burnUnit: 'usd',
+    burnWindow: null,
     cacheTtlMs: 5 * MINUTE,
     companion: 'none',
     companionSince: null,
@@ -761,7 +763,6 @@ if (FLEET_PINS.length > 0) {
     cycleMs: null,
     effort: lines[0].effort,
     epoch: 1,
-    estimated: false,
     forkDepth: null,
     forkedFrom: null,
     historical: false,
@@ -779,6 +780,62 @@ if (FLEET_PINS.length > 0) {
     runwayBounded: null,
     runwayMs: null,
     sessionId: FLEET_SESSION_ID,
+    shedFrom: null,
+    shedReason: null,
+    speed: null,
+  });
+}
+
+/**
+ * The approved Ultra's session on bench, pinned on its newest turn, a Sonnet one inside the pool's affinity window:
+ * its poll names no 5-hour window, so its burn is a share of the 7-day window. The workshop pool keeps no cache warm,
+ * so no recipe warms it. Written after the recipes rather than rolled, so every drawn row and recipe keeps its rolls,
+ * the burn a figure of its own.
+ */
+const workshopRows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'bench' && r.sessionId === WORKSHOP_SESSION_ID);
+const WORKSHOP_PIN = workshopRows[0];
+const WORKSHOP_BURN = 0.0021;
+{
+  const lastAttempt = WORKSHOP_PIN.attempts[WORKSHOP_PIN.attempts.length - 1];
+  const keyGeneration = Date.parse(keyById.get('bench')!.createdAt);
+  const seen = ledgered.get(activityOf('bench', keyGeneration, WORKSHOP_SESSION_ID)) ?? null;
+  const createdAt = workshopRows[workshopRows.length - 1].at;
+  const line = pinLine({ accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), lastInputTokens: promptOf(WORKSHOP_PIN), lastUsedAt: lastAttempt.startedAt, model: WORKSHOP_PIN.canonicalModel });
+  SESSIONS.push({
+    ...SESSION_SAMPLE,
+    accountId: 'workshop',
+    agentContexts: datedLines(createdAt, activityOf('bench', keyGeneration, WORKSHOP_SESSION_ID), [line]),
+    agentId: 'main',
+    agents: 1,
+    burn: WORKSHOP_BURN,
+    burnAt: lastAttempt.startedAt,
+    burnEquivalent: burnEquivalentOf(WORKSHOP_BURN, 'workshop', burnWindowOf('workshop')),
+    burnUnit: 'window_share',
+    burnWindow: burnWindowOf('workshop'),
+    cacheTtlMs: HOUR,
+    companion: 'none',
+    companionSince: null,
+    createdAt,
+    cycleMs: null,
+    effort: line.effort,
+    epoch: 1,
+    forkDepth: null,
+    forkedFrom: null,
+    historical: false,
+    keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
+    keyGeneration,
+    keyId: 'bench',
+    lastInputTokens: promptOf(WORKSHOP_PIN),
+    lastRefreshAt: lastAttempt.startedAt,
+    lastRequestAt: seen?.last ?? null,
+    lastUsedAt: lastAttempt.startedAt,
+    model: WORKSHOP_PIN.canonicalModel,
+    pinned: true,
+    presenceAgeSeconds: null,
+    requests: seen?.requests ?? 0,
+    runwayBounded: null,
+    runwayMs: null,
+    sessionId: WORKSHOP_SESSION_ID,
     shedFrom: null,
     shedReason: null,
     speed: null,
@@ -803,6 +860,7 @@ if (holderLast && insideSessionExpiry(holderLast.at, NOW)) {
     burnAt: null,
     burnEquivalent: null,
     burnUnit: null,
+    burnWindow: null,
     cacheTtlMs: null,
     companion: 'none',
     companionSince: null,
@@ -850,6 +908,7 @@ export function refusalOnlyRows(now: number): Session[] {
     burnAt: null,
     burnEquivalent: null,
     burnUnit: null,
+    burnWindow: null,
     cacheTtlMs: null,
     companion: 'none',
     companionSince: null,
@@ -932,12 +991,12 @@ const writtenRow = (row: Pick<Session, 'accountId' | 'agentContexts' | 'agentId'
   burnAt: line.lastUsedAt,
   burnEquivalent: null,
   burnUnit: 'usd',
+  burnWindow: null,
   cacheTtlMs: line.cacheTtlMs,
   companionSince: null,
   cycleMs: null,
   effort: line.effort,
   epoch: 1,
-  estimated: false,
   forkDepth: null,
   forkedFrom: null,
   historical: false,
@@ -1027,6 +1086,7 @@ for (const r of RECIPES) {
 }
 for (const pin of SLOWED_PINS) for (const a of pin.agents) pinOn('studio', `notebook|${pin.sessionId}|${a.agentId}|${a.model}`);
 for (const last of FLEET_PINS) pinOn(last.attempts[last.attempts.length - 1].accountId, `fleet|${FLEET_SESSION_ID}|main|${last.canonicalModel}`);
+pinOn('workshop', `bench|${WORKSHOP_SESSION_ID}|main|${WORKSHOP_PIN.canonicalModel}`);
 for (const row of WRITTEN_SESSIONS) for (const line of row.agentContexts) pinOn(line.accountId, `${row.keyId}|${row.sessionId}|${line.agentId}|${line.model}`);
 // Main's auxiliary pin draws no line, but the router holds it, so the pools count it as they count every pin.
 pinOn('overflow', `laptop|${AUXILIARY_ONLY_SESSION_ID}|main|${HAIKU}`);

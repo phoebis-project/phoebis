@@ -10,7 +10,7 @@ import * as d from './dist/api.js';
 // 7-day window. The regime desk, for the entrypoints desk and pane, sizes Max 20x 200 and 1250 and Pro 10 and 62.5 and
 // holds both windows whole in the band.
 const tables = JSON.parse(readFileSync(new URL('./fixtures/test_tables.json', import.meta.url), 'utf8')).body;
-const costs = d.decodeSubscriptionCosts(tables.subscription_costs.content);
+const costs = d.decodeSubscriptionCosts(tables.subscription_costs.content, tables.subscription_costs.unit);
 
 const MAX_20X = 'default_claude_max_20x';
 const OPUS = 'claude-opus-5-5';
@@ -89,7 +89,7 @@ test("a tier's capacity is read as stored, then with the default_ prefix taken o
   assert.equal(d.tierCapacity(costs, 'claude_ai', 'five_hour'), 5);
   assert.equal(d.tierCapacity(costs, 'default_claude_team', 'seven_day'), null);
   assert.equal(d.tierCapacity(costs, 'claude_enterprise', 'five_hour'), null);
-  assert.equal(d.anchorTier(costs), MAX_20X);
+  assert.equal(d.anchorTier(costs), 'default_claude_ai', "the anchor is the envelope's unit tier");
 });
 
 test("the band factor is the reciprocal of the priced window's capacity factor inside the band, and 1 outside it", () => {
@@ -546,19 +546,19 @@ test('a share and a 20x equivalent price an unweighted model of a weighted tier 
   }
   assert.deepEqual(d.modelWeeks(costs, 'claude-fable-5-1'), ['seven_day_fable'], 'a Fable model reads its third column');
   // No other tier's capacity reaches the equivalent, while it moves the tier's own share.
-  const resized = { ...costs, capacity: { ...costs.capacity, default_claude_ai: { fiveHour: 1, sevenDay: 1 } } };
+  const resized = { ...costs, capacity: { ...costs.capacity, [MAX_20X]: { fiveHour: 1, sevenDay: 1 } } };
   assert.deepEqual(d.equivalentOf(resized, 'five_hour', OPUS, u, OUT), d.equivalentOf(costs, 'five_hour', OPUS, u, OUT));
-  assert.notEqual(d.shareOrFallback(resized, 'five_hour', 'default_claude_ai', OPUS, u, OUT)?.share, d.shareOrFallback(costs, 'five_hour', 'default_claude_ai', OPUS, u, OUT)?.share);
+  assert.notEqual(d.shareOrFallback(resized, 'five_hour', MAX_20X, OPUS, u, OUT)?.share, d.shareOrFallback(costs, 'five_hour', MAX_20X, OPUS, u, OUT)?.share);
   assert.equal(d.equivalentOf(costs, 'five_hour', 'claude-mystery-2', u, OUT), null, 'a model the fallback cannot price');
 });
 
 test('an account tier the cost model does not size reads no share, while the 20x equivalent prices its requests under the anchor tier', () => {
-  // A cost model without Pro's row, as the console reads a team account the shipped model does not size.
-  const { default_claude_ai: _pro, ...sized } = costs.capacity;
+  // A cost model without Max 20x's row, as the console reads a team account the shipped model does not size.
+  const { [MAX_20X]: _max, ...sized } = costs.capacity;
   const tierless = { ...costs, capacity: sized };
   const u = usage({ input: 1 });
   for (const model of [OPUS, 'claude-opus-4-8']) {
-    assert.equal(d.shareOrFallback(tierless, 'five_hour', 'default_claude_ai', model, u, OUT), null, `${model} on the unsized tier`);
+    assert.equal(d.shareOrFallback(tierless, 'five_hour', MAX_20X, model, u, OUT), null, `${model} on the unsized tier`);
     const equivalent = d.equivalentOf(tierless, 'five_hour', model, u, OUT);
     assert.ok(equivalent !== null && equivalent.equivalent > 0, `${model} still reads its equivalent`);
     close(equivalent?.equivalent, d.equivalentOf(costs, 'five_hour', model, u, OUT)?.equivalent, `${model}'s equivalent reads no account tier`);

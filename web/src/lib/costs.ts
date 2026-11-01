@@ -17,7 +17,7 @@ const TOKEN_TYPES: TokenType[] = ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', '
 // other.
 const own = (map: object, key: string): boolean => Object.prototype.hasOwnProperty.call(map, key);
 
-export const anchorTier = (costs: SubscriptionCosts): string => costs.unit.definedBy.tier;
+export const anchorTier = (costs: SubscriptionCosts): string => costs.unit.tier;
 
 /** The tier's capacity row as stored, then with `default_` taken off or put on; undefined for a tier the
  *  model lacks. */

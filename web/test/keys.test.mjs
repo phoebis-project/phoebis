@@ -2,16 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { keyRankOf } from './dist/ui.js';
 
-/**
- * A key's lifetime sum, its plan rows' 7-day equivalent flagged where `unpriced` holds, as the keys route answers it.
- */
-const lifetime = ({ billedUsd = 0, cost = 0, sevenDay = 0, unpriced = false } = {}) => ({
-  billedUsd,
-  cost,
-  equivalent: { fiveHour: sevenDay * 3, sevenDay, unpriced: { fiveHour: unpriced, sevenDay: unpriced } },
-  estimated: false,
-  requests: 12,
-});
+/** A key's lifetime sum, its plan rows' Pro-week figure null where `unpriced` holds, as the keys route answers it. */
+const lifetime = ({ billedUsd = 0, cost = 0, sevenDay = 0, unpriced = false } = {}) => ({ billedUsd, cost, equivalent: unpriced ? null : sevenDay, requests: 12 });
 
 test("a key's bar ranks by its 7-day equivalent under native and reads unknown where a plan row priced nothing on that window", () => {
   assert.equal(keyRankOf('native', lifetime({ billedUsd: 4.91, cost: 9.4, sevenDay: 0.0241 })), 0.0241, 'the billed dollars read in the label alone');

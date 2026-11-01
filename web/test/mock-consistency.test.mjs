@@ -23,6 +23,21 @@ const requestsOf = (r) => r.requests.ok + r.requests.incomplete + r.requests.rat
 const tokensOf = (r) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
 const sum = (list, read) => list.reduce((n, x) => n + read(x), 0);
 const near = (a, b) => Math.abs(a - b) < 1e-6;
+/** A request's five priced token counts, which the ledger prices a row by. */
+const requestTokens = (r) => r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output;
+/** Whether the cost model weighs the model with a row of its own, under its id or its undated name, the one weight a
+ *  figure prices at. */
+const ownWeight = (s, model) => (s.settings.subscriptionCosts.modelWeight[model] ?? s.settings.subscriptionCosts.modelWeight[s.lib.undatedModel(model)] ?? null) !== null;
+/** Whether a subscription window paid the request: its serving attempt's funding, which a request no account served
+ *  has none of. */
+const planPaid = (s, r) => r.attempts.length > 0 && s.lib.fundingOf(r.attempts[r.attempts.length - 1]) === 'plan';
+/** The windows a plan request's shares are keyed by: the shared windows the account's reading names, both before any,
+ *  then the model's weeks. */
+const shareWindowsOf = (s, accountId, model) => {
+  const ids = s.accounts.find((a) => a.id === accountId)?.windows.map((w) => w.id) ?? [];
+  const held = [['five_hour', '5h'], ['seven_day', '7d']].filter(([, id]) => ids.includes(id)).map(([w]) => w);
+  return [...(held.length === 0 ? ['five_hour', 'seven_day'] : held), ...s.lib.modelWeeks(s.settings.subscriptionCosts, model)];
+};
 
 /** The engine's pin key, so a session's subagents on another model, or on another account, hold pins of their own. */
 const pinOf = (r) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`;
@@ -427,7 +442,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(
       s.accounts.filter((a) => a.kind === 'oauth').map((a) => a.email),
       // The sunset seed's address follows reserve's, as its row does in the story.
-      ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+studio@example.com', 'operator+old@example.com', 'operator+spare@example.com', 'operator+reserve@example.com', 'operator+sunset@example.com', 'operator+contract@example.com'],
+      ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+studio@example.com', 'operator+old@example.com', 'operator+spare@example.com', 'operator+reserve@example.com', 'operator+sunset@example.com', 'operator+contract@example.com', 'operator+workshop@example.com'],
       'every subscription keeps the identity it last paired with',
     );
     const pairing = await s.api.startPairing({ accountId: 'legacy' });
@@ -687,61 +702,59 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(groups.map((g) => g.key).sort(), resolved, 'the model groups');
   });
 
-  test(`the mock flags a window where a plan row with tokens priced nothing on it, so the story reads no flag, and its unpriced request flags the day under its switch, at ${at}`, async () => {
+  test(`the story's Sonnet 4.5 rows price nothing, so every sum that holds one reads null and the attention list names the model, and its unpriced request reads alike under its switch, at ${at}`, async () => {
     const s = await story;
     const range = { from: iso(s.now - DAY), to: iso(s.now) };
-    const both = { five_hour: false, seven_day: false };
-    const shared = { fiveHour: false, sevenDay: false };
-    // The rule over the rows the folds read: a plan row with tokens whose equivalent on the window is null.
-    const unpricedRows = s.allRollups.filter((r) => r.funding === 'plan' && tokensOf(r) > 0 && Object.values(r.equivalents).some((v) => v === null));
-    assert.deepEqual(unpricedRows.map((r) => r.model), [], 'every model the story draws sits in a tier with a weighted model');
-    const plain = await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'model' });
-    for (const g of plain) {
-      assert.deepEqual([g.unpriced?.five_hour, g.unpriced?.seven_day, g.probeUnpriced?.five_hour, g.probeUnpriced?.seven_day], [false, false, false, false], `${g.key} reads no flag`);
-      for (const [w, flag] of Object.entries(g.unpriced ?? {})) assert.equal(flag, false, `${g.key}'s ${w}`);
+    const holds = (rows) => rows.some((r) => r.canonicalModel === 'claude-sonnet-4-5' && planPaid(s, r) && requestTokens(r) > 0);
+    const sonnet = s.requests.filter((r) => r.canonicalModel === 'claude-sonnet-4-5' && planPaid(s, r));
+    assert.ok(sonnet.length > 0, 'the story serves Sonnet 4.5 on a plan');
+    for (const r of sonnet) assert.ok(r.costEquivalent === null && Object.values(r.costShares ?? {}).every((v) => v === null), `${r.id} prices nothing`);
+    assert.ok(s.allRollups.filter((r) => r.model === 'claude-sonnet-4-5' && r.funding === 'plan' && tokensOf(r) > 0).every((r) => r.equivalent === null), "its rollups' rows with tokens hold no figure");
+    const models = await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'model' });
+    const group = models.find((g) => g.key === 'claude-sonnet-4-5');
+    assert.ok(group && group.planRequests > 0 && group.costEquivalent === null && group.equivalentSplit === null, 'its model group reads null');
+    assert.ok(models.some((g) => typeof g.costEquivalent === 'number' && g.costEquivalent > 0), 'a model with a weight of its own prices its figure');
+    const accounts = await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'account' });
+    assert.equal(accounts.find((g) => g.key === 'secondary')?.costEquivalent, null, 'the account that serves it reads null');
+    const burn = await s.api.getAnalyticsBurn(range, 'model');
+    assert.ok(burn.points.some((p) => p.group === 'claude-sonnet-4-5' && p.unpriced), 'a bucket of it reads flagged');
+    assert.deepEqual([...new Set(burn.points.filter((p) => p.unpriced).map((p) => p.group))], ['claude-sonnet-4-5'], 'and no other model flags one');
+    assert.ok(burn.points.every((p) => !p.unpriced || p.equivalent === null), 'a flagged bucket reads null');
+    assert.ok(holds(s.counted), "the dashboard's day holds one");
+    assert.equal(s.overview.equivalent24h, null, "so the dashboard's day reads null");
+    for (const p of s.pools) assert.equal(p.equivalent24h === null, holds(s.totalled.filter((r) => r.poolId === p.id && !r.refused)), `${p.id}'s day`);
+    for (const k of s.keys) {
+      const rows = s.rollups.filter((r) => r.keyId === k.id && r.keyGeneration === Date.parse(k.createdAt));
+      assert.equal(k.lifetime.equivalent === null, rows.some((r) => r.funding === 'plan' && r.equivalent === null), `${k.id}'s lifetime`);
     }
-    const plainBurn = await s.api.getAnalyticsBurn(range, 'key');
-    assert.ok(plainBurn.points.every((p) => !p.fiveHourUnpriced && !p.sevenDayUnpriced && !p.modelWeekUnpriced), 'no burn point reads a flag');
-    assert.deepEqual([s.overview.equivalent24h.unpriced, ...s.overview.hourly.map((h) => h.equivalent.unpriced)].filter((u) => u.fiveHour || u.sevenDay), [], 'the dashboard reads no flag');
-    for (const k of s.keys) assert.deepEqual([k.lifetime.equivalent.unpriced, k.usage7d.equivalent.unpriced], [shared, shared], `${k.id} reads no flag`);
-    for (const p of s.pools) assert.deepEqual([p.equivalent24h.unpriced, ...p.traffic24h.map((b) => b.equivalent.unpriced)].filter((u) => u.fiveHour || u.sevenDay), [], `${p.id} reads no flag`);
-    // The story's Sonnet 4.5 account has no weight of its own and prices through its model tier's fallback.
-    const secondary = (await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'account' })).find((g) => g.key === 'secondary');
-    assert.ok(secondary && secondary.estimated && secondary.costEquivalent.seven_day > 0, 'the Sonnet 4.5 account prices an estimate');
-    assert.deepEqual(secondary.unpriced, both, 'and is never unpriced');
+    assert.ok(s.keys.some((k) => k.lifetime.equivalent === null) && s.pools.some((p) => p.equivalent24h === null), 'a key and a pool that served it read null');
+    const requests = s.requests.filter((r) => s.lib.undatedModel(r.canonicalModel) === 'claude-sonnet-4-5' && planPaid(s, r) && r.costEquivalent === null && requestTokens(r) > 0).length;
+    assert.deepEqual(s.attention.filter((i) => i.kind === 'model_unpriced').map((i) => [i.detail, i.link, i.pools, i.subject.type]), [[{ model: 'claude-sonnet-4-5', requests }, null, [], 'model']], 'one item names the model and its plan requests');
     // The switch lends the story one plan request on a model the cost model lists in no tier, in a row of its own.
     globalThis.localStorage = { getItem: (key) => (key === 'phoebis.mockUnpriced' ? '1' : null) };
     let switched;
     try {
       switched = {
-        accounts: await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'account' }),
         all: await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'all' }),
         burn: await s.api.getAnalyticsBurn(range, 'model'),
         models: await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'model' }),
-        overview: await s.api.getOverview(),
         series: await s.api.getAnalyticsSeries({ ...range, groupBy: 'model' }),
       };
     } finally {
       delete globalThis.localStorage;
     }
-    const added = switched.models.filter((g) => !plain.some((p) => p.key === g.key));
+    const added = switched.models.filter((g) => !models.some((p) => p.key === g.key));
     assert.equal(added.length, 1, 'the switch adds one model group');
     const [unlisted] = added;
     assert.equal(s.lib.modelTierOf(s.settings.subscriptionCosts, unlisted.key), null, `${unlisted.key} sits in no tier`);
-    assert.deepEqual([unlisted.unpriced, unlisted.costEquivalent, unlisted.planRequests, unlisted.estimated], [{ five_hour: true, seven_day: true }, {}, 1, false], 'its group flags both shared windows, which it leaves out');
-    for (const g of switched.models.filter((x) => x.key !== unlisted.key)) assert.deepEqual(g.unpriced, plain.find((p) => p.key === g.key).unpriced, `${g.key} keeps its flags`);
-    const [whole] = switched.all;
-    assert.deepEqual([whole.unpriced, Object.keys(whole.costEquivalent).filter((w) => w === 'five_hour' || w === 'seven_day')], [{ ...whole.unpriced, five_hour: true, seven_day: true }, []], "the whole range's group flags both windows and leaves them out, so no partial sum reads as the whole");
-    assert.deepEqual(switched.accounts.find((g) => g.key === 'secondary').unpriced, both, 'the Sonnet 4.5 account stays priced beside it');
+    assert.deepEqual([unlisted.costEquivalent, unlisted.planRequests], [null, 1], 'its group prices nothing');
+    for (const g of switched.models.filter((x) => x.key !== unlisted.key)) assert.equal(g.costEquivalent, models.find((p) => p.key === g.key).costEquivalent, `${g.key} keeps its figure`);
+    assert.equal(switched.all[0].costEquivalent, null, "the whole range's group reads null, so no partial sum reads as the whole");
     const bucket = switched.series.find((p) => p.groups.some((g) => g.key === unlisted.key));
-    assert.deepEqual(bucket?.groups.filter((g) => g.unpriced.seven_day).map((g) => g.key), [unlisted.key], 'one bucket holds it, its group the one flagged');
-    const flaggedPoints = switched.burn.points.filter((p) => p.fiveHourUnpriced || p.sevenDayUnpriced);
-    assert.deepEqual(flaggedPoints.map((p) => [p.group, p.fiveHourEquivalent, p.sevenDayEquivalent, p.fiveHourUnpriced, p.sevenDayUnpriced, p.modelWeekUnpriced]), [[unlisted.key, null, null, true, true, false]], 'its burn bucket flags both shared windows over null equivalents');
-    // The shared sums keep every priced row's figure and flag the windows the request priced nothing on.
-    assert.deepEqual([switched.overview.equivalent24h.unpriced, switched.overview.equivalent24h.fiveHour, switched.overview.equivalent24h.sevenDay], [{ fiveHour: true, sevenDay: true }, s.overview.equivalent24h.fiveHour, s.overview.equivalent24h.sevenDay]);
-    assert.equal(switched.overview.hourly.filter((h) => h.equivalent.unpriced.fiveHour).length, 1, 'one hour holds it');
+    assert.equal(bucket?.groups.find((g) => g.key === unlisted.key)?.costEquivalent, null, 'one bucket holds it, its group null');
+    assert.deepEqual(switched.burn.points.filter((p) => p.group === unlisted.key && p.tokens > 0).map((p) => [p.equivalent, p.unpriced]), [[null, true]], 'its burn bucket reads null, flagged');
     // The switch reads per answer, so the story answers whole again once it is off.
-    assert.deepEqual((await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'model' })).map((g) => g.key), plain.map((g) => g.key));
+    assert.deepEqual((await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'model' })).map((g) => g.key), models.map((g) => g.key));
   });
 
   test(`the live desktop key starts on the hour its earlier holder ended, inside the last day, at ${at}`, async () => {
@@ -902,7 +915,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.equal(sum(p.members, (m) => m.activePins) + outside, p.activePins, `${p.id}'s members' sum and the ${outside} pins on accounts outside them make its figure`);
       above[p.id] = p.activePins - sum(p.members, (m) => m.activePins);
     }
-    assert.deepEqual(above, { all: 0, contract: 0, jobs: 0, work: 1 }, 'work holds one pin on a former member and the other pools none');
+    assert.deepEqual(above, { all: 0, contract: 0, jobs: 0, work: 1, workshop: 0 }, 'work holds one pin on a former member and the other pools none');
     assert.ok(s.pools.some((p) => p.activePins > s.sessions.filter((x) => x.pinned && poolOf.get(x.keyId) === p.id).length), 'a pool holds more pins than pinned sessions');
     assert.equal(s.overview.activePins, sum(s.pools, (p) => p.activePins), "the dashboard's active pins");
   });
@@ -2497,11 +2510,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(held > 0, 'a held shed line');
   });
 
-  test(`every round's pin the pick read prices its rewrite as the story's 20x equivalent of its weekly window with the window named, at ${at}`, async () => {
+  test(`every round's pin the pick read prices its rewrite as the Pro-week figure with the window it compared on named, and the story's oldest round as it stored it, at ${at}`, async () => {
     const s = await story;
+    const costs = s.settings.subscriptionCosts;
     const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
     // The model's own week where it draws one, else the 7-day window.
     const weekOf = (model) => (model.includes('fable') ? 'seven_day_fable' : 'seven_day');
+    // The prompt written to the cache again, as the Pro tier's share of its 7-day window.
+    const proWeek = (tokens, model) => (ownWeight(s, model) ? s.lib.shareIn(costs, 'seven_day', 'default_claude_ai', model, { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: tokens, input: 0, output: 0 }, false) : null);
+    const oldest = rounds.reduce((x, y) => (Date.parse(y.at) < Date.parse(x.at) ? y : x));
+    assert.deepEqual(rounds.map((e) => [e === oldest, e.detail.rewrite_unit]).sort(), [[false, 'pro_week'], [false, 'pro_week'], [false, 'pro_week'], [true, undefined]], 'the newer rounds name the unit and the oldest none');
     const read = { api_key: 0, oauth: 0 };
     for (const e of rounds) {
       for (const p of e.detail.pins) {
@@ -2511,7 +2529,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
           continue;
         }
         assert.equal(p.rewrite_window, weekOf(p.model), where);
-        assert.equal(p.rewrite, s.lib.rewriteOf(p.last_input_tokens, p.model)[p.rewrite_window], where);
+        assert.equal(p.rewrite, e === oldest ? s.lib.rewriteOf(p.last_input_tokens, p.model)[p.rewrite_window] : proWeek(p.last_input_tokens, p.model), where);
         read[s.accounts.find((a) => a.id === p.planned).kind] += 1;
       }
     }
@@ -3050,11 +3068,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     ]);
   });
 
-  test(`every plan-funded row of a weighted model tier carries non-null shares and equivalents, estimated where the model has no weight of its own, and no API key, overage or fast row carries one, at ${at}`, async () => {
+  test(`every plan-funded row carries its Pro-week figure and its shares on the windows its account's set has and its model's weeks, null on a model without a weight of its own, and no API key, overage or fast row carries one, at ${at}`, async () => {
     const s = await story;
-    const costs = s.settings.subscriptionCosts;
     let priced = 0;
-    let estimated = 0;
+    let unpriced = 0;
+    const keys = new Map();
     for (const r of s.requests) {
       const serving = r.attempts[r.attempts.length - 1] ?? null;
       const funding = s.lib.fundingOf(serving);
@@ -3064,18 +3082,19 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         continue;
       }
       assert.ok(r.costShares !== null && typeof r.costShares === 'object', `${r.id} is plan-funded and carries no share map`);
-      assert.ok(r.costEquivalent !== null && typeof r.costEquivalent === 'object', `${r.id} is plan-funded and carries no equivalent`);
-      const values = [...Object.values(r.costShares), ...Object.values(r.costEquivalent ?? {})];
-      // A model of a weighted model tier prices at its own weight or its tier's latest one.
-      const weight = s.lib.weightOrFallback(costs, r.canonicalModel, 'five_hour');
-      assert.ok(weight !== null, `${r.id} runs on ${r.canonicalModel}, which the fallback prices`);
-      assert.ok(values.length > 0 && values.every((v) => typeof v === 'number'), `${r.id} on ${r.canonicalModel} reads ${JSON.stringify([r.costShares, r.costEquivalent])}`);
-      assert.equal(r.estimated, weight?.estimated, `${r.id} on ${r.canonicalModel} reads estimated ${r.estimated}`);
-      priced += 1;
-      if (r.canonicalModel === 'claude-sonnet-4-5') estimated += 1;
+      if (r.classifier !== null) continue;
+      assert.deepEqual(Object.keys(r.costShares), shareWindowsOf(s, serving.accountId, r.canonicalModel), `${r.id} on ${serving.accountId} keys its shares`);
+      keys.set(`${serving.accountId} ${r.canonicalModel}`, Object.keys(r.costShares));
+      if (ownWeight(s, r.canonicalModel)) {
+        assert.ok(typeof r.costEquivalent === 'number' && Object.values(r.costShares).every((v) => typeof v === 'number'), `${r.id} on ${r.canonicalModel} reads ${JSON.stringify([r.costShares, r.costEquivalent])}`);
+        priced += 1;
+      } else {
+        assert.ok(r.costEquivalent === null && Object.values(r.costShares).every((v) => v === null), `${r.id} on ${r.canonicalModel} prices nothing`);
+        unpriced += 1;
+      }
     }
-    assert.ok(priced > 0, 'the story prices a share');
-    assert.ok(estimated > 0, "the story's Sonnet 4.5 rows price an estimate");
+    assert.ok(priced > 0 && unpriced > 0, `the story prices ${priced} rows and leaves ${unpriced} unpriced`);
+    assert.deepEqual([keys.get('workshop claude-fable-5-1'), keys.get('primary claude-fable-5-1')], [['seven_day', 'seven_day_fable'], ['five_hour', 'seven_day', 'seven_day_fable']], 'the approved Ultra prices no 5-hour share, the unapproved one does');
   });
 
   test(`the story's two classifier calls of one session read zero shares with the reason and book nothing, at ${at}`, async () => {
@@ -3084,9 +3103,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(calls.length, 2, "two rows are the client's classifier calls");
     assert.equal(new Set(calls.map((r) => `${r.keyId}|${r.sessionId}`)).size, 1, 'of one session under one key');
     for (const r of calls) {
-      assert.deepEqual([r.requestClass, r.shareReason, r.estimated, s.lib.fundingOf(r.attempts.at(-1))], ['auxiliary', 'client_classifier', false, 'plan'], r.id);
-      const figures = [...Object.values(r.costShares ?? {}), ...Object.values(r.costEquivalent ?? {})];
-      assert.ok(figures.length > 0 && figures.every((v) => v === 0), `${r.id} reads ${JSON.stringify([r.costShares, r.costEquivalent])}`);
+      assert.deepEqual([r.requestClass, r.shareReason, s.lib.fundingOf(r.attempts.at(-1))], ['auxiliary', 'client_classifier', 'plan'], r.id);
+      const shares = Object.values(r.costShares ?? {});
+      assert.ok(shares.length > 0 && [...shares, r.costEquivalent].every((v) => v === 0), `${r.id} reads ${JSON.stringify([r.costShares, r.costEquivalent])}`);
       assert.ok(r.costUsd > 0, `${r.id} keeps its dollar estimate`);
     }
     assert.deepEqual(s.requests.filter((r) => r.shareReason !== null).map((r) => r.id).sort(), calls.map((r) => r.id).sort(), 'the reason stands on the classifier calls alone');
@@ -3147,21 +3166,23 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(earlier > 0, `no hour of the story prices before the entry of ${latest}`);
   });
 
-  test(`the breakdown by model's 20x equivalents are the sums of the account rows' under the same filters, at ${at}`, async () => {
+  test(`the breakdown by model's Pro-week figures are the sums of the account rows' under the same filters, null where one is, at ${at}`, async () => {
     const s = await story;
     const range = { from: iso(s.now - DAY), to: iso(s.now) };
     const byModel = await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'model' });
     let compared = 0;
     for (const g of byModel) {
       const accounts = await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'account', models: [g.key] });
-      const windows = new Set([...Object.keys(g.costEquivalent ?? {}), ...accounts.flatMap((a) => Object.keys(a.costEquivalent ?? {}))]);
-      for (const w of windows) {
-        const summed = sum(accounts, (a) => a.costEquivalent?.[w] ?? 0);
-        assert.ok(Math.abs((g.costEquivalent?.[w] ?? 0) - summed) <= 1e-9 * Math.max(1, summed), `${g.key}'s ${w} reads ${g.costEquivalent?.[w]} against its accounts' ${summed}`);
+      const figures = accounts.map((a) => a.costEquivalent);
+      if (figures.some((v) => v === null)) {
+        assert.equal(g.costEquivalent, null, `${g.key} reads ${g.costEquivalent} where an account priced nothing`);
+        continue;
       }
-      if (windows.size > 0) compared += 1;
+      const summed = sum(figures, (v) => v);
+      assert.ok(typeof g.costEquivalent === 'number' && Math.abs(g.costEquivalent - summed) <= 1e-9 * Math.max(1, summed), `${g.key} reads ${g.costEquivalent} against its accounts' ${summed}`);
+      if (summed > 0) compared += 1;
     }
-    assert.ok(compared > 0, 'a model carries an equivalent');
+    assert.ok(compared > 0, 'a model carries a figure');
   });
 
   test(`every group's billed dollars and its plan rows' dollars add up to its dollars, at ${at}`, async () => {
@@ -3192,34 +3213,48 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const byModel = await s.api.getAnalyticsBreakdown({ ...range, accountIds: ['nightly'], groupBy: 'model' });
     const [own] = await s.api.getAnalyticsBreakdown({ ...range, accountIds: ['nightly'], groupBy: 'account' });
     assert.ok(byModel.length > 1 && own?.key === 'nightly', 'nightly served more than one model');
-    for (const g of byModel) assert.ok(g.costShares !== null && g.cacheShares !== null && g.probeShares !== null, `nightly's ${g.key} reads its shares`);
+    for (const g of byModel) assert.ok(g.costShares !== null, `nightly's ${g.key} reads its shares`);
     const week = sum(byModel, (g) => g.costShares?.seven_day ?? 0);
     assert.ok(own.costShares.seven_day > 0 && Math.abs(week - own.costShares.seven_day) <= 1e-9, `the models' 7-day shares ${week} against nightly's ${own.costShares.seven_day}`);
     const two = await s.api.getAnalyticsBreakdown({ ...range, accountIds: ['nightly', 'primary'], groupBy: 'model' });
     assert.ok(two.length > 0);
-    for (const g of two) assert.deepEqual([g.costShares, g.cacheShares, g.probeShares], [null, null, null], `two accounts' ${g.key}`);
+    for (const g of two) assert.equal(g.costShares, null, `two accounts' ${g.key}`);
   });
 
-  test(`the dashboard's day reads its billed dollars and the plan rows' summed 20x equivalents, at ${at}`, async () => {
+  test(`the dashboard's day reads its billed dollars and the plan rows' summed Pro-week figure, null where a plan row priced nothing, at ${at}`, async () => {
     const s = await story;
-    const plan = s.counted.filter((r) => r.costEquivalent !== null);
-    const summed = (w) => sum(plan, (r) => r.costEquivalent[w] ?? 0);
-    assert.ok(s.overview.equivalent24h && near(s.overview.equivalent24h.fiveHour, summed('five_hour')) && near(s.overview.equivalent24h.sevenDay, summed('seven_day')), `the day reads ${JSON.stringify(s.overview.equivalent24h)}`);
-    assert.ok(near(s.overview.billed24h, sum(s.counted.filter((r) => r.costEquivalent === null), (r) => r.costUsd)), 'the billed rows alone');
-    assert.equal(s.overview.estimated24h, s.counted.some((r) => r.estimated), "a fallback-priced row marks the day");
-    assert.ok(near(sum(s.overview.hourly, (h) => h.equivalent?.fiveHour ?? 0), s.overview.equivalent24h.fiveHour), 'the hours add up to the day');
+    const figureOf = (rows) => {
+      const plan = rows.filter((r) => planPaid(s, r));
+      return plan.some((r) => requestTokens(r) > 0 && r.costEquivalent === null) ? null : sum(plan, (r) => r.costEquivalent ?? 0);
+    };
+    assert.equal(s.overview.equivalent24h, figureOf(s.counted), `the day reads ${s.overview.equivalent24h}`);
+    assert.ok(near(s.overview.billed24h, sum(s.counted.filter((r) => !planPaid(s, r)), (r) => r.costUsd)), 'the billed rows alone');
+    for (const h of s.overview.hourly) {
+      const rows = s.counted.filter((r) => startOfHour(Date.parse(r.at)) === Date.parse(h.at));
+      const want = figureOf(rows);
+      assert.ok(want === null ? h.equivalent === null : near(h.equivalent, want), `${h.at} reads ${h.equivalent} against ${want}`);
+    }
+    assert.ok(s.overview.hourly.some((h) => h.equivalent === null) && s.overview.hourly.some((h) => typeof h.equivalent === 'number' && h.equivalent > 0), 'an hour of Sonnet 4.5 reads null and a priced one its figure');
   });
 
-  test(`every pinned plan session reads its burn as a 20x equivalent, estimated where the pin's model has no weight of its own, at ${at}`, async () => {
+  test(`every pinned plan session reads its burn on the window its account's set names and the Pro-week burn beside it, null on a model without a weight of its own, at ${at}`, async () => {
     const s = await story;
-    const costs = s.settings.subscriptionCosts;
     const pinned = s.sessions.filter((x) => x.pinned && x.burnUnit === 'window_share');
     assert.ok(pinned.length > 0);
+    let unpriced = 0;
     for (const x of pinned) {
-      assert.ok(typeof x.burnEquivalent === 'number' && typeof x.burn === 'number', `${x.sessionId} on ${x.model} burns ${x.burn} and reads ${x.burnEquivalent}`);
-      assert.equal(x.estimated, s.lib.weightOrFallback(costs, x.model, 'five_hour')?.estimated, `${x.sessionId} on ${x.model}`);
+      const windows = s.accounts.find((a) => a.id === x.accountId)?.windows.map((w) => w.id) ?? [];
+      assert.equal(x.burnWindow, windows.includes('5h') || !windows.includes('7d') ? 'five_hour' : 'seven_day', `${x.sessionId} on ${x.accountId}`);
+      if (!ownWeight(s, x.model)) {
+        assert.deepEqual([x.burn, x.burnEquivalent], [null, null], `${x.sessionId} on ${x.model} burns nothing`);
+        unpriced += 1;
+        continue;
+      }
+      assert.ok(typeof x.burn === 'number' && near(x.burnEquivalent, s.lib.burnEquivalentOf(x.burn, x.accountId, x.burnWindow)), `${x.sessionId} on ${x.model} burns ${x.burn} and reads ${x.burnEquivalent}`);
     }
-    assert.ok(pinned.some((x) => x.estimated), "a pin on the story's Sonnet 4.5 burns an estimate");
+    assert.ok(unpriced > 0, "a pin on the story's Sonnet 4.5 burns nothing");
+    assert.deepEqual(pinned.filter((x) => x.accountId === 'workshop').map((x) => x.burnWindow), ['seven_day'], "the approved Ultra's pin burns its 7-day window");
+    assert.ok(s.sessions.filter((x) => x.burnUnit !== 'window_share').every((x) => x.burnWindow === null), 'a session off plan quota names no window');
   });
 
   test(`every row's phases are in order and agree with its ttfbMs and durationMs, at ${at}`, async () => {
@@ -3245,7 +3280,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`the breakdown's account shares equal the sum of its rows' own shares, the cache splits priced at each row's hour, at ${at}`, async () => {
+  test(`the breakdown's account shares equal the sum of its rows' own shares, and its cache figure the cache splits priced at each row's hour, at ${at}`, async () => {
     const s = await story;
     const costs = s.settings.subscriptionCosts;
     const range = { from: iso(s.now - DAY), to: iso(s.now) };
@@ -3254,7 +3289,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const kinds = new Map(s.accounts.map((a) => [a.id, a.kind]));
     const tiers = new Map(s.accounts.map((a) => [a.id, a.subscription?.rateLimitTier]));
     const usageOf = (r) => ({ cacheRead: r.tokens.cacheRead, cacheWrite1h: r.tokens.cacheWrite1h, cacheWrite5m: r.tokens.cacheWrite5m, input: r.tokens.uncachedInput, output: r.tokens.output });
-    const windowsOf = (r) => ['five_hour', 'seven_day', ...s.lib.modelWeeks(costs, r.model)];
     // The rows' own shares, each request priced at its completion, summed as the route sums them: a window read null by
     // any row reads null for the group.
     const own = (rows) => {
@@ -3265,15 +3299,14 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       }
       return out;
     };
-    // The cache splits have no per-request figure on a row, so each row's tokens price at its hour.
-    const summed = (rows, tier, usage) => {
-      const out = {};
+    // The cache halves have no per-request figure on a row, so each row's tokens price at its hour as the Pro-week
+    // figure, a client classifier call's at zero.
+    const summed = (rows, usage) => {
+      let out = 0;
       for (const r of rows) {
         if (tokensOf(r) === 0) continue;
-        for (const w of windowsOf(r)) {
-          const share = s.lib.shareOrFallback(costs, w, tier, r.model, usage(r), Date.parse(r.hour))?.share ?? null;
-          out[w] = share === null || out[w] === null ? null : (out[w] ?? 0) + share;
-        }
+        const figure = r.classifier === 'client' ? 0 : ownWeight(s, r.model) ? (s.lib.equivalentOf(costs, 'seven_day', r.model, usage(r), Date.parse(r.hour))?.equivalent ?? null) : null;
+        out = out === null || figure === null ? null : out + figure;
       }
       return out;
     };
@@ -3282,16 +3315,24 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       else assert.ok(typeof got === 'number' && Math.abs(got - want) < 1e-9, `${where} reads ${got} against the rows' ${want}`);
     };
     let compared = 0;
+    let cached = 0;
     for (const g of groups) {
       const tier = tiers.get(g.key);
       const plan = day.filter((r) => r.accountId === g.key && r.funding === 'plan');
       const counted = plan.filter((r) => r.kind !== 'probe');
-      const probes = plan.filter((r) => r.kind === 'probe');
       // The counts read under every account, a request no account served among them, as the route counts them.
       assert.equal(g.planRequests, sum(counted, requestsOf), `${g.key}'s plan requests`);
       assert.equal(g.planOutputTokens, sum(counted, (r) => r.tokens.output), `${g.key}'s plan output tokens`);
+      const read = summed(counted, (r) => ({ ...usageOf(r), cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }));
+      const write = summed(counted, (r) => ({ ...usageOf(r), cacheRead: 0, input: 0, output: 0 }));
+      if (read === null || write === null) assert.equal(g.cacheEquivalent, null, `${g.key}'s cache figure where a row priced nothing`);
+      else {
+        close(g.cacheEquivalent?.read ?? null, read, `${g.key}'s cache read`);
+        close(g.cacheEquivalent?.write ?? null, write, `${g.key}'s cache write`);
+        if (read > 0) cached += 1;
+      }
       if (kinds.get(g.key) !== 'oauth' || tier === undefined) {
-        assert.deepEqual([g.costShares, g.cacheShares, g.probeShares], [null, null, null], `${g.key} prices a share`);
+        assert.equal(g.costShares, null, `${g.key} prices a share`);
         continue;
       }
       const cost = own(counted);
@@ -3299,25 +3340,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       // with null.
       assert.deepEqual(Object.keys(g.costShares ?? {}).sort(), Object.keys(cost).filter((w) => cost[w] !== null).sort(), `${g.key}'s windows`);
       for (const [w, got] of Object.entries(g.costShares ?? {})) close(got, cost[w], `${g.key}'s ${w}`);
-      const read = summed(counted, tier, (r) => ({ ...usageOf(r), cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }));
-      const write = summed(counted, tier, (r) => ({ ...usageOf(r), cacheRead: 0, input: 0, output: 0 }));
-      // An unpriced window is absent from the cache and probe maps, as the route answers them.
-      assert.deepEqual(Object.keys(g.cacheShares ?? {}).sort(), Object.keys(read).filter((w) => read[w] !== null && write[w] !== null).sort(), `${g.key}'s cache windows`);
-      for (const [w, entry] of Object.entries(g.cacheShares ?? {})) {
-        close(entry.read, read[w], `${g.key}'s ${w} cache read`);
-        close(entry.write, write[w], `${g.key}'s ${w} cache write`);
-      }
-      const probe = own(probes);
-      const probeUsd = sum(probes, (r) => r.probeCostUsd);
-      const ratio = probeUsd > 0 ? sum(probes, (r) => r.wastedProbeUsd) / probeUsd : null;
-      assert.deepEqual(Object.keys(g.probeShares ?? {}).sort(), Object.keys(probe).filter((w) => probe[w] !== null).sort(), `${g.key}'s probe windows`);
-      for (const [w, entry] of Object.entries(g.probeShares ?? {})) {
-        close(entry.cost, probe[w], `${g.key}'s ${w} probe cost`);
-        close(entry.wasted, ratio === null ? null : probe[w] * ratio, `${g.key}'s ${w} wasted probe share`);
-      }
       compared += 1;
     }
-    assert.ok(compared > 0 && groups.some((g) => g.costShares !== null && Object.values(g.costShares).some((v) => v !== null)), 'an account carries a priced share');
+    assert.ok(compared > 0 && cached > 0 && groups.some((g) => g.costShares !== null && Object.values(g.costShares).some((v) => v !== null)), 'an account carries a priced share and a priced cache figure');
   });
 
   test(`the first page under the default range holds the undecodable row and its capture stops after the second delta, at ${at}`, async () => {
@@ -3508,14 +3533,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.deepEqual(Object.fromEntries(groups.map((g) => [g.key, g.requests]).sort()), Object.fromEntries(Object.entries(want).sort()), groupBy);
     }
     // A client classifier call takes no plan share, so its group's cost, cache, saving and split figures read zero,
-    // its account's shares and the 20x equivalents alike.
+    // its account's shares and the Pro-week figures alike.
     const [free] = s.lib.groupsOf(defaultRange(s), { accountIds: ['primary'], groupBy: 'classifier', includeProbes: false }).filter((g) => g.key === 'client');
-    const pairs = (map) => Object.values(map ?? {}).flatMap((c) => [c.read, c.write]);
-    const figures = [
-      ...Object.values(free?.costEquivalent ?? {}), ...pairs(free?.cacheEquivalent), ...Object.values(free?.savingEquivalent ?? {}), ...Object.values(free?.equivalentSplit ?? {}),
-      ...Object.values(free?.costShares ?? {}), ...pairs(free?.cacheShares), ...Object.values(free?.savingShares ?? {}),
-    ];
-    assert.ok(free?.requests === 2 && figures.length > 0 && figures.every((v) => v === 0), `the client group reads ${JSON.stringify(free && { cacheEquivalent: free.cacheEquivalent, cacheShares: free.cacheShares, costEquivalent: free.costEquivalent, costShares: free.costShares, equivalentSplit: free.equivalentSplit, requests: free.requests, savingEquivalent: free.savingEquivalent, savingShares: free.savingShares })}`);
+    const figures = [free?.costEquivalent, free?.cacheEquivalent?.read, free?.cacheEquivalent?.write, free?.savingEquivalent, ...Object.values(free?.equivalentSplit ?? {}), ...Object.values(free?.costShares ?? {})];
+    assert.ok(free?.requests === 2 && figures.every((v) => v === 0), `the client group reads ${JSON.stringify(free && { cacheEquivalent: free.cacheEquivalent, costEquivalent: free.costEquivalent, costShares: free.costShares, equivalentSplit: free.equivalentSplit, requests: free.requests, savingEquivalent: free.savingEquivalent })}`);
   });
 
   test(`the story holds two laptop requests the router's own stop cut, one past its head and one before any, at ${at}`, async () => {

@@ -85,19 +85,24 @@ function pricedWindows(map: Record<string, number | null> | null): { key: string
   return priced.sort((a, b) => rank(a[0]) - rank(b[0])).map(([key, share]) => ({ key, share }));
 }
 
-export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costEquivalent' | 'costShares' | 'costUsd' | 'estimated' | 'shareReason'>, unit: UnitPosition): CostUnit {
-  const { costUsd: usd, estimated, shareReason: reason } = r;
+/** The request's Pro-week figure as the one 7-day equivalent the cells read, none where the route priced nothing. */
+const figureOf = (r: Pick<RequestLog, 'costEquivalent'>): { key: string; share: number }[] => (r.costEquivalent === null ? [] : [{ key: 'seven_day', share: r.costEquivalent }]);
+
+export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costEquivalent' | 'costShares' | 'costUsd' | 'shareReason'>, unit: UnitPosition): CostUnit {
+  const { costUsd: usd, shareReason: reason } = r;
+  // The route answers no estimate, so no figure carries the mark.
+  const estimated = false;
   const last = r.attempts[r.attempts.length - 1];
   if (last === undefined) return { estimated, kind: 'unserved', usd };
   const funding = fundingOf(last);
   if (unit === 'native' && nativeOf(funding) === 'equivalent') {
-    const equivalents = pricedWindows(r.costEquivalent);
+    const equivalents = figureOf(r);
     return equivalents.length === 0 ? { estimated, kind: 'unpriced', usd } : { equivalents, estimated, kind: 'equivalent', reason, usd };
   }
   // A billed request has no subscription equivalent to read, and a subscription request bills no dollars.
   if (funding !== 'plan') return unit === 'equivalent' ? { estimated, kind: 'dash', title: NO_EQUIVALENT_TITLE, usd } : { estimated, funding, kind: 'dollars', usd };
   if (unit === 'usd') return { estimated, kind: 'dash', title: NOTHING_BILLED_TITLE, usd };
-  if (unit === 'all' || unit === 'equivalent') return { equivalents: pricedWindows(r.costEquivalent), estimated, kind: 'equivalent_dollars', reason, usd };
+  if (unit === 'all' || unit === 'equivalent') return { equivalents: figureOf(r), estimated, kind: 'equivalent_dollars', reason, usd };
   const shares = pricedWindows(r.costShares);
   return shares.length === 0 ? { estimated, kind: 'unpriced', usd } : { estimated, kind: 'shares', reason, shares, usd };
 }

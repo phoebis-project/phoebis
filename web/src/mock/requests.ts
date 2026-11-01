@@ -6,13 +6,13 @@ import type {
 import type { GuardrailMatch } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
-import { anchorTier, equivalentOf, fundingOf, modelWeeks, pricedWindow, shareOrFallback, tierCapacity } from '@/lib/costs';
+import { equivalentOf, fundingOf, modelWeeks, pricedWindow, shareOf, tierCapacity } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
 import { NO_CLASS, NO_EFFORT, foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
-import { tokensTotal } from '@/lib/format';
+import { tokensTotal, undatedModel } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { endOf } from '@/lib/quota';
-import { ACCOUNTS, QUOTA_HISTORY, accountById } from './accounts';
+import { ACCOUNTS, QUOTA_HISTORY, accountById, sharedWindowsOf } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor } from './catalog';
 import { leadOf } from './lead';
@@ -36,6 +36,17 @@ const kindOf = (accountId: string): AccountKind => {
   if (kind === undefined) throw new Error(`the story names an account the registry lacks: ${accountId}`);
   return kind;
 };
+/**
+ * Whether the cost model weighs the model with a row of its own, under its id or its undated name, as the share rule
+ * keys it: the one weight a mock figure prices at, so a model of a weighted tier without one prices nothing.
+ */
+export const ownWeighted = (model: string): boolean => (TABLES.modelWeight[model] ?? TABLES.modelWeight[undatedModel(model)] ?? null) !== null;
+/**
+ * The windows a request's shares are keyed by: the shared windows the serving account's set has, then the model's
+ * weeks, which no set bounds.
+ */
+const shareWindowsOf = (accountId: string, model: string): string[] => [...sharedWindowsOf(accountId), ...modelWeeks(TABLES, model)];
+
 /** The account tier an attempt lands under: the subscription's, none for an API key account. */
 const accountTier = (accountId: string): string | null => accountById.get(accountId)?.subscription?.rateLimitTier ?? null;
 /** The serving account's usage-based class, as the ledger stores it on the attempt. */
@@ -102,10 +113,9 @@ export const LANES: Lane[] = [
 
 /**
  * The account that serves Sonnet 4.5 alone, whatever the lane drew: the cost model has no weight of its own for it, so
- * its buckets price through its model tier's latest weighted model as an estimate. The sessions the story moves off it
- * carry Sonnet 4.5 to primary, whose 11:00 and 14:00 buckets read the estimate too. The story's one unpriced row is a
- * plan request on a model the cost model lists in no tier, `UNPRICED_REQUEST`, which the mock adds behind its unpriced
- * switch.
+ * its rows price nothing, which the attention item names. The sessions the story moves off it carry Sonnet 4.5 to
+ * primary, whose 11:00 and 14:00 buckets price nothing either. The story's other unpriced row is a plan request on a
+ * model the cost model lists in no tier, `UNPRICED_REQUEST`, which the mock adds behind its unpriced switch.
  */
 const UNPRICED_ACCOUNT = 'secondary';
 const modelOn = (accountId: string, drawn: string) => (accountId === UNPRICED_ACCOUNT ? 'claude-sonnet-4-5' : drawn);
@@ -974,11 +984,14 @@ export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
 export const RELEASED_SESSION_ID = '3c36d663-d074-42f6-8738-f54da7c9f026';
 /** The contract seat's batch session on fleet. */
 export const FLEET_SESSION_ID = '8b1f4c2e-6a93-4d07-b5e2-3c9a7f1d4e68';
+/** The approved Ultra's session on bench, on the 7-day window and the Fable week alone. */
+export const WORKSHOP_SESSION_ID = '4a7c2e9b-1d58-4f36-b0e3-7c5a9d2f1e84';
 /**
- * The contract seat's rows on fleet: story rows the routing log derives its records for, as it does a drawn row's, that
- * take no draw from the streams the drawn rows read, so every drawn figure stays where it was.
+ * The contract seat's rows on fleet and the approved Ultra's rows on bench: story rows the routing log derives its
+ * records for, as it does a drawn row's, that take no draw from the streams the drawn rows read, so every drawn figure
+ * stays where it was.
  */
-export const UNSEEDED_IDS: ReadonlySet<string> = new Set(['req_3f6a9c21-d48', 'req_7b2e5d93-a16', 'req_c94d1e07-b35']);
+export const UNSEEDED_IDS: ReadonlySet<string> = new Set(['req_1c7e4a9d-f52', 'req_3f6a9c21-d48', 'req_7b2e5d93-a16', 'req_9d3b6f2a-c81', 'req_c94d1e07-b35']);
 
 const sessionOf = (prefix: string) => SESSION_IDS.find((id) => id.startsWith(prefix)) ?? prefix;
 
@@ -1420,6 +1433,10 @@ function storyRequests(): RequestLog[] {
     { agentId: 'main', at: t(14, 8, 20), attempts: [{ accountId: 'contract', at: t(14, 8, 20), ms: 7_400, status: 200 }], id: 'req_c94d1e07-b35', keyId: 'fleet', model: 'claude-sonnet-5-5', requestClass: 'main', session: FLEET_SESSION_ID, usage: { cacheRead: 12_400, cacheWrite5m: 6_200, input: 2_900, output: 1_120 } },
     { agentId: 'main', at: t(14, 19, 30), attempts: [{ accountId: 'contract', at: t(14, 19, 30), ms: 5_900, status: 200 }], id: 'req_7b2e5d93-a16', keyId: 'fleet', model: 'claude-sonnet-5-5', requestClass: 'main', session: FLEET_SESSION_ID, usage: { cacheRead: 18_600, cacheWrite5m: 1_400, input: 1_700, output: 860 } },
     { agentId: 'main', at: t(14, 25, 30), attempts: [{ accountId: 'contract', at: t(14, 25, 30), ms: 11_200, status: 200 }], id: 'req_3f6a9c21-d48', keyId: 'fleet', model: 'claude-opus-5-5', requestClass: 'main', session: FLEET_SESSION_ID, usage: { cacheRead: 20_000, cacheWrite5m: 2_200, input: 2_400, output: 1_540 } },
+    // The approved Ultra's session on bench, a Fable turn and a Sonnet one, priced on its 7-day window and the Fable
+    // week alone, since its poll names no 5-hour window. Last, so every seed above keeps the upstream ids it draws.
+    { agentId: 'main', at: t(14, 16, 30), attempts: [{ accountId: 'workshop', at: t(14, 16, 30), ms: 9_800, status: 200 }], id: 'req_1c7e4a9d-f52', keyId: 'bench', model: 'claude-fable-5-1', requestClass: 'main', session: WORKSHOP_SESSION_ID, usage: { cacheWrite1h: 42_600, input: 2_100, output: 1_380 } },
+    { agentId: 'main', at: t(14, 24, 10), attempts: [{ accountId: 'workshop', at: t(14, 24, 10), ms: 6_300, status: 200 }], id: 'req_9d3b6f2a-c81', keyId: 'bench', model: 'claude-sonnet-5-5', requestClass: 'main', session: WORKSHOP_SESSION_ID, usage: { cacheRead: 44_000, cacheWrite1h: 1_900, input: 1_600, output: 720 } },
   ];
   return seeds.map(storyRow);
 }
@@ -1543,6 +1560,8 @@ keyById.get('ci')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'ci' && r.error
 keyById.get('notebook')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'notebook')?.at ?? null;
 // The fleet key's last use is its newest request, a turn of the contract seat's story session.
 keyById.get('fleet')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'fleet')?.at ?? null;
+// The bench key's last use is its newest request, a turn of the approved Ultra's story session.
+keyById.get('bench')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'bench')?.at ?? null;
 
 /**
  * The head that first read nightly in plan overage: the first attempt the day sent it after its spend cap was raised
@@ -1998,19 +2017,19 @@ function seedHolds() {
 }
 
 /**
- * A row's shares of its account's windows and its 20x equivalents, as the request route answers them: null for a
- * request no subscription window paid, else each window the model applies to at the request's completion, the shares
- * under the account's tier and the equivalents under none, a window the cost model cannot price carried as null and
- * an account without a tier an empty share map. `estimated` is true where a window priced at the model tier's fallback
- * weight. A client classifier call reads zero on each window the tier sizes, the equivalents under the anchor tier,
- * with the share reason, and a classifier call billed in dollars carries no reason, as the route answers both.
+ * A row's Pro-week figure and its shares of its account's windows, as the request route answers them: null for a
+ * request no subscription window paid, else the figure at the request's completion, null for a model without a weight
+ * of its own, and a share on each window of the account's set and each week the model applies to, under the account's
+ * tier, a window the cost model cannot price carried as null and an account without a tier an empty share map. A
+ * client classifier call reads zero, on each such window the tier sizes, with the share reason, and a classifier call
+ * billed in dollars carries no reason, as the route answers both.
  */
-function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'costShares' | 'estimated' | 'shareReason'> {
+function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'costShares' | 'shareReason'> {
   const serving = r.attempts[r.attempts.length - 1] ?? null;
-  if (serving === null || fundingOf(serving) !== 'plan') return { costEquivalent: null, costShares: null, estimated: false, shareReason: null };
+  if (serving === null || fundingOf(serving) !== 'plan') return { costEquivalent: null, costShares: null, shareReason: null };
   const tier = accountById.get(serving.accountId)?.subscription?.rateLimitTier;
   const finishedMs = Date.parse(r.at) + (r.durationMs ?? 0);
-  const windows = ['five_hour', 'seven_day', ...modelWeeks(TABLES, r.canonicalModel)];
+  const windows = shareWindowsOf(serving.accountId, r.canonicalModel);
   if (r.classifier !== null) {
     const zeros = (sizing: string) =>
       Object.fromEntries(
@@ -2019,11 +2038,11 @@ function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'cost
           return priced !== null && tierCapacity(TABLES, sizing, priced.priced) !== null;
         }).map((w) => [w, 0]),
       );
-    return { costEquivalent: zeros(anchorTier(TABLES)), costShares: tier === undefined ? {} : zeros(tier), estimated: false, shareReason: 'client_classifier' };
+    return { costEquivalent: 0, costShares: tier === undefined ? {} : zeros(tier), shareReason: 'client_classifier' };
   }
-  const equivalents = windows.map((w) => [w, equivalentOf(TABLES, w, r.canonicalModel, r.usage, finishedMs)] as const);
-  const shares: CostShares = tier === undefined ? {} : Object.fromEntries(windows.map((w) => [w, shareOrFallback(TABLES, w, tier, r.canonicalModel, r.usage, finishedMs)?.share ?? null]));
-  return { costEquivalent: Object.fromEntries(equivalents.map(([w, e]) => [w, e?.equivalent ?? null])), costShares: shares, estimated: equivalents.some(([, e]) => e?.estimated === true), shareReason: null };
+  const weighted = ownWeighted(r.canonicalModel);
+  const shares: CostShares = tier === undefined ? {} : Object.fromEntries(windows.map((w) => [w, weighted ? shareOf(TABLES, w, tier, r.canonicalModel, r.usage, finishedMs) : null]));
+  return { costEquivalent: weighted ? (equivalentOf(TABLES, 'seven_day', r.canonicalModel, r.usage, finishedMs)?.equivalent ?? null) : null, costShares: shares, shareReason: null };
 }
 
 /**
@@ -2153,31 +2172,25 @@ const fundingKey = (r: RequestLog): HourlyRollup['funding'] => {
 };
 
 /**
- * An hour's plan-window shares and 20x equivalents: each request priced at its own band and completion, then summed,
- * so a request across a band edge reads as its own shares do. A request is priced here rather than its cost shares
- * read, which are null on every request the plan did not fund. A window any request prices null reads null, and a
- * request with no token prices nothing, nor, for the shares alone, one on an account without a tier.
+ * An hour's Pro-week figure and its plan-window shares: each request priced at its own band and completion, then
+ * summed, so a request across a band edge reads as its own shares do. A request is priced here rather than its cost
+ * shares read, which are null on every request the plan did not fund. A figure or a window any request prices null
+ * reads null, a model without a weight of its own prices nothing, a request with no token prices nothing, and the
+ * shares, keyed by the windows the account's set has and the model's weeks, read nothing for an account without a tier.
  */
-function hourShares(accountId: string, model: string, priced: { at: number; usage: Usage }[]): Pick<HourlyRollup, 'equivalents' | 'estimated' | 'shares'> {
+function hourShares(accountId: string, model: string, priced: { at: number; usage: Usage }[]): Pick<HourlyRollup, 'equivalent' | 'shares'> {
   const tier = accountById.get(accountId)?.subscription?.rateLimitTier;
-  const windows = ['five_hour', 'seven_day', ...modelWeeks(TABLES, model)];
+  const windows = shareWindowsOf(accountId, model);
+  const weighted = ownWeighted(model);
   const shares: Record<string, number | null> = Object.fromEntries(windows.map((w) => [w, 0]));
-  const equivalents: Record<string, number | null> = Object.fromEntries(windows.map((w) => [w, 0]));
-  const add = (into: Record<string, number | null>, w: string, figure: number | null) => {
-    const sum = into[w];
-    into[w] = figure === null || sum === null ? null : sum + figure;
-  };
-  let estimated = false;
+  const plus = (sum: number | null, figure: number | null) => (figure === null || sum === null ? null : sum + figure);
+  let equivalent: number | null = 0;
   for (const { at, usage } of priced) {
     if (tokensTotal(usage) === 0) continue;
-    for (const w of windows) {
-      const equivalent = equivalentOf(TABLES, w, model, usage, at);
-      add(equivalents, w, equivalent?.equivalent ?? null);
-      if (equivalent?.estimated) estimated = true;
-      if (tier !== undefined) add(shares, w, shareOrFallback(TABLES, w, tier, model, usage, at)?.share ?? null);
-    }
+    equivalent = plus(equivalent, weighted ? (equivalentOf(TABLES, 'seven_day', model, usage, at)?.equivalent ?? null) : null);
+    if (tier !== undefined) for (const w of windows) shares[w] = plus(shares[w], weighted ? shareOf(TABLES, w, tier, model, usage, at) : null);
   }
-  return { equivalents, estimated, shares };
+  return { equivalent, shares };
 }
 
 // A canceled row is the client's or the router's cut and never an upstream failure, so a headless row with no status
@@ -2597,30 +2610,25 @@ const TOTAL_ROWS: RequestLog[] = counted(TOTALS_FROM);
 const COUNTED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
 
 const sumOf = <T,>(list: T[], read: (x: T) => number) => list.reduce((n, x) => n + read(x), 0);
-/** Rollups' billed dollars, their plan rows' 20x equivalents on the two shared windows and whether a plan row priced
- *  at the fallback weight, as the keys route sums a key's rows. A window a row could not price adds nothing and is
- *  flagged: an hour's equivalent is null where a request with tokens priced nothing on it. */
-const sidesOf = (rows: HourlyRollup[]): Pick<ApiKey['usage7d'], 'billedUsd' | 'equivalent' | 'estimated'> => {
+/** Rollups' billed dollars and their plan rows' Pro-week figure, as the keys route sums a key's rows: an hour's figure
+ *  is null where a request with tokens priced nothing, which nulls the sum, and 0 with no plan row. */
+const sidesOf = (rows: HourlyRollup[]): Pick<ApiKey['usage7d'], 'billedUsd' | 'equivalent'> => {
   const plan = rows.filter((r) => r.funding === 'plan');
   return {
     billedUsd: sumOf(rows.filter((r) => r.funding !== 'plan'), (r) => r.costUsd),
-    equivalent: {
-      fiveHour: sumOf(plan, (r) => r.equivalents.five_hour ?? 0),
-      sevenDay: sumOf(plan, (r) => r.equivalents.seven_day ?? 0),
-      unpriced: { fiveHour: plan.some((r) => r.equivalents.five_hour === null), sevenDay: plan.some((r) => r.equivalents.seven_day === null) },
-    },
-    estimated: plan.some((r) => r.estimated),
+    equivalent: plan.some((r) => r.equivalent === null) ? null : sumOf(plan, (r) => r.equivalent ?? 0),
   };
 };
-/** The same over request rows, as the pools and dashboard routes sum theirs: a request carries a null window whatever
- *  its tokens, so only one with tokens flags it. */
-export const requestSidesOf = (rows: RequestLog[]): Pick<TrafficBucket, 'billedUsd' | 'equivalent' | 'estimated'> => {
-  const plan = rows.filter((r) => r.costEquivalent !== null);
-  const flagged = (window: 'five_hour' | 'seven_day') => plan.some((r) => tokensTotal(r.usage) > 0 && r.costEquivalent?.[window] === null);
+/** Whether a subscription window paid the request: its serving attempt's funding, which a request no account served
+ *  has none of. */
+const planPaid = (r: RequestLog): boolean => r.attempts.length > 0 && fundingOf(r.attempts[r.attempts.length - 1]) === 'plan';
+/** The same over request rows, as the pools and dashboard routes sum theirs: a plan request with tokens that priced
+ *  nothing nulls the figure, and one with no token prices nothing. */
+export const requestSidesOf = (rows: RequestLog[]): Pick<TrafficBucket, 'billedUsd' | 'equivalent'> => {
+  const plan = rows.filter(planPaid);
   return {
-    billedUsd: sumOf(rows.filter((r) => r.costEquivalent === null), (r) => r.costUsd),
-    equivalent: { fiveHour: sumOf(plan, (r) => r.costEquivalent?.five_hour ?? 0), sevenDay: sumOf(plan, (r) => r.costEquivalent?.seven_day ?? 0), unpriced: { fiveHour: flagged('five_hour'), sevenDay: flagged('seven_day') } },
-    estimated: plan.some((r) => r.estimated),
+    billedUsd: sumOf(rows.filter((r) => !planPaid(r)), (r) => r.costUsd),
+    equivalent: plan.some((r) => tokensTotal(r.usage) > 0 && r.costEquivalent === null) ? null : sumOf(plan, (r) => r.costEquivalent ?? 0),
   };
 };
 const requestsIn = (r: HourlyRollup) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown;
@@ -2652,12 +2660,7 @@ function deriveFigures() {
       lifetime: {
         billedUsd: Math.max(k.lifetime.billedUsd, life.billedUsd),
         cost: Math.max(k.lifetime.cost, sumOf(mine, (r) => r.costUsd)),
-        equivalent: {
-          fiveHour: Math.max(k.lifetime.equivalent.fiveHour, life.equivalent.fiveHour),
-          sevenDay: Math.max(k.lifetime.equivalent.sevenDay, life.equivalent.sevenDay),
-          unpriced: { fiveHour: k.lifetime.equivalent.unpriced.fiveHour || life.equivalent.unpriced.fiveHour, sevenDay: k.lifetime.equivalent.unpriced.sevenDay || life.equivalent.unpriced.sevenDay },
-        },
-        estimated: k.lifetime.estimated || life.estimated,
+        equivalent: k.lifetime.equivalent === null || life.equivalent === null ? null : Math.max(k.lifetime.equivalent, life.equivalent),
         requests: Math.max(k.lifetime.requests, sumOf(mine, requestsIn)),
       },
       usage7d: { ...sidesOf(week), cost: sumOf(week, (r) => r.costUsd), requests: sumOf(week, requestsIn), tokens: sumOf(week, tokensIn) },
@@ -2679,7 +2682,7 @@ function deriveFigures() {
       bucket.tokens += tokensTotal(r.usage);
     }
     const day = requestSidesOf(mine);
-    Object.assign(p, { billed24h: day.billedUsd, cost24h: sumOf(mine, (r) => r.costUsd), equivalent24h: day.equivalent, estimated24h: day.estimated, requests24h: mine.length, traffic24h });
+    Object.assign(p, { billed24h: day.billedUsd, cost24h: sumOf(mine, (r) => r.costUsd), equivalent24h: day.equivalent, requests24h: mine.length, traffic24h });
   }
 }
 

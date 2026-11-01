@@ -5,10 +5,10 @@ import * as d from './dist/api.js';
 
 const NOW = Date.UTC(2026, 8, 16, 14, 30);
 const HOUR = 3_600_000;
-// The test tables' capacities: Max 20x, the anchor, 100 on the 5-hour window and 1000 on the week, Max 5x 25 and 250,
-// Pro 5 and 50, Team 10 and no 7-day capacity; no Enterprise row at all.
+// The test tables' capacities: Max 20x 100 on the 5-hour window and 1000 on the week, Max 5x 25 and 250, Pro, the
+// anchor, 5 and 50, Team 10 and no 7-day capacity, and no Enterprise row at all.
 const TABLES = JSON.parse(readFileSync(new URL('./fixtures/test_tables.json', import.meta.url), 'utf8')).body;
-const COSTS = d.decodeSubscriptionCosts(TABLES.subscription_costs.content);
+const COSTS = d.decodeSubscriptionCosts(TABLES.subscription_costs.content, TABLES.subscription_costs.unit);
 
 const window = (id, utilization, resetsInMs = 2 * HOUR) => ({ id, label: id, observedAt: new Date(NOW - 60_000).toISOString(), periodHours: id === '5h' ? 5 : 168, resetsAt: new Date(NOW + resetsInMs).toISOString(), utilization });
 // The plan word each tier resolves to on its own, so an account reads the plan the router would resolve for it and the
@@ -34,22 +34,22 @@ const account = (id, rateLimitTier, windows, extra = {}, plan = PLAN_OF_TIER[rat
 });
 const close = (actual, expected, what) => assert.ok(Math.abs(actual - expected) < 1e-9, `${what}: ${actual} against ${expected}`);
 
-test('a Max 20x account at 10% left and a Pro account at 90% left weigh to 1.05 capacity and 0.145 left', () => {
-  // Weighed by capacity over the anchor's: 100 / 100 and 5 / 100.
+test('a Max 20x account at 10% left and a Pro account at 90% left weigh to 21 capacity and 2.9 left', () => {
+  // Weighed by capacity over the anchor's: 100 / 5 and 5 / 5.
   const figures = d.ringFigures([account('primary', 'default_claude_max_20x', [window('5h', 0.9)]), account('secondary', 'default_claude_ai', [window('5h', 0.1)])], '5h', COSTS, NOW);
-  assert.equal(figures.anchor, 'Max 20x', 'the capacity reads in windows of the tier the file anchors its unit on');
-  close(figures.capacity, 1.05, 'capacity');
-  close(figures.left, 0.145, 'left');
+  assert.equal(figures.anchor, 'Pro', 'the capacity reads in windows of the tier the file anchors its unit on');
+  close(figures.capacity, 21, 'capacity');
+  close(figures.left, 2.9, 'left');
   assert.deepEqual(
     figures.rows.map((r) => [r.id, r.weight]),
     [
-      ['secondary', 0.05],
-      ['primary', 1],
+      ['secondary', 1],
+      ['primary', 20],
     ],
   );
   assert.deepEqual(figures.leftOut, []);
   assert.equal(d.fmtPct(figures.left / figures.capacity, 1), '13.8%');
-  assert.equal(d.fmtWindows(figures.capacity), '1.05');
+  assert.equal(d.fmtWindows(figures.capacity), '21.00');
   assert.equal(d.fmtWindows(1.3), '1.30');
 });
 
@@ -93,8 +93,8 @@ test('an unsized tier and a null 7-day capacity are left out with their reasons'
     { id: 'team', label: 'team', reason: 'tier unknown' },
     { id: 'fresh', label: 'fresh', reason: 'no subscription profile' },
   ]);
-  close(figures.capacity, 1, 'capacity');
-  close(figures.left, 0.59, 'left');
+  close(figures.capacity, 20, 'capacity');
+  close(figures.left, 11.8, 'left');
 });
 
 test('a ring with every account left out has no rows', () => {
@@ -110,12 +110,12 @@ test('a ring with every account left out has no rows', () => {
 });
 
 test("an anchor with no capacity on the window weighs no account and names the anchor's tier as the one not measured", () => {
-  const anchorless = { ...COSTS, capacity: { ...COSTS.capacity, default_claude_max_20x: { ...COSTS.capacity.default_claude_max_20x, sevenDay: null } } };
+  const anchorless = { ...COSTS, capacity: { ...COSTS.capacity, default_claude_ai: { ...COSTS.capacity.default_claude_ai, sevenDay: null } } };
   const figures = d.ringFigures([account('primary', 'default_claude_max_20x', [window('7d', 0.41)]), account('nightly', 'default_claude_max_5x', [window('7d', 0.35)])], '7d', anchorless, NOW);
   assert.deepEqual(figures.rows, []);
   assert.deepEqual(
     figures.leftOut.map((o) => o.reason),
-    ['Max 20x 7-day capacity not measured', 'Max 20x 7-day capacity not measured'],
+    ['Pro 7-day capacity not measured', 'Pro 7-day capacity not measured'],
   );
 });
 
@@ -125,13 +125,13 @@ test('an expired window counts as a full allowance, keeps its weight and is not 
   assert.deepEqual(
     figures.rows.map((r) => [r.id, r.weight, Number(r.remaining.toFixed(9))]),
     [
-      ['primary', 1, 1],
-      ['nightly', 0.25, 0.4],
+      ['primary', 20, 1],
+      ['nightly', 5, 0.4],
     ],
   );
   assert.deepEqual(figures.leftOut, []);
-  close(figures.capacity, 1.25, 'capacity');
-  close(figures.left, 1.1, 'left');
+  close(figures.capacity, 25, 'capacity');
+  close(figures.left, 22, 'left');
 });
 
 test('an account with routing off or without the window is neither weighed nor named', () => {
@@ -175,7 +175,7 @@ test('a usage-based seat is named under both rings with its reason and weighs no
   ];
   for (const id of ['5h', '7d']) {
     const figures = d.ringFigures(accounts, id, COSTS, NOW);
-    assert.deepEqual(figures.rows.map((r) => [r.id, r.weight]), [['primary', 1]], `the ${id} ring`);
+    assert.deepEqual(figures.rows.map((r) => [r.id, r.weight]), [['primary', 20]], `the ${id} ring`);
     assert.deepEqual(
       figures.leftOut,
       [
@@ -189,7 +189,7 @@ test('a usage-based seat is named under both rings with its reason and weighs no
 
 test('a Team seat on a tier the cost model holds weighs by its row, as any plan the router prices', () => {
   const figures = d.ringFigures([account('primary', 'default_claude_max_20x', [window('5h', 0.5)]), account('team', 'default_claude_team', [window('5h', 0.4)])], '5h', COSTS, NOW);
-  assert.deepEqual(figures.rows.map((r) => [r.id, r.weight]), [['team', 0.1], ['primary', 1]], "Team's 10 over the anchor's 100");
+  assert.deepEqual(figures.rows.map((r) => [r.id, r.weight]), [['team', 2], ['primary', 20]], "Team's 10 over the anchor's 5");
   assert.deepEqual(figures.leftOut, []);
 });
 
@@ -200,6 +200,6 @@ test('a free plan is named under the ring with its reason and weighs nothing, wh
   assert.deepEqual(free.leftOut, [{ id: 'free', label: 'free', reason: 'no priced capacity for a free plan' }]);
   assert.deepEqual([free.capacity, free.left], [0, 0]);
   const pro = d.ringFigures([account('pro', 'default_claude_ai', [window('5h', 0.5)], {}, 'pro')], '5h', COSTS, NOW);
-  assert.deepEqual(pro.rows.map((r) => [r.id, r.weight]), [['pro', 0.05]], "Pro's 5 over the anchor's 100");
+  assert.deepEqual(pro.rows.map((r) => [r.id, r.weight]), [['pro', 1]], "Pro's 5 over the anchor's 5");
   assert.deepEqual(pro.leftOut, []);
 });

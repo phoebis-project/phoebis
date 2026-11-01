@@ -8,7 +8,7 @@ const item = (kind, over = {}) => ({ detail: {}, kind, link: null, pools: [], si
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 test('the attention kinds rank worst first, the order the route answers in', () => {
-  assert.deepEqual([...ATTENTION_KIND_VALUES], ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unweighted', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long']);
+  assert.deepEqual([...ATTENTION_KIND_VALUES], ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unpriced', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long']);
 });
 
 test("a listener's two certificate kinds decode as themselves, never as the worst kind", () => {
@@ -17,7 +17,7 @@ test("a listener's two certificate kinds decode as themselves, never as the wors
   assert.deepEqual(kinds, ['certificate_expiring', 'certificate_reload_failed']);
 });
 
-test('each attention kind has its word and its tone, a client drift and a failed refresh serious', () => {
+test('each attention kind has its word and its tone, a client drift and a failed refresh serious, an unpriced model info', () => {
   assert.deepEqual(ATTENTION_LABEL, {
     certificate_expiring: 'Certificate expiring',
     certificate_reload_failed: 'Certificate reload failed',
@@ -26,7 +26,7 @@ test('each attention kind has its word and its tone, a client drift and a failed
     funding_required: 'Funding required',
     ledger_record_parked: 'Priced record parked',
     meter_drift: 'Meter drift against the table',
-    model_unweighted: 'Model weight estimated',
+    model_unpriced: 'Model unpriced',
     poll_backoff: 'Usage poll backing off',
     pool_exhausted: 'Pool exhausted',
     reauth_required: 'Re-auth required',
@@ -37,7 +37,7 @@ test('each attention kind has its word and its tone, a client drift and a failed
     wall_reached: 'Wall reached under the ceiling',
     writer_degraded: 'State writer degraded',
   });
-  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'serious', 'warning', 'serious', 'warning', 'warning', 'warning', 'warning', 'warning', 'warning', 'warning']);
+  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'serious', 'warning', 'serious', 'warning', 'info', 'warning', 'warning', 'warning', 'warning', 'warning']);
 });
 
 test('an item opens the page where its condition is fixed, and an item without a link opens nothing', () => {
@@ -47,12 +47,12 @@ test('an item opens the page where its condition is fixed, and an item without a
   assert.equal(attentionHref(item('client_drift'), NOW), null, 'a drift refusal that carried no key has nothing to open');
   assert.equal(attentionHref(item('meter_drift', { link: { id: 'nightly', page: 'accounts' } }), NOW), '/meter?accounts=nightly', 'a meter drift opens the Meter view narrowed to its account');
   assert.equal(attentionHref(item('writer_degraded', { subject: { id: 'routing', label: 'routing', type: 'router' } }), NOW), null, "the router's own component has nothing to open");
-  // An estimated weight shows in the cost reference dialog, which no address opens, so the item has nothing to open.
-  const unweighted = { detail: { model: 'claude-sonnet-4-5', requests: 12, tier: 'sonnet', weight_of: 'claude-sonnet-5-5' }, kind: 'model_unweighted', pools: [], since: NOW, subject: { id: 'claude-sonnet-4-5', label: 'claude-sonnet-4-5', type: 'model' } };
+  // A model's weight shows in the cost reference dialog, which no address opens, so the item has nothing to open.
+  const unpriced = { detail: { model: 'claude-sonnet-4-5', requests: 12 }, kind: 'model_unpriced', pools: [], since: NOW, subject: { id: 'claude-sonnet-4-5', label: 'claude-sonnet-4-5', type: 'model' } };
   for (const link of [{ id: 'claude-sonnet-4-5', page: 'models' }, null]) {
-    const model = decodeAttention({ ...unweighted, link });
+    const model = decodeAttention({ ...unpriced, link });
     const drawn = [model.link, attentionHref(model, NOW), attentionWords(model, NOW) ?? `${ATTENTION_LABEL[model.kind]}: ${model.subject.label}`, attentionTitle(model, NOW).split('\n')[0]];
-    assert.deepEqual(drawn, [null, null, 'Model weight estimated: claude-sonnet-4-5', attentionDetail(model, NOW)], `an unweighted model's item ${link === null ? 'with no link' : 'naming the models page'} opens nothing and draws its label, its detail on the title`);
+    assert.deepEqual(drawn, [null, null, 'Model unpriced: claude-sonnet-4-5', attentionDetail(model, NOW)], `an unpriced model's item ${link === null ? 'with no link' : 'naming the models page'} opens nothing and draws its label, its detail on the title`);
   }
 });
 
@@ -86,16 +86,9 @@ test("a row reads each kind's detail as one sentence", () => {
   assert.equal(sentence('ledger_record_parked', { accounts: ['research'], count: 1, pool: 'jobs' }), "1 priced record parked, landing at the next start or on the dashboard's Replay (research)");
   assert.equal(sentence('ledger_record_parked', { accounts: ['primary', 'overflow'], count: 3, pool: null }), "3 priced records parked, landing at the next start or on the dashboard's Replay (primary, overflow)");
   assert.equal(sentence('ledger_record_parked', { accounts: [], count: 2, pool: 'jobs' }), "2 priced records parked, landing at the next start or on the dashboard's Replay", 'a record that names no account adds none');
-  const since = fmtAbsolute(item('model_unweighted').since);
-  assert.equal(
-    sentence('model_unweighted', { model: 'claude-sonnet-4-5', requests: 12, tier: 'sonnet', weight_of: 'claude-sonnet-5-5' }),
-    `claude-sonnet-4-5 has no measured weight, so its 12 plan-funded requests since ${since} priced at the weight of claude-sonnet-5-5, the latest weighted model of the sonnet model tier`,
-  );
-  assert.equal(
-    sentence('model_unweighted', { model: 'claude-opus-99', requests: 1, tier: null, weight_of: null }),
-    `claude-opus-99 has no measured weight, so its 1 plan-funded request since ${since} priced at the weight of the latest weighted model of its model tier`,
-    'a detail missing its tier and its donor names neither',
-  );
+  const since = fmtAbsolute(item('model_unpriced').since);
+  assert.equal(sentence('model_unpriced', { model: 'claude-sonnet-4-5', requests: 12 }), `claude-sonnet-4-5 has no weight in the cost model, so its 12 plan-funded requests since ${since} priced no window share.`);
+  assert.equal(sentence('model_unpriced', { model: 'claude-opus-99', requests: 1 }), `claude-opus-99 has no weight in the cost model, so its 1 plan-funded request since ${since} priced no window share.`, 'one request reads singular');
   const slowed = { bar_ms: 3_600_000, factor_min: 0.35, open: true, setting: ['slow_down_stretch_seconds'], setting_values: { slow_down_stretch_seconds: 1800 }, slowed_ms: 7_700_000, spans: 2 };
   assert.equal(sentence('slowed_long', slowed), `slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since ${fmtShortTime(item('slowed_long').since)}`);
 });
@@ -158,7 +151,7 @@ test("a badge's title for an item that carries no pool leads with its sentence, 
   );
   const degraded = item('writer_degraded', { detail: { component: 'ledger' } });
   assert.equal(attentionTitle(degraded, NOW), [attentionDetail(degraded, NOW), 'component: ledger', 'started 2h ago'].join('\n'));
-  const model = item('model_unweighted', { detail: { model: 'claude-sonnet-4-5', requests: 12, tier: 'sonnet', weight_of: 'claude-sonnet-5-5' }, subject: { id: 'claude-sonnet-4-5', label: 'claude-sonnet-4-5', type: 'model' } });
+  const model = item('model_unpriced', { detail: { model: 'claude-sonnet-4-5', requests: 12 }, subject: { id: 'claude-sonnet-4-5', label: 'claude-sonnet-4-5', type: 'model' } });
   assert.equal(attentionTitle(model, NOW).split('\n')[0], attentionDetail(model, NOW), "a model's item belongs to no pool card, so its title leads with its sentence");
   const pooled = item('writer_degraded', { detail: { component: 'ledger' }, pools: ['all'] });
   assert.equal(attentionTitle(pooled, NOW), ['component: ledger', 'started 2h ago'].join('\n'), "an item a pool carries reads its sentence on that pool's card");

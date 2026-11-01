@@ -1,6 +1,6 @@
 import type { AttentionItem, Reconciliation, RoutingEvent } from '@/api/types';
 import { MIN_RISE, ratioOff } from '@/lib/analytics';
-import { latestWeighted, modelTierOf } from '@/lib/costs';
+import { fundingOf } from '@/lib/costs';
 import { undatedModel } from '@/lib/format';
 import { ACCOUNTS, accountById } from './accounts';
 import { RECONCILIATIONS } from './analytics';
@@ -42,19 +42,20 @@ const lastDay = (kind: string) => ROUTING_EVENTS.filter((e) => e.kind === kind &
 const sorted = (values: unknown[]) => [...new Set(values.map(String))].sort();
 
 /**
- * A model the cost model does not weight as the ledger counts it: the requests on it that a plan funded and that
- * carried usage, priced at its model tier's latest weighted model, the run dated from the first of them. Null when the
- * story holds none.
+ * A model the cost model prices nothing for as the ledger counts it: the requests on it that a plan funded and that
+ * carried usage, each with no Pro-week figure, the run dated from the first of them. Null when the story holds none.
  */
-function unweighted(model: string): Pick<AttentionItem, 'detail' | 'since'> | null {
+function unpriced(model: string): Pick<AttentionItem, 'detail' | 'since'> | null {
   // The rows run newest first.
-  const rows = REQUESTS.filter((r) => undatedModel(r.canonicalModel) === model && r.estimated && r.usage.input + r.usage.output + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0);
+  const rows = REQUESTS.filter((r) => {
+    const serving = r.attempts[r.attempts.length - 1] ?? null;
+    return undatedModel(r.canonicalModel) === model && serving !== null && fundingOf(serving) === 'plan' && r.costEquivalent === null && r.usage.input + r.usage.output + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0;
+  });
   const first = rows[rows.length - 1];
-  const tier = modelTierOf(TABLES, model);
-  return first ? { detail: { model, requests: rows.length, tier, weight_of: tier === null ? null : latestWeighted(TABLES, tier) }, since: first.at } : null;
+  return first ? { detail: { model, requests: rows.length }, since: first.at } : null;
 }
 
-const sonnetUnweighted = unweighted('claude-sonnet-4-5');
+const sonnetUnpriced = unpriced('claude-sonnet-4-5');
 
 /**
  * An account's walls over the day as the reader dates them, read by the newest round on the newest wall's window
@@ -228,11 +229,11 @@ const CONDITIONS: AttentionItem[] = [
  * its one member spent the day's budget, a client build refused on the laptop key, the routing state writer keeping
  * its writes in memory, legacy's lapsed credential, the Overflow workspace out of funding as its account reads,
  * legacy's refreshes failing, the proxy listener's certificate 12 days from its end, a priced record of the jobs pool's
- * one member parked in the ledger file, the backoff secondary's poll is in, Sonnet 4.5 priced at its model tier's
- * weight, nightly's 5-hour window charged twice the table up to its 13:11 reset, nightly's wall at 12:01 and
- * secondary's after the 11:00 round, nightly spent after the least-bad move onto it, the all pool's round that found
- * no destination with runway, and studio slowed in work for 2 h 8 min of the day. The meter drift reads the reconciled
- * windows and the four routing conditions the routing log's events, as the ledger folds them.
+ * one member parked in the ledger file, the backoff secondary's poll is in, Sonnet 4.5 priced nothing, nightly's
+ * 5-hour window charged twice the table up to its 13:11 reset, nightly's wall at 12:01 and secondary's after the 11:00
+ * round, nightly spent after the least-bad move onto it, the all pool's round that found no destination with runway,
+ * and studio slowed in work for 2 h 8 min of the day. The meter drift reads the reconciled windows and the four routing
+ * conditions the routing log's events, as the ledger folds them.
  */
 export const ATTENTION: AttentionItem[] = [
   ...(jobsExhausted
@@ -311,12 +312,12 @@ export const ATTENTION: AttentionItem[] = [
     kind: 'poll_backoff',
     since: secondaryPoll?.backoffSince ?? ago(42 * MINUTE),
   },
-  ...(sonnetUnweighted
+  ...(sonnetUnpriced
     ? [
         {
           ...ATTENTION_ITEM_SAMPLE,
-          ...sonnetUnweighted,
-          kind: 'model_unweighted' as const,
+          ...sonnetUnpriced,
+          kind: 'model_unpriced' as const,
           link: null,
           pools: [],
           subject: { id: 'claude-sonnet-4-5', label: 'claude-sonnet-4-5', type: 'model' as const },

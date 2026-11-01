@@ -2,14 +2,16 @@ import type {
   Account, AllowanceReset, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordOutcome,
   PoolKeepalive, RecordPin, RecordRequest, RecordSettings, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
+import { shareIn } from '@/lib/costs';
 import { endOf } from '@/lib/quota';
 import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN } from './accounts';
 import { GUARDRAILS } from './guardrails';
 import { leadOf } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, clock, failsOver, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, ownWeighted, clock, failsOver, oauthWindows, requestById } from './requests';
 import { createRng } from './rng';
+import { TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NOW, iso } from './time';
 
 /** Why a move rule fired, as the trace's `moved` names it. A failover's reasons move the pin from the task instead. */
@@ -36,6 +38,12 @@ export const rewriteOf = (tokens: number, model: string): Record<string, number>
   Object.fromEntries(drawnWindows(model).map((w) => [w, round5(tokens * WRITE_SHARE[w] * familyWeight(model))]));
 /** The weekly window the pick prices a pin's rewrite in: the model's week where it draws one, else the 7-day window. */
 const rewriteWindowOf = (model: string): string => (drawnWindows(model).includes('seven_day_fable') ? 'seven_day_fable' : 'seven_day');
+/**
+ * A rewrite of `tokens` as the Pro-week figure: the prompt written to the cache again, the Pro tier's share of its
+ * 7-day window, which no band weighs. Null for a model without a weight of its own.
+ */
+export const proWeekRewriteOf = (tokens: number, model: string): number | null =>
+  ownWeighted(model) ? shareIn(TABLES, 'seven_day', 'default_claude_ai', model, { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: tokens, input: 0, output: 0 }, false) : null;
 /**
  * The tokens a request's body carries, the relay's estimate a fresh session's rewrite is priced from. The mock holds no
  * estimate of its own and reads the usage the request reported, so a request that ended with no usage, which the
@@ -2167,9 +2175,11 @@ function poolRow(p: PoolSeed): Record<string, unknown> {
  * A round's `shedding_round` event off the decision that ran it: the window that fired with its projection, horizon
  * and ceiling from the shed line, the round's figures, and each pin with the rewrite and the runway it would take on
  * the destination planned for it, each planned move counted against the next one's runway there. The rewrite is the
- * story's 20x equivalent of the pin's weekly window, a figure of the pin alone, so an API-key destination reads it too.
+ * pin's Pro-week figure under `rewrite_unit`, a figure of the pin alone, so an API-key destination reads it too, with
+ * the weekly window the pick compared on named. An event of an earlier build (`earlier`) stored the rewrite as the
+ * story's 20x equivalent of that window and names no unit.
  */
-function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
+function roundEvent(decision: string, pins: RoundPin[], earlier = false): EventSeed | null {
   const record = DECISIONS.get(decision);
   const line = record?.walk.find((w) => w.step === 'move:shed');
   const value = (key: string) => line?.facts.find((f) => f.key === key)?.value;
@@ -2194,7 +2204,7 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
   // to the horizon, ranked by the pool's strategy, by tier and under Pace by score, the longest runway breaking the
   // strategy's tie. Round robin's cursor names one turn, so the runway never speaks there.
   const read = (p: RoundPin) => {
-    if (!p.marked) return { planned: null, rewrite: null, runway: null };
+    if (!p.marked) return { planned: null, rewrite: null, runway: null, window: null };
     const windows = drawnWindows(p.model);
     const siblings = record.candidates.filter((c) => c.obstacle === null && c.accountId !== accountId && c.inFlight < c.inFlightCap && (c.kind === 'api_key' || windows.every((w) => (c.windows[w]?.utilization ?? 0) < 1)));
     const reads = siblings.map((c) => {
@@ -2205,16 +2215,19 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
     const ranked = [...fitting].sort((x, y) => (tierBefore(x.base.tier, y.base.tier) ? -1 : tierBefore(y.base.tier, x.base.tier) ? 1 : pool.strategy === 'pace' ? scoreOf(y.base) - scoreOf(x.base) : 0));
     const ties = ranked.filter((x) => tierKey(x.base.tier) === tierKey(ranked[0].base.tier) && (pool.strategy !== 'pace' || scoreOf(x.base) === scoreOf(ranked[0].base)));
     const chosen = pool.strategy === 'round_robin' ? ranked[0] : longestOf(ties)[0];
-    if (!chosen) return { planned: null, rewrite: null, runway: null };
+    if (!chosen) return { planned: null, rewrite: null, runway: null, window: null };
     const rewrite = rewriteOf(p.lastInputTokens, p.model);
     for (const [w, x] of Object.entries(rewrite)) if (chosen.base.windows[w]) chosen.base.windows[w].reserved = round5((chosen.base.windows[w].reserved ?? 0) + x);
     chosen.base.burn = { ...chosen.base.burn, [window]: (chosen.base.burn[window] ?? 0) + (p.burn ?? 0) };
     planned.set(chosen.base.accountId, chosen.base);
-    // A pin with no prompt size reported yet is unsized, so its rewrite and the window it is of read nothing.
+    // A pin with no prompt size reported yet is unsized, so its rewrite and the window it is of read nothing. A sized
+    // pin names the window the pick compared on, its Pro-week figure null on a model without a weight of its own.
+    const unsized = p.lastInputTokens === 0;
     return {
       planned: chosen.base.accountId,
-      rewrite: p.lastInputTokens === 0 ? null : (rewrite[rewriteWindowOf(p.model)] ?? null),
+      rewrite: unsized ? null : earlier ? (rewrite[rewriteWindowOf(p.model)] ?? null) : proWeekRewriteOf(p.lastInputTokens, p.model),
       runway: chosen.fit.runwayMs,
+      window: unsized ? null : rewriteWindowOf(p.model),
     };
   };
   return {
@@ -2238,12 +2251,13 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
         return {
           agent_id: p.agentId, burn: p.burn, cold: p.cold, key_id: p.keyId, last_input_tokens: p.lastInputTokens, marked: p.marked, model: p.model, note: p.note,
           per_rewrite: p.burn === null ? null : Number((p.burn / p.lastInputTokens).toPrecision(7)), planned: figures.planned, rewrite: figures.rewrite,
-          rewrite_window: figures.rewrite === null ? null : rewriteWindowOf(p.model), runway_ms: figures.runway, session_id: p.sessionId, skip: p.skip,
+          rewrite_window: figures.window, runway_ms: figures.runway, session_id: p.sessionId, skip: p.skip,
         };
       }),
       projection,
       reason: round.reason,
       removed: round.removed,
+      ...(earlier ? {} : { rewrite_unit: 'pro_week' }),
       shed_cap: pool.shedCap,
       stretch_ms: slowed?.stretchMs ?? null,
       target: round.target,
@@ -2621,7 +2635,8 @@ function buildEvents(): RoutingEvent[] {
   const undecodable = requestById.get('req_5e3c8a41-d27')!;
   const cutAttempt = undecodable.attempts[undecodable.attempts.length - 1];
   seeds.push(
-    ...[roundEvent('req_1eaa9bc1-a18/1', ROUND_PINS), roundEvent('req_9f2e7c5a-c49/2', STRETCH_PINS), roundEvent('req_6e1f3b98-a24/1', NO_RUNWAY_PINS), roundEvent('req_3e7a5c19-f84/1', FABLE_WEEK_PINS)].flatMap((e) => (e === null ? [] : [e])),
+    // The 08:30 round on nightly is the story's oldest, written by an earlier build, so it keeps the rewrite it stored.
+    ...[roundEvent('req_1eaa9bc1-a18/1', ROUND_PINS), roundEvent('req_9f2e7c5a-c49/2', STRETCH_PINS), roundEvent('req_6e1f3b98-a24/1', NO_RUNWAY_PINS), roundEvent('req_3e7a5c19-f84/1', FABLE_WEEK_PINS, true)].flatMap((e) => (e === null ? [] : [e])),
     ...markCleared(),
     ...expiredReservations(),
     ...slowDownSpans(),

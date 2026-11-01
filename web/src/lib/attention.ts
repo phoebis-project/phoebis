@@ -12,7 +12,7 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   funding_required: 'Funding required',
   ledger_record_parked: 'Priced record parked',
   meter_drift: 'Meter drift against the table',
-  model_unweighted: 'Model weight estimated',
+  model_unpriced: 'Model unpriced',
   poll_backoff: 'Usage poll backing off',
   pool_exhausted: 'Pool exhausted',
   reauth_required: 'Re-auth required',
@@ -23,8 +23,9 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   wall_reached: 'Wall reached under the ceiling',
   writer_degraded: 'State writer degraded',
 };
-/** Critical where requests fail now, serious where they fail soon or lose data, warning for the rest. */
-export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'serious' | 'warning'> = {
+/** Critical where requests fail now, serious where they fail soon or lose data, warning for the rest, info for a
+ *  condition that costs nothing and asks for a table entry. */
+export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'info' | 'serious' | 'warning'> = {
   certificate_expiring: 'warning',
   certificate_reload_failed: 'serious',
   client_drift: 'serious',
@@ -32,7 +33,7 @@ export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'serious' | 'war
   funding_required: 'serious',
   ledger_record_parked: 'serious',
   meter_drift: 'warning',
-  model_unweighted: 'warning',
+  model_unpriced: 'info',
   poll_backoff: 'warning',
   pool_exhausted: 'critical',
   reauth_required: 'critical',
@@ -160,12 +161,9 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     }
     case 'certificate_reload_failed':
       return `The ${listenerOf(item)} listener's pair did not load: ${text(d.error) ?? ''}. The router keeps serving the pair it loaded at ${fmtAbsolute(instant(d.serving_since))}.`;
-    case 'model_unweighted': {
+    case 'model_unpriced': {
       const n = count(d.requests);
-      const donor = text(d.weight_of);
-      const tier = text(d.tier);
-      const latest = `the latest weighted model of ${tier ? `the ${tier} model tier` : 'its model tier'}`;
-      return `${text(d.model) ?? item.subject.id} has no measured weight, so its ${n} plan-funded ${n === 1 ? 'request' : 'requests'} since ${fmtAbsolute(item.since)} priced at the weight of ${donor ? `${donor}, ${latest}` : latest}`;
+      return `${text(d.model) ?? item.subject.id} has no weight in the cost model, so its ${n} plan-funded ${n === 1 ? 'request' : 'requests'} since ${fmtAbsolute(item.since)} priced no window share.`;
     }
     case 'wall_reached':
     case 'destination_spent':

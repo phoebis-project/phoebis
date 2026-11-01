@@ -64,14 +64,14 @@ function costTileOf(unit: UnitPosition, o: Overview): CostTile {
   if (unit === 'equivalent') return { note: 'at the API price list, the subscription requests', spark: o.hourly.map((h) => h.cost - h.billed), value: fmtUsd(o.cost24h - o.billed24h) };
   if (unit === 'share') return { note: 'shares do not add across accounts', spark: o.hourly.map((h) => h.cost), title: SHARE_NOTE, value: '-' };
   const day = o.equivalent24h;
-  const plan = day.fiveHour > 0 || day.sevenDay > 0 || day.unpriced.fiveHour || day.unpriced.sevenDay;
+  const plan = day === null || day > 0;
   const billed = o.billed24h > 0;
-  const { figures, marked, unpriced } = nativeFiguresOf('seven_day', { billed: billed ? o.billed24h : undefined, equivalent: plan ? day.sevenDay : undefined, unpriced: day.unpriced.sevenDay }, o.estimated24h);
+  const { figures, marked, unpriced } = nativeFiguresOf('seven_day', { billed: billed ? o.billed24h : undefined, equivalent: plan ? day : undefined, unpriced: day === null }, false);
   return {
-    note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash('seven_day', unpriced ? null : day.sevenDay / 24, marked)} per hour`,
+    note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash('seven_day', day === null ? null : day / 24, marked)} per hour`,
     // In percent: the spark's scale floors at one, a dollar an hour on the dollar positions, and a floor of a whole
     // window an hour would flatten the day.
-    spark: plan || !billed ? o.hourly.map((h) => h.equivalent.sevenDay * 100) : o.hourly.map((h) => h.billed),
+    spark: plan || !billed ? o.hourly.map((h) => (h.equivalent ?? 0) * 100) : o.hourly.map((h) => h.billed),
     title: unpriced ? UNPRICED_TITLE : marked ? ESTIMATED_TITLE : undefined,
     value: figuresValue(figures),
   };

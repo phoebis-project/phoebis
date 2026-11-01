@@ -4,14 +4,12 @@ import * as d from './dist/api.js';
 
 const attempt = (accountKind, overageInUse, speed) => ({ accountKind, overageInUse, response: { speed } });
 const PLAN = attempt('oauth', false, 'standard');
-const request = (costShares, attempts = [PLAN], costUsd = 0.0048, more = {}) => ({ attempts, costEquivalent: null, costShares, costUsd, estimated: false, shareReason: null, ...more });
+const request = (costShares, attempts = [PLAN], costUsd = 0.0048, more = {}) => ({ attempts, costEquivalent: null, costShares, costUsd, shareReason: null, ...more });
 /** The position under which a plan request reads its own window shares. */
 const SHARE_POSITIONS = ['share'];
 const POSITIONS = ['all', 'equivalent', 'native', 'share', 'usd'];
 /** The two positions under which a plan request reads its dollar equivalent. */
 const EQUIVALENT_DOLLAR_POSITIONS = ['all', 'equivalent'];
-/** A cell title as an estimated figure carries it: its own title, then the estimate as a sentence of its own. */
-const markedTitle = (title) => `${title}. ${d.ESTIMATED_TITLE}.`;
 
 test('a plan request with shares reads the model week over the 5-hour share in their short words, with every share in full and the equivalent on the title', () => {
   for (const position of SHARE_POSITIONS) {
@@ -61,50 +59,38 @@ test('an overage request, a fast answer, an API key request and a usage-based re
   }
 });
 
-test('under Dollar equivalent an overage request, a fast answer and an API key request read a dash titled no subscription equivalent, with no mark where estimated', () => {
+test('under Dollar equivalent an overage request, a fast answer and an API key request read a dash titled no subscription equivalent', () => {
   assert.equal(d.NO_EQUIVALENT_TITLE, 'Billed in dollars, no subscription equivalent');
   for (const a of [attempt('oauth', true, 'standard'), attempt('oauth', false, 'fast'), attempt('api_key', null, 'standard')]) {
-    for (const estimated of [false, true]) {
-      const unit = d.costUnitOf(request(null, [PLAN, a], 1.25, { estimated }), 'equivalent');
-      const what = `${JSON.stringify(a)} estimated ${estimated}`;
-      assert.deepEqual(unit, { estimated, kind: 'dash', title: d.NO_EQUIVALENT_TITLE, usd: 1.25 }, `${what}: the flag stays on the unit`);
-      assert.deepEqual(d.costCellOf(unit), { main: '-', sub: '', title: d.NO_EQUIVALENT_TITLE }, `${what}: a dash shows no figure, so it reads no tilde and no estimate`);
-    }
+    const unit = d.costUnitOf(request(null, [PLAN, a], 1.25), 'equivalent');
+    const what = JSON.stringify(a);
+    assert.deepEqual(unit, { estimated: false, kind: 'dash', title: d.NO_EQUIVALENT_TITLE, usd: 1.25 }, what);
+    assert.deepEqual(d.costCellOf(unit), { main: '-', sub: '', title: d.NO_EQUIVALENT_TITLE }, `${what}: a dash shows no figure`);
   }
 });
 
-test('under All in dollars and Dollar equivalent a plan request reads its dollar equivalent over equivalent, with every equivalent in full and the dollars on the title', () => {
-  const r = request({ five_hour: 0.0042, seven_day: 0.00061 }, [PLAN], 0.0048, { costEquivalent: { seven_day_fable: 0.02222, five_hour: 0.014667, seven_day: 0.002444 } });
+test('under All in dollars and Dollar equivalent a plan request reads its dollar equivalent over equivalent, with its Pro-week figure in full and the dollars on the title', () => {
+  const r = request({ five_hour: 0.0042, seven_day: 0.00061 }, [PLAN], 0.0048, { costEquivalent: 0.002444 });
   for (const position of EQUIVALENT_DOLLAR_POSITIONS) {
     const unit = d.costUnitOf(r, position);
-    assert.deepEqual(
-      unit,
-      { equivalents: [{ key: 'five_hour', share: 0.014667 }, { key: 'seven_day', share: 0.002444 }, { key: 'seven_day_fable', share: 0.02222 }], estimated: false, kind: 'equivalent_dollars', reason: null, usd: 0.0048 },
-      `${position}: the equivalents read 5-hour, 7-day, then the model week, whatever order the route answered them in, and the own-window shares are not read`,
-    );
-    assert.deepEqual(d.costCellOf(unit), { main: '$0.0048', sub: 'equivalent', title: '1.47% of 20x 5-hour, 0.244% of 20x 7-day, 2.22% of 20x 7-day Fable, $0.0048 equivalent' }, position);
+    assert.deepEqual(unit, { equivalents: [{ key: 'seven_day', share: 0.002444 }], estimated: false, kind: 'equivalent_dollars', reason: null, usd: 0.0048 }, `${position}: the figure reads as the 7-day equivalent, and the own-window shares are not read`);
+    assert.deepEqual(d.costCellOf(unit), { main: '$0.0048', sub: 'equivalent', title: '0.244% of 20x 7-day, $0.0048 equivalent' }, position);
   }
-  const estimated = d.costUnitOf({ ...r, estimated: true }, 'all');
-  assert.deepEqual(d.costCellOf(estimated), { main: '~$0.0048', sub: 'equivalent', title: markedTitle('1.47% of 20x 5-hour, 0.244% of 20x 7-day, 2.22% of 20x 7-day Fable, $0.0048 equivalent') }, 'an estimated figure reads the tilde and the estimate');
 });
 
 test('under All in dollars and Dollar equivalent a plan request the route priced no equivalent for reads its dollar equivalent alone on the title', () => {
   for (const position of EQUIVALENT_DOLLAR_POSITIONS) {
-    for (const costEquivalent of [null, {}, { five_hour: null, seven_day: null }]) {
-      const unit = d.costUnitOf(request({ five_hour: 0.0042 }, [PLAN], 0.0048, { costEquivalent }), position);
-      assert.deepEqual(unit, { equivalents: [], estimated: false, kind: 'equivalent_dollars', reason: null, usd: 0.0048 }, `${position} ${JSON.stringify(costEquivalent)}`);
-      assert.deepEqual(d.costCellOf(unit), { main: '$0.0048', sub: 'equivalent', title: '$0.0048 equivalent' }, `${position} ${JSON.stringify(costEquivalent)}`);
-    }
+    const unit = d.costUnitOf(request({ five_hour: 0.0042 }, [PLAN], 0.0048, { costEquivalent: null }), position);
+    assert.deepEqual(unit, { equivalents: [], estimated: false, kind: 'equivalent_dollars', reason: null, usd: 0.0048 }, position);
+    assert.deepEqual(d.costCellOf(unit), { main: '$0.0048', sub: 'equivalent', title: '$0.0048 equivalent' }, position);
   }
 });
 
-test('under Billed dollars a plan request reads a dash titled nothing billed, with no mark where estimated', () => {
+test('under Billed dollars a plan request reads a dash titled nothing billed', () => {
   assert.equal(d.NOTHING_BILLED_TITLE, 'Nothing billed: a subscription request');
-  for (const estimated of [false, true]) {
-    const unit = d.costUnitOf(request({ five_hour: 0.0042, seven_day: 0.00061 }, [PLAN], 0.0048, { costEquivalent: { five_hour: 0.014667 }, estimated }), 'usd');
-    assert.deepEqual(unit, { estimated, kind: 'dash', title: d.NOTHING_BILLED_TITLE, usd: 0.0048 }, `estimated ${estimated}: the flag stays on the unit`);
-    assert.deepEqual(d.costCellOf(unit), { main: '-', sub: '', title: d.NOTHING_BILLED_TITLE }, `estimated ${estimated}: a dash shows no figure, so it reads no tilde and no estimate`);
-  }
+  const unit = d.costUnitOf(request({ five_hour: 0.0042, seven_day: 0.00061 }, [PLAN], 0.0048, { costEquivalent: 0.014667 }), 'usd');
+  assert.deepEqual(unit, { estimated: false, kind: 'dash', title: d.NOTHING_BILLED_TITLE, usd: 0.0048 });
+  assert.deepEqual(d.costCellOf(unit), { main: '-', sub: '', title: d.NOTHING_BILLED_TITLE }, 'a dash shows no figure');
 });
 
 test('the Cost header names what a subscription and a billed request read under each position', () => {
@@ -130,20 +116,21 @@ test('a plan request the route priced no share for reads dollars over equivalent
 
 test('a_free_calls_cost_cell_reads_zero_with_the_free_title', () => {
   assert.equal(d.FREE_SHARE_TITLE, 'Free on the plan: a client classifier call takes no window share');
-  const free = request({ five_hour: 0, seven_day: 0 }, [PLAN], 0.0012, { costEquivalent: { five_hour: 0, seven_day: 0 }, shareReason: 'client_classifier' });
+  const free = request({ five_hour: 0, seven_day: 0 }, [PLAN], 0.0012, { costEquivalent: 0, shareReason: 'client_classifier' });
   const zero = [{ key: 'five_hour', share: 0 }, { key: 'seven_day', share: 0 }];
   for (const position of SHARE_POSITIONS) {
     const unit = d.costUnitOf(free, position);
     assert.deepEqual(unit, { estimated: false, kind: 'shares', reason: 'client_classifier', shares: zero, usd: 0.0012 }, position);
     assert.deepEqual(d.costCellOf(unit), { main: '0% 7d', sub: '0% 5h', title: `${d.FREE_SHARE_TITLE}. 0% of 5-hour, 0% of 7-day, $0.0012 equivalent` }, `${position}: the zero shares read as figures, the title says why ahead of the estimate`);
   }
+  const figure = [{ key: 'seven_day', share: 0 }];
   const native = d.costUnitOf(free, 'native');
-  assert.deepEqual(native, { equivalents: zero, estimated: false, kind: 'equivalent', reason: 'client_classifier', usd: 0.0012 });
-  assert.deepEqual(d.costCellOf(native), { main: '0% 20x 5h', sub: '0% 20x 7d', title: `${d.FREE_SHARE_TITLE}. 0%, 0%, $0.0012 equivalent` }, 'native: the zero equivalents read as figures, the title says why ahead of the estimate');
+  assert.deepEqual(native, { equivalents: figure, estimated: false, kind: 'equivalent', reason: 'client_classifier', usd: 0.0012 });
+  assert.deepEqual(d.costCellOf(native), { main: '0% 20x 7d', sub: '', title: `${d.FREE_SHARE_TITLE}. 0%, $0.0012 equivalent` }, 'native: the zero figure reads as a figure, the title says why ahead of the estimate');
   for (const position of EQUIVALENT_DOLLAR_POSITIONS) {
     const unit = d.costUnitOf(free, position);
-    assert.deepEqual(unit, { equivalents: zero, estimated: false, kind: 'equivalent_dollars', reason: 'client_classifier', usd: 0.0012 }, position);
-    assert.deepEqual(d.costCellOf(unit), { main: '$0.0012', sub: 'equivalent', title: `${d.FREE_SHARE_TITLE}. 0%, 0%, $0.0012 equivalent` }, `${position}: the dollar equivalent reads over equivalent, the title says why its equivalents read zero ahead of the estimate`);
+    assert.deepEqual(unit, { equivalents: figure, estimated: false, kind: 'equivalent_dollars', reason: 'client_classifier', usd: 0.0012 }, position);
+    assert.deepEqual(d.costCellOf(unit), { main: '$0.0012', sub: 'equivalent', title: `${d.FREE_SHARE_TITLE}. 0%, $0.0012 equivalent` }, `${position}: the dollar equivalent reads over equivalent, the title says why its figure reads zero ahead of the estimate`);
   }
   const billed = d.costUnitOf(free, 'usd');
   assert.deepEqual(billed, { estimated: false, kind: 'dash', title: d.NOTHING_BILLED_TITLE, usd: 0.0012 });
@@ -167,59 +154,17 @@ test('a request with no attempt reads its zero dollars with no funding word and 
   }
 });
 
-test('under native a plan request reads its 20x equivalents: the 5-hour one over the 7-day one in their short words, every equivalent in full and the dollars on the title', () => {
-  const r = request({ five_hour: 0.0042, seven_day: 0.00061, seven_day_fable: 0.0012 }, [PLAN], 0.0048, { costEquivalent: { seven_day_fable: 0.02222, five_hour: 0.014667, seven_day: 0.002444 } });
+test('under native a plan request reads its Pro-week figure as the 7-day equivalent in its short word, the figure in full and the dollars on the title', () => {
+  const r = request({ five_hour: 0.0042, seven_day: 0.00061, seven_day_fable: 0.0012 }, [PLAN], 0.0048, { costEquivalent: 0.002444 });
   const unit = d.costUnitOf(r, 'native');
-  assert.deepEqual(
-    unit,
-    { equivalents: [{ key: 'five_hour', share: 0.014667 }, { key: 'seven_day', share: 0.002444 }, { key: 'seven_day_fable', share: 0.02222 }], estimated: false, kind: 'equivalent', reason: null, usd: 0.0048 },
-    'the equivalents read 5-hour, 7-day, then the model week, whatever order the route answered them in, and the own-window shares are not read',
-  );
-  assert.deepEqual(d.costCellOf(unit), { main: '1.47% 20x 5h', sub: '0.244% 20x 7d', title: '1.47% of 20x 5-hour, 0.244% of 20x 7-day, 2.22% of 20x 7-day Fable, $0.0048 equivalent' });
-});
-
-test('under native a plan request priced on the 5-hour window alone reads it once, with the null 7-day window left out', () => {
-  const unit = d.costUnitOf(request(null, [PLAN], 0.0048, { costEquivalent: { five_hour: 0.01, seven_day: null } }), 'native');
-  assert.deepEqual(unit, { equivalents: [{ key: 'five_hour', share: 0.01 }], estimated: false, kind: 'equivalent', reason: null, usd: 0.0048 });
-  assert.deepEqual(d.costCellOf(unit), { main: '1% 20x 5h', sub: '', title: '1% of 20x 5-hour, $0.0048 equivalent' });
-});
-
-test('under native a plan request with no 5-hour equivalent leads with its 7-day one, the model week under it', () => {
-  const unit = d.costUnitOf(request(null, [PLAN], 0.0048, { costEquivalent: { five_hour: null, seven_day: 0.002444, seven_day_fable: 0.02222 } }), 'native');
-  assert.deepEqual(unit.equivalents, [{ key: 'seven_day', share: 0.002444 }, { key: 'seven_day_fable', share: 0.02222 }], 'the null 5-hour window draws nothing');
-  assert.deepEqual(d.costCellOf(unit), { main: '0.244% 20x 7d', sub: '2.22% 20x 7-day Fable', title: '0.244% of 20x 7-day, 2.22% of 20x 7-day Fable, $0.0048 equivalent' });
-});
-
-test('under native a plan request of a model weighed on its week alone reads the week once', () => {
-  const unit = d.costUnitOf(request(null, [PLAN], 0.0048, { costEquivalent: { seven_day_fable: 0.02222 } }), 'native');
-  assert.deepEqual(unit, { equivalents: [{ key: 'seven_day_fable', share: 0.02222 }], estimated: false, kind: 'equivalent', reason: null, usd: 0.0048 });
-  assert.deepEqual(d.costCellOf(unit), { main: '2.22% 20x 7-day Fable', sub: '', title: '2.22% of 20x 7-day Fable, $0.0048 equivalent' });
+  assert.deepEqual(unit, { equivalents: [{ key: 'seven_day', share: 0.002444 }], estimated: false, kind: 'equivalent', reason: null, usd: 0.0048 }, 'the own-window shares are not read');
+  assert.deepEqual(d.costCellOf(unit), { main: '0.244% 20x 7d', sub: '', title: '0.244% of 20x 7-day, $0.0048 equivalent' });
 });
 
 test('under native a plan request the route priced no equivalent for reads dollars over equivalent with no estimated mark', () => {
-  for (const costEquivalent of [null, {}, { five_hour: null, seven_day: null }]) {
-    const unit = d.costUnitOf(request({ five_hour: 0.0042, seven_day: 0.00061 }, [PLAN], 0.0048, { costEquivalent }), 'native');
-    assert.deepEqual(unit, { estimated: false, kind: 'unpriced', usd: 0.0048 }, JSON.stringify(costEquivalent));
-    assert.deepEqual(d.costCellOf(unit), { main: '$0.0048', sub: 'equivalent', title: d.NO_SHARE_TITLE }, JSON.stringify(costEquivalent));
-  }
-});
-
-test('a figure the route marked estimated reads a tilde before its main line and the estimate after its own title, under native and under share', () => {
-  const r = request({ five_hour: 0.0042, seven_day: 0.00061 }, [PLAN], 0.0048, { costEquivalent: { five_hour: 0.014667, seven_day: 0.002444 }, estimated: true });
-  const native = d.costUnitOf(r, 'native');
-  assert.equal(native.estimated, true, 'the equivalent kind carries the flag');
-  assert.deepEqual(d.costCellOf(native), { main: '~1.47% 20x 5h', sub: '0.244% 20x 7d', title: markedTitle('1.47% of 20x 5-hour, 0.244% of 20x 7-day, $0.0048 equivalent') });
-  const share = d.costUnitOf(r, 'share');
-  assert.equal(share.estimated, true, 'the shares kind carries the flag');
-  assert.deepEqual(d.costCellOf(share), { main: '~0.061% 7d', sub: '0.42% 5h', title: markedTitle('0.42% of 5-hour, 0.061% of 7-day, $0.0048 equivalent') });
-});
-
-test('a billed request the route marked estimated reads the tilde and the estimate under usd, and every kind with a figure carries the mark', () => {
-  const billed = d.costUnitOf(request(null, [attempt('api_key', null, 'standard')], 1.25, { estimated: true }), 'usd');
-  assert.deepEqual(billed, { estimated: true, funding: 'api_key', kind: 'dollars', usd: 1.25 });
-  assert.deepEqual(d.costCellOf(billed), { main: '~$1.25', sub: 'API key', title: markedTitle('Billed in dollars: API key') });
-  assert.deepEqual(d.costCellOf({ estimated: true, kind: 'unpriced', usd: 0.0048 }), { main: '~$0.0048', sub: 'equivalent', title: markedTitle(d.NO_SHARE_TITLE) });
-  assert.deepEqual(d.costCellOf({ estimated: true, kind: 'unserved', usd: 0 }), { main: '~$0.00', sub: '', title: `${d.ESTIMATED_TITLE}.` }, 'an empty title reads the estimate alone');
+  const unit = d.costUnitOf(request({ five_hour: 0.0042, seven_day: 0.00061 }, [PLAN], 0.0048, { costEquivalent: null }), 'native');
+  assert.deepEqual(unit, { estimated: false, kind: 'unpriced', usd: 0.0048 });
+  assert.deepEqual(d.costCellOf(unit), { main: '$0.0048', sub: 'equivalent', title: d.NO_SHARE_TITLE });
 });
 
 /** A settings answer's two revision lists, enough for the title, written here so no shipped date is pinned. */
@@ -235,26 +180,22 @@ test('the revisions in force at a request name the latest price list and cost mo
 });
 
 test("the Dashboard's glance cell reads an equivalent unit's lead window alone in its 20x short form, with the full reading and the revisions on the title", () => {
-  const r = request(null, [PLAN], 0.0048, { costEquivalent: { seven_day_fable: 0.02222, five_hour: 0.014667, seven_day: 0.002444 } });
+  const r = request(null, [PLAN], 0.0048, { costEquivalent: 0.002444 });
   const revisions = 'Priced at the API prices of Oct 08, 2026 and the cost model of Oct 05, 2026';
-  const full = '1.47% of 20x 5-hour, 0.244% of 20x 7-day, 2.22% of 20x 7-day Fable, $0.0048 equivalent';
-  assert.deepEqual(d.glanceCellOf(d.costUnitOf(r, 'native'), revisions), { main: '1.47% 20x 5h', sub: '', title: `${full}. ${revisions}` });
-  assert.deepEqual(d.glanceCellOf(d.costUnitOf(r, 'native'), null), { main: '1.47% 20x 5h', sub: '', title: full }, 'no settings at hand, the reading alone');
-  const estimated = d.costUnitOf({ ...r, estimated: true }, 'native');
-  assert.deepEqual(d.glanceCellOf(estimated, revisions), { main: '~1.47% 20x 5h', sub: '', title: markedTitle(`${full}. ${revisions}`) });
-  const weekly = d.costUnitOf(request(null, [PLAN], 0.0048, { costEquivalent: { five_hour: null, seven_day: 0.002444 } }), 'native');
-  assert.deepEqual(d.glanceCellOf(weekly, null), { main: '0.244% 20x 7d', sub: '', title: '0.244% of 20x 7-day, $0.0048 equivalent' }, 'no 5-hour figure, the next window leads');
+  const full = '0.244% of 20x 7-day, $0.0048 equivalent';
+  assert.deepEqual(d.glanceCellOf(d.costUnitOf(r, 'native'), revisions), { main: '0.244% 20x 7d', sub: '', title: `${full}. ${revisions}` });
+  assert.deepEqual(d.glanceCellOf(d.costUnitOf(r, 'native'), null), { main: '0.244% 20x 7d', sub: '', title: full }, 'no settings at hand, the reading alone');
 });
 
 test("the Dashboard's glance cell of a client classifier call leads its title with the free sentence, ahead of the reading and the revisions", () => {
   const revisions = 'Priced at the API prices of Oct 08, 2026 and the cost model of Oct 05, 2026';
-  const free = request({ five_hour: 0, seven_day: 0 }, [PLAN], 0.0012, { costEquivalent: { five_hour: 0, seven_day: 0 }, shareReason: 'client_classifier' });
+  const free = request({ five_hour: 0, seven_day: 0 }, [PLAN], 0.0012, { costEquivalent: 0, shareReason: 'client_classifier' });
   const unit = d.costUnitOf(free, 'native');
   assert.equal(unit.reason, 'client_classifier');
-  assert.deepEqual(d.glanceCellOf(unit, revisions), { main: '0% 20x 5h', sub: '', title: `${d.FREE_SHARE_TITLE}. 0%, 0%, $0.0012 equivalent. ${revisions}` });
-  assert.deepEqual(d.glanceCellOf(unit, null), { main: '0% 20x 5h', sub: '', title: `${d.FREE_SHARE_TITLE}. 0%, 0%, $0.0012 equivalent` }, 'no settings at hand, the sentence and the reading');
+  assert.deepEqual(d.glanceCellOf(unit, revisions), { main: '0% 20x 7d', sub: '', title: `${d.FREE_SHARE_TITLE}. 0%, $0.0012 equivalent. ${revisions}` });
+  assert.deepEqual(d.glanceCellOf(unit, null), { main: '0% 20x 7d', sub: '', title: `${d.FREE_SHARE_TITLE}. 0%, $0.0012 equivalent` }, 'no settings at hand, the sentence and the reading');
   const plain = d.costUnitOf({ ...free, shareReason: null }, 'native');
-  assert.deepEqual(d.glanceCellOf(plain, revisions), { main: '0% 20x 5h', sub: '', title: `0%, 0%, $0.0012 equivalent. ${revisions}` }, 'without the reason the title reads the zeros alone');
+  assert.deepEqual(d.glanceCellOf(plain, revisions), { main: '0% 20x 7d', sub: '', title: `0%, $0.0012 equivalent. ${revisions}` }, 'without the reason the title reads the zero alone');
 });
 
 test("the Dashboard's glance cell reads every other unit as the Requests cell does", () => {
@@ -262,7 +203,6 @@ test("the Dashboard's glance cell reads every other unit as the Requests cell do
   for (const unit of [
     d.costUnitOf(request(null, [attempt('api_key', null, 'standard')], 1.25), 'native'),
     d.costUnitOf(request({ five_hour: 0.0042, seven_day: 0.00061 }), 'share'),
-    d.costUnitOf(request({ five_hour: 0.0042, seven_day: 0.00061 }, [PLAN], 0.0048, { estimated: true }), 'share'),
     d.costUnitOf(request(null, [PLAN], 0.0048, { costEquivalent: null }), 'native'),
     d.costUnitOf(request(null, [], 0), 'native'),
   ]) {
@@ -272,16 +212,16 @@ test("the Dashboard's glance cell reads every other unit as the Requests cell do
 
 test("the Dashboard's glance cell reads a plan and a billed request under each dollar position as the Requests cell does, a dash with no mark", () => {
   const revisions = 'Priced at the API prices of Oct 08, 2026 and the cost model of Oct 05, 2026';
-  const plan = request({ five_hour: 0.0042, seven_day: 0.00061 }, [PLAN], 0.0048, { costEquivalent: { five_hour: 0.014667, seven_day: 0.002444 }, estimated: true });
-  const billed = request(null, [attempt('oauth', true, 'standard')], 1.25, { estimated: true });
-  const equivalent = { main: '~$0.0048', sub: 'equivalent', title: markedTitle('1.47% of 20x 5-hour, 0.244% of 20x 7-day, $0.0048 equivalent') };
+  const plan = request({ five_hour: 0.0042, seven_day: 0.00061 }, [PLAN], 0.0048, { costEquivalent: 0.002444 });
+  const billed = request(null, [attempt('oauth', true, 'standard')], 1.25);
+  const equivalent = { main: '$0.0048', sub: 'equivalent', title: '0.244% of 20x 7-day, $0.0048 equivalent' };
   for (const [r, position, cell] of [
     [plan, 'all', equivalent],
     [plan, 'equivalent', equivalent],
     [plan, 'usd', { main: '-', sub: '', title: d.NOTHING_BILLED_TITLE }],
-    [billed, 'all', { main: '~$1.25', sub: 'overage', title: markedTitle('Billed in dollars: overage') }],
+    [billed, 'all', { main: '$1.25', sub: 'overage', title: 'Billed in dollars: overage' }],
     [billed, 'equivalent', { main: '-', sub: '', title: d.NO_EQUIVALENT_TITLE }],
-    [billed, 'usd', { main: '~$1.25', sub: 'overage', title: markedTitle('Billed in dollars: overage') }],
+    [billed, 'usd', { main: '$1.25', sub: 'overage', title: 'Billed in dollars: overage' }],
   ]) {
     const unit = d.costUnitOf(r, position);
     const what = `${r === plan ? 'plan' : 'billed'} under ${position}`;
