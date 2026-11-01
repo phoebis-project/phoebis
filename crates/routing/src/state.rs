@@ -3930,8 +3930,9 @@ mod tests {
         assert_eq!(state.credits("a"), None);
     }
 
-    /// A registry that reads `a` ready under incarnation 1 at `revision`, off the mark: a reconcile against it keeps
-    /// a funding entry only while the writer has not acknowledged its mark at a revision above `revision`.
+    /// A registry that reads `a` ready under incarnation 1 at `revision`, off the mark. A reconcile against it keeps a
+    /// funding entry whose mark the writer has not acknowledged or acknowledged at a revision above `revision`, and
+    /// drops one acknowledged at `revision` or below.
     fn ready_at(revision: u64) -> RegistrySnapshot {
         RegistrySnapshot::from_load(
             phoebis_store::RegistryLoad {

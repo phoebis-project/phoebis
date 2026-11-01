@@ -23426,7 +23426,8 @@ fn the_exempt_classes_are_never_held() {
         ),
     );
     // Its burn counts as any other's: the seven pins' 0.14 of the window an hour, decayed over the 21 s since their
-    // fold, over the speed the control's and the compaction's reads folded into the entry.
+    // fold, read 0.138376157. The control's read folds the entry's speed to 0.528120376 and the compaction's to
+    // 0.527901465, so the demand is 0.138376157 / 0.527901465.
     let d = on_a(&mut st, "auxiliary", auxiliary(&on, "s5", at));
     assert!(close(
         candidate(&d.record, "a").windows[FIVE_HOUR]

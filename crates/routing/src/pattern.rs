@@ -197,8 +197,8 @@ mod tests {
             matches(&within_pattern, &within_name),
             "a pattern and a name at the bound fill the table and match"
         );
-        // 256 tokens, the last a literal b the name never holds: a backtracking matcher finds the matching pair above
-        // in about 256 steps, so only a pair it cannot match shows an exponential walk.
+        // 256 tokens, the last a literal b the name never holds. No split of the stars matches it, so this pair forces
+        // every backtracking matcher through its full walk.
         let missing = format!("{}*b", "*a".repeat(127));
         let start = std::time::Instant::now();
         let missed = matches(&missing, &within_name);
