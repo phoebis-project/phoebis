@@ -967,15 +967,15 @@ split draws a ring per side by token kind, the subscription requests' with its f
 request and Per 1k output, each with the billed dollars on a line under the figure. A subscription side the route could
 not price, as when a request ran on a model without a weight in the cost model, reads a dash, its bucket on the Cost by
 chart a gap, and the Cost split draws no ring for it. The Cost tile's dash carries the Dashboard's hover, and the Cost
-by chart names the groups it draws that read unpriced on a line under its subtitle, `{group} unpriced in {m} buckets,
-drawn as gaps` for one group (`research unpriced in 1 bucket, drawn as a gap`), the groups' labels joined by middle dots
-for up to three, and `{n} groups unpriced in {m} buckets, drawn as gaps` past three. Under the Max and Ultra weeks the
-figures wait on the settings, so the section draws its placeholders until they answer. Where that read fails, the tiles
-draw the read's error and the cards their error state. Under All in dollars, Billed
-dollars and Dollar equivalent Cost draws the tiles Estimated cost, Billed dollars or Dollar equivalent, Cost per request
-and Cost per 1k output tokens, then Cost by the chosen group as a chart and a table (Requests, Cost, Input, Cache read,
-Cache write, Output, Per request, Per 1k output) and the Cost split as one ring in dollars (Input, Cache read, Cache
-write, Output). Every position draws Fast mode spend. The prices behind the dollars are on
+by chart names the groups it draws that read unpriced on a line under its subtitle,
+`{group} unpriced in {m} buckets, drawn as gaps` for one group (`research unpriced in 1 bucket, drawn as a gap`), the
+groups' labels joined by middle dots for up to three, and `{n} groups unpriced in {m} buckets, drawn as gaps` past
+three. Under the Max and Ultra weeks the figures wait on the settings, so the section draws its placeholders until they
+answer. Where that read fails, the tiles draw the read's error and the cards their error state. Under All in dollars,
+Billed dollars and Dollar equivalent Cost draws the tiles Estimated cost, Billed dollars or Dollar equivalent, Cost per
+request and Cost per 1k output tokens, then Cost by the chosen group as a chart and a table (Requests, Cost, Input,
+Cache read, Cache write, Output, Per request, Per 1k output) and the Cost split as one ring in dollars (Input, Cache
+read, Cache write, Output). Every position draws Fast mode spend. The prices behind the dollars are on
 [Pricing](statistics.md#pricing), and the cost model behind the subscription figures on [Plan
 meter](statistics.md#plan-meter).
 
@@ -1160,17 +1160,16 @@ mirrors the top bar's switch with the week select beside it, disabled under the 
 and a legend button of its own ("The unit every view prices a request in. Native reads a subscription request as a share
 of the chosen week and a billed request in dollars."), the four browser preferences the shell reads, and at a phone's
 width each row's control wraps under its label, the Unit row's position select, week select and legend button onto a
-second line. "About" lists Version, Profile, Metrics listener,
-Ledger path, API prices path and Subscription costs path (each as the path or "not configured", then its table's entry
-in force, its revision count and the next date while one is pending, as `effective {date}, {n} revisions, next {date}`,
-the last reading `{problem}` in their place while the cost model reports a problem), Storage path, "Requests, samples
-and the routing log" and "Rollups" (each as `kept for {n} days`, or "kept forever" where its key is 0), "Body capture"
-(as `at most {n} hours`, the longest a pool or a key keeps captured bodies), "Session expiry" (as `1d (86400 s)`, how
-long a session stays listed after its last activity), "Non-companion timeout" (as `1h (3600 s)`, how long a session no
-mod reports stays listed after its last use, which also bounds the lines its pins draw), and Admin secret as
-"configured" or "not configured", each path's, each retention line's and each session line's hover naming the bootstrap
-key that sets it, and closes on "The values the configuration file sets are on the installation page, and
-`phoebis check-config` prints this router's."
+second line. "About" lists Version, Profile, Metrics listener, Ledger path, API prices path and Subscription costs path
+(each as the path or "not configured", then its table's entry in force, its revision count and the next date while one
+is pending, as `effective {date}, {n} revisions, next {date}`, the last reading `{problem}` in their place while the
+cost model reports a problem), Storage path, "Requests, samples and the routing log" and "Rollups" (each as
+`kept for {n} days`, or "kept forever" where its key is 0), "Body capture" (as `at most {n} hours`, the longest a pool
+or a key keeps captured bodies), "Session expiry" (as `1d (86400 s)`, how long a session stays listed after its last
+activity), "Non-companion timeout" (as `1h (3600 s)`, how long a session no mod reports stays listed after its last use,
+which also bounds the lines its pins draw), and Admin secret as "configured" or "not configured", each path's, each
+retention line's and each session line's hover naming the bootstrap key that sets it, and closes on "The values the
+configuration file sets are on the installation page, and `phoebis check-config` prints this router's."
 
 "Downstream client configuration" ("Put it in the env block of the client's settings file or export it in the shell
 that launches the client, and replace the token with a key from the Keys page.") shows the seven lines that point

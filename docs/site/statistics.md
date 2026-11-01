@@ -290,8 +290,8 @@ shell](console.md#the-shell)).
 
 The base capacities the shipped file carries, in units per window, keyed by the tier the profile reports for the plans
 the cost model prices (a Pro subscription reports `default_claude_ai`, and a free organization reports the same tier
-with no priced capacity). The 5-hour column holds for an account whose reading carries the window: an approved Ultra
-account has no 5-hour window, so nothing is priced on it there:
+with no priced capacity). The 5-hour column holds for an account whose reading carries the window, because an approved
+Ultra account has no 5-hour window, so nothing is priced on it there:
 
 | Tier | 5-hour | 7-day |
 | --- | --- | --- |
@@ -370,11 +370,10 @@ projection, a runway and a stretch across a band edge weigh the in-band part of 
 and the rest at the plain rate. The analytics routes read the hourly rollups instead, which fold a request under the
 hour it arrived in, so their shares weigh it by that hour's band rather than by the band at its completion, and the
 Pro-week figure does the same where the week's factor is not 1. The burn route groups by the analytics' ten dimensions,
-read from the rollups the same way, and by session,
-which reads the attempts, each weighed by the band at its completion. The shares answer under the account grouping, or
-under every grouping when the filter names exactly one account, since shares of different accounts' windows do not add,
-and the Pro-week figure answers under every grouping. The Tiers and peak band tab of the cost reference names this
-week's hours in your zone ([The cost
+read from the rollups the same way, and by session, which reads the attempts, each weighed by the band at its
+completion. The shares answer under the account grouping, or under every grouping when the filter names exactly one
+account, since shares of different accounts' windows do not add, and the Pro-week figure answers under every grouping.
+The Tiers and peak band tab of the cost reference names this week's hours in your zone ([The cost
 reference](console.md#the-cost-reference)).
 
 The Fable-scoped week is a row of the file, `model_windows.seven_day_fable`, half the 7-day window of the request's
@@ -385,14 +384,13 @@ attention item Model unpriced names it until a weight lands. A model of no model
 the same way. For such a model the prediction adds no charge, the projection adds no burn, the shedding round ranks the
 pin after every priced one and never marks it, the analytics list the share under model unlisted, and the cost reference
 shows a dash in its cells and "not weighed" in its weight cell. Once the model has served a plan-funded request since
-the start, the ledger raises the `model_unpriced` attention item for the `phoebis_attention` gauge, `GET
-/admin/attention` answers it, and the console lists it on the dashboard's attention line as a plain badge in the info
-tone ([Conditions and gauges](#conditions-and-gauges)). An account tier without a capacity on a window prices no share
-there either, and the prediction adds no charge and the projection no burn on that
-window. While the account runs on its plan, a shedding round on that window
-reads that tier's pins as unpriced, after every priced pin, and marks none of them, and in the analytics an account on a
-tier the file lacks reads tier unknown, while a window the file leaves `null` on a listed tier reads model unlisted. A
-dated model id reads the weight of its undated name.
+the start, the ledger raises the `model_unpriced` attention item for the `phoebis_attention` gauge,
+`GET /admin/attention` answers it, and the console lists it on the dashboard's attention line as a plain badge in the
+info tone ([Conditions and gauges](#conditions-and-gauges)). An account tier without a capacity on a window prices no
+share there either, and the prediction adds no charge and the projection no burn on that window. While the account runs
+on its plan, a shedding round on that window reads that tier's pins as unpriced, after every priced pin, and marks none
+of them, and in the analytics an account on a tier the file lacks reads tier unknown, while a window the file leaves
+`null` on a listed tier reads model unlisted. A dated model id reads the weight of its undated name.
 
 The file is a revision list in the price table's shape: `revisions`, each entry an `effective` date and the whole model
 of that date, in force from 00:00 UTC of its date to the next entry's, an instant before the first entry reading the
