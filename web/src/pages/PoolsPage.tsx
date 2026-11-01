@@ -23,10 +23,10 @@ import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC } from '@/lib/address';
-import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, SHARE_NOTE, UNPRICED_TITLE, equivalentOrDash, moveLabel, nativeFiguresOf } from '@/lib/analytics';
+import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, UNPRICED_TITLE, equivalentOrDash, moveLabel, nativeFiguresOf, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
-import { clock } from '@/lib/clock';
-import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, shareLabel, shortModel, withEstimate } from '@/lib/format';
+import { weekScale } from '@/lib/costs';
+import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, shortModel } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
@@ -226,7 +226,11 @@ const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
 };
 
 export function PoolsPage() {
-  const { unit } = useAppSettings();
+  const { unit, week } = useAppSettings();
+  // The cost model whose capacities scale the day's figures to the chosen week. The Pro week reads without it.
+  const settings = useAsync(() => api.getSettings(), []);
+  const scale = weekScale(settings.data?.subscriptionCosts ?? null, week);
+  const reading: WeekReading = { error: scale === null ? settings.error : null, scale, week };
   // The return rate's range is the dialog's own, so each opening, a fresh state without one, starts on 7 days.
   const [dialog, setDialog] = useState<{ initialGroup: PoolGroup | null; pool: Pool | null; range?: OverviewRange } | null>(null);
   const returnRange = dialog?.range ?? '7d';
@@ -338,7 +342,7 @@ export function PoolsPage() {
         },
       }
     : null;
-  const dayTile = totals ? sumTileOf(unit, totals.day) : null;
+  const dayTile = totals ? sumTileOf(unit, totals.day, reading) : null;
 
   return (
     <div className="stack" ref={pageRef}>
@@ -357,6 +361,7 @@ export function PoolsPage() {
             catalog.reload();
             sessions.reload();
             overview.reload();
+            settings.reload();
           },
           paused: dialogOpen ? 'dialog' : barOpen ? 'menu' : null,
           refreshTitle: 'Reads the list again now',
@@ -373,7 +378,7 @@ export function PoolsPage() {
         <Tile label="Accounts in pools" value={totals ? fmtInt(totals.accounts) : null} />
         <Tile label="Keys" value={totals && totals.keys !== null ? fmtInt(totals.keys) : keysRead === 'failed' ? <span className="muted">n/a</span> : null} />
         <Tile label="Requests, 24h" value={totals ? fmtInt(totals.requests) : null} />
-        <Tile label="Cost, 24h" value={dayTile?.value ?? null} title={dayTile?.title} />
+        <Tile label="Cost, 24h" value={dayTile?.value ?? null} title={dayTile?.title} error={dayTile?.value === null ? reading.error : null} />
       </div>
       {/* A failed read leaves the cards on the last answer's items, or none before the first. This line says so. */}
       {attention.error !== null && <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />}
@@ -389,6 +394,7 @@ export function PoolsPage() {
                 accountById={accountById}
                 attention={(attention.items ?? []).filter((i) => i.pools.includes(p.id))}
                 now={now}
+                reading={reading}
                 onEdit={() => setDialog({ initialGroup: null, pool: p })}
                 onDelete={() => setDeleting(p)}
               />
@@ -585,53 +591,41 @@ function CacheTtlOverrides({
   );
 }
 
-const DAY_MS = 24 * 3_600_000;
 const dayOf = (p: Pool): FundedSum => ({ billedUsd: p.billed24h, cost: p.cost24h, equivalent: p.equivalent24h });
 
 /**
- * A pool card's Cost 24h under the unit. Native stacks the day's Pro-week figure over its billed dollars, a side with
- * no rows left out, and a day a plan row priced nothing on reads the dash under `UNPRICED_TITLE`. Under the shares a
- * card whose one member is a subscription account reads that account's own 7-day share of the pool's day, which the
- * breakdown route prices when a read names the one account, and the console converts no equivalent into a share.
- * Every other card names no one account.
+ * A pool card's Cost 24h under the unit. Native stacks the day's figure in the chosen week over its billed dollars, a
+ * side with no rows left out, and a day a plan row priced nothing on reads the dash under `UNPRICED_TITLE`. A pool sums
+ * its members' accounts, so its figure carries no hint. The figure waits on the scale, so the card draws its skeleton
+ * while the cost model is out, and the settings read's failure as a dash titled with it.
  */
-function PoolCost({ pool, accountById }: { accountById: Map<string, Account>; pool: Pool }) {
+function PoolCost({ pool, reading }: { pool: Pool; reading: WeekReading }) {
   const { unit } = useAppSettings();
-  const only = pool.members.length === 1 ? pool.members[0] : null;
-  const member = unit === 'share' && only?.kind === 'oauth' ? only.accountId : null;
-  const read = useAsync(() => {
-    if (member === null) return Promise.resolve(null);
-    const to = clock.now();
-    return api.getAnalyticsBreakdown({ accountIds: [member], from: new Date(to - DAY_MS).toISOString(), groupBy: 'pool', poolIds: [pool.id], to: new Date(to).toISOString() });
-  }, [pool.id, member]);
   const dash = (title?: string) => (
     <dd className="num" title={title}>
       -
     </dd>
   );
   const day = dayOf(pool);
-  if (unit === 'share') {
-    if (member === null) return dash(SHARE_NOTE);
-    if (read.error !== null) return dash(`Could not load the share: ${read.error}`);
-    if (read.loading || read.stale || read.data === null) return dash('Loading the share');
-    const group = read.data.find((g) => g.key === pool.id);
-    const seven = group?.costShares?.seven_day;
-    if (group === undefined || typeof seven !== 'number') return dash(`No share of ${accountById.get(member)?.label ?? member}'s 7-day window priced in the last 24 hours`);
-    const five = group.costShares?.five_hour;
-    return (
-      <dd className="num" title={[shareLabel('seven_day', seven), ...(typeof five === 'number' ? [shareLabel('five_hour', five)] : [])].join(', ')}>
-        {shareLabel('seven_day', seven)}
-      </dd>
-    );
-  }
-  if (unit !== 'native') return <dd className="num">{fmtUsd(dollarsUnder(unit, day))}</dd>;
+  // The `share` position is the one no select offers.
+  const position = unit === 'share' ? 'native' : unit;
+  if (position !== 'native') return <dd className="num">{fmtUsd(dollarsUnder(position, day))}</dd>;
   const sides = nativeSidesOf(day);
   if (sides.equivalent === undefined && sides.billed === undefined) return dash('No request in the last 24 hours');
-  const reading = [...(sides.equivalent === undefined ? [] : [equivalentOrDash('seven_day', sides.equivalent)]), ...(sides.billed === undefined ? [] : [`${fmtUsd(sides.billed)} billed`])];
-  const native = nativeFiguresOf('seven_day', sides, false);
+  const { scale, week } = reading;
+  if (scale === null)
+    return reading.error === null ? (
+      <dd className="num">
+        <Skeleton width={72} height={12} />
+      </dd>
+    ) : (
+      dash(reading.error)
+    );
+  const full = [...(sides.equivalent === undefined ? [] : [equivalentOrDash(sides.equivalent, week, scale)]), ...(sides.billed === undefined ? [] : [`${fmtUsd(sides.billed)} billed`])];
+  const native = nativeFiguresOf(sides, week, scale);
   return (
-    <dd className="num" title={native.unpriced ? UNPRICED_TITLE : withEstimate(reading.join(', '), native.marked)}>
-      {sumTileOf(unit, day).value}
+    <dd className="num" title={native.unpriced ? UNPRICED_TITLE : full.join(', ')}>
+      {sumTileOf(unit, day, reading).value}
     </dd>
   );
 }
@@ -646,6 +640,7 @@ function PoolCard({
   now,
   onEdit,
   onDelete,
+  reading,
 }: {
   accountById: Map<string, Account>;
   /** Null until the account list is read. The status sentence then says only what the pool's verdicts carry. */
@@ -658,6 +653,7 @@ function PoolCard({
   onDelete: () => void;
   onEdit: () => void;
   pool: Pool;
+  reading: WeekReading;
 }) {
   const ink = useChartInk();
   const standingId = useId();
@@ -886,7 +882,7 @@ function PoolCard({
         </div>
         <div>
           <dt>Cost 24h</dt>
-          <PoolCost pool={pool} accountById={accountById} />
+          <PoolCost pool={pool} reading={reading} />
         </div>
         <div>
           <dt>Active pins</dt>

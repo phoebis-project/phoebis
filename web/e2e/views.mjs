@@ -848,11 +848,11 @@ const REFUSED_TITLE =
 const REQUESTS_TITLE = 'Requests the router asked an account for. The refused requests are in the Refused tile.';
 
 /**
- * The Dashboard's tile words beside their neighbors: the Estimated cost, 24h tile's figure and note under native, its
- * subscription line reading the 7-day window (`{share} of 20x 7-day`, or `0%` with no window named on a day without
- * subscription cost, as `fmtEquivalent` draws a zero share) over its word and its note a figure per hour, and the
- * Refused, 24h tile's hover naming the router's own refusals beside the Requests, 24h tile's hover, the two labels in
- * one type.
+ * The Dashboard's tile words beside their neighbors: the Estimated cost, 24h tile's figure and note under native and
+ * the Ultra week, the pass's defaults, its subscription line reading that week (`{share} of an Ultra week`, or `0%` on
+ * a day without subscription cost) over its word, or the dash under the unpriced title on a day a request priced
+ * nothing on, as the story's day holds a Sonnet 4.5 request, and its note a figure per hour, and the Refused, 24h
+ * tile's hover naming the router's own refusals beside the Requests, 24h tile's hover, the two labels in one type.
  */
 async function dashboardTileWords(theme) {
   const say = (what) => failures.push(`${theme} /: ${what}`);
@@ -869,15 +869,17 @@ async function dashboardTileWords(theme) {
     const refused = tile('Refused, 24h');
     const requests = tile('Requests, 24h');
     return {
-      cost: { lines: [...(cost?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => [l.querySelector('.cost-figure')?.textContent ?? '', l.querySelector('.stat__pair-word')?.textContent ?? '']), note: cost?.querySelector('.stat__note')?.textContent ?? null },
+      cost: { lines: [...(cost?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => [l.querySelector('.cost-figure')?.textContent ?? '', l.querySelector('.stat__pair-word')?.textContent ?? '']), note: cost?.querySelector('.stat__note')?.textContent ?? null, title: cost?.getAttribute('title') ?? null },
       refused: { label: label(refused), title: refused?.getAttribute('title') ?? null },
       requests: { label: label(requests), title: requests?.getAttribute('title') ?? null },
     };
   });
   measurements.push(`${theme} / Dashboard tile words ${JSON.stringify(read)}`);
   const subscription = read.cost.lines.find(([, word]) => word === 'subscription');
-  if (!/^~?(\d[\d.]*% of 20x 7-day|0%)$/.test(subscription?.[0] ?? '')) say(`the Estimated cost, 24h tile's subscription line reads ${JSON.stringify(subscription ?? null)}, not a share of the 20x 7-day window or 0%`);
-  if (!/^(~?(\d[\d.]*% of 20x 7-day|0%)|\$[\d,.]+ billed) per hour$/.test(read.cost.note ?? '')) say(`the Estimated cost, 24h tile's note reads ${JSON.stringify(read.cost.note)}`);
+  if (subscription?.[0] === '-') {
+    if (read.cost.title !== UNPRICED_TITLE) say(`the Estimated cost, 24h tile's subscription dash is titled ${JSON.stringify(read.cost.title)}, not the unpriced title`);
+  } else if (!/^(\d[\d.]*% of an Ultra week|0%)$/.test(subscription?.[0] ?? '')) say(`the Estimated cost, 24h tile's subscription line reads ${JSON.stringify(subscription ?? null)}, not a share of an Ultra week, 0% or the unpriced dash`);
+  if (!/^(\d[\d.]*% of an Ultra week|0%|-|\$[\d,.]+ billed) per hour$/.test(read.cost.note ?? '')) say(`the Estimated cost, 24h tile's note reads ${JSON.stringify(read.cost.note)}`);
   if (read.refused.title !== REFUSED_TITLE) say(`the Refused, 24h tile's hover reads ${JSON.stringify(read.refused.title)}`);
   if (read.requests.title !== REQUESTS_TITLE) say(`the Requests, 24h tile's hover reads ${JSON.stringify(read.requests.title)}`);
   for (const what of compare(read.refused.label, read.requests.label, ['color', 'family', 'size', 'weight'], "the Refused, 24h tile's label against the Requests, 24h tile's")) say(what);
@@ -4832,8 +4834,8 @@ async function ringLinesSpan(theme) {
  * The Dashboard's recent requests read each model id on one line, so a long id cannot set its row's height, and the
  * table fits its card: the Model cell stops at its cap behind an ellipsis, with the whole id on the title. The Time and
  * Tokens cells keep their second lines, so the rows' heights are not asserted. The fit is asserted in the router pass
- * and recorded in the mock pass, whose story's subscription rows read their 5-hour equivalent in the Cost cell, wider
- * than the card leaves at 1280 by 800, so there the table scrolls inside its wrap as the request list does.
+ * and recorded in the mock pass, whose story's subscription rows read their figure in the Ultra week in the Cost cell,
+ * wider than the card leaves at 1280 by 800, so there the table scrolls inside its wrap as the request list does.
  */
 async function recentRowsOneLine(theme) {
   const read = await page.evaluate(() => {
@@ -4939,8 +4941,8 @@ async function recentDollarCosts(theme) {
 
 /** The mock's switch that adds its one plan request on a model the cost model lists in no tier. */
 const UNPRICED_SWITCH = 'phoebis.mockUnpriced';
-/** The dash's title where a window priced nothing. The pass reads no module of the console, so it spells it here. */
-const UNPRICED_TITLE = 'No subscription request priced on this window: its model has no tier the cost model weighs';
+/** The dash's title where a plan row priced nothing. The pass reads no module of the console, so it spells it here. */
+const UNPRICED_TITLE = 'No subscription request priced: its model has no weight in the cost model';
 
 /**
  * The Estimated cost, 24h tile under the mock's unpriced switch, whose day holds a plan request priced on no window:
@@ -5207,7 +5209,7 @@ async function burnCards(theme) {
     if (!(await tabTo(theme, 'Traffic'))) return;
     const failovers = await read(['Failovers']);
     if (!(await tabTo(theme, 'Burn'))) return;
-    const burn = await read(['5-hour per hour', '7-day per hour', 'Model week per hour', 'Spend per minute']);
+    const burn = await read(['Plan per hour', 'Spend per minute']);
     if (!(await tabTo(theme, 'Traffic'))) return;
     const rewrites = await read(['Migration rewrites']);
     const cards = { beside: rewrites.beside, boxes: [...failovers.boxes, ...rewrites.boxes, ...burn.boxes] };
@@ -5251,16 +5253,17 @@ async function errorsSubtitle(theme) {
 }
 
 /**
- * The Burn tab's four cards at 1440 by 900 under the key grouping, where `.grid-2` alone fits three columns: the three
- * plan cards and Spend per minute sit two by two, two cards on each of two top edges, each as wide as half the grid's
- * row less half its gap, and none spanning the row. Each card's top edge, left edge and width go to the measurements,
- * and the viewport and the Traffic tab are the pass's again after.
+ * The Burn tab's two cards at 1440 by 900, read under `search`: Plan per hour and Spend per minute share one top edge,
+ * each as wide as half the grid's row less half its gap within 1 px, and neither spans the row, where `.grid-2` alone
+ * would fit three columns. Each card's top edge, left edge and width go to the measurements, and the viewport, the
+ * address and the Traffic tab are the pass's again after.
  */
-async function burnGridFour(theme) {
-  const say = (what) => failures.push(`${theme} /analytics burn grid at 1440 by 900: ${what}`);
+async function burnGridOf(theme, what, search) {
+  const say = (line) => failures.push(`${theme} /analytics burn grid ${what} at 1440 by 900: ${line}`);
   try {
     await page.setViewportSize({ height: 900, width: 1440 });
     await settle();
+    if (search !== '') await loadAtOrigin(`/analytics${search}`, '.analytics-section#traffic');
     if (!(await tabTo(theme, 'Burn'))) return;
     const read = await page.evaluate(() => {
       const grid = document.querySelector('.burn-grid');
@@ -5268,95 +5271,56 @@ async function burnGridFour(theme) {
       const box = (c) => ({ left: Math.round(c.getBoundingClientRect().left), title: c.querySelector('.card__title')?.textContent?.trim() ?? '', top: Math.round(c.getBoundingClientRect().top), width: Math.round(c.getBoundingClientRect().width) });
       return { cards: [...grid.children].map(box), gap: parseFloat(getComputedStyle(grid).columnGap), row: Math.round(grid.getBoundingClientRect().width) };
     });
-    measurements.push(`${theme} /analytics burn grid at 1440 by 900 ${JSON.stringify(read)}`);
+    measurements.push(`${theme} /analytics burn grid ${what} at 1440 by 900 ${JSON.stringify(read)}`);
     if (read === null) {
       say('no grid to measure');
       return;
     }
-    if (read.cards.length !== 4) {
-      say(`the grid draws ${read.cards.length} cards, not four`);
-      return;
-    }
-    const rows = Object.values(Object.groupBy(read.cards, (c) => c.top));
-    if (rows.length !== 2 || rows.some((r) => r.length !== 2)) say(`the four cards sit ${rows.map((r) => r.length).join(', ')} to a row, not two per row`);
-    const half = { width: Math.round((read.row - read.gap) / 2) };
-    for (const c of read.cards) {
-      for (const what of compare({ width: c.width }, half, ['width'], `${c.title} against half the ${read.row}px row less half the gap`)) say(what);
-      if (Math.abs(c.width - read.row) <= 1) say(`${c.title} spans the ${read.row}px row`);
-    }
-  } finally {
-    await page.setViewportSize({ height: 800, width: 1280 });
-    await settle();
-    await tabTo(theme, 'Traffic');
-    await atRest();
-  }
-}
-
-/**
- * The story account serving Sonnet 4.5 alone (the mock's `UNPRICED_ACCOUNT`), so none of its lines has a model week and
- * its Burn tab draws three cards.
- */
-const BURN_THREE_ACCOUNT = 'secondary';
-
-/**
- * The Burn tab's three cards at 1440 by 900 under the Accounts filter naming the story account with no model week
- * (BURN_THREE_ACCOUNT, the seed named in its comment), where the grid holds three columns: the three cards share one
- * top edge, each as wide as a third of the grid's row less two thirds of its gap within 1 px, and none spans the row.
- * Each card's left edge and width go to the measurements, and the viewport, the filter and the Traffic tab are the
- * pass's again after. The mock pass's alone.
- */
-async function burnGridThree(theme) {
-  const say = (what) => failures.push(`${theme} /analytics burn grid of three at 1440 by 900: ${what}`);
-  try {
-    await page.setViewportSize({ height: 900, width: 1440 });
-    await settle();
-    await loadAtOrigin(`/analytics?accounts=${BURN_THREE_ACCOUNT}`, '.analytics-section#traffic');
-    if (!(await tabTo(theme, 'Burn'))) return;
-    const read = await page.evaluate(() => {
-      const grid = document.querySelector('.burn-grid');
-      if (!grid) return null;
-      const box = (c) => ({ left: Math.round(c.getBoundingClientRect().left), title: c.querySelector('.card__title')?.textContent?.trim() ?? '', top: Math.round(c.getBoundingClientRect().top), width: Math.round(c.getBoundingClientRect().width) });
-      return { cards: [...grid.children].map(box), gap: parseFloat(getComputedStyle(grid).columnGap), row: Math.round(grid.getBoundingClientRect().width) };
-    });
-    measurements.push(`${theme} /analytics burn grid of three at 1440 by 900 ${JSON.stringify(read)}`);
-    if (read === null) {
-      say('no grid to measure');
-      return;
-    }
-    if (read.cards.length !== 3) {
-      say(`the grid draws ${read.cards.length} cards under ${BURN_THREE_ACCOUNT}, not three`);
+    if (JSON.stringify(read.cards.map((c) => c.title)) !== JSON.stringify(['Plan per hour', 'Spend per minute'])) {
+      say(`the grid draws ${JSON.stringify(read.cards.map((c) => c.title))}, not Plan per hour and Spend per minute`);
       return;
     }
     const tops = Object.keys(Object.groupBy(read.cards, (c) => c.top));
-    if (tops.length !== 1) say(`the three cards sit on ${tops.length} top edges (${tops.join(', ')}), not one`);
-    const third = (read.row - 2 * read.gap) / 3;
+    if (tops.length !== 1) say(`the two cards sit on ${tops.length} top edges (${tops.join(', ')}), not one`);
+    const half = (read.row - read.gap) / 2;
     for (const c of read.cards) {
-      if (Math.abs(c.width - third) > 1) say(`${c.title} is ${c.width}px wide, not a third of the ${read.row}px row less two thirds of the gap (${third}px) within 1 px`);
+      if (Math.abs(c.width - half) > 1) say(`${c.title} is ${c.width}px wide, not half the ${read.row}px row less half the gap (${half}px) within 1 px`);
       if (Math.abs(c.width - read.row) <= 1) say(`${c.title} spans the ${read.row}px row`);
     }
   } finally {
     await page.setViewportSize({ height: 800, width: 1280 });
     await settle();
-    await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    if (search !== '') await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    else await tabTo(theme, 'Traffic');
     await atRest();
   }
 }
 
+/** The story account serving Sonnet 4.5 alone (the mock's `UNPRICED_ACCOUNT`), whose plan card draws its gaps alone. */
+const BURN_UNPRICED_ACCOUNT = 'secondary';
+
+/** The two cards under the key grouping, the page's default. */
+const burnGridPair = (theme) => burnGridOf(theme, 'under the key grouping', '');
 /**
- * The 5-hour plan card's muted legend entries against their neighbors. The estimated entry draws its swatch hollow: a
- * transparent box with a border in its color, taller than the 2 px line swatch, the type its neighbor's. The model
- * unlisted entry reads against the entry before it, a planned line's, on type and swatch size, and, where an account
- * whose tier the cost model does not size draws a tier unknown entry beside it, that muted entry on type, swatch size
- * and color too. In the mock's story every model has a model tier the cost model weighs, `secondary`'s Sonnet 4.5
- * pricing at its tier's latest weight as an estimate, so the estimated entry must draw there and the model unlisted
- * entry must not. The router's seed bills no subscription traffic, so there the pass records what it reads.
+ * The two cards under the Accounts filter naming the story account whose traffic prices nothing
+ * (BURN_UNPRICED_ACCOUNT, the seed named in its comment), so the plan card keeps its place beside Spend per minute with
+ * its gaps alone. The mock pass's alone.
+ */
+const burnGridNamed = (theme) => burnGridOf(theme, `under ${BURN_UNPRICED_ACCOUNT}`, `?accounts=${BURN_UNPRICED_ACCOUNT}`);
+
+/**
+ * The plan card's muted legend entries against their neighbors. The model unlisted entry reads against the entry
+ * before it, a planned line's, on type and swatch size, and, where an account whose tier the cost model does not size
+ * draws a tier unknown entry beside it, that muted entry on type, swatch size and color too. In the mock's story
+ * `secondary` serves Sonnet 4.5, which the cost model has no weight for, so its buckets price nothing and the model
+ * unlisted entry must draw. The router's seed bills no subscription traffic, so there the pass records what it reads.
  */
 async function planLegend(theme) {
   try {
     if (!(await tabTo(theme, 'Burn'))) return;
     if (mock) await burnShot(theme);
     const read = await page.evaluate(() => {
-      const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === '5-hour per hour');
+      const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour');
       if (!card) return null;
       const items = [...card.querySelectorAll('.legend li')];
       const label = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
@@ -5367,13 +5331,11 @@ async function planLegend(theme) {
         const swatch = li.querySelector('.legend__swatch');
         const r = swatch?.getBoundingClientRect();
         const look = swatch ? getComputedStyle(swatch) : null;
-        return { background: look?.backgroundColor ?? null, border: look ? `${look.borderTopWidth} ${look.borderTopStyle} ${look.borderTopColor}` : null, color: look?.backgroundColor ?? null, height: r?.height ?? null, label: label(li), swatch: r ? `${Math.round(r.width)}x${Math.round(r.height)}` : null, type: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}`, value: value(li) };
+        return { color: look?.backgroundColor ?? null, label: label(li), swatch: r ? `${Math.round(r.width)}x${Math.round(r.height)}` : null, type: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}`, value: value(li) };
       };
       const at = items.findIndex((li) => label(li) === 'model unlisted');
-      const estimated = items.findIndex((li) => label(li) === 'estimated');
       return {
-        estimated: estimated < 0 ? null : box(items[estimated]),
-        estimatedNeighbour: estimated > 0 ? box(items[estimated - 1]) : null,
+        labels: items.map(label),
         neighbour: at > 0 ? box(items[at - 1]) : null,
         tierUnknown: box(items.find((li) => value(li) === 'tier unknown')),
         unlisted: at < 0 ? null : box(items[at]),
@@ -5381,18 +5343,14 @@ async function planLegend(theme) {
     });
     measurements.push(`${theme} /analytics plan legend ${JSON.stringify(read)}`);
     if (read === null) {
-      failures.push(`${theme} /analytics: no 5-hour plan card to read the legend of`);
+      failures.push(`${theme} /analytics: no Plan per hour card to read the legend of`);
       return;
     }
-    if (read.estimated === null) {
-      if (mock) failures.push(`${theme} /analytics: the story prices Sonnet 4.5 as an estimate, yet no estimated entry draws`);
-    } else {
-      const e = read.estimated;
-      if (e.background !== 'rgba(0, 0, 0, 0)' || !e.border?.startsWith('1px solid') || !(e.height > 2)) failures.push(`${theme} /analytics: the estimated entry's swatch reads ${e.background} under ${e.border}, ${e.height}px tall, not a hollow box`);
-      if (read.estimatedNeighbour) failures.push(...compare(e, read.estimatedNeighbour, ['type'], `${theme} /analytics: the estimated entry against the entry before it`));
+    if (read.labels.includes('estimated')) failures.push(`${theme} /analytics: the plan card lists an estimated entry`);
+    if (read.unlisted === null) {
+      if (mock) failures.push(`${theme} /analytics: the story serves Sonnet 4.5, which prices nothing, yet no model unlisted entry draws`);
+      return;
     }
-    if (read.unlisted === null) return;
-    if (mock) failures.push(`${theme} /analytics: every story model prices through its model tier, yet a model unlisted entry draws`);
     failures.push(...compare(read.unlisted, read.neighbour, ['type', 'swatch'], `${theme} /analytics: the model unlisted entry against the entry before it`));
     if (read.tierUnknown) failures.push(...compare(read.unlisted, read.tierUnknown, ['type', 'swatch', 'color'], `${theme} /analytics: the model unlisted entry against the tier unknown entry`));
   } finally {
@@ -5406,7 +5364,7 @@ async function planLegend(theme) {
  * placements row is as tall as a cache row of one line. Member budgets is read against Placements by rung on the title
  * and head types alone, since the two cards sit in different sections' grids, and Member budgets in the Burn section.
  * Under a fresh browser's native position Cache by model's cost cells carry the billed dollars on a line under the
- * 20x figure, so its width is recorded at 1280 by 800 and every column sits inside its wrap, and in the mock's story a
+ * figure, so its width is recorded at 1280 by 800 and every column sits inside its wrap, and in the mock's story a
  * row draws that second line. Every budget row draws its bar, one row per budgeted period, and in the mock's story the
  * member past its budget carries the at-budget badge, and the subscription member's spend leads with the muted word
  * metered in the figure's own type. The Burn section's cards end on Member budgets after the charts, with no
@@ -5837,7 +5795,7 @@ function timeFit(cells) {
 /**
  * The request table's room, as the fit measures read it: how much the table needs of its wrap, its narrowest layout,
  * the columns' widths and the fill heads, the Client texts cut, the TTFB cells' lines, the held markers' lines, the
- * Cost cells that read a share or a 20x equivalent, the Time column (its width against the wrap less the other columns,
+ * Cost cells that read a figure in the chosen week, the Time column (its width against the wrap less the other columns,
  * and its cells' floor against the widest dated time the clock setting draws), each row's id line, the wrap's and the
  * document's scroll, and the Time cells' fit.
  */
@@ -5919,9 +5877,8 @@ async function readRequestsTable() {
     const cellsOf = (at) => (at < 0 ? [] : [...table.querySelectorAll('tbody tr')].map((tr) => (tr.children.length > at ? tr.children[at] : null)).filter((td) => td !== null));
     const ttfb = cellsOf(columnAt('TTFB'));
     const held = [...table.querySelectorAll('tbody .requests__attempts > .badge')].map((b) => ({ lines: lines(b), text: b.textContent?.trim() ?? '' }));
-    // The main line or the `.sub` line, whichever the row's figures fill, each in its window's short word: a share
-    // under the share position, a 20x equivalent under native, the default.
-    const shares = cellsOf(columnAt('Cost')).filter((td) => /\d+% (20x )?(5h|7d|7-day Fable)/.test(td.textContent ?? '')).length;
+    // The main line, a figure in the chosen week's short form under native, the default.
+    const shares = cellsOf(columnAt('Cost')).filter((td) => /\d+% (Pro|Max|Ultra) week/.test(td.textContent ?? '')).length;
     return {
       classes: { cut: cutOf(classes), ellipsis: [...new Set(classes.map((c) => getComputedStyle(c).textOverflow))], shown: classes.length },
       client: wrap.clientWidth,
@@ -6076,24 +6033,24 @@ async function requestsTableSizes(theme) {
 }
 
 /**
- * The default set at 1280 by 800 with window labels in the Cost column, the widest text the column draws (under
- * native, the default, a request's "1.47% 20x 5h" main line over "0.244% 20x 7d"). The mock pass's alone: the router
- * pass seeds one API key account, whose rows read dollars. The story's plan-funded rows carry 20x equivalents, so the
- * count of cells whose main line or `.sub` reads one is asserted above zero: a page with no such cell would measure
- * the table without the widest text. The need, the wrap's width and the Cost column's width are recorded beside the
+ * The default set at 1280 by 800 with week figures in the Cost column, the widest text the column draws (under native
+ * and the Ultra week, the defaults, a request's "0.0244% Ultra week" on one line). The mock pass's alone: the router
+ * pass seeds one API key account, whose rows read dollars. The story's priced plan-funded rows carry the figure, so the
+ * count of cells that read one is asserted above zero: a page with no such cell would measure the table without the
+ * widest text. The need, the wrap's width and the Cost column's width are recorded beside the
  * fit `requestsTableFits` asserts on the same draw, under the `range` the page was loaded on as well.
  */
 async function requestsTableFitsWithShares(theme, range = null) {
   const read = await readRequestsTable();
   const under = range === null ? '' : ` under ${range}`;
   const cost = read?.columns.find(([label]) => label === 'Cost')?.[1] ?? null;
-  measurements.push(`${theme} /requests table with shares${under} ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, Cost column ${cost}px, ${read.shares} of ${read.rows} Cost cells read a 20x equivalent or a share`}`);
+  measurements.push(`${theme} /requests table with shares${under} ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, Cost column ${cost}px, ${read.shares} of ${read.rows} Cost cells read a figure in the chosen week`}`);
   if (read === null) {
     failures.push(`${theme} /requests${under}: no request table to measure with shares`);
     return;
   }
   if (read.drawer) failures.push(`${theme} /requests${under}: the drawer is open, so the default set is not measured with shares alone`);
-  if (read.shares === 0) failures.push(`${theme} /requests${under}: no Cost cell of the default set reads a 20x equivalent or a share, so the table is measured without the widest text`);
+  if (read.shares === 0) failures.push(`${theme} /requests${under}: no Cost cell of the default set reads a figure in the chosen week, so the table is measured without the widest text`);
 }
 
 /**
@@ -6351,7 +6308,7 @@ async function warmingLoneCard(theme) {
 /**
  * The Analytics tiles rows and the Cache warming grid at 1280 by 800 and 1440 by 900: on the Cost tab's tiles row and
  * the Cache warming tab's, the Wasted probes card's row among them, no tile's figure (each `.cost-figure`, the nowrap
- * run that keeps a window's name whole) is wider than its tile's content box, and in the Cache warming grid a card
+ * run that keeps the figure whole) is wider than its tile's content box, and in the Cache warming grid a card
  * alone on its row spans the grid's width, while a last card that shares its row stands on its neighbor's top edge.
  * Every figure's width against its tile's and every card's box go to the measurements, and the viewport and the Traffic
  * tab are the pass's again after.
@@ -7075,9 +7032,10 @@ async function trafficCards(theme) {
 
 /**
  * The Cost split under a fresh browser's native position at the pass's 1280 by 800: a ring per funding side by side on
- * one row, and each ring's center figure inside the ring's box, so a marked percent is never clipped. The story bills
- * dollars beside its plan rows, so the mock pass draws both rings, and a seed with one side draws one. The view returns
- * to Traffic afterwards, as the other Analytics checks leave it.
+ * one row, and each ring's center figure inside the ring's box, so a percent is never clipped. The story's range holds a
+ * request on Sonnet 4.5, which the cost model has no weight for, so its plan side prices nothing and the mock pass draws
+ * the billed ring alone, and a seed with one side draws one. The view returns to Traffic afterwards, as the other
+ * Analytics checks leave it.
  */
 async function costSplitRings(theme) {
   try {
@@ -7087,13 +7045,13 @@ async function costSplitRings(theme) {
       const edges = (b) => ({ bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) });
       return [...(card?.querySelectorAll('svg.donut') ?? [])].map((svg) => {
         const value = svg.querySelector('.donut__value');
-        return { center: value?.textContent ?? '', ring: edges(svg.getBoundingClientRect()), text: value ? edges(value.getBoundingClientRect()) : null };
+        return { center: value?.textContent ?? '', label: svg.querySelector('.donut__label')?.textContent ?? '', ring: edges(svg.getBoundingClientRect()), text: value ? edges(value.getBoundingClientRect()) : null };
       });
     });
     measurements.push(`${theme} /analytics cost split rings ${JSON.stringify(read)}`);
     const say = (what) => failures.push(`${theme} /analytics: ${what}`);
     if (read.length === 0) say('the Cost split draws no ring');
-    if (mock && read.length !== 2) say(`the story's day holds plan and billed rows, yet the Cost split draws ${read.length} rings`);
+    if (mock && JSON.stringify(read.map((r) => r.label)) !== JSON.stringify(['billed'])) say(`the story's range prices its plan rows nothing, yet the Cost split draws ${JSON.stringify(read.map((r) => r.label))}, not the billed ring alone`);
     for (const r of read) {
       if (r.text === null || r.text.left < r.ring.left || r.text.right > r.ring.right) say(`the Cost split's center "${r.center}" runs past its ring: ${JSON.stringify(r)}`);
     }
@@ -8010,9 +7968,10 @@ async function fastLane(theme, path) {
  * line whole. At 375 by 800 the drawer stacks under the list and the compact set, wider than the phone's card, scrolls
  * inside it. Every chip the drawer draws, the Answer row's and the upstream ids', takes the status badge's type and
  * height, and the request class badge its box. The Estimated cost row of a request a subscription window paid draws its
- * share chips in the same type, each on one line inside the cell, with the muted equivalent on one line after them (a
- * request billed in dollars draws no chip there, which is recorded). The mock pass reads them again on the story's
- * plan-funded Fable answer, whose three chips read a 5-hour, a 7-day and a 7-day Fable share in that order. The Phases
+ * figure chip and the hint's chips after it in the same type, each on one line inside the cell, with the muted
+ * equivalent on one line after them (a request billed in dollars draws no chip there, which is recorded). The mock pass
+ * reads them again on the story's plan-funded Fable answer, whose chips read the figure in the Ultra week, the plan,
+ * then a 5-hour, a 7-day and a Fable week share in that order. The Phases
  * legend lists the seven phases, and the token bar draws a segment wherever the Usage table holds tokens (a request
  * that ended with no answer holds none and draws none). A request that ended with no answer draws no chip, so then the
  * chips are read on the newest request that answered 200. The router's seeded answers name no stop reason, speed or
@@ -8025,10 +7984,10 @@ async function requestDrawerCompact(theme) {
     if (got.phases !== 7) say(`${where}: the Phases legend lists ${got.phases} phases, not seven`);
     if (got.segments === 0 && got.tokens > 0) say(`${where}: the token bar draws no segment over ${got.tokens} tokens`);
   };
-  // The cost row's chips (the 20x equivalents under native, the default) take the status badge's type, sit on one
-  // line each inside the cell, and the muted equivalent follows them on one line inside it. A cost row with no chip (a
-  // request billed in dollars) is recorded in the router pass, whose seeded requests an API key account serves, and
-  // fails the mock pass, whose story's newest request a subscription window paid for.
+  // The cost row's chips (the figure and the hint's lines under native, the default) take the status badge's type,
+  // sit on one line each inside the cell, and the muted equivalent follows them on one line inside it. A cost row with
+  // no chip (a request billed in dollars) is recorded in the router pass, whose seeded requests an API key account
+  // serves, and fails the mock pass, whose story's newest request a subscription window paid for.
   const costRow = (where, got) => {
     if (got.cost === null) {
       say(`${where} has no Estimated cost row to read`);
@@ -8167,8 +8126,9 @@ async function requestDrawerCompact(theme) {
   else if (phone.table.scroll <= phone.table.client || phone.table.wrap <= phone.table.client) say(`the open drawer at 375 by 800: the compact table takes ${phone.table.scroll}px of its ${phone.table.client}px card without scrolling inside it`);
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
-  // The story's plan-funded Fable answer prices all three windows, so its cost row draws the three-chip layout, in
-  // the order the pages draw the windows. A row past the first page is opened at its Details address.
+  // The story's plan-funded Fable answer prices all three windows of its account, so its cost row draws the figure,
+  // the plan and three share chips, in the order the pages draw the windows. A row past the first page is opened at
+  // its Details address.
   if (mock) {
     const fable = 'req_a6c19e73-5d2';
     const row = page.locator('.requests__table tbody tr', { has: page.locator(`.sub.mono[title="${fable}"]`) });
@@ -8193,8 +8153,9 @@ async function requestDrawerCompact(theme) {
       const got = await read();
       measurements.push(`${theme} /requests ${where} cost row ${JSON.stringify(got.cost)}`);
       costRow(where, got);
-      const windows = (got.cost?.chips ?? []).map((c) => c.text.replace(/^\S+ of /, ''));
-      if (JSON.stringify(windows) !== JSON.stringify(['20x 5-hour', '20x 7-day', '20x 7-day Fable'])) say(`${where}: the cost row's chips read ${JSON.stringify((got.cost?.chips ?? []).map((c) => c.text))}, not a 20x 5-hour, a 20x 7-day and a 20x 7-day Fable equivalent in that order`);
+      const [figure, plan, ...shares] = (got.cost?.chips ?? []).map((c) => c.text);
+      const windows = shares.map((t) => t.replace(/^\S+ of /, '').replace(/ \(in the band\)$/, ''));
+      if (!/^\d[\d.]*% of an Ultra week$/.test(figure ?? '') || plan !== 'Ultra' || JSON.stringify(windows) !== JSON.stringify(['the 5-hour window', 'the 7-day window', 'the Fable week'])) say(`${where}: the cost row's chips read ${JSON.stringify((got.cost?.chips ?? []).map((c) => c.text))}, not the figure in the Ultra week, the plan, and a 5-hour, a 7-day and a Fable week share in that order`);
     }
     await page.setViewportSize({ height: 800, width: 1280 });
     await settle();
@@ -10186,16 +10147,16 @@ async function keysPoolSelect(theme) {
 }
 
 /**
- * The lifetime cost card under the mock's unpriced switch, which flags the key its unpriced request lands on: that
- * key's bar reads a dash beside its billed dollars under the unpriced title, fills none of its track and sorts last,
- * its figure in the type and ink of a neighbor's that reads a number and its track as wide. The neighbor's fill goes
- * unread, since a key billed behind an API-key account draws its dollars over an empty fill too. The page loads again
- * without the switch, so the measures after it read the story whole.
+ * The lifetime cost card on the story, whose desktop and laptop keys hold requests on Sonnet 4.5, which the cost model
+ * has no weight for: each such key's bar reads a dash beside its billed dollars under the unpriced title, fills none of
+ * its track, and the flagged bars sort after every other, the first one's figure in the type and ink of a neighbor's
+ * that reads a number and its track as wide. The neighbor's fill goes unread, since a key billed behind an API-key
+ * account draws its dollars over an empty fill too. The page loads again after, so the measures after it read the
+ * story's table.
  */
 async function keysBars(theme) {
   const say = (what) => failures.push(`${theme} /keys: ${what}`);
   try {
-    await page.evaluate((key) => localStorage.setItem(key, '1'), UNPRICED_SWITCH);
     await loadAtOrigin('/keys', '.hbars li');
     const bars = await page.evaluate(() =>
       [...document.querySelectorAll('.hbars li')].map((li) => {
@@ -10217,16 +10178,17 @@ async function keysBars(theme) {
     );
     const flagged = bars.filter((bar) => bar.title === UNPRICED_TITLE);
     const neighbor = bars.find((bar) => bar.title !== UNPRICED_TITLE && !bar.text.startsWith('-') && /\d/.test(bar.text)) ?? null;
-    measurements.push(`${theme} /keys unpriced bar ${JSON.stringify({ flagged, last: bars.at(-1)?.name ?? null, neighbor })}`);
-    if (flagged.length !== 1) say(`under the unpriced switch ${flagged.length} bars read the unpriced title, not one`);
-    const bar = flagged[0];
-    if (bar === undefined) return;
-    if (!/^-(, \$[\d,.]+ billed)?$/.test(bar.text)) say(`the flagged key's bar reads ${JSON.stringify(bar.text)}, not a dash beside its billed dollars`);
-    if (bar.fill !== 0) say(`the flagged key's bar fills ${bar.fill} px of its track, not none`);
-    if (bars.at(-1)?.name !== bar.name) say(`the flagged key ${bar.name} sorts before ${bars.at(-1)?.name}, not last`);
-    for (const what of compare(bar, neighbor, ['color', 'family', 'size', 'track', 'weight'], "the flagged key's figure and track against a neighbor's that reads a number")) say(what);
+    measurements.push(`${theme} /keys unpriced bars ${JSON.stringify({ flagged, last: bars.slice(-flagged.length).map((b) => b.name), neighbor })}`);
+    if (mock && flagged.length === 0) say("the story's keys hold requests on Sonnet 4.5, yet no bar reads the unpriced title");
+    if (flagged.length === 0) return;
+    for (const bar of flagged) {
+      if (!/^-(, \$[\d,.]+ billed)?$/.test(bar.text)) say(`the flagged key ${bar.name}'s bar reads ${JSON.stringify(bar.text)}, not a dash beside its billed dollars`);
+      if (bar.fill !== 0) say(`the flagged key ${bar.name}'s bar fills ${bar.fill} px of its track, not none`);
+    }
+    const tail = bars.slice(-flagged.length);
+    if (tail.some((b) => b.title !== UNPRICED_TITLE)) say(`the flagged keys do not sort last: ${JSON.stringify(bars.map((b) => [b.name, b.title === UNPRICED_TITLE]))}`);
+    for (const what of compare(flagged[0], neighbor, ['color', 'family', 'size', 'track', 'weight'], "the flagged key's figure and track against a neighbor's that reads a number")) say(what);
   } finally {
-    await page.evaluate((key) => localStorage.removeItem(key), UNPRICED_SWITCH);
     await loadAtOrigin('/keys', '.card--table tbody tr');
   }
 }
@@ -10931,14 +10893,15 @@ async function costReferenceHeadlines(theme) {
 }
 
 /**
- * The Analytics page's Burn tab, which the views' shots never reach: the 5-hour plan card with the peak band shaded. It
- * runs on the tab the plan legend's check opened, so the pass takes no step of the clock more than it did before.
+ * The Analytics page's Burn tab, which the views' shots never reach: the plan card with its lines in the chosen week.
+ * It runs on the tab the plan legend's check opened, so the pass takes no step of the clock more than it did before.
  */
 async function burnShot(theme) {
   await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
-  const areas = await page.evaluate(() => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === '5-hour per hour')?.querySelectorAll('.recharts-reference-area').length ?? 0);
-  measurements.push(`${theme} /analytics burn plan chart shades ${areas} band runs`);
-  if (areas === 0) failures.push(`${theme} /analytics: the Burn view's 5-hour plan card shades no hour of the peak band`);
+  const lines = await page.evaluate(() => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour')?.querySelectorAll('.recharts-line').length ?? null);
+  measurements.push(`${theme} /analytics burn plan chart draws ${lines} lines`);
+  if (lines === null) failures.push(`${theme} /analytics: the Burn view draws no Plan per hour card`);
+  else if (lines === 0) failures.push(`${theme} /analytics: the Burn view's plan card draws no line`);
   await atRest();
   // As the view shots do: a full-page capture paints the fixed header and sidebar at the window's scroll offset, and
   // a shot of a scrolled page reproduces byte for byte, so no later diff would catch it.
@@ -12072,8 +12035,8 @@ try {
       if (view.path === '/keys' && mock) await anchoredRowUnderBanner(theme, view.path);
       if (view.path === '/keys') await dialogControls(theme);
       if (view.path === '/analytics') await burnLoneCard(theme);
-      if (view.path === '/analytics' && mock) await burnGridFour(theme);
-      if (view.path === '/analytics' && mock) await burnGridThree(theme);
+      if (view.path === '/analytics' && mock) await burnGridPair(theme);
+      if (view.path === '/analytics' && mock) await burnGridNamed(theme);
       if (view.path === '/analytics' && mock) await refusalCardPattern(theme);
       if (view.path === '/analytics' && mock) await analyticsTypedPicker(theme);
       if (view.path === '/analytics') await warmingLoneCard(theme);

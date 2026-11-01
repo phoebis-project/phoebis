@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { flushSync } from 'react-dom';
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Dot, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Dot, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { windowId } from '@/api/decode';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups, type SessionRequests } from '@/api/fold';
 import { useAppSettings } from '@/app/settings';
-import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, RefusalCategoriesAnswer, RequestLog, RewritesAnswer, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
+import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, RefusalCategoriesAnswer, RequestLog, RewritesAnswer, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
 import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -20,20 +20,20 @@ import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceColumnWord, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, type AllowanceFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, MAX_BURN_LINES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, hintPlan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, placementCells, placementRungLabel, readBurn, sampledWindows, shareHint, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
-import { bandRuns } from '@/lib/costs';
+import { weekScale } from '@/lib/costs';
 import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, readEnd, spanEnded } from '@/lib/follow';
-import { ESTIMATED_TITLE, equivalentShort, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtEquivalent, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, pct, shareLabel, shortId, upperFirst, usdTickDigits, withEstimate } from '@/lib/format';
+import { fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
 import { REFUSED_TITLE } from '@/lib/requests';
 import { CLIENT_PATTERNS_PLAIN, linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { words } from '@/lib/routingLog';
-import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition } from '@/lib/unit';
+import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition, type WeekPosition } from '@/lib/unit';
 import { WINDOW_HOURS, WINDOW_LABEL } from '@/lib/windows';
 
 /** The dimensions the breakdown route groups on; `all` is the ungrouped total every section reads. */
@@ -64,8 +64,8 @@ const SESSION_PAGE_SIZE = 500;
 const SESSION_PAGE_LIMIT = 20;
 const SESSION_SOURCE_NOTE = 'From the request log, since rollups carry no session. Cache warming figures are unavailable per session';
 const SESSION_COST_NOTE = 'Cost split is not available for a session view.';
-// The rings' centers read bare, so the subtitle names the window the subscription ring's percents are of.
-const NATIVE_SPLIT_NOTE = `By token kind, ${NATIVE_7D_SUBSET}`;
+// The rings' centers read bare, so the subtitle names the week the subscription ring's percents are of.
+const NATIVE_SPLIT_NOTE = `By token kind, ${NATIVE_SUBSET}`;
 const UNAVAILABLE_NOTE = 'not in the request log';
 const WARMING_UNAVAILABLE = 'Cache warming figures are not available for a session view.';
 const COST_PARTS: { key: keyof CostSplit; label: string; slot: number }[] = [
@@ -83,10 +83,6 @@ const LATENCY_METRICS: { format: (v: number | null) => string; key: keyof Latenc
 
 /** A dollar position's requests in the Cost split's, the cache cost card's and the Probe cost tile's shorter form. */
 const UNIT_SPLIT: Record<DollarPosition, string> = { all: 'all requests', equivalent: "the subscription requests' equivalent", usd: 'billed' };
-const PER_REQUEST_SHARE_NOTE = 'of the 7-day window per plan-funded request';
-const PER_THOUSAND_SHARE_NOTE = 'of the 7-day window per 1k plan-funded output tokens';
-/** A share drawn bare, where the header or the legend already names the window. */
-const shareOrDash = (share: number | null | undefined) => (share === null || share === undefined ? '-' : fmtShare(share));
 /** An error rate in the Traffic head's line, a dash where the range rated no request. */
 const pctOrDash = (rate: number | null) => (rate === null ? '-' : fmtPct(rate, 1));
 /** An error rate in a Traffic cell, a muted dash for a group with no request to rate. */
@@ -119,22 +115,20 @@ const usdAxis = (values: Iterable<number>) => {
 /** The split as the donut draws it, or null for a group folded from request rows, which carry one total. */
 const knownSplit = (c: AnalyticsGroup['cost']): CostSplit | null => (c.cacheRead === null || c.cacheWrite === null ? null : { ...c, cacheRead: c.cacheRead, cacheWrite: c.cacheWrite });
 
-type NativeRatio = { estimated: boolean; figures: CostFigure[]; note: string };
+type NativeRatio = { figures: CostFigure[]; note: string };
 /**
- * The native Cost per request and per 1k output tiles: the plan rows' 20x 7-day equivalent over the plan requests and
- * output tokens the route counts beside the billed dollars over the rest, a side with no rows left out as the first
- * tile leaves it, and a dash where a count is unknown or zero or the route priced the plan rows nothing on the window.
+ * The native Cost per request and per 1k output tiles: the plan rows' figure in the chosen week over the plan requests
+ * and output tokens the route counts beside the billed dollars over the rest, a side with no rows left out as the
+ * first tile leaves it, and a dash where a count is unknown or zero or the route priced the plan rows nothing.
  */
-function nativeRatiosOf(totals: AnalyticsGroup): { perRequest: NativeRatio; perThousand: NativeRatio } {
-  const sides = sidesOf(totals, 'seven_day');
+function nativeRatiosOf(totals: AnalyticsGroup, week: WeekPosition, weekFactor: number): { perRequest: NativeRatio; perThousand: NativeRatio } {
+  const sides = sidesOf(totals);
   const ratio = (count: number | null, whole: number, scale: number, word: string, note: (n: number) => string): NativeRatio => {
     const billedCount = count === null ? null : whole - count;
     const per = (v: number | null, n: number | null) => (v === null || n === null || !(n > 0) ? null : (v / n) * scale);
     const equivalent = sides.equivalent === undefined ? null : per(sides.equivalent, count);
-    const estimated = false;
     return {
-      estimated,
-      figures: [...(sides.equivalent === undefined ? [] : [{ text: equivalentOrDash('seven_day', equivalent, estimated), word: 'subscription' }]), ...(sides.billed === undefined ? [] : [{ text: usdOrDash(per(sides.billed, billedCount)), word: 'billed' }])],
+      figures: [...(sides.equivalent === undefined ? [] : [{ text: equivalentOrDash(equivalent, week, weekFactor), word: 'subscription' }]), ...(sides.billed === undefined ? [] : [{ text: usdOrDash(per(sides.billed, billedCount)), word: 'billed' }])],
       note:
         count === null || billedCount === null
           ? `${note(whole)} ${word}`
@@ -148,11 +142,8 @@ function nativeRatiosOf(totals: AnalyticsGroup): { perRequest: NativeRatio; perT
   return { perRequest: ratio(totals.planRequests, totals.requests, 1, 'requests', fmtInt), perThousand: ratio(totals.planOutputTokens, totals.tokens.output, 1000, 'output tokens', fmtCompact) };
 }
 
-/**
- * The native table's columns: Cost, the 20x 7-day equivalent with the billed dollars under it, then the other windows,
- * the week column named by the groups' equivalent keys as `weekColumnOf` names it for the shares, then the ratios.
- */
-const nativeColumns = (): string[] => ['Requests', 'Cost', '20x 5-hour', `20x ${weekColumnOf([])}`, 'Per request', 'Per 1k output'];
+/** The native table's columns: Cost, the figure in the chosen week with the billed dollars under it, then the ratios. */
+const NATIVE_COLUMNS = ['Requests', 'Cost', 'Per request', 'Per 1k output'];
 /** A native cell's figure over its billed line, the full reading on its title. */
 const nativeCell = (cell: { main: string; sub: string; title: string }): ReactNode => (
   <span title={cell.title || undefined}>
@@ -161,31 +152,21 @@ const nativeCell = (cell: { main: string; sub: string; title: string }): ReactNo
   </span>
 );
 /**
- * A group's native row: its requests, its cost (the plan rows' 20x 7-day equivalent with the billed dollars under it),
- * its 5-hour and model week equivalents, and the 7-day equivalent per plan request and per 1k plan output tokens with
- * the billed dollars per billed request and per 1k billed output tokens under it, a side with no rows left out and a
- * figure with no count a dash. An estimated group marks every equivalent it shows and names the estimate on its label.
+ * A group's native row: its requests, its cost (the plan rows' figure in the chosen week with the billed dollars under
+ * it, the hint on its title where the row is one account's), and the figure per plan request and per 1k plan output
+ * tokens with the billed dollars per billed request and per 1k billed output tokens under it, a side with no rows left
+ * out and a figure with no count a dash.
  */
-function nativeRowOf(g: AnalyticsGroup): { cells: ReactNode[]; key: string; label: string; title: string } {
-  const sides = sidesOf(g, 'seven_day');
-  // The Pro-week figure reads as the 7-day window's, and as none on any other.
-  const priced = (key: string | undefined) => (sides.equivalent === undefined || key !== 'seven_day' ? null : g.costEquivalent);
-  const sevenDay = priced('seven_day');
+function nativeRowOf(g: AnalyticsGroup, week: WeekPosition, weekFactor: number, hint: string | null): { cells: ReactNode[]; key: string; label: string; title: string } {
+  const sides = sidesOf(g);
+  const figure = sides.equivalent === undefined ? null : g.costEquivalent;
   const per = (v: number | null, count: number | null, scale: number) => (v === null || count === null || !(count > 0) ? null : (v / count) * scale);
   // Undefined leaves a side with no rows out of the cell, as the tiles leave it out.
-  const both = (equivalent: number | null, billed: number | null) => nativeCell(nativeCellOf('seven_day', sides.equivalent === undefined ? undefined : equivalent, false, sides.billed === undefined ? undefined : billed));
-  const ratio = (planCount: number | null, whole: number, scale: number) => both(per(sevenDay, planCount, scale), per(sides.billed ?? null, planCount === null ? null : whole - planCount, scale));
-  const windowCell = (key: string | undefined) => nativeCell(nativeCellOf(key ?? '', priced(key), false));
+  const both = (equivalent: number | null, billed: number | null, shown: string | null = null) => nativeCell(nativeCellOf(sides.equivalent === undefined ? undefined : equivalent, sides.billed === undefined ? undefined : billed, week, weekFactor, shown));
+  const ratio = (planCount: number | null, whole: number, scale: number) => both(per(figure, planCount, scale), per(sides.billed ?? null, planCount === null ? null : whole - planCount, scale));
   const label = modelGroupLabel(g);
   return {
-    cells: [
-      fmtInt(g.requests),
-      both(sevenDay, sides.billed ?? null),
-      windowCell('five_hour'),
-      windowCell(undefined),
-      ratio(g.planRequests, g.requests, 1),
-      ratio(g.planOutputTokens, g.tokens.output, 1000),
-    ],
+    cells: [fmtInt(g.requests), both(figure, sides.billed ?? null, hint), ratio(g.planRequests, g.requests, 1), ratio(g.planOutputTokens, g.tokens.output, 1000)],
     key: g.key,
     label,
     title: label,
@@ -277,7 +258,7 @@ export function AnalyticsPage() {
   // A session id is one session per key lifetime, so a drill-down from a session row names the lifetime too. A session
   // without one reads unscoped.
   const sessionKey = a.session && a.key ? a.key : null;
-  const { setUnit, unit } = useAppSettings();
+  const { setUnit, unit, week } = useAppSettings();
   const dollars = dollarsOf(unit);
   const funding = UNIT_FUNDING[unit];
   // A shared link lands on its position, then the choice persists like any other: the parameter is read into the
@@ -419,10 +400,14 @@ export function AnalyticsPage() {
   // The weekly resets of the last four weeks whatever the range, so a range change reads nothing, and the Accounts
   // filter alone narrows them.
   const unusedAllowance = useAsync(() => (tab === 'accounts' ? api.getAnalyticsUnusedAllowance(allowanceSpan(now), { accountIds: filters.accountId }) : Promise.resolve(null)), [tab, filters.accountId, generation, resets.moved]);
-  // The cost model's capacity rows, which the plan chart's line category reads each account's stored tier against and
-  // the unused allowance card prices its figures through.
-  const costSettings = useAsync(() => (tab === 'burn' || tab === 'accounts' ? api.getSettings() : Promise.resolve(null)), [tab]);
-  const sized = useMemo(() => (burn.data && costSettings.data ? sizedAccounts(burn.data.accounts, costSettings.data.subscriptionCosts) : null), [burn.data, costSettings.data]);
+  // The cost model, read once per page load whatever the tab: the chosen week's scale reads every week figure the page
+  // draws, the plan chart's line category reads each account's stored tier against its capacity rows, and the unused
+  // allowance card prices its figures through it.
+  const costSettings = useAsync(() => api.getSettings(), []);
+  const costs = costSettings.data?.subscriptionCosts ?? null;
+  const scale = weekScale(costs, week);
+  const reading: WeekReading = { error: scale === null ? costSettings.error : null, scale, week };
+  const sized = useMemo(() => (burn.data && costs ? sizedAccounts(burn.data.accounts, costs) : null), [burn.data, costs]);
   const rewrites = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRewrites({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
   const refusalCategories = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRefusalCategories(query) : Promise.resolve(null)), [query, tab, generation], reload);
   // The counts route reads the range alone, which the card's subtitle says, since it carries no filter.
@@ -561,26 +546,33 @@ export function AnalyticsPage() {
   }, [sessionId, funding, funded, warming, groups, stale, rows, groupBy, foldOptions, costBreakdown.stale, costBreakdown.data]);
   const costBuckets = useMemo(() => (costPoints === points ? buckets : bucketsOf(costPoints)), [costPoints, points, buckets]);
   const costTotals = useMemo(() => totalsOf(costGroups), [costGroups]);
-  const costHead = costHeadOf(unit, costTotals);
-  const nativeRatios = nativeRatiosOf(costTotals);
+  const costHead = costHeadOf(unit, costTotals, week, scale);
+  const nativeRatios = scale === null ? null : nativeRatiosOf(costTotals, week, scale);
   // A session fold has no cost split either, so the donut and the cache cost card read unavailable in a session view.
   const costSplit = knownSplit(costTotals.cost);
   // The routes answer a named account's own-window shares on every group under any grouping, and under the account
-  // grouping each account's on its own group. So the per-group surfaces read shares under either, and the surfaces that
-  // read one account's whole sum the named account's groups, whose shares add since they share its windows.
+  // grouping each account's on its own group. So a row under either reads one account's hint, and the tiles under one
+  // named account sum its groups, whose shares add since they share its windows. A group summing several accounts and
+  // the probe, saving, net and cache figures carry none. The registry names the plan and the tier, so a figure carries
+  // no hint while it is out.
   const namedAccount = filters.accountId.length === 1 ? filters.accountId[0] : null;
-  const sharedGroups = groupBy === 'account' || namedAccount !== null;
+  const hintOf = (id: string, shares: Record<string, number | null> | null): string | null => {
+    const account = registry.data?.find((x) => x.id === id);
+    const tier = account?.subscription?.rateLimitTier ?? null;
+    const plan = account === undefined ? null : hintPlan(account, tier);
+    return plan === null ? null : shareHint(plan, shares, tier, null);
+  };
+  const rowHint = (g: AnalyticsGroup): string | null => (groupBy === 'account' ? hintOf(g.key, g.costShares) : namedAccount === null ? null : hintOf(namedAccount, g.costShares));
   const oneGroup = useMemo(() => (namedAccount === null ? null : oneAccountGroupOf(costTotals, costGroups)), [costGroups, costTotals, namedAccount]);
-  const cacheWeek = weekLabelOf(undefined);
+  const tileHint = namedAccount === null || oneGroup === null ? null : hintOf(namedAccount, oneGroup.costShares);
   const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || patterns.userAgents.length > 0 || patterns.clients.length > 0 || sessionId !== null || includeProbes;
   // The rewrite and fit routes read the range alone, so every filter of the bar passes them by. The burn route reads
   // the Accounts filter and the user agent groups beside it.
   const unfiltered = otherFilters || filters.accountId.length > 0;
-  // The plan cards follow the unit: the shares under Window shares, where the route answers them for the account
-  // grouping or one named account, and the 20x equivalents, a subscription request's native unit, under every other.
-  const burnFigure: BurnFigure = unit === 'share' ? 'share' : 'equivalent';
   const burnAccount = filters.accountId.length === 1 ? filters.accountId[0] : null;
-  const burnSizes = burnFigure === 'share' && (pageBy === 'account' || burnAccount !== null);
+  // The plan chart sizes its lines by tier where each group holds one account's rows.
+  const burnSizes = pageBy === 'account' || burnAccount !== null;
+  const burnReading: WeekReading = burnSizes && sized === null ? { error: costSettings.error, scale: null, week } : reading;
 
   const groupSlot = useMemo(() => {
     // Slots follow the range's whole key list so a filter never repaints the survivors, and an account's slot is the
@@ -607,24 +599,29 @@ export function AnalyticsPage() {
       ? costBreakdown.data === null || costBreakdown.stale || (nativeWarming && (billedBreakdown.data === null || billedBreakdown.stale))
       : loading;
   const costError = funded ? (costSeries.error ?? costBreakdown.error) : warming ? (costBreakdown.error ?? billedBreakdown.error) : null;
+  // Under native every week figure waits on the scale: a surface draws its skeleton while the cost model is out and the
+  // settings read's failure in its place, never a Pro-week figure under another week's label.
+  const weekWait = unit === 'native' && scale === null;
+  const figureLoading = costLoading || weekWait;
+  const figureError = costError ?? (weekWait ? costSettings.error : null);
   const billedTotals = useMemo(() => (nativeWarming && !billedBreakdown.stale && billedBreakdown.data !== null ? sumGroups(billedBreakdown.data) : null), [nativeWarming, billedBreakdown.stale, billedBreakdown.data]);
-  const shareTiles = shareTilesOf(groupBy, namedAccount, oneGroup, costLoading);
-  const probeTile = probeTileOf(unit, namedAccount, oneGroup, costTotals, billedTotals, costLoading, sessionId !== null);
-  const savingTile = savingTileOf(unit, namedAccount, oneGroup, costTotals, billedTotals, costLoading, sessionId !== null);
-  const netTile = netTileOf(unit, namedAccount, oneGroup, costTotals, billedTotals, costLoading, sessionId !== null);
+  const probeTile = probeTileOf(unit, costTotals, billedTotals, figureLoading, sessionId !== null, reading);
+  const savingTile = savingTileOf(unit, costTotals, billedTotals, figureLoading, sessionId !== null, reading);
+  const netTile = netTileOf(unit, costTotals, billedTotals, figureLoading, sessionId !== null, reading);
   const warmingPoints = useMemo(() => (warmingSeries.stale ? [] : (warmingSeries.data ?? [])), [warmingSeries.stale, warmingSeries.data]);
   const billedWarmingPoints = nativeWarming && !billedWarmingSeries.stale ? billedWarmingSeries.data : null;
   const warmingLoading = warmingSeries.data === null || warmingSeries.stale || (nativeWarming && (billedWarmingSeries.data === null || billedWarmingSeries.stale));
   const fundedModels = useMemo(() => new Map((byModelFunded.stale ? [] : (byModelFunded.data ?? [])).map((g) => [g.key, g])), [byModelFunded.stale, byModelFunded.data]);
   const fundedPools = useMemo(() => new Map((fundedByPool.stale ? [] : (fundedByPool.data ?? [])).map((g) => [g.key, g])), [fundedByPool.stale, fundedByPool.data]);
-  // Native draws the cache card's bars in the plan rows' equivalent with the billed dollars in its subtitle, and a
-  // range with no plan row draws the billed rows' dollars, its one side.
-  const cacheSides = sidesOf(costTotals, 'seven_day');
+  // Native draws the cache card's bars in the plan rows' figure with the billed dollars in its subtitle, and a range
+  // with no plan row draws the billed rows' dollars, its one side.
+  const cacheSides = sidesOf(costTotals);
   const cacheEquivalent = unit === 'native' && cacheSides.equivalent !== undefined;
+  const cacheScale = cacheEquivalent ? scale : null;
   const cacheDollars = unit === 'native' ? 'billed' : 'cost';
   const cacheSplit = unit === 'native' ? knownSplit(costTotals.billed) : costSplit;
   // Absent on a fold and wherever no plan row priced, so the legend reads a dash there.
-  const cacheSevenDay = costTotals.cacheEquivalent ?? undefined;
+  const cacheFigure = costTotals.cacheEquivalent ?? undefined;
   // Usage credits alone fund a fast answer, on a subscription account as on an API key.
   const fastSpend = speedPoints.reduce((n, p) => n + (p.groups.find((g) => g.key === 'fast')?.costUsd ?? 0), 0);
   const groupLabel = GROUP_LABEL[groupBy];
@@ -776,16 +773,18 @@ export function AnalyticsPage() {
 
       {tab === 'burn' && (
         <Section id="burn" shown={shown} title="Burn" meta={`Tokens, spend and plan share over the range${otherFilters ? BURN_UNFILTERED_NOTE : ''}`}>
-          {/* Only the shares size their lines by tier, so the equivalents neither wait on nor fail with the settings
-              read. */}
+          {/* The plan card's figure waits on the chosen week's scale and, where its lines are one account's, on the
+              tiers that pick their category, both carried by `burnReading` with their failure. Spend per minute
+              sizes nothing, so it draws while the settings read is out. */}
           <BurnCharts
             account={burnAccount}
             answer={burn.stale ? null : (burn.data?.answer ?? null)}
-            costs={costSettings.data?.subscriptionCosts ?? null}
-            error={burn.error ?? (burnSizes ? costSettings.error : null)}
-            figure={burnFigure}
+            accounts={burn.stale ? null : (burn.data?.accounts ?? null)}
+            costs={costs}
+            error={burn.error}
             groupBy={pageBy}
-            loading={burn.data === null || burn.stale || (burnSizes && sized === null)}
+            loading={burn.data === null || burn.stale}
+            reading={burnReading}
             onCostReferenceOpenChange={setCostOpen}
             rangeEndMs={burn.data?.endMs}
             readAt={burn.data?.readAt}
@@ -874,61 +873,35 @@ export function AnalyticsPage() {
             <ChartCard
               title="Write cost vs read cost"
               subtitle={
-                unit === 'share'
-                  ? "Shares of the account's 7-day window per bucket, writing the cache and reading it back"
-                  : cacheEquivalent
-                    ? `20x 7-day equivalent per bucket spent writing the cache and reading it back by the subscription requests${cacheSides.billed === undefined ? '' : `, the billed requests ${usdOrDash(costTotals.billed.cacheWrite)} writing and ${usdOrDash(costTotals.billed.cacheRead)} reading`}`
-                    : `USD per bucket spent writing the cache and reading it back, ${UNIT_SPLIT[unit === 'native' ? 'usd' : dollars]}`
+                cacheEquivalent
+                  ? `Share of the chosen week per bucket spent writing the cache and reading it back by the subscription requests${cacheSides.billed === undefined ? '' : `, the billed requests ${usdOrDash(costTotals.billed.cacheWrite)} writing and ${usdOrDash(costTotals.billed.cacheRead)} reading`}`
+                  : `USD per bucket spent writing the cache and reading it back, ${UNIT_SPLIT[unit === 'native' ? 'usd' : dollars]}`
               }
-              loading={costLoading}
-              error={costError}
-              empty={unit === 'share' && namedAccount === null ? ONE_ACCOUNT_SHARE_NOTE : undefined}
+              loading={cacheEquivalent ? figureLoading : costLoading}
+              error={cacheEquivalent ? figureError : costError}
               legend={
-                unit === 'share'
+                cacheScale !== null
                   ? [
-                      { color: ink.series[3], label: 'Write share', value: '-' },
-                      { color: ink.series[2], label: 'Read share', value: '-' },
+                      { color: ink.series[3], label: 'Write cost', value: equivalentOrDash(cacheFigure?.write, week, cacheScale) },
+                      { color: ink.series[2], label: 'Read cost', value: equivalentOrDash(cacheFigure?.read, week, cacheScale) },
                     ]
-                  : cacheEquivalent
-                    ? [
-                        { color: ink.series[3], label: 'Write cost', value: equivalentOrDash('seven_day', cacheSevenDay?.write) },
-                        { color: ink.series[2], label: 'Read cost', value: equivalentOrDash('seven_day', cacheSevenDay?.read) },
-                      ]
-                    : [
-                        { color: ink.series[3], label: 'Write cost', value: usdOrDash(costTotals[cacheDollars].cacheWrite) },
-                        { color: ink.series[2], label: 'Read cost', value: usdOrDash(costTotals[cacheDollars].cacheRead) },
-                      ]
+                  : [
+                      { color: ink.series[3], label: 'Write cost', value: usdOrDash(costTotals[cacheDollars].cacheWrite) },
+                      { color: ink.series[2], label: 'Read cost', value: usdOrDash(costTotals[cacheDollars].cacheRead) },
+                    ]
               }
             >
-              {unit === 'share' ? (
-                <BarChart data={[] as CacheShareRow[]} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
-                  <CartesianGrid vertical={false} stroke={ink.grid} />
-                  <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-                  <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={60} />
-                  <Tooltip
-                    cursor={{ fill: ink.grid, opacity: 0.6 }}
-                    content={timeTip<CacheShareRow>((p) => [
-                      { color: ink.series[3], label: 'write (5-hour)', value: shareOrDash(p.write.fiveHour) },
-                      { color: ink.series[3], label: 'write (7-day)', value: shareOrDash(p.write.sevenDay) },
-                      { color: ink.series[3], label: `write (${cacheWeek})`, value: shareOrDash(p.write.week) },
-                      { color: ink.series[2], label: 'read (5-hour)', value: shareOrDash(p.read.fiveHour) },
-                      { color: ink.series[2], label: 'read (7-day)', value: shareOrDash(p.read.sevenDay) },
-                      { color: ink.series[2], label: `read (${cacheWeek})`, value: shareOrDash(p.read.week) },
-                    ])}
-                  />
-                  <Bar dataKey="write.sevenDay" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />
-                  <Bar dataKey="read.sevenDay" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />
-                </BarChart>
-              ) : cacheEquivalent ? (
+              {/* The bars draw the Pro-week figure, so the axis and the tooltip read it in the chosen week. */}
+              {cacheScale !== null ? (
                 <BarChart data={costBuckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-                  <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={60} />
+                  <YAxis tickFormatter={(v: number) => fmtShare(v * cacheScale)} tickLine={false} axisLine={false} width={60} />
                   <Tooltip
                     cursor={{ fill: ink.grid, opacity: 0.6 }}
                     content={timeTip<Bucket>((p) => [
-                      { color: ink.series[3], label: 'write cost', value: equivalentOrDash('seven_day', p.cacheEquivalent?.write) },
-                      { color: ink.series[2], label: 'read cost', value: equivalentOrDash('seven_day', p.cacheEquivalent?.read) },
+                      { color: ink.series[3], label: 'write cost', value: equivalentOrDash(p.cacheEquivalent?.write, week, cacheScale) },
+                      { color: ink.series[2], label: 'read cost', value: equivalentOrDash(p.cacheEquivalent?.read, week, cacheScale) },
                     ])}
                   />
                   <Bar dataKey="cacheEquivalent.write" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />
@@ -961,9 +934,9 @@ export function AnalyticsPage() {
             <CacheByModel
               groups={byModel.stale ? [] : (byModel.data ?? [])}
               funded={fundedModels}
-              error={byModel.error ?? byModelFunded.error}
-              loading={byModel.data === null || byModel.stale || (funded && (byModelFunded.data === null || byModelFunded.stale))}
-              namedAccount={namedAccount}
+              error={byModel.error ?? byModelFunded.error ?? (weekWait ? costSettings.error : null)}
+              loading={byModel.data === null || byModel.stale || (funded && (byModelFunded.data === null || byModelFunded.stale)) || weekWait}
+              reading={reading}
               unit={unit}
             />
           )}
@@ -979,46 +952,35 @@ export function AnalyticsPage() {
       )}
 
       {tab === 'cost' && (
-        <Section id="cost" shown={shown} title="Cost" meta={costLoading || costError !== null ? undefined : costHead.meta} metaTitle={costHead.unpriced ? UNPRICED_TITLE : costHead.estimated ? ESTIMATED_TITLE : undefined}>
+        <Section id="cost" shown={shown} title="Cost" meta={figureLoading || figureError !== null || costHead === null ? undefined : costHead.meta} metaTitle={costHead?.unpriced ? UNPRICED_TITLE : undefined}>
           <div className="tiles-row">
-            {unit === 'share' ? (
+            <Tile label={costHead?.tile.label ?? 'Cost'} value={figureLoading || costHead === null ? null : figuresValue(costHead.tile.figures)} note={costHead?.tile.note ?? NATIVE_SUBSET} title={costHead?.unpriced ? UNPRICED_TITLE : unit === 'native' ? (tileHint ?? undefined) : undefined} error={figureError} />
+            {unit === 'native' ? (
               <>
-                <Tile label="Window share" value={shareTiles.sevenDay.value} note={shareTiles.sevenDay.note} />
-                <Tile label="Per request" value={shareTiles.perRequest.value} note={shareTiles.perRequest.note} />
-                <Tile label="Per 1k output" value={shareTiles.perThousand.value} note={shareTiles.perThousand.note} />
+                <Tile label="Cost per request" value={figureLoading || nativeRatios === null ? null : figuresValue(nativeRatios.perRequest.figures)} note={nativeRatios === null ? null : nativeRatios.perRequest.note} error={figureError} />
+                <Tile label="Cost per 1k output tokens" value={figureLoading || nativeRatios === null ? null : figuresValue(nativeRatios.perThousand.figures)} note={nativeRatios === null ? null : nativeRatios.perThousand.note} error={figureError} />
               </>
             ) : (
               <>
-                <Tile label={costHead.tile?.label ?? ''} value={costLoading ? null : figuresValue(costHead.tile?.figures ?? [])} note={costHead.tile?.note} title={costHead.unpriced ? UNPRICED_TITLE : costHead.estimated ? ESTIMATED_TITLE : undefined} error={costError} />
-                {unit === 'native' ? (
-                  <>
-                    <Tile label="Cost per request" value={costLoading ? null : figuresValue(nativeRatios.perRequest.figures)} note={nativeRatios.perRequest.note} title={nativeRatios.perRequest.estimated ? ESTIMATED_TITLE : undefined} error={costError} />
-                    <Tile label="Cost per 1k output tokens" value={costLoading ? null : figuresValue(nativeRatios.perThousand.figures)} note={nativeRatios.perThousand.note} title={nativeRatios.perThousand.estimated ? ESTIMATED_TITLE : undefined} error={costError} />
-                  </>
-                ) : (
-                  <>
-                    <Tile label="Cost per request" value={costLoading ? null : fmtUsd(costTotals.requests ? costTotals.costUsd / costTotals.requests : 0)} note={`${fmtInt(costTotals.requests)} requests`} error={costError} />
-                    <Tile label="Cost per 1k output tokens" value={costLoading ? null : fmtUsd(costTotals.tokens.output ? (costTotals.costUsd / costTotals.tokens.output) * 1000 : 0)} note={`${fmtCompact(costTotals.tokens.output)} output tokens`} error={costError} />
-                  </>
-                )}
+                <Tile label="Cost per request" value={costLoading ? null : fmtUsd(costTotals.requests ? costTotals.costUsd / costTotals.requests : 0)} note={`${fmtInt(costTotals.requests)} requests`} error={costError} />
+                <Tile label="Cost per 1k output tokens" value={costLoading ? null : fmtUsd(costTotals.tokens.output ? (costTotals.costUsd / costTotals.tokens.output) * 1000 : 0)} note={`${fmtCompact(costTotals.tokens.output)} output tokens`} error={costError} />
               </>
             )}
             <Tile label="Fast mode spend" value={speedError !== null ? '-' : speedLoading ? null : fmtUsd(fastSpend)} note="usage credits, at the fast cells" />
           </div>
           <div className="grid-2">
-            <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={costLoading} error={costError} axis={axis} shared={sharedGroups} unit={unit} />
-            {/* Native draws a ring per funding, each in its own unit. Under the shares the split reads the whole in
-                dollars, as under All in dollars. */}
+            <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={figureLoading} error={figureError} axis={axis} reading={reading} unit={unit} />
+            {/* Native draws a ring per funding, each in its own unit. */}
             <Card title="Cost split" subtitle={unit === 'native' ? NATIVE_SPLIT_NOTE : `By token kind, in dollars at the API price list, ${UNIT_SPLIT[dollars]}`}>
               {/* The request summary carries one total and no split, so a session view has nothing to draw here. */}
               {sessionId !== null ? (
                 <p className="muted">{SESSION_COST_NOTE}</p>
-              ) : costError !== null ? (
-                <ErrorState title="Could not load cost split" body={costError} />
-              ) : costLoading ? (
+              ) : figureError !== null ? (
+                <ErrorState title="Could not load cost split" body={figureError} />
+              ) : figureLoading ? (
                 <Skeleton height={148} />
               ) : unit === 'native' ? (
-                <NativeSplit totals={costTotals} />
+                scale === null ? <Skeleton height={148} /> : <NativeSplit totals={costTotals} week={week} weekFactor={scale} />
               ) : costSplit === null ? (
                 <Skeleton height={148} />
               ) : (
@@ -1026,40 +988,22 @@ export function AnalyticsPage() {
               )}
             </Card>
           </div>
-          {sessionId === null && unit === 'share' && !sharedGroups && (
-            <Card title={`Cost by ${groupLabel.toLowerCase()}`} subtitle="Shares of each account's own windows">
-              <p className="muted">{GROUPED_SHARE_NOTE}</p>
-            </Card>
-          )}
-          {sessionId === null && unit === 'share' && sharedGroups && (
-            <BreakdownTable
-              title={`Cost by ${groupLabel.toLowerCase()}`}
-              subtitle={groupBy === 'account' ? "Shares of each account's own windows for the range, over its plan-funded requests" : "Shares of the named account's own windows for the range, over its plan-funded requests"}
-              loading={costLoading}
-              groupLabel={groupLabel}
-              columns={['Plan requests', '5-hour', '7-day', weekColumnOf(costGroups), 'Per request', 'Per 1k output']}
-              rows={costGroups.map((g) => {
-                const r = shareRow(g);
-                return { key: g.key, label: modelGroupLabel(g), cells: [g.planRequests === null ? '-' : fmtInt(g.planRequests), r.fiveHour ?? '-', r.sevenDay ?? '-', r.week ?? '-', r.perRequest ?? '-', r.perThousand ?? '-'] };
-              })}
-            />
-          )}
           {sessionId === null && unit === 'native' && (
             <BreakdownTable
               className="native-cost-table"
               title={`Cost by ${groupLabel.toLowerCase()}`}
               subtitle={`Totals for the selected range and filters, ${NATIVE_SUBSET}`}
-              error={costError}
-              loading={costLoading}
+              error={figureError}
+              loading={figureLoading}
               groupLabel={groupLabel}
-              columns={nativeColumns()}
-              rows={costGroups.map((g) => nativeRowOf(g))}
+              columns={NATIVE_COLUMNS}
+              rows={scale === null ? [] : costGroups.map((g) => nativeRowOf(g, week, scale, rowHint(g)))}
             />
           )}
-          {sessionId === null && unit !== 'share' && unit !== 'native' && (
+          {sessionId === null && unit !== 'native' && (
             <BreakdownTable
               title={`Cost by ${groupLabel.toLowerCase()}`}
-              subtitle={`Totals for the selected range and filters, ${costHead.subset}`}
+              subtitle={`Totals for the selected range and filters, ${costHead?.subset ?? ''}`}
               error={costError}
               loading={costLoading}
               groupLabel={groupLabel}
@@ -1086,9 +1030,9 @@ export function AnalyticsPage() {
       {tab === 'cache-warming' && (
         <Section id="cache-warming" shown={shown} title="Cache warming" meta={sessionId === null ? 'Probe rows are always counted here, whatever the toggle above says' : SESSION_SOURCE_NOTE}>
           <div className="tiles-row">
-            <Tile label="Probe cost" value={probeTile.value} note={probeTile.note} title={probeTile.title} error={costError} />
-            <Tile label="Saved by probes" value={savingTile.value} note={savingTile.note} title={savingTile.title} error={costError} />
-            <Tile label="Net saving" value={netTile.value} note={netTile.note} title={netTile.title} tone={netTile.critical ? 'critical' : undefined} error={costError} />
+            <Tile label="Probe cost" value={probeTile.value} note={probeTile.note} error={figureError} />
+            <Tile label="Saved by probes" value={savingTile.value} note={savingTile.note} error={figureError} />
+            <Tile label="Net saving" value={netTile.value} note={netTile.note} tone={netTile.critical ? 'critical' : undefined} error={figureError} />
             <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : keptWarmNote(keptWarm)} />
           </div>
           <div className="grid-2 warming-grid">
@@ -1106,23 +1050,24 @@ export function AnalyticsPage() {
             </ChartCard>
 
             <Card title="Wasted probes" subtitle={`${WASTED_PROBE_BLURB} ${WASTED_PROBE_UNIT[unit]}`}>
-              {costError !== null ? (
-                <ErrorState title="Could not load wasted probes" body={costError} />
-              ) : costLoading ? (
+              {figureError !== null ? (
+                <ErrorState title="Could not load wasted probes" body={figureError} />
+              ) : figureLoading ? (
                 <Skeleton height={190} />
               ) : probesUnmeasured ? (
                 <p className="muted">{WARMING_UNAVAILABLE}</p>
               ) : (
-                <WastedProbes group={costTotals} probes={probesOf(costTotals)} unit={unit} billed={billedTotals} account={namedAccount === null ? null : { group: oneGroup }} />
+                <WastedProbes group={costTotals} probes={probesOf(costTotals)} unit={unit} billed={billedTotals} reading={reading} />
               )}
             </Card>
 
             <SavingChart
               axis={axis}
               billed={billedWarmingPoints}
-              error={sessionId === null ? (warmingSeries.error ?? billedWarmingSeries.error) : null}
-              loading={sessionId === null ? warmingLoading : loading}
+              error={(sessionId === null ? (warmingSeries.error ?? billedWarmingSeries.error) : null) ?? (weekWait ? costSettings.error : null)}
+              loading={(sessionId === null ? warmingLoading : loading) || weekWait}
               points={sessionId === null ? warmingPoints : points}
+              reading={reading}
               session={sessionId !== null}
               unit={unit}
             />
@@ -1150,8 +1095,9 @@ export function AnalyticsPage() {
           <KeepaliveByPool
             groups={poolGroups}
             funded={fundedPools}
-            error={sessionId === null ? (byPool.error ?? fundedByPool.error) : null}
-            loading={sessionId === null ? byPool.data === null || byPool.stale || (poolFunding !== undefined && (fundedByPool.data === null || fundedByPool.stale)) : loading}
+            error={(sessionId === null ? (byPool.error ?? fundedByPool.error) : null) ?? (weekWait ? costSettings.error : null)}
+            loading={(sessionId === null ? byPool.data === null || byPool.stale || (poolFunding !== undefined && (fundedByPool.data === null || fundedByPool.stale)) : loading) || weekWait}
+            reading={reading}
             unit={unit}
           />
         </Section>
@@ -1229,57 +1175,33 @@ function Section({ id, title, meta, metaTitle, controls, shown = true, children 
   );
 }
 
-type ShareTile = { note: string | undefined; value: string | null };
 /**
- * The three Cost tiles under "Window shares": the named account's 7-day share with its other windows in the note, and
- * the 7-day share per plan-funded request and per 1k plan-funded output tokens, read under any grouping. With none or
- * several accounts named the tiles read "per account below" under the account grouping, since shares of different
- * accounts' windows do not add, and under another grouping a dash under the note that names the filter.
+ * A probe figure's two sides under native: the plan probes' Pro-week figure off the whole read and the billed probes'
+ * dollars off the billed read, told apart by the counts of their answered and failed probes (`upstreamProbes`), since a
+ * held or skipped probe costs nothing. `undefined` leaves out a side with no such probe, null reads a dash where the
+ * plan probes priced nothing, and a group with no such probe on either side reads its zero in each unit, as an empty
+ * range does.
  */
-function shareTilesOf(groupBy: GroupBy, namedAccount: string | null, group: AnalyticsGroup | null, loading: boolean): { perRequest: ShareTile; perThousand: ShareTile; sevenDay: ShareTile } {
-  if (namedAccount === null) {
-    const tile: ShareTile = groupBy === 'account' ? { note: undefined, value: loading ? null : 'per account below' } : { note: ONE_ACCOUNT_SHARE_NOTE, value: loading ? null : '-' };
-    return { perRequest: tile, perThousand: tile, sevenDay: tile };
-  }
-  const shares = group?.costShares ?? null;
-  const row = group === null ? null : shareRow(group);
-  const named = (key: string | undefined) => (shares === null || key === undefined || !own(shares, key) || shares[key] === null ? null : shareLabel(key, shares[key] as number));
-  const sevenDay = named('seven_day');
-  const others = [named('five_hour'), named(shares === null ? undefined : weekKeyOf(shares))].filter((s): s is string => s !== null);
-  return {
-    perRequest: { note: PER_REQUEST_SHARE_NOTE, value: loading ? null : (row?.perRequest ?? '-') },
-    perThousand: { note: PER_THOUSAND_SHARE_NOTE, value: loading ? null : (row?.perThousand ?? '-') },
-    sevenDay: { note: others.length ? others.join(', ') : undefined, value: loading ? null : (sevenDay ?? '-') },
-  };
-}
-
-/**
- * A probe figure's two sides under native: the plan probes' 20x 7-day equivalent off the whole read and the billed
- * probes' dollars off the billed read, told apart by the counts of their answered and failed probes (`upstreamProbes`),
- * since a held or skipped probe costs nothing. `undefined` leaves out a side with no such probe, null reads a dash
- * where the plan probes priced nothing on the window, and a group with no such probe on either side reads its zero in
- * each unit, as an empty range does.
- */
-function probeSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | undefined, read: 'cost' | 'wasted'): { billed: number | undefined; equivalent: number | null | undefined; estimated: boolean } {
+function probeSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | undefined, read: 'cost' | 'wasted'): { billed: number | undefined; equivalent: number | null | undefined } {
   const billedProbes = billed ? upstreamProbes(billed) : 0;
   const planProbes = upstreamProbes(whole) - billedProbes;
   const priced = whole.probeEquivalent === null ? null : whole.probeEquivalent[read];
   const dollars = billed ? (read === 'cost' ? billed.probeCostUsd : billed.wastedProbeUsd) : 0;
-  if (planProbes <= 0 && billedProbes <= 0) return { billed: dollars, equivalent: priced ?? 0, estimated: false };
-  return { billed: billedProbes > 0 ? dollars : undefined, equivalent: planProbes > 0 ? priced : undefined, estimated: false };
+  if (planProbes <= 0 && billedProbes <= 0) return { billed: dollars, equivalent: priced ?? 0 };
+  return { billed: billedProbes > 0 ? dollars : undefined, equivalent: planProbes > 0 ? priced : undefined };
 }
-const probeFiguresOf = (sides: ReturnType<typeof probeSidesOf>): CostFigure[] => [
-  ...(sides.equivalent === undefined ? [] : [{ text: equivalentOrDash('seven_day', sides.equivalent, sides.estimated), word: 'subscription' }]),
+const probeFiguresOf = (sides: ReturnType<typeof probeSidesOf>, week: WeekPosition, weekFactor: number): CostFigure[] => [
+  ...(sides.equivalent === undefined ? [] : [{ text: equivalentOrDash(sides.equivalent, week, weekFactor), word: 'subscription' }]),
   ...(sides.billed === undefined ? [] : [{ text: fmtUsd(sides.billed), word: 'billed' }]),
 ];
 
 /**
  * The saving's two sides under native, told apart by their kept-warm credits, the plan side's the whole read's less the
- * billed read's: the plan credits' 20x 7-day saving off the whole read and the billed credits' dollars off `billed`.
+ * billed read's: the plan credits' Pro-week saving off the whole read and the billed credits' dollars off `billed`.
  * `net` reads each side's saving less its probes' cost, so a side stands there on a credit or on an answered or failed
  * probe, and a side whose probes kept nothing warm nets their cost under zero. A held or skipped probe costs
  * nothing, so it leaves its side's saving whole. `undefined` leaves a side out, null reads a dash where the plan rows
- * priced nothing on the window, and a group with nothing on either side reads its zero in each unit.
+ * priced nothing, and a group with nothing on either side reads its zero in each unit.
  */
 function savingSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | undefined, read: 'gross' | 'net'): ReturnType<typeof probeSidesOf> {
   const credits = (g: AnalyticsGroup | null | undefined) => (g?.keptWarm ? keptWarmTokens(g.keptWarm) : 0);
@@ -1294,29 +1216,22 @@ function savingSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | un
   const paid = billedCredits > 0 || (net && billedProbes > 0);
   const equivalent = planSaving === null || planCost === null ? null : netSaving(planSaving, planCost);
   const dollars = netSaving(billed?.savingUsd ?? 0, net ? (billed?.probeCostUsd ?? 0) : 0);
-  if (!plan && !paid) return { billed: dollars, equivalent: equivalent ?? 0, estimated: false };
-  return { billed: paid ? dollars : undefined, equivalent: plan ? equivalent : undefined, estimated: false };
+  if (!plan && !paid) return { billed: dollars, equivalent: equivalent ?? 0 };
+  return { billed: paid ? dollars : undefined, equivalent: plan ? equivalent : undefined };
 }
 
 /**
- * The Probe cost tile per position: under "Window shares" the named account's probe share of its 7-day window with
- * the other windows and the probe count in the note, a dash with the count where none is priced, and the note alone
- * with none or several accounts named. Under native the plan probes' 20x 7-day equivalent of the whole read stacked
- * over the billed probes' dollars of `billed`, and under a dollar position the position's probe dollars. A session view
- * folds request rows, which measure no probe count, so `session` reads the count unmeasured on every path even where
- * the fold holds no group at all (the named account's rows all billed, or a position that keeps no row).
+ * The Probe cost tile per position: under native the plan probes' figure in the chosen week of the whole read stacked
+ * over the billed probes' dollars of `billed`, the skeleton while the scale is out, and under a dollar position the
+ * position's probe dollars. A session view folds request rows, which measure no probe count, so `session` reads the
+ * count unmeasured on every path. The tile sums the probes of every account it reads, so it carries no hint.
  */
-function probeTileOf(unit: UnitPosition, namedAccount: string | null, group: AnalyticsGroup | null, totals: AnalyticsGroup, billed: AnalyticsGroup | null, loading: boolean, session: boolean): { note: string; title?: string; value: ReactNode | null } {
-  if (unit === 'share') {
-    if (namedAccount === null) return { note: ONE_ACCOUNT_SHARE_NOTE, value: loading ? null : '-' };
-    const probes = session || group?.fromRequests ? UNAVAILABLE_NOTE : `${fmtInt(group === null ? 0 : probesOf(group))} probes`;
-    return { note: probes, value: loading ? null : '-' };
-  }
+function probeTileOf(unit: UnitPosition, totals: AnalyticsGroup, billed: AnalyticsGroup | null, loading: boolean, session: boolean, reading: WeekReading): { note: string; value: ReactNode | null } {
   const unmeasured = session || totals.fromRequests === true;
   if (unmeasured) return { note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
   if (unit === 'native') {
     const sides = probeSidesOf(totals, billed, 'cost');
-    return { note: `${fmtInt(probesOf(totals))} probes, ${NATIVE_7D_SUBSET}`, title: sides.estimated ? ESTIMATED_TITLE : undefined, value: loading ? null : figuresValue(probeFiguresOf(sides)) };
+    return { note: `${fmtInt(probesOf(totals))} probes, ${NATIVE_SUBSET}`, value: loading || reading.scale === null ? null : figuresValue(probeFiguresOf(sides, reading.week, reading.scale)) };
   }
   return { note: `${fmtInt(probesOf(totals))} probes, ${UNIT_SPLIT[dollarsOf(unit)]}`, value: loading ? null : fmtUsd(totals.probeCostUsd) };
 }
@@ -1324,21 +1239,16 @@ function probeTileOf(unit: UnitPosition, namedAccount: string | null, group: Ana
 const keptWarmRequests = (g: AnalyticsGroup | null) => `${fmtInt(g?.keptWarm?.requests ?? 0)} requests kept warm`;
 
 /**
- * The saving tile's figures per position, shaped as probeTileOf's: under native the plan rows' 20x 7-day equivalent
- * over the billed dollars, under all the dollars, under usd the billed subset, under share the one account's window
- * share or a dash with the note, under equivalent the equivalent. The note leads with the credited requests, and a
- * session view, whose fold carries no credit, reads the figure unmeasured.
+ * The saving tile's figures per position, shaped as probeTileOf's: under native the plan rows' figure in the chosen
+ * week over the billed dollars, under all the dollars, under usd the billed subset, under equivalent the equivalent.
+ * The note leads with the credited requests, and a session view, whose fold carries no credit, reads the figure
+ * unmeasured.
  */
-function savingTileOf(unit: UnitPosition, namedAccount: string | null, group: AnalyticsGroup | null, totals: AnalyticsGroup, billed: AnalyticsGroup | null, loading: boolean, session: boolean): { note: string; title?: string; value: ReactNode | null } {
-  if (unit === 'share') {
-    if (namedAccount === null) return { note: ONE_ACCOUNT_SHARE_NOTE, value: loading ? null : '-' };
-    if (session || group?.fromRequests) return { note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
-    return { note: keptWarmRequests(group), value: loading ? null : '-' };
-  }
+function savingTileOf(unit: UnitPosition, totals: AnalyticsGroup, billed: AnalyticsGroup | null, loading: boolean, session: boolean, reading: WeekReading): { note: string; value: ReactNode | null } {
   if (session || totals.fromRequests === true) return { note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
   if (unit === 'native') {
     const sides = savingSidesOf(totals, billed, 'gross');
-    return { note: `${keptWarmRequests(totals)}, ${NATIVE_7D_SUBSET}`, title: sides.estimated ? ESTIMATED_TITLE : undefined, value: loading ? null : figuresValue(probeFiguresOf(sides)) };
+    return { note: `${keptWarmRequests(totals)}, ${NATIVE_SUBSET}`, value: loading || reading.scale === null ? null : figuresValue(probeFiguresOf(sides, reading.week, reading.scale)) };
   }
   return { note: `${keptWarmRequests(totals)}, ${UNIT_SPLIT[dollarsOf(unit)]}`, value: loading ? null : fmtUsd(totals.savingUsd) };
 }
@@ -1348,27 +1258,16 @@ function savingTileOf(unit: UnitPosition, namedAccount: string | null, group: An
  * is under zero. Under native that is the plan side's figure, the widget's subject, and the billed dollars beside it
  * never tone the tile.
  */
-function netTileOf(unit: UnitPosition, namedAccount: string | null, group: AnalyticsGroup | null, totals: AnalyticsGroup, billed: AnalyticsGroup | null, loading: boolean, session: boolean): { critical: boolean; note: string; title?: string; value: ReactNode | null } {
+function netTileOf(unit: UnitPosition, totals: AnalyticsGroup, billed: AnalyticsGroup | null, loading: boolean, session: boolean, reading: WeekReading): { critical: boolean; note: string; value: ReactNode | null } {
   const less = (subset: string) => `less the probe cost, ${subset}`;
-  if (unit === 'share') {
-    if (namedAccount === null) return { critical: false, note: ONE_ACCOUNT_SHARE_NOTE, value: loading ? null : '-' };
-    if (session || group?.fromRequests) return { critical: false, note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
-    return { critical: false, note: 'less the probe cost', value: loading ? null : '-' };
-  }
   if (session || totals.fromRequests === true) return { critical: false, note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
   if (unit === 'native') {
     const sides = savingSidesOf(totals, billed, 'net');
-    return { critical: !loading && typeof sides.equivalent === 'number' && sides.equivalent < 0, note: less(NATIVE_7D_SUBSET), title: sides.estimated ? ESTIMATED_TITLE : undefined, value: loading ? null : figuresValue(probeFiguresOf(sides)) };
+    const shown = !loading && reading.scale !== null;
+    return { critical: shown && typeof sides.equivalent === 'number' && sides.equivalent < 0, note: less(NATIVE_SUBSET), value: shown && reading.scale !== null ? figuresValue(probeFiguresOf(sides, reading.week, reading.scale)) : null };
   }
   const net = netSaving(totals.savingUsd, totals.probeCostUsd);
   return { critical: !loading && net < 0, note: less(UNIT_SPLIT[dollarsOf(unit)]), value: loading ? null : fmtUsd(net) };
-}
-
-type WindowShares = Record<'fiveHour' | 'sevenDay' | 'week', number | null>;
-interface CacheShareRow {
-  at: number;
-  read: WindowShares;
-  write: WindowShares;
 }
 
 function ChartCard({
@@ -1604,54 +1503,50 @@ const WASTED_PROBE_UNIT: Record<UnitPosition, string> = {
   all: 'In dollars at list prices.',
   equivalent: 'In dollars at list prices.',
   native: "In the unit each probe's funding pays in.",
-  share: "In the one account's window shares.",
+  // The `share` entry is the position no select offers.
+  share: "In the unit each probe's funding pays in.",
   usd: 'In dollars at list prices.',
 };
 
-type ProbeTile = { note?: string; title?: string; value: ReactNode };
+type ProbeTile = { note?: string; value: ReactNode };
 /**
- * The Wasted cost and Share of probe cost tiles per position. Native stacks the wasted plan probes' 20x 7-day
- * equivalent over the wasted billed probes' dollars and reads the share off the plan side, the billed side's where no
- * plan probe ran. Under "Window shares" the named account's probe shares read, as the Probe cost tile reads them, and
- * with none named a dash under the note that names the filter. A dollar position reads its own rows' dollars.
+ * The Wasted cost and Share of probe cost tiles per position. Native stacks the wasted plan probes' figure in the chosen
+ * week over the wasted billed probes' dollars and reads the share off the plan side, the billed side's where no plan
+ * probe ran, and their skeletons while the scale is out. A dollar position reads its own rows' dollars.
  */
-function wastedTilesOf(unit: UnitPosition, group: AnalyticsGroup, billed: AnalyticsGroup | null, account: { group: AnalyticsGroup | null } | null): { cost: ProbeTile; share: ProbeTile } {
+function wastedTilesOf(unit: UnitPosition, group: AnalyticsGroup, billed: AnalyticsGroup | null, reading: WeekReading): { cost: ProbeTile; share: ProbeTile } {
   if (unit === 'native') {
+    const { scale: weekFactor, week } = reading;
+    if (weekFactor === null) return { cost: { value: null }, share: { value: null } };
     const wasted = probeSidesOf(group, billed, 'wasted');
     const cost = probeSidesOf(group, billed, 'cost');
     const ratio = (w: number | null | undefined, c: number | null | undefined) => (w === null || w === undefined || c === null || c === undefined ? null : c ? w / c : 0);
     const share = cost.equivalent === undefined ? ratio(wasted.billed, cost.billed) : ratio(wasted.equivalent, cost.equivalent);
-    const of = probeFiguresOf(cost).map((f) => f.text);
+    const of = probeFiguresOf(cost, week, weekFactor).map((f) => f.text);
     return {
-      cost: { note: NATIVE_7D_SUBSET, title: wasted.estimated ? ESTIMATED_TITLE : undefined, value: figuresValue(probeFiguresOf(wasted)) },
+      cost: { note: NATIVE_SUBSET, value: figuresValue(probeFiguresOf(wasted, week, weekFactor)) },
       share: { note: `of ${of.join(' and ')} on probes`, value: share === null ? '-' : fmtPct(share, 1) },
     };
   }
-  if (unit === 'share') {
-    if (account === null) return { cost: { note: ONE_ACCOUNT_SHARE_NOTE, value: '-' }, share: { value: '-' } };
-    return { cost: { value: '-' }, share: { value: '-' } };
-  }
+  const dollars = dollarsOf(unit);
   return {
-    cost: { note: unit === 'all' ? 'at list prices' : `at list prices, ${UNIT_SPLIT[unit]}`, value: fmtUsd(group.wastedProbeUsd) },
+    cost: { note: dollars === 'all' ? 'at list prices' : `at list prices, ${UNIT_SPLIT[dollars]}`, value: fmtUsd(group.wastedProbeUsd) },
     share: { note: `of ${fmtUsd(group.probeCostUsd)} on probes`, value: fmtPct(group.probeCostUsd ? group.wastedProbeUsd / group.probeCostUsd : 0, 1) },
   };
 }
 
-/**
- * `group` is the position's rows (the whole under native and the shares), `billed` native's billed read, and `account`
- * the one account the shares read, null with none named.
- */
-function WastedProbes({ account, billed, group, probes, unit }: { account: { group: AnalyticsGroup | null } | null; billed: AnalyticsGroup | null; group: AnalyticsGroup; probes: number; unit: UnitPosition }) {
+/** `group` is the position's rows (the whole under native), `billed` native's billed read. */
+function WastedProbes({ billed, group, probes, reading, unit }: { billed: AnalyticsGroup | null; group: AnalyticsGroup; probes: number; reading: WeekReading; unit: UnitPosition }) {
   const ink = useChartInk();
   const rows = WASTED_PROBE_REASONS.map((reason) => ({ count: group.wastedProbeReasons[reason], reason })).sort((a, b) => b.count - a.count);
   const max = Math.max(1, ...rows.map((r) => r.count));
   if (group.wastedProbes === 0) return <p className="muted">No wasted probes in range.</p>;
-  const tiles = wastedTilesOf(unit, group, billed, account);
+  const tiles = wastedTilesOf(unit, group, billed, reading);
   return (
     <>
       <div className="tiles-row tiles-row--panel">
         <Tile label="Wasted probes" value={fmtInt(group.wastedProbes)} note={`of ${fmtInt(probes)} probes`} />
-        <Tile label="Wasted cost" value={tiles.cost.value} note={tiles.cost.note} title={tiles.cost.title} />
+        <Tile label="Wasted cost" value={tiles.cost.value} note={tiles.cost.note} />
         <Tile label="Share of probe cost" value={tiles.share.value} note={tiles.share.note} />
       </div>
       <ul className="hbars hbars--reasons hbars--under-tiles">
@@ -1673,22 +1568,23 @@ function WastedProbes({ account, billed, group, probes, unit }: { account: { gro
 }
 
 /**
- * A side pair in one line, the plan side's equivalent and the billed side's dollars, as the native tooltip reads it.
+ * A side pair in one line, the plan side's figure in the chosen week and the billed side's dollars, as the native
+ * tooltip reads it.
  */
-const sidesText = (s: ReturnType<typeof probeSidesOf>): string => [...(s.equivalent === undefined ? [] : [equivalentOrDash('seven_day', s.equivalent, s.estimated)]), ...(s.billed === undefined ? [] : [`${fmtUsd(s.billed)} billed`])].join(', ');
-/** An equivalent figure as the chart prints it: a side with no row reads its zero, and a side priced nothing a dash. */
-const chartEquivalent = (s: ReturnType<typeof probeSidesOf>): string => equivalentOrDash('seven_day', s.equivalent === undefined ? 0 : s.equivalent, s.estimated);
+const sidesText = (s: ReturnType<typeof probeSidesOf>, week: WeekPosition, weekFactor: number): string => [...(s.equivalent === undefined ? [] : [equivalentOrDash(s.equivalent, week, weekFactor)]), ...(s.billed === undefined ? [] : [`${fmtUsd(s.billed)} billed`])].join(', ');
+/** A figure as the chart prints it: a side with no row reads its zero, and a side priced nothing a dash. */
+const chartEquivalent = (s: ReturnType<typeof probeSidesOf>, week: WeekPosition, weekFactor: number): string => equivalentOrDash(s.equivalent === undefined ? 0 : s.equivalent, week, weekFactor);
 
 /**
  * The Saved by probes chart: two bars per bucket, the gross saving and the probe cost, each bucket's net in the
  * tooltip, and the range's gross, cost and net in the legend, the net in the critical ink under zero. `points` is the
  * series that counts probes under the position's funding and `billed` native's billed twin. The dollar positions draw
- * dollars. Native draws the plan side's 20x 7-day equivalents with the billed dollars beside them in the tooltip, as
- * the Probe cost tile pairs them, and the billed dollars alone where the range holds no plan side, as the cache cost
- * card does. Window shares draw the equivalents as well, since the route answers a bucket's share only where one
- * account's rows fill it. A session view's fold carries no credit, so `session` draws no bar and dashes the legend.
+ * dollars. Native draws the plan side's Pro-week figures, read in the chosen week, with the billed dollars beside them
+ * in the tooltip, as the Probe cost tile pairs them, and the billed dollars alone where the range holds no plan side,
+ * as the cache cost card does. A session view's fold carries no credit, so `session` draws no bar and dashes the
+ * legend.
  */
-function SavingChart({ axis, billed, error, loading, points, session, unit }: { axis: TimeAxis; billed: AnalyticsPoint[] | null; error: string | null; loading: boolean; points: AnalyticsPoint[]; session: boolean; unit: UnitPosition }) {
+function SavingChart({ axis, billed, error, loading, points, reading, session, unit }: { axis: TimeAxis; billed: AnalyticsPoint[] | null; error: string | null; loading: boolean; points: AnalyticsPoint[]; reading: WeekReading; session: boolean; unit: UnitPosition }) {
   const ink = useChartInk();
   const buckets = useMemo(() => bucketsOf(points), [points]);
   const billedBuckets = useMemo(() => (billed === null ? null : bucketsOf(billed)), [billed]);
@@ -1697,7 +1593,14 @@ function SavingChart({ axis, billed, error, loading, points, session, unit }: { 
   const billedTotals = useMemo(() => (billed === null ? null : totalsOf(billed.flatMap((p) => p.groups))), [billed]);
   const native = unit === 'native';
   const range = { cost: probeSidesOf(totals, billedTotals, 'cost'), gross: savingSidesOf(totals, billedTotals, 'gross'), net: savingSidesOf(totals, billedTotals, 'net') };
-  const equivalents = unit === 'share' || (native && range.net.equivalent !== undefined);
+  const equivalents = native && range.net.equivalent !== undefined;
+  const title = 'Saved by probes';
+  const subtitle = "Per bucket, the gross saving against the probes' cost";
+  // The figures wait on the scale, so the card draws its skeleton while it is out.
+  const { scale: weekFactor, week } = reading;
+  if (equivalents && weekFactor === null) return <ChartCard title={title} subtitle={subtitle} loading error={error}>{null}</ChartCard>;
+  // The dollar figures read no scale, and under the equivalents the return above leaves one.
+  const factor = weekFactor ?? 1;
   const drawn = native && !equivalents ? (billedBuckets ?? []) : buckets;
   const dollars = native && !equivalents ? (billedTotals ?? totals) : totals;
   const net = equivalents ? (range.net.equivalent === undefined ? 0 : range.net.equivalent) : netSaving(dollars.savingUsd, dollars.probeCostUsd);
@@ -1705,7 +1608,7 @@ function SavingChart({ axis, billed, error, loading, points, session, unit }: { 
   const figures = session
     ? { cost: '-', gross: '-', net: '-' }
     : equivalents
-      ? { cost: chartEquivalent(range.cost), gross: chartEquivalent(range.gross), net: chartEquivalent(range.net) }
+      ? { cost: chartEquivalent(range.cost, week, factor), gross: chartEquivalent(range.gross, week, factor), net: chartEquivalent(range.net, week, factor) }
       : { cost: fmtUsd(dollars.probeCostUsd), gross: fmtUsd(dollars.savingUsd), net: fmtUsd(net ?? 0) };
   // A bucket that priced nothing draws no height.
   const gross = (p: Bucket) => (equivalents ? (p.savingEquivalent ?? 0) : p.savingUsd);
@@ -1718,14 +1621,13 @@ function SavingChart({ axis, billed, error, loading, points, session, unit }: { 
     ];
     if (session) return rows(['-', '-', '-']);
     if (!equivalents) return rows([fmtUsd(p.savingUsd), fmtUsd(p.probeCostUsd), fmtUsd(netSaving(p.savingUsd, p.probeCostUsd))]);
-    const paid = native ? (billedAt.get(p.at) ?? null) : null;
-    const of = (s: ReturnType<typeof probeSidesOf>) => (native ? sidesText(s) : chartEquivalent(s));
-    return rows([of(savingSidesOf(p, paid, 'gross')), of(probeSidesOf(p, paid, 'cost')), of(savingSidesOf(p, paid, 'net'))]);
+    const paid = billedAt.get(p.at) ?? null;
+    return rows([sidesText(savingSidesOf(p, paid, 'gross'), week, factor), sidesText(probeSidesOf(p, paid, 'cost'), week, factor), sidesText(savingSidesOf(p, paid, 'net'), week, factor)]);
   };
   return (
     <ChartCard
-      title="Saved by probes"
-      subtitle="Per bucket, the gross saving against the probes' cost"
+      title={title}
+      subtitle={subtitle}
       loading={loading}
       error={error}
       legend={[
@@ -1737,7 +1639,7 @@ function SavingChart({ axis, billed, error, loading, points, session, unit }: { 
       <BarChart data={drawn} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
         <CartesianGrid vertical={false} stroke={ink.grid} />
         <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-        {equivalents ? <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={60} /> : <YAxis {...usdAxis(drawn.flatMap((b) => [b.savingUsd, b.probeCostUsd]))} tickLine={false} axisLine={false} />}
+        {equivalents ? <YAxis tickFormatter={(v: number) => fmtShare(v * factor)} tickLine={false} axisLine={false} width={60} /> : <YAxis {...usdAxis(drawn.flatMap((b) => [b.savingUsd, b.probeCostUsd]))} tickLine={false} axisLine={false} />}
         <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>(tip)} />
         {!session && <Bar dataKey={gross} fill={ink.series[1]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
         {!session && <Bar dataKey={cost} fill={ink.series[3]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
@@ -1840,34 +1742,29 @@ function Histogram({ h, format, p99 }: { format: (v: number) => string; h: numbe
 
 /**
  * Cache by model under a position: the token columns read every row, and the Read cost and Write cost cells read the
- * position's side. Native pairs each model's plan rows' 20x 7-day equivalent with its billed rows' dollars in each
- * cell, a dollar side reads its own read by model (`funded`, by key), and the shares read each model's 7-day share
- * where the route answers it, which it does while `namedAccount`, the Accounts filter's one entry, is set.
+ * position's side. Native pairs each model's plan rows' figure in the chosen week with its billed rows' dollars in each
+ * cell, and a dollar side reads its own read by model (`funded`, by key). The cells sum every account a model ran on,
+ * so they carry no hint, and the table reads no rows while the scale is out, which its loading draws.
  */
-function CacheByModel({ error, funded, groups, loading, namedAccount, unit }: { error: string | null; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; namedAccount: string | null; unit: UnitPosition }) {
+function CacheByModel({ error, funded, groups, loading, reading, unit }: { error: string | null; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; reading: WeekReading; unit: UnitPosition }) {
   // A request refused before it resolved a model reads no cache, so the group without a model has no row here.
   const rows = useMemo(() => groups.filter((g) => g.key !== '').sort((a, b) => b.tokens.cacheRead - a.tokens.cacheRead), [groups]);
-  const subtitle =
-    unit === 'native'
-      ? `Totals for the selected range and filters, ${NATIVE_7D_SUBSET}`
-      : unit === 'share'
-        ? namedAccount === null
-          ? ONE_ACCOUNT_SHARE_NOTE
-          : "Totals for the selected range and filters, one account's 7-day window shares"
-        : `Totals for the selected range and filters, ${UNIT_SUBSET[unit]}`;
-  const costsOf = (g: AnalyticsGroup): { cells: ReactNode[]; estimated: boolean } => {
+  const subtitle = unit === 'native' ? `Totals for the selected range and filters, ${NATIVE_SUBSET}` : `Totals for the selected range and filters, ${UNIT_SUBSET[dollarsOf(unit)]}`;
+  const { scale: weekFactor, week } = reading;
+  const costsOf = (g: AnalyticsGroup, factor: number): ReactNode[] => {
     if (unit === 'native') {
-      const sides = sidesOf(g, 'seven_day');
+      const sides = sidesOf(g);
       // Null where no plan row priced, which reads a dash on the plan side.
       const priced = g.cacheEquivalent;
-      const cell = (side: 'read' | 'write', billed: number | null) => nativeCell(nativeCellOf('seven_day', sides.equivalent === undefined ? undefined : (priced?.[side] ?? null), false, sides.billed === undefined ? undefined : billed));
-      return { cells: [cell('read', g.billed.cacheRead), cell('write', g.billed.cacheWrite)], estimated: false };
+      const cell = (side: 'read' | 'write', billed: number | null) => nativeCell(nativeCellOf(sides.equivalent === undefined ? undefined : (priced?.[side] ?? null), sides.billed === undefined ? undefined : billed, week, factor));
+      return [cell('read', g.billed.cacheRead), cell('write', g.billed.cacheWrite)];
     }
-    if (unit === 'share') return { cells: ['-', '-'], estimated: false };
     // A model the side has no row of spent nothing on that side.
     const side = unit === 'all' ? g : (funded.get(g.key) ?? null);
-    return { cells: side === null ? [fmtUsd(0), fmtUsd(0)] : [usdOrDash(side.cost.cacheRead), usdOrDash(side.cost.cacheWrite)], estimated: false };
+    return side === null ? [fmtUsd(0), fmtUsd(0)] : [usdOrDash(side.cost.cacheRead), usdOrDash(side.cost.cacheWrite)];
   };
+  // A dollar position reads no scale.
+  const factor = unit === 'native' ? weekFactor : 1;
   return (
     <BreakdownTable
       title="Cache by model"
@@ -1876,42 +1773,44 @@ function CacheByModel({ error, funded, groups, loading, namedAccount, unit }: { 
       loading={loading}
       groupLabel="Model"
       columns={['Reads', 'Writes 5m', 'Writes 1h', 'Hit ratio', 'Cached share', 'Read cost', 'Write cost']}
-      rows={rows.map((g) => {
-        const costs = costsOf(g);
-        return {
-          key: g.key,
-          label: g.label,
-          title: withEstimate(g.label, costs.estimated),
-          cells: [fmtCompact(g.tokens.cacheRead), fmtCompact(g.tokens.cacheWrite5m), fmtCompact(g.tokens.cacheWrite1h), fmtPct(hitRatioOf(g) ?? 0), fmtPct(cachedShareOf(g) ?? 0), ...costs.cells],
-        };
-      })}
+      rows={
+        factor === null
+          ? []
+          : rows.map((g) => ({
+              key: g.key,
+              label: g.label,
+              title: g.label,
+              cells: [fmtCompact(g.tokens.cacheRead), fmtCompact(g.tokens.cacheWrite5m), fmtCompact(g.tokens.cacheWrite1h), fmtPct(hitRatioOf(g) ?? 0), fmtPct(cachedShareOf(g) ?? 0), ...costsOf(g, factor)],
+            }))
+      }
     />
   );
 }
 
 /**
- * The Probe cost and Saved cells follow the position as their tiles do: native pairs the pool's plan side's 20x 7-day
- * equivalent with its billed side's dollars (`funded`, the billed read by pool), a dollar side reads its own read by
- * pool, and the shares read the pool's share where the route answers one. The other columns read every row.
+ * The Probe cost and Saved cells follow the position as their tiles do: native pairs the pool's plan side's figure in
+ * the chosen week with its billed side's dollars (`funded`, the billed read by pool), and a dollar side reads its own
+ * read by pool. The other columns read every row, and the table reads no rows while the scale is out.
  */
-function KeepaliveByPool({ error, funded, groups, loading, unit }: { error: string | null; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; unit: UnitPosition }) {
+function KeepaliveByPool({ error, funded, groups, loading, reading, unit }: { error: string | null; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; reading: WeekReading; unit: UnitPosition }) {
   const rows = useMemo(() => [...groups].sort((a, b) => (b.keptWarm === null ? 0 : keptWarmTokens(b.keptWarm)) - (a.keptWarm === null ? 0 : keptWarmTokens(a.keptWarm))), [groups]);
-  const probeCost = (g: AnalyticsGroup): ReactNode => {
+  const { scale: weekFactor, week } = reading;
+  const probeCost = (g: AnalyticsGroup, factor: number): ReactNode => {
     if (unit === 'native') {
       const sides = probeSidesOf(g, funded.get(g.key), 'cost');
-      return nativeCell(nativeCellOf('seven_day', sides.equivalent, sides.estimated, sides.billed));
+      return nativeCell(nativeCellOf(sides.equivalent, sides.billed, week, factor));
     }
-    if (unit === 'share') return '-';
     return fmtUsd(unit === 'all' ? g.probeCostUsd : (funded.get(g.key)?.probeCostUsd ?? 0));
   };
-  const saved = (g: AnalyticsGroup): ReactNode => {
+  const saved = (g: AnalyticsGroup, factor: number): ReactNode => {
     if (unit === 'native') {
       const sides = savingSidesOf(g, funded.get(g.key), 'gross');
-      return nativeCell(nativeCellOf('seven_day', sides.equivalent, sides.estimated, sides.billed));
+      return nativeCell(nativeCellOf(sides.equivalent, sides.billed, week, factor));
     }
-    if (unit === 'share') return '-';
     return fmtUsd(unit === 'all' ? g.savingUsd : (funded.get(g.key)?.savingUsd ?? 0));
   };
+  // A dollar position reads no scale.
+  const factor = unit === 'native' ? weekFactor : 1;
   return (
     <BreakdownTable
       title="Cache warming by pool"
@@ -1919,29 +1818,33 @@ function KeepaliveByPool({ error, funded, groups, loading, unit }: { error: stri
       loading={loading}
       groupLabel="Pool"
       columns={['Probes OK', 'Held', 'Skipped', 'Failed', 'Kept-warm requests', 'Kept-warm tokens', 'Probe cost', 'Saved']}
-      rows={rows.map((g) => ({
-        key: g.key,
-        label: g.label,
-        // A group folded from request rows measured none of these.
-        cells: [
-          g.fromRequests ? '-' : fmtInt(g.probes.ok),
-          g.fromRequests ? '-' : fmtInt(g.probes.held),
-          g.fromRequests ? '-' : fmtInt(g.probes.skipped),
-          g.fromRequests ? '-' : fmtInt(g.probes.failed),
-          g.keptWarm === null ? '-' : fmtInt(g.keptWarm.requests),
-          g.keptWarm === null ? '-' : fmtCompact(keptWarmTokens(g.keptWarm)),
-          g.fromRequests ? '-' : probeCost(g),
-          g.fromRequests ? '-' : saved(g),
-        ],
-      }))}
+      rows={
+        factor === null
+          ? []
+          : rows.map((g) => ({
+              key: g.key,
+              label: g.label,
+              // A group folded from request rows measured none of these.
+              cells: [
+                g.fromRequests ? '-' : fmtInt(g.probes.ok),
+                g.fromRequests ? '-' : fmtInt(g.probes.held),
+                g.fromRequests ? '-' : fmtInt(g.probes.skipped),
+                g.fromRequests ? '-' : fmtInt(g.probes.failed),
+                g.keptWarm === null ? '-' : fmtInt(g.keptWarm.requests),
+                g.keptWarm === null ? '-' : fmtCompact(keptWarmTokens(g.keptWarm)),
+                g.fromRequests ? '-' : probeCost(g, factor),
+                g.fromRequests ? '-' : saved(g, factor),
+              ],
+            }))
+      }
     />
   );
 }
 
 /**
  * One ring of the cost by token kind. `format` prints each kind's figure in the ring's unit and the center's total
- * unless `center` prints it shorter, `label` names the ring at its center, and `title` is the ring's hover text, such
- * as the estimate's sentence. `figureTitle` is a kind's figure's own hover text, which masks `title` over the figure.
+ * unless `center` prints it shorter, `label` names the ring at its center, and `title` is the ring's hover text.
+ * `figureTitle` is a kind's figure's own hover text, which masks `title` over the figure.
  */
 function CostDonut({ center, cost, figureTitle, format = fmtUsd, label = 'cost', title }: { center?: (v: number) => string; cost: CostSplit; figureTitle?: (v: number) => string; format?: (v: number) => string; label?: string; title?: string }) {
   const ink = useChartInk();
@@ -1966,18 +1869,19 @@ function CostDonut({ center, cost, figureTitle, format = fmtUsd, label = 'cost',
 }
 
 /**
- * Native's cost split: the plan rows' 20x 7-day equivalent by token kind beside the billed dollars by token kind, a
- * side with no rows left out. The subscription ring's center reads a bare percent, since the card's subtitle names the
- * window, so a marked figure fits inside the ring, and its list names the window, since each row also reads the kind's
- * proportion of the ring as a bare percent. Plan rows the route priced nothing on the window draw no ring, since the
- * decoder reads the route's empty split as four zeros, and with no billed ring beside it the card reads a dash.
+ * Native's cost split: the plan rows' figure by token kind in the chosen week beside the billed dollars by token kind,
+ * a side with no rows left out. The subscription ring's center reads a bare percent, since the card's subtitle names
+ * the week, so the figure fits inside the ring, and its list names the week in each kind's short form, with the full
+ * form on the hover, since each row also reads the kind's proportion of the ring as a bare percent. Plan rows the route
+ * priced nothing on draw no ring, and with no billed ring beside it the card reads a dash.
  */
-function NativeSplit({ totals }: { totals: AnalyticsGroup }) {
-  const sides = sidesOf(totals, 'seven_day');
-  const subscription = sides.equivalent === undefined || sides.equivalent === null ? null : totals.equivalentSplit;
+function NativeSplit({ totals, week, weekFactor }: { totals: AnalyticsGroup; week: WeekPosition; weekFactor: number }) {
+  const sides = sidesOf(totals);
+  const split = sides.equivalent === undefined || sides.equivalent === null ? null : totals.equivalentSplit;
+  const subscription = split === null ? null : { cacheRead: split.cacheRead * weekFactor, cacheWrite: split.cacheWrite * weekFactor, input: split.input * weekFactor, output: split.output * weekFactor };
   const billed = sides.billed === undefined ? null : knownSplit(totals.billed);
   const rings = [
-    ...(subscription === null ? [] : [<CostDonut key="subscription" cost={subscription} center={(v) => fmtShare(v)} figureTitle={(v) => fmtEquivalent('seven_day', v)} format={(v) => equivalentShort('seven_day', v)} label="subscription" />]),
+    ...(subscription === null ? [] : [<CostDonut key="subscription" cost={subscription} center={(v) => fmtShare(v)} figureTitle={(v) => fmtWeek(v, week)} format={(v) => weekShort(v, week)} label="subscription" />]),
     ...(billed === null ? [] : [<CostDonut key="billed" cost={billed} label="billed" />]),
   ];
   if (rings.length === 0) return sides.equivalent === null ? <p className="muted">-</p> : <Skeleton height={148} />;
@@ -1986,15 +1890,14 @@ function NativeSplit({ totals }: { totals: AnalyticsGroup }) {
 
 const MAX_STACKED_GROUPS = 7;
 
-type Stack = { data: Record<string, number | null>[]; estimated: Map<number, Set<string>>; keys: string[]; labels: Map<string, string>; unpriced: { buckets: number; labels: string[] } };
+type Stack = { data: Record<string, number | null>[]; keys: string[]; labels: Map<string, string>; unpriced: { buckets: number; labels: string[] } };
 /**
- * The groups stacked by one figure per bucket: the seven with the largest total in range and the rest as Other, and
- * per bucket the stacks an estimated group's figure fed. A null figure is one the route priced nothing on: it leaves
- * its stack's bucket a gap, a dash in the tooltip, since a partial sum would read as the whole. `drawn` keeps only the
- * groups whose figure is above zero somewhere in range or unpriced somewhere, for a side that holds some of the page's
- * groups, so a group priced nothing throughout stays listed with its gaps. `unpriced` names the drawn groups that
- * `flagged` reads unpriced in a bucket, a group folded into Other among them, by their labels in the chart's order, and
- * counts the buckets holding one.
+ * The groups stacked by one figure per bucket: the seven with the largest total in range and the rest as Other. A null
+ * figure is one the route priced nothing on: it leaves its stack's bucket a gap, a dash in the tooltip, since a partial
+ * sum would read as the whole. `drawn` keeps only the groups whose figure is above zero somewhere in range or unpriced
+ * somewhere, for a side that holds some of the page's groups, so a group priced nothing throughout stays listed with
+ * its gaps. `unpriced` names the drawn groups that `flagged` reads unpriced in a bucket, a group folded into Other among
+ * them, by their labels in the chart's order, and counts the buckets holding one.
  */
 function stackOf(points: AnalyticsPoint[], value: (g: AnalyticsGroup) => number | null, drawn = false, flagged: (g: AnalyticsGroup) => boolean = () => false): Stack {
   const totals = new Map<string, number>();
@@ -2022,11 +1925,8 @@ function stackOf(points: AnalyticsPoint[], value: (g: AnalyticsGroup) => number 
     for (const g of hit) unpricedGroups.add(g.key);
     if (hit.length > 0) unpricedBuckets += 1;
   }
-  const estimated = new Map<number, Set<string>>();
   const data = points.map((p) => {
-    const at = Date.parse(p.at);
-    const row: Record<string, number | null> = { at };
-    const marked = new Set<string>();
+    const row: Record<string, number | null> = { at: Date.parse(p.at) };
     for (const k of keys) row[k] = 0;
     for (const g of p.groups) {
       const k = top.includes(g.key) ? g.key : 'Other';
@@ -2035,23 +1935,18 @@ function stackOf(points: AnalyticsPoint[], value: (g: AnalyticsGroup) => number 
       const sum = row[k];
       row[k] = v === null || sum === null ? null : sum + v;
     }
-    estimated.set(at, marked);
     return row;
   });
-  return { data, estimated, keys, labels, unpriced: { buckets: unpricedBuckets, labels: ranked.filter((k) => unpricedGroups.has(k)).map((k) => labels.get(k) ?? k) } };
+  return { data, keys, labels, unpriced: { buckets: unpricedBuckets, labels: ranked.filter((k) => unpricedGroups.has(k)).map((k) => labels.get(k) ?? k) } };
 }
-/** A plan bucket the route priced nothing on reads null. */
-const sevenDayEquivalentOf = (g: AnalyticsGroup) => g.costEquivalent;
 
 /**
- * `shared` is whether the route answers the shares on the page's groups: under the account grouping, or with one
- * account named.
+ * Native stacks the plan rows' Pro-week figure per bucket, its axis and tooltip in the chosen week, and draws the billed
+ * rows' dollars on a card of their own. A group sums every account it holds, so the chart carries no hint.
  */
-function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, shared, unit }: { axis: TimeAxis; error: string | null; groupBy: GroupBy; groupSlot: (key: string) => string; loading: boolean; points: AnalyticsPoint[]; shared: boolean; unit: UnitPosition }) {
+function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, reading, unit }: { axis: TimeAxis; error: string | null; groupBy: GroupBy; groupSlot: (key: string) => string; loading: boolean; points: AnalyticsPoint[]; reading: WeekReading; unit: UnitPosition }) {
   const ink = useChartInk();
-  const lines = useMemo(() => shareLines(points), [points]);
-  // Native stacks the plan rows' equivalent and draws the billed rows' dollars on a card of their own.
-  const stack = useMemo(() => (unit === 'native' ? stackOf(points, sevenDayEquivalentOf, true, (g) => g.costEquivalent === null) : stackOf(points, (g) => g.costUsd)), [points, unit]);
+  const stack = useMemo(() => (unit === 'native' ? stackOf(points, (g) => g.costEquivalent, true, (g) => g.costEquivalent === null) : stackOf(points, (g) => g.costUsd)), [points, unit]);
   const billed = useMemo(() => (unit === 'native' ? stackOf(points, (g) => g.billedUsd, true) : null), [points, unit]);
   const { keys, labels, data } = stack;
   const color = (k: string) => (k === 'Other' ? ink.muted : groupSlot(k));
@@ -2070,13 +1965,13 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, shared,
     </ChartCard>
   );
   if (unit === 'native') {
-    const marked = (k: string) => data.some((row) => stack.estimated.get(Number(row.at))?.has(k) ?? false);
     const billedDrawn = billed !== null && billed.keys.length > 0;
-    // A range with no plan row leaves the equivalent card out while the billed card draws, as the tiles leave out a
-    // side with no rows. With neither side the card stays, so an empty range still reads as one.
+    // A range with no plan row leaves the plan card out while the billed card draws, as the tiles leave out a side
+    // with no rows. With neither side the card stays, so an empty range still reads as one.
     const planDrawn = loading || error !== null || keys.length > 0 || !billedDrawn;
-    const subtitle = '20x 7-day equivalent per bucket, stacked, the subscription requests';
+    const subtitle = 'Share of the chosen week per bucket, stacked, the subscription requests';
     const note = unpricedNote(stack.unpriced.labels, stack.unpriced.buckets);
+    const { scale: weekFactor, week } = reading;
     return (
       <>
         {planDrawn && (
@@ -2093,69 +1988,29 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, shared,
                 </>
               )
             }
-            loading={loading}
+            loading={loading || weekFactor === null}
             error={error}
-            legend={keys.map((k) => ({ color: color(k), label: label(k), title: marked(k) ? ESTIMATED_TITLE : undefined }))}
+            legend={keys.map((k) => ({ color: color(k), label: label(k) }))}
           >
-            <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-              <CartesianGrid vertical={false} stroke={ink.grid} />
-              <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-              <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={60} />
-              {/* Recharts drops null entries by default, and a bucket whose every group the route priced nothing on
-                  would lose its tooltip and its dashes. */}
-              <Tooltip
-                cursor={{ stroke: ink.axis }}
-                filterNull={false}
-                content={timeTip<Record<string, number | null> & { at: number }>((p) => keys.map((k) => ({ color: color(k), label: label(k), value: equivalentOrDash('seven_day', p[k], stack.estimated.get(p.at)?.has(k) ?? false) })))}
-              />
-              {areas(stack)}
-            </AreaChart>
+            {weekFactor !== null && (
+              <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+                <CartesianGrid vertical={false} stroke={ink.grid} />
+                <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <YAxis tickFormatter={(v: number) => fmtShare(v * weekFactor)} tickLine={false} axisLine={false} width={60} />
+                {/* Recharts drops null entries by default, and a bucket whose every group the route priced nothing on
+                    would lose its tooltip and its dashes. */}
+                <Tooltip
+                  cursor={{ stroke: ink.axis }}
+                  filterNull={false}
+                  content={timeTip<Record<string, number | null> & { at: number }>((p) => keys.map((k) => ({ color: color(k), label: label(k), value: equivalentOrDash(p[k], week, weekFactor) })))}
+                />
+                {areas(stack)}
+              </AreaChart>
+            )}
           </ChartCard>
         )}
         {billedDrawn && dollarCard(billed, `Billed by ${GROUP_LABEL[groupBy].toLowerCase()}`, 'USD per bucket, stacked, the billed requests')}
       </>
-    );
-  }
-  if (unit === 'share') {
-    // A model week a group never priced in the range lists no dashed entry, as its line draws nothing.
-    const weekOf = (a: string) => lines.data.some((row) => row[`${a}:week`] !== null);
-    // A line is named by its group's label, which names the page's grouping: an account under the account grouping, a
-    // model, a key or another dimension of the one named account under any other.
-    const nameOf = (a: string) => lines.labels[a] ?? a;
-    return (
-      <ChartCard
-        title={title}
-        subtitle={groupBy === 'account' ? "Each account's share of its own 7-day window per bucket, solid, and of its model week, dashed" : "Each group's share of the named account's 7-day window per bucket, solid, and of its model week, dashed"}
-        loading={loading}
-        error={error}
-        empty={shared ? undefined : GROUPED_SHARE_NOTE}
-        legend={lines.accounts.flatMap((a) => [{ color: groupSlot(a), label: `${nameOf(a)} (7-day)`, shape: 'line' as const }, ...(weekOf(a) ? [{ color: groupSlot(a), dashed: true, label: `${nameOf(a)} (${weekLabelOf(lines.weeks[a])})`, shape: 'line' as const }] : [])])}
-      >
-        <LineChart data={lines.data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-          <CartesianGrid vertical={false} stroke={ink.grid} />
-          <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-          <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={60} />
-          <Tooltip
-            cursor={{ stroke: ink.axis }}
-            content={timeTip<Record<string, number | null> & { at: number }>((p) =>
-              lines.accounts.flatMap((a) => [
-                { color: groupSlot(a), label: `${nameOf(a)} (5-hour)`, value: shareOrDash(p[`${a}:5h`]) },
-                { color: groupSlot(a), label: `${nameOf(a)} (7-day)`, value: shareOrDash(p[`${a}:7d`]) },
-                ...(weekOf(a) ? [{ color: groupSlot(a), label: `${nameOf(a)} (${weekLabelOf(lines.weeks[a])})`, value: shareOrDash(p[`${a}:week`]) }] : []),
-              ]),
-            )}
-          />
-          {/* The lines leave a null bucket unconnected, so a bucket with no share reads as a gap rather than a slope,
-              and a priced bucket with a gap or the range's edge on both sides draws as a dot, as the Burn plan lines
-              do. */}
-          {lines.accounts.map((a) => (
-            <Line key={`${a}:7d`} type="monotone" dataKey={`${a}:7d`} stroke={groupSlot(a)} strokeWidth={2} dot={isolatedDot(lines.data.map((r) => r[`${a}:7d`]), groupSlot(a))} isAnimationActive={false} />
-          ))}
-          {lines.accounts.map((a) => (
-            <Line key={`${a}:week`} type="monotone" dataKey={`${a}:week`} stroke={groupSlot(a)} strokeWidth={2} strokeDasharray="4 3" dot={isolatedDot(lines.data.map((r) => r[`${a}:week`]), groupSlot(a))} isAnimationActive={false} />
-          ))}
-        </LineChart>
-      </ChartCard>
     );
   }
   return dollarCard(stack, title, `USD per bucket, stacked, ${UNIT_SUBSET[dollarsOf(unit)]}`);
@@ -2379,79 +2234,17 @@ const CONVERSATION_HINT = CONVERSATION_CLASSES.join(', ');
 const OVERHEAD_HINT = 'every other class, and requests that named none';
 const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}. Overhead is ${OVERHEAD_HINT}`;
 
-const SPEND_NOTE = "Dollars per minute: API-key traffic, a usage-based seat's whole spend, and a subscription account's fast-mode and overage answers. Its plan quota spends window share, charted per window beside it";
+const SPEND_NOTE = "Dollars per minute: API-key traffic, a usage-based seat's whole spend, and a subscription account's fast-mode and overage answers. Its plan quota is charted beside it as a share of the chosen week";
 /** A folded rest of subscription accounts as the dollars chart names it: its dollars are its members' fast-mode
  *  and overage answers, and its own label names the plan unit, which the dollars axis does not chart. */
 const SPEND_REST = 'Other (fast mode or overage)';
 const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown: 'Other (fast mode or overage, tier unknown)', window_share: SPEND_REST };
-const TIER_UNKNOWN_HINT = 'A free plan, no tier on file or one the cost model does not hold, so no share of its windows is priced';
-const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model of no known tier, or on a tier the cost model has no capacity for on that window, prices no share there and draws no point';
-// "Model tier", since the tier unknown entries beside it name the account tier.
-const ESTIMATED_HINT = 'A bucket whose model has no measured weight and reads the latest weighed model of its model tier';
-// The shares carry no flag, so a bucket off every such model and one the table could not price both answer no week.
-const WEEK_MEAN_HINT = 'The mean per hour of the buckets that answered a model week';
-// The equivalents carry the route's flag, so a bucket off every such model reads zero and an unpriced one stays a gap.
-const WEEK_IDLE_HINT = 'The mean per hour of the buckets, reading one that ran on no model with a week of its own as zero and leaving out one the cost model could not price';
+const TIER_UNKNOWN_HINT = 'A free plan, no tier on file or one the cost model does not hold, and no bucket of the range priced, so no share of the week is drawn';
+const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model without a weight in the cost model prices no share and draws no point';
 const NO_ACCOUNT: ReadonlySet<string> = new Set();
 const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its width it covers';
-
-/**
- * One plan card's window: the rows' figure it reads, the line's per-hour mean, whether a line left traffic unpriced on
- * it, and its subtitle under each figure. Only the 5-hour card shades the peak band, the one window it weighs. The
- * route names no model week, so its card reads the one the cost model ships, the 7-day Fable window.
- */
-interface PlanWindow {
-  band: boolean;
-  equivalent: string;
-  /** The window's key, which names it on an equivalent ("1.47% of 20x 5-hour"). */
-  key: string;
-  /** Whether the slot's figure is one the route marked estimated, a zero the fold filled in never being one. */
-  marked: (r: BurnRow, slot: number) => boolean;
-  perHour: (l: BurnLine) => number | null;
-  read: (r: BurnRow) => (number | null)[];
-  share: (whose: string) => string;
-  title: string;
-  unpriced: (l: BurnLine) => boolean;
-  word: string;
-}
-const PLAN_WINDOWS: PlanWindow[] = [
-  {
-    band: true,
-    equivalent: 'The subscription traffic per hour in 20x 5-hour equivalents, weighed by the peak band, whose hours are shaded',
-    key: 'five_hour',
-    marked: () => false,
-    perHour: (l) => l.fiveHourPerHour,
-    read: (r) => r.fiveHour,
-    share: (whose) => `The share of ${whose} own 5-hour window its traffic used per hour, weighed by the peak band, whose hours are shaded`,
-    title: '5-hour per hour',
-    unpriced: (l) => l.unpriced.fiveHour,
-    word: '5-hour',
-  },
-  {
-    band: false,
-    equivalent: 'The subscription traffic per hour in 20x 7-day equivalents',
-    key: 'seven_day',
-    marked: () => false,
-    perHour: (l) => l.sevenDayPerHour,
-    read: (r) => r.sevenDay,
-    share: (whose) => `The share of ${whose} own 7-day window its traffic used per hour`,
-    title: '7-day per hour',
-    unpriced: (l) => l.unpriced.sevenDay,
-    word: '7-day',
-  },
-  {
-    band: false,
-    equivalent: `The subscription traffic per hour in 20x equivalents of its model's own week, the ${weekLabelOf(undefined)} window`,
-    key: 'seven_day_fable',
-    marked: () => false,
-    perHour: (l) => l.weekPerHour,
-    read: (r) => r.week,
-    share: (whose) => `The share of ${whose} own model week its traffic used per hour, the ${weekLabelOf(undefined)} window`,
-    title: 'Model week per hour',
-    unpriced: () => false,
-    word: weekLabelOf(undefined),
-  },
-];
+const PLAN_TITLE = 'Plan per hour';
+const PLAN_SUBTITLE = 'The subscription traffic per hour as a share of the chosen week';
 
 /**
  * A line's dot, drawn on the slots `isolatedSlots` names alone: the line leaves its null slots unconnected, so a
@@ -2464,58 +2257,55 @@ const isolatedDot = (values: (number | null)[], color: string) => {
 };
 
 /**
- * A plan line's dot: hollow on a slot whose bucket priced through the model tier's fallback, a channel of its own
- * beside the dash and the isolated slot's filled dot, which it takes elsewhere.
- */
-const estimatedDot = (values: (number | null)[], estimated: boolean[], color: string, ground: string) => {
-  const isolated = isolatedDot(values, color);
-  return (props: { cx?: number; cy?: number; index: number; key?: string }) =>
-    estimated[props.index] && values[props.index] !== null ? (
-      <Dot key={props.key} className="recharts-line-dot recharts-line-dot--estimated" cx={props.cx} cy={props.cy} r={3} fill={ground} stroke={color} strokeWidth={2} />
-    ) : (
-      isolated(props)
-    );
-};
-
-/**
- * The burn route's views of one grouping: the dollars per minute, and one plan card per window. A line's color
+ * The burn route's views of one grouping: the dollars per minute, and the plan card in the chosen week. A line's color
  * follows its group within the answer rather than its rank, so a range that reorders the groups does not repaint
- * them, and the account grouping keeps each account's page-wide color. `figure` is what the plan cards read, and
- * `account` the one account the Accounts filter names, whose shares answer under any grouping.
+ * them, and the account grouping keeps each account's page-wide color. `account` is the one account the Accounts
+ * filter names, and `accounts` the accounts read beside the answer, which give a tooltip's hint its plan and tier.
  */
 function BurnCharts({
   account,
+  accounts,
   answer,
   costs,
   error,
-  figure,
   groupBy,
   loading,
   onCostReferenceOpenChange,
   rangeEndMs,
   readAt,
+  reading,
   sized,
   slotOf,
 }: {
   account: string | null;
+  accounts: Account[] | null;
   answer: { bucketSeconds: number; points: BurnPoint[] } | null;
   costs: SubscriptionCosts | null;
   error: string | null;
-  figure: BurnFigure;
   groupBy: BurnGroup;
   loading: boolean;
   /** The Cost reference dialog opening and closing, which the page's auto reload waits for. */
   onCostReferenceOpenChange: (open: boolean) => void;
   rangeEndMs: number | undefined;
   readAt: number | undefined;
+  reading: WeekReading;
   sized: ReadonlySet<string> | null;
   slotOf: (id: string) => number | null;
 }) {
   const ink = useChartInk();
   const { lines, rows } = useMemo(
-    () => (answer === null ? { lines: [] as BurnLine[], rows: [] as BurnRow[] } : foldBurn(answer.points, groupBy, answer.bucketSeconds, sized ?? NO_ACCOUNT, MAX_BURN_LINES, rangeEndMs, readAt, { account, figure })),
-    [account, answer, figure, groupBy, rangeEndMs, readAt, sized],
+    () => (answer === null ? { lines: [] as BurnLine[], rows: [] as BurnRow[] } : foldBurn(answer.points, groupBy, answer.bucketSeconds, sized ?? NO_ACCOUNT, MAX_BURN_LINES, rangeEndMs, readAt, { account })),
+    [account, answer, groupBy, rangeEndMs, readAt, sized],
   );
+  // The points by bucket and group, for the tooltip's hint, which reads a bucket's one point of one account.
+  const pointsAt = useMemo(() => {
+    const at = new Map<string, BurnPoint[]>();
+    for (const p of answer?.points ?? []) {
+      const slot = `${Date.parse(p.at)}|${p.group}`;
+      at.set(slot, [...(at.get(slot) ?? []), p]);
+    }
+    return at;
+  }, [answer]);
   const named = useMemo(() => lines.filter((l) => !l.other).map((l) => l.key).sort(), [lines]);
   const colorOf = (l: BurnLine) => (l.other ? ink.muted : groupBy === 'account' ? accountColor(ink, slotOf(l.key)) : ink.series[Math.min(7, named.indexOf(l.key))]);
   // A session id runs past any legend, so it shows cut the way the session filter's chip cuts it, whole on hover.
@@ -2525,7 +2315,7 @@ function BurnCharts({
   // Read off the buckets, not the lines: the class grouping draws its two lines even over a range with no traffic.
   const empty = !loading && error === null && rows.length === 0 ? 'No traffic in this range.' : undefined;
   const byAccount = groupBy === 'account';
-  // The route answers the shares where each group holds one account's rows.
+  // Where each group holds one account's rows, a line's unit is its account's.
   const shared = byAccount || account !== null;
   // Every other grouping mixes both kinds of account, so its lines chart the dollars their API-key traffic and
   // fast-mode and overage answers spent. Under the account grouping a subscription account, or a folded rest of
@@ -2533,23 +2323,11 @@ function BurnCharts({
   const spent = lines.map((l, i) => ({ i, l })).filter(({ l }) => !byAccount || l.unit === 'usd' || l.usdPerMinute > 0);
   // Until the settings land no account reads as sized, so the rest names no tier it cannot know yet.
   const spendNameOf = (l: BurnLine) => (l.other && l.unit !== 'usd' ? (sized === null ? SPEND_REST : SPEND_REST_LABEL[l.unit]) : nameOf(l));
-  // Under the shares a sized subscription account draws, an idle one reading a dash. The equivalents read no tier, so
-  // every group whose traffic a plan paid for draws, and a group of billed rows alone, which reads zero, does not.
-  const planned = lines
-    .map((l, i) => ({ i, l }))
-    .filter(({ l }) => !l.other && (figure === 'share' ? l.unit === 'window_share' : l.unpriced.fiveHour || l.unpriced.sevenDay || [l.fiveHourPerHour, l.sevenDayPerHour, l.weekPerHour].some((v) => v !== null && v > 0)));
-  const unpriced = figure === 'share' && shared ? lines.filter((l) => !l.other && l.unit === 'unknown') : [];
-  // A share reads bare, its card naming the window, while an equivalent names its window ("1.47% of 20x 5-hour"), in
-  // the short form in the legend.
-  const figureOf = (w: PlanWindow, v: number | null, estimated: boolean, form: 'full' | 'short') => {
-    if (v === null) return '-';
-    if (figure === 'share') return `${estimated ? '~' : ''}${fmtShare(v)}`;
-    return form === 'full' ? equivalentOrDash(w.key, v, estimated) : `${estimated ? '~' : ''}${equivalentShort(w.key, v)}`;
-  };
+  // A line draws while a plan paid for its traffic, a group of billed rows alone reading zero, and where each group
+  // holds one account's rows only a line in the plan's unit draws: one the router sizes or whose points carry a figure.
+  const planned = lines.map((l, i) => ({ i, l })).filter(({ l }) => !l.other && (!shared || l.unit === 'window_share') && (l.unpriced || (l.perHour !== null && l.perHour > 0)));
+  const unknown = shared ? lines.filter((l) => !l.other && l.unit === 'unknown') : [];
   const partial = rows[rows.length - 1]?.partial === true;
-  // The band's own hours over the instants the plan chart spans: the buckets are UTC multiples whose starts fall off
-  // the band's edges, so shading whole buckets would mark the wrong hours.
-  const band = useMemo(() => (costs === null || rows.length < 2 ? [] : bandRuns(costs, rows[0].at, rows[rows.length - 1].at)), [costs, rows]);
   // A bucket too short to set the scale would stretch the axis over a few seconds' rate, so the axis stops at the
   // buckets that set it and the short one runs past the top.
   const scaled = rows.filter((r) => r.setsScale);
@@ -2561,94 +2339,100 @@ function BurnCharts({
   const spentScale = scaleTo(spentValues);
   // Without a capped domain recharts spans every row, so the labels' precision reads every row too.
   const spentAxis = usdAxis('domain' in spentScale ? spentValues : rows.flatMap((r) => spent.map(({ i }) => r.usd[i])));
-  const whose = byAccount ? "each subscription account's" : "the named account's";
-  // The model week's card draws while a line ran on a model with a week of its own.
-  const windows = PLAN_WINDOWS.filter((w) => w !== PLAN_WINDOWS[2] || planned.some(({ l }) => l.weekPerHour !== null));
-  const planCard = (w: PlanWindow) => {
-    const drawn = w === PLAN_WINDOWS[2] ? planned.filter(({ l }) => l.weekPerHour !== null) : planned;
+  // The route answers a bucket's shares without the model week's key, so the hint names the model week the cost model
+  // carries on the 7-day window.
+  const weekKey = costs === null ? undefined : Object.keys(costs.modelWindows).find((key) => costs.modelWindows[key].of === 'seven_day');
+  // The hint reads one account's line alone, a folded line (the request classes, the rest) carrying none, and a bucket
+  // has no one completion, so no band word.
+  const hintOf = (l: BurnLine, at: number): string | null => {
+    const owner = l.other || groupBy === 'request_class' || !shared ? undefined : accounts?.find((a) => a.id === (byAccount ? l.key : account));
+    const here = pointsAt.get(`${at}|${l.key}`) ?? [];
+    if (owner === undefined || here.length !== 1) return null;
+    const [p] = here;
+    const tier = owner.subscription?.rateLimitTier ?? null;
+    const plan = hintPlan(owner, tier);
+    const shares: Record<string, number | null> = { five_hour: p.fiveHourShare, seven_day: p.sevenDayShare, ...(weekKey === undefined ? {} : { [weekKey]: p.modelWeekShare }) };
+    return plan === null ? null : shareHint(plan, shares, tier, null);
+  };
+  const subtitle = (
+    <>
+      {PLAN_SUBTITLE}.{partial ? ` ${PARTIAL_NOTE}.` : ''} <CostReferenceLink onOpenChange={onCostReferenceOpenChange} tab="tiers" />
+    </>
+  );
+  const { scale: weekFactor, week } = reading;
+  const planCard = (factor: number) => {
+    // The figure in the chosen week, the full form on a hover and the short one in the legend.
+    const figureOf = (v: number | null, form: 'full' | 'short') => (v === null ? '-' : form === 'full' ? fmtWeek(v * factor, week) : weekShort(v * factor, week));
     const legend = [
-      ...drawn.map(({ i, l }) => {
-        // Per window, as the line's dots read it, so a model week the fold filled at zero takes no mark from estimated
-        // 5-hour buckets.
-        const marked = rows.some((r) => w.marked(r, i));
-        const perHour = w.perHour(l);
-        const short = figureOf(w, perHour, marked, 'short');
-        return {
-          color: colorOf(l),
-          label: nameOf(l),
-          shape: 'line' as const,
-          title: withEstimate(w === PLAN_WINDOWS[2] ? (figure === 'equivalent' ? WEEK_IDLE_HINT : WEEK_MEAN_HINT) : w.band && l.fiveHourPeak !== null ? `Highest hour ${figureOf(w, l.fiveHourPeak, false, 'full')}` : '', marked) || undefined,
-          // An equivalent's own hover names its window in full and masks the entry's title over the figure, so it
-          // carries the estimate as well. A dash has no window to name.
-          value: figure === 'equivalent' && perHour !== null ? <span title={withEstimate(figureOf(w, perHour, false, 'full'), marked)}>{short}</span> : short,
-        };
-      }),
-      // One entry for every figure the cost model cannot price on the window, whichever line it fell on. Muted, since
-      // it draws no line of its own.
-      ...(drawn.some(({ l }) => w.unpriced(l)) ? [{ color: ink.muted, label: 'model unlisted', shape: 'line' as const, title: MODEL_UNLISTED_HINT, value: w.word }] : []),
-      // Listed on the window's own marks, since the entry explains the hollow dot, which draws on them alone.
-      ...(drawn.some(({ i }) => rows.some((r) => w.marked(r, i))) ? [{ color: ink.muted, hollow: true, label: 'estimated', shape: 'line' as const, title: ESTIMATED_HINT }] : []),
+      ...planned.map(({ l }) => ({
+        color: colorOf(l),
+        label: nameOf(l),
+        shape: 'line' as const,
+        title: l.peak === null ? undefined : `Highest hour ${figureOf(l.peak, 'full')}`,
+        // The figure's own hover names it in full and masks the entry's title over the figure. A dash has none.
+        value: l.perHour === null ? '-' : <span title={figureOf(l.perHour, 'full')}>{figureOf(l.perHour, 'short')}</span>,
+      })),
+      // One entry for every bucket the cost model could not price, whichever line it fell on. Muted, since it draws no
+      // line of its own.
+      ...(planned.some(({ l }) => l.unpriced) ? [{ color: ink.muted, label: 'model unlisted', shape: 'line' as const, title: MODEL_UNLISTED_HINT }] : []),
       // Muted, since no line of its own is drawn.
-      ...unpriced.map((l) => ({ color: ink.muted, label: nameOf(l), shape: 'line' as const, title: TIER_UNKNOWN_HINT, value: 'tier unknown' })),
+      ...unknown.map((l) => ({ color: ink.muted, label: nameOf(l), shape: 'line' as const, title: TIER_UNKNOWN_HINT, value: 'tier unknown' })),
     ];
     return (
       <ChartCard
-        key={w.title}
-        title={w.title}
-        subtitle={
-          <>
-            {figure === 'share' ? w.share(whose) : w.equivalent}.{partial ? ` ${PARTIAL_NOTE}.` : ''} <CostReferenceLink onOpenChange={onCostReferenceOpenChange} tab="tiers" />
-          </>
-        }
+        key={PLAN_TITLE}
+        title={PLAN_TITLE}
+        subtitle={subtitle}
         error={error}
         loading={loading}
         empty={
           empty ??
-          (figure === 'share' && !shared
-            ? GROUPED_SHARE_NOTE
-            : drawn.length > 0
-              ? undefined
-              : unpriced.length > 0
-                ? byAccount
-                  ? `No subscription account in range has a tier the router prices: ${unpriced.map(nameOf).join(', ')}.`
-                  : 'The named account has a free plan, or has no tier on file or one the cost model does not hold, so no share of its windows is priced.'
-                : figure === 'share'
-                  ? 'No subscription account burned in this range.'
-                  : 'No subscription traffic in this range.')
+          (planned.length > 0
+            ? undefined
+            : unknown.length > 0
+              ? byAccount
+                ? `No subscription account in range has a tier the router prices: ${unknown.map(nameOf).join(', ')}.`
+                : 'The named account has a free plan, or has no tier on file or one the cost model does not hold, and no bucket of the range priced.'
+              : 'No subscription traffic in this range.')
         }
         legend={legend}
       >
         <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
-          {/* A category axis places a reference area on its categories alone, so this one counts instants and ticks on
-              the buckets. */}
           <XAxis dataKey="at" type="number" scale="time" domain={['dataMin', 'dataMax']} ticks={rows.map((r) => r.at)} {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-          <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={52} {...scaleTo(scaled.flatMap((r) => drawn.map(({ i }) => w.read(r)[i] ?? 0)))} />
+          <YAxis tickFormatter={(v: number) => fmtShare(v * factor)} tickLine={false} axisLine={false} width={52} {...scaleTo(scaled.flatMap((r) => planned.map(({ i }) => r.equivalent[i] ?? 0)))} />
           {/* Recharts drops null entries by default, and a bucket whose every figure is null would lose its date, its
               dashes and the unpriced hint. */}
           <Tooltip
             cursor={{ stroke: ink.axis }}
             filterNull={false}
             content={timeTip<BurnRow>((r) =>
-              drawn.map(({ i, l }) => {
-                const v = w.read(r)[i];
-                const marked = w.marked(r, i) && v !== null;
-                return { color: colorOf(l), label: nameOf(l), title: w.unpriced(l) && slotUnpriced(v, r.tokens[i]) ? MODEL_UNLISTED_HINT : marked ? ESTIMATED_HINT : undefined, value: figureOf(w, v, marked, 'full') };
+              planned.flatMap(({ i, l }) => {
+                const v = r.equivalent[i];
+                const hint = hintOf(l, r.at);
+                return [{ color: colorOf(l), label: nameOf(l), title: l.unpriced && slotUnpriced(v, r.tokens[i]) ? MODEL_UNLISTED_HINT : undefined, value: figureOf(v, 'full') }, ...(hint === null ? [] : [{ label: hint, value: null }])];
               }),
             )}
           />
-          {w.band && band.map((run) => <ReferenceArea key={run.from} x1={run.from} x2={run.to} fill={ink.series[6]} fillOpacity={0.34} ifOverflow="hidden" />)}
-          {drawn.map(({ i, l }) => (
+          {planned.map(({ i, l }) => (
             // A null slot draws no point, and the gap stays since the lines do not connect across it.
-            <Line key={i} type="monotone" dataKey={(r: BurnRow) => w.read(r)[i]} stroke={colorOf(l)} strokeWidth={2} dot={estimatedDot(rows.map((r) => w.read(r)[i]), rows.map((r) => w.marked(r, i)), colorOf(l), ink.surface)} isAnimationActive={false} />
+            <Line key={i} type="monotone" dataKey={(r: BurnRow) => r.equivalent[i]} stroke={colorOf(l)} strokeWidth={2} dot={isolatedDot(rows.map((r) => r.equivalent[i]), colorOf(l))} isAnimationActive={false} />
           ))}
         </LineChart>
       </ChartCard>
     );
   };
   return (
-    <div className={windows.length + 1 === 4 ? 'grid-2 burn-grid burn-grid--four' : 'grid-2 burn-grid'}>
-      {windows.map(planCard)}
+    <div className="grid-2 burn-grid">
+      {/* The figure waits on the chosen week's scale, so the card draws its skeleton while the cost model is out and its
+          failure in its place. */}
+      {weekFactor === null ? (
+        <ChartCard title={PLAN_TITLE} subtitle={subtitle} error={error ?? reading.error} loading>
+          {null}
+        </ChartCard>
+      ) : (
+        planCard(weekFactor)
+      )}
       <ChartCard
         title="Spend per minute"
         subtitle={`${byAccount ? SPEND_NOTE : `${SPEND_NOTE} when grouped by account`}${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}${partial ? `. ${PARTIAL_NOTE}` : ''}`}

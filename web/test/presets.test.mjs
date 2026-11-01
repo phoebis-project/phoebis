@@ -69,12 +69,13 @@ const win = (id, projection, horizonIn = 2 * HOUR, burn = 0.01) => ({
 });
 /** A subscription account with its 5-hour and 7-day projections, and its 7-day Fable window's where one is named. */
 const oauth = (id, five, seven, fable = null) => ({ fableWindow: fable === null ? null : win('7d_fable', fable, 5 * HOUR), id, kind: 'oauth', label: id, windows: [win('5h', five), win('7d', seven, 5 * HOUR)] });
-/** A pin as the Sessions route serves it: its 5-hour burn decayed to `burnAt`, the instant of the read. */
+/** A pin as the Sessions route serves it: its burn on `burnWindow` decayed to `burnAt`, the instant of the read. */
 const pin = (accountId, sessionId, burn, warm, over = {}) => ({
   accountId,
   burn,
   burnAt: at(NOW),
   burnUnit: 'window_share',
+  burnWindow: 'five_hour',
   cacheTtlMs: 5 * MINUTE,
   keyId: 'desktop',
   lastInputTokens: 1_000,
@@ -351,7 +352,7 @@ test('a held 5-hour window is not the closest reading, however near the ceiling 
   assert.equal(d.shedPreviewLine(preview, NOW), `No member projects over the ceiling on any window: the closest is low, 5h 60 % at ${d.instant(NOW + 2 * HOUR, NOW)}.`);
 });
 
-test("a round on a weekly window scales the pins' 5-hour burn by the account's burn on that window", () => {
+test("a round on a weekly window scales each pin's burn by the account's burn on that window over its burn on the pin's own window", () => {
   // weekly crosses on its 7-day window alone: 97 % at a horizon five hours out under a ceiling of 95, an excess of 0.4
   // points an hour. Its sessions burn the 7-day window a quarter as fast as the 5-hour one, so the pins' 5 and 3 points
   // read 1.25 and 0.75 there. The excess is under the cap's half of their 2, and a's 1.25 covers it alone.
@@ -360,6 +361,23 @@ test("a round on a weekly window scales the pins' 5-hour burn by the account's b
   const preview = d.shedPreview(pool([weekly, cool], { windowCeiling: 0.95 }), [weekly, cool], pins, NOW);
   assert.deepEqual(preview.hot.map((h) => [h.label, h.window, h.excess.toFixed(4)]), [['weekly', '7d', '0.0040']]);
   assert.equal(d.shedPreviewLine(preview, NOW), '1 member projects over the ceiling: weekly. A round there would mark 1 session (0 warm), 0.4 %/h of the excess, to move to a sibling with runway.');
+});
+
+test('a pin on an account without a 5-hour window scales its 7-day burn by 1 on a 7-day round and by the Fable burn over the 7-day burn on a Fable round', () => {
+  // approved has no 5-hour window, so its pins' burn is a share of the 7-day window. On the 7-day round, 97 % at a
+  // horizon five hours out under a ceiling of 95 asks 0.4 points an hour, which a's 5 points cover.
+  const approved = { fableWindow: null, id: 'approved', kind: 'oauth', label: 'approved', windows: [win('7d', 0.97, 5 * HOUR, 0.02)] };
+  const weekly = [pin('approved', 'a', 0.05, false, { burnWindow: 'seven_day' }), pin('approved', 'b', 0.03, false, { burnWindow: 'seven_day' })];
+  assert.equal(line([approved, cool], weekly, { windowCeiling: 0.95 }), '1 member projects over the ceiling: approved. A round there would mark 1 session (0 warm), 0.4 %/h of the excess, to move to a sibling with runway.');
+  // On the Fable round the account burns its Fable week half as fast as its 7-day window, so the pins' 3 and 2 points
+  // read 1.5 and 1 there. 99 % two hours out asks 2 points an hour, the cap's half of their 2.5 bounds it at 1.25, and
+  // a's 1.5 covers that alone.
+  const fable = { fableWindow: win('7d_fable', 0.99, 2 * HOUR, 0.01), id: 'fable', kind: 'oauth', label: 'fable', windows: [win('7d', 0.5, 5 * HOUR, 0.02)] };
+  const sibling = oauth('sibling', 0.3, 0.2, 0.2);
+  const pins = [pin('fable', 'a', 0.03, false, { burnWindow: 'seven_day', model: 'claude-fable-5' }), pin('fable', 'b', 0.02, false, { burnWindow: 'seven_day', model: 'claude-fable-5' })];
+  const preview = d.shedPreview(pool([fable, sibling], { windowCeiling: 0.95 }), [fable, sibling], pins, NOW);
+  assert.deepEqual(preview.hot.map((h) => [h.label, h.window]), [['fable', '7d_fable']]);
+  assert.equal(d.shedPreviewLine(preview, NOW), '1 member projects over the ceiling: fable. A round there would mark 1 session (0 warm), 1.5 %/h of the excess, to move to a sibling with runway.');
 });
 
 test('with load shedding off the preview opens by saying no round runs, then names the projection alone', () => {

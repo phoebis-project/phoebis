@@ -96,6 +96,9 @@ const windowStart = (w: RateLimitWindow, now: number): number | null => {
 export type ShedWindow = '5h' | '7d' | '7d_fable';
 const TRIGGER_ORDER: ShedWindow[] = ['5h', '7d', '7d_fable'];
 const PREVIEW_WINDOW: Record<ShedWindow, string> = { '5h': '5h', '7d': '7d', '7d_fable': '7-day Fable' };
+/** A session's `burnWindow` as the window the trigger reads, a key it does not know as none. */
+const BURN_WINDOW: Readonly<Record<string, ShedWindow>> = { five_hour: '5h', seven_day: '7d', seven_day_fable: '7d_fable' };
+const burnWindowOf = (key: string | null): ShedWindow | null => (key !== null && Object.prototype.hasOwnProperty.call(BURN_WINDOW, key) ? BURN_WINDOW[key] : null);
 
 const readingOf = (account: Account, id: ShedWindow): RateLimitWindow | null => (id === '7d_fable' ? account.fableWindow : windowOf(account, id));
 /**
@@ -243,16 +246,18 @@ export function shedPreview(
     const excess = (fired.projection - ceiling) / Math.max((fired.horizon - now) / HOUR_MS, 1 / 60);
     hot.push({ excess, horizon: fired.horizon, id: account.id, label: account.label, projection: fired.projection, window: fired.id });
     if (!pool.loadShedding) continue;
-    // The served burn is a pin's share of the account's 5-hour window. A round on a weekly window reads each pin's
-    // burn scaled by the account's burn on that window over its 5-hour burn, the preview's approximation of the
-    // router's pricing of each pin on the fired window. A pin whose model does not draw the fired window is out of the
-    // round before the order, as the router's partition takes it, so it is in neither the order, the counts nor the
-    // quiet reading, and a pin served in dollars has no share to scale, so it reads unpriced.
-    const fiveHour = five?.burn ?? null;
-    const scale = fired.id === '5h' ? 1 : fiveHour !== null && fiveHour > 0 && fired.burn !== null ? fired.burn / fiveHour : null;
+    // The served burn is a pin's share of the window its `burnWindow` names: the 5-hour window, or the 7-day one on an
+    // account without it. A round on another window reads each pin's burn scaled by the account's burn on the fired
+    // window over its burn on the pin's own, the preview's approximation of the router's pricing of each pin on the
+    // fired window. A pin whose model does not draw the fired window is out of the round before the order, as the
+    // router's partition takes it, so it is in neither the order, the counts nor the quiet reading, and a pin served in
+    // dollars has no share to scale, so it reads unpriced.
     const walked = pins
       .filter((s) => windowsOf(s.model).includes(fired.id))
       .map((s) => {
+        const window = burnWindowOf(s.burnWindow);
+        const own = window === null ? null : (readingOf(account, window)?.burn ?? null);
+        const scale = fired.id === window ? 1 : own !== null && own > 0 && fired.burn !== null ? fired.burn / own : null;
         const served = s.burn === null || s.burnUnit !== 'window_share' ? null : burnDecayed(s.burn, s.burnAt, now, windowMs);
         return {
           burn: served === null || scale === null ? null : served * scale,

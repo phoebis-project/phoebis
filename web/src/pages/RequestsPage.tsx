@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
-import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, Usage } from '@/api/types';
+import type { Account, ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, SubscriptionCosts, Usage } from '@/api/types';
 import { REFUSAL_CATEGORIES, STOP_REASONS } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useFollow } from '@/app/useFollow';
@@ -17,21 +17,23 @@ import type { Option } from '@/components/ui/OptionList';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, Select, Skeleton } from '@/components/ui/primitives';
 import { addressWindow, RANGE_PRESETS, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
+import { shareHint, shareHintLines } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
 import { bodyLines, bodyText, findHits } from '@/lib/bodies';
 import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
+import { weekScale } from '@/lib/costs';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, pollQuery, readEnd, spanEnded } from '@/lib/follow';
-import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtEquivalent, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, forkLabel, shareLabel, shortAgent, shortId, shortModel, tokensTotal, withEstimate } from '@/lib/format';
+import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
-import { costCellOf, costHeaderTitle, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, revisionsTitle } from '@/lib/requests';
+import { costCellOf, costHeaderTitle, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, requestHintArgs, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
-import type { UnitPosition } from '@/lib/unit';
+import type { UnitPosition, WeekPosition } from '@/lib/unit';
 import { StatusBadge } from './DashboardPage';
 
 // `fill` marks the columns the table draws `col-fill`, so the table takes its content width when none of them shows.
@@ -137,9 +139,34 @@ const routingLogHref = (r: RequestLog, now: number) => {
   return logHref(requestLink(r.id, at, r.durationMs === null ? null : at + r.durationMs, now));
 };
 
-/** The Cost cell: the position's main line over its second, every figure and the dollar equivalent on the title. */
-function CostCell({ request, unit }: { request: RequestLog; unit: UnitPosition }) {
-  const cell = costCellOf(costUnitOf(request, unit));
+/** The figure's context a request's cost reads: the accounts read and the cost model the hint is composed from, and the
+ *  chosen week with its scale, null while the cost model is out. */
+interface CostContext {
+  accounts: Account[] | null;
+  costs: SubscriptionCosts | null;
+  scale: number | null;
+  week: WeekPosition;
+}
+
+/** A request's unit under a position, with the hint composed where the accounts read holds its account. */
+function requestCost(request: RequestLog, unit: UnitPosition, context: CostContext): { hint: string[]; unit: CostUnit } {
+  const args = requestHintArgs(request, context.accounts, context.costs);
+  const lines = args === null ? [] : shareHintLines(...args);
+  return { hint: lines, unit: costUnitOf(request, unit, args === null ? null : shareHint(...args)) };
+}
+
+/**
+ * The Cost cell: the position's main line over its second, the hint and the dollar equivalent on the title, and the
+ * skeleton while the scale is out.
+ */
+function CostCell({ context, request, unit }: { context: CostContext; request: RequestLog; unit: UnitPosition }) {
+  const cell = costCellOf(requestCost(request, unit, context).unit, context.week, context.scale);
+  if (cell === null)
+    return (
+      <td className="right num col-fit">
+        <Skeleton width={72} />
+      </td>
+    );
   return (
     <td className="right num col-fit" title={cell.title || undefined}>
       {cell.main}
@@ -159,68 +186,51 @@ function HeldBadge({ held }: { held: CohortHold }) {
 }
 
 /**
- * The drawer's cost row: the equivalent or share chips with the dollar equivalent muted after them, the dollars, the
- * dollar equivalent with `equivalent` muted after it, or the dash of a position that reads nothing for the request.
- * An estimated figure reads a tilde before its first value, and the row's title says why.
+ * The drawer's cost row: the figure in the chosen week as one chip with the hint's lines as chips after it and the
+ * dollar equivalent muted after them, the dollars, the dollar equivalent with `equivalent` muted after it, or the dash
+ * of a position that reads nothing for the request. The figure waits on the scale, so it draws its skeleton while the
+ * cost model is out.
  */
-function costRowValue(unit: CostUnit) {
-  const mark = unit.estimated ? '~' : '';
-  const chipsOf = (figures: { key: string; share: number }[], label: (key: string, share: number) => string) => figures.map(({ key, share }, i) => ({ value: `${i === 0 ? mark : ''}${label(key, share)}` }));
+function costRowValue(unit: CostUnit, hint: string[], week: WeekPosition, scale: number | null) {
   switch (unit.kind) {
     case 'equivalent':
-      return (
+      return scale === null ? (
+        <Skeleton width={120} />
+      ) : (
         <span className="usage-table__end">
-          <Chips chips={chipsOf(unit.equivalents, fmtEquivalent)} />
-          <span className="muted">{fmtUsd(unit.usd)} equivalent</span>
-        </span>
-      );
-    case 'shares':
-      return (
-        <span className="usage-table__end">
-          <Chips chips={chipsOf(unit.shares, shareLabel)} />
+          <Chips chips={[fmtWeek(unit.figure * scale, week), ...hint].map((value) => ({ value }))} />
           <span className="muted">{fmtUsd(unit.usd)} equivalent</span>
         </span>
       );
     case 'dash':
       return <b>-</b>;
     case 'dollars':
-      return (
-        <b>
-          {mark}
-          {fmtUsd(unit.usd)}
-        </b>
-      );
+    case 'unserved':
+      return <b>{fmtUsd(unit.usd)}</b>;
     case 'equivalent_dollars':
     case 'unpriced':
       return (
         <b>
-          {mark}
           {fmtUsd(unit.usd)} <span className="muted">equivalent</span>
-        </b>
-      );
-    case 'unserved':
-      return (
-        <b>
-          {mark}
-          {fmtUsd(unit.usd)}
         </b>
       );
   }
 }
 
 /**
- * The drawer's cost value under one title: why a dollar figure, a dash or a free call's figures stand where they do,
- * the serving account's tier as the attempt stored it, the price list and the cost model in force at the request's
- * instant while the settings are at hand, and the estimate of a figure. A title on an element inside the cell would
- * hide the row's own wherever the figure is hovered.
+ * The drawer's cost value under one title: why a dollar figure, a dash or a free call's figure stands where it does,
+ * the hint, the serving account's tier as the attempt stored it, and the price list and the cost model in force at the
+ * request's instant while the settings are at hand. A title on an element inside the cell would hide the row's own
+ * wherever the figure is hovered.
  */
-function CostRowCell({ request: r, settings, unit }: { request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
-  const cost = costUnitOf(r, unit);
-  const why = (cost.kind === 'shares' || cost.kind === 'equivalent' || cost.kind === 'equivalent_dollars') && cost.reason !== null ? FREE_SHARE_TITLE : cost.kind === 'dollars' ? `Billed in dollars: ${FUNDING_WORD[cost.funding]}` : cost.kind === 'unpriced' ? NO_SHARE_TITLE : cost.kind === 'dash' ? cost.title : null;
-  const title = withEstimate([why, r.tier === null ? null : `Account tier ${r.tier}`, revisionsTitle(settings, r.at)].filter((part) => part !== null).join('. '), cost.estimated && cost.kind !== 'dash');
+function CostRowCell({ context, request: r, settings, unit }: { context: CostContext; request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
+  const { hint, unit: cost } = requestCost(r, unit, context);
+  const why = (cost.kind === 'equivalent' || cost.kind === 'equivalent_dollars') && cost.reason !== null ? FREE_SHARE_TITLE : cost.kind === 'dollars' ? `Billed in dollars: ${FUNDING_WORD[cost.funding]}` : cost.kind === 'unpriced' ? NO_SHARE_TITLE : cost.kind === 'dash' ? cost.title : null;
+  const shown = cost.kind === 'equivalent' || cost.kind === 'equivalent_dollars' ? cost.hint : null;
+  const title = [why, shown, r.tier === null ? null : `Account tier ${r.tier}`, revisionsTitle(settings, r.at)].filter((part) => part !== null).join('. ');
   return (
     <td className="right num" title={title || undefined}>
-      {costRowValue(cost)}
+      {costRowValue(cost, cost.kind === 'equivalent' ? hint : [], context.week, context.scale)}
     </td>
   );
 }
@@ -258,9 +268,12 @@ export function RequestsPage() {
   const guardrails = useAsync(() => api.listGuardrails(), []);
   const accounts = useAsync(() => api.listAccounts(), []);
   const catalog = useAsync(() => api.listCatalog(), []);
-  // The revisions the drawer's cost row names. The cells read no cost model, since the route prices every figure.
+  // The revisions the drawer's cost row names, and the cost model whose capacities scale every figure to the chosen week
+  // and whose band the hint reads at a request's completion.
   const settings = useAsync(() => api.getSettings(), []);
-  const { timeFormat, unit } = useAppSettings();
+  const { timeFormat, unit, week } = useAppSettings();
+  const costs = settings.data?.subscriptionCosts ?? null;
+  const context: CostContext = { accounts: accounts.data, costs, scale: weekScale(costs, week), week };
 
   const { address, filters: read, replace } = useQueryFilters(REQUESTS_CODEC);
   const filters = useMemo<Filters>(() => ({ ...read, outcomes: outcomesOf(read.outcomes), rows: Number(read.rows), statuses: read.statuses.filter((code) => /^\d+$/.test(code)) }), [read]);
@@ -491,7 +504,7 @@ export function RequestsPage() {
                             <span className="sub">{r.usage.cacheRead > 0 ? `${fmtCompact(r.usage.cacheRead)} cached` : 'uncached'}</span>
                           </td>
                         )}
-                        {shown.has('cost') && <CostCell request={r} unit={unit} />}
+                        {shown.has('cost') && <CostCell context={context} request={r} unit={unit} />}
                         <td className="right col-fit">
                           <span className="requests__links">
                             <Link to={routingLogHref(r, now)} onClick={(e) => e.stopPropagation()}>
@@ -546,14 +559,14 @@ export function RequestsPage() {
 
       {requestId && (
         <Descriptions>
-          <RequestDrawer request={selected} requestId={requestId} guardrails={guardrails.data} now={now} rows={read.rows} settings={settings.data} unit={unit} onClose={() => navigate({ pathname: '/requests', search: location.search })} />
+          <RequestDrawer context={context} request={selected} requestId={requestId} guardrails={guardrails.data} now={now} rows={read.rows} settings={settings.data} unit={unit} onClose={() => navigate({ pathname: '/requests', search: location.search })} />
         </Descriptions>
       )}
     </div>
   );
 }
 
-function RequestDrawer({ guardrails, request, requestId, now, onClose, rows, settings, unit }: { guardrails: Guardrail[] | null; now: number; onClose: () => void; request: RequestLog | null; requestId: string; rows: string; settings: Settings | null; unit: UnitPosition }) {
+function RequestDrawer({ context, guardrails, request, requestId, now, onClose, rows, settings, unit }: { context: CostContext; guardrails: Guardrail[] | null; now: number; onClose: () => void; request: RequestLog | null; requestId: string; rows: string; settings: Settings | null; unit: UnitPosition }) {
   // The drawer reads the request on every open, and draws the list's own row whenever the page holds it.
   const detail = useAsync(() => api.getRequest(requestId), [requestId]);
   // A load that is pending or has failed leaves the answer to the request before it in hand, so only an answer
@@ -703,7 +716,7 @@ function RequestDrawer({ guardrails, request, requestId, now, onClose, rows, set
                   <td>
                     <b>Estimated cost</b>
                   </td>
-                  <CostRowCell request={r} settings={settings} unit={unit} />
+                  <CostRowCell context={context} request={r} settings={settings} unit={unit} />
                 </tr>
               </tbody>
             </table>

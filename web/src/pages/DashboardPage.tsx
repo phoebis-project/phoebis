@@ -13,14 +13,15 @@ import { Badge, Button, Card, EmptyState, ErrorState, Skeleton } from '@/compone
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { figuresValue } from '@/components/ui/Tile';
-import { equivalentOrDash, nativeFiguresOf, SHARE_NOTE, UNPRICED_TITLE } from '@/lib/analytics';
-import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
+import { equivalentOrDash, nativeFiguresOf, shareHint, UNPRICED_TITLE } from '@/lib/analytics';
+import { weekScale } from '@/lib/costs';
+import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
-import { REFUSED_TITLE, costHeaderTitle, costUnitOf, glanceCellOf, revisionsTitle } from '@/lib/requests';
+import { REFUSED_TITLE, costHeaderTitle, costUnitOf, glanceCellOf, requestHintArgs, revisionsTitle } from '@/lib/requests';
 import { fmtWindows, ringFigures, type RingFigures, type RingLeftOut, type RingRow } from '@/lib/rings';
 import { speedHover } from '@/lib/selection';
-import type { UnitPosition } from '@/lib/unit';
+import type { UnitPosition, WeekPosition } from '@/lib/unit';
 
 /**
  * A read whose first answer failed holds no data, so its card would wait on a placeholder forever; a refresh that fails
@@ -43,36 +44,38 @@ function asOfLine(reads: [string, Loaded<unknown>][], now: number): { text: stri
   return { text: failed ? `Last refresh of the ${failed[0]} failed: ${failed[1].error}. Showing data as of ${asOf}` : `As of ${asOf}`, title: fmtAbsolute(oldest) };
 }
 
-/** The day's cost tile as `StatTile` draws it. */
+/** The day's cost tile as `StatTile` draws it, a null value and note the skeleton. */
 interface CostTile {
-  note: string;
-  spark: number[];
+  note: string | null;
+  spark: (number | null)[];
   title?: string;
   value: ReactNode;
 }
 /**
- * The day's cost tile under a position. Native stacks the plan rows' 20x 7-day equivalent, the Pools page's reading of
- * a day, over the billed rows' dollars, a side with no rows left out, and an empty day reads its zero in each unit. A
- * day whose 7-day window a plan row priced nothing on reads the dash under `UNPRICED_TITLE`, its note a dash too while
- * no request was billed, and a zero reads as no plan rows only where neither window is flagged. The dollar positions
- * read their dollars. The shares are one account's, and the tile sums every account, so it reads a dash, its note
- * saying why and its spark kept so the tile never waits on a placeholder.
+ * The day's cost tile under a position. Native stacks the plan rows' figure in the chosen week, the Pools page's
+ * reading of a day, over the billed rows' dollars, a side with no rows left out, and an empty day reads its zero in
+ * each unit. A day a plan row priced nothing on reads the dash under `UNPRICED_TITLE`, its note a dash too while no
+ * request was billed, and its spark leaves an unpriced hour a gap. The figure waits on the scale, so native draws the
+ * skeleton while the cost model is out, and the settings read's failure as a dash titled with it. The dollar
+ * positions read their dollars.
  */
-function costTileOf(unit: UnitPosition, o: Overview): CostTile {
+function costTileOf(unit: UnitPosition, o: Overview, week: WeekPosition, scale: number | null, error: string | null): CostTile {
   if (unit === 'all') return { note: `${fmtUsd(o.cost24h / 24)} per hour`, spark: o.hourly.map((h) => h.cost), value: fmtUsd(o.cost24h) };
   if (unit === 'usd') return { note: `${fmtUsd(o.billed24h / 24)} per hour`, spark: o.hourly.map((h) => h.billed), value: fmtUsd(o.billed24h) };
   if (unit === 'equivalent') return { note: 'at the API price list, the subscription requests', spark: o.hourly.map((h) => h.cost - h.billed), value: fmtUsd(o.cost24h - o.billed24h) };
-  if (unit === 'share') return { note: 'shares do not add across accounts', spark: o.hourly.map((h) => h.cost), title: SHARE_NOTE, value: '-' };
+  // The `share` position is the one no select offers, so it reads as native from here.
   const day = o.equivalent24h;
   const plan = day === null || day > 0;
   const billed = o.billed24h > 0;
-  const { figures, marked, unpriced } = nativeFiguresOf('seven_day', { billed: billed ? o.billed24h : undefined, equivalent: plan ? day : undefined, unpriced: day === null }, false);
+  // In percent: the spark's scale floors at one, a dollar an hour on the dollar positions, and a floor of a whole
+  // week an hour would flatten the day. An unpriced hour is no idle one, so it draws as a gap.
+  const spark = (factor: number) => (plan || !billed ? o.hourly.map((h) => (h.equivalent === null ? null : h.equivalent * factor * 100)) : o.hourly.map((h) => h.billed));
+  if (scale === null) return error === null ? { note: null, spark: spark(1), value: null } : { note: 'could not load', spark: spark(1), title: error, value: '-' };
+  const { figures, unpriced } = nativeFiguresOf({ billed: billed ? o.billed24h : undefined, equivalent: plan ? day : undefined }, week, scale);
   return {
-    note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash('seven_day', day === null ? null : day / 24, marked)} per hour`,
-    // In percent: the spark's scale floors at one, a dollar an hour on the dollar positions, and a floor of a whole
-    // window an hour would flatten the day.
-    spark: plan || !billed ? o.hourly.map((h) => (h.equivalent ?? 0) * 100) : o.hourly.map((h) => h.billed),
-    title: unpriced ? UNPRICED_TITLE : marked ? ESTIMATED_TITLE : undefined,
+    note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash(day === null ? null : day / 24, week, scale)} per hour`,
+    spark: spark(scale),
+    title: unpriced ? UNPRICED_TITLE : undefined,
     value: figuresValue(figures),
   };
 }
@@ -82,7 +85,7 @@ function ReadFailed({ title, error, retry }: { error: string | null; retry: () =
 }
 
 export function DashboardPage() {
-  const { unit } = useAppSettings();
+  const { unit, week } = useAppSettings();
   const overview = useAsync(() => api.getOverview(), [], { refreshMs: 30_000 });
   const accounts = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
   const requests = useAsync(() => api.listRequests({ limit: 10 }), [], { refreshMs: 30_000 });
@@ -94,8 +97,9 @@ export function DashboardPage() {
 
   const o = overview.data;
   const hourly = o?.hourly ?? [];
-  const costTile = o ? costTileOf(unit, o) : null;
   const costs = settings.data?.subscriptionCosts ?? null;
+  const scale = weekScale(costs, week);
+  const costTile = o ? costTileOf(unit, o, week, scale, settings.error) : null;
   const ringFailure = failedFirst(accounts) ? (
     <ReadFailed title="Could not load the accounts" error={accounts.error} retry={accounts.reload} />
   ) : failedFirst(settings) ? (
@@ -182,7 +186,7 @@ export function DashboardPage() {
 
       <div className="dash-bottom">
         <Card title="Recent requests" subtitle="Last 10 across every pool" actions={<Link to="/requests">All requests</Link>} padded={false} className="card--table">
-          <RecentTable rows={requests.data?.requests ?? null} error={requests.error} settings={settings.data} />
+          <RecentTable rows={requests.data?.requests ?? null} error={requests.error} settings={settings.data} accounts={accounts.data} scale={scale} />
         </Card>
         <Card title="Sessions" subtitle="Sticky pins and cache-warming agents" actions={<Link to="/sessions">Open</Link>}>
           {failedFirst(overview) || failedFirst(sessions) ? (
@@ -196,7 +200,7 @@ export function DashboardPage() {
   );
 }
 
-function StatTile({ label, value, note, spark, color, title }: { color: string; label: string; note: string | null; spark: number[]; title?: string; value: ReactNode }) {
+function StatTile({ label, value, note, spark, color, title }: { color: string; label: string; note: string | null; spark: (number | null)[]; title?: string; value: ReactNode }) {
   return (
     <div className="stat" title={title}>
       <span className="stat__label">{label}</span>
@@ -322,11 +326,19 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
 const MODEL_CHARS = 12;
 
 /**
- * A recent request's Cost cell, read under each position as the Requests cell reads it, except that Native reads a
- * subscription request at a glance.
+ * A recent request's Cost cell, read under each position as the Requests cell reads it, with the hint composed from the
+ * accounts read and the cost model and the revisions in force on a native figure's title. The skeleton stands while
+ * the scale is out.
  */
-function RecentCost({ request, settings, unit }: { request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
-  const cell = glanceCellOf(costUnitOf(request, unit), revisionsTitle(settings, request.at));
+function RecentCost({ accounts, request, scale, settings, unit, week }: { accounts: Account[] | null; request: RequestLog; scale: number | null; settings: Settings | null; unit: UnitPosition; week: WeekPosition }) {
+  const args = requestHintArgs(request, accounts, settings?.subscriptionCosts ?? null);
+  const cell = glanceCellOf(costUnitOf(request, unit, args === null ? null : shareHint(...args)), revisionsTitle(settings, request.at), week, scale);
+  if (cell === null)
+    return (
+      <td className="right num col-fit">
+        <Skeleton width={72} />
+      </td>
+    );
   return (
     <td className="right num col-fit" title={cell.title || undefined}>
       {cell.main}
@@ -335,8 +347,8 @@ function RecentCost({ request, settings, unit }: { request: RequestLog; settings
   );
 }
 
-function RecentTable({ rows, error, settings }: { error: string | null; rows: RequestLog[] | null; settings: Settings | null }) {
-  const { unit } = useAppSettings();
+function RecentTable({ accounts, rows, error, scale, settings }: { accounts: Account[] | null; error: string | null; rows: RequestLog[] | null; scale: number | null; settings: Settings | null }) {
+  const { unit, week } = useAppSettings();
   return (
     <div className="table-wrap">
       <table className="table dash__recent">
@@ -396,7 +408,7 @@ function RecentTable({ rows, error, settings }: { error: string | null; rows: Re
                       {fmtCompact(tokensTotal(r.usage))}
                       <span className="sub">{fmtCompact(r.usage.cacheRead)} cached</span>
                     </td>
-                    <RecentCost request={r} settings={settings} unit={unit} />
+                    <RecentCost accounts={accounts} request={r} scale={scale} settings={settings} unit={unit} week={week} />
                   </tr>
                 );
               })}

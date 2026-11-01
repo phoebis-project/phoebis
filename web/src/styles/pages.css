@@ -4809,15 +4809,21 @@
   align-items: center;
 }
 
-/* A native Cost figure keeps its window's name whole, so a narrow tile moves the funding's word under the figure
-   rather than breaking "7-day" at its hyphen. The inline block leaves a break before the word. */
+/* A native Cost figure stays whole, so a narrow tile moves the funding's word under the figure rather than breaking
+   the figure. The inline block leaves a break before the word. */
 .cost-figure {
   display: inline-block;
   white-space: nowrap;
 }
 
-/* Each equivalent cell names its window in its short word, so at 1280 px the six figure columns fit a 990 px card at
-   8 px of padding a side beside a group column that keeps a floor of sixteen characters plus its 12 px a side. Longer
+/* A pool card's tile is half of a phone's card, narrower than a figure in the Ultra week, which then breaks between
+   its words rather than widening the card past the window. */
+.pool__stats .cost-figure {
+  white-space: normal;
+}
+
+/* Each figure cell reads the chosen week's short form, so at 1280 px the four figure columns fit a 990 px card at 8 px
+   of padding a side beside a group column that keeps a floor of sixteen characters plus its 12 px a side. Longer
    figures scroll the table inside its wrap. */
 .native-cost-table td.col-fill {
   min-width: calc(16ch + 24px);
@@ -4847,27 +4853,9 @@
   line-height: 16px;
 }
 
-/* The Traffic grid's eight cards pair off, and its rule spans the last card should the count turn odd. The Burn grid
-   draws three plan cards beside the spend card, or two without a model week, and spans an odd last card where the grid
-   holds two columns at most: from 1344 px it holds three or more, so three cards share one row and the four-card band
-   below keeps its own rule. */
+/* The Traffic grid's eight cards pair off, and its rule spans the last card should the count turn odd. */
 .traffic-grid > .card:last-child:nth-child(odd) {
   grid-column: 1 / -1;
-}
-
-@media (max-width: 1343.98px) {
-  .burn-grid > .card:last-child:nth-child(odd) {
-    grid-column: 1 / -1;
-  }
-}
-
-/* Four burn cards (three plan cards and the spend card) sit two by two in the window widths where auto-fit draws three
-   340 px columns, 1344 px to 1701 px, so no card sits alone at a third of the row, and from 1702 px the four share one
-   row. Three cards share one row from 1344 px, where the odd rule above no longer spans the third. */
-@media (min-width: 1344px) and (max-width: 1701.98px) {
-  .burn-grid--four {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 /* The Cache warming grid's five cards sit two to a row in `.grid-2`, which fits three 340 px columns and their two

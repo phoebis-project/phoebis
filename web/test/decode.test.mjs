@@ -1990,7 +1990,7 @@ test("a sum of groups adds the Pro-week figures, the billed side and the plan co
   close(mixed.billedUsd, a.billedUsd + b.billedUsd + folded.billedUsd, 'billedUsd with the fold');
   close(mixed.costEquivalent, a.costEquivalent + b.costEquivalent + folded.costEquivalent, 'costEquivalent with the fold');
   // A refused row joins no count of the fold, its plan counts among them.
-  const planRows = rows.filter((r) => !r.refused && d.costUnitOf(r, 'native').kind !== 'dollars');
+  const planRows = rows.filter((r) => !r.refused && d.costUnitOf(r, 'native', null).kind !== 'dollars');
   assert.deepEqual([folded.planRequests, folded.planOutputTokens], [planRows.length, planRows.reduce((n, r) => n + r.usage.output, 0)], 'a fold counts its plan rows under every grouping, as the route counts them');
   assert.deepEqual([mixed.planRequests, mixed.planOutputTokens], [routeOnly.planRequests + folded.planRequests, routeOnly.planOutputTokens + folded.planOutputTokens], 'and the counts sum');
   // A group the route answered no count for is skipped while another carries one.
@@ -2006,7 +2006,7 @@ test('a sum of groups reads null where a group priced nothing, so no partial sum
   assert.ok(priced.planRequests > 0 && unpriced.planRequests > 0 && unpriced.planOutputTokens > 0, 'both captured groups hold plan rows with tokens');
   const summed = d.sumGroups([priced, unpriced]);
   assert.deepEqual([summed.costEquivalent, summed.cacheEquivalent], [null, null], 'the group that priced nothing nulls the sum');
-  assert.equal(d.sidesOf(summed, 'seven_day').equivalent, null, 'and the plan side reads it unpriced');
+  assert.equal(d.sidesOf(summed).equivalent, null, 'and the plan side reads it unpriced');
   const without = d.decodeAnalyticsGroup({ ...second, cache_equivalent: { read: 0, write: 0 }, cost_equivalent: 0, plan_output_tokens: 0, plan_requests: 0 });
   const kept = d.sumGroups([priced, without]);
   assert.deepEqual([kept.costEquivalent, kept.cacheEquivalent], [0.25, { read: 0.125, write: 0.0625 }], 'a group with no plan row adds its zero');
@@ -2016,7 +2016,7 @@ test('a session fold reads null where one of its plan rows priced nothing and, c
   const plan = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
   const attempt = plan.attempts[plan.attempts.length - 1];
   const [folded] = d.foldGroups([plan, { ...plan, costEquivalent: null, id: 'r-unpriced' }], 'key');
-  assert.deepEqual([folded.costEquivalent, folded.planRequests, d.sidesOf(folded, 'seven_day').equivalent, d.costHeadOf('native', folded).meta], [null, 2, null, '- in range'], 'the group counts its plan rows and reads them unpriced rather than as a group with no plan row');
+  assert.deepEqual([folded.costEquivalent, folded.planRequests, d.sidesOf(folded).equivalent, d.costHeadOf('native', folded, 'ultra', 0.1).meta], [null, 2, null, '- in range'], 'the group counts its plan rows and reads them unpriced rather than as a group with no plan row');
   // A billed row carries no plan figure, and a plan row with no token prices nothing, so neither nulls the fold.
   const billed = { ...plan, attempts: [{ ...attempt, accountKind: 'api_key' }], costEquivalent: null, id: 'r-billed' };
   const tokenless = { ...plan, costEquivalent: null, id: 'r-tokenless', usage: { ...plan.usage, cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 } };

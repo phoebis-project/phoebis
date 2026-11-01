@@ -24,7 +24,7 @@ export { call };
 // The fold the Cost section sums its groups by, so a check reads the totals the page draws from one derivation.
 export { sumGroups } from '@/api/fold';
 export { AttentionRows } from '@/components/AttentionRows';
-export { GROUPED_SHARE_NOTE, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, SHARE_NOTE } from '@/lib/analytics';
+export { MAX_BURN_LINES, NATIVE_SUBSET, shareHint } from '@/lib/analytics';
 // The model item's sentence, so the attention line's check reads its title against the story's own detail.
 export { ATTENTION_REFRESH_MS, attentionDetail } from '@/lib/attention';
 export { default as React } from 'react';
@@ -47,7 +47,7 @@ export { CACHE_MISS_LABEL, CACHE_MISS_REASONS, CACHE_MISS_SHORT, missLabel, miss
 // The strip's model and its buttons' names, so a card check spells the stations a record draws and the names a reader
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
-export { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, shareLabel, shortModel, spanText, undatedModel, weekShort } from '@/lib/format';
+export { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, shareLabel, shortModel, spanText, undatedModel, weekShort } from '@/lib/format';
 // The pace mark's offset, so the check and the meter place it by one arithmetic.
 export { remainingTimeShare } from '@/lib/quota';
 // The projection's phrase, its burn and the span it spells, so a check computes the words a window draws from the one

@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
+const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtHourTick, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
 
 test("a fork reads its base cut at the session's width and the depth where one is known", () => {
   const base = '1a2b3c4d-5e6f-4a7b-9c8d-7e6f5a4b3c2d';
@@ -195,15 +195,6 @@ test('a spend amount in minor units reads in its own currency at its exponent', 
 test('a spend amount under a code Intl rejects reads as a decimal with the code after it, or alone without a code', () => {
   assert.equal(fmtMinor(12_500, 'EURO', 2), '125.00 EURO', 'a code of four letters prints after the amount');
   assert.equal(fmtMinor(12_500, '', 2), '125.00', 'an empty code prints the amount alone');
-});
-
-test('a 20x window equivalent reads as a percent of the named 20x window to three significant digits, and zero as 0%', () => {
-  assert.equal(fmtEquivalent('five_hour', 0.014667), '1.47% of 20x 5-hour');
-  assert.equal(fmtEquivalent('seven_day', 0.002444), '0.244% of 20x 7-day');
-  assert.equal(fmtEquivalent('seven_day_fable', 0.02222), '2.22% of 20x 7-day Fable', 'the model week reads 7-day Fable');
-  assert.equal(fmtEquivalent('seven_day', 3.4), '340% of 20x 7-day', 'a sum past one window stays a percent');
-  assert.equal(fmtEquivalent('seven_day', 0), '0%');
-  assert.equal(fmtEquivalent('seven_day_opus', 0.5), '50% of 20x seven_day_opus', 'a window the pages do not know keeps its key');
 });
 
 test('a share of the chosen week reads as a percent of that week, zero as 0%, and its short form names the week', () => {

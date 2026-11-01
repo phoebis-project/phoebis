@@ -14,13 +14,14 @@ import { figuresValue, Tile } from '@/components/ui/Tile';
 import { IconChevron, IconInfo, IconPlus, IconWarning, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC, type KeysAddress } from '@/lib/address';
-import { nativeFiguresOf, SHARE_NOTE, UNPRICED_TITLE, type DollarPosition } from '@/lib/analytics';
+import { nativeFiguresOf, UNPRICED_TITLE, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { effectiveCaptureHours } from '@/lib/capture';
 import { clock } from '@/lib/clock';
+import { weekScale } from '@/lib/costs';
 import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import type { PauseCause } from '@/lib/follow';
-import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { guardrailsChange, KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, sortKeys, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { scrollToElement } from '@/lib/scroll';
@@ -65,60 +66,70 @@ export const dollarsUnder = (unit: DollarPosition, s: FundedSum): number => (uni
  * A null figure is a plan row priced nothing, a side with rows whatever the other rows priced, and a zero reads as no
  * plan rows.
  */
-export const nativeSidesOf = (s: FundedSum): { billed: number | undefined; equivalent: number | null | undefined; unpriced: boolean } => ({
+export const nativeSidesOf = (s: FundedSum): { billed: number | undefined; equivalent: number | null | undefined } => ({
   billed: s.billedUsd > 0 ? s.billedUsd : undefined,
   equivalent: s.equivalent === null || s.equivalent > 0 ? s.equivalent : undefined,
-  unpriced: s.equivalent === null,
 });
-/** The title of a sum's native figure: the unpriced window's, else the estimate's where the equivalent is marked. */
-const nativeTitleOf = (f: { marked: boolean; unpriced: boolean }): string | undefined => (f.unpriced ? UNPRICED_TITLE : f.marked ? ESTIMATED_TITLE : undefined);
 /**
- * A tile over a sum under a position. Native stacks the two sides with their words, the subscription side a dash under
- * `UNPRICED_TITLE` where the window is flagged, and an empty sum reads its zero in each unit rather than nothing. The
- * shares are one account's, and these tiles sum every account, so they read a dash.
+ * A tile over a sum under a position. Native stacks the two sides with their words in the chosen week, the
+ * subscription side a dash under `UNPRICED_TITLE` where a plan row priced nothing, and an empty sum reads its zero in
+ * each unit rather than nothing. A null value is the skeleton native draws while the scale is out.
  */
-export function sumTileOf(unit: UnitPosition, s: FundedSum): { title?: string; value: ReactNode } {
-  if (unit === 'share') return { title: SHARE_NOTE, value: '-' };
-  if (unit !== 'native') return { value: fmtUsd(dollarsUnder(unit, s)) };
-  const native = nativeFiguresOf('seven_day', nativeSidesOf(s), false);
-  return { title: nativeTitleOf(native), value: figuresValue(native.figures) };
+export function sumTileOf(unit: UnitPosition, s: FundedSum, reading: WeekReading): { title?: string; value: ReactNode | null } {
+  // The `share` position is the one no select offers.
+  const position = unit === 'share' ? 'native' : unit;
+  if (position !== 'native') return { value: fmtUsd(dollarsUnder(position, s)) };
+  if (reading.scale === null) return { value: null };
+  const native = nativeFiguresOf(nativeSidesOf(s), reading.week, reading.scale);
+  return { title: native.unpriced ? UNPRICED_TITLE : undefined, value: figuresValue(native.figures) };
 }
 /**
- * A key's figure as a label or a line reads it: native's two sides on one line, a side with no rows left out and a
- * dash titled `empty` where neither has any, a dollar position's dollars, and under the shares a dash, since a key
- * spans its pool's accounts.
+ * A key's figure as a label or a line reads it: native's two sides on one line in the chosen week, a side with no rows
+ * left out and a dash titled `empty` where neither has any, and a dollar position's dollars. A key spans its pool's
+ * accounts, so no one account's windows bound it and it carries no hint. Null under native while the scale is out.
  */
-function keyFigureOf(unit: UnitPosition, s: FundedSum, empty: string): { text: string; title?: string } {
-  if (unit === 'share') return { text: '-', title: SHARE_NOTE };
-  if (unit !== 'native') return { text: fmtUsd(dollarsUnder(unit, s)) };
+function keyFigureOf(unit: UnitPosition, s: FundedSum, empty: string, reading: WeekReading): { text: string; title?: string } | null {
+  // The `share` position is the one no select offers.
+  const position = unit === 'share' ? 'native' : unit;
+  if (position !== 'native') return { text: fmtUsd(dollarsUnder(position, s)) };
   const sides = nativeSidesOf(s);
   if (sides.equivalent === undefined && sides.billed === undefined) return { text: '-', title: empty };
-  const native = nativeFiguresOf('seven_day', sides, false);
-  return { text: native.figures.map((f) => (f.word === 'billed' ? `${f.text} billed` : f.text)).join(', '), title: nativeTitleOf(native) };
+  if (reading.scale === null) return null;
+  const native = nativeFiguresOf(sides, reading.week, reading.scale);
+  return { text: native.figures.map((f) => (f.word === 'billed' ? `${f.text} billed` : f.text)).join(', '), title: native.unpriced ? UNPRICED_TITLE : undefined };
 }
 /**
- * A key's bar length on the lifetime cost card: under native the 7-day equivalent, where a billed key's dollars read in
- * its label alone, and null where a plan row priced nothing on that window, since the priced rows alone would draw a
- * length the key's traffic does not have. A dollar position ranks by its dollars, and the shares by 0, since no key
- * reads a share to rank by.
+ * A key's bar length on the lifetime cost card: under native the Pro-week figure, which the chosen week scales alike for
+ * every bar, where a billed key's dollars read in its label alone, and null where a plan row priced nothing, since the
+ * priced rows alone would draw a length the key's traffic does not have. A dollar position ranks by its dollars.
  */
 export const keyRankOf = (unit: UnitPosition, lifetime: FundedSum): number | null => {
-  if (unit === 'native') return lifetime.equivalent;
-  return unit === 'share' ? 0 : dollarsUnder(unit, lifetime);
+  // The `share` position is the one no select offers.
+  const position = unit === 'share' ? 'native' : unit;
+  return position === 'native' ? lifetime.equivalent : dollarsUnder(position, lifetime);
 };
 
+/** A key's figure while the scale is out: the skeleton, or the settings read's failure as a dash titled with it. */
+function PendingFigure({ error }: { error: string | null }) {
+  return error === null ? <Skeleton width={72} height={12} /> : <span title={error}>-</span>;
+}
+
 /** A key row's 7-day figure under its tokens. */
-function WeekLine({ unit, usage }: { unit: UnitPosition; usage: FundedSum }) {
-  const figure = keyFigureOf(unit, usage, 'No request in the last 7 days');
+function WeekLine({ reading, unit, usage }: { reading: WeekReading; unit: UnitPosition; usage: FundedSum }) {
+  const figure = keyFigureOf(unit, usage, 'No request in the last 7 days', reading);
   return (
-    <span className="sub" title={figure.title}>
-      {figure.text}
+    <span className="sub" title={figure?.title}>
+      {figure === null ? <PendingFigure error={reading.error} /> : figure.text}
     </span>
   );
 }
 
 export function KeysPage() {
-  const { unit } = useAppSettings();
+  const { unit, week } = useAppSettings();
+  // The cost model whose capacities scale every figure to the chosen week. The Pro week reads without it.
+  const settings = useAsync(() => api.getSettings(), []);
+  const scale = weekScale(settings.data?.subscriptionCosts ?? null, week);
+  const reading: WeekReading = { error: scale === null ? settings.error : null, scale, week };
   const now = useNow();
   const ink = useChartInk();
   const location = useLocation();
@@ -244,7 +255,7 @@ export function KeysPage() {
         },
       }
     : null;
-  const lifetimeTile = totals ? sumTileOf(unit, totals.lifetime) : null;
+  const lifetimeTile = totals ? sumTileOf(unit, totals.lifetime, reading) : null;
   const rankOf = (k: ApiKey) => keyRankOf(unit, k.lifetime);
   // The top rank sets the full width: a fixed floor such as a dollar would dwarf the equivalent's bars, each a small
   // fraction of a window.
@@ -278,6 +289,7 @@ export function KeysPage() {
           onRefresh: () => {
             keys.reload();
             pools.reload();
+            settings.reload();
           },
           paused: pauseCause,
           refreshTitle: 'Reads the list again now',
@@ -292,7 +304,7 @@ export function KeysPage() {
         <Tile label="Keys" value={totals ? fmtInt(totals.keys) : null} />
         <Tile label="Active" value={totals ? fmtInt(totals.active) : null} />
         <Tile label="Lifetime requests" value={totals ? fmtCompact(totals.requests) : null} />
-        <Tile label="Lifetime cost" value={lifetimeTile?.value ?? null} title={lifetimeTile?.title} />
+        <Tile label="Lifetime cost" value={lifetimeTile?.value ?? null} title={lifetimeTile?.title} error={lifetimeTile?.value === null ? reading.error : null} />
       </div>
 
       <div className="keys-layout">
@@ -303,7 +315,7 @@ export function KeysPage() {
                 // An unknown rank sorts below a zero, so a flagged key comes last.
                 .sort((a, b) => (rankOf(b) ?? -1) - (rankOf(a) ?? -1))
                 .map((k) => {
-                  const figure = keyFigureOf(unit, k.lifetime, 'No request yet');
+                  const figure = keyFigureOf(unit, k.lifetime, 'No request yet', reading);
                   const rank = rankOf(k);
                   return (
                     <li key={k.id}>
@@ -312,7 +324,7 @@ export function KeysPage() {
                           {k.name} <span className="muted mono">{k.prefix}…</span>
                         </span>
                         <span className="num">
-                          <span title={figure.title}>{figure.text}</span> <span className="muted">{fmtCompact(k.lifetime.requests)} {k.lifetime.requests === 1 ? 'request' : 'requests'}</span>
+                          {figure === null ? <PendingFigure error={reading.error} /> : <span title={figure.title}>{figure.text}</span>} <span className="muted">{fmtCompact(k.lifetime.requests)} {k.lifetime.requests === 1 ? 'request' : 'requests'}</span>
                         </span>
                       </div>
                       <div className="hbars__track">
@@ -380,7 +392,7 @@ export function KeysPage() {
                         <td className="col-fill">{k.modelRules.length ? <span className="mono" title={k.modelRules.map((r) => (r.not ? `NOT ${r.pattern}` : r.pattern)).join(', ')}>{k.modelRules.length === 1 ? '1 rule' : `${k.modelRules.length} rules`}{k.modelRulesMode === 'replace' && ' (replace)'}</span> : <span className="muted" title={NO_RULES[k.modelRulesMode]}>{NO_RULES[k.modelRulesMode]}</span>}</td>
                         <td className="right num col-fit">
                           {fmtCompact(k.usage7d.tokens)} tok
-                          <WeekLine unit={unit} usage={k.usage7d} />
+                          <WeekLine reading={reading} unit={unit} usage={k.usage7d} />
                         </td>
                         <td className="col-fit" title={k.expiresAt ? fmtAbsolute(k.expiresAt) : undefined}>{k.expiresAt ? fmtDate(k.expiresAt) : <span className="muted">Never</span>}</td>
                         <td className="col-fill">

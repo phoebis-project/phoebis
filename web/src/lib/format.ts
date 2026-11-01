@@ -79,9 +79,6 @@ export const weekShort = (share: number, week: WeekPosition): string => `${fmtSh
 const EQUIVALENT_WINDOW: ByWindow<string> = { '5h': '5-hour', '7d': '7-day', '7d_fable': '7-day Fable' };
 /** A 20x equivalent's window word: "5-hour", "7-day", "7-day Fable", a window the pages do not know under its key. */
 export const equivalentWord = (windowKey: string): string => EQUIVALENT_WINDOW[windowKeyId(windowKey) ?? ''] ?? windowKey;
-/** The 20x window equivalent with its window named: "1.47% of 20x 5-hour", "2.22% of 20x 7-day Fable", zero as "0%". */
-export const fmtEquivalent = (windowKey: string, share: number): string =>
-  share === 0 ? '0%' : `${fmtShare(share)} of 20x ${equivalentWord(windowKey)}`;
 /** The short form for a cell: "1.47% 20x 5h", "0.244% 20x 7d", "2.22% 20x 7-day Fable". */
 export const equivalentShort = (windowKey: string, share: number): string => `${fmtShare(share)} 20x ${WINDOW_SHORT[windowKeyId(windowKey) ?? ''] ?? windowKey}`;
 /**

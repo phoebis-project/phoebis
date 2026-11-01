@@ -246,8 +246,9 @@ export const weekScale = (costs: SubscriptionCosts | null, week: WeekPosition): 
 };
 
 /** The account tiers a model week applies to: the cost model sizes the Fable week for every tier, and Pro has no
- *  Fable access, so the hint and the cost reference draw the week for these tiers alone. */
-export const MODEL_WEEK_TIERS: Record<string, readonly string[]> = { seven_day_fable: ['default_claude_max_5x', 'default_claude_max_20x'] };
+ *  Fable access, so the hint and the cost reference draw the week for these tiers alone. Each tier is listed in both
+ *  spellings a profile reports, as `planLabel` maps them, so the match stays exact. */
+export const MODEL_WEEK_TIERS: Record<string, readonly string[]> = { seven_day_fable: ['claude_max_20x', 'claude_max_5x', 'default_claude_max_20x', 'default_claude_max_5x'] };
 
 /** The entry in force at `at` (an instant or an ISO string): the latest `effectiveDate` at or before it, else the
  *  first, since a blank history reads worse than the earliest known table. Null for an empty list. */

@@ -1,10 +1,10 @@
 import { effectiveLabel } from '@/api/decode';
-import type { CohortHold, RequestLog, Settings } from '@/api/types';
-import { own } from '@/lib/analytics';
-import { type Funding, fundingOf, nativeOf, revisionAt } from '@/lib/costs';
-import { equivalentShort, fmtEquivalent, fmtUsd, shareLabel, shareShort, withEstimate } from '@/lib/format';
+import type { Account, CohortHold, RequestLog, Settings, SubscriptionCosts } from '@/api/types';
+import { hintPlan, own } from '@/lib/analytics';
+import { type Funding, fundingOf, inBand, nativeOf, revisionAt } from '@/lib/costs';
+import { fmtUsd, fmtWeek, weekShort } from '@/lib/format';
 import { ageWord } from '@/lib/routingLog';
-import type { UnitPosition } from '@/lib/unit';
+import type { UnitPosition, WeekPosition } from '@/lib/unit';
 
 /** The words under a dollar figure for who paid: the funding of a request billed in dollars. */
 export const FUNDING_WORD: Record<Exclude<Funding, 'plan'>, string> = { api_key: 'API key', fast: 'fast mode', overage: 'overage', usage_based: 'usage-based' };
@@ -39,31 +39,26 @@ export function heldWords(held: CohortHold): { badge: string; title: string } {
   return { badge, title: `waited ${waits.length > 0 ? waits.join(', ') : waitWord(held.heldMs)} on ${heldOn(held)}` };
 }
 
-/** The two windows every subscription shares, drawn first in this order, and a model's own week follows them. */
-const SHARED_WINDOWS = ['five_hour', 'seven_day'];
-
-/** A request's cost as a position reads it, each position reading what its line of the unit legend names. A plan-funded
- *  request carries its 20x equivalents under native, its dollar equivalent beside them under All in dollars and Dollar
- *  equivalent, the shares the route answered under Window shares and a dash under Billed dollars, each list the
- *  windows the route priced (a null one left out) in the order 5-hour, 7-day, then the model week. One billed in
- *  dollars carries the dollars with the funding word, and a dash under Dollar equivalent. One the route priced no
- *  window for carries the dollar equivalent alone, and a request no account served the zero dollars, with no funding
- *  to name. Every variant carries `estimated`, the route's flag, so the mark follows a figure under every position. A
- *  dash keeps the flag but draws no mark, since it shows no figure to estimate. A unit of 20x equivalents, of the
- *  dollar equivalent or of shares carries the route's `reason` where its figures read zero by rule. */
+/**
+ * A request's cost as a position reads it, each position reading what its line of the unit legend names. A plan-funded
+ * request carries its Pro-week figure under native, its dollar equivalent beside it under All in dollars and Dollar
+ * equivalent, and a dash under Billed dollars, with the hint where the surface composed one. One billed in dollars
+ * carries the dollars with the funding word, and a dash under Dollar equivalent. One the route priced nothing for
+ * carries the dollar equivalent alone, and a request no account served the zero dollars, with no funding to name. A
+ * unit of the figure carries the route's `reason` where the figure reads zero by rule.
+ */
 export type CostUnit =
-  | { kind: 'dash'; estimated: boolean; title: string; usd: number }
-  | { kind: 'dollars'; estimated: boolean; funding: Exclude<Funding, 'plan'>; usd: number }
-  | { kind: 'equivalent'; equivalents: { key: string; share: number }[]; estimated: boolean; reason: 'client_classifier' | null; usd: number }
-  | { kind: 'equivalent_dollars'; equivalents: { key: string; share: number }[]; estimated: boolean; reason: 'client_classifier' | null; usd: number }
-  | { kind: 'shares'; estimated: boolean; reason: 'client_classifier' | null; shares: { key: string; share: number }[]; usd: number }
-  | { kind: 'unpriced'; estimated: boolean; usd: number }
-  | { kind: 'unserved'; estimated: boolean; usd: number };
+  | { kind: 'dash'; title: string; usd: number }
+  | { kind: 'dollars'; funding: Exclude<Funding, 'plan'>; usd: number }
+  | { kind: 'equivalent'; figure: number; hint: string | null; reason: 'client_classifier' | null; usd: number }
+  | { kind: 'equivalent_dollars'; figure: number; hint: string | null; reason: 'client_classifier' | null; usd: number }
+  | { kind: 'unpriced'; usd: number }
+  | { kind: 'unserved'; usd: number };
 
 const COST_HEADER_TITLE: Record<UnitPosition, string> = {
   all: 'Dollar equivalent for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
   equivalent: 'Dollar equivalent for a request a subscription window paid, a dash for an API key, fast mode, overage or usage-based request',
-  native: '20x window equivalents for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
+  native: 'A share of the chosen week for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
   share: 'Window shares for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
   usd: 'A dash for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
 };
@@ -73,84 +68,61 @@ export function costHeaderTitle(unit: UnitPosition): string {
   return COST_HEADER_TITLE[unit];
 }
 
-/** A window map's priced entries, the two shared windows first. */
-function pricedWindows(map: Record<string, number | null> | null): { key: string; share: number }[] {
-  // A null figure is a window the route could not price, which draws nothing rather than a wrong figure.
-  const priced = Object.entries(map ?? {}).filter((entry): entry is [string, number] => entry[1] !== null);
-  const rank = (key: string) => {
-    const at = SHARED_WINDOWS.indexOf(key);
-    return at < 0 ? SHARED_WINDOWS.length : at;
-  };
-  // A stable sort keeps the route's order among the keys past the two shared windows.
-  return priced.sort((a, b) => rank(a[0]) - rank(b[0])).map(([key, share]) => ({ key, share }));
+/**
+ * The hint's arguments for a request: the serving account's plan, its display name where the accounts read holds it,
+ * the shares the route answered, the tier the attempt stored and the band at the request's completion where the cost
+ * model is at hand. Null while the accounts read is out, and where the row names no plan to label.
+ */
+export function requestHintArgs(r: Pick<RequestLog, 'accountId' | 'at' | 'costShares' | 'durationMs' | 'tier'>, accounts: Account[] | null, costs: SubscriptionCosts | null): [string, Record<string, number | null> | null, string | null, boolean | null] | null {
+  if (accounts === null) return null;
+  const plan = hintPlan(accounts.find((a) => a.id === r.accountId), r.tier);
+  return plan === null ? null : [plan, r.costShares, r.tier, costs === null ? null : inBand(costs, Date.parse(r.at) + (r.durationMs ?? 0))];
 }
 
-/** The request's Pro-week figure as the one 7-day equivalent the cells read, none where the route priced nothing. */
-const figureOf = (r: Pick<RequestLog, 'costEquivalent'>): { key: string; share: number }[] => (r.costEquivalent === null ? [] : [{ key: 'seven_day', share: r.costEquivalent }]);
-
-export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costEquivalent' | 'costShares' | 'costUsd' | 'shareReason'>, unit: UnitPosition): CostUnit {
+/** `hint` is `shareHint` over the row, composed by the surface that holds the account and the cost model. */
+export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costEquivalent' | 'costShares' | 'costUsd' | 'shareReason' | 'tier'>, unit: UnitPosition, hint: string | null): CostUnit {
   const { costUsd: usd, shareReason: reason } = r;
-  // The route answers no estimate, so no figure carries the mark.
-  const estimated = false;
   const last = r.attempts[r.attempts.length - 1];
-  if (last === undefined) return { estimated, kind: 'unserved', usd };
+  if (last === undefined) return { kind: 'unserved', usd };
   const funding = fundingOf(last);
-  if (unit === 'native' && nativeOf(funding) === 'equivalent') {
-    const equivalents = figureOf(r);
-    return equivalents.length === 0 ? { estimated, kind: 'unpriced', usd } : { equivalents, estimated, kind: 'equivalent', reason, usd };
-  }
+  // The `share` position is the one no select offers.
+  const position = unit === 'share' ? 'native' : unit;
+  if (position === 'native' && nativeOf(funding) === 'equivalent') return r.costEquivalent === null ? { kind: 'unpriced', usd } : { figure: r.costEquivalent, hint, kind: 'equivalent', reason, usd };
   // A billed request has no subscription equivalent to read, and a subscription request bills no dollars.
-  if (funding !== 'plan') return unit === 'equivalent' ? { estimated, kind: 'dash', title: NO_EQUIVALENT_TITLE, usd } : { estimated, funding, kind: 'dollars', usd };
-  if (unit === 'usd') return { estimated, kind: 'dash', title: NOTHING_BILLED_TITLE, usd };
-  if (unit === 'all' || unit === 'equivalent') return { equivalents: figureOf(r), estimated, kind: 'equivalent_dollars', reason, usd };
-  const shares = pricedWindows(r.costShares);
-  return shares.length === 0 ? { estimated, kind: 'unpriced', usd } : { estimated, kind: 'shares', reason, shares, usd };
+  if (funding !== 'plan') return position === 'equivalent' ? { kind: 'dash', title: NO_EQUIVALENT_TITLE, usd } : { funding, kind: 'dollars', usd };
+  if (position === 'usd') return { kind: 'dash', title: NOTHING_BILLED_TITLE, usd };
+  return r.costEquivalent === null ? { kind: 'unpriced', usd } : { figure: r.costEquivalent, hint, kind: 'equivalent_dollars', reason, usd };
 }
 
-/** An equivalent unit's figures in full, then the dollar equivalent. */
-const equivalentReading = (unit: Extract<CostUnit, { kind: 'equivalent' | 'equivalent_dollars' }>): string =>
-  [...unit.equivalents.map((e) => fmtEquivalent(e.key, e.share)), `${fmtUsd(unit.usd)} equivalent`].join(', ');
+/** Parts of a title as sentences, an absent part left out. */
+const sentences = (parts: (string | null)[]): string => parts.filter((part): part is string => part !== null && part !== '').join('. ');
 
-/** A plan unit's reading, led by the free sentence where the route gave a reason for its zero figures. */
-const freeLed = (reason: 'client_classifier' | null, reading: string): string => (reason === null ? reading : `${FREE_SHARE_TITLE}. ${reading}`);
+/**
+ * A dollar equivalent unit's title: the hint, then the figure in the chosen week and the dollars. The figure waits on
+ * the scale, so the title reads the dollars alone while it is out.
+ */
+const equivalentReading = (unit: Extract<CostUnit, { kind: 'equivalent_dollars' }>, week: WeekPosition, scale: number | null): string =>
+  sentences([unit.hint, [...(scale === null ? [] : [fmtWeek(unit.figure * scale, week)]), `${fmtUsd(unit.usd)} equivalent`].join(', ')]);
 
-/** The table cell's two lines and title, before the estimated mark. */
-function plainCell(unit: CostUnit): { main: string; sub: string; title: string } {
+/** A plan unit's reading, led by the free sentence where the route gave a reason for its zero figure. */
+const freeLed = (reason: 'client_classifier' | null, reading: string): string => (reason === null ? reading : sentences([FREE_SHARE_TITLE, reading]));
+
+/**
+ * The table cell's main line, second line and title. Native reads the figure in the chosen week's short form on one
+ * line, the title the hint, then the dollar equivalent, behind the free sentence where the route gave a reason for a
+ * zero figure. A dollar equivalent draws the dollars over `equivalent` with the figure in full and the dollars on the
+ * title, behind the same sentence, a dollar unit the dollars over the funding word or `equivalent`, a dash its title
+ * alone, and an unserved request's dollars alone, with no second line and no title. Null under native while `scale` is
+ * out, which the surface draws as its skeleton, so no Pro-week figure reads under the chosen week's label.
+ */
+export function costCellOf(unit: CostUnit, week: WeekPosition, scale: number | null): { main: string; sub: string; title: string } | null {
   if (unit.kind === 'dash') return { main: '-', sub: '', title: unit.title };
   if (unit.kind === 'dollars') return { main: fmtUsd(unit.usd), sub: FUNDING_WORD[unit.funding], title: `Billed in dollars: ${FUNDING_WORD[unit.funding]}` };
-  if (unit.kind === 'equivalent_dollars') return { main: fmtUsd(unit.usd), sub: 'equivalent', title: freeLed(unit.reason, equivalentReading(unit)) };
+  if (unit.kind === 'equivalent_dollars') return { main: fmtUsd(unit.usd), sub: 'equivalent', title: freeLed(unit.reason, equivalentReading(unit, week, scale)) };
   if (unit.kind === 'unpriced') return { main: fmtUsd(unit.usd), sub: 'equivalent', title: NO_SHARE_TITLE };
   if (unit.kind === 'unserved') return { main: fmtUsd(unit.usd), sub: '', title: '' };
-  if (unit.kind === 'equivalent') {
-    // One request's cell leads with the 5-hour window. A request with no 5-hour figure leads with the next window it
-    // priced, so the cell never draws an empty main line.
-    const [main, sub] = unit.equivalents;
-    return {
-      main: equivalentShort(main.key, main.share),
-      sub: sub ? equivalentShort(sub.key, sub.share) : '',
-      title: freeLed(unit.reason, equivalentReading(unit)),
-    };
-  }
-  const main = unit.shares.find((s) => !SHARED_WINDOWS.includes(s.key)) ?? unit.shares.find((s) => s.key === 'seven_day') ?? unit.shares[0];
-  const fiveHour = unit.shares.find((s) => s.key === 'five_hour');
-  return {
-    main: shareShort(main.key, main.share),
-    // A row priced on the 5-hour window alone reads it as its main line and not again under it.
-    sub: fiveHour && fiveHour !== main ? shareShort(fiveHour.key, fiveHour.share) : '',
-    title: freeLed(unit.reason, [...unit.shares.map((s) => shareLabel(s.key, s.share)), `${fmtUsd(unit.usd)} equivalent`].join(', ')),
-  };
-}
-
-/** The table cell's two lines and title. An equivalent unit draws the 5-hour equivalent over the 7-day one, a share
- *  unit the model week's share where there is one, else the 7-day's, over the 5-hour share, each in its window's short
- *  word, with every figure in full and the dollar equivalent on the title, the free sentence ahead of them where the
- *  route gave a reason for zero figures. A dollar equivalent draws the dollars over `equivalent` with every equivalent
- *  in full and the dollars on the title, behind the same free sentence, a dollar unit the dollars over the funding word
- *  or `equivalent`, a dash its title alone, and an unserved request's dollars alone, with no second line and no title.
- *  A figure the route marked estimated reads a tilde before its main line and the estimate after its title. */
-export function costCellOf(unit: CostUnit): { main: string; sub: string; title: string } {
-  const cell = plainCell(unit);
-  return unit.estimated && unit.kind !== 'dash' ? { main: `~${cell.main}`, sub: cell.sub, title: withEstimate(cell.title, true) } : cell;
+  if (scale === null) return null;
+  return { main: weekShort(unit.figure * scale, week), sub: '', title: freeLed(unit.reason, sentences([unit.hint, `${fmtUsd(unit.usd)} equivalent`])) };
 }
 
 /**
@@ -165,13 +137,10 @@ export function revisionsTitle(settings: Pick<Settings, 'apiPrices' | 'subscript
 }
 
 /**
- * The Dashboard's recent Cost cell, a glance on one line. An equivalent unit reads its lead window's figure alone in
- * the 20x short form, and the title carries the full reading behind the free sentence where the route gave a reason,
- * the revisions in force and the estimate. Every other unit reads as the Requests cell.
+ * The Dashboard's recent Cost cell, a glance on one line. Every unit reads as the Requests cell, and the native figure's
+ * title carries the revisions in force after the reading. Null while the scale is out, as the Requests cell is.
  */
-export function glanceCellOf(unit: CostUnit, revisions: string | null): { main: string; sub: string; title: string } {
-  if (unit.kind !== 'equivalent') return costCellOf(unit);
-  const [lead] = unit.equivalents;
-  const title = [freeLed(unit.reason, equivalentReading(unit)), revisions].filter((part) => part !== null).join('. ');
-  return { main: `${unit.estimated ? '~' : ''}${equivalentShort(lead.key, lead.share)}`, sub: '', title: withEstimate(title, unit.estimated) };
+export function glanceCellOf(unit: CostUnit, revisions: string | null, week: WeekPosition, scale: number | null): { main: string; sub: string; title: string } | null {
+  const cell = costCellOf(unit, week, scale);
+  return cell === null || unit.kind !== 'equivalent' ? cell : { ...cell, title: sentences([cell.title, revisions]) };
 }
