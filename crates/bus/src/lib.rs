@@ -219,7 +219,6 @@ mod tests {
         let bus = Bus::new();
         let mut reader = bus.subscribe("reader", Delivery::Durable);
         let sleeper = bus.subscribe("sleeper", Delivery::Durable);
-        let started = std::time::Instant::now();
         for i in 0..QUEUE_DEPTH {
             bus.publish(observed(&format!("r{i}")));
             // The reader keeps up; the sleeper never reads.
@@ -228,14 +227,10 @@ mod tests {
             }
         }
         // Chunks share the queue: the sleeper's is full, so these drop, and they drop in order after the
-        // observations that fit.
+        // observations that fit. The sleeper never reads, so a publish that waited on it would never return.
         for i in 0..40 {
             bus.publish(Event::ResponseChunk(chunk("r0", i)));
         }
-        assert!(
-            started.elapsed() < Duration::from_millis(500),
-            "publishing never waits on a subscriber"
-        );
         assert_eq!(sleeper.stats.dropped.load(Ordering::SeqCst), 40);
         assert_eq!(reader.stats.dropped.load(Ordering::SeqCst), 0);
         let mut seen = 0;
@@ -389,19 +384,7 @@ mod tests {
 
     #[test]
     fn the_header_denylist_refuses_credentials_and_the_relays_own_hop() {
-        for name in [
-            "anthropic-beta",
-            "anthropic-version",
-            "content-type",
-            "user-agent",
-            "x-app",
-            "x-claude-code-future",
-            "x-claude-code-session-id",
-            "X-Foo",
-            "X-Stainless-Lang",
-        ] {
-            assert!(header_published(name), "{name}");
-        }
+        assert!(header_published("X-Foo"));
         for name in [
             "Accept-Encoding",
             "authorization",

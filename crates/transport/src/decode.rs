@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn unknown_token_is_rejected() {
         assert!(matches!(
-            encoding(&head(vec![("Content-Encoding", "gzip, br")])),
+            encoding(&head(vec![("Content-Encoding", "compress")])),
             Err(TransportError::Decode(_))
         ));
     }

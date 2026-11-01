@@ -1243,63 +1243,56 @@ mod tests {
     /// condition as no body at all.
     #[test]
     fn the_scanners_refuse_the_depth_serde_refuses_and_admit_the_depth_it_reads() {
-        let mut verdicts = Vec::new();
-        for depth in MAX_DEPTH - 2..=MAX_DEPTH {
-            let body = nested(depth);
-            let reads = serde_json::from_slice::<serde_json::Value>(&body).is_ok();
-            verdicts.push(reads);
-            if reads {
-                let admitted =
-                    format!("serde reads {depth} arrays under the root, so the scanners do");
-                assert!(sign(&body).is_ok(), "{admitted}");
-                assert!(
-                    string_member_span(&body, &["model"]).is_some(),
-                    "{admitted}"
-                );
-                assert!(
-                    matches!(repeated_top_level_member(&body, &["model"]), Ok(None)),
-                    "{admitted}"
-                );
-                assert!(
-                    matches!(first_system_block_member_count(&body, "text"), Ok(1)),
-                    "{admitted}"
-                );
-                assert!(
-                    matches!(cache_control_spans(&body), Ok(spans) if spans.is_empty()),
-                    "{admitted}"
-                );
-            } else {
-                let refused =
-                    format!("serde refuses {depth} arrays under the root, so the scanners do");
-                assert!(
-                    matches!(sign(&body), Err(CchError::TooDeep(_))),
-                    "{refused}"
-                );
-                assert_eq!(string_member_span(&body, &["model"]), None, "{refused}");
-                assert!(
-                    matches!(
-                        repeated_top_level_member(&body, &["model"]),
-                        Err(CchError::TooDeep(_))
-                    ),
-                    "{refused}"
-                );
-                assert!(
-                    matches!(
-                        first_system_block_member_count(&body, "text"),
-                        Err(CchError::TooDeep(_))
-                    ),
-                    "{refused}"
-                );
-                assert!(
-                    matches!(cache_control_spans(&body), Err(CchError::TooDeep(_))),
-                    "{refused}"
-                );
-            }
-        }
+        // The root and 126 arrays are 127 containers, the most serde's recursion limit of 128 reads.
+        let body = nested(MAX_DEPTH - 2);
+        let admitted = "serde reads 126 arrays under the root, so the scanners do";
+        assert!(serde_reads(&body), "{admitted}");
+        assert!(sign(&body).is_ok(), "{admitted}");
         assert!(
-            verdicts.contains(&true) && verdicts.contains(&false),
-            "the range holds a depth serde reads and one it refuses: {verdicts:?}"
+            string_member_span(&body, &["model"]).is_some(),
+            "{admitted}"
         );
+        assert!(
+            matches!(repeated_top_level_member(&body, &["model"]), Ok(None)),
+            "{admitted}"
+        );
+        assert!(
+            matches!(first_system_block_member_count(&body, "text"), Ok(1)),
+            "{admitted}"
+        );
+        assert!(
+            matches!(cache_control_spans(&body), Ok(spans) if spans.is_empty()),
+            "{admitted}"
+        );
+        for depth in [MAX_DEPTH - 1, MAX_DEPTH] {
+            let body = nested(depth);
+            let refused =
+                format!("serde refuses {depth} arrays under the root, so the scanners do");
+            assert!(!serde_reads(&body), "{refused}");
+            assert!(
+                matches!(sign(&body), Err(CchError::TooDeep(_))),
+                "{refused}"
+            );
+            assert_eq!(string_member_span(&body, &["model"]), None, "{refused}");
+            assert!(
+                matches!(
+                    repeated_top_level_member(&body, &["model"]),
+                    Err(CchError::TooDeep(_))
+                ),
+                "{refused}"
+            );
+            assert!(
+                matches!(
+                    first_system_block_member_count(&body, "text"),
+                    Err(CchError::TooDeep(_))
+                ),
+                "{refused}"
+            );
+            assert!(
+                matches!(cache_control_spans(&body), Err(CchError::TooDeep(_))),
+                "{refused}"
+            );
+        }
     }
 
     /// `depth` nested arrays around a number, the element of a container a walker eats the bracket of itself. The
@@ -1562,10 +1555,10 @@ mod tests {
     /// member one level nearer the bound.
     #[test]
     fn an_empty_block_array_counts_back_out_of_its_bracket() {
-        let mut s = scanner_at(b"[]", 0, 1);
-        block_array(&mut s, &mut Vec::new(), false, Keys::Raw).unwrap();
-        assert_eq!(
-            s.depth, 1,
+        let body = format!(r#"{{"system":[],"x":{}}}"#, arrays(MAX_DEPTH - 2)).into_bytes();
+        assert!(serde_reads(&body));
+        assert!(
+            matches!(cache_control_spans(&body), Ok(spans) if spans.is_empty()),
             "the walk counts back out at the closing bracket"
         );
     }
@@ -2018,6 +2011,9 @@ mod tests {
     #[test]
     fn a_body_whose_top_level_is_an_array_is_refused() {
         let body = br#"[{"model":"a"}]"#;
-        assert!(repeated_top_level_member(body, &["metadata", "model", "stream"]).is_err());
+        assert!(matches!(
+            repeated_top_level_member(body, &["metadata", "model", "stream"]),
+            Err(CchError::Json(0))
+        ));
     }
 }

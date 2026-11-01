@@ -76,68 +76,54 @@ async fn the_shell_is_served_for_every_app_path_and_never_cached() {
 async fn hashed_assets_are_immutable_and_typed_and_a_missing_asset_is_a_404() {
     let asset = phoebis_ui::asset_paths()
         .into_iter()
-        .find(|p| p.starts_with("assets/") && p.ends_with(".js"));
-    if let Some(asset) = asset {
-        let (status, headers, body) = send("GET", &format!("/{asset}")).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            headers["cache-control"],
-            "public, max-age=31536000, immutable"
-        );
-        assert!(headers["content-type"]
-            .to_str()
-            .unwrap()
-            .contains("javascript"));
-        assert!(!body.is_empty());
-        // A HEAD tells a caller what it would get without sending it: the same headers, the length, no body.
-        let (head_status, head_headers, head_body) = send("HEAD", &format!("/{asset}")).await;
-        let (bytes, _) = phoebis_ui::lookup(&asset).unwrap();
-        assert_eq!(head_status, StatusCode::OK);
-        assert_eq!(head_headers["cache-control"], headers["cache-control"]);
-        assert_eq!(head_headers["content-type"], headers["content-type"]);
-        assert_eq!(head_headers["content-length"], bytes.len().to_string());
-        assert!(head_body.is_empty(), "a HEAD answer carries no body");
-    } else {
-        assert!(
-            phoebis_ui::is_placeholder(),
-            "a real bundle carries at least one script under assets/"
-        );
-    }
+        .find(|p| p.starts_with("assets/") && p.ends_with(".js"))
+        .expect("the build embedded a bundle with a script under assets/");
+    let (status, headers, body) = send("GET", &format!("/{asset}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers["cache-control"],
+        "public, max-age=31536000, immutable"
+    );
+    assert!(headers["content-type"]
+        .to_str()
+        .unwrap()
+        .contains("javascript"));
+    assert!(!body.is_empty());
+    // A HEAD tells a caller what it would get without sending it: the same headers, the length, no body.
+    let (head_status, head_headers, head_body) = send("HEAD", &format!("/{asset}")).await;
+    let (bytes, _) = phoebis_ui::lookup(&asset).unwrap();
+    assert_eq!(head_status, StatusCode::OK);
+    assert_eq!(head_headers["cache-control"], headers["cache-control"]);
+    assert_eq!(head_headers["content-type"], headers["content-type"]);
+    assert_eq!(head_headers["content-length"], bytes.len().to_string());
+    assert!(head_body.is_empty(), "a HEAD answer carries no body");
     let (status, headers, _) = send("GET", "/assets/missing-0000.js").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(headers["cache-control"], "no-store");
     let (status, headers, body) = send("GET", "/theme.js").await;
-    if phoebis_ui::is_placeholder() {
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    } else {
-        assert_eq!(
-            (status, headers["cache-control"].to_str().unwrap()),
-            (StatusCode::OK, "no-store")
-        );
-        assert!(body.contains("data-theme"));
-    }
+    assert_eq!(
+        (status, headers["cache-control"].to_str().unwrap()),
+        (StatusCode::OK, "no-store")
+    );
+    assert!(body.contains("data-theme"));
     let (status, headers, body) = send("GET", "/favicon.svg").await;
-    if phoebis_ui::is_placeholder() {
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    } else {
-        assert_eq!(status, StatusCode::OK);
-        assert!(headers["content-type"]
-            .to_str()
-            .unwrap()
-            .starts_with("image/svg+xml"));
-        assert_eq!(headers["cache-control"], "no-store");
-        assert!(
-            body.contains("prefers-color-scheme"),
-            "the favicon follows the browser's scheme"
-        );
-        assert_eq!(
-            phoebis_ui::lookup("favicon-32.png")
-                .map(|(_, mime)| mime)
-                .as_deref(),
-            Some("image/png"),
-            "the PNG fallback is in the bundle and served as a PNG"
-        );
-    }
+    assert_eq!(status, StatusCode::OK);
+    assert!(headers["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("image/svg+xml"));
+    assert_eq!(headers["cache-control"], "no-store");
+    assert!(
+        body.contains("prefers-color-scheme"),
+        "the favicon follows the browser's scheme"
+    );
+    assert_eq!(
+        phoebis_ui::lookup("favicon-32.png")
+            .map(|(_, mime)| mime)
+            .as_deref(),
+        Some("image/png"),
+        "the PNG fallback is in the bundle and served as a PNG"
+    );
 }
 
 #[tokio::test]
@@ -166,39 +152,30 @@ async fn the_api_reference_page_is_served_at_its_directory_and_nothing_else_unde
         let (status, headers, body) = send("GET", path).await;
         assert_eq!(headers["cache-control"], "no-store", "{path}");
         assert_security_headers(&headers, path);
-        if phoebis_ui::is_placeholder() {
-            assert_eq!(
-                status,
-                StatusCode::NOT_FOUND,
-                "{path}: a placeholder build carries no reference page"
-            );
-            assert!(body.contains("not found"), "{path}");
-        } else {
-            assert_eq!(status, StatusCode::OK, "{path}");
-            assert!(
-                headers["content-type"]
-                    .to_str()
-                    .unwrap()
-                    .starts_with("text/html"),
-                "{path}"
-            );
-            assert!(
-                body.contains(r#"<div id="app">"#),
-                "{path}: the reference shell"
-            );
-            assert!(
-                body.contains("<title>Phoebis Router API reference</title>"),
-                "{path}"
-            );
-            assert!(
-                !body.contains("theme.js"),
-                "{path}: the page's theme is its own"
-            );
-            assert!(
-                body.contains(r#"src="/assets/"#),
-                "{path}: the entry is loaded from the hashed assets"
-            );
-        }
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert!(
+            headers["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("text/html"),
+            "{path}"
+        );
+        assert!(
+            body.contains(r#"<div id="app">"#),
+            "{path}: the reference shell"
+        );
+        assert!(
+            body.contains("<title>Phoebis Router API reference</title>"),
+            "{path}"
+        );
+        assert!(
+            !body.contains("theme.js"),
+            "{path}: the page's theme is its own"
+        );
+        assert!(
+            body.contains(r#"src="/assets/"#),
+            "{path}: the entry is loaded from the hashed assets"
+        );
     }
     for path in [
         "/api-reference/x",
@@ -214,10 +191,8 @@ async fn the_api_reference_page_is_served_at_its_directory_and_nothing_else_unde
         );
     }
     let (status, headers, body) = send("HEAD", "/api-reference/").await;
-    if !phoebis_ui::is_placeholder() {
-        assert_eq!(status, StatusCode::OK);
-        assert!(headers.contains_key("content-length"));
-    }
+    assert_eq!(status, StatusCode::OK);
+    assert!(headers.contains_key("content-length"));
     assert!(body.is_empty(), "a HEAD carries no body");
     let (status, headers, _) = send("POST", "/api-reference/").await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);

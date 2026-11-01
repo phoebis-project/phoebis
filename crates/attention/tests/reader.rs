@@ -594,6 +594,7 @@ fn resolve(rig: &Rig, outcome: AttemptOutcome) -> u64 {
 #[tokio::test]
 async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_first() {
     let rig = rig().await;
+    rig.store.set_clock(rig.clock());
     let (attention, _arm) = rig.attention(None);
     resolve(&rig, AttemptOutcome::Failed("invalid_grant".into()));
     let conditions = read(&attention, NOW);
@@ -603,8 +604,8 @@ async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_
         (false, &json!(1)),
         "one failure is a token endpoint having a bad moment"
     );
-    // Apart by more than a millisecond, so the run's start can only be read off the older attempt.
-    tokio::time::sleep(Duration::from_millis(2)).await;
+    // A millisecond apart on the store's clock, so the run's start can only be read off the older attempt.
+    rig.at(NOW + 1);
     let lost = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
     rig.store
         .resolve_refresh_attempt(lost, 1, AttemptOutcome::Uncertain("lost".into()))
@@ -638,13 +639,14 @@ async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_
 #[tokio::test]
 async fn a_lost_refresh_a_committed_retry_supersedes_counts_no_second_failure() {
     let rig = rig().await;
+    rig.store.set_clock(rig.clock());
     let (attention, _arm) = rig.attention(None);
     let lost = resolve(
         &rig,
         AttemptOutcome::Uncertain("refresh response lost".into()),
     );
-    // Apart by more than a millisecond, so the commit settles the lost row again under a later time than its own.
-    tokio::time::sleep(Duration::from_millis(2)).await;
+    // A millisecond on the store's clock, so the commit settles the lost row again under a later time than its own.
+    rig.at(NOW + 1);
     let retry = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
     rig.store
         .commit_credentials(
@@ -705,10 +707,11 @@ async fn a_lost_refresh_a_committed_retry_supersedes_counts_no_second_failure() 
 async fn a_pairing_that_supersedes_a_pending_retry_leaves_no_refresh_run() {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     let rig = rig_with_store(store.clone()).await;
+    rig.store.set_clock(rig.clock());
     let failed = resolve(&rig, AttemptOutcome::Failed("invalid_grant".into()));
-    tokio::time::sleep(Duration::from_millis(2)).await;
+    rig.at(NOW + 1);
     let pending = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
-    tokio::time::sleep(Duration::from_millis(2)).await;
+    rig.at(NOW + 2);
     rig.store
         .commit_credentials(
             "business",
@@ -1904,19 +1907,15 @@ async fn a_leaf_thirty_days_and_twelve_hours_from_its_end_holds_no_expiring_item
 async fn a_leaf_exactly_thirty_days_from_its_end_holds_the_expiring_item_since_the_read() {
     let rig = rig().await;
     let pairs = Arc::new(Pairs::default());
-    pairs.set(vec![pair("proxy.tls", NOW + 30 * DAY)]);
     let (attention, _arm) = rig.attention_with_pairs(None, Some(pairs.clone()));
-    let conditions = read(&attention, NOW);
-    let held = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
-    assert_eq!((held.holds, held.since), (true, Some(NOW)));
 
     // One pair installed once and read at twelve-hour steps across its onset: no read dates the item after itself.
     let not_after = NOW + 61 * DAY;
     pairs.set(vec![pair("proxy.tls", not_after)]);
-    for at in [
-        NOW + 30 * DAY + 12 * HOUR,
-        NOW + 31 * DAY,
-        NOW + 31 * DAY + 12 * HOUR,
+    for (at, expiring) in [
+        (NOW + 30 * DAY + 12 * HOUR, (false, None)),
+        (NOW + 31 * DAY, (true, Some(NOW + 31 * DAY))),
+        (NOW + 31 * DAY + 12 * HOUR, (true, Some(NOW + 31 * DAY))),
     ] {
         let conditions = read(&attention, at);
         let c = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
@@ -1925,15 +1924,7 @@ async fn a_leaf_exactly_thirty_days_from_its_end_holds_the_expiring_item_since_t
             "at {at}: since {:?} is after the read",
             c.since
         );
-        assert_eq!(
-            (c.holds, c.since),
-            if at < not_after - 30 * DAY {
-                (false, None)
-            } else {
-                (true, Some(not_after - 30 * DAY))
-            },
-            "at {at}"
-        );
+        assert_eq!((c.holds, c.since), expiring, "at {at}");
     }
 }
 

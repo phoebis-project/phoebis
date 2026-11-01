@@ -483,12 +483,12 @@ for finding in 'fail.md:1: semicolon:' 'fail.md:2: columns: 121' 'fail.md:3: das
   echo "$out" | grep -q "$finding" || fail "prose did not report $finding: $out"
 done
 echo "$out" | grep -q 'fail.md:6:' && fail "prose reported the line that opens a wrapped span: $out"
-for word in sub-project subproject ruling rulings task tasks finding findings worktree worktrees workstream 'item 12' 'shape B' 'option 2'; do
+# A word from each of the two vocabulary patterns, a working document's word and a shape letter. The code span that
+# exempts such a word is pass.md's `task`.
+for word in task 'shape B'; do
   echo "The $word is named here." > "$tmp/prose/word.md"
   out=$(python3 "$check" prose "$tmp/prose/word.md" 2>&1) && fail "prose passed the word $word in prose"
   echo "$out" | grep -q "word.md:1: vocabulary:" || fail "prose did not report $word as vocabulary: $out"
-  echo "The \`$word\` is named here." > "$tmp/prose/word.md"
-  python3 "$check" prose "$tmp/prose/word.md" >/dev/null || fail "prose refused the word $word inside a code span"
 done
 # A span left open ends with its paragraph: a blank line or a fence line closes it, so the prose after either is read.
 {

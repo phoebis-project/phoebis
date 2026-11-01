@@ -70,14 +70,14 @@ fn versions_of_one_id_are_distinct_and_ascending_and_current_and_at_answer_the_t
             stamped.windows(2).all(|pair| pair[0] < pair[1]),
             "{id}: {stamped:?}"
         );
-        let highest = *stamped.last().expect("an id holds a version");
+    }
+    // The table ships each id at version 1 alone.
+    for id in ["away-recap", "prompt-suggestion", "subagent-status-summary"] {
         let current = Preset::current(id).expect("a shipped id has a current version");
-        assert_eq!((current.id, current.version), (*id, highest));
-        for &version in stamped {
-            let at = Preset::at(id, version).expect("a shipped version answers");
-            assert_eq!((at.id, at.version), (*id, version));
-        }
-        assert!(Preset::at(id, highest + 1).is_none());
+        assert_eq!((current.id, current.version), (id, 1));
+        let at = Preset::at(id, 1).expect("a shipped version answers");
+        assert_eq!((at.id, at.version), (id, 1));
+        assert!(Preset::at(id, 2).is_none());
     }
     assert!(Preset::current("not-a-preset").is_none());
     assert!(Preset::at("not-a-preset", 1).is_none());
@@ -85,34 +85,42 @@ fn versions_of_one_id_are_distinct_and_ascending_and_current_and_at_answer_the_t
 
 #[test]
 fn each_preset_matches_its_own_fork_fixture_and_none_of_the_other_bodies() {
-    let forks = [
-        ("subagent-status-summary", FORK),
-        ("prompt-suggestion", SUGGESTION),
-        ("away-recap", RECAP),
-    ];
-    let bodies: Vec<(&str, Value)> = forks
-        .into_iter()
-        .chain([("classifier", CLASSIFIER)])
-        .map(|(name, text)| {
-            (
-                name,
-                serde_json::from_str(text).expect("the fixture parses"),
-            )
-        })
-        .collect();
-    for (id, _) in forks {
+    let body = |name: &'static str, text: &str| -> (&'static str, Value) {
+        (
+            name,
+            serde_json::from_str(text).expect("the fixture parses"),
+        )
+    };
+    let summary = body("subagent-status-summary", FORK);
+    let suggestion = body("prompt-suggestion", SUGGESTION);
+    let recap = body("away-recap", RECAP);
+    let classifier = body("classifier", CLASSIFIER);
+    for (id, own, others) in [
+        (
+            "subagent-status-summary",
+            &summary,
+            [&suggestion, &recap, &classifier],
+        ),
+        (
+            "prompt-suggestion",
+            &suggestion,
+            [&summary, &recap, &classifier],
+        ),
+        ("away-recap", &recap, [&summary, &suggestion, &classifier]),
+    ] {
         let preset = Preset::current(id).unwrap_or_else(|| panic!("{id} is not in the table"));
         let guardrail = compiled(preset);
-        for (name, body) in &bodies {
+        assert_eq!(
+            evaluate(&guardrail, &auxiliary(&own.1)),
+            Verdict::Matched,
+            "{id} on its own fork"
+        );
+        for (name, body) in others {
             let verdict = evaluate(&guardrail, &auxiliary(body));
-            if *name == id {
-                assert_eq!(verdict, Verdict::Matched, "{id} on its own fork");
-            } else {
-                assert!(
-                    matches!(verdict, Verdict::Unmatched { .. }),
-                    "{id} on the {name} body: {verdict:?}"
-                );
-            }
+            assert!(
+                matches!(verdict, Verdict::Unmatched { .. }),
+                "{id} on the {name} body: {verdict:?}"
+            );
         }
     }
 }
