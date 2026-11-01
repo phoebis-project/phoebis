@@ -101,6 +101,7 @@ test('a new pool reads each member the way the pool route does', async () => {
     studio: 'eligible',
     // The sunset seed's plan ended, which the route reads as a term past its end.
     sunset: 'unavailable',
+    workshop: 'eligible',
   });
   // Two members, one half of the ended term each, since the sunset seed holds both halves at once.
   await api.updateAccount('sunset', { canceled: false, subscriptionEndsAt: null });
