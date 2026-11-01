@@ -2318,18 +2318,6 @@ fn stats_settings_are_validated_with_the_specs_bounds() {
     };
     let config = load(&with("defaults", "")).unwrap();
     assert_eq!(config.stats.retention_days, 365);
-    let path =
-        |p: &Option<std::path::PathBuf>| p.as_deref().and_then(|p| p.to_str()).map(str::to_string);
-    assert_eq!(
-        (
-            path(&config.stats.api_prices_path),
-            path(&config.stats.subscription_costs_path)
-        ),
-        (
-            Some("./api_prices.yaml".to_string()),
-            Some("./subscription_costs.yaml".to_string())
-        )
-    );
     assert!(matches!(
         load(&with("ledger", "stats:\n  ledger_path: /\n")),
         Err(ConfigError::LedgerPath { .. })
@@ -3150,6 +3138,28 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
             Some(burn_at)
         ),
         "the plain copy holds each type's tokens a second, unpriced"
+    );
+    let usage = phoebis_routing::PinUsage {
+        input: 1_000,
+        output: 100,
+        ..Default::default()
+    };
+    let prompt = usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
+    let revisions = phoebis_ledger::PriceRevisions::shipped();
+    let prices = revisions.in_force(jiff::Timestamp::now().as_millisecond());
+    let dollars = prices
+        .rate_table()
+        .price("claude-opus-5", usage, prompt)
+        .unwrap();
+    assert!(
+        (prices
+            .rate_table()
+            .price_burn("claude-opus-5", &pin.burn, pin.last_input_tokens)
+            .unwrap()
+            - dollars / 1_800.0)
+            .abs()
+            < 1e-12,
+        "priced when read, the plain copy is the dollar rate the usage costs over the window"
     );
     up.shutdown().await;
 }

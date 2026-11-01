@@ -235,8 +235,19 @@ fn the_summary_names_the_routing_keys() {
         ),
         "{stdout}"
     );
-    // Lines 8 and 9 name the shipped tables, whose counts move with every revision, so the hand-counted tables below
-    // pin their format.
+    // Neither default path has a file under the test's working directory, so lines 8 and 9 frame the shipped tables
+    // with the path each looked for. The counts inside move with every revision, and the hand-counted tables below pin
+    // them.
+    assert!(
+        lines[8].starts_with("api prices: built in (")
+            && lines[8].ends_with("), since ./api_prices.yaml was not found"),
+        "{stdout}"
+    );
+    assert!(
+        lines[9].starts_with("subscription costs: built in (")
+            && lines[9].ends_with("), since ./subscription_costs.yaml was not found"),
+        "{stdout}"
+    );
     assert_eq!(
         lines.get(10..12),
         Some(
