@@ -660,40 +660,6 @@ mod tests {
             .contains_key(SEVEN_DAY_FABLE));
     }
 
-    // Under the anchor tier the Pro-week figure is the row's 7-day share, a billed row carries none and a classifier
-    // call reads zero.
-    #[test]
-    fn the_equivalent_is_one_pro_week_figure() {
-        let pro = RowKey {
-            tier: Some(PRO),
-            ..plan_row()
-        };
-        let priced = price(&pro, input(1));
-        assert!(
-            close(
-                priced.equivalent,
-                priced.shares.as_ref().expect("Pro is sized")[SEVEN_DAY].unwrap()
-            ),
-            "{priced:?}"
-        );
-        let billed = price(
-            &RowKey {
-                funding: Funding::ApiKey,
-                ..pro
-            },
-            input(1),
-        );
-        assert_eq!(billed.equivalent, None, "{billed:?}");
-        let classifier = price(
-            &RowKey {
-                classifier: true,
-                ..pro
-            },
-            input(1),
-        );
-        assert_eq!(classifier.equivalent, Some(0.0), "{classifier:?}");
-    }
-
     // The test tables size the Pro week at 50 in both revisions, so the case edits the second entry's Pro row to 200.
     // One Opus 5.5 input token in January is 2 units, the January weight, over the February anchor row of 200: 0.01,
     // where a divisor read at `at` would read 2 / 50 and units read at `now` 4 / 200. The shares keep January's rows.

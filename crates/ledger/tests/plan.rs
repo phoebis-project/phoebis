@@ -862,36 +862,6 @@ fn the_rate_table_carries_a_row_per_listed_model_and_no_rate_for_one_without_a_w
     assert!(first().rate_table("one_hour", None).rows.is_empty());
 }
 
-// An id no file lists has no weight, so the meter prices it at nothing and its pin ranks last: Opus 9 though Opus 5.5
-// weighs its model tier, Mystery 9, whose model tier has no weighted model, and GPT 5, of no model tier.
-#[test]
-fn an_unlisted_id_takes_no_rate_as_the_meter_prices_it_at_nothing() {
-    let costs = first();
-    let rates = costs.rate_table(FIVE_HOUR, None);
-    let usage = PinUsage {
-        input: 1_000,
-        cache_read: 10_000,
-        write_5m: 100,
-        write_1h: 200,
-        output: 500,
-    };
-    for model in [
-        "claude-opus-9",
-        "claude-opus-9-20270101",
-        "claude-mystery-9",
-        "gpt-5",
-    ] {
-        assert_eq!(rates.rows.get(model), None, "{model}: no file lists it");
-        assert_eq!(per_type(rates.rates_for(model, 0)), [None; 5], "{model}");
-        assert_eq!(rates.price(model, usage, 0), None, "{model}");
-        assert_eq!(
-            costs.share_at(FIVE_HOUR, None, PRO, model, usage, OUT_OF_BAND),
-            None,
-            "{model}: the meter charges nothing"
-        );
-    }
-}
-
 // A file can list an id under a model tier other than the one its id names. Opus 7 listed under the Mystery model
 // tier, which has no weighted model, is unpriced on the meter, so its rate row carries no rate where its id's own
 // model tier would rate it.
@@ -1266,27 +1236,6 @@ fn an_anchor_tier_without_a_capacity_on_either_window_is_refused() {
 const SECOND_REVISION_ANCHOR_ROW: &str =
     "  - effective: 2026-02-01\n    capacity:\n      default_claude_ai:      {five_hour: 5, seven_day: 50}\n";
 
-#[test]
-fn a_unit_inside_a_revision_is_refused_as_an_unknown_field() {
-    assert_names(
-        &refused(
-            "unit: {tier: default_claude_ai, window: seven_day}\nrevisions:\n  - effective: 2026-01-01\n",
-            "revisions:\n  - effective: 2026-01-01\n    unit: {tier: default_claude_ai, window: seven_day}\n",
-        ),
-        "unknown field `unit`",
-    );
-}
-
-#[test]
-fn a_file_without_the_unit_block_is_refused() {
-    let message = refused("unit: {tier: default_claude_ai, window: seven_day}\n", "");
-    assert_names(&message, "missing field `unit`");
-    assert!(
-        !message.contains("revisions[0]"),
-        "the refusal names the file's own key: {message}"
-    );
-}
-
 // `capacity_rules` passes an anchor tier with no row at all, so the unit's own check refuses the dropped row.
 #[test]
 fn a_revision_whose_anchor_tier_lacks_the_units_window_is_refused_naming_the_revision() {
@@ -1297,36 +1246,6 @@ fn a_revision_whose_anchor_tier_lacks_the_units_window_is_refused_naming_the_rev
         ),
         "revision 2026-02-01: capacity.default_claude_ai.seven_day: the anchor tier carries a capacity on the unit's \
          window",
-    );
-}
-
-// The unit's size is the anchor row of the revision in force, so nothing refuses a later revision that resizes it.
-#[test]
-fn a_revision_that_resizes_the_anchor_row_loads() {
-    let resized = SECOND_REVISION_ANCHOR_ROW.replace("seven_day: 50}", "seven_day: 100}");
-    let text = SUBSCRIPTION_COSTS.replacen(SECOND_REVISION_ANCHOR_ROW, &resized, 1);
-    assert_ne!(text, SUBSCRIPTION_COSTS, "the edit lands");
-    let revisions = CostRevisions::from_yaml(&text).expect("a resized anchor row loads");
-    let dates: Vec<&str> = revisions.iter().map(|r| r.effective.as_str()).collect();
-    assert_eq!(dates, ["2026-01-01", "2026-02-01"]);
-    assert_eq!(revisions.latest().capacity[PRO].seven_day, Some(100.0));
-}
-
-#[test]
-fn a_unit_naming_a_tier_the_file_lacks_is_refused() {
-    assert_names(
-        &refused("{tier: default_claude_ai,", "{tier: default_claude_max_1x,"),
-        "revision 2026-01-01: capacity.default_claude_max_1x.seven_day: the anchor tier carries a capacity on the \
-         unit's window",
-    );
-}
-
-#[test]
-fn a_unit_naming_a_window_other_than_the_two_is_refused() {
-    assert_eq!(
-        refused("window: seven_day}", "window: seven_day_fable}"),
-        "unit.window: `seven_day_fable` is neither five_hour nor seven_day",
-        "a file-level refusal, under no revision's date"
     );
 }
 

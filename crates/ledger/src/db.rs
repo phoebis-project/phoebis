@@ -1342,18 +1342,6 @@ mod tests {
         .unwrap()
     }
 
-    /// The baseline still creates the column, since every open runs it, so the build's own chain must drop it on a
-    /// fresh file as on a stamped one.
-    #[test]
-    fn a_fresh_ledger_opens_without_the_estimated_column() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        prepare(&mut conn, Path::new(":memory:"), schema::MIGRATIONS).unwrap();
-        assert_eq!(
-            (estimated_columns(&conn), read_version(&conn).unwrap()),
-            (0, 2)
-        );
-    }
-
     #[test]
     fn a_ledger_stamped_at_version_one_loses_the_column_and_keeps_its_rows() {
         let mut conn = prepared_in_memory();

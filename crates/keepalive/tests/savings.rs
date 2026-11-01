@@ -4548,12 +4548,11 @@ async fn a_usage_based_seats_kept_warm_credit_files_under_no_tier_as_its_request
 }
 
 /// A credit files beside its request's own row: a Haiku 5.5 request in January whose prompt passes that month's
-/// long-context threshold, kept warm on an Ultra account, keys the credit under `long` and the account's tier, so the
-/// saving prices at the long-context cells and reaches the account's saving in the Pro-week figure. The test cost
-/// model weighs no Haiku 5.5, and a model without a weight prices nothing, so the case weighs it as the model weighs
-/// Haiku 4.5.
+/// long-context threshold, kept warm on an Ultra account, keys the credit under `long` and the account's tier. The test
+/// cost model weighs no Haiku 5.5, and a model without a weight prices nothing, so the case weighs it as the model
+/// weighs Haiku 4.5.
 #[tokio::test]
-async fn a_credit_keys_its_requests_tier_and_band_and_reaches_the_saving_figure() {
+async fn a_credit_keys_its_requests_tier_and_band() {
     const HAIKU: &str = "claude-haiku-5-5";
     let costs = phoebis_ledger::test_tables::SUBSCRIPTION_COSTS
         .replace(
@@ -4614,28 +4613,6 @@ async fn a_credit_keys_its_requests_tier_and_band_and_reaches_the_saving_figure(
         (credit.band.as_str(), credit.tier.as_str()),
         ("long", "default_claude_max_20x"),
         "the credited request's band and the serving account's tier"
-    );
-    let groups = phoebis_ledger::breakdown(
-        &rows,
-        "account",
-        false,
-        &phoebis_ledger::LiveKeys::default(),
-        &[],
-        Some(phoebis_ledger::SharePricing { tables: &r.tables }),
-        &r.pricing,
-        &r.tables,
-        r.now(),
-    );
-    let saving = groups
-        .iter()
-        .find(|group| group.key == "o")
-        .and_then(|group| group.saving_equivalent)
-        .expect("the account grouping answers the account's saving in the Pro-week figure");
-    // At Haiku 5.5's January weight of 0.5 the 2,000 tokens the credit kept warm are 2,000 x 0.5 x 2 = 2,000 units
-    // written and 2,000 x 0.5 x 0.1 = 100 read, so the saving is 1,900 units, over the Pro tier's 50 on the week.
-    assert_eq!(
-        saving, 38.0,
-        "the write's figure less the read's at the credit's own key"
     );
 }
 

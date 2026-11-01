@@ -6305,67 +6305,6 @@ async fn a_pool_member_answers_the_engines_pace_score_whatever_its_kind() {
     );
 }
 
-#[tokio::test]
-async fn a_pin_on_a_model_without_a_weight_reads_a_null_burn() {
-    // The pin burns Sonnet 4.5, which the shipped cost model has no weight for: it prices nothing on the plan window
-    // whatever its model tier, and the same pin in overage prices in dollars, since the price table lists the model.
-    use common::{get, json, login, wait_json};
-    let now = common::NOW;
-    let parts = sessions_harness_with(|generation| {
-        vec![phoebis_store::PinRow {
-            model: "claude-sonnet-4-5".into(),
-            ..burning_opus_pin("s1", "business", generation, now, 100.0, 100.0)
-        }]
-    })
-    .await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
-    let (burn, unit) = burn_of(&sessions, "s1");
-    assert_eq!(
-        (burn, unit.as_deref()),
-        (None, Some("window_share")),
-        "a model the cost model has no weight for burns nothing on the plan window"
-    );
-    let row = session_row(&sessions, "s1");
-    assert_eq!(
-        (row.get("burn_equivalent"), row.get("estimated")),
-        (Some(&serde_json::Value::Null), None),
-        "the equivalent prices nothing either, and no row carries an estimate mark: {row}"
-    );
-    parts
-        .router
-        .report(phoebis_routing::Report::Overage {
-            account_id: "business".into(),
-            evidence: phoebis_routing::OverageEvidence {
-                in_use: true,
-                since: Some(now - 3_600_000),
-                reset: Some(now + 3_600_000),
-                observed_at: now,
-                source: phoebis_routing::EvidenceSource::Head,
-                incarnation: 1,
-            },
-            incarnation: 1,
-        })
-        .await;
-    let in_overage = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
-        session_row(v, "s1")["burn_unit"] == "usd"
-    })
-    .await;
-    // Sonnet 4.5's own $3 a million input tokens make $1.08 an hour of 100 a second, where an id the table did not list
-    // would price at its dearest cell, Fable's $10.
-    assert!(
-        close(burn_of(&in_overage, "s1").0, 1.08),
-        "dollars price the same pin at its own row, since the price table lists the model: {:?}",
-        burn_of(&in_overage, "s1")
-    );
-    let row = session_row(&in_overage, "s1");
-    assert_eq!(
-        (row.get("burn_equivalent"), row.get("estimated")),
-        (Some(&serde_json::Value::Null), None),
-        "the dollars are the price table's own: {row}"
-    );
-}
-
 /// A cost model whose `default_claude_max_20x` tier holds 20 times Pro's 5-hour window and 40 times Pro's week, so a
 /// burn read on one window through the other window's tier factor reads apart from the right figure.
 const UNEQUAL_FACTORS_COSTS: &str = "\

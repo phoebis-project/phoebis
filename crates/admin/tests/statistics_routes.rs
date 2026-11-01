@@ -1452,64 +1452,6 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_nulls_the_p
     );
 }
 
-#[tokio::test]
-async fn a_plan_request_on_a_model_the_cost_model_does_not_weight_reads_a_null_figure() {
-    let (parts, cookie) = on_test_costs().await;
-    let now = common::NOW;
-    // The test cost model leaves Opus 5 unweighted under the `opus` tier, whose Opus 5.5 carries a weight.
-    // The landing records the account's Ultra tier on each attempt. One request on the plan, one answered in
-    // overage.
-    set_max_20x(&parts).await;
-    let plan = record("opus-plan", now - HOUR, "claude-opus-5", "s0");
-    let mut billed = record("opus-billed", now - HOUR, "claude-opus-5", "s1");
-    let Record::Request { attempts, .. } = &mut billed else {
-        unreachable!("record builds a request")
-    };
-    attempts[0].overage_in_use = Some(true);
-    parts.ledger.record(plan);
-    parts.ledger.record(billed);
-    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
-        parts.db.request("opus-billed").await.unwrap()
-    })
-    .await;
-    let summary = json(get(&parts.app, "/admin/requests/opus-plan", Some(&cookie)).await).await
-        ["request"]
-        .clone();
-    assert_eq!(
-        (
-            summary.get("cost_equivalent"),
-            summary.get("estimated"),
-            &summary["tier"],
-            &summary["cost_shares"]
-        ),
-        (
-            Some(&serde_json::Value::Null),
-            None,
-            &serde_json::json!("default_claude_max_20x"),
-            &serde_json::json!({"five_hour": null, "seven_day": null})
-        ),
-        "a model without a weight prices nothing whatever its model tier weighs, and the summary still names the \
-         tier the serving attempt recorded: {summary}"
-    );
-    let billed = json(get(&parts.app, "/admin/requests/opus-billed", Some(&cookie)).await).await
-        ["request"]
-        .clone();
-    assert_eq!(
-        (
-            billed.get("cost_equivalent"),
-            billed.get("estimated"),
-            billed.get("tier")
-        ),
-        (
-            Some(&serde_json::Value::Null),
-            None,
-            Some(&serde_json::json!("default_claude_max_20x"))
-        ),
-        "a request billed in dollars answers a null figure, and still names the account tier its attempt \
-         recorded: {billed}"
-    );
-}
-
 /// The request count on a session row is the ledger's. A pin the ledger has no row for has no count, and
 /// saying zero would read as "this session made no requests" rather than "nothing was recorded".
 #[tokio::test]

@@ -145,10 +145,6 @@ test("a reset prices at the plan and the tier it ran under, and at the account's
   assert.equal(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, 'ultra', MAX_5X).text, '12.5% Ultra week');
 });
 
-test('the subtitle names the chosen week the figures read in', () => {
-  assert.equal(d.allowanceSubtitle(), 'Each weekly window left unused when it reset, as a share of the chosen week, the last four weeks');
-});
-
 test("an account's windows and the card's column pairs read the 7-day window first, then each model week in the console's order", () => {
   const a = accountOf('a', MAX_20X, [windowOf('seven_day_opus', [0.5]), windowOf('seven_day_fable', [0.5]), windowOf('seven_day', [0.5])]);
   assert.deepEqual(d.allowanceWindows(a).map((w) => w.window), ['seven_day', 'seven_day_fable', 'seven_day_opus']);

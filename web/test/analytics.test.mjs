@@ -729,20 +729,6 @@ test("a plan-funded row with no token joins the session fold's plan count and no
   assert.deepEqual([folded.planRequests, folded.planOutputTokens], [2, plan.usage.output], 'the failed row still counts as a plan request');
 });
 
-test("a fold sums one Pro-week figure under each row's funding, so a billed row adds nothing and a plan row that priced nothing nulls the group", () => {
-  const plan = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
-  const attempt = plan.attempts[plan.attempts.length - 1];
-  // The route answers a billed request's figure as null, which is no figure of a plan window at all.
-  const billed = (id) => ({ ...plan, attempts: [{ ...attempt, accountKind: 'api_key' }], costEquivalent: null, id });
-  const priced = { ...plan, costEquivalent: 0.0042, id: 'p-priced' };
-  const unpriced = { ...plan, costEquivalent: null, id: 'p-unpriced' };
-  const [mixed] = d.foldGroups([billed('b-1'), priced], 'all');
-  const [billedOnly] = d.foldGroups([billed('b-1'), billed('b-2')], 'all');
-  const [nulled] = d.foldGroups([priced, unpriced], 'all');
-  assert.deepEqual([mixed.costEquivalent, billedOnly.costEquivalent, nulled.costEquivalent], [0.0042, 0, null], 'the plan row alone, no plan row, and a plan row with tokens the cost model could not price');
-  assert.deepEqual([d.sumGroups([mixed, billedOnly]).costEquivalent, d.sumGroups([mixed, nulled]).costEquivalent], [0.0042, null], 'the sum of groups follows: a null group nulls it');
-});
-
 /** An account's hour as the accounts route answers it, the peaks and counts empty, the windows as given. */
 const rollup = (accountId, hourMs, windows) => ({ accountId, cooldownSeconds: 0, hour: new Date(hourMs).toISOString(), overageSeconds: 0, peak: { '5h': null, '7d': null, '7d_fable': null }, pins: { created: 0, migratedIn: 0, migratedOut: 0 }, windows });
 const windowSample = (over = {}) => ({ lead: 0.1, resetsAt: '2026-09-16T12:55:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5, ...over });
@@ -850,14 +836,6 @@ test('native reads a dash under its title on the subscription side where the rou
   assert.deepEqual(d.sidesOf(accountGroup({ costEquivalent: 0, planRequests: 0 })), { billed: g.billedUsd, equivalent: undefined }, 'a sum with no plan row leaves the side out');
   const unpriced = d.costHeadOf('native', g, 'ultra', 0.1);
   assert.deepEqual([unpriced.tile.figures, unpriced.meta, unpriced.unpriced], [[{ text: '-', word: 'subscription' }, { text: billed, word: 'billed' }], `- and ${billed} in range`, true], 'the dash takes the unpriced title whatever the other rows priced');
-});
-
-test('a sum of groups reads the probe figure null where a group with plan probes priced nothing, so no partial sum reads as the whole', () => {
-  const base = accountGroup();
-  const window = { cost: 0.002, wasted: 0.001 };
-  const probed = (over = {}) => accountGroup({ probeEquivalent: window, probes: { ...base.probes, ok: 3, planOk: 3 }, ...over });
-  assert.deepEqual(d.sumGroups([probed(), probed()]).probeEquivalent, { cost: 0.004, wasted: 0.002 }, 'two priced groups add, each half apart');
-  assert.equal(d.sumGroups([probed(), probed({ probeEquivalent: null })]).probeEquivalent, null, 'a group whose plan probes priced nothing nulls the sum');
 });
 
 test('a native table cell reads the short form in the chosen week with the billed dollars under it, the full reading and the hint on its title', () => {

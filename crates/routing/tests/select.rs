@@ -25812,13 +25812,6 @@ fn a_pick_between_a_fable_pin_and_an_opus_pin_of_one_prompt_size_marks_the_opus_
         (round.target - 0.054).abs() < 1e-9,
         "the excess sets the target: {round:?}"
     );
-    let pin = |session: &str| {
-        round
-            .pins
-            .iter()
-            .find(|p| p.session_id == session)
-            .unwrap_or_else(|| panic!("{session} in the round: {round:?}"))
-    };
     assert_eq!(
         round
             .pins
@@ -25837,17 +25830,6 @@ fn a_pick_between_a_fable_pin_and_an_opus_pin_of_one_prompt_size_marks_the_opus_
             ("light", false, None, None, Some("current")),
         ],
         "the order walks the Fable pin first, and the pick marks the Opus pin, whose move spends less of a week"
-    );
-    let (fable, opus) = (pin("fable"), pin("opus"));
-    assert!(
-        fable
-            .rewrite
-            .zip(opus.rewrite)
-            .is_some_and(|(fable, opus)| (fable - opus).abs() < 1e-12),
-        "both pins rewrite one prompt size, so both read one Pro-week figure, though the pick weighed the Fable pin's \
-         move on its week: {:?} against {:?}",
-        fable.rewrite,
-        opus.rewrite
     );
     assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
 }

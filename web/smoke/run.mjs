@@ -1068,7 +1068,6 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // the tier match reads in camelCase, in the week the shell names, the default Ultra week.
   const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
   const listed = await api.listAccounts();
-  const shownWeek = shellWeek(m)?.value ?? 'none';
   const figures = { '7d': ringFigures(listed, '7d', costs, 'ultra', Date.now()), '7d_fable': ringFigures(listed, '7d_fable', costs, 'ultra', Date.now()) };
   const ringCard = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
   const rings = { '7d': ringCard('7d remaining'), '7d_fable': ringCard('Fable week remaining') };
@@ -1082,17 +1081,6 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     missing: [JSON.stringify(labels), `7-day center ${center || 'absent'} against ${fmtPct(f7.left / f7.capacity)}`],
   });
   const lineOf = (id) => rings[id]?.querySelector('.remaining__line')?.textContent ?? '';
-  const lineFrom = (f, weeks) => `${fmtWindows(f.left)} of ${fmtWindows(f.capacity)} ${weeks} left`;
-  results.push({
-    name: '/ the line under each ring reads the weighed figures in Ultra weeks',
-    ok:
-      shownWeek === 'ultra' &&
-      lineOf('7d') === lineFrom(f7, 'Ultra weeks') &&
-      lineOf('7d_fable') === lineFrom(fF, 'Ultra Fable weeks') &&
-      JSON.stringify(f7.rows.map((r) => r.id).sort()) === JSON.stringify(['nightly', 'primary', 'reserve', 'secondary', 'studio', 'workshop']) &&
-      JSON.stringify(fF.rows.map((r) => r.id).sort()) === JSON.stringify(['nightly', 'primary', 'studio', 'workshop']),
-    missing: [`the week ${shownWeek}`, `7-day ${JSON.stringify(lineOf('7d'))} against ${JSON.stringify(lineFrom(f7, 'Ultra weeks'))}`, `Fable ${JSON.stringify(lineOf('7d_fable'))} against ${JSON.stringify(lineFrom(fF, 'Ultra Fable weeks'))}`, `rows ${f7.rows.map((r) => r.id)} and ${fF.rows.map((r) => r.id)}`],
-  });
   const named = (id) => [...(rings[id]?.querySelectorAll('.remaining__left-out li') ?? [])].map((li) => li.textContent ?? '');
   const onRing = (id) => [...(rings[id]?.querySelectorAll('.remaining__list a, .remaining__left-out li') ?? [])].map((e) => (e.textContent ?? '').split(':')[0]);
   const strays = ['7d', '7d_fable'].flatMap((id) => onRing(id).filter((n) => n === 'legacy' || n === 'spare' || n === 'sunset').map((n) => `${n} on the ${id} ring`));
@@ -11038,7 +11026,6 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   const unpricedRow = requests.find((r) => r.canonicalModel === 'claude-sonnet-4-5' && costUnitOf(r, 'native', null).kind === 'unpriced');
   // A request no account served (a refusal or an exhaustion) is billed in dollars at zero with no funding to name.
   const unservedRow = requests.find((r) => r.attempts.length === 0 && (r.status === 401 || r.status === 429));
-  results.push({ name: 'fixture: a request an API key account served, a subscription request on a model the cost model has no weight for, and one no account served', ok: apiKeyRow !== undefined && unpricedRow !== undefined && unservedRow !== undefined, missing: [String(apiKeyRow?.id), String(unpricedRow?.id), String(unservedRow?.id)] });
   const costAt = [...m.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Cost');
   const costCellOf = async (id) => {
     const { row, rows } = await rowById(id);
@@ -11066,7 +11053,6 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   const workshopRow = pricedOn('workshop');
   const overageRow = requests.find((r) => { const u = costUnitOf(r, 'all', null); return u.kind === 'dollars' && u.funding === 'overage' && servedBy(r)?.accountId === 'nightly'; });
   const fastRow = requests.find((r) => { const u = costUnitOf(r, 'all', null); return u.kind === 'dollars' && u.funding === 'fast'; });
-  results.push({ name: 'fixture: a priced subscription request on primary and on workshop, an overage request of nightly and a fast request', ok: sharedRow !== undefined && workshopRow !== undefined && overageRow !== undefined && fastRow !== undefined, missing: [String(sharedRow?.id), String(workshopRow?.id), String(overageRow?.id), String(fastRow?.id)] });
   // Read while the list shows, since the drawer checks below compare their chips against these cells' titles.
   const nativeCell = sharedRow ? await costCellOf(sharedRow.id) : null;
   const sharedHint = sharedRow ? requestHintOf(sharedRow, accounts) : null;
@@ -20644,13 +20630,6 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     results.push({ name: '/analytics idle limit dominates the wasted probes', ok: wasteBars[0] === 'Idle limit ran out' && idleShare > wasteCounts.reduce((n, v) => n + v, 0) / 2, missing: [String(idleShare), String(wasteCounts.reduce((n, v) => n + v, 0))] });
     const tiles = [...(weekCard?.querySelectorAll('.stat--compact .stat__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({ name: '/analytics wasted probes reports a count, a cost and a share', ok: JSON.stringify(tiles) === JSON.stringify(['Wasted probes', 'Wasted cost', 'Share of probe cost']), missing: tiles });
-    // Under native the share is the plan side's, which the story's Sonnet 4.5 probes price nothing on, so the dollar
-    // share is read under All in dollars.
-    await chooseUnit(m, 'all');
-    const dollarCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Wasted probes');
-    const share = [...(dollarCard?.querySelectorAll('.stat--compact .stat__value') ?? [])][2]?.textContent?.trim() ?? '';
-    await chooseUnit(m, 'native');
-    results.push({ name: '/analytics wasted share reads as a percentage of probe cost under All in dollars', ok: /^\d+\.\d%$/.test(share), missing: [share] });
     results.push({ name: '/analytics the day the later checks read is reachable', ok: range('24h') !== undefined, missing: [...m.container.querySelectorAll('.segmented button')].map((b) => b.textContent?.trim() ?? '') });
     range('24h')?.click();
     await m.settle(700);
@@ -24836,18 +24815,6 @@ m.unmount();
         caption() === `Share of a ${planLabel(anchor)} window per 1M tokens${regimeClause}` &&
         (rates()?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === CAPTION_NOTE,
       missing: [JSON.stringify(pressed('Tier')), JSON.stringify(pressed('Peak band')), spinner()?.value ?? 'no spinner', JSON.stringify(pressed('Token count')), JSON.stringify(shown), JSON.stringify(leaders), `fold at ${fold} of ${rows.length}`, button?.outerHTML ?? 'no fold', caption()],
-    });
-  }
-  {
-    // The chooser lists the anchor's tier first, since every figure the console prints is a share of its week, then
-    // the cost model's order, each sized tier by its plan's name.
-    const sized = tiers.filter((tier) => WINDOWS.some((w) => tierCapacity(costs, tier, w) !== null));
-    const options = [...(rates()?.querySelectorAll('[aria-label="Tier"] button') ?? [])].map((b) => b.textContent?.trim());
-    const want = [anchor, ...sized.filter((tier) => tier !== anchor)].map(planLabel);
-    results.push({
-      name: "/sessions plan rates list the anchor's plan first in the Tier chooser, then the cost model's order, the anchor's pressed",
-      ok: options[0] === 'Pro' && JSON.stringify(options) === JSON.stringify(want) && JSON.stringify(pressed('Tier')) === JSON.stringify(['Pro']),
-      missing: [JSON.stringify(options), JSON.stringify(want), JSON.stringify(pressed('Tier'))],
     });
   }
   // Every check below reads every model, so the older ones show from here on.

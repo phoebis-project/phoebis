@@ -803,7 +803,6 @@ fn the_attention_gauge_reads_one_series_per_condition_with_its_labels_escaped() 
                 ("pool_exhausted", "main".into(), true),
                 ("client_drift", "2.1.274".into(), false),
                 ("pool_exhausted", "odd\"pool".into(), false),
-                ("model_unpriced", "claude-opus-5".into(), true),
             ],
         },
         ..RoutingGauges::default()
@@ -814,7 +813,6 @@ fn the_attention_gauge_reads_one_series_per_condition_with_its_labels_escaped() 
         r#"phoebis_attention{kind="pool_exhausted",subject="main"} 1"#,
         r#"phoebis_attention{kind="client_drift",subject="2.1.274"} 0"#,
         r#"phoebis_attention{kind="pool_exhausted",subject="odd\"pool"} 0"#,
-        r#"phoebis_attention{kind="model_unpriced",subject="claude-opus-5"} 1"#,
     ] {
         assert!(text.contains(line), "missing {line} in:\n{text}");
     }

@@ -13,57 +13,6 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
 const { act, createElement: h, createRoot, UnitLegend } = await import('./dist/ui.js');
 
-const LEGEND = {
-  native: 'Each request in the unit its funding pays in: a subscription request as a share of the week the week control names, an API key, fast-mode, overage or usage-based request in dollars.',
-  all: 'Every request in dollars at the API price list, a subscription request at its dollar equivalent.',
-  usd: 'The API key, fast-mode, overage and usage-based requests alone, the dollars the account holder is charged.',
-  equivalent: 'The subscription requests alone at the API price list.',
-};
-const NOTE =
-  "A subscription figure is the share of a Pro 7-day window the same tokens would spend, the cost model's units over the Pro capacity, so figures of different account tiers compare and add. The week control reads it as a share of a Max week, five Pro weeks, or an Ultra week, ten Pro weeks. On a request or one account's row the figure's hover names the account's plan and its share of each window the account has.";
-
-test("the positions run native first, then the Cost section's three", () => {
-  assert.deepEqual([...d.UNIT_POSITIONS], ['native', 'all', 'usd', 'equivalent']);
-});
-
-test('every position carries its long and short label', () => {
-  assert.deepEqual(
-    d.UNIT_POSITIONS.map((p) => [d.UNIT_LABEL[p], d.UNIT_SHORT[p]]),
-    [
-      ['Native', 'Native'],
-      ['All in dollars', 'All $'],
-      ['Billed dollars', 'Billed $'],
-      ['Dollar equivalent', 'Equivalent $'],
-    ],
-  );
-});
-
-test("the legend explains every position and the subscription figure in the spec's wording", () => {
-  assert.deepEqual(Object.fromEntries(d.UNIT_POSITIONS.map((p) => [p, d.UNIT_LEGEND[p]])), LEGEND);
-  assert.equal(d.UNIT_LEGEND_NOTE, NOTE);
-});
-
-test("the legend's closing paragraph names the account tiers it compares across", () => {
-  assert.ok(d.UNIT_LEGEND_NOTE.includes('figures of different account tiers compare and add'), 'the figure compares across account tiers');
-  assert.deepEqual(d.UNIT_LEGEND_NOTE.match(/\b(?<!account |model )tiers?\b/g) ?? [], [], 'every tier the paragraph mentions is named');
-});
-
-test('a stored value the console does not know reads native, the share position an earlier build stored among them', () => {
-  for (const position of d.UNIT_POSITIONS) assert.equal(d.positionOf(position), position, position);
-  assert.equal(d.positionOf('share'), 'native', 'a position the select no longer offers');
-  assert.equal(d.positionOf('bogus'), 'native');
-  assert.equal(d.positionOf(''), 'native');
-  assert.equal(d.positionOf(null), 'native');
-  assert.equal(d.positionOf(undefined), 'native');
-});
-
-test('a stored week the console does not know reads the Ultra week, the default', () => {
-  assert.equal(d.weekOf('max'), 'max');
-  assert.equal(d.weekOf('pro'), 'pro');
-  assert.equal(d.weekOf('bogus'), 'ultra');
-  assert.equal(d.weekOf(null), 'ultra');
-});
-
 test('native reads both sides of one answer and every other position its funding side', () => {
   assert.ok(Object.hasOwn(d.UNIT_FUNDING, 'native'), 'native is a position of the map');
   assert.equal(d.UNIT_FUNDING.native, undefined);

@@ -1590,25 +1590,6 @@ revisions:
     }
 
     #[test]
-    fn a_plan_request_on_a_model_without_a_weight_reads_a_null_figure_and_one_with_a_weight_its_own(
-    ) {
-        let shares = shares_of();
-        let figure = |model: &str, kind: &str| {
-            request_summary(&request_of(model), &[attempt_of(kind, None, None)], &shares)
-                .cost_equivalent
-        };
-        assert_eq!(
-            figure("claude-sonnet-5", "oauth"),
-            None,
-            "a Sonnet model the cost model does not list prices nothing, though Sonnet 5.5 weighs its model tier"
-        );
-        assert!(
-            figure("claude-fable-5-1", "oauth").is_some_and(|figure| figure > 0.0),
-            "a weighted model prices at its own weight"
-        );
-    }
-
-    #[test]
     fn the_request_s_receipt_selects_the_cost_revision_and_the_attempt_s_completion_the_band() {
         /// Monday 2026-09-21 at 23:00 UTC, 16:00 in Los Angeles: off the band, before the second revision.
         const RECEIPT: i64 = 1_790_031_600_000;

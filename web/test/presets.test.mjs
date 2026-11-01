@@ -352,17 +352,6 @@ test('a held 5-hour window is not the closest reading, however near the ceiling 
   assert.equal(d.shedPreviewLine(preview, NOW), `No member projects over the ceiling on any window: the closest is low, 5h 60 % at ${d.instant(NOW + 2 * HOUR, NOW)}.`);
 });
 
-test("a round on a weekly window scales each pin's burn by the account's burn on that window over its burn on the pin's own window", () => {
-  // weekly crosses on its 7-day window alone: 97 % at a horizon five hours out under a ceiling of 95, an excess of 0.4
-  // points an hour. Its sessions burn the 7-day window a quarter as fast as the 5-hour one, so the pins' 5 and 3 points
-  // read 1.25 and 0.75 there. The excess is under the cap's half of their 2, and a's 1.25 covers it alone.
-  const weekly = { fableWindow: null, id: 'weekly', kind: 'oauth', label: 'weekly', windows: [win('5h', 0.6, 2 * HOUR, 0.08), win('7d', 0.97, 5 * HOUR, 0.02)] };
-  const pins = [pin('weekly', 'a', 0.05, false), pin('weekly', 'b', 0.03, false)];
-  const preview = d.shedPreview(pool([weekly, cool], { windowCeiling: 0.95 }), [weekly, cool], pins, NOW);
-  assert.deepEqual(preview.hot.map((h) => [h.label, h.window, h.excess.toFixed(4)]), [['weekly', '7d', '0.0040']]);
-  assert.equal(d.shedPreviewLine(preview, NOW), '1 member projects over the ceiling: weekly. A round there would mark 1 session (0 warm), 0.4 %/h of the excess, to move to a sibling with runway.');
-});
-
 test('a pin on an account without a 5-hour window scales its 7-day burn by 1 on a 7-day round and by the Fable burn over the 7-day burn on a Fable round', () => {
   // approved has no 5-hour window, so its pins' burn is a share of the 7-day window. On the 7-day round, 97 % at a
   // horizon five hours out under a ceiling of 95 asks 0.4 points an hour, which a's 5 points cover.

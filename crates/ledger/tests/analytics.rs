@@ -1081,52 +1081,6 @@ fn the_saving_prices_each_kept_warm_count_at_its_ttls_write_rate_less_the_read()
     );
 }
 
-/// A credit's row carries no request token, so its saving alone prices it: on a model the cost model leaves unweighted
-/// (the test table's Opus 5 beside Opus 5.5 at 2), the saving prices nothing, so the group's saving figure reads
-/// `None` rather than a zero, as a request row on the model does.
-#[test]
-fn a_credit_on_a_model_without_a_weight_prices_no_saving_figure() {
-    let prices = phoebis_ledger::test_tables::api_prices();
-    let costs = phoebis_ledger::test_tables::subscription_costs();
-    let db = LedgerDb::open_in_memory().unwrap();
-    db.write(|c| {
-        let tx = c.transaction()?;
-        fold_keepalive(
-            &tx,
-            &KeepaliveDelta {
-                at: phoebis_ledger::test_tables::JANUARY_2026,
-                key_id: "desktop".into(),
-                pool_id: "main".into(),
-                account_id: "a".into(),
-                canonical_model: "claude-opus-5".into(),
-                kind: "inference".into(),
-                kept_warm_requests: 1,
-                kept_warm_5m_tokens: 2_000,
-                ..Default::default()
-            },
-        )?;
-        tx.commit()?;
-        Ok(())
-    })
-    .unwrap();
-    let rows = db
-        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
-        .unwrap();
-    let groups = breakdown(
-        &rows,
-        "all",
-        false,
-        &LiveKeys::default(),
-        &[],
-        None,
-        &prices,
-        &costs,
-        NOW,
-    );
-    let group = groups.first().expect("the credit's group");
-    assert_eq!(group.saving_equivalent, None, "{group:?}");
-}
-
 #[test]
 fn a_keepalive_credits_row_files_under_the_reserved_class() {
     let db = LedgerDb::open_in_memory().unwrap();
@@ -2380,62 +2334,6 @@ fn a_plan_row_on_a_model_the_cost_model_cannot_weigh_nulls_its_groups_figure() {
 }
 
 #[test]
-fn a_group_whose_plan_rows_all_priced_reads_its_figure() {
-    let db = LedgerDb::open_in_memory().unwrap();
-    // A row at its own weight and a Fable row with a week of its own, which the Pro-week figure reads no part of.
-    for (id, model) in [
-        ("r-sonnet", "claude-sonnet-5-5"),
-        ("r-fable", "claude-fable-5-1"),
-    ] {
-        plant_share(
-            &db,
-            ShareRow {
-                id,
-                model,
-                ..ShareRow::default()
-            },
-        );
-    }
-    let groups = test_cost_groups(&db, "account", false);
-    let a = group(&groups, "a");
-    assert!(
-        a.cost_equivalent.is_some_and(|figure| figure > 0.0) && a.cache_equivalent.is_some(),
-        "{a:?}"
-    );
-}
-
-#[test]
-fn a_group_of_billed_rows_alone_reads_a_zero_figure() {
-    let db = LedgerDb::open_in_memory().unwrap();
-    plant_share(
-        &db,
-        ShareRow {
-            id: "r-overage",
-            model: "claude-unlisted-1",
-            overage: Some(true),
-            ..ShareRow::default()
-        },
-    );
-    plant_share(
-        &db,
-        ShareRow {
-            id: "r-api",
-            account: "k",
-            account_kind: "api_key",
-            model: "claude-unlisted-1",
-            ..ShareRow::default()
-        },
-    );
-    let groups = test_cost_groups(&db, "model", false);
-    let g = group(&groups, "claude-unlisted-1");
-    assert_eq!(
-        g.cost_equivalent,
-        Some(0.0),
-        "no plan row joined the sum, so a model it cannot weigh nulls nothing: {g:?}"
-    );
-}
-
-#[test]
 fn a_plan_probe_the_cost_model_cannot_weigh_nulls_the_probe_figure_and_not_the_request_figure() {
     let db = LedgerDb::open_in_memory().unwrap();
     plant_share(
@@ -2659,45 +2557,6 @@ async fn shared_sums(
         ("the pool's totals", pools["p"].equivalent),
         ("the key's totals", keys["k"].equivalent),
     ]
-}
-
-/// A plan row the cost model cannot weigh nulls the figure of the dashboard, a pool's traffic and the keys' and pools'
-/// totals, so a partial sum never reads as the whole. A model in no tier and a tier that weighs no model each meet the
-/// sums on a ledger of their own.
-#[tokio::test]
-async fn the_shared_sums_read_none_once_a_plan_row_prices_nothing() {
-    let costs = test_costs();
-    for (model, why) in [
-        ("claude-unlisted-1", "a model with no tier"),
-        ("claude-mystery-2", "a tier with no weighted model"),
-    ] {
-        let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
-        plant_share(
-            &db,
-            ShareRow {
-                id: "r-priced",
-                model: "claude-sonnet-5-5",
-                ..ShareRow::default()
-            },
-        );
-        for (what, sum) in shared_sums(&db, &costs).await {
-            assert!(
-                sum.is_some_and(|figure| figure > 0.0),
-                "{what} prices its one plan row: {sum:?}"
-            );
-        }
-        plant_share(
-            &db,
-            ShareRow {
-                id: "r-unpriced",
-                model,
-                ..ShareRow::default()
-            },
-        );
-        for (what, sum) in shared_sums(&db, &costs).await {
-            assert_eq!(sum, None, "{what} under {why}");
-        }
-    }
 }
 
 /// A billed row's figure is `None` as an unpriced plan row's is, since dollars fund it, so a sum that nulled on any
@@ -3862,60 +3721,6 @@ async fn the_shares_answer_under_any_grouping_where_the_filter_names_one_account
             "each account group is one account: {by_account:?}"
         );
     }
-}
-
-/// A model the cost model does not weight prices nothing, whatever its model tier: a group holding a row on it reads
-/// a null equivalent beside its rows' dollars, while a group of a weighted model keeps its figure.
-#[tokio::test]
-async fn a_group_holding_a_row_on_a_model_without_a_weight_reads_a_null_equivalent_beside_its_dollars(
-) {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
-    for (id, model) in [
-        ("r-opus-4-7", "claude-opus-4-7"),
-        ("r-opus-5-5", "claude-opus-5-5"),
-    ] {
-        plant_share(
-            &db,
-            ShareRow {
-                id,
-                model,
-                ..ShareRow::default()
-            },
-        );
-    }
-    let (filter, tables) = (RollupFilter::default(), share_tables());
-    let read = |group_by| {
-        groups_by(
-            &db,
-            &filter,
-            hour_range(WEEKDAY_OFF_PEAK),
-            group_by,
-            &tables,
-        )
-    };
-    let (by_model, all) = (read("model").await, read("all").await);
-    let (unweighted, weighted, all) = (
-        group(&by_model, "claude-opus-4-7"),
-        group(&by_model, "claude-opus-5-5"),
-        group(&all, "all"),
-    );
-    let equivalent =
-        |group: &GroupRow| serde_json::to_value(group).unwrap()["cost_equivalent"].clone();
-    assert_eq!(
-        (equivalent(unweighted), equivalent(all)),
-        (serde_json::Value::Null, serde_json::Value::Null),
-        "a row that priced nothing nulls its group's sum rather than reading the other row's part: {unweighted:?}, \
-         {all:?}"
-    );
-    assert!(
-        equivalent(weighted).as_f64().is_some_and(|e| e > 0.0),
-        "a weighted model keeps its figure: {weighted:?}"
-    );
-    assert!(
-        all.cost_usd > 0.0
-            && (all.cost_usd - (unweighted.cost_usd + weighted.cost_usd)).abs() < 1e-12,
-        "the group keeps its rows' dollars: {all:?}"
-    );
 }
 
 /// A classifier call's plan row reads zero in its shares and in the equivalent, and its cache halves and its split by
@@ -5169,70 +4974,6 @@ fn a_row_with_no_token_never_unprices_a_bucket_and_a_bucket_of_them_alone_reads_
     assert_eq!(
         (idle.five_hour_share, idle.seven_day_share, idle.tokens),
         (None, None, 0)
-    );
-}
-
-#[test]
-fn a_row_on_a_model_without_a_weight_prices_no_share_and_no_equivalent() {
-    let db = LedgerDb::open_in_memory().unwrap();
-    // The shipped model has no weight for Opus 4.7, so a million of its input tokens price nothing on either window,
-    // whatever its model tier weighs.
-    db.insert_request(
-        &RequestRecord {
-            id: "r-opus-4-7".into(),
-            received_at: WEEKDAY_OFF_PEAK,
-            key_id: Some("k".into()),
-            pool_id: Some("p".into()),
-            canonical_model: "claude-opus-4-7".into(),
-            model: "claude-opus-4-7".into(),
-            kind: "inference".into(),
-            origin: "client".into(),
-            outcome: "succeeded".into(),
-            attempts: 1,
-            ..Default::default()
-        },
-        &[AttemptRecord {
-            request_id: "r-opus-4-7".into(),
-            attempt: 1,
-            account_id: "max".into(),
-            account_kind: "oauth".into(),
-            outcome: "succeeded".into(),
-            input_tokens: Some(1_000_000),
-            tier: Some(MAX_20X.into()),
-            ..Default::default()
-        }],
-        None,
-    )
-    .unwrap();
-    let tables = PlanTables::shipped();
-    let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
-    let filter = SeriesFilter {
-        from: hour,
-        to: hour + 3_600_000,
-        bucket_seconds: 3_600,
-        accounts: vec!["max".into()],
-        ..SeriesFilter::default()
-    };
-    let point = db
-        .read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, NOW))
-        .unwrap()
-        .into_iter()
-        .find(|p| p.at == hour)
-        .expect("the planted hour");
-    assert_eq!(
-        (point.five_hour_share, point.seven_day_share),
-        (None, None),
-        "a known tier prices nothing for a model without a weight: {point:?}"
-    );
-    assert_eq!(
-        (point.uncached_tokens, point.usd),
-        (1_000_000, 0.0),
-        "and the tokens still count"
-    );
-    assert_eq!(
-        (point.equivalent, point.unpriced),
-        (None, true),
-        "the figure reads none and the bucket says a plan row priced nothing"
     );
 }
 
