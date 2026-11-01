@@ -575,6 +575,9 @@ async fn a_cold_services_request_waits_the_bound_then_falls_back_to_the_spelling
         elapsed < STARTUP_BOUND * 2,
         "{elapsed:?} waited past twice the bound"
     );
+    // The request dials the fake, so the paused clock cannot time it. On the real clock only a wait the relay
+    // skipped can fail a lower bound.
+    let start = std::time::Instant::now();
     let resp = h
         .app
         .clone()
@@ -582,6 +585,10 @@ async fn a_cold_services_request_waits_the_bound_then_falls_back_to_the_spelling
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
+    assert!(
+        start.elapsed() >= STARTUP_BOUND,
+        "the request itself waited the bound before it fell back to the spelling"
+    );
     assert!(
         h.router
             .pins()
