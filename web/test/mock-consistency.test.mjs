@@ -25,9 +25,9 @@ const sum = (list, read) => list.reduce((n, x) => n + read(x), 0);
 const near = (a, b) => Math.abs(a - b) < 1e-6;
 /** A request's five priced token counts, which the ledger prices a row by. */
 const requestTokens = (r) => r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output;
-/** Whether the cost model weighs the model with a row of its own, under its id or its undated name, the one weight a
- *  figure prices at. */
-const ownWeight = (s, model) => (s.settings.subscriptionCosts.modelWeight[model] ?? s.settings.subscriptionCosts.modelWeight[s.lib.undatedModel(model)] ?? null) !== null;
+/** Whether the cost model weighs the model on the 7-day window itself, its override there or its row's weight, the one
+ *  weight a figure prices at. */
+const ownWeight = (s, model) => s.lib.weightOf(s.settings.subscriptionCosts, model, 'seven_day') !== null;
 /** Whether a subscription window paid the request: its serving attempt's funding, which a request no account served
  *  has none of. */
 const planPaid = (s, r) => r.attempts.length > 0 && s.lib.fundingOf(r.attempts[r.attempts.length - 1]) === 'plan';
@@ -3323,7 +3323,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       let out = 0;
       for (const r of rows) {
         if (tokensOf(r) === 0) continue;
-        const figure = r.classifier === 'client' ? 0 : ownWeight(s, r.model) ? (s.lib.equivalentOf(costs, 'seven_day', r.model, usage(r), Date.parse(r.hour))?.equivalent ?? null) : null;
+        const figure = r.classifier === 'client' ? 0 : ownWeight(s, r.model) ? s.lib.equivalentOf(costs, r.model, usage(r), Date.parse(r.hour)) : null;
         out = out === null || figure === null ? null : out + figure;
       }
       return out;

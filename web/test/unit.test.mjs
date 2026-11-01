@@ -14,53 +14,60 @@ after(() => window.close());
 const { act, createElement: h, createRoot, UnitLegend } = await import('./dist/ui.js');
 
 const LEGEND = {
-  native: 'Each request in the unit its funding pays in: a subscription request as 20x window equivalents, an API key, fast-mode, overage or usage-based request in dollars.',
+  native: 'Each request in the unit its funding pays in: a subscription request as a share of the week the week control names, an API key, fast-mode, overage or usage-based request in dollars.',
   all: 'Every request in dollars at the API price list, a subscription request at its dollar equivalent.',
   usd: 'The API key, fast-mode, overage and usage-based requests alone, the dollars the account holder is charged.',
-  share: "A subscription account's requests as shares of its own 5-hour, 7-day and model-week windows. Reads where one account is named, since shares of different accounts' windows do not add.",
   equivalent: 'The subscription requests alone at the API price list.',
 };
 const NOTE =
-  "A 20x window equivalent is the share of a Max 20x account's window the same tokens would spend, the cost model's unit over the Max 20x capacity, so figures of different account tiers compare and add. The 5-hour column carries the peak band's weight, the 7-day column the week's factor, and a model week its own capacity factor. A figure marked ~ is estimated: its model has no measured weight and reads the latest weighed model of its model tier.";
+  "A subscription figure is the share of a Pro 7-day window the same tokens would spend, the cost model's units over the Pro capacity, so figures of different account tiers compare and add. The week control reads it as a share of a Max week, five Pro weeks, or an Ultra week, ten Pro weeks. On a request or one account's row the figure's hover names the account's plan and its share of each window the account has.";
 
-test("the positions run native first, then the Cost section's four", () => {
-  assert.deepEqual([...d.UNIT_POSITIONS], ['native', 'all', 'usd', 'share', 'equivalent']);
+test("the positions run native first, then the Cost section's three", () => {
+  assert.deepEqual([...d.UNIT_POSITIONS], ['native', 'all', 'usd', 'equivalent']);
 });
 
-test('the long and the short labels name every position and nothing else', () => {
-  const positions = [...d.UNIT_POSITIONS].sort();
-  assert.equal(positions.length, 5);
-  assert.deepEqual(Object.keys(d.UNIT_LABEL).sort(), positions);
-  assert.deepEqual(Object.keys(d.UNIT_SHORT).sort(), positions);
-  assert.deepEqual(d.UNIT_LABEL, { all: 'All in dollars', equivalent: 'Dollar equivalent', native: 'Native', share: 'Window shares', usd: 'Billed dollars' });
-  assert.deepEqual(d.UNIT_SHORT, { all: 'All $', equivalent: 'Equivalent $', native: 'Native', share: 'Shares', usd: 'Billed $' });
+test('every position carries its long and short label', () => {
+  assert.deepEqual(
+    d.UNIT_POSITIONS.map((p) => [d.UNIT_LABEL[p], d.UNIT_SHORT[p]]),
+    [
+      ['Native', 'Native'],
+      ['All in dollars', 'All $'],
+      ['Billed dollars', 'Billed $'],
+      ['Dollar equivalent', 'Equivalent $'],
+    ],
+  );
 });
 
-test("the legend explains every position and the 20x window equivalent in the spec's wording", () => {
-  assert.deepEqual(Object.keys(d.UNIT_LEGEND).sort(), [...d.UNIT_POSITIONS].sort());
-  assert.deepEqual(d.UNIT_LEGEND, LEGEND);
+test("the legend explains every position and the subscription figure in the spec's wording", () => {
+  assert.deepEqual(Object.fromEntries(d.UNIT_POSITIONS.map((p) => [p, d.UNIT_LEGEND[p]])), LEGEND);
   assert.equal(d.UNIT_LEGEND_NOTE, NOTE);
 });
 
-test("the legend's closing paragraph names the account tiers and the model tier apart", () => {
-  assert.ok(d.UNIT_LEGEND_NOTE.includes('figures of different account tiers compare and add'), 'the equivalent compares across account tiers');
-  assert.ok(d.UNIT_LEGEND_NOTE.includes('the latest weighed model of its model tier'), "an estimate reads its model tier's latest weighed model");
+test("the legend's closing paragraph names the account tiers it compares across", () => {
+  assert.ok(d.UNIT_LEGEND_NOTE.includes('figures of different account tiers compare and add'), 'the figure compares across account tiers');
   assert.deepEqual(d.UNIT_LEGEND_NOTE.match(/\b(?<!account |model )tiers?\b/g) ?? [], [], 'every tier the paragraph mentions is named');
 });
 
 test('no legend sentence joins two clauses with a semicolon', () => {
-  const texts = [...Object.values(d.UNIT_LEGEND), d.UNIT_LEGEND_NOTE];
-  assert.equal(texts.length, 6);
-  assert.deepEqual(texts.filter((t) => t === '' || t.includes(';')), []);
+  const texts = [...d.UNIT_POSITIONS.map((p) => d.UNIT_LEGEND[p]), d.UNIT_LEGEND_NOTE];
+  assert.equal(texts.length, 5);
+  assert.deepEqual(texts.filter((t) => t === undefined || t === '' || t.includes(';')), []);
 });
 
-test('a stored value the console does not know reads native', () => {
+test('a stored value the console does not know reads native, the share position an earlier build stored among them', () => {
   for (const position of d.UNIT_POSITIONS) assert.equal(d.positionOf(position), position, position);
-  assert.equal(d.positionOf('share'), 'share');
+  assert.equal(d.positionOf('share'), 'native', 'a position the select no longer offers');
   assert.equal(d.positionOf('bogus'), 'native');
   assert.equal(d.positionOf(''), 'native');
   assert.equal(d.positionOf(null), 'native');
   assert.equal(d.positionOf(undefined), 'native');
+});
+
+test('a stored week the console does not know reads the Ultra week, the default', () => {
+  assert.equal(d.weekOf('max'), 'max');
+  assert.equal(d.weekOf('pro'), 'pro');
+  assert.equal(d.weekOf('bogus'), 'ultra');
+  assert.equal(d.weekOf(null), 'ultra');
 });
 
 test('native reads both sides of one answer and every other position its funding side', () => {

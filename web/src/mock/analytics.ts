@@ -5,7 +5,7 @@ import type {
 } from '@/api/types';
 import { bucketShare } from '@/lib/analytics';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
-import { equivalentOf, modelWeeks, pricedWindow, tierCapacity, type Usage } from '@/lib/costs';
+import { equivalentOf, modelWeeks, pricedWindow, tierCapacity, weightOf, type Usage } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, placementHit } from '@/lib/format';
 import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
@@ -13,7 +13,7 @@ import { matchesPattern } from '@/lib/pattern';
 import { endOf } from '@/lib/quota';
 import { ACCOUNTS, sharedWindowsOf } from './accounts';
 import { keyById } from './pools';
-import { clock, ownWeighted } from './requests';
+import { clock } from './requests';
 import { createRng } from './rng';
 import type { EventSeed } from './routingLog';
 import { TABLES } from './samples';
@@ -454,7 +454,7 @@ const usageOf = (r: HourlyRollup): Usage => ({ cacheRead: r.tokens.cacheRead, ca
 
 /** A row's tokens as the Pro-week figure, completing at the row's hour, null for a model without a weight of its
  *  own. */
-const equivalentAt = (r: HourlyRollup, usage: Usage): number | null => (ownWeighted(r.model) ? (equivalentOf(TABLES, 'seven_day', r.model, usage, Date.parse(r.hour))?.equivalent ?? null) : null);
+const equivalentAt = (r: HourlyRollup, usage: Usage): number | null => (weightOf(TABLES, r.model, 'seven_day') !== null ? equivalentOf(TABLES, r.model, usage, Date.parse(r.hour)) : null);
 
 /**
  * A row's cache read alone and its cache writes alone as the Pro-week figure at the row's hour. `usage` is the row's

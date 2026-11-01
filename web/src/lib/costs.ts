@@ -1,5 +1,6 @@
 import type { Attempt, ModelTiers, SubscriptionCosts, TypeMultiplier } from '@/api/types';
 import { undatedModel } from '@/lib/format';
+import { WEEK_TIER, type WeekPosition } from '@/lib/unit';
 
 /**
  * The share rule of the subscription cost model, the console's one copy of what the ledger prices: a token costs the
@@ -93,16 +94,13 @@ export const underRegime = (costs: SubscriptionCosts, entrypoint: string | null)
 /** The model's row key: its id as sent, else its undated name, since the price rows carry dated ids. */
 const keyOf = (costs: SubscriptionCosts, model: string): string | null => (own(costs.modelWeight, model) ? model : own(costs.modelWeight, undatedModel(model)) ? undatedModel(model) : null);
 
-/** The model's own weight on `window`: its override on the window, else its row's weight. The fallback reads this
- *  and never `weightOf`, so `weightOf` can read the fallback without a loop. */
-const ownWeightOf = (costs: SubscriptionCosts, model: string, window: string): number | null => {
+/** The model's own weight on `window`: its override on the window, else its row's weight, else null. */
+export const weightOf = (costs: SubscriptionCosts, model: string, window: string): number | null => {
   const key = keyOf(costs, model);
   if (key === null) return null;
   const byWindow = costs.overrides[key]?.weightByWindow;
   return byWindow !== undefined && own(byWindow, window) ? byWindow[window] : costs.modelWeight[key];
 };
-
-export const weightOf = (costs: SubscriptionCosts, model: string, window: string): number | null => weightOrFallback(costs, model, window)?.weight ?? null;
 
 /** The model's tier: its `model_tier` entry, else its undated id's, else the id's segment after `claude-` when
  *  `tier_order` names it. Named apart from routingLog's `tierOf`, the engine's account tier, which the test entry
@@ -122,11 +120,11 @@ export const latestWeighted = (costs: SubscriptionCosts, tier: string): string |
     .filter((model) => modelTierOf(costs, model) === tier && costs.modelWeight[model] !== null)
     .sort(newestFirst)[0] ?? null;
 
-/** The weight a model prices at on `window`, and whether it stands in: the model's own (an override counts), else the
- *  model tier's latest weighed model's base weight marked estimated, else null. The donor's override names the donor
- *  alone, so it never reaches another model. */
+/** The weight the cost reference draws for a model on `window`, and whether it stands in: the model's own (an override
+ *  counts), else the model tier's latest weighed model's base weight marked estimated, else null. The donor's override
+ *  names the donor alone, so it never reaches another model. */
 export const weightOrFallback = (costs: SubscriptionCosts, model: string, window: string): { estimated: boolean; weight: number } | null => {
-  const weight = ownWeightOf(costs, model, window);
+  const weight = weightOf(costs, model, window);
   if (weight !== null) return { estimated: false, weight };
   const tier = modelTierOf(costs, model);
   const donor = tier === null ? null : latestWeighted(costs, tier);
@@ -203,7 +201,7 @@ export const bandFactor = (costs: SubscriptionCosts, window: string, at: number)
 };
 
 /** Per million tokens of each type at `weight`, the share of the account tier's window out of band, null for an
- *  unpriced window or account tier. The model's own multipliers apply whichever model's weight stands in. */
+ *  unpriced window or account tier. */
 const ratesAt = (costs: SubscriptionCosts, window: string, tier: string, model: string, weight: number | null): Record<TokenType, number> | null => {
   const w = pricedWindow(costs, window);
   const capacity = w === null ? null : tierCapacity(costs, tier, w.priced);
@@ -229,22 +227,27 @@ export const shareIn = (costs: SubscriptionCosts, window: string, tier: string, 
 
 /** The share `usage` spends for a request completing at `at`; null where unpriced, and where the band's state at `at`
  *  cannot be read, since a share on an assumed state could read half what the ledger charges. */
-export const shareOf = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, at: number): number | null => shareOrFallback(costs, window, tier, model, usage, at)?.share ?? null;
-
-/** `shareOf` at `weightOrFallback`'s weight, the flag beside the share. */
-export const shareOrFallback = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, at: number): { estimated: boolean; share: number } | null => {
+export const shareOf = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, at: number): number | null => {
   const inside = inBand(costs, at);
-  const weight = inside === null ? null : weightOrFallback(costs, model, window);
-  const share = inside === null || weight === null ? null : shareAt(costs, window, tier, model, usage, inside, weight.weight);
-  return share === null || weight === null ? null : { estimated: weight.estimated, share };
+  return inside === null ? null : shareAt(costs, window, tier, model, usage, inside, weightOf(costs, model, window));
 };
 
-/** The 20x window equivalent: the share under the anchor tier, the cost model's units over its capacity. No account
- *  tier is read, so the figure adds across accounts. */
-export const equivalentOf = (costs: SubscriptionCosts, window: string, model: string, usage: Usage, at: number): { equivalent: number; estimated: boolean } | null => {
-  const priced = shareOrFallback(costs, window, anchorTier(costs), model, usage, at);
-  return priced === null ? null : { equivalent: priced.share, estimated: priced.estimated };
+/** The Pro-week figure: the share of the anchor tier's 7-day window, so the figure adds across accounts. Null where
+ *  the model has no weight on the window or the band's state at `at` cannot be read. */
+export const equivalentOf = (costs: SubscriptionCosts, model: string, usage: Usage, at: number): number | null => shareOf(costs, 'seven_day', anchorTier(costs), model, usage, at);
+
+/** The chosen week's figure per Pro-week figure: the anchor tier's 7-day capacity over the chosen tier's in the
+ *  revision `costs` is (the one in force at the read), 1 under Pro with no table, null where either side is null. */
+export const weekScale = (costs: SubscriptionCosts | null, week: WeekPosition): number | null => {
+  if (costs === null) return week === 'pro' ? 1 : null;
+  const anchor = tierCapacity(costs, anchorTier(costs), 'seven_day');
+  const chosen = tierCapacity(costs, WEEK_TIER[week], 'seven_day');
+  return anchor === null || chosen === null ? null : anchor / chosen;
 };
+
+/** The account tiers a model week applies to: the cost model sizes the Fable week for every tier, and Pro has no
+ *  Fable access, so the hint and the cost reference draw the week for these tiers alone. */
+export const MODEL_WEEK_TIERS: Record<string, readonly string[]> = { seven_day_fable: ['default_claude_max_5x', 'default_claude_max_20x'] };
 
 /** The entry in force at `at` (an instant or an ISO string): the latest `effectiveDate` at or before it, else the
  *  first, since a blank history reads worse than the earliest known table. Null for an empty list. */
@@ -276,7 +279,7 @@ export const fundingOf = (attempt: Pick<Attempt, 'accountKind' | 'overageInUse' 
 };
 
 export type NativeUnit = 'equivalent' | 'usd';
-/** The unit a funding pays in: a subscription window in 20x equivalents, everything else in dollars. */
+/** The unit a funding pays in: a subscription window as a share of the chosen week, everything else in dollars. */
 export const nativeOf = (funding: Funding): NativeUnit => (funding === 'plan' ? 'equivalent' : 'usd');
 
 /** Minutes of a day in the viewing zone. */

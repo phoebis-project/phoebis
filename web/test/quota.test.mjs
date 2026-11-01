@@ -30,9 +30,9 @@ test('the plan word table labels the eight resolved words and nothing else', () 
     [
       ['enterprise', 'Enterprise'],
       ['free', 'Free'],
-      ['max', 'Max'],
-      ['max_20x', 'Max 20x'],
-      ['max_5x', 'Max 5x'],
+      ['max', 'Max (tier unknown)'],
+      ['max_20x', 'Ultra'],
+      ['max_5x', 'Max'],
       ['pro', 'Pro'],
       ['team', 'Team'],
       ['usage_based', 'Usage-based'],

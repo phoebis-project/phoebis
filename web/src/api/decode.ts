@@ -191,9 +191,10 @@ function fastLaneReading(v: unknown): FastLaneReading | null {
   return { observedAt: isoOr(r.observed_at, epoch), resetsAt: isoOrNull(r.resets_at), utilization: num(r.utilization) };
 }
 
-/** The plan's name: the resolved word's label through one table, a word the table lacks shown as sent, and null with
- *  no word, since the tier names no plan on its own. */
-export const planName = (sub: Subscription | null): string | null => (sub === null || sub.plan === null ? null : planWordLabel(sub.plan));
+/** The plan's name: the profile's display name where it carries one, since claude.ai names the plan there, else the
+ *  resolved word's label through one table, a word the table lacks shown as sent, and null with neither, since the tier
+ *  names no plan on its own. */
+export const planName = (sub: Subscription | null): string | null => (sub === null ? null : (sub.planDisplayName ?? (sub.plan === null ? null : planWordLabel(sub.plan))));
 
 export function decodeCatalogModel(v: unknown): CatalogModel {
   const m = rec(v);

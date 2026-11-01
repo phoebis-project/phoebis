@@ -7,16 +7,28 @@ const own = (map: object, key: string): boolean => Object.prototype.hasOwnProper
 
 export type MeterTone = 'good' | 'low' | 'warn';
 
+// The names claude.ai gives the plans, keyed by the tier ids, which stay the keys everywhere the router stores a tier.
+const TIER_LABEL: Readonly<Record<string, string>> = {
+  claude_enterprise: 'Enterprise',
+  claude_max_20x: 'Ultra',
+  claude_max_5x: 'Max',
+  claude_pro: 'Pro',
+  claude_team: 'Team',
+  default_claude_ai: 'Pro',
+  default_claude_enterprise: 'Enterprise',
+  default_claude_max_20x: 'Ultra',
+  default_claude_max_5x: 'Max',
+  default_claude_team: 'Team',
+};
+
 /**
  * A tier's label, for the cost reference's tiers, the rings' anchor and reasons, and an older decision record's tier
- * word: `default_claude_max_5x` reads as "Max 5x" and `default_claude_ai`, the tier the profile reports for Pro, as
- * "Pro", and anything else is shown as sent.
+ * word: `default_claude_max_20x` reads as "Ultra", `default_claude_max_5x` as "Max" and `default_claude_ai`, the tier
+ * the profile reports for Pro, as "Pro", and anything else is shown as sent. An account's own plan reads the profile's
+ * display name first where it carries one (`planName`), since a record or a capacity row carries the tier alone.
  */
 export function planLabel(tier: string): string {
-  const m = /^(?:default_)?claude_(ai|max|pro|team|enterprise)(?:_(\d+)x)?$/.exec(tier);
-  if (!m) return tier;
-  const name = m[1] === 'ai' ? 'Pro' : m[1][0].toUpperCase() + m[1].slice(1);
-  return m[2] ? `${name} ${m[2]}x` : name;
+  return own(TIER_LABEL, tier) ? TIER_LABEL[tier] : tier;
 }
 
 /**
@@ -27,9 +39,9 @@ export function planLabel(tier: string): string {
 export const PLAN_WORD_LABEL: Readonly<Record<string, string>> = {
   enterprise: 'Enterprise',
   free: 'Free',
-  max: 'Max',
-  max_20x: 'Max 20x',
-  max_5x: 'Max 5x',
+  max: 'Max (tier unknown)',
+  max_20x: 'Ultra',
+  max_5x: 'Max',
   pro: 'Pro',
   team: 'Team',
   usage_based: 'Usage-based',

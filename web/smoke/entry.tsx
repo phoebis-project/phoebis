@@ -40,14 +40,14 @@ export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, Pill, Switche
 export { GuardrailDialog } from '@/pages/GuardrailsPage';
 // The figures and the model form a Dashboard check computes its expectation from, so the check and the page read one
 // derivation; the cost reference's and the About card's checks read theirs the same way.
-export { anchorTier, bandFactor, bandRuns, bandSentence, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, regimeClients, regimeNames, regimeTitle, regimeWord, revisionAt, shareOf, smallestTier, tierCapacity, tierGroups, tierOrder, weightOf, weightOrFallback, windowMultiple, withRegime } from '@/lib/costs';
+export { anchorTier, bandFactor, bandRuns, bandSentence, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, regimeClients, regimeNames, regimeTitle, regimeWord, revisionAt, shareOf, smallestTier, tierCapacity, tierGroups, tierOrder, weekScale, weightOf, weightOrFallback, windowMultiple, withRegime } from '@/lib/costs';
 // The Cache miss reasons, their labels and short words in the page's order, so the filter and Analytics table checks
 // read the words the pages draw.
 export { CACHE_MISS_LABEL, CACHE_MISS_REASONS, CACHE_MISS_SHORT, missLabel, missShort } from '@/lib/cache';
 // The strip's model and its buttons' names, so a card check spells the stations a record draws and the names a reader
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
-export { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, shareLabel, shortModel, spanText, undatedModel } from '@/lib/format';
+export { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, shareLabel, shortModel, spanText, undatedModel, weekShort } from '@/lib/format';
 // The pace mark's offset, so the check and the meter place it by one arithmetic.
 export { remainingTimeShare } from '@/lib/quota';
 // The projection's phrase, its burn and the span it spells, so a check computes the words a window draws from the one
@@ -63,7 +63,7 @@ export { ALL_KINDS } from '@/lib/routingLog';
 // The walk's words, so a card check reads a popover's column and its title as the console words them.
 export { keyWord, STEP_NAME, words } from '@/lib/routingLog';
 // The legend's words, so the shell's check reads the popover against the one source the console draws it from.
-export { UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE } from '@/lib/unit';
+export { UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, WEEK_LABEL, WEEK_POSITIONS, weekOf } from '@/lib/unit';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
 export const requestEvents = REQUEST_EVENTS;
 export const requests = REQUESTS;

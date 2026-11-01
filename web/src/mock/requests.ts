@@ -6,10 +6,10 @@ import type {
 import type { GuardrailMatch } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
-import { equivalentOf, fundingOf, modelWeeks, pricedWindow, shareOf, tierCapacity } from '@/lib/costs';
+import { equivalentOf, fundingOf, modelWeeks, pricedWindow, shareOf, tierCapacity, weightOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
 import { NO_CLASS, NO_EFFORT, foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
-import { tokensTotal, undatedModel } from '@/lib/format';
+import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { endOf } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, accountById, sharedWindowsOf } from './accounts';
@@ -36,11 +36,6 @@ const kindOf = (accountId: string): AccountKind => {
   if (kind === undefined) throw new Error(`the story names an account the registry lacks: ${accountId}`);
   return kind;
 };
-/**
- * Whether the cost model weighs the model with a row of its own, under its id or its undated name, as the share rule
- * keys it: the one weight a mock figure prices at, so a model of a weighted tier without one prices nothing.
- */
-export const ownWeighted = (model: string): boolean => (TABLES.modelWeight[model] ?? TABLES.modelWeight[undatedModel(model)] ?? null) !== null;
 /**
  * The windows a request's shares are keyed by: the shared windows the serving account's set has, then the model's
  * weeks, which no set bounds.
@@ -2040,9 +2035,9 @@ function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'cost
       );
     return { costEquivalent: 0, costShares: tier === undefined ? {} : zeros(tier), shareReason: 'client_classifier' };
   }
-  const weighted = ownWeighted(r.canonicalModel);
+  const weighted = weightOf(TABLES, r.canonicalModel, 'seven_day') !== null;
   const shares: CostShares = tier === undefined ? {} : Object.fromEntries(windows.map((w) => [w, weighted ? shareOf(TABLES, w, tier, r.canonicalModel, r.usage, finishedMs) : null]));
-  return { costEquivalent: weighted ? (equivalentOf(TABLES, 'seven_day', r.canonicalModel, r.usage, finishedMs)?.equivalent ?? null) : null, costShares: shares, shareReason: null };
+  return { costEquivalent: weighted ? equivalentOf(TABLES, r.canonicalModel, r.usage, finishedMs) : null, costShares: shares, shareReason: null };
 }
 
 /**
@@ -2181,13 +2176,13 @@ const fundingKey = (r: RequestLog): HourlyRollup['funding'] => {
 function hourShares(accountId: string, model: string, priced: { at: number; usage: Usage }[]): Pick<HourlyRollup, 'equivalent' | 'shares'> {
   const tier = accountById.get(accountId)?.subscription?.rateLimitTier;
   const windows = shareWindowsOf(accountId, model);
-  const weighted = ownWeighted(model);
+  const weighted = weightOf(TABLES, model, 'seven_day') !== null;
   const shares: Record<string, number | null> = Object.fromEntries(windows.map((w) => [w, 0]));
   const plus = (sum: number | null, figure: number | null) => (figure === null || sum === null ? null : sum + figure);
   let equivalent: number | null = 0;
   for (const { at, usage } of priced) {
     if (tokensTotal(usage) === 0) continue;
-    equivalent = plus(equivalent, weighted ? (equivalentOf(TABLES, 'seven_day', model, usage, at)?.equivalent ?? null) : null);
+    equivalent = plus(equivalent, weighted ? equivalentOf(TABLES, model, usage, at) : null);
     if (tier !== undefined) for (const w of windows) shares[w] = plus(shares[w], weighted ? shareOf(TABLES, w, tier, model, usage, at) : null);
   }
   return { equivalent, shares };

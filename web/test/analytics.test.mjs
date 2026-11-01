@@ -266,7 +266,7 @@ test("the mock's burn fold sums the rows' own shares, prices only rows with toke
   const usageOf = (input) => ({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input, output: 0 });
   // A row carries its requests' shares, each priced at its completion, which can land past the hour it arrived in.
   const sharesAt = (model, input, at) => Object.fromEntries(['five_hour', 'seven_day'].map((w) => [w, d.shareOf(costs, w, tier, model, usageOf(input), at)]));
-  const row = (model, uncachedInput, completedAt = hour) => ({ accountId: 'primary', costUsd: 0, equivalent: d.equivalentOf(costs, 'seven_day', model, usageOf(uncachedInput), completedAt)?.equivalent ?? null, funding: 'plan', hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', shares: sharesAt(model, uncachedInput, completedAt), tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
+  const row = (model, uncachedInput, completedAt = hour) => ({ accountId: 'primary', costUsd: 0, equivalent: d.equivalentOf(costs, model, usageOf(uncachedInput), completedAt), funding: 'plan', hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', shares: sharesAt(model, uncachedInput, completedAt), tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
   const range = { from: new Date(hour).toISOString(), to: new Date(hour + HOUR).toISOString() };
   const shareOf = (rows) => d.burnOf(rows, range, 'account').points.find((p) => p.group === 'primary' && Date.parse(p.at) === hour).fiveHourShare;
   // A request that arrived before the band opened and completed inside it, so the band's factor prices it.

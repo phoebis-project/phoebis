@@ -1,10 +1,10 @@
 import type { AgentContext, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, RecipeCause, RecipeState, Session } from '@/api/types';
-import { anchorTier, tierCapacity, type CostWindow } from '@/lib/costs';
+import { anchorTier, tierCapacity, weightOf, type CostWindow } from '@/lib/costs';
 import { accountById, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById } from './pools';
-import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID, WORKSHOP_SESSION_ID, ownWeighted } from './requests';
+import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID, WORKSHOP_SESSION_ID } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
 import { HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
@@ -326,7 +326,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const lastInputRoll = written ? written.lastInputTokens : rng.int(500, 20_000);
   const lastRefreshRoll = ago((written ? written.lastRefreshMinutes : rng.int(2, 40)) * MINUTE);
   // A pin on a model without a weight of its own has no burn to rank by, as the route answers it.
-  const weighted = pinned && unit === 'window_share' && ownWeighted(spec.model);
+  const weighted = pinned && unit === 'window_share' && weightOf(TABLES, spec.model, 'seven_day') !== null;
   const burn = !pinned ? null : unit === 'usd' ? burnUsdRoll : weighted ? burnRoll : null;
   const window = unit === 'window_share' ? burnWindowOf(spec.accountId) : null;
   // The ledger names a session's fork from its requests, so a session it never saw records none.

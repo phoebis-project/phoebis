@@ -1,4 +1,5 @@
 import type { Placement } from '@/api/types';
+import { WEEK_LABEL, type WeekPosition } from '@/lib/unit';
 import { type ByWindow, WINDOW_LABEL, windowKeyId } from '@/lib/windows';
 
 export type TimeFormat = '12h' | '24h';
@@ -70,6 +71,11 @@ const WINDOW_SHORT: ByWindow<string> = { '5h': '5h', '7d': '7d', '7d_fable': '7-
  * full form. A window the pages do not know reads under its key, and `shareLabel` stays the full form.
  */
 export const shareShort = (windowKey: string, share: number): string => `${fmtShare(share)} ${WINDOW_SHORT[windowKeyId(windowKey) ?? ''] ?? windowKey}`;
+export const WEEK_WORD: Record<WeekPosition, string> = { max: 'a Max week', pro: 'a Pro week', ultra: 'an Ultra week' };
+/** "0.11% of an Ultra week", "1.11% of a Pro week", zero "0%". */
+export const fmtWeek = (share: number, week: WeekPosition): string => (share === 0 ? '0%' : `${fmtShare(share)} of ${WEEK_WORD[week]}`);
+/** The short form for a cell: "0.11% Ultra week". */
+export const weekShort = (share: number, week: WeekPosition): string => `${fmtShare(share)} ${WEEK_LABEL[week]}`;
 const EQUIVALENT_WINDOW: ByWindow<string> = { '5h': '5-hour', '7d': '7-day', '7d_fable': '7-day Fable' };
 /** A 20x equivalent's window word: "5-hour", "7-day", "7-day Fable", a window the pages do not know under its key. */
 export const equivalentWord = (windowKey: string): string => EQUIVALENT_WINDOW[windowKeyId(windowKey) ?? ''] ?? windowKey;

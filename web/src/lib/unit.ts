@@ -5,8 +5,9 @@ import type { FundingFilter } from '@/api/types';
  * since the test entry re-exports both modules and one name for two types would clash.
  */
 export type UnitPosition = 'all' | 'equivalent' | 'native' | 'share' | 'usd';
-/** The select's order: native first, the default, then the Cost section's four. */
-export const UNIT_POSITIONS: readonly UnitPosition[] = ['native', 'all', 'usd', 'share', 'equivalent'];
+/** The select's order: native first, the default, then the Cost section's three. */
+export const UNIT_POSITIONS: readonly UnitPosition[] = ['native', 'all', 'usd', 'equivalent'];
+// The `share` entries of the four tables below are the position no select offers.
 export const UNIT_LABEL: Record<UnitPosition, string> = { all: 'All in dollars', equivalent: 'Dollar equivalent', native: 'Native', share: 'Window shares', usd: 'Billed dollars' };
 /** The labels the top bar's select shows at 900 px and below, where the bar spans a viewport as narrow as a phone's. */
 export const UNIT_SHORT: Record<UnitPosition, string> = { all: 'All $', equivalent: 'Equivalent $', native: 'Native', share: 'Shares', usd: 'Billed $' };
@@ -20,18 +21,28 @@ export const UNIT_FUNDING: Record<UnitPosition, FundingFilter | undefined> = { a
 export const UNIT_LEGEND: Record<UnitPosition, string> = {
   all: 'Every request in dollars at the API price list, a subscription request at its dollar equivalent.',
   equivalent: 'The subscription requests alone at the API price list.',
-  native: 'Each request in the unit its funding pays in: a subscription request as 20x window equivalents, an API key, fast-mode, overage or usage-based request in dollars.',
+  native: 'Each request in the unit its funding pays in: a subscription request as a share of the week the week control names, an API key, fast-mode, overage or usage-based request in dollars.',
   share: "A subscription account's requests as shares of its own 5-hour, 7-day and model-week windows. Reads where one account is named, since shares of different accounts' windows do not add.",
   usd: 'The API key, fast-mode, overage and usage-based requests alone, the dollars the account holder is charged.',
 };
 /**
- * The legend's closing paragraph. It names the account tiers the equivalent compares across apart from the model tier
- * an estimate reads.
+ * The legend's closing paragraph. The figure is a share of the Pro week whatever the account tier, and the week
+ * control rescales it to the week the operator reads in.
  */
 export const UNIT_LEGEND_NOTE =
-  "A 20x window equivalent is the share of a Max 20x account's window the same tokens would spend, the cost model's unit over the Max 20x capacity, so figures of different account tiers compare and add. The 5-hour column carries the peak band's weight, the 7-day column the week's factor, and a model week its own capacity factor. A figure marked ~ is estimated: its model has no measured weight and reads the latest weighed model of its model tier.";
+  "A subscription figure is the share of a Pro 7-day window the same tokens would spend, the cost model's units over the Pro capacity, so figures of different account tiers compare and add. The week control reads it as a share of a Max week, five Pro weeks, or an Ultra week, ten Pro weeks. On a request or one account's row the figure's hover names the account's plan and its share of each window the account has.";
 /**
  * The stored value as a position: the browser hands back whatever string it holds, so a value the console does not know
  * reads native.
  */
 export const positionOf = (value: string | null | undefined): UnitPosition => UNIT_POSITIONS.find((p) => p === value) ?? 'native';
+
+export type WeekPosition = 'max' | 'pro' | 'ultra';
+/** The select's order. */
+export const WEEK_POSITIONS: readonly WeekPosition[] = ['pro', 'max', 'ultra'];
+export const WEEK_LABEL: Record<WeekPosition, string> = { max: 'Max week', pro: 'Pro week', ultra: 'Ultra week' };
+/** The labels at 900 px and below. */
+export const WEEK_SHORT: Record<WeekPosition, string> = { max: 'Max', pro: 'Pro', ultra: 'Ultra' };
+export const WEEK_TIER: Record<WeekPosition, string> = { max: 'default_claude_max_5x', pro: 'default_claude_ai', ultra: 'default_claude_max_20x' };
+/** A stored value the console does not know reads ultra, the default. */
+export const weekOf = (value: string | null | undefined): WeekPosition => WEEK_POSITIONS.find((w) => w === value) ?? 'ultra';

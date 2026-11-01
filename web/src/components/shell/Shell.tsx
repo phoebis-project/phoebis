@@ -8,7 +8,7 @@ import { useAsync, useMediaQuery } from '@/lib/hooks';
 import { Button, Descriptions, Segmented, Toast, Toggle } from '@/components/ui/primitives';
 import { IconActivity, IconArrowRight, IconChart, IconFunnel, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconRoute, IconSessions, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
 import { Mark } from '@/components/ui/Mark';
-import { UnitLegend, UnitSwitch } from '@/components/ui/UnitControls';
+import { UnitLegend, UnitSwitch, WeekSwitch } from '@/components/ui/UnitControls';
 
 type NavItem = { icon: ReactNode; label: string; to: string };
 
@@ -48,7 +48,7 @@ export const PAGE_TITLES: Record<string, string> = {
 
 export function Shell() {
   const { pathname } = useLocation();
-  const { expertView, setExpertView, setModelTiers, setTheme, setUnit, theme, unit } = useAppSettings();
+  const { expertView, setExpertView, setModelTiers, setTheme, setUnit, setWeek, theme, unit, week } = useAppSettings();
   const narrow = useMediaQuery('(max-width: 900px)');
   const { done, logout, queue } = useSession();
   const settings = useAsync(() => api.getSettings(), []);
@@ -145,6 +145,7 @@ export function Shell() {
             <h1 className="topbar__title">{title}</h1>
             <div className="topbar__right">
               <UnitSwitch unit={unit} onChange={setUnit} short={narrow} />
+              <WeekSwitch week={week} onChange={setWeek} short={narrow} disabled={unit !== 'native'} />
               <UnitLegend />
               <Button variant="ghost" size="sm" className="topbar__logout" aria-label="Log out" title="Log out" icon={<IconArrowRight size={15} />} onClick={() => void logout()}>
                 <span className="topbar__logout-label">Log out</span>

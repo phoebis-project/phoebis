@@ -897,6 +897,127 @@ async function topbarHeights(theme) {
 }
 
 /**
+ * The week control beside the unit switch. At 1280 by 800 and 1440 by 900 the Week select sits in the bar's right
+ * group after the Unit select and before the legend's button, its three long labels whole in its text box, in the Unit
+ * select's height, top edge, type and ink. At 900 by 800 and 360 by 800 it reads the three short labels whole, on the
+ * Unit select's line, and at 360 the legend's button has given way. Under All in dollars it reads disabled with its
+ * title, and under Native again enabled with none. On the Settings page's Unit row at 1280 and 400 px the week select
+ * sits on the position select's line to its right, both under the row's label at 400, as the row's other controls.
+ * The pass's viewport and Native stand again after.
+ */
+async function weekControl(theme) {
+  const LONG = ['Pro week', 'Max week', 'Ultra week'];
+  const SHORT = ['Pro', 'Max', 'Ultra'];
+  const TITLE = 'The week applies under Native';
+  const readBar = () =>
+    page.evaluate(() => {
+      // A box with no size is an element the layout does not draw.
+      const box = (el) => {
+        if (!el) return null;
+        const b = el.getBoundingClientRect();
+        return b.width === 0 && b.height === 0 ? null : { bottom: Math.round(b.bottom), height: Math.round(b.height), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) };
+      };
+      const look = (el) => {
+        const s = getComputedStyle(el);
+        return { color: s.color, font: `${s.fontWeight} ${s.fontSize} ${s.fontFamily}` };
+      };
+      const bar = document.querySelector('.topbar');
+      const right = bar?.querySelector('.topbar__right');
+      const unit = right?.querySelector('select[aria-label="Unit"]') ?? null;
+      const week = right?.querySelector('select[aria-label="Week"]') ?? null;
+      const legend = right?.querySelector('button[aria-label="What the units mean"]') ?? null;
+      // The labels are measured in the select's own font against the box its padding leaves for the text, a pixel of
+      // slack for canvas metrics and the layout rounding apart, as the unit switch's measure reads its own.
+      const style = week ? getComputedStyle(week) : null;
+      const pen = document.createElement('canvas').getContext('2d');
+      if (pen && style) pen.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const slots = [...(right?.children ?? [])];
+      const slotOf = (el) => (el ? slots.findIndex((slot) => slot.contains(el)) : -1);
+      return {
+        bar: box(bar),
+        disabled: week?.disabled ?? null,
+        labels: week && style && pen ? { room: Math.floor(week.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)), widest: Math.ceil(Math.max(...[...week.options].map((o) => pen.measureText(o.textContent ?? '').width))) } : null,
+        legend: box(legend),
+        options: [...(week?.options ?? [])].map((o) => o.textContent),
+        slots: [slotOf(unit), slotOf(week), slotOf(legend)],
+        title: week?.getAttribute('title') ?? null,
+        unit: unit ? { ...box(unit), ...look(unit) } : null,
+        week: week ? { ...box(week), ...look(week) } : null,
+        width: document.documentElement.clientWidth,
+      };
+    });
+  try {
+    for (const { height, width } of [
+      { height: 800, width: 1280 },
+      { height: 900, width: 1440 },
+      { height: 800, width: 900 },
+      { height: 800, width: 360 },
+    ]) {
+      const say = (what) => failures.push(`${theme} /: at ${width} by ${height} ${what}`);
+      await page.setViewportSize({ height, width });
+      await settle();
+      const read = await readBar();
+      measurements.push(`${theme} / week control at ${width} by ${height} ${JSON.stringify(read)}`);
+      if (read.week === null || read.unit === null || read.bar === null) {
+        say('the top bar draws no Week select beside its Unit select');
+        continue;
+      }
+      const [unitSlot, weekSlot, legendSlot] = read.slots;
+      if (!(unitSlot >= 0 && weekSlot > unitSlot && legendSlot > weekSlot)) say(`the Week select is not between the Unit select and the legend's button in the bar's right group, slots ${JSON.stringify(read.slots)}`);
+      if (read.week.left < 0 || read.week.right > read.width || read.week.top < read.bar.top || read.week.bottom > read.bar.bottom) say(`the Week select ${JSON.stringify(read.week)} leaves the bar ${JSON.stringify(read.bar)} or the ${read.width} px viewport`);
+      const labels = width > 900 ? LONG : SHORT;
+      if (JSON.stringify(read.options) !== JSON.stringify(labels)) say(`the Week select's options read ${JSON.stringify(read.options)} against ${JSON.stringify(labels)}`);
+      if (read.labels === null || read.labels.widest > read.labels.room + 1) say(`the Week select's text box ${read.labels?.room} px is narrower than its widest label ${read.labels?.widest} px`);
+      if (width === 360 && read.legend !== null) say(`the legend's button is drawn ${JSON.stringify(read.legend)}, where it gives way`);
+      for (const what of compare(read.week, read.unit, ['height', 'top', 'font', 'color'], 'the Week select against the Unit select')) say(what);
+    }
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    const states = {};
+    for (const position of ['all', 'native']) {
+      await page.locator('.topbar select[aria-label="Unit"]').selectOption(position);
+      await settle();
+      const read = await readBar();
+      states[position] = { disabled: read.disabled, title: read.title };
+    }
+    measurements.push(`${theme} / week control under each unit ${JSON.stringify(states)}`);
+    if (states.all.disabled !== true || states.all.title !== TITLE) failures.push(`${theme} /: under All in dollars the Week select reads ${JSON.stringify(states.all)}, not disabled with the title ${JSON.stringify(TITLE)}`);
+    if (states.native.disabled !== false || states.native.title !== null) failures.push(`${theme} /: under Native the Week select reads ${JSON.stringify(states.native)}, not enabled with no title`);
+    await loadAtOrigin('/settings', '.settings select[aria-label="Week"]');
+    for (const width of [1280, 400]) {
+      const say = (what) => failures.push(`${theme} /settings: at ${width} px ${what}`);
+      await page.setViewportSize({ height: 800, width });
+      await settle();
+      const row = await page.evaluate(() => {
+        const box = (el) => {
+          if (!el) return null;
+          const b = el.getBoundingClientRect();
+          return b.width === 0 && b.height === 0 ? null : { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) };
+        };
+        const unit = document.querySelector('.settings select[aria-label="Unit"]');
+        const week = document.querySelector('.settings select[aria-label="Week"]');
+        const label = unit?.closest('.setting-row')?.firstElementChild ?? null;
+        return { label: box(label), sameRow: unit !== null && week !== null && unit.closest('.setting-row') === week.closest('.setting-row'), unit: box(unit), week: box(week) };
+      });
+      measurements.push(`${theme} /settings week control at ${width} px ${JSON.stringify(row)}`);
+      if (row.unit === null || row.week === null || !row.sameRow) {
+        say('the Unit row draws no week select beside its position select');
+        continue;
+      }
+      const middle = (b) => (b.top + b.bottom) / 2;
+      if (Math.abs(middle(row.unit) - middle(row.week)) > 2 || row.week.left < row.unit.right) say(`the week select ${JSON.stringify(row.week)} is not on the position select's line to its right ${JSON.stringify(row.unit)}`);
+      // A pixel of slack, as the Appearance rows' read allows a label over its control.
+      if (width === 400 && (row.label === null || row.label.bottom > Math.min(row.unit.top, row.week.top) + 1)) say(`the week and position selects ${JSON.stringify([row.unit, row.week])} are not under the row's label ${JSON.stringify(row.label)}`);
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await page.evaluate(() => localStorage.setItem('phoebis.unit', 'native'));
+    await atRest();
+  }
+}
+
+/**
  * The sidebar's Expert view row stands above the version line in the status block, the two rows clear of each other.
  */
 async function expertRow(theme) {
@@ -4693,28 +4814,6 @@ async function ringLinesSpan(theme) {
 }
 
 /**
- * The Dashboard's recent requests under Window shares, the mock pass's alone: the share position keeps the Requests
- * page's two-line shares in the Cost cell, wider than the card leaves at 1280 by 800, so the table's width is recorded
- * as `recentRowsOneLine` records it under native. A count of cells reading a share is asserted above zero, so the
- * record is never one of the native table. The switch returns to native, the pass's default, before the next read.
- */
-async function recentUnderShares(theme) {
-  const unit = page.locator('.topbar select[aria-label="Unit"]');
-  await unit.selectOption('share');
-  await settle();
-  const read = await page.evaluate(() => {
-    const wrap = document.querySelector('.dash-bottom .table-wrap');
-    const costs = [...document.querySelectorAll('.dash__recent tbody tr')].map((tr) => tr.lastElementChild?.textContent?.trim() ?? '');
-    return wrap === null ? null : { client: wrap.clientWidth, scroll: wrap.scrollWidth, shares: costs.filter((text) => /\d% (5h|7d|7-day Fable)/.test(text)).length };
-  });
-  await unit.selectOption('native');
-  await settle();
-  measurements.push(`${theme} / the Recent requests table under Window shares ${read === null ? 'not drawn' : `needs ${read.scroll}px of its card's ${read.client}px${read.scroll > read.client ? ' and scrolls inside it' : ''}, ${read.shares} Cost cells reading a share`}`);
-  if (read === null) failures.push(`${theme} /: no Recent requests table to measure under Window shares`);
-  else if (read.shares === 0) failures.push(`${theme} /: no recent Cost cell reads a share under Window shares, so the record would read the native table`);
-}
-
-/**
  * The Dashboard's recent requests read each model id on one line, so a long id cannot set its row's height, and the
  * table fits its card: the Model cell stops at its cap behind an ellipsis, with the whole id on the title. The Time and
  * Tokens cells keep their second lines, so the rows' heights are not asserted. The fit is asserted in the router pass
@@ -4946,7 +5045,7 @@ async function wastedProbeRows(theme) {
 }
 
 /** The top bar's unit positions in its order. The pass reads no module of the console, so it lists them here. */
-const UNIT_POSITIONS = ['native', 'all', 'usd', 'share', 'equivalent'];
+const UNIT_POSITIONS = ['native', 'all', 'usd', 'equivalent'];
 
 /**
  * The Cache warming tab under each unit position at the pass's 1280 by 800: Probe cost, Saved by probes, Net saving
@@ -7237,16 +7336,19 @@ async function phoneFit(theme, path) {
 }
 
 /**
- * The unit legend's lines in the top bar's popover at 1280 by 800: Native's and Billed dollars' lines name the four
- * billed fundings, each line in the face, size and ink of the line after it, the label in the weight of that line's
- * label. Escape closes the popover again.
+ * The unit legend's lines in the top bar's popover at 1280 by 800: one line per position of the select in its order and
+ * the closing paragraph after them, Native's and Billed dollars' lines naming the four billed fundings, each position's
+ * line in the face, size and ink of the line after it, the label in the weight of that line's label. Escape closes the
+ * popover again.
  */
 async function unitLegendLines(theme) {
   const LEGEND = 'What the units mean';
+  const LABELS = ['Native', 'All in dollars', 'Billed dollars', 'Dollar equivalent'];
   const WANT = {
     'Billed dollars': 'Billed dollars The API key, fast-mode, overage and usage-based requests alone, the dollars the account holder is charged.',
-    Native: 'Native Each request in the unit its funding pays in: a subscription request as 20x window equivalents, an API key, fast-mode, overage or usage-based request in dollars.',
+    Native: 'Native Each request in the unit its funding pays in: a subscription request as a share of the week the week control names, an API key, fast-mode, overage or usage-based request in dollars.',
   };
+  const NOTE = "A subscription figure is the share of a Pro 7-day window the same tokens would spend, the cost model's units over the Pro capacity, so figures of different account tiers compare and add. The week control reads it as a share of a Max week, five Pro weeks, or an Ultra week, ten Pro weeks. On a request or one account's row the figure's hover names the account's plan and its share of each window the account has.";
   const button = page.locator('.topbar').getByRole('button', { name: LEGEND, exact: true });
   if ((await button.count()) === 0) {
     failures.push(`${theme} /analytics: the top bar draws no legend button to read the legend's lines by`);
@@ -7264,6 +7366,9 @@ async function unitLegendLines(theme) {
   await page.keyboard.press('Escape');
   await settle();
   measurements.push(`${theme} /analytics unit legend lines ${JSON.stringify(lines.map((l) => [l.label, l.size, l.color, l.labelWeight]))}`);
+  const drawn = lines.map((l) => l.label);
+  if (JSON.stringify(drawn) !== JSON.stringify([...LABELS, null])) failures.push(`${theme} /analytics: the unit legend's lines read the labels ${JSON.stringify(drawn)}, not the four positions in order and the closing paragraph`);
+  if (lines[lines.length - 1]?.text !== NOTE) failures.push(`${theme} /analytics: the unit legend's closing paragraph reads ${JSON.stringify(lines[lines.length - 1]?.text ?? null)}`);
   for (const [label, want] of Object.entries(WANT)) {
     const at = lines.findIndex((l) => l.label === label);
     if (at < 0) {
@@ -7276,16 +7381,16 @@ async function unitLegendLines(theme) {
 }
 
 /**
- * The unit switch in the top bar at 1280 and 400 px: the Unit select inside the bar and the viewport, clear of Log
- * out and the theme switch, and nothing scrolling the bar sideways. At 1280 px the legend's button sits inside the bar
- * too, and its popover opens over the Analytics filter bar, which sticks under the top bar, with no point of it
- * covered. At 400 px every option reads its short label and the legend's button gives way, since the bar has room for
- * the switch alone beside the title, Log out and the theme switch. At both widths the closed select's text box holds
+ * The unit switch in the top bar at 1280 and 400 px: the Unit select inside the bar and the viewport, clear of the
+ * week control, Log out and the theme switch, and nothing scrolling the bar sideways. At 1280 px the legend's button
+ * sits inside the bar too, and its popover opens over the Analytics filter bar, which sticks under the top bar, with no
+ * point of it covered. At 400 px every option reads its short label and the legend's button gives way, since the bar
+ * holds the two switches, Log out and the theme switch and no more. At both widths the closed select's text box holds
  * its widest label, so no position is drawn cut short.
  */
 async function unitControl(theme) {
-  const LONG = ['Native', 'All in dollars', 'Billed dollars', 'Window shares', 'Dollar equivalent'];
-  const SHORT = ['Native', 'All $', 'Billed $', 'Shares', 'Equivalent $'];
+  const LONG = ['Native', 'All in dollars', 'Billed dollars', 'Dollar equivalent'];
+  const SHORT = ['Native', 'All $', 'Billed $', 'Equivalent $'];
   const LEGEND = 'What the units mean';
   try {
     for (const width of [1280, 400]) {
@@ -7318,6 +7423,7 @@ async function unitControl(theme) {
           scroll: bar ? [bar.scrollWidth, bar.clientWidth] : null,
           select: box(select),
           theme: box(right?.querySelector('.segmented[aria-label="Theme"]')),
+          week: box(right?.querySelector('select[aria-label="Week"]')?.closest('.select') ?? null),
           width: document.documentElement.clientWidth,
           wrapper: box(select?.closest('.select')),
         };
@@ -7336,7 +7442,7 @@ async function unitControl(theme) {
         else if (!inside(b, read.bar) || !inside(b, viewport)) failures.push(`${theme} /analytics: at ${width} px ${name} ${JSON.stringify(b)} leaves the bar ${JSON.stringify(read.bar)} or the ${read.width} px viewport`);
       }
       if (width === 400 && read.legend !== null) failures.push(`${theme} /analytics: at 400 px the legend button is drawn ${JSON.stringify(read.legend)}, where the bar has room for the switch alone`);
-      const neighbors = [['Log out', read.logout], ['the theme switch', read.theme]];
+      const neighbors = [['the week control', read.week], ['Log out', read.logout], ['the theme switch', read.theme]];
       for (const [name, b] of drawn) for (const [other, o] of neighbors) if (b !== null && o !== null && overlaps(b, o)) failures.push(`${theme} /analytics: at ${width} px ${name} ${JSON.stringify(b)} overlaps ${other} ${JSON.stringify(o)}`);
       if (read.select !== null && read.legend !== null && overlaps(read.wrapper, read.legend)) failures.push(`${theme} /analytics: at ${width} px the Unit select ${JSON.stringify(read.wrapper)} overlaps the legend button ${JSON.stringify(read.legend)}`);
       if (read.scroll === null || read.scroll[0] !== read.scroll[1]) failures.push(`${theme} /analytics: at ${width} px the top bar scrolls sideways, ${JSON.stringify(read.scroll)} scroll and client width`);
@@ -11774,7 +11880,6 @@ try {
         }
         await page.setViewportSize({ height: 800, width: 1280 });
         await settle();
-        if (mock) await recentUnderShares(theme);
         if (mock) await recentDollarCosts(theme);
         await remainingCards(theme);
         await ringLinesSpan(theme);
@@ -11947,6 +12052,7 @@ try {
       if (view.path === '/pools') await utilizationCeiling(theme);
       if (view.path === '/pools' && mock) await anchoredRowUnderBanner(theme, view.path);
       if (view.path === '/') await topbarHeights(theme);
+      if (view.path === '/') await weekControl(theme);
       if (view.path === '/keys') await keysLayout(theme);
       if (view.path === '/keys' && mock) await anchoredRowUnderBanner(theme, view.path);
       if (view.path === '/keys') await dialogControls(theme);

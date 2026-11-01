@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { positionOf, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, UNIT_POSITIONS, UNIT_SHORT, type UnitPosition } from '@/lib/unit';
+import { positionOf, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, UNIT_POSITIONS, UNIT_SHORT, WEEK_LABEL, WEEK_POSITIONS, WEEK_SHORT, weekOf, type UnitPosition, type WeekPosition } from '@/lib/unit';
 import { IconInfo } from './icons';
 import { Select } from './primitives';
 
@@ -15,6 +15,23 @@ export function UnitSwitch({ onChange, short, unit }: { onChange: (u: UnitPositi
       {UNIT_POSITIONS.map((p) => (
         <option key={p} value={p}>
           {short ? UNIT_SHORT[p] : UNIT_LABEL[p]}
+        </option>
+      ))}
+    </Select>
+  );
+}
+
+/**
+ * The week a subscription figure reads in. It applies under Native alone, so under a dollar position it stays drawn,
+ * disabled, and its title says why.
+ */
+export function WeekSwitch({ disabled, onChange, short, week }: { disabled: boolean; onChange: (w: WeekPosition) => void; short: boolean; week: WeekPosition }) {
+  return (
+    // Keyed on the label set for the reason the unit switch is.
+    <Select key={short ? 'short' : 'long'} aria-label="Week" className="week-switch" value={week} disabled={disabled} title={disabled ? 'The week applies under Native' : undefined} onChange={(e) => onChange(weekOf(e.target.value))}>
+      {WEEK_POSITIONS.map((w) => (
+        <option key={w} value={w}>
+          {short ? WEEK_SHORT[w] : WEEK_LABEL[w]}
         </option>
       ))}
     </Select>

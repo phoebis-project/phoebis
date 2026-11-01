@@ -22,14 +22,15 @@ test('an account decodes with its windows, plan, pool, and models', () => {
   const a = d.decodeAccount(body);
   assert.equal(a.id, 'business');
   assert.equal(a.kind, 'oauth');
-  // The captured fixture answers the word the router resolves for this Max 20x organization, `max_20x`.
-  assert.equal(a.plan, 'Max 20x', 'the resolved word names the plan, so the badge, the search and the chips read one name');
-  assert.equal(d.decodeAccount({ ...body, subscription: { ...body.subscription, plan: null } }).plan, null, 'the tier names no plan on its own');
+  // The captured fixture answers the word the router resolves for this Ultra organization, `max_20x`, and the profile's
+  // display name "Ultra".
+  assert.equal(a.plan, 'Ultra', 'the display name names the plan, so the badge, the search and the chips read one name');
+  assert.equal(d.decodeAccount({ ...body, subscription: { ...body.subscription, plan: null } }).plan, 'Ultra', 'the display name names the plan without a word');
   const planOf = (plan) => d.decodeAccount({ ...body, subscription: { ...body.subscription, plan } });
-  assert.deepEqual([planOf('max_20x').subscription.plan, planOf('max_20x').plan], ['max_20x', 'Max 20x'], 'the word reads as sent and labels through the table');
-  assert.equal(planOf('free').plan, 'Free', 'the word and not the tier names the plan');
-  assert.equal(planOf('usage_based').plan, 'Usage-based');
-  assert.deepEqual([planOf('some_new_word').subscription.plan, planOf('some_new_word').plan], ['some_new_word', 'some_new_word'], 'a word the table lacks reads as sent');
+  assert.deepEqual([planOf('max_20x').subscription.plan, planOf('max_20x').plan], ['max_20x', 'Ultra'], 'the word reads as sent and the display name names the plan');
+  assert.equal(planOf('free').plan, 'Ultra', 'the display name wins over the word');
+  assert.equal(planOf('usage_based').plan, 'Ultra');
+  assert.deepEqual([planOf('some_new_word').subscription.plan, planOf('some_new_word').plan], ['some_new_word', 'Ultra'], 'a word the table lacks reads as sent beside the display name');
   assert.equal(a.subscription.rateLimitTier, 'default_claude_max_20x');
   assert.deepEqual(
     Object.keys(a.subscription).sort(),
@@ -365,18 +366,22 @@ test('an unknown weekly window decodes under its key after the known ones, in th
   assert.deepEqual([captive.label, captive.periodHours], ['seven_day_opus', 168]);
 });
 
-test('plan labels read the tier', () => {
-  assert.equal(d.planLabel('default_claude_max_20x'), 'Max 20x');
+test('plan labels read the tier, and the unknown-tier Max word names its tier unknown', () => {
+  assert.equal(d.planLabel('default_claude_max_20x'), 'Ultra');
+  assert.equal(d.planLabel('claude_max_20x'), 'Ultra');
+  assert.equal(d.planLabel('default_claude_max_5x'), 'Max');
   assert.equal(d.planLabel('claude_pro'), 'Pro');
   assert.equal(d.planLabel('default_claude_ai'), 'Pro', 'the tier the profile reports for Pro');
-  assert.equal(d.planLabel('default_claude_max_5x'), 'Max 5x');
+  assert.equal(d.planLabel('default_claude_team'), 'Team');
+  assert.equal(d.planLabel('default_claude_max_10x'), 'default_claude_max_10x', 'a Max multiplier the plans do not name reads as sent');
   assert.equal(d.planLabel('something_else'), 'something_else');
+  assert.equal(d.planWordLabel('max'), 'Max (tier unknown)', 'a Max organization whose tier names neither size');
 });
 
 test('plan names label the resolved word through one table, a word the table lacks as sent, and nothing without a word', () => {
   const sub = { billingType: '', endsAt: null, organizationType: '', plan: null, rateLimitTier: '', since: null, trialEndsAt: null };
-  assert.equal(d.planName({ ...sub, plan: 'max_5x', rateLimitTier: 'default_claude_max_20x' }), 'Max 5x', 'the word wins over the tier');
-  assert.equal(d.planName({ ...sub, plan: 'max', rateLimitTier: 'default_claude_max_20x' }), 'Max', 'a Max organization whose tier names neither size');
+  assert.equal(d.planName({ ...sub, plan: 'max_5x', rateLimitTier: 'default_claude_max_20x' }), 'Max', 'the word wins over the tier');
+  assert.equal(d.planName({ ...sub, plan: 'max', rateLimitTier: 'default_claude_max_20x' }), 'Max (tier unknown)', 'a Max organization whose tier names neither size');
   assert.equal(d.planName({ ...sub, plan: 'free', rateLimitTier: 'default_claude_ai' }), 'Free', 'a free organization under the Pro tier');
   assert.equal(d.planName({ ...sub, plan: 'usage_based', rateLimitTier: 'default_claude_zero' }), 'Usage-based');
   assert.equal(d.planName({ ...sub, plan: 'some_new_word', rateLimitTier: 'some_new_tier' }), 'some_new_word', 'a word the table lacks reads as sent');

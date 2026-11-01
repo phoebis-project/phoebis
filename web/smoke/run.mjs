@@ -1548,7 +1548,8 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
   // days still to run are seven.
   // The contract seed is a usage-based seat, whose class resolves its plan above its Enterprise type.
   const drawn = { contract: chipsOf('contract'), nightly: chipsOf('nightly'), primary: chipsOf('primary'), secondary: chipsOf('secondary'), studio: chipsOf('studio') };
-  const wanted = { contract: ['Plan Usage-based'], nightly: ['Plan Max 5x'], primary: ['Plan Max 20x'], secondary: ['Plan Pro', 'Trial ends in 7 days'], studio: ['Plan Max 5x'] };
+  // primary's profile names its plan Ultra, and the Max 5x seeds carry no display name, so their word labels them.
+  const wanted = { contract: ['Plan Usage-based'], nightly: ['Plan Max'], primary: ['Plan Ultra'], secondary: ['Plan Pro', 'Trial ends in 7 days'], studio: ['Plan Max'] };
   results.push({
     name: '/quota each card names the plan the router resolved with no start date, and counts down the trial where the profile reports one',
     ok: JSON.stringify(drawn) === JSON.stringify(wanted),
@@ -2459,7 +2460,7 @@ results.push({ name: 'nav calls the pages Accounts and Keys, and no text names t
   const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
   results.push({ name: 'nav has Quota after Dashboard and Sessions, the navigation lists no live view, Keepalive or Plugins', ok: JSON.stringify(nav) === JSON.stringify(['Dashboard', 'Quota', 'Accounts', 'Pools', 'Keys', 'Guardrails', 'Requests', 'Analytics', 'Sessions', 'Settings']), missing: nav });
 }
-expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Identity', 'OAuth login', 'Max 20x since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
+expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Identity', 'OAuth login', 'Ultra since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
 {
   // An account belongs to one pool: the list row's foot names it or says there is none, and the Pool card holds the
   // one membership.
@@ -18708,9 +18709,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ok: JSON.stringify(headSelects) === JSON.stringify([['cost', true, 0], ['cache', true, 0], ['cache-warming', true, 0]]) && shellUnit(m) !== null,
       missing: [JSON.stringify(headSelects), shellUnit(m) === null ? 'no Unit select in the top bar' : ''],
     });
-    const META = { all: /^\$[\d,.]+ in range, all requests$/, equivalent: /^\$[\d,.]+ in range, equivalent$/, share: /^shares per account$/, usd: /^\$[\d,.]+ in range, billed$/ };
+    const META = { all: /^\$[\d,.]+ in range, all requests$/, equivalent: /^\$[\d,.]+ in range, equivalent$/, usd: /^\$[\d,.]+ in range, billed$/ };
     const written = [];
-    for (const value of ['usd', 'share', 'equivalent', 'all']) {
+    for (const value of ['usd', 'equivalent', 'all']) {
       await chooseUnit(m, value);
       written.push([value, m.location().search, m.location().hash, shellUnit(m)?.value ?? 'no switch', localStorage.getItem('phoebis.unit'), costMeta()]);
     }
@@ -18719,6 +18720,20 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ok: written.every(([value, search, hash, shown, stored, meta]) => search === '' && hash === '#cost' && shown === value && stored === value && META[value].test(meta)),
       missing: written.map((w) => w.join(' ')),
     });
+    // The week is the same kind of setting, so a choice on its control under Native writes nothing to the address.
+    await chooseUnit(m, 'native');
+    const weekSelect = m.container.querySelector('.topbar select[aria-label="Week"]');
+    const weeks = [];
+    for (const value of ['pro', 'max', 'ultra']) {
+      await changeSelect(m, weekSelect, value);
+      weeks.push([value, m.location().search, m.location().hash, weekSelect?.value ?? 'no week control', localStorage.getItem('phoebis.week')]);
+    }
+    results.push({
+      name: '/analytics choosing a week on the top bar under Native writes nothing to the address, keeps the hash and stores the week',
+      ok: weeks.every(([value, search, hash, shown, stored]) => search === '' && hash === '#cost' && shown === value && stored === value),
+      missing: weeks.map((w) => w.join(' ')),
+    });
+    localStorage.removeItem('phoebis.week');
     // The two funded reads: none while Traffic shows, one series and one breakdown call per dollar position on Cost.
     const fundingOf = (spy) => spy.calls.map((c) => c[0]?.funding).filter((f) => f !== undefined);
     const spied = async (act) => {
@@ -18741,13 +18756,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const metas = { equivalent: costMeta() };
     await chooseUnit(m, 'usd');
     metas.usd = costMeta();
-    await chooseUnit(m, 'share');
-    metas.share = costMeta();
     await chooseUnit(m, 'all');
     metas.all = costMeta();
     results.push({
       name: '/analytics the meta line names the position',
-      ok: /^\$[\d,.]+ in range, all requests$/.test(metas.all) && /^\$[\d,.]+ in range, billed$/.test(metas.usd) && metas.share === 'shares per account' && /^\$[\d,.]+ in range, equivalent$/.test(metas.equivalent),
+      ok: /^\$[\d,.]+ in range, all requests$/.test(metas.all) && /^\$[\d,.]+ in range, billed$/.test(metas.usd) && /^\$[\d,.]+ in range, equivalent$/.test(metas.equivalent),
       missing: Object.entries(metas).map(([k, v]) => `${k}: ${v}`),
     });
     // The two dollar positions partition the rows by who paid, so their figures add up to the whole within a cent.
@@ -18761,18 +18774,22 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await tab(m, 'Traffic');
     {
       // A shared link lands on its position: the parameter is read into the setting once and dropped, every other key
-      // and the tab kept. A value the console does not know leaves the setting as it stood and drops as well.
+      // and the tab kept. A value the console does not know, the share position no select offers among them, leaves
+      // the setting as it stood and drops as well.
       localStorage.removeItem('phoebis.unit');
-      const landed = await mount('/analytics?by=account&unit=share#cost');
+      const landed = await mount('/analytics?by=account&unit=usd#cost');
       const known = [shellUnit(landed)?.value ?? 'no switch', landed.location().search, landed.location().hash, localStorage.getItem('phoebis.unit')];
       landed.unmount();
-      localStorage.removeItem('phoebis.unit');
-      const bogus = await mount('/analytics?unit=bogus#cost');
-      const unknown = [shellUnit(bogus)?.value ?? 'no switch', bogus.location().search, bogus.location().hash, localStorage.getItem('phoebis.unit')];
-      bogus.unmount();
+      const unknown = [];
+      for (const value of ['share', 'bogus']) {
+        localStorage.removeItem('phoebis.unit');
+        const page = await mount(`/analytics?by=account&unit=${value}#cost`);
+        unknown.push([shellUnit(page)?.value ?? 'no switch', page.location().search, page.location().hash, localStorage.getItem('phoebis.unit')]);
+        page.unmount();
+      }
       results.push({
-        name: '/analytics a ?unit=share link lands on Window shares and leaves the address without the parameter, and an unknown value drops alone',
-        ok: JSON.stringify(known) === JSON.stringify(['share', '?by=account', '#cost', 'share']) && JSON.stringify(unknown) === JSON.stringify(['native', '', '#cost', null]),
+        name: '/analytics a ?unit=usd link lands on Billed dollars and leaves the address without the parameter, and a ?unit=share link or an unknown value lands on Native and drops alone',
+        ok: JSON.stringify(known) === JSON.stringify(['usd', '?by=account', '#cost', 'usd']) && unknown.every((u) => JSON.stringify(u) === JSON.stringify(['native', '?by=account', '#cost', null])),
         missing: [JSON.stringify(known), JSON.stringify(unknown)],
       });
       localStorage.removeItem('phoebis.unit');
@@ -26758,9 +26775,11 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
 m.unmount();
 
 // The unit switch: one select in the top bar sets the unit every view prices in, kept in this browser alone and
-// mirrored on the Settings page. On /settings two selects share the label, so every read names its host.
+// mirrored on the Settings page, and the week control beside it sets the week a subscription figure reads in. On
+// /settings two selects share each label, so every read names its host.
 {
   localStorage.removeItem('phoebis.unit');
+  localStorage.removeItem('phoebis.week');
   const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
   const choose = async (page, select, value) => {
     if (select) {
@@ -26771,40 +26790,80 @@ m.unmount();
   };
   const shellUnit = (page) => page.container.querySelector('.topbar select[aria-label="Unit"]');
   const settingsUnit = (page) => page.container.querySelector('.settings select[aria-label="Unit"]');
+  const shellWeek = (page) => page.container.querySelector('.topbar select[aria-label="Week"]');
+  const settingsWeek = (page) => page.container.querySelector('.settings select[aria-label="Week"]');
   const fresh = await mount('/');
   const first = shellUnit(fresh);
   const options = [...(first?.options ?? [])].map((o) => o.textContent);
   const logout = fresh.container.querySelector('.topbar__right button[aria-label="Log out"]');
   const before = first !== null && logout !== null && first.closest('.topbar__right') === logout.parentElement && (first.compareDocumentPosition(logout) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
   results.push({
-    name: "the top bar's Unit select reads Native on a fresh browser and offers the five positions in order, before Log out",
-    ok: first?.value === 'native' && JSON.stringify(options) === JSON.stringify(['Native', 'All in dollars', 'Billed dollars', 'Window shares', 'Dollar equivalent']) && before && fresh.container.querySelectorAll('select[aria-label="Unit"]').length === 1,
+    name: "the top bar's Unit select reads Native on a fresh browser and offers the four positions in order, before Log out",
+    ok: first?.value === 'native' && JSON.stringify(options) === JSON.stringify(['Native', 'All in dollars', 'Billed dollars', 'Dollar equivalent']) && before && fresh.container.querySelectorAll('select[aria-label="Unit"]').length === 1,
     missing: [first?.value ?? 'no Unit select in the top bar', JSON.stringify(options), `before Log out ${before}`],
   });
-  await choose(fresh, first, 'share');
-  const stored = localStorage.getItem('phoebis.unit');
+  const week = shellWeek(fresh);
+  const weekOptions = [...(week?.options ?? [])].map((o) => o.textContent);
+  const legendButton = fresh.container.querySelector('.topbar__right button[aria-label="What the units mean"]');
+  const follows = (a, b) => a !== null && b !== null && (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  const between = week !== null && week.closest('.topbar__right') === first?.closest('.topbar__right') && follows(first, week) && follows(week, legendButton);
+  results.push({
+    name: "the top bar's Week select reads the Ultra week on a fresh browser and offers the three weeks in order, after the Unit select and before the legend's button",
+    ok: week?.value === 'ultra' && JSON.stringify(weekOptions) === JSON.stringify(['Pro week', 'Max week', 'Ultra week']) && between && !week.disabled && fresh.container.querySelectorAll('select[aria-label="Week"]').length === 1,
+    missing: [week?.value ?? 'no Week select in the top bar', JSON.stringify(weekOptions), `between the Unit select and the legend's button ${between}`, `disabled ${week?.disabled}`],
+  });
+  await choose(fresh, week, 'pro');
+  await choose(fresh, first, 'all');
+  const stored = [localStorage.getItem('phoebis.unit'), localStorage.getItem('phoebis.week')];
   fresh.unmount();
   const keys = await mount('/keys');
-  const onKeys = shellUnit(keys)?.value ?? null;
+  const onKeys = [shellUnit(keys)?.value ?? null, shellWeek(keys)?.value ?? null];
   keys.unmount();
   const settings = await mount('/settings');
-  const mirrored = [shellUnit(settings)?.value ?? null, settingsUnit(settings)?.value ?? null];
-  await choose(settings, settingsUnit(settings), 'usd');
-  const moved = [shellUnit(settings)?.value ?? null, settingsUnit(settings)?.value ?? null, localStorage.getItem('phoebis.unit')];
+  const mirrored = [shellUnit(settings)?.value ?? null, settingsUnit(settings)?.value ?? null, shellWeek(settings)?.value ?? null, settingsWeek(settings)?.value ?? null];
+  await choose(settings, settingsUnit(settings), 'native');
+  await choose(settings, settingsWeek(settings), 'max');
+  const moved = [shellUnit(settings)?.value ?? null, settingsUnit(settings)?.value ?? null, localStorage.getItem('phoebis.unit'), shellWeek(settings)?.value ?? null, settingsWeek(settings)?.value ?? null, localStorage.getItem('phoebis.week')];
+  await choose(settings, shellWeek(settings), 'ultra');
   await choose(settings, shellUnit(settings), 'equivalent');
-  const back = [shellUnit(settings)?.value ?? null, settingsUnit(settings)?.value ?? null];
+  const back = [shellUnit(settings)?.value ?? null, settingsUnit(settings)?.value ?? null, shellWeek(settings)?.value ?? null, settingsWeek(settings)?.value ?? null];
   settings.unmount();
   results.push({
-    name: 'a choice on the top bar persists under phoebis.unit to the next page, and the Settings page mirrors the switch both ways',
-    ok: stored === 'share' && onKeys === 'share' && JSON.stringify(mirrored) === JSON.stringify(['share', 'share']) && JSON.stringify(moved) === JSON.stringify(['usd', 'usd', 'usd']) && JSON.stringify(back) === JSON.stringify(['equivalent', 'equivalent']),
-    missing: [`stored ${stored}`, `on /keys ${onKeys}`, `mirrored ${JSON.stringify(mirrored)}`, `moved from Settings ${JSON.stringify(moved)}`, `moved from the top bar ${JSON.stringify(back)}`],
+    name: 'a choice on the top bar persists under phoebis.unit and phoebis.week to the next page, and the Settings page mirrors both switches both ways',
+    ok: JSON.stringify(stored) === JSON.stringify(['all', 'pro']) && JSON.stringify(onKeys) === JSON.stringify(['all', 'pro']) && JSON.stringify(mirrored) === JSON.stringify(['all', 'all', 'pro', 'pro']) && JSON.stringify(moved) === JSON.stringify(['native', 'native', 'native', 'max', 'max', 'max']) && JSON.stringify(back) === JSON.stringify(['equivalent', 'equivalent', 'ultra', 'ultra']),
+    missing: [`stored ${JSON.stringify(stored)}`, `on /keys ${JSON.stringify(onKeys)}`, `mirrored ${JSON.stringify(mirrored)}`, `moved from Settings ${JSON.stringify(moved)}`, `moved from the top bar ${JSON.stringify(back)}`],
   });
-  localStorage.setItem('phoebis.unit', 'bogus');
-  const bogus = await mount('/settings');
-  const unknown = [shellUnit(bogus)?.value ?? null, settingsUnit(bogus)?.value ?? null];
-  bogus.unmount();
-  results.push({ name: 'a stored unit the console does not know reads Native on the top bar and on the Settings page', ok: JSON.stringify(unknown) === JSON.stringify(['native', 'native']), missing: [JSON.stringify(unknown)] });
+  // An earlier build stored the share position, which no select offers now.
+  const unknown = [];
+  for (const value of ['share', 'bogus']) {
+    localStorage.setItem('phoebis.unit', value);
+    localStorage.setItem('phoebis.week', value);
+    const page = await mount('/settings');
+    unknown.push([value, shellUnit(page)?.value ?? null, settingsUnit(page)?.value ?? null, shellWeek(page)?.value ?? null, settingsWeek(page)?.value ?? null]);
+    page.unmount();
+  }
+  results.push({
+    name: 'a stored unit the console does not know, the share position among them, reads Native, and a stored week it does not know the Ultra week, on the top bar and on the Settings page',
+    ok: unknown.every(([, ...read]) => JSON.stringify(read) === JSON.stringify(['native', 'native', 'ultra', 'ultra'])),
+    missing: unknown.map((u) => JSON.stringify(u)),
+  });
+  // The week scales a subscription figure alone, so under a dollar position its control waits, in both places it draws.
+  const TITLE = 'The week applies under Native';
+  const stateIn = (select) => [select?.disabled ?? null, select?.getAttribute('title') ?? null];
+  const states = [];
+  for (const unit of ['native', 'all', 'usd', 'equivalent']) {
+    localStorage.setItem('phoebis.unit', unit);
+    const page = await mount('/settings');
+    states.push([unit, ...stateIn(shellWeek(page)), ...stateIn(settingsWeek(page))]);
+    page.unmount();
+  }
+  results.push({
+    name: `the week control reads disabled with the title "${TITLE}" under each dollar position and enabled under Native, in the top bar and on the Settings page`,
+    ok: states.every(([unit, ...read]) => JSON.stringify(read) === JSON.stringify(unit === 'native' ? [false, null, false, null] : [true, TITLE, true, TITLE])),
+    missing: states.map((s) => JSON.stringify(s)),
+  });
   localStorage.removeItem('phoebis.unit');
+  localStorage.removeItem('phoebis.week');
 
   const LEGEND = 'What the units mean';
   const legendIn = async (host) => {
@@ -26831,10 +26890,12 @@ m.unmount();
     page.unmount();
     return { button: button !== null, closed, closedOnEscape, closedOnOutside, expanded, keptOnInside, lines, text };
   };
-  const wanted = ['native', 'all', 'usd', 'share', 'equivalent'].map((p) => `${UNIT_LABEL[p]} ${UNIT_LEGEND[p]}`);
+  // The tables keep an entry for the share position no select offers, so the lines are read through the four positions.
+  const POSITIONS = ['native', 'all', 'usd', 'equivalent'];
+  const wanted = POSITIONS.map((p) => `${UNIT_LABEL[p]} ${UNIT_LEGEND[p]}`);
   for (const [host, where] of [['.topbar', "beside the top bar's switch"], ['.settings', "beside the Settings page's Unit row"]]) {
     const read = await legendIn(host);
-    const missing = [...Object.values(UNIT_LABEL), ...Object.values(UNIT_LEGEND), UNIT_LEGEND_NOTE].filter((t) => !read.text.includes(t));
+    const missing = [...POSITIONS.map((p) => UNIT_LABEL[p]), ...POSITIONS.map((p) => UNIT_LEGEND[p]), UNIT_LEGEND_NOTE].filter((t) => !read.text.includes(t));
     results.push({
       name: `the legend's button ${where} opens one line per position and the closing paragraph, and Escape or a click outside closes it`,
       ok: read.button && read.closed && read.expanded === 'true' && JSON.stringify(read.lines) === JSON.stringify([...wanted, UNIT_LEGEND_NOTE]) && missing.length === 0 && read.keptOnInside && read.closedOnEscape && read.closedOnOutside,

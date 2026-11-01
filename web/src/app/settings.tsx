@@ -3,7 +3,7 @@ import type { ModelTiers } from '@/api/types';
 import { setTimeFormat as applyTimeFormat, type TimeFormat } from '@/lib/format';
 import { useLocalStorage, useMediaQuery } from '@/lib/hooks';
 import { setModelTiers as applyModelTiers } from '@/lib/routingLog';
-import { positionOf, type UnitPosition } from '@/lib/unit';
+import { positionOf, weekOf, type UnitPosition, type WeekPosition } from '@/lib/unit';
 
 export type ExpertChoice = 'off' | 'on';
 export type ThemeChoice = 'dark' | 'light' | 'system';
@@ -22,10 +22,13 @@ interface AppSettings {
   setTheme: (t: ThemeChoice) => void;
   setTimeFormat: (f: TimeFormat) => void;
   setUnit: (u: UnitPosition) => void;
+  setWeek: (w: WeekPosition) => void;
   theme: ThemeChoice;
   timeFormat: TimeFormat;
   /** The unit every view prices a request in, kept in this browser alone. */
   unit: UnitPosition;
+  /** The week a subscription figure reads in under Native, kept in this browser alone beside the unit. */
+  week: WeekPosition;
 }
 
 const Ctx = createContext<AppSettings | null>(null);
@@ -44,6 +47,9 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   // Read through the positions: the hook hands back whatever string the browser holds under the key.
   const unit = positionOf(storedUnit);
   const setUnit = useCallback((u: UnitPosition) => storeUnit(u), [storeUnit]);
+  const [storedWeek, storeWeek] = useLocalStorage<string>('phoebis.week', 'ultra');
+  const week = weekOf(storedWeek);
+  const setWeek = useCallback((w: WeekPosition) => storeWeek(w), [storeWeek]);
   const [modelTiers, storeModelTiers] = useState<ModelTiers>(NO_TIERS);
   // The routing log's comparator reads the module's pair, so it holds the new order before the context change
   // re-renders the lists that sort through it.
@@ -74,8 +80,8 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<AppSettings>(
-    () => ({ expertView, formatVersion, modelTiers, resolvedTheme, setExpertView, setModelTiers, setTheme, setTimeFormat, setUnit, theme, timeFormat: storedFormat, unit }),
-    [expertView, formatVersion, modelTiers, resolvedTheme, setExpertView, setModelTiers, setTheme, setTimeFormat, setUnit, storedFormat, theme, unit],
+    () => ({ expertView, formatVersion, modelTiers, resolvedTheme, setExpertView, setModelTiers, setTheme, setTimeFormat, setUnit, setWeek, theme, timeFormat: storedFormat, unit, week }),
+    [expertView, formatVersion, modelTiers, resolvedTheme, setExpertView, setModelTiers, setTheme, setTimeFormat, setUnit, setWeek, storedFormat, theme, unit, week],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

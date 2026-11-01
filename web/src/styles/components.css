@@ -204,6 +204,17 @@
   min-width: 150px;
 }
 
+/* Under a dollar position the week waits on the unit, so its select stays drawn and reads as waiting. */
+.week-switch:disabled {
+  color: var(--ink-3);
+  cursor: not-allowed;
+  background: var(--surface-2);
+}
+
+.select:has(> .week-switch:disabled) > svg {
+  opacity: 0.5;
+}
+
 .unit-legend__anchor {
   position: relative;
   display: inline-flex;
@@ -2213,16 +2224,25 @@ textarea.input {
   .topbar .unit-switch {
     min-width: 96px;
   }
+
+  /* The unit and week switches beside a view's title outgrow the bar under about 650 px, so the controls move onto a
+     line of their own under the title rather than shrinking a switch's label or running past the window. A bar on one
+     line keeps its 52 px. */
+  .topbar {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    height: auto;
+    min-height: 52px;
+    padding-top: 9.5px;
+    padding-bottom: 9.5px;
+  }
 }
 
-/* A phone's bar holds the switch beside the title, Log out and the theme switch and no more: the legend's button gives
-   way (the Settings page's Unit row keeps it), Log out shows its icon alone, and the controls close up, so the title
-   and every short label read whole. A title the bar cannot hold beside its controls wraps at its spaces rather than
-   pushing the bar past the window, and keeps each word whole, so a one-word title moves the controls right instead of
-   running under them. */
+/* A phone's bar draws its controls compact: the legend's button gives way (the Settings page's Unit row keeps it), Log
+   out shows its icon alone, and the controls close up, so the title and every short label read whole on their lines. */
 @media (max-width: 599px) {
   .topbar {
-    gap: 6px;
+    column-gap: 6px;
   }
 
   .topbar__right {
@@ -2234,7 +2254,8 @@ textarea.input {
     display: none;
   }
 
-  .topbar .unit-switch {
+  .topbar .unit-switch,
+  .topbar .week-switch {
     min-width: 0;
     padding: 4px 19px 4px 6px;
     font-size: 12px;
@@ -2288,10 +2309,14 @@ textarea.input {
   }
 }
 
-/* Under 375 px a one-word title as long as Dashboard leaves the controls beside it past the window, at 360 px by
-   14 px, so the bar and its right group close up further and the switch's text and padding shrink. */
+/* Under 375 px the bar's line of controls and the Settings page's Unit row are at their narrowest, so the bar, its
+   right group and the row close up further and the switches' text and padding shrink. */
 @media (max-width: 374px) {
   .topbar {
+    column-gap: 4px;
+  }
+
+  .unit-setting {
     gap: 4px;
   }
 
@@ -2299,7 +2324,8 @@ textarea.input {
     gap: 3px;
   }
 
-  .topbar .unit-switch {
+  .topbar .unit-switch,
+  .topbar .week-switch {
     padding: 4px 18px 4px 4px;
     font-size: 11px;
   }

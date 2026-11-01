@@ -739,12 +739,12 @@ test('the candidate cells word every verdict and its chip', () => {
   };
   const chosen = cell({ verdict: 'chosen' });
   assert.deepEqual(chosen.account, { entity: { id: 'primary', kind: 'account' }, value: 'primary' });
-  assert.equal(chosen.plan, 'Max 20x');
+  assert.equal(chosen.plan, 'Ultra');
   // A record carries the plan word the router resolved, and a record from before it the tier word it was written with.
-  assert.equal(cell({ planTier: 'max_20x' }).plan, 'Max 20x', 'the resolved word through the label table');
+  assert.equal(cell({ planTier: 'max_20x' }).plan, 'Ultra', 'the resolved word through the label table');
   assert.equal(cell({ planTier: 'free' }).plan, 'Free');
   assert.equal(cell({ planTier: 'usage_based' }).plan, 'Usage-based');
-  assert.equal(cell({ planTier: 'default_claude_max_20x' }).plan, 'Max 20x', "an older record's tier word through its tier label");
+  assert.equal(cell({ planTier: 'default_claude_max_20x' }).plan, 'Ultra', "an older record's tier word through its tier label");
   assert.equal(chosen.tier, 'plan P0');
   assert.deepEqual(chosen.windows, [['62%', '16:44', 'head 4 s'], ['41%', 'Sep 19 20:10', 'head 4 s'], ['12%', 'Sep 19 20:10', 'head 4 s']]);
   assert.equal(chosen.inFlight, '3 of 16');

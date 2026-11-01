@@ -39,15 +39,15 @@ The sidebar reads the brand "Phoebis Router" over the views in this order: Dashb
 Guardrails, Requests, Analytics, Sessions, Settings. Under them a group headed "Diagnostics" holds Routing log and
 Meter, shown while the expert view is on or while the open view is a diagnostics view, so a link into either view opens
 it whatever the mode and leaves the mode as you set it. The sidebar's foot carries the "Expert view" switch and the
-router's version as `v{version}`. The top bar reads the open view's title (the document title is `{title} - Phoebis
-Router`), the "Unit" switch with its legend's button, "Log out", and the theme switch "Theme" with Light, Dark and
-System, stored under `phoebis.theme` (`system` until you pick one). When the router answers from a build other than the
-one the console's files were built from, a banner above the top bar reads `The router runs a newer build than this
-console. Reload to pick it up.` beside a "Reload" button, and it stays in view with the top bar until the page reloads.
-The time format lives under `phoebis.timeFormat` (`24h` by default). The theme, the time format and the unit are browser
-preferences, which the Settings view's Appearance card also sets, and nothing in the shell changes a router setting. On
-a narrow window a menu button opens the sidebar over the view. At a phone's width the top bar wraps a view title it
-cannot hold beside its controls onto a second line.
+router's version as `v{version}`. The top bar reads the open view's title (the document title is
+`{title} - Phoebis Router`), the "Unit" switch, the "Week" control and the unit legend's button, "Log out", and the
+theme switch "Theme" with Light, Dark and System, stored under `phoebis.theme` (`system` until you pick one). When the
+router answers from a build other than the one the console's files were built from, a banner above the top bar reads
+`The router runs a newer build than this console. Reload to pick it up.` beside a "Reload" button, and it stays in view
+with the top bar until the page reloads. The time format lives under `phoebis.timeFormat` (`24h` by default). The theme,
+the time format, the unit and the week are browser preferences, which the Settings view's Appearance card also sets, and
+nothing in the shell changes a router setting. On a narrow window a menu button opens the sidebar over the view, and the
+top bar moves its controls onto a line of their own under the view title where the two do not fit side by side.
 
 The Accounts, Analytics and Pools views load their code on first open. A view that fails to draw tells a bundle that
 changed under the tab ("This page could not load") from an error while drawing ("This page hit an error"), each with its
@@ -58,23 +58,25 @@ under `phoebis.unit` (`native` until you pick one). Its button "What the units m
 focus, closes on Escape or a click outside it, and hands the focus back to its button on Escape, with one line per
 position in the switch's order:
 
-- Native: "Each request in the unit its funding pays in: a subscription request as 20x window equivalents, an API key,
-  fast-mode, overage or usage-based request in dollars."
+- Native: "Each request in the unit its funding pays in: a subscription request as a share of the week the week control
+  names, an API key, fast-mode, overage or usage-based request in dollars."
 - All in dollars: "Every request in dollars at the API price list, a subscription request at its dollar equivalent."
 - Billed dollars: "The API key, fast-mode, overage and usage-based requests alone, the dollars the account holder is
   charged."
-- Window shares: "A subscription account's requests as shares of its own 5-hour, 7-day and model-week windows. Reads
-  where one account is named, since shares of different accounts' windows do not add."
 - Dollar equivalent: "The subscription requests alone at the API price list."
 
-The legend ends on what a 20x window equivalent is: the share of a Max 20x account's window the same tokens would spend,
-the cost model's unit over the Max 20x capacity, so figures of different account tiers compare and add. The 5-hour
-column carries the peak band's weight, the 7-day column the week's factor, and a model week its own capacity factor. A
-figure marked `~` is an estimate: its model has no measured weight and reads the latest weighed model of its model tier,
-and its hover reads "Estimated at the model tier's latest weighted model". On a narrow window every position but Native
-reads a short label (`All $`, `Billed $`, `Shares` and `Equivalent $`), and at a phone's width the legend's button
-leaves the top bar and stays on the Settings view's Unit row. The cost model behind the equivalents is on [Plan
-meter](statistics.md#plan-meter).
+The legend ends on what a subscription figure is: "A subscription figure is the share of a Pro 7-day window the same
+tokens would spend, the cost model's units over the Pro capacity, so figures of different account tiers compare and add.
+The week control reads it as a share of a Max week, five Pro weeks, or an Ultra week, ten Pro weeks. On a request or one
+account's row the figure's hover names the account's plan and its share of each window the account has." On a narrow
+window every position but Native reads a short label (`All $`, `Billed $` and `Equivalent $`), and at a phone's width
+the legend's button leaves the top bar and stays on the Settings view's Unit row. The cost model behind the figures is
+on [Plan meter](statistics.md#plan-meter).
+
+The "Week" control beside the switch sets the week a subscription figure reads in under Native, "Pro week", "Max week"
+or "Ultra week", stored under `phoebis.week` (`ultra` until you pick one). Under All in dollars, Billed dollars or
+Dollar equivalent it reads disabled with the title "The week applies under Native". On a narrow window it reads the
+short labels `Pro`, `Max` and `Ultra`, and the Settings view's Unit row carries it too.
 
 The expert view, whose switch carries the title "Shows every field of the pool and key dialogs, the advanced ones
 included.", is stored in the browser under `phoebis.expertView` and starts off. With it on, the pool dialog's rail gains
@@ -235,11 +237,12 @@ names the spend window's reset, the router estimates it as 00:00 UTC on the firs
 this window yet)` on hover. The "Extra usage" chip reads `off`, `not in use`, `in use` or `not reported`, with the
 month's spend against its limit while extra usage is enabled and the reading carries the amounts, in the serious tone
 while requests bill as extra usage, and the provider's reason inside the line with the whole message on hover. The chips
-name the plan the router resolved from the organization type and the tier ("Plan", reading "Free", "Pro", "Max 20x" or
-"Usage-based", the tier on hover), when the plan of an account marked canceled ends (in the serious tone inside a week),
-and when a trial ends ("Trial"). The poll reading says when the poll last asked the endpoint and how it answered, with
-the whole message and the backoff on hover, and "Refresh" reads this account's endpoint now. A card that shows an error,
-whose last poll failed, or that is backing off counts as needing attention.
+name the plan the router resolved from the organization type and the tier ("Plan", reading "Free", "Pro", "Max", "Ultra"
+or "Usage-based", the display name claude.ai sends where the account carries one, the tier on hover), when the plan of
+an account marked canceled ends (in the serious tone inside a week), and when a trial ends ("Trial"). The poll reading
+says when the poll last asked the endpoint and how it answered, with the whole message and the backoff on hover, and
+"Refresh" reads this account's endpoint now. A card that shows an error, whose last poll failed, or that is backing off
+counts as needing attention.
 
 Quota windows lays the same windows across a calendar titled "Quota windows", with its span and length (`two weeks` in
 the Weekly mode, `three days` in the 5-hour mode), "Previous period", "Today" and "Next period" buttons, the mode switch
@@ -276,12 +279,13 @@ detail is open, or while its save runs, and while it is off the page reads the l
 with the same wait, until the account's first reading lands or 30 s pass. The six labels, with the state each stands
 for, are Cooling down (`cooldown`), Needs funding (`funding_required`), Paused (`paused`), Needs re-auth
 (`reauth_required`), Ready (`ready`) and Not paired (`unpaired`). A row reads the label with a badge that names the plan
-the router resolved from the organization type and the tier ("Free", "Pro", "Max 5x", "Max 20x", "Max", "Team",
-"Enterprise" or "Usage-based", none on an API-key row), the status badge with the speed chip beside it on a slowed
-account, the email, `pool {id}` or "no pool", "Overage" while requests bill as extra usage and "extra usage on" while it
-is enabled and unused. The pane reads "The router holds no account yet" with "Add account" before the first account, "No
-accounts match" with "Clear the search or the status filter." under a filter, and "No account to show" until a row is
-selected. What the states mean and how an account moves between them is on [Pairing an account](pairing.md).
+the router resolved from the organization type and the tier ("Free", "Pro", "Max", "Ultra", "Max (tier unknown)",
+"Team", "Enterprise" or "Usage-based", the display name claude.ai sends where the account carries one, none on an
+API-key row), the status badge with the speed chip beside it on a slowed account, the email, `pool {id}` or "no pool",
+"Overage" while requests bill as extra usage and "extra usage on" while it is enabled and unused. The pane reads "The
+router holds no account yet" with "Add account" before the first account, "No accounts match" with "Clear the search or
+the status filter." under a filter, and "No account to show" until a row is selected. What the states mean and how an
+account moves between them is on [Pairing an account](pairing.md).
 
 The detail opens on the account's label with "Edit label", its email and its badges: the status, `quarantined` while
 the last refresh's outcome is uncertain, `cooldown ends {ago}`, "Overage active" and "Routing paused", with `Overage
@@ -300,7 +304,7 @@ it." The actions, with the dialog each opens:
 | "Delete account" | "Delete account" | `Removes {label} from its pool and deletes it. Request history stays in the ledger.` |
 
 "Identity" lists, for a subscription account, Type ("OAuth login"), Plan, the plan the router resolved, with its start
-(`Max 20x since {date}`, and `Free since {date}` on an account whose plan ended, the plan the router resolved once the
+(`Ultra since {date}`, and `Free since {date}` on an account whose plan ended, the plan the router resolved once the
 organization held none), Rate-limit tier (`{tier}, usage-based` on a usage-based seat, and on an account whose plan
 ended the tier the profile read found), Ends where known, Plan ended where set, with its instant, Trial ends where
 known, Organization and Billing type, and "Edit end" opens the end editor: the checkbox "Canceled", the field `Ends
@@ -1147,19 +1151,20 @@ the Revision select.
 
 "Appearance" ("Stored in this browser only.") sets the Theme, Light, Dark or System ("System follows the operating
 system preference."), the Time format, 12h or 24h ("Applies to every timestamp and axis tick."), and the Unit, which
-mirrors the top bar's switch with a legend button of its own ("The unit every view prices a request in. Native reads a
-subscription request as 20x window equivalents and a billed request in dollars."), the three browser preferences the
-shell reads, and at a phone's width each row's control takes a line of its own under its label. "About" lists Version,
-Profile, Metrics listener, Ledger path, API prices path and Subscription costs path (each as the path or "not
-configured", then its table's entry in force, its revision count and the next date while one is pending, as
-`effective {date}, {n} revisions, next {date}`, the last reading `{problem}` in their place while the cost model reports
-a problem), Storage path, "Requests, samples and the routing log" and "Rollups" (each as `kept for {n} days`, or "kept
-forever" where its key is 0), "Body capture" (as `at most {n} hours`, the longest a pool or a key keeps captured
-bodies), "Session expiry" (as `1d (86400 s)`, how long a session stays listed after its last activity), "Non-companion
-timeout" (as `1h (3600 s)`, how long a session no mod reports stays listed after its last use, which also bounds the
-lines its pins draw), and Admin secret as "configured" or "not configured", each path's, each retention line's and each
-session line's hover naming the bootstrap key that sets it, and closes on "The values the configuration file sets are on
-the installation page, and `phoebis check-config` prints this router's."
+mirrors the top bar's switch with the week select beside it, disabled under the dollar positions as the top bar's is,
+and a legend button of its own ("The unit every view prices a request in. Native reads a subscription request as a share
+of the chosen week and a billed request in dollars."), the four browser preferences the shell reads, and at a phone's
+width each row's control takes a line of its own under its label. "About" lists Version, Profile, Metrics listener,
+Ledger path, API prices path and Subscription costs path (each as the path or "not configured", then its table's entry
+in force, its revision count and the next date while one is pending, as `effective {date}, {n} revisions, next {date}`,
+the last reading `{problem}` in their place while the cost model reports a problem), Storage path, "Requests, samples
+and the routing log" and "Rollups" (each as `kept for {n} days`, or "kept forever" where its key is 0), "Body capture"
+(as `at most {n} hours`, the longest a pool or a key keeps captured bodies), "Session expiry" (as `1d (86400 s)`, how
+long a session stays listed after its last activity), "Non-companion timeout" (as `1h (3600 s)`, how long a session no
+mod reports stays listed after its last use, which also bounds the lines its pins draw), and Admin secret as
+"configured" or "not configured", each path's, each retention line's and each session line's hover naming the bootstrap
+key that sets it, and closes on "The values the configuration file sets are on the installation page, and
+`phoebis check-config` prints this router's."
 
 "Downstream client configuration" ("Put it in the env block of the client's settings file or export it in the shell
 that launches the client, and replace the token with a key from the Keys page.") shows the seven lines that point

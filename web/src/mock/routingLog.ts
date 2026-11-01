@@ -2,14 +2,14 @@ import type {
   Account, AllowanceReset, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordOutcome,
   PoolKeepalive, RecordPin, RecordRequest, RecordSettings, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
-import { shareIn } from '@/lib/costs';
+import { shareIn, weightOf } from '@/lib/costs';
 import { endOf } from '@/lib/quota';
 import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN } from './accounts';
 import { GUARDRAILS } from './guardrails';
 import { leadOf } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, ownWeighted, clock, failsOver, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, clock, failsOver, oauthWindows, requestById } from './requests';
 import { createRng } from './rng';
 import { TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NOW, iso } from './time';
@@ -43,7 +43,7 @@ const rewriteWindowOf = (model: string): string => (drawnWindows(model).includes
  * 7-day window, which no band weighs. Null for a model without a weight of its own.
  */
 export const proWeekRewriteOf = (tokens: number, model: string): number | null =>
-  ownWeighted(model) ? shareIn(TABLES, 'seven_day', 'default_claude_ai', model, { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: tokens, input: 0, output: 0 }, false) : null;
+  weightOf(TABLES, model, 'seven_day') !== null ? shareIn(TABLES, 'seven_day', 'default_claude_ai', model, { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: tokens, input: 0, output: 0 }, false) : null;
 /**
  * The tokens a request's body carries, the relay's estimate a fresh session's rewrite is priced from. The mock holds no
  * estimate of its own and reads the usage the request reported, so a request that ended with no usage, which the
