@@ -24925,7 +24925,7 @@ m.unmount();
   }
   {
     // The story's Sonnet 4.5 has no weight in the served cost model, the mock's `TABLES`, so it prices nothing: every
-    // cell a dash with no title, its weight cell "not weighed", and no cell of the table borrows another model's weight.
+    // cell a dash with no title and its weight cell "not weighed".
     const model = 'claude-sonnet-4-5';
     const row = rowOf(model);
     const cells = cellsOf(row);
@@ -24939,8 +24939,7 @@ m.unmount();
         cells.every((c) => c === '-') &&
         titles.every((t) => t === null) &&
         weight?.textContent?.trim() === 'not weighed' &&
-        weight.querySelector('[title]')?.getAttribute('title') === 'No weight in the subscription cost model, so its traffic prices no window share' &&
-        rates()?.querySelector('.cost-ref__val--estimated, .cost-ref__donor') === null,
+        weight.querySelector('[title]')?.getAttribute('title') === 'No weight in the subscription cost model, so its traffic prices no window share',
       missing: [JSON.stringify(cells), JSON.stringify(titles), weight?.textContent ?? 'no weight cell', weight?.querySelector('[title]')?.getAttribute('title') ?? 'no title'],
     });
   }

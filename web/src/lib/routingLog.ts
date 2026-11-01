@@ -1762,17 +1762,17 @@ const FIT_WORD: Record<string, string> = { fits: 'fits', least_bad: 'least bad',
 const REWRITE_WINDOW_WORD: Record<string, string> = { five_hour: '5-hour', seven_day: '7-day', seven_day_fable: '7-day Fable' };
 /**
  * A pin's Rewrite cell. A round that names its `rewrite_unit` stored the Pro-week figure, which reads in the chosen
- * week titled with the window the pick compared on, a dash while the scale is out. An earlier build's round stored its
- * window's 20x equivalent, which prints as stored under that label, since a conversion would read it as a Pro-week
- * figure. A pin that names no window prints its bare share.
+ * week titled with the window the pick compared on, untitled where the pick compared on none, and a dash while the
+ * scale is out. An earlier build's round stored its window's 20x equivalent, which prints as stored under that label,
+ * since a conversion would read it as a Pro-week figure, and its bare share where the pin names no window.
  */
 const rewriteCell = (rewrite: number | null, window: string | null, unit: string | null, week: WeekReading): Chip => {
   if (rewrite === null) return plain('-');
-  if (window === null) return plain(fmtShare(rewrite));
-  const word = own(REWRITE_WINDOW_WORD, window) ? REWRITE_WINDOW_WORD[window] : window;
-  if (unit !== 'pro_week') return plain(`${fmtShare(rewrite)} of 20x ${word}`);
+  const word = window === null ? null : own(REWRITE_WINDOW_WORD, window) ? REWRITE_WINDOW_WORD[window] : window;
+  if (unit !== 'pro_week') return plain(word === null ? fmtShare(rewrite) : `${fmtShare(rewrite)} of 20x ${word}`);
   if (week.scale === null) return week.error === null ? plain('-') : { ...plain('-'), title: week.error };
-  return { ...plain(weekShort(rewrite * week.scale, week.week)), title: `compared on the ${word} window` };
+  const cell = plain(weekShort(rewrite * week.scale, week.week));
+  return word === null ? cell : { ...cell, title: `compared on the ${word} window` };
 };
 
 /** An event's detail as pairs: When, Account and Pool first, then the kind's own. `rows` are the rows the page holds,

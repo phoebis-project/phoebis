@@ -1176,6 +1176,14 @@ test("a round's Pro-week rewrite reads in the chosen week, titled with the windo
   assert.deepEqual(cell({ ...pin, model: 'claude-sonnet-5', rewrite_window: 'seven_day' }, ULTRA), ['0.111% Ultra week', 'compared on the 7-day window']);
 });
 
+test("a round's Pro-week rewrite whose pin names no window still reads in the chosen week, with no hover", () => {
+  const detail = { ...DETAIL_EVENTS.shedding_round[0], rewrite_unit: 'pro_week' };
+  const pin = { ...detail.pins[0], rewrite: 0.0222, rewrite_window: null };
+  const c = d.detailPairs(event('shedding_round', { ...detail, pins: [pin] }), NOW, [], ULTRA).find((x) => x.label === 'Pins').table.rows[0][5];
+  // The pick compared the pin on no window of its own, and its 2.22% of a Pro week is still 0.111% of an Ultra week.
+  assert.deepEqual([chipText(c), c.title ?? null], ['0.111% Ultra week', null]);
+});
+
 test("a round's Pro-week rewrite waits on the week's scale, and a failed settings read titles its dash with the error", () => {
   const detail = { ...DETAIL_EVENTS.shedding_round[0], rewrite_unit: 'pro_week' };
   const cell = (week) => {
@@ -1188,8 +1196,8 @@ test("a round's Pro-week rewrite waits on the week's scale, and a failed setting
 
 test("an approved account's booking names its 7-day reservation in the strip's reserved chip", () => {
   const reservation = { accountId: 'primary', burn: { seven_day: 0.002 }, expiresAt: iso(ms(14, 30)), rewrite: { seven_day: 0.0121 } };
-  const placed = record({ outcome: { kind: 'placed', reservation } });
-  assert.ok(texts(d.verdictChips(placed, decision({}))).includes('reserved 1.21% of 7d'), texts(d.verdictChips(placed, decision({}))).join(' / '));
+  const chips = texts(d.verdictChips(record({ outcome: { kind: 'placed', reservation } }), decision({})));
+  assert.ok(chips.includes('reserved 1.21% of 7d'), chips.join(' / '));
 });
 
 test('a cleared window reads its readings before and after, its unchanged reset and its source, and nothing of why', () => {

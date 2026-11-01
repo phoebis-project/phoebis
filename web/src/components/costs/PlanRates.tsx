@@ -156,7 +156,7 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
   const rows = (models: string[], from: number) =>
     models.flatMap((model, i) => {
       const alt = (from + i) % 2 ? 'is-alt' : '';
-      // A model week draws under a tier whose plan carries it alone, so no row names a Fable week against Pro.
+      // A model week draws only under a tier whose plan carries it, so no row names a Fable week against Pro.
       const weeks = modelWeeks(costs, model).filter((week) => weightOf(costs, model, week) !== null && (MODEL_WEEK_TIERS[week]?.includes(tier) ?? false));
       return [
         <tr key={model} className={`${alt}${weeks.length ? ' has-sub' : ''}`}>
