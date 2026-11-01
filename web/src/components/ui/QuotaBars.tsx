@@ -100,13 +100,10 @@ export function WindowBarAbsent({ compact = false, label, words }: { compact?: b
 }
 
 /**
- * The three windows every subscription account chip shows, in one row: 5h, 7d,
- * and Fable 7d. A window the account's poll does not carry keeps its slot as a
- * greyed placeholder naming it, so chips line up across the list: an approved
- * Ultra account reads "no 5-hour window" beside its 7-day bar, "none" on a
- * compact card. With `others`,
- * every further window the account carries follows under its own key, as the
- * detail card draws them.
+ * The three windows every subscription account chip shows, in one row: 5h, 7d, and Fable 7d. A window the account's
+ * poll does not carry keeps its slot as a greyed placeholder naming it, so chips line up across the list: an approved
+ * Ultra account reads "no 5-hour window" beside its 7-day bar, "none" on a compact card. With `others`, every further
+ * window the account carries follows under its own key, as the detail card draws them.
  */
 export function WindowTriple({ account, now, compact = false, others = false }: { account: Account; compact?: boolean; now: number; others?: boolean }) {
   // A usage-based seat has no plan window, so its one spend window takes the triple's place, full width.

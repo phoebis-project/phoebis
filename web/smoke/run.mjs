@@ -27223,11 +27223,11 @@ m.unmount();
 }
 
 {
-  // An account whose poll has read no window yet is named "not read yet" under both rings, where its compact card reads
-  // "not read" with "Not read yet" on its title while an API-key account's card, which no poll reads, keeps "No quota
-  // windows", and a fleet whose polls carry no Fable week reads that sentence over the Fable ring's list in place of one
-  // about unsized tiers. The answer drops every Fable week and reserve's windows, a Pro seed listed and routable with no
-  // plan end.
+  // An account whose poll has read no window yet is named "not read yet" under both rings, where its compact card
+  // reads "not read" with "Not read yet" on its title while an API-key account's card, which no poll reads, keeps "No
+  // quota windows", and a fleet whose polls carry no Fable week reads that sentence over the Fable ring's list in
+  // place of one about unsized tiers. The answer drops every Fable week and reserve's windows, a Pro seed listed and
+  // routable with no plan end.
   const { listAccounts } = api;
   api.listAccounts = async () => (await listAccounts.call(api)).map((a) => ({ ...a, fableWindow: null, ...(a.id === 'reserve' ? { windows: [] } : {}) }));
   const page = await mount('/', { now: CLOCK_ORIGIN });

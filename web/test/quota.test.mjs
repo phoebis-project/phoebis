@@ -295,7 +295,7 @@ test('the plan-ended sentence reads its age in the long form and in the compact 
 test("the priced tier is the stored one under the six tiered plan words while the cost table holds its row, and none with the gate's reason otherwise", () => {
   // The table's own rows: Max 20x and Team held, Enterprise and Pro's tier not.
   const costs = { capacity: { default_claude_max_20x: { fiveHour: 100, sevenDay: 1_000 }, default_claude_team: { fiveHour: 10, sevenDay: 100 } } };
-  const priced = (plan, tier, table = costs) => d.pricedTier(plan, tier, table);
+  const priced = (plan, tier) => d.pricedTier(plan, tier, costs);
   for (const plan of ['max', 'max_20x', 'max_5x', 'pro']) assert.deepEqual(priced(plan, 'default_claude_max_20x'), { tier: 'default_claude_max_20x' }, `${plan} on a held tier`);
   assert.deepEqual(priced('team', 'default_claude_team'), { tier: 'default_claude_team' }, 'a Team seat on a held tier');
   assert.deepEqual(priced('team', 'claude_team'), { tier: 'claude_team' }, "the held tier matched with the prefix put on, as the cost model's lookup matches it");
