@@ -23,6 +23,7 @@ const INK3_ALLOWED = new Set([
   '.select > svg',
   '.srow__chevron',
   '.status-dot',
+  '.week-switch:disabled',
 ]);
 
 /**

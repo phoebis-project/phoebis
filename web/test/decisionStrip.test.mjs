@@ -963,7 +963,7 @@ test("the pin's three groups hold their keys and the fired shed line reads its t
   // A pin the round passed over reads one chip, its session and the reason.
   const skipped = (await recordOf('req_6e1f3b98-a24/1'));
   const rows = stationPlan(skipped, 'move:shed').block.groups.find((g) => g.label === 'Round').rows.find((r) => r.label === 'skipped');
-  assert.deepEqual(rows.chips.map((c) => [c.value, c.href]), [['bcc805b6: no runway', '/sessions'], ['d7167642: no runway', '/sessions'], ['d7167642: fast lane', '/sessions']]);
+  assert.deepEqual(rows.chips.map((c) => [c.value, c.href]), [['bcc805b6: unpriced', '/sessions'], ['d7167642: no runway', '/sessions'], ['d7167642: fast lane', '/sessions']]);
 });
 
 test("a held 5-hour window's age and its hold read as durations in the Round group after the wait", async () => {
