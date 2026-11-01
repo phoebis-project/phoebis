@@ -12,7 +12,7 @@ const point = (at, group, over = {}) => {
 };
 const NONE = new Set();
 /** The cost model with nothing in it, which a test fills with the rows it needs. */
-const EMPTY = d.decodeSubscriptionCosts(undefined);
+const EMPTY = d.decodeSubscriptionCosts(undefined, fixture('test_tables').subscription_costs.unit);
 
 test('a conversation class and an overhead class split as the legend says', () => {
   for (const conversation of ['compaction', 'main', 'subagent']) assert.equal(d.classLegendOf(conversation), 'conversation', conversation);
@@ -680,8 +680,6 @@ test("one named account's shares sum over the groups the route answered them on,
   assert.deepEqual(sum([g({ five_hour: 0.25, seven_day: 0.125 }), g({ five_hour: 0.5, seven_day: null })]), { five_hour: 0.75 }, 'and so does a window carried as null');
   assert.deepEqual(sum([g({ five_hour: 0.25, seven_day: 0.125 }), g({}, 0)]), { five_hour: 0.25, seven_day: 0.125 }, 'a group of billed rows alone carries no window to sum');
   assert.equal(sum([g(null), g(null)]), null, 'no group answered a share map');
-  const probes = d.oneAccountShares([accountGroup({ probeShares: { seven_day: { cost: 0.25, wasted: 0.125 } } }), accountGroup({ probeShares: {} })], (x) => x.probeShares, (a, b) => ({ cost: a.cost + b.cost, wasted: a.wasted === null || b.wasted === null ? null : a.wasted + b.wasted }));
-  assert.deepEqual(probes, { seven_day: { cost: 0.25, wasted: 0.125 } }, 'a group without probes adds none, whatever its plan requests');
 });
 
 test("one named account's whole is unavailable where a group with plan usage answered no share map, in either order", () => {
@@ -692,23 +690,6 @@ test("one named account's whole is unavailable where a group with plan usage ans
     assert.equal(d.oneAccountShares(groups, (x) => x.costShares, (a, b) => a + b, d.planRowsRequired), null, `${what}: the priced group's shares are not the account's whole`);
   }
   assert.equal(d.oneAccountGroupOf(priced, [priced, unmapped]).costShares, null, 'and the whole the page reads is unavailable');
-});
-
-test('the probe guard reads the plan-funded answered probes', () => {
-  const base = accountGroup();
-  const window = { cost: 0.002, wasted: 0.001 };
-  const probed = (probes) => accountGroup({ probeEquivalent: { five_hour: window, seven_day: window }, probes: { ...base.probes, ...probes } });
-  assert.equal(d.probesRequired(probed({ ok: 3, planOk: 0 })), false, 'answered probes the plan funded none of oblige no probe window');
-  assert.equal(d.probesRequired(probed({ ok: 3, planOk: 2 })), true, 'plan-funded answered probes oblige the group to carry both probe windows');
-});
-
-test('the saving guard reads the plan-funded credits, a credit-only group among them', () => {
-  const credited = (keptWarm, over = {}) => accountGroup({ keptWarm: { planTokens1h: 0, planTokens5m: 0, requests: 2, tokens1h: 0, tokens5m: 800, ...keptWarm }, ...over });
-  // A credit-only group: a request received before the bucket and completed inside it carries no request of the bucket.
-  const creditOnly = { costEquivalent: {}, planOutputTokens: 0, planRequests: 0 };
-  assert.equal(d.savingRequired(credited({ planRequests: 2, planTokens5m: 800 }, creditOnly)), true, 'plan-funded credits oblige the group to carry both saving windows, with no plan request beside them');
-  assert.equal(d.savingRequired(credited({ planRequests: 0 }, creditOnly)), false, 'billed credits oblige none');
-  assert.equal(d.savingRequired(credited({ planRequests: 0 })), false, 'nor do billed credits beside plan rows');
 });
 
 test('the idle slots of the plan cards zero-fill against the flag under the Pro-week figure, an unpriced slot stays a gap, and the shares keep the token test', () => {

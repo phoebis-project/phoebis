@@ -16412,12 +16412,13 @@ m.unmount();
         id: 'req_6e1f3b98-a24',
         seq: 1,
         terminus: ['chosen', 'Chosen', 'renewed'],
-        // The round found no destination with runway, so its Round group names each pin it passed over and why, the
-        // parked Opus pin on the fast lane last, left out before the walk.
+        // The round marked nothing, so its Round group names each pin it passed over and why, in the round's order: the
+        // cold Sonnet 4.5 pin unpriced, since its model has no weight of its own, the Sonnet 5.5 pin with no runway on
+        // any sibling, and the parked Opus pin on the fast lane last, left out before the walk.
         own: async (card, record, page) => {
           const round = groupOfPopover(await popoverOf(page, stationButton(card, 'move:shed')), 'Round');
           const skipped = popoverRowOf(round, 'skipped') ?? [];
-          return skipped.length === 3 && skipped.slice(0, 2).every((c) => /^skipped [0-9a-f]{8}: no runway$/.test(c)) && /^skipped [0-9a-f]{8}: fast lane$/.test(skipped[2]);
+          return skipped.length === 3 && /^skipped [0-9a-f]{8}: unpriced$/.test(skipped[0]) && /^skipped [0-9a-f]{8}: no runway$/.test(skipped[1]) && /^skipped [0-9a-f]{8}: fast lane$/.test(skipped[2]);
         },
         what: 'round that marked nothing',
       },
@@ -18367,8 +18368,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   results.push({ name: '/analytics the Accounts meta names window usage and pace', ok: meta === 'Peak utilization, window usage, pace, ineligible time, and pin churn per account', missing: [meta] });
 }
 {
-  // The story samples every account's 5-hour window, so the Peak chart draws a line for each. Here studio's rows hold
-  // no 5-hour peak, so the chart draws no line for it, and the window cards beside it still list it.
+  // The story samples the 5-hour window of every account but the approved Ultra seat, whose set lacks it, so the Peak
+  // chart draws a line for each other account. Here studio's rows hold no 5-hour peak either, so the chart draws no
+  // line for studio or the seat, and the window cards beside it still list both.
   const { listAccountRollups } = api;
   api.listAccountRollups = async (...args) => (await listAccountRollups.apply(api, args)).map((r) => (r.accountId === 'studio' ? { ...r, peak: { ...r.peak, '5h': null } } : r));
   const page = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
@@ -18379,7 +18381,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const usage = legendOf('Window usage');
   results.push({
     name: '/analytics the Peak 5-hour legend lists an account only where the chart draws its line',
-    ok: usage.includes('studio') && peak.length > 0 && !peak.includes('studio') && JSON.stringify(peak) === JSON.stringify(usage.filter((a) => a !== 'studio')),
+    ok: usage.includes('studio') && usage.includes('workshop') && peak.length > 0 && !peak.includes('studio') && !peak.includes('workshop') && JSON.stringify(peak) === JSON.stringify(usage.filter((a) => a !== 'studio' && a !== 'workshop')),
     missing: [`Peak ${JSON.stringify(peak)}`, `Window usage ${JSON.stringify(usage)}`],
   });
   page.unmount();

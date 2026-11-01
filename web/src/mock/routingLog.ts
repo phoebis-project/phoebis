@@ -1681,7 +1681,8 @@ const sessionId = (prefix: string) => REQUESTS.find((r) => r.sessionId?.startsWi
  * The 11:00 round's four pins on secondary in its order: the cold one, then the warm ones by burn over their prompt.
  * Each holds Sonnet 4.5, the one model secondary serves, and burns its share of the 5-hour window per hour, which sum
  * to the account's burn. The first two cover the target under the cap and plan their moves to primary, where they fit,
- * and the walk stops before the current pin.
+ * and the walk stops before the current pin. The round is an earlier build's record, which priced Sonnet 4.5 through
+ * its fallback weight, so its burns and marks stand as it stored them.
  */
 const ROUND_PINS: RoundPin[] = [
   { agentId: 'main', burn: 0.0034, cold: true, keyId: 'desktop', lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('0d588de5'), skip: null },
@@ -1697,13 +1698,14 @@ const ROUND_PINS: RoundPin[] = [
 const parkedOpus = SESSIONS.find((x) => x.sessionId === SESSION_IDS[3] && x.keyId === 'desktop');
 
 /**
- * The afternoon round's pins on primary, cold first: no sibling has runway for either walked pin, since nightly
- * projects past the ceiling, secondary is spent and cooling, and the Overflow workspace needs funding. Their burns sum
- * to primary's. The parked Opus pin rides the fast lane, so it holds no share of a plan window and leaves the round
- * before the order.
+ * The afternoon round's pins on primary, cold first. The cold pin holds Sonnet 4.5, which has no weight of its own, so
+ * the round prices no burn for it and skips it as unpriced rather than shed a session on a guess. No sibling has
+ * runway for the other walked pin, since nightly projects past the ceiling, secondary is spent and cooling, and the
+ * Overflow workspace needs funding. The parked Opus pin rides the fast lane, so it holds no share of a plan window and
+ * leaves the round before the order.
  */
 const NO_RUNWAY_PINS: RoundPin[] = [
-  { agentId: 'main', burn: 0.052, cold: true, keyId: 'desktop', lastInputTokens: 43_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('bcc805b6'), skip: 'no_runway' },
+  { agentId: 'main', burn: null, cold: true, keyId: 'desktop', lastInputTokens: 43_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('bcc805b6'), skip: 'unpriced' },
   { agentId: 'main', burn: 0.033, cold: false, keyId: 'desktop', lastInputTokens: 52_300, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: sessionId('d7167642'), skip: 'no_runway' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: parkedOpus?.lastInputTokens ?? 0, marked: false, model: parkedOpus?.model ?? 'claude-opus-5', note: null, sessionId: SESSION_IDS[3], skip: 'fast_lane' },
 ];
@@ -2220,15 +2222,10 @@ function roundEvent(decision: string, pins: RoundPin[], earlier = false): EventS
     for (const [w, x] of Object.entries(rewrite)) if (chosen.base.windows[w]) chosen.base.windows[w].reserved = round5((chosen.base.windows[w].reserved ?? 0) + x);
     chosen.base.burn = { ...chosen.base.burn, [window]: (chosen.base.burn[window] ?? 0) + (p.burn ?? 0) };
     planned.set(chosen.base.accountId, chosen.base);
-    // A pin with no prompt size reported yet is unsized, so its rewrite and the window it is of read nothing. A sized
-    // pin names the window the pick compared on, its Pro-week figure null on a model without a weight of its own.
-    const unsized = p.lastInputTokens === 0;
-    return {
-      planned: chosen.base.accountId,
-      rewrite: unsized ? null : earlier ? (rewrite[rewriteWindowOf(p.model)] ?? null) : proWeekRewriteOf(p.lastInputTokens, p.model),
-      runway: chosen.fit.runwayMs,
-      window: unsized ? null : rewriteWindowOf(p.model),
-    };
+    // A pin with no prompt size reported yet is unsized, so its rewrite reads nothing, and the Pro-week figure is null
+    // on a model without a weight of its own. The engine names the window the pick compared on beside a figure alone.
+    const figure = p.lastInputTokens === 0 ? null : earlier ? (rewrite[rewriteWindowOf(p.model)] ?? null) : proWeekRewriteOf(p.lastInputTokens, p.model);
+    return { planned: chosen.base.accountId, rewrite: figure, runway: chosen.fit.runwayMs, window: figure === null ? null : rewriteWindowOf(p.model) };
   };
   return {
     accountId,
@@ -2635,8 +2632,10 @@ function buildEvents(): RoutingEvent[] {
   const undecodable = requestById.get('req_5e3c8a41-d27')!;
   const cutAttempt = undecodable.attempts[undecodable.attempts.length - 1];
   seeds.push(
-    // The 08:30 round on nightly is the story's oldest, written by an earlier build, so it keeps the rewrite it stored.
-    ...[roundEvent('req_1eaa9bc1-a18/1', ROUND_PINS), roundEvent('req_9f2e7c5a-c49/2', STRETCH_PINS), roundEvent('req_6e1f3b98-a24/1', NO_RUNWAY_PINS), roundEvent('req_3e7a5c19-f84/1', FABLE_WEEK_PINS, true)].flatMap((e) => (e === null ? [] : [e])),
+    // The 08:30 and 11:00 rounds are an earlier build's records, so they name no unit and keep the rewrites they
+    // stored, priced through that build's fallback weight: the 11:00 round's planned moves of Sonnet 4.5 pins read
+    // their figures, which the request story's moves onto primary at 11:00 follow.
+    ...[roundEvent('req_1eaa9bc1-a18/1', ROUND_PINS, true), roundEvent('req_9f2e7c5a-c49/2', STRETCH_PINS), roundEvent('req_6e1f3b98-a24/1', NO_RUNWAY_PINS), roundEvent('req_3e7a5c19-f84/1', FABLE_WEEK_PINS, true)].flatMap((e) => (e === null ? [] : [e])),
     ...markCleared(),
     ...expiredReservations(),
     ...slowDownSpans(),

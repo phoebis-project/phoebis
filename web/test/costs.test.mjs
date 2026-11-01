@@ -288,7 +288,7 @@ test("the models list tier by tier in the cost model's order, the newest version
     { models: ['claude-unknown-1'], tier: null },
   ]);
   // The empty model names no tier, so every id is of none, by version and then id, and nothing folds.
-  const empty = d.decodeSubscriptionCosts(undefined);
+  const empty = d.decodeSubscriptionCosts(undefined, tables.subscription_costs.unit);
   const ids = ['claude-haiku-4-5', 'claude-opus-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-sonnet-5-5'];
   assert.deepEqual(d.tierOrder(ids, empty), ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1', 'claude-opus-5', 'claude-haiku-4-5']);
   assert.deepEqual(d.tierGroups(ids, empty).map((g) => g.models), [['claude-opus-5-5'], ['claude-sonnet-5-5'], ['claude-fable-5-1'], ['claude-opus-5'], ['claude-haiku-4-5']]);

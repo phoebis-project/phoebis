@@ -404,6 +404,19 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
+  test(`an account whose window set lacks the 5-hour window reads no 5-hour peak and no cooldown in its account facts, while one with the window reads its peak, at ${at}`, async () => {
+    const s = await story;
+    const facts = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now));
+    // The ledger reads the 5-hour peak off the heads' 5-hour readings, which an account without the window never sends,
+    // and the story's cooldowns come from that peak alone.
+    const has5h = new Map(s.accounts.map((a) => [a.id, a.windows.some((w) => w.id === '5h')]));
+    const without = facts.filter((r) => has5h.get(r.accountId) === false);
+    const withWindow = facts.filter((r) => has5h.get(r.accountId) === true);
+    assert.ok(without.length > 0 && withWindow.length > 0, 'the story holds account facts on both sides');
+    assert.deepEqual(without.filter((r) => r.peak['5h'] !== null || r.cooldownSeconds !== 0).map((r) => `${r.accountId} ${r.hour} ${r.peak['5h']} ${r.cooldownSeconds}`), []);
+    assert.deepEqual(withWindow.filter((r) => typeof r.peak['5h'] !== 'number').map((r) => `${r.accountId} ${r.hour}`), [], 'an account with the window reads its 5-hour peak');
+  });
+
   test(`no retired story name and no harness name reaches a row, at ${at}`, async () => {
     const s = await story;
     const names = [
@@ -2510,7 +2523,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(held > 0, 'a held shed line');
   });
 
-  test(`every round's pin the pick read prices its rewrite as the Pro-week figure with the window it compared on named, and the story's oldest round as it stored it, at ${at}`, async () => {
+  test(`every round's pin the pick read prices its rewrite as the Pro-week figure with the window it compared on named beside a figure alone, and the story's two oldest rounds, an earlier build's, as they stored them, at ${at}`, async () => {
     const s = await story;
     const costs = s.settings.subscriptionCosts;
     const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
@@ -2518,9 +2531,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const weekOf = (model) => (model.includes('fable') ? 'seven_day_fable' : 'seven_day');
     // The prompt written to the cache again, as the Pro tier's share of its 7-day window.
     const proWeek = (tokens, model) => (ownWeight(s, model) ? s.lib.shareIn(costs, 'seven_day', 'default_claude_ai', model, { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: tokens, input: 0, output: 0 }, false) : null);
-    const oldest = rounds.reduce((x, y) => (Date.parse(y.at) < Date.parse(x.at) ? y : x));
-    assert.deepEqual(rounds.map((e) => [e === oldest, e.detail.rewrite_unit]).sort(), [[false, 'pro_week'], [false, 'pro_week'], [false, 'pro_week'], [true, undefined]], 'the newer rounds name the unit and the oldest none');
+    // The 08:30 and 11:00 rounds, which an earlier build wrote before the unit.
+    const older = new Set([...rounds].sort((x, y) => Date.parse(x.at) - Date.parse(y.at)).slice(0, 2));
+    assert.deepEqual(rounds.map((e) => [older.has(e), e.detail.rewrite_unit]).sort(), [[false, 'pro_week'], [false, 'pro_week'], [true, undefined], [true, undefined]], 'the newer rounds name the unit and the older ones none');
     const read = { api_key: 0, oauth: 0 };
+    let stored = 0;
     for (const e of rounds) {
       for (const p of e.detail.pins) {
         const where = `${e.requestId}: ${p.session_id}`;
@@ -2528,11 +2543,14 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
           assert.deepEqual([p.rewrite, p.rewrite_window], [null, null], where);
           continue;
         }
-        assert.equal(p.rewrite_window, weekOf(p.model), where);
-        assert.equal(p.rewrite, e === oldest ? s.lib.rewriteOf(p.last_input_tokens, p.model)[p.rewrite_window] : proWeek(p.last_input_tokens, p.model), where);
+        const figure = older.has(e) ? s.lib.rewriteOf(p.last_input_tokens, p.model)[weekOf(p.model)] : proWeek(p.last_input_tokens, p.model);
+        // The engine names the window the pick compared on with a figure, and none beside a null one.
+        assert.deepEqual([p.rewrite, p.rewrite_window], [figure, figure === null ? null : weekOf(p.model)], where);
+        if (older.has(e) && p.rewrite !== null) stored += 1;
         read[s.accounts.find((a) => a.id === p.planned).kind] += 1;
       }
     }
+    assert.ok(stored > 0, 'an older round keeps a stored figure, so the Rewrite cell reads both kinds');
     assert.ok(read.api_key > 0 && read.oauth > 0, `the pins the pick read by destination kind: ${JSON.stringify(read)}`);
   });
 

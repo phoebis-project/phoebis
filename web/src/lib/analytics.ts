@@ -138,9 +138,6 @@ export interface BurnRow {
   /** The model week's figure per hour, null where the route could not price one there, and where no row of the bucket
    *  ran on a model with a week of its own unless the line's fold reads that bucket as zero. */
   week: (number | null)[];
-  /** Per slot, whether a point of the bucket carried a model week figure, so a zero the fold filled in or a gap marks
-   *  no estimate. */
-  weekAnswered: boolean[];
 }
 
 /** One window's running figure over a slot's points: null until a point carries one, and latched once a point reads
@@ -285,31 +282,17 @@ export function oneAccountShares<T>(groups: AnalyticsGroup[], read: (g: Analytic
  * group that carries no plan count has plan rows where its Pro-week figure is not zero, as `sidesOf` reads it.
  */
 export const planRowsRequired = (g: AnalyticsGroup): boolean => (g.planRequests === null ? g.costEquivalent !== 0 : g.planRequests > 0 && g.planOutputTokens !== 0);
-export const addReadWrite = (a: { read: number; write: number }, b: { read: number; write: number }) => ({ read: a.read + b.read, write: a.write + b.write });
 /**
  * The failed share of a group's requests, null for a group with no request, which the cells draw as a dash. The refused
  * requests are in neither count, since the fold never counted them.
  */
 export const errorRateOf = (g: Pick<AnalyticsGroup, 'requests' | 'succeeded'>): number | null => (g.requests > 0 ? (g.requests - g.succeeded) / g.requests : null);
 /**
- * Whether a group's probes oblige it to carry both shared probe windows on its shares: answered probes a plan account
- * served, since a held or skipped probe never ran. A group whose answered probes are all billed carries no plan window
- * to lack, so it adds no probe window and drops none.
- */
-export const probesRequired = (g: Pick<AnalyticsGroup, 'probes'>): boolean => g.probes.planOk > 0;
-/**
  * The answered and the failed probes, the count a side's probe cost latches on. The wire's `failed` count also holds
  * the exhausted and rejected probes the relay refuses itself. A held or skipped probe never ran, so a group whose
  * probes were all held or skipped spent nothing on probes and its saving stands.
  */
 export const upstreamProbes = (g: Pick<AnalyticsGroup, 'probes'>): number => g.probes.ok + g.probes.failed;
-/**
- * Whether a group's kept-warm credits oblige it to carry both shared saving windows: credits whose request a plan
- * account served, a credit-only group's among them (a request received before the bucket and completed inside it). A
- * group whose probes kept nothing warm, or whose credits are all billed, carries no plan saving to lack, so it adds no
- * saving window and drops none.
- */
-export const savingRequired = (g: Pick<AnalyticsGroup, 'keptWarm'>): boolean => (g.keptWarm?.planRequests ?? 0) > 0;
 /**
  * The named account's whole: the position's totals with its shares summed over the groups the route answered them on.
  */
@@ -688,7 +671,6 @@ export function foldBurn(
         uncached: sums.map((s) => s.uncached / minutes),
         usd: sums.map((s) => s.usd / minutes),
         week: sums.map((s) => perHour(s.week, hours)),
-        weekAnswered: sums.map((s) => perHour(s.week, hours) !== null),
       };
     });
   // Weighed by the share of its width a bucket covers rather than its seconds: the same mean, and a range of full

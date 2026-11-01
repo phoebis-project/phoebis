@@ -2760,6 +2760,9 @@ function accountRollups(): AccountRollup[] {
     const from = since ? startOfHour(Date.parse(since)) : start;
     const readings = [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])].map((w) => Date.parse(w.observedAt));
     const until = Math.max(...readings);
+    // The ledger reads the 5-hour peak off the heads' 5-hour readings, which an account whose set lacks the window
+    // never sends. Its drift is still drawn, so every account after it keeps its stream.
+    const fiveHour = account.windows.some((w) => w.id === '5h');
     for (let t = start; t < end; t += HOUR) {
       const sampled5 = sampleIndex.get(`${account.id}|5h`)?.get(t);
       const sampled7 = sampleIndex.get(`${account.id}|7d`)?.get(t);
@@ -2767,17 +2770,17 @@ function accountRollups(): AccountRollup[] {
       drift5 = Math.max(0, Math.min(1, drift5 + h.float(-0.12, 0.12)));
       drift7 = Math.max(0, Math.min(1, drift7 + h.float(-0.03, 0.03)));
       driftF = Math.max(0, Math.min(1, driftF + h.float(-0.03, 0.03)));
-      const peak5 = sampled5 ?? drift5;
+      const peak5 = fiveHour ? (sampled5 ?? drift5) : null;
       const peak7 = sampled7 ?? drift7;
       const peakF = account.fableWindow ? sampledF ?? driftF : null;
-      const cooldown = peak5 >= 0.97 ? h.int(600, 3_600) : 0;
-      const overage = account.extraUsage?.enabled && peak5 >= 0.9 ? h.int(300, 3_600) : 0;
+      const cooldown = peak5 !== null && peak5 >= 0.97 ? h.int(600, 3_600) : 0;
+      const overage = account.extraUsage?.enabled && peak5 !== null && peak5 >= 0.9 ? h.int(300, 3_600) : 0;
       const busy = new Date(t).getHours() >= 8 && new Date(t).getHours() <= 19;
       const row: AccountRollup = {
         ...ACCOUNT_ROLLUP_SAMPLE,
         accountId: account.id,
         hour: iso(t),
-        peak: { '5h': Math.round(peak5 * 1000) / 1000, '7d': Math.round(peak7 * 1000) / 1000, '7d_fable': peakF === null ? null : Math.round(peakF * 1000) / 1000 },
+        peak: { '5h': peak5 === null ? null : Math.round(peak5 * 1000) / 1000, '7d': Math.round(peak7 * 1000) / 1000, '7d_fable': peakF === null ? null : Math.round(peakF * 1000) / 1000 },
         cooldownSeconds: cooldown,
         overageSeconds: overage,
         pins: { created: busy ? h.int(0, 3) : h.chance(0.2) ? 1 : 0, migratedIn: busy && h.chance(0.25) ? 1 : 0, migratedOut: cooldown > 0 ? h.int(1, 3) : 0 },
