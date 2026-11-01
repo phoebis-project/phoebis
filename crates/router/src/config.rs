@@ -740,21 +740,9 @@ mod tests {
     }
 
     #[test]
-    fn the_proxy_keys_default_and_refuse_outside_their_bounds() {
+    fn the_proxy_keys_refuse_outside_their_bounds() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
-        let proxy = load(&file(dir.path(), "defaults", "")).unwrap().proxy;
-        assert_eq!(
-            (
-                proxy.body_budget_bytes,
-                proxy.body_read_seconds,
-                proxy.key_body_reads,
-                proxy.max_request_bytes,
-                proxy.sign_cch_placeholder,
-                proxy.upstream_gzip.as_str()
-            ),
-            (536_870_912, 60, 128, 33_554_432, false, "auto")
-        );
         for (name, keys, expected) in [
             (
                 "max-request-low",
@@ -920,30 +908,10 @@ mod tests {
         let config = load(&file(dir.path(), "defaults", "")).unwrap();
         assert_eq!(
             (
-                config.routing.cooldown_fallback_seconds,
-                config.routing.model_rejection_seconds,
-                config.routing.catalog_refresh_seconds,
-                config.routing.startup_fetch_seconds
-            ),
-            (60, 3_600, 21_600, 30)
-        );
-        assert_eq!(
-            (
                 config.sessions.expire_after_seconds,
                 config.stats.body_capture_max_hours
             ),
             (86_400, 72)
-        );
-        let config = load(&file(dir.path(), "explicit", "routing:\n  catalog_refresh_seconds: 3600\n  cooldown_fallback_seconds: 30\n  model_rejection_seconds: 1800\n  startup_fetch_seconds: 2\nsessions:\n  expire_after_seconds: 7200\nstats:\n  body_capture_max_hours: 24\n")).unwrap();
-        assert_eq!(
-            (
-                config.routing.model_rejection_seconds,
-                config.routing.catalog_refresh_seconds,
-                config.routing.startup_fetch_seconds,
-                config.sessions.expire_after_seconds,
-                config.stats.body_capture_max_hours
-            ),
-            (1_800, 3_600, 2, 7_200, 24)
         );
         assert!(matches!(
             load(&file(

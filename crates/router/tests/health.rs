@@ -117,7 +117,12 @@ fn a_closed_port_fails_within_the_timeout() {
         .local_addr()
         .unwrap();
     let started = Instant::now();
-    assert!(phoebis_router::health::probe(addr, false, phoebis_router::health::TIMEOUT).is_err());
+    assert_eq!(
+        phoebis_router::health::probe(addr, false, phoebis_router::health::TIMEOUT),
+        Err(format!(
+            "proxy does not answer on {addr}: Connection refused (os error 111)"
+        ))
+    );
     assert!(started.elapsed() < phoebis_router::health::TIMEOUT + Duration::from_secs(1));
 }
 

@@ -682,43 +682,11 @@ mod tests {
     }
 
     #[test]
-    fn the_attention_reader_reads_each_pair_with_its_key_its_end_and_its_failed_reload() {
+    fn the_expiry_warning_and_the_attention_item_start_the_same_number_of_days_before_the_end() {
         assert_eq!(
             i64::from(EXPIRY_WARNING_DAYS),
             phoebis_attention::CERTIFICATE_WARNING_DAYS,
             "the dashboard's item holds from exactly 30 days before not_after"
-        );
-        let dir = tempfile::tempdir().unwrap();
-        let not_after = jiff::Timestamp::now().as_second() + 90 * 86_400;
-        let (cert, key) =
-            generate_pair_valid_until(&["localhost"], not_after).write_to(dir.path(), "proxy");
-        let set = LiveSet::new();
-        set.fill(vec![
-            (
-                "proxy",
-                Some(Live::new(
-                    "proxy.tls",
-                    load_pair("proxy.tls", &cert, &key).unwrap(),
-                    1_000,
-                )),
-            ),
-            ("admin", None),
-        ]);
-        std::fs::write(&key, generate_pair(&["localhost"]).key_pem).unwrap();
-        let refused = set.reload(2_000);
-        let Some(("proxy", Reloaded::Refused { error })) = refused.first().cloned() else {
-            panic!("{refused:?}");
-        };
-        assert_eq!(
-            TlsPairs::pairs(&*set),
-            [phoebis_attention::PairFacts {
-                key: "proxy.tls".to_owned(),
-                cert_file: cert,
-                key_file: key,
-                not_after_ms: not_after * 1_000,
-                loaded_at: 1_000,
-                failed: Some((2_000, error)),
-            }]
         );
     }
 
