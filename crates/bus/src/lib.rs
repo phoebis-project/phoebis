@@ -227,10 +227,19 @@ mod tests {
             }
         }
         // Chunks share the queue: the sleeper's is full, so these drop, and they drop in order after the
-        // observations that fit. The sleeper never reads, so a publish that waited on it would never return.
-        for i in 0..40 {
-            bus.publish(Event::ResponseChunk(chunk("r0", i)));
-        }
+        // observations that fit. The burst runs on a thread of its own because a publish that waited on the
+        // never-reading sleeper would otherwise hang the test.
+        let publisher = bus.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for i in 0..40 {
+                publisher.publish(Event::ResponseChunk(chunk("r0", i)));
+            }
+            let _ = done_tx.send(());
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a publish to the sleeper's full queue drops at once and never waits on it");
         assert_eq!(sleeper.stats.dropped.load(Ordering::SeqCst), 40);
         assert_eq!(reader.stats.dropped.load(Ordering::SeqCst), 0);
         let mut seen = 0;
@@ -394,6 +403,7 @@ mod tests {
             "host",
             "transfer-encoding",
             "x-api-key",
+            "x-forwarded-for",
             "x-keepalive-owner-id",
         ] {
             assert!(!header_published(name), "{name}");
