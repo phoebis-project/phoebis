@@ -400,23 +400,26 @@ the ones this page uses.
 
 ### The windows the router works from
 
-The router judges a subscription account by the 5-hour and the 7-day window every model shares, and a model family's own
-week where the family table names one (its one row is Fable's `seven_day_fable`). A weekly reading the endpoint reports
-under a key the table does not name (such as `seven_day_opus`) is kept, shown and persisted, cools the account when a
+The router judges a subscription account by the shared windows its window set holds (below), the 5-hour and the 7-day
+window, and a model family's own week where the family table names one (its one row is Fable's `seven_day_fable`). A
+weekly reading the endpoint reports under a key the table does not name (such as
+`seven_day_opus`) is kept, shown and persisted, cools the account when a
 429 claims it, and feeds no allowance until a row names it. The windows are read from two sources: every response head
 the account answers, and a poll of the usage endpoint every five minutes per account, each account on its own phase,
 backed off alone on a 429 ([Quota samples](statistics.md#quota-samples)). Between readings the router predicts: a
 reading stands until its window's reset, plus the share of the window the router's own requests consumed since the
 reading (priced through the subscription cost model on the account's tier). A window the cost model cannot price for the
-request adds nothing and holds its reading. At the reset it reads zero and counts the requests since, a weekly window's
+request adds nothing and holds its reading, and a shared window the account's set lacks takes no charge, since the
+account has no such window to spend. At the reset it reads zero and counts the requests since, a weekly window's
 reset advanced by whole weeks, the 5-hour window's next reset named by the next reading. A reading that names no reset,
 taken before the reset of the reading it replaces, stands under that reset and reads zero at it. One taken at or past
 that reset opens the next window and stands until the next reading, as does one where the reading it replaces names no
 reset to stand under. An API-key account's rate-limit buckets stand until their reset or, without one, for a minute. The
 share is priced through the account's stored tier: a tier change is read at the next profile refresh, within a quarter
 hour, and applied when the router reloads, and a tier changed while the router was down is read at start. The newest
-reading per account and window is kept in the registry and loaded at startup, so a restart, and an account whose first
-poll the endpoint refuses, route from the last known windows. A reading carries the plan and the tier the account held
+reading per account and window is kept in the registry and loaded at startup, a window a clean poll dropped leaving the
+registry with its reading, so a restart, and an account whose first poll the endpoint refuses, route from the last known
+windows. A reading carries the plan and the tier the account held
 when it was taken, which the `window_reset` event names when its reset passes. The router never fetches usage at a
 selection: use of an account outside the router shows in the next head or poll, so a decision can lag it by up to five
 minutes plus any backoff, and by up to one more interval after a failed poll or a restart. The [Quota
@@ -424,6 +427,19 @@ view](console.md#quota) shows when the poll last asked the endpoint for each OAu
 while an account backs off, since when and when its next attempt comes. The `poll_backoff` condition of the
 [`phoebis_attention` gauge](statistics.md#conditions-and-gauges) holds once an account has backed off for thirty
 minutes.
+
+**The window set** An OAuth account's shared windows are its window set: both shared windows before its first clean
+poll, and from then on the shared windows the newest clean poll's body carried, so an approved Ultra account, whose poll
+carries no 5-hour window, has the 7-day window alone. A poll that lacks a shared window drops the account's reading of
+it: the stored reading and the charges on it leave, the registry's row with them, and the 5-hour window's slow-down
+entries end with it. A head carries some windows only and drops none, and a head's reading of a shared window the set
+lacks does not land, so the window comes back with the next clean poll that carries it. A body with no shared window at
+all is no reading of the account and settles nothing, and a poll older than the one that named the set neither drops a
+window nor rewrites it. The set persists in the registry beside the readings and is restored at startup, so a restart
+keeps the account's windows as its last clean poll named them. A model week is booked and read whatever the set holds.
+The drop logs one line at info naming the account and the window and raises no routing log event, and the account's
+cards draw the missing window's slot as "none" with the window's words on hover, "no 5-hour window" on an approved Ultra
+account ([Dashboard](console.md#dashboard), [Quota](console.md#quota)).
 
 **Spent and cleared** A plan window read at 1.0 or above emits `window_spent` once per reset cycle, whether a head, a
 poll or the router's own prediction took it there. A window read under its limit again in the same reset cycle emits
@@ -440,8 +456,9 @@ after the restart neither moves the anchor nor holds the account past the window
 
 **The projection** Every move and placement reads where each plan window of a subscription account is headed: its
 prediction plus the burn of the sessions pinned to it under the pool's keys, priced per window on the account's tier,
-the band's hours inside the horizon weighed as the band weighs them, times the time to the window's horizon. The 5-hour
-window's horizon is the earlier of its reset and the account's subscription end. A weekly window's, the 7-day window's
+the band's hours inside the horizon weighed as the band weighs them, times the time to the window's horizon. A shared
+window the account's set lacks is not projected, since nothing is read or charged on it. The 5-hour window's horizon is
+the earlier of its reset and the account's subscription end. A weekly window's, the 7-day window's
 and a model's own week's, is the earliest of five hours from now, its reset and the end, so a weekly projection looks
 five hours ahead at most. A 5-hour reading past its reset with no new reset looks five hours ahead too, since the window
 opens with the next request. `burn_average_seconds` (default 1800) is the time constant of each session's burn average,
@@ -471,13 +488,16 @@ prompt as one cache write) added now and its burn added to the account's, reache
 rewrite alone takes a window there, unbounded when nothing burns, and unbounded on the Sessions route and in the
 decision record's fit table where it reaches past the window's next reset, while the fit's verdict reads the computed
 figure against the horizon and the strategy's tie-break ranks by it. The session fits the account when the runway
-reaches the horizon on every window its model draws, `five_hour`, `seven_day` and the model's own week where it has one.
-An API-key account fits while its worst live rate-limit bucket reads under 1.0. A usage-based seat fits as an API-key
-account does: with no bucket to read, it has room.
+reaches the horizon on every window its model draws that the account's window set holds, `five_hour` where the set has
+it, `seven_day` and the model's own week where it has one, so an approved Ultra account is judged on its 7-day window
+and the model week alone. An API-key account fits while its worst live rate-limit bucket reads under 1.0. A usage-based
+seat fits as an API-key account does: with no
+bucket to read, it has room.
 
-A move or a placement books its rewrite and its burn on the destination as a reservation, which the destination's
-prediction and burn count until the request's usage replaces it, the request ends without usage, or the reservation
-turns an hour old, so two moves in one second see each other. A token count, a keepalive probe, a request sent fast and
+A move or a placement books its rewrite and its burn, on the windows its model draws that the destination's set holds,
+as a reservation, which the destination's prediction and burn count until the request's usage replaces it, the request
+ends without usage, or the reservation turns an hour old, so two moves in one second see each other, and a booking made
+before a poll dropped a window counts nothing on it. A token count, a keepalive probe, a request sent fast and
 a renewal book nothing, and a restart drops every reservation with the requests it belonged to. The pin's next request
 after a landing on another account waits before its head for the first request's head, as a `held` decision with the
 reason `rewrite` that names the request it waits for, up to `slow_down_hold_seconds` from that request's dispatch and
@@ -604,15 +624,18 @@ counts that destination's planned rewrite and burn for the pins after it, so two
 headroom twice. A pin is indivisible, so the order serves a target larger than one pin's burn, and once the burn of a
 pin the walk has not reached covers what the target still asks, the walk picks instead: among the pins whose burn covers
 the rest and for which the gate finds a destination, it marks the one whose move costs the least, a warm pin its rewrite
-as the Max 20x equivalent of the pin's model week, or of the 7-day window where the model has no week, one figure for
-the pin on every destination, and a cold pin nothing, since its cache is rewritten wherever it runs next (under
-`warm_sessions` `always` every pin its rewrite, as the order ignores warmth there), the first in the order among equals,
+as the Pro share of the pin's model week, or of the 7-day window where the model has no week, the window the pick
+compares on, one figure for the pin on every destination, and a cold pin nothing, since its cache is rewritten wherever
+it runs next (under `warm_sessions` `always` every pin its rewrite, as the order
+ignores warmth there), the first in the order among equals,
 and the marking ends there with the target met. A move's cost is the share its rewrite spends on the scarce weekly
 windows, since the 5-hour window refills. The pin the pick marked carries the note `cheapest` in the round's record and
 event, every pin the pick read carries the runway the gate read for it, unbounded where it passes its window's reset,
-and its rewrite in the pick's unit, and a pick that finds no covering pin with a destination leaves the walk to the
-order. A pin whose burn carries the removed burn past the target stays marked, and the walk stops there. A round that
-marks nothing records why: `no_runway` when no priced pin had a destination, `off_window` when it walked no pin and a
+and its rewrite as the Pro-week figure, the share of the Pro 7-day window a Pro account would spend on it, with the
+window the pick compared on beside it, which the routing log reads in the chosen week, and a pick that finds no covering
+pin with a destination leaves the walk to the order. A pin whose burn carries the removed burn past the target stays
+marked, and the walk stops there. A round that marks nothing records why: `no_runway` when
+no priced pin had a destination, `off_window` when it walked no pin and a
 pin it left out was off the window that fired, `unpriced` when no burn was priced, `last_pin` when the account had one
 pin on the window, and `standing` when every pin walked was a pending move. Either way the round is recorded, so the
 dwell holds.
@@ -665,8 +688,9 @@ selects on a model priced by prompt length ([Pricing](statistics.md#pricing)), w
 API-key account or a subscription account in overage, so leaving overage switches the reading without a reset and a
 session that moves between tiers reads the right share on both. The projection, the round's walk and the spare rate
 price the plain copy on the account's tier under the regime of the pin's entrypoint ([Plan
-meter](statistics.md#plan-meter)), on every window the pin's model draws, the spare rate at the band in force when it
-reads, and the projection and the walk weighing the band's hours inside the horizon as the band weighs them, the walk
+meter](statistics.md#plan-meter)), on every window the pin's model draws that the account's set holds, so an approved
+Ultra pin burns no 5-hour share, the spare rate at the band in force when it reads, and the projection and the walk
+weighing the band's hours inside the horizon as the band weighs them, the walk
 over the span its excess covers. A keepalive probe's usage never counts. A burn the model cannot price, for a model it
 has no weight for or a tier it has no capacity for, reads as none.
 
@@ -707,7 +731,8 @@ a base-regime span crosses a band edge, as the projection's are. A stretch at or
 window already at the ceiling reads a stretch of at least the time to its reset. The stretch is the time the slow-down
 adds to every session on the account when it spreads their work to the reset, and `slow_down_stretch_seconds` (60 to
 18000, default 9000) is the time the operator lets it add before a round moves sessions off the account. An API-key
-account has no 5-hour window and no slow-down.
+account has no 5-hour window and no slow-down, and neither has an approved Ultra account, whose poll carries none: the
+clean poll that drops the window ends the account's slow-down entries at once, each span recorded to the drop.
 
 From the stretch follows one speed factor per account, `(ceiling - U) / (R x B)` clamped to [0, 1], the in-band hours
 weighed at one over the band factor across a band edge as above, which is `1 - S / R` for the stretch `S`: 1 at a

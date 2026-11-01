@@ -759,7 +759,9 @@ equivalent on hover. The hint names the account's plan, its display name where t
 of each window the account has, in the order 5-hour, 7-day and the model week, with "(in the band)" after a 5-hour share
 that completed inside the band: "Ultra: 0.11% of the 7-day window, 0.22% of the Fable week". It names no window the
 account lacks, so an approved Ultra account reads no 5-hour share, and no Fable week on a Pro account. Under the Max and
-Ultra weeks the figure waits on the settings, so the cell draws its placeholder until they answer. A request whose model
+Ultra weeks the figure waits on the settings, so the cell draws its placeholder until they answer. Where that read
+fails, the cell draws a dash titled with the read's message, the drawer's Estimated cost row draws the same dash with
+the message leading its hover, and the split Refresh button's body reads the settings again. A request whose model
 has no weight in the cost model reads its dollar equivalent over `equivalent` with the hover "The cost model prices no
 share for this request". Under All in dollars and Dollar equivalent a subscription request reads its dollar equivalent
 over `equivalent` with the hint and the figure in the chosen week on hover, and under Billed dollars a dash with the
@@ -968,7 +970,8 @@ chart a gap, and the Cost split draws no ring for it. The Cost tile's dash carri
 by chart names the groups it draws that read unpriced on a line under its subtitle, `{group} unpriced in {m} buckets,
 drawn as gaps` for one group (`research unpriced in 1 bucket, drawn as a gap`), the groups' labels joined by middle dots
 for up to three, and `{n} groups unpriced in {m} buckets, drawn as gaps` past three. Under the Max and Ultra weeks the
-figures wait on the settings, so the section draws its placeholders until they answer. Under All in dollars, Billed
+figures wait on the settings, so the section draws its placeholders until they answer. Where that read fails, the tiles
+draw the read's error and the cards their error state. Under All in dollars, Billed
 dollars and Dollar equivalent Cost draws the tiles Estimated cost, Billed dollars or Dollar equivalent, Cost per request
 and Cost per 1k output tokens, then Cost by the chosen group as a chart and a table (Requests, Cost, Input, Cache read,
 Cache write, Output, Per request, Per 1k output) and the Cost split as one ring in dollars (Input, Cache read, Cache
@@ -1104,7 +1107,7 @@ recipe" and `Nothing is scheduled because {reason}.`
 The "Cost reference" link opens the dialog "Cost reference" under "What a million tokens costs: in dollars at list
 price, and as a share of a subscription window." on three tabs, Tiers and peak band, Plan rates and API prices. The
 Sessions view's head and the pool dialog's Warm sessions hint open it on Plan rates, the pool dialog's Write cost hint
-on API prices, and the subtitle of the Dashboard's 7-day ring and the notes of the Burn section's Plan per hour cards
+on API prices, and the subtitle of the Dashboard's 7-day ring and the note of the Burn section's Plan per hour card
 on Tiers and peak band. It opens on the entries in force now. Its footer carries a "Revision" select over both files'
 revision dates, newest first, a date not yet in force marked `(next)`, and choosing a date redraws every tab at the
 entry each file had in force on that date, or at a file's first entry when the date comes before it. A single date
@@ -1156,7 +1159,8 @@ system preference."), the Time format, 12h or 24h ("Applies to every timestamp a
 mirrors the top bar's switch with the week select beside it, disabled under the dollar positions as the top bar's is,
 and a legend button of its own ("The unit every view prices a request in. Native reads a subscription request as a share
 of the chosen week and a billed request in dollars."), the four browser preferences the shell reads, and at a phone's
-width each row's control takes a line of its own under its label. "About" lists Version, Profile, Metrics listener,
+width each row's control wraps under its label, the Unit row's position select, week select and legend button onto a
+second line. "About" lists Version, Profile, Metrics listener,
 Ledger path, API prices path and Subscription costs path (each as the path or "not configured", then its table's entry
 in force, its revision count and the next date while one is pending, as `effective {date}, {n} revisions, next {date}`,
 the last reading `{problem}` in their place while the cost model reports a problem), Storage path, "Requests, samples

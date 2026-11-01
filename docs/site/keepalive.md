@@ -147,9 +147,11 @@ The break-even of a recipe is the pause length at which its chain of probes cost
 read) / (cadence * read)`. The read and write factors are those of the recipe's model under its account's funding. A
 plan-funded recipe reads the cost model's type multipliers, the model's own where it sets them. A token costs the
 model's weight times the type's multiplier, so the weight enters the probes' cost and the re-write they save alike and
-cancels, and the fallback weight of an unweighted model changes nothing in its break-even. A model of no model tier
-breaks even where a weighted one does. A dollar-funded recipe reads its model's row of the price table, and a model the
-price table does not price reads its tightest row, the one with the smallest break-even among the priced rows. On a row
+cancels. A model without a weight prices nothing and breaks even where a weighted one does. A plan-funded probe and the
+saving it keeps are priced in the 7-day window of the account's tier, the window every plan keeps, and the wire carries
+each as the Pro-week figure the console reads in the chosen week. A dollar-funded recipe reads its model's row of the
+price table, and a model the price table does not price reads its tightest row, the
+one with the smallest break-even among the priced rows. On a row
 priced by prompt length, the recipe reads the set its request's prompt length selects, as the probe's own cost does. The
 cadence is the TTL's: 15 probes an hour on a five-minute entry and 1.11 on a one-hour entry. On the shipped cost model,
 a plan-funded recipe breaks even after 44.1 hours on a one-hour entry and 3 hours 16 minutes on a five-minute entry.
@@ -412,8 +414,9 @@ above, and `wasted_probe_reasons` counts them by the reason. The wasted probes' 
 rollup beside their count, priced the same way. Each wasted probe files beside its own cost row, in the hour the relay
 received the probe and under the funding that row took (the kind of the account that served it, whether that account is
 a usage-based seat, the speed its answer reported and whether its answer reported overage in use), so the wasted part of
-a probe share reads the plan-funded probes' waste against their own cost. `probes_skipped` counts a due probe a gate or
-a lapsed entry withheld rather than sending, for example because a cooldown already held the recipe. `probes_held`
+the probes' figure, read in the chosen week, is the plan-funded probes' waste against their own cost. `probes_skipped`
+counts a due probe a gate or a lapsed entry withheld rather than sending, for
+example because a cooldown already held the recipe. `probes_held`
 counts a probe the router refused with `503 ledger_behind` while its ledger caught up and sent again, outside the failed
 probes since no account answered it.
 
@@ -520,8 +523,10 @@ with the Sessions view under [Sessions](console.md#sessions). The price table's 
 ## A router restart
 
 The engine writes its state to the registry every 30 seconds and at shutdown: the sessions, every agent with its state
-and its park, the retained recipes and the idle-age counters. A recipe's prompt is sealed under the storage key, as the
-credentials are. A probe in flight is not saved. The shutdown stops taking reports and the events of requests in flight
+and its park, the retained recipes and the idle-age counters. Each settlement in that state names the window it was
+priced in, and a state an earlier build saved reads the 5-hour window for it. A recipe's prompt is sealed under the
+storage key, as the credentials are. A probe in flight is not saved. The
+shutdown stops taking reports and the events of requests in flight
 before its last save, so that save holds the state the engine had when it stopped, and a report that arrives later is
 answered `quiesced`. A save that fails is logged once and retried at every flush, and the engine keeps running from
 memory.

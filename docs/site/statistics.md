@@ -248,10 +248,13 @@ every prompt at the long-context cells. The list itself is refused when it is em
 
 ## Plan meter
 
-A subscription account's plan-side figures read as a share of its own 5-hour and 7-day windows, a percent with the
-window named. An API-key account, and a subscription account in overage, read dollars, and an overage request adds to no
-window share. A usage-based seat reads dollars at the API rates with no window share, since its spend is billed against
-its cap and draws no plan window.
+A subscription account's plan-side figures read as one Pro-week figure, the share of a Pro 7-day window the same tokens
+would spend, which the console shows in the week the week control names, and where one account is named the figure's
+hint gives the request's shares of that account's own windows, each a percent with the window named, over the windows
+the account's window set holds ([The windows the router works from](routing.md#the-windows-the-router-works-from)). An
+API-key account, and a subscription account in overage, read dollars, and an overage request adds to no window share. A
+usage-based seat reads dollars at the API rates with no window share, since its spend is billed against its cap and
+draws no plan window.
 
 A fast answer draws no plan window: it adds nothing to the share, the prediction, the projection, or the burn a shedding
 round ranks by. It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`, which
@@ -260,44 +263,50 @@ Plan per hour and its dollars in `usd`. A usage-based seat's answer counts its d
 burn route names its group's unit `usd`, as an API-key account's. A member's budget counts a fast answer at the fast
 cells, a subscription member's as an API-key member's.
 
-A client classifier call reads a zero share and a zero equivalent on a subscription account, with the reason
+A client classifier call reads a zero share and a zero Pro-week figure on a subscription account, with the reason
 `client_classifier` on the request, and its dollars in the overage, on an API key and on a usage-based seat.
 
 The subscription cost model (`crates/ledger/subscription_costs.yaml`) ships beside the price table and holds constants:
 a token costs its model's weight times its type's multiplier in units on every window, a window holds a capacity in
 units per account tier, and a request's share of a window is the units it spent over that capacity, over the peak band's
-capacity factor when the request completes inside the band. A unit is 1/150,000,000 of the Max 20x 5-hour window outside
-the band, so one percent of that window, the step the usage header moves in, is 1,500,000 units. A request prices under
-the regime that lists its client's entrypoint (the interactive regime, below), so one percent of the Max 20x 5-hour
-window is 3,000,000 units for an interactive request and 1,500,000 for any other. The admin routes answer the unit as
-the 20x window equivalent beside the dollars: the share of a Max 20x window the same tokens would spend, so figures of
-different account tiers compare and add, with an `estimated` flag beside it. It comes in up to three members, the 5-hour
-window with the peak band's weight, the 7-day window with the week's factor, and a model week over its capacity factor,
-and the dashboard, key and pool routes answer the first two. One million plain input tokens of Opus 5.5 are 2,200,000
-units, 1.47% of a 20x 5-hour window outside the band and 0.244% of a 20x 7-day window, and the same request on a Pro
-account reads 29.3% of its own 5-hour window. Under the interactive regime the same million tokens are 0.73% of the 20x
-5-hour window and 0.196% of the 20x week, and 14.7% of a Pro 5-hour window against 29.3%. The console reads the 20x
-equivalent under the top bar's Unit switch, whose default Native position shows a subscription request in it and a
-billed request in dollars ([The shell](console.md#the-shell)).
+capacity factor when the request completes inside the band. A unit is 1/90,000,000 of the Pro 7-day window, so one
+percent of that window, the step the usage header moves in, is 900,000 units. A request prices under the regime that
+lists its client's entrypoint (the interactive regime, below), and the unit stays the base Pro 7-day window, of which an
+interactive window holds 112,500,000, so one percent of the Pro week is 1,125,000 units for an interactive request and
+900,000 for any other. The admin routes answer one figure per row beside the dollars, the Pro-week figure: the share of
+a Pro 7-day window the same tokens would spend, the row's units over the Pro week of its regime, so figures of different
+account tiers compare and add. A row's units read the revision in force at its instant, and the figure divides them by
+the current revision's Pro week, so every figure on the console reads one yardstick. Where a route names one account,
+the request's shares of that account's own windows ride beside the figure as its hint, the 5-hour window with the peak
+band's weight, the 7-day window and the model week where the model has one on that plan, each only where the account's
+window set holds the window. A Fable 5.1 request of 100,000 input tokens outside the band under the base regime is
+1,000,000 units, 1.11% of a Pro week, 0.222% of a Max week and 0.111% of an Ultra week. One million plain input tokens
+of Opus 5.5 are 2,200,000 units, 2.44% of a Pro week, 0.489% of a Max week and 0.244% of an Ultra week, and the same
+request on a Pro account spends 29.3% of its own 5-hour window. Under the interactive regime the same million tokens are
+1.96% of a Pro week, 0.391% of a Max week and 0.196% of an Ultra week, and 14.7% of a Pro 5-hour window against 29.3%.
+The console reads the Pro-week figure in the week the top bar's Week control names, Ultra week until you pick one, under
+the Unit switch, whose default Native position shows a subscription request in it and a billed request in dollars ([The
+shell](console.md#the-shell)).
 
 The base capacities the shipped file carries, in units per window, keyed by the tier the profile reports for the plans
 the cost model prices (a Pro subscription reports `default_claude_ai`, and a free organization reports the same tier
-with no priced capacity):
+with no priced capacity). The 5-hour column holds for an account whose reading carries the window: an approved Ultra
+account has no 5-hour window, so nothing is priced on it there:
 
 | Tier | 5-hour | 7-day |
 | --- | --- | --- |
 | `default_claude_ai` (Pro) | 7,500,000 | 90,000,000 |
-| `default_claude_max_5x` | 37,500,000 | 450,000,000 |
-| `default_claude_max_20x` | 150,000,000 | 900,000,000 |
+| `default_claude_max_5x` (Max) | 37,500,000 | 450,000,000 |
+| `default_claude_max_20x` (Ultra) | 150,000,000 | 900,000,000 |
 
 The interactive regime's capacities, in the same units, twice the base 5-hour window and 1.25 times the base 7-day
-window on every tier, the Pro row assumed from the Max 20x factor:
+window on every tier, the Pro row assumed from the Ultra factor:
 
 | Tier | 5-hour | 7-day |
 | --- | --- | --- |
 | `default_claude_ai` (Pro, assumed) | 15,000,000 | 112,500,000 |
-| `default_claude_max_5x` | 75,000,000 | 562,500,000 |
-| `default_claude_max_20x` | 300,000,000 | 1,125,000,000 |
+| `default_claude_max_5x` (Max) | 75,000,000 | 562,500,000 |
+| `default_claude_max_20x` (Ultra) | 300,000,000 | 1,125,000,000 |
 
 A request prices under the interactive regime when its client's entrypoint is `claude-desktop`, `claude-desktop-3p`,
 `claude-vscode` or `cli` (the desktop app, the third-party desktop, the IDE extension and the terminal, which the plan
@@ -314,26 +323,29 @@ with no plan take no share of a plan window, while a Team or Enterprise seat rec
 cost model holds it and prices no share until it does.
 
 The weights of the same file, in units per plain input token, each with the date the plan meter measured it, and the
-share of a Max 20x window one million input tokens spend outside the band, derived from the weight over the capacity:
+share one million input tokens spend outside the band, derived from the weight over the capacity: of the Pro 5-hour
+window, the window the hint's 5-hour line reads in on a Pro account, and of the Pro, Max and Ultra weeks, the figures
+the week control shows:
 
-| Model | Weight | Measured | 5-hour input per million on Max 20x | 7-day input per million on Max 20x |
-| --- | --- | --- | --- | --- |
-| `claude-fable-5-1` | 10 | 2026-09-30 | 6.67% | 1.11% |
-| `claude-fable-5` | 10 | 2026-10-29 | 6.67% | 1.11% |
-| `claude-opus-5-5` | 2.2 | 2026-10-04 | 1.47% | 0.244% |
-| `claude-opus-5` | 2.75 | 2026-10-29 | 1.83% | 0.306% |
-| `claude-opus-4-8` | 3.25 | 2026-10-29 | 2.17% | 0.361% |
-| `claude-sonnet-5-5` | 1.5 | 2026-09-30 | 1.00% | 0.167% |
-| `claude-sonnet-5` | 1.5 | 2026-10-29 | 1.00% | 0.167% |
-| `claude-sonnet-4-6` | 3 | 2026-10-29 | 2.00% | 0.333% |
-| `claude-haiku-5-5` | 0.1 | 2026-10-08 | 0.0667% | 0.0111% |
-| `claude-haiku-4-5` | 1 | 2026-10-05 | 0.667% | 0.111% |
+| Model | Weight | Measured | Pro 5-hour, input per million | Pro week | Max week | Ultra week |
+| --- | --- | --- | --- | --- | --- | --- |
+| `claude-fable-5-1` | 10 | 2026-09-30 | 133% | 11.1% | 2.22% | 1.11% |
+| `claude-fable-5` | 10 | 2026-10-29 | 133% | 11.1% | 2.22% | 1.11% |
+| `claude-opus-5-5` | 2.2 | 2026-10-04 | 29.3% | 2.44% | 0.489% | 0.244% |
+| `claude-opus-5` | 2.75 | 2026-10-29 | 36.7% | 3.06% | 0.611% | 0.306% |
+| `claude-opus-4-8` | 3.25 | 2026-10-29 | 43.3% | 3.61% | 0.722% | 0.361% |
+| `claude-sonnet-5-5` | 1.5 | 2026-09-30 | 20.0% | 1.67% | 0.333% | 0.167% |
+| `claude-sonnet-5` | 1.5 | 2026-10-29 | 20.0% | 1.67% | 0.333% | 0.167% |
+| `claude-sonnet-4-6` | 3 | 2026-10-29 | 40.0% | 3.33% | 0.667% | 0.333% |
+| `claude-haiku-5-5` | 0.1 | 2026-10-08 | 1.33% | 0.111% | 0.0222% | 0.0111% |
+| `claude-haiku-4-5` | 1 | 2026-10-05 | 13.3% | 1.11% | 0.222% | 0.111% |
 
 Every priced model of the shipped table but one carries a weight. The plan meter measured Fable 5, Opus 5, Opus 4.8,
-Sonnet 5 and Sonnet 4.6 on 2026-10-29 under the interactive regime on a Max 5x account, each weight the measured 5-hour
-rate times 2 for the regime, over 4 for the tier and times 1.5 for the unit, the Sonnet 5 figure equal to Sonnet 5.5's
-weight. `claude-sonnet-4-5`, priced and tiered, has no weight row and reads Sonnet 5.5's weight, the latest weighed
-model of its model tier, as an estimate.
+Sonnet 5 and Sonnet 4.6 on 2026-10-29 under the interactive regime on a Max account, each weight the measured 5-hour
+rate, a percent of that account's interactive 5-hour window per million tokens, times 2 for the regime, over 4 for the
+tier and times 1.5 for the units, the Ultra 5-hour window's 150,000,000 units over a hundred per million tokens, the
+Sonnet 5 figure equal to Sonnet 5.5's weight. `claude-sonnet-4-5`, priced and tiered, has no weight row and prices
+nothing.
 
 Under the interactive regime a request spends half the table's 5-hour share and 0.8 of its 7-day share, since the regime
 doubles the 5-hour capacity and raises the 7-day by a quarter while the weights stay the same.
@@ -356,26 +368,28 @@ overage by its dollars. The projection reads the plain copy at the band in force
 session's model draws, and carries it forward weighing the band's hours inside the horizon as the band weighs them. A
 projection, a runway and a stretch across a band edge weigh the in-band part of the horizon at one over the band factor
 and the rest at the plain rate. The analytics routes read the hourly rollups instead, which fold a request under the
-hour it arrived in, so their shares and 20x equivalents weigh it by that hour's band rather than by the band at its
-completion. The burn route groups by the analytics' ten dimensions, read from the rollups the same way, and by session,
+hour it arrived in, so their shares weigh it by that hour's band rather than by the band at its completion, and the
+Pro-week figure does the same where the week's factor is not 1. The burn route groups by the analytics' ten dimensions,
+read from the rollups the same way, and by session,
 which reads the attempts, each weighed by the band at its completion. The shares answer under the account grouping, or
 under every grouping when the filter names exactly one account, since shares of different accounts' windows do not add,
-and the 20x equivalents answer under every grouping. The Tiers and peak band tab of the cost reference names this week's
-hours in your zone ([The cost reference](console.md#the-cost-reference)).
+and the Pro-week figure answers under every grouping. The Tiers and peak band tab of the cost reference names this
+week's hours in your zone ([The cost
+reference](console.md#the-cost-reference)).
 
 The Fable-scoped week is a row of the file, `model_windows.seven_day_fable`, half the 7-day window of the request's
 regime on every tier, so a Fable request's share of it is twice its 7-day share.
 
-A model without a weight of its own reads the weight of the latest weighed model of its model tier as an estimate: the
-prediction charges it, the projection and the shedding round price its pin's burn by that estimate, and every route that
-answers its figure answers `estimated` true beside it, which the console draws as a `~` before the figure. Once the
-model has served a plan-funded request since the start, the ledger raises the `model_unweighted` attention item for the
-`phoebis_attention` gauge, `GET /admin/attention` answers it, and the console lists it on the dashboard's attention line
-as a plain badge ([Conditions and gauges](#conditions-and-gauges)). A model of no model tier, or of a model tier with no
-weighed model, prices no share: the prediction adds no charge, the projection adds no burn, the shedding round ranks the
-pin after every priced one and never marks it, the analytics list the share under model unlisted and the cost reference
-shows a dash. An account tier without a capacity on a window prices no share there either, and the prediction adds no
-charge and the projection no burn on that window. While the account runs on its plan, a shedding round on that window
+A model without a weight on a window prices nothing there: the request's figure is null, its tokens still count, and the
+attention item Model unpriced names it until a weight lands. A model of no model tier has no weight and prices nothing
+the same way. For such a model the prediction adds no charge, the projection adds no burn, the shedding round ranks the
+pin after every priced one and never marks it, the analytics list the share under model unlisted, and the cost reference
+shows a dash in its cells and "not weighed" in its weight cell. Once the model has served a plan-funded request since
+the start, the ledger raises the `model_unpriced` attention item for the `phoebis_attention` gauge, `GET
+/admin/attention` answers it, and the console lists it on the dashboard's attention line as a plain badge in the info
+tone ([Conditions and gauges](#conditions-and-gauges)). An account tier without a capacity on a window prices no share
+there either, and the prediction adds no charge and the projection no burn on that
+window. While the account runs on its plan, a shedding round on that window
 reads that tier's pins as unpriced, after every priced pin, and marks none of them, and in the analytics an account on a
 tier the file lacks reads tier unknown, while a window the file leaves `null` on a listed tier reads model unlisted. A
 dated model id reads the weight of its undated name.
@@ -386,14 +400,14 @@ first. The shipped file carries one entry, and `stats.subscription_costs_path` r
 weight that replaces an assumed one edits every entry, since it says what the weight always was.
 
 Two members of each entry name the model tiers: `tier_order`, the tiers in display order (`fable`, `opus`, `sonnet` and
-`haiku` on the shipped file), and `model_tier`, each model's tier by undated id. They name the tier whose latest weighed
-model stands in for an unweighted one, and `GET /admin/pricing` answers both with the rest of the cost model, so a new
-model or a new family is an edit of the file. A model the map does not name takes the tier its id names after `claude-`
-when `tier_order` lists it.
+`haiku` on the shipped file), and `model_tier`, each model's tier by undated id. The tiers order the cost reference's
+rows and the routing log's model order, so a listed model's tier is never guessed from its id, and `GET /admin/pricing`
+answers both with the rest of the cost model, so a new model or a new family is an edit of the file. A model the map
+does not name takes the tier its id names after `claude-` when `tier_order` lists it.
 
-A new model is one weight line and its `model_tier` entry: the weight is its plain input rate in percent of the Max 20x
-5-hour window per million tokens, measured outside the band through the headless client (`sdk-cli`), times 1.5, or times
-3 when the measurement ran through an interactive one. An operator who cannot wait for a release copies the shipped
+A new model is one weight line and its `model_tier` entry: the weight is its plain input rate in percent of the Pro
+7-day window per million tokens, measured outside the band through the headless client (`sdk-cli`), times 0.9, or times
+1.125 when the measurement ran through an interactive one. An operator who cannot wait for a release copies the shipped
 file, adds both lines and points `stats.subscription_costs_path` at the copy.
 
 ## Body capture
@@ -529,7 +543,8 @@ Each family means what its entry below says, the text a `# HELP` line would hold
 - `phoebis_account_overage_in_use` reads 1 for an account in overage, billing extra usage past its plan, and 0 for any
   other account.
 - `phoebis_account_ratelimit_utilization` reads the latest utilization each quota window of an account reported, 1 at
-  the window's limit.
+  the window's limit, and a shared window a clean poll dropped takes its series with it, as the router drops the
+  window's reading.
 - `phoebis_attempts_total` counts the attempts on the upstream, by account, model and the attempt's outcome.
 - `phoebis_attention` reads 1 while an attention condition holds on its subject and 0 once it clears
   ([Conditions and gauges](#conditions-and-gauges)).
@@ -617,12 +632,16 @@ windows rather than the events, so a restart holds it again at the first fold to
 | `certificate_expiring` | warning | the listener key | a pair with more than 30 days left is loaded |
 | `ledger_record_parked` | serious | the pool, or `-` for a record without one | the next start or the Replay button lands them |
 | `poll_backoff` | warning | the polled account | a poll answers clean, or the account is flagged plan ended |
-| `model_unweighted` | warning | the model | a later subscription request on the model is priced at a cost model entry that weighs it, or the router restarts |
+| `model_unpriced` | info | the model | a later plan-funded request on the model is priced at a cost model entry that weighs it, or the router restarts |
 | `meter_drift` | warning | the OAuth account | the newest reconciled window of each kind that ended in the last eight days with a rise of at least 5% reads a ratio inside 0.8 to 1.25 or a priced share under 5%, or no such window remains |
 | `wall_reached` | warning | the account | no window of the account read spent in the last 24 hours |
 | `destination_spent` | warning | the destination account | no move onto the account was followed by a spent window within an hour in the last 24 hours, or a `window_cleared` on the same window followed each such spent window |
 | `shed_no_runway` | warning | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours |
 | `slowed_long` | warning | the account | the slow-down spans of the last 24 hours sum at or under twice the pool's `slow_down_stretch_seconds`, at least an hour |
+
+Of the tones, critical, serious, warning and info, `info` is the mildest, a condition that holds while nothing is
+broken: the dashboard's line draws such an item in the place the route ranks it, and no pool card draws it, since a
+model belongs to no pool.
 
 **`pool_exhausted`** holds while a request of the pool has ended exhausted and none of the pool's requests has
 succeeded since. It is fed by the request bus. An `incomplete` answer neither raises nor clears it. The detail names the
@@ -687,13 +706,13 @@ since the paused poll sends no clean answer. The detail gives when the run start
 many 429s the endpoint answered in a row. The `poll_backoff_ended` event that closes a run names its `cause`,
 `clean_poll` for a clean answer or `plan_ended` for the pause.
 
-**`model_unweighted`** holds while a model the cost model does not weigh has served plan-funded requests since the
-start, each priced at the weight of the latest weighed model of its model tier and marked estimated wherever its figure
-shows ([Plan meter](#plan-meter)). The ledger keeps the run in memory, so it starts over at a restart, and the next
-plan-funded request on the model raises it again. A later plan-funded request priced at a cost model entry that weighs
-the model clears it. The subject is the model, the dashboard's line reads the item as "Model weight estimated", and it
-carries no link, since the estimate shows in the cost reference dialog. It dates from the run's first request, and the
-detail names the model, its model tier, the model whose weight stands in and the requests served since.
+**`model_unpriced`** holds while a model the cost model does not weigh has served plan-funded requests since the start,
+each priced at no window share, its figure null ([Plan meter](#plan-meter)). The ledger keeps the run in memory, so it
+starts over at a restart, and the next plan-funded request on the model raises it again. A later plan-funded request
+priced at a cost model entry that weighs the model clears it, and a client classifier call raises nothing. The subject
+is the model, the dashboard's line reads the item as "Model unpriced" in the info tone, and it carries no link, since
+the cost reference dialog shows the model's cells as dashes with the weight cell "not weighed". It dates from the run's
+first request, and the detail names the model and the requests served since.
 
 **`meter_drift`** holds while, for any window kind, the account's newest completed window with a rise of at least 5%
 reads a ratio outside 0.8 to 1.25 between the rise the upstream's readings showed and the share the router priced for

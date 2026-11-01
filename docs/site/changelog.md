@@ -64,8 +64,9 @@ wall runs from the announcement's instant, or from the reset's passing for a wal
 classified by account kind, and a failover lands the session as a move whose record and event carry its cause
 ([Cooldowns and failover](routing.md#cooldowns-and-failover)), and `overage_policy` chooses what happens once an account
 bills extra usage ([Overage](routing.md#overage)). A pin whose model does not draw the fired window leaves the round, no
-5-hour round fires in the window's first two burn averages, the cheapest pick prices a rewrite in the Max 20x equivalent
-of the pin's weekly window, and the projection, the runway and the stretch weigh the band's hours inside the horizon. A
+5-hour round fires in the window's first two burn averages, the cheapest pick compares a rewrite as the Pro share of the
+pin's weekly window and records it as the Pro-week figure with the window it compared on, which the routing log reads in
+the chosen week, and the projection, the runway and the stretch weigh the band's hours inside the horizon. A
 moved pin's stamp names how it moved, a shedding round or the failover that landed it, which the status page's pins
 block and the routing log's record card read as `shed from` or `failed over from` the account it left
 ([Is it up?](operations.md#is-it-up), [Routing log](console.md#routing-log)). After a slow-down round a `wall_reached`
@@ -97,6 +98,11 @@ past the window's length ([The windows the router works from](routing.md#the-win
 A session's creation time is its main agent's first placement, kept across a failover, a move and a second pin, so the
 Sessions view's order by creation is stable ([Routing](routing.md#selection)).
 A usage-based seat's old plan readings start no shedding round ([Routing](routing.md#moves)).
+An OAuth account's shared windows are the ones its newest clean poll carried, both before the first, so a poll that
+lacks the 5-hour window drops the account's reading of it and its charges, ends its slow-down entries and leaves the
+window out of the prediction, the projection, the reservation and the burn, while a head drops nothing and a head's
+reading of a window the account lacks does not land ([The windows the router works
+from](routing.md#the-windows-the-router-works-from)).
 
 With `keepalive.enabled` on a pool the router keeps a replayable copy of every eligible request a session sends and,
 shortly before the cache entry would expire, sends a probe that reads it ([Keepalive](keepalive.md)). The policy's
@@ -133,6 +139,9 @@ The idle-return counters are kept by pool and UTC day, so the keepalive overview
 or 30 days, the counters starting afresh at the deploy ([Keepalive](keepalive.md#the-return-rate-by-idle-age)).
 The keepalive mod keeps a subagent the router named released unannounced when a later answer omits it, until its next
 report, so a released record's departure frees its slot ([The keepalive protocol](relay.md#the-keepalive-protocol)).
+The keepalive prices its probes, the savings and the break-even in the 7-day window of the account's tier, the window
+every plan keeps, and the console shows the probe cost and the saving in the chosen week ([The four
+fields](keepalive.md#the-four-fields), [What the ledger records](keepalive.md#what-the-ledger-records)).
 
 The admin listener serves the web console behind a login with the admin secret, with the views in the sidebar's order,
 Dashboard, Quota, Accounts, Pools, Keys, Guardrails, Requests, Analytics, Sessions and Settings, and under them the
@@ -155,7 +164,7 @@ its controls onto a second line at a phone's width, so the Routing log page fits
 shell](console.md#the-shell)). The unit legend takes the focus when it opens and hands it back to its button when it
 closes on Escape, and the Settings view's Appearance rows wrap their controls under their labels at a phone's width
 ([The shell](console.md#the-shell), [Settings](console.md#settings)). A key's processed rules are read on `GET
-/admin/keys/{id}/models` and in the key dialog, and the model weight estimated attention item opens no page ([API
+/admin/keys/{id}/models` and in the key dialog, and the Model unpriced attention item opens no page ([API
 reference](api-reference.md)). Each `GET /admin/sessions` row reads from the main agent's conversation pin, or the
 newest conversation pin of another agent where main holds none, and lists the row's conversation pins as agent lines
 with their effort and their warmth, a session no companion reports leaving the list after the non-companion timeout of
@@ -172,13 +181,16 @@ account cards and the Accounts list read `No window since the plan ended {ago}` 
 ([Dashboard](console.md#dashboard), [Accounts](console.md#accounts)). The Dashboard's attention line keeps one row and
 folds the items past it behind a "+N more" badge, and a pool card's attention rows end with their age
 ([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The Dashboard's Estimated cost tile reads the day's
-subscription traffic against the 7-day window under Native ([Dashboard](console.md#dashboard)). The Dashboard's
-remaining cards and the Burn cards price a Team or Enterprise seat at its tier where the cost model holds the row, and
-the remaining cards name a free plan, a usage-based seat or an unheld tier under the ring with the reason, the Burn
-cards reading a free plan or an unheld tier as tier unknown under Window shares ([Dashboard](console.md#dashboard),
-[Analytics](console.md#analytics)). The Dashboard's remaining cards list each account with the most of its own window
-left first ([Dashboard](console.md#dashboard)). A Quota card's Refresh draws its reading the moment it answers, at the
-reading's instant ([Quota](console.md#quota)). A usage-based seat draws one spend bar wherever the window bars are
+subscription traffic in the chosen week under Native ([Dashboard](console.md#dashboard)). The Dashboard's two rings, 7d
+remaining and Fable week remaining, weigh each subscription account by its tier's 7-day capacity over the chosen week's
+tier's and read their lines in the chosen week, such as 0.39 of 1.30 Ultra weeks left, and the rings and the Plan per
+hour card price a Team or Enterprise seat at its tier where the cost model holds the row, the rings naming an account
+whose poll lacks the window, a free plan, a usage-based seat or an unheld tier under the ring with the reason, and the
+card reading an account the router prices no tier for whose range holds no priced bucket as tier unknown
+([Dashboard](console.md#dashboard), [Analytics](console.md#analytics)). The Dashboard's rings list each account with the
+most of its own window left first ([Dashboard](console.md#dashboard)). A Quota card's Refresh draws its reading the
+moment it answers, at the reading's instant ([Quota](console.md#quota)). A
+usage-based seat draws one spend bar wherever the window bars are
 drawn, with its amounts, its reset marked estimated until a header names it, and a lane on the Quota windows timeline
 ([Quota](console.md#quota)). An account in the `disconnected` or `reauth_required` state reports no quota window, so
 neither a console view nor the status screen draws its last reading ([Quota](console.md#quota)). Each window the
@@ -214,12 +226,14 @@ Flagging the plan ended closes an open usage-poll backoff run, so `poll_backoff`
 organization type first and its rate-limit tier second (`free`, `pro`, `max_5x`, `max_20x`, `max`, `team`, `enterprise`
 or `usage_based`), and a free organization or a usage-based seat prices no capacity, so the router reads it as an
 untiered account ([Pairing](pairing.md#two-kinds-of-account), [API reference](api-reference.md)). An account's badge,
-its Plan row and the Accounts search read the plan the router resolved from the organization type and the tier, "Free"
-for a free organization and "Usage-based" for a seat, as do the Quota card's chip, the capacity rings and the routing
-log's candidates ([Accounts](console.md#accounts), [Dashboard](console.md#dashboard), [Quota](console.md#quota),
-[Routing log](console.md#routing-log)). An account's detail draws "Allowance left at reset", each weekly window's share
-left unused at its last four resets in the top bar's unit, a term's end counting as a reset marked "term ended"
-([Accounts](console.md#accounts)). An account's detail draws "Meter drift", the newest completed window of each kind
+its Plan row and the Accounts search read the display name claude.ai sends where the account carries one and the plan
+the router resolved from the organization type and the tier otherwise, Ultra, Max or Pro for the tiers the cost model
+prices, "Free" for a free organization and "Usage-based" for a seat, as do the Quota card's chip and the capacity rings,
+while the routing log's candidates read the label of the plan word a record carries ([Accounts](console.md#accounts),
+[Dashboard](console.md#dashboard), [Quota](console.md#quota), [Routing log](console.md#routing-log)). An account's
+detail draws "Allowance left at reset", each weekly window's share left unused at its last four resets in the chosen
+week under every position, a term's end counting as a reset marked "term ended" ([Accounts](console.md#accounts)). An
+account's detail draws "Meter drift", the newest completed window of each kind
 against the table with the windows off the band in 30 days, opening the Meter view on the account
 ([Accounts](console.md#accounts)). An account's end editor names the browser's zone beside its field
 ([Accounts](console.md#accounts)). An account's end editor opens empty for a running plan, and its hint names the date
@@ -233,9 +247,10 @@ filter bar's sort control, a key and a direction carried in the address, Name as
 ([Accounts](console.md#accounts)). The Accounts view shows a paired account's first reading once the confirm's poll
 lands, a few seconds after the confirm, with "The first quota reading is in flight." in its Usage card until then and a
 read of the list every 2 s for up to 30 s while auto reload is off ([Accounts](console.md#accounts)). The allowance
-block and the Analytics card price each weekly reset at the tier the account ran under at that reset
-([Accounts](console.md#accounts), [Analytics](console.md#analytics)). A new pool's dialog starts with cache warming off
-([Pools](console.md#pools)). A pool card's Active pins fact counts every pin under the pool's keys, as the Dashboard's
+block and the Analytics card read each weekly reset in the chosen week and price it at the tier the account ran under at
+that reset ([Accounts](console.md#accounts), [Analytics](console.md#analytics)). A new pool's dialog starts with cache
+warming off ([Pools](console.md#pools)). A pool card's Active pins fact
+counts every pin under the pool's keys, as the Dashboard's
 Sessions card does, and reads how many sit on a former member under the figure ([Dashboard](console.md#dashboard),
 [Pools](console.md#pools)). The pool dialog's idle window set above the break-even reads a note that the ceiling lies
 above it and prices its cost from the set value, while the parked and horizon ceilings stay capped at the break-even
@@ -268,11 +283,12 @@ reads a dash for its model ([Requests](console.md#requests)). Unchecking Select 
 check, the inverse of checking it, and an empty list keeps its meaning ([Requests](console.md#requests), [Routing
 log](console.md#routing-log)). A deleted key's group reads `<id> (deleted, created <time>)`, its creation instant in the
 viewer's zone ([Analytics](console.md#analytics)). The Accounts section's card "Unused allowance by account" ranks the
-subscription accounts by the share of their weekly windows left unused over the last four weeks, with the fleet's
-figures ([Analytics](console.md#analytics)). The Analytics session view reads the session's rows through the route's
-session filter, and each auto reload re-reads the first page alone ([Analytics](console.md#analytics)). The Analytics
-view's Burn tab lays Plan per hour's three cards and Spend per minute out two by two where three would share a row and
-the fourth would sit alone ([Analytics](console.md#analytics)). The Analytics view's Cache warming tab spans its last
+subscription accounts by the figure of their weekly windows left unused over the last four weeks, in the chosen week,
+with the fleet's figures ([Analytics](console.md#analytics)). The Analytics session view reads the session's rows
+through the route's session filter, and each auto reload re-reads the first
+page alone ([Analytics](console.md#analytics)). The Analytics view's Burn tab draws one Plan per hour card, the
+subscription traffic per hour in the chosen week, a bucket the cost model could not price staying a gap under a "model
+unlisted" entry ([Analytics](console.md#analytics)). The Analytics view's Cache warming tab spans its last
 card across the row where that card would sit alone, as the Burn tab does ([Analytics](console.md#analytics)). The
 Analytics view's model grouping lists a request refused before it resolved a model under "no model"
 ([Analytics](console.md#analytics)). The Burn section closes on Member budgets, its reconciliation rows listed on the
@@ -280,20 +296,22 @@ Meter view ([Analytics](console.md#analytics), [Meter](console.md#meter)). The C
 saved and the net saving after their cost, as tiles, a chart and a Saved column per pool
 ([Analytics](console.md#analytics)). The Client and User agent filters list the range's values and take a typed pattern,
 each value a chip ([Analytics](console.md#analytics)). The Cost by chart's note names the unpriced groups it draws as
-gaps ([Analytics](console.md#analytics)). The Cost split's subscription rows and the Plan per hour legend figures name
-their window in full on hover ([Analytics](console.md#analytics)). The ledger records a null diagnostics member on a
+gaps ([Analytics](console.md#analytics)). The Cost split's subscription ring and the Plan per hour legend read their
+figures in the chosen week ([Analytics](console.md#analytics)). The ledger records a null diagnostics member on a
 request that named a message as `none` and a comparison the upstream was still running as `pending`, which Misses by
 reason and its per-group table read as No divergence and Pending ([Analytics](console.md#analytics)). The Refusals by
 category card narrows under the Client and User agent filters and its links carry the client pattern
 ([Analytics](console.md#analytics)). The Traffic section's Refusals by category card counts the answers the upstream
 refused by category, each bar opening the Requests view on them ([Analytics](console.md#analytics)). The Traffic table's
 Error rate reads a dash for a group with no requests ([Analytics](console.md#analytics)). The unused allowance card and
-the Accounts detail's allowance block draw their shares under Window shares without the cost model, so a failed settings
-read leaves them in place ([Analytics](console.md#analytics), [Accounts](console.md#accounts)). Under the Analytics
-classifier grouping the requests with no classifier call are labeled `none`, as the Requests facet names them
-([Analytics](console.md#analytics)). Without the Model week card the Burn tab's three cards share one row from 1344 px
-([Analytics](console.md#analytics)). On the Sessions view a released subagent's record keeps its slot of the agent cap
-for one cache TTL after the release and then leaves the engine ([Sessions](console.md#sessions)). The Sessions row's
+the Accounts detail's allowance block read their figures in the chosen week under every position and wait on the cost
+model, so a failed settings read draws their error ([Analytics](console.md#analytics), [Accounts](console.md#accounts)).
+Under the Analytics classifier grouping the requests with no classifier
+call are labeled `none`, as the Requests facet names them
+([Analytics](console.md#analytics)). The Burn tab's Plan per hour and Spend per minute cards share one row where the
+grid fits two columns ([Analytics](console.md#analytics)). On the Sessions view a released subagent's record keeps its
+slot of the agent cap for one cache TTL after the release and then leaves the
+engine ([Sessions](console.md#sessions)). The Sessions row's
 "+N" badge counts every agent pinned on another model, a pin without a recipe among them
 ([Sessions](console.md#sessions)). The Sessions view offers Companion only, Finished sessions (Show finished sessions)
 and Released agents (Show released agents) as filters in its address, hides a finished session by default, and counts
@@ -352,13 +370,22 @@ A plan-ended account answers the plan and the tier its last profile named, its e
 were priced under ([Pairing](pairing.md#account-states)).
 `POST /admin/keys` and the key edit refuse an unknown member with `400` as the pool routes do ([API
 reference](api-reference.md)).
+The Dashboard's account cards and the Accounts list keep a slot for a window the account's poll does not carry, "none"
+muted in the share's place with the window's words on hover, "no 5-hour window" on an approved Ultra account, the Quota
+cards keep the window's row with the same words muted, and an account whose poll has read no window reads "not read" on
+each ([Dashboard](console.md#dashboard), [Accounts](console.md#accounts), [Quota](console.md#quota)).
+The top bar's Week control reads a subscription figure as a share of the Pro, Max or Ultra week, Ultra week until you
+pick one, stored in the browser beside the unit position, mirrored on the Settings view's Unit row and disabled under
+the dollar positions ([The shell](console.md#the-shell), [Settings](console.md#settings)).
 
 Every finished request lands in the ledger as one row for the client request, one per attempt and one per routing
 decision, folded into the hourly rollup the analytics read ([Statistics](statistics.md#the-ledger)). Each attempt
 carries its token counts and the tier the router prices by, which a page or a route prices when it reads them, so a free
 organization's and a usage-based seat's requests read unpriced in every figure ([Pricing](statistics.md#pricing), [Plan
-meter](statistics.md#plan-meter)). A subscription account's plan-side figures read as a share of its 5-hour and 7-day
-windows ([Plan meter](statistics.md#plan-meter)). The metrics listener serves `/metrics` in Prometheus text format
+meter](statistics.md#plan-meter)). A subscription account's plan-side figures read as one Pro-week figure, the share of
+a Pro 7-day window the same tokens would spend, with the request's shares of its own account's windows as the hint where
+one account is named, bounded by the windows the account's poll carries ([Plan meter](statistics.md#plan-meter)). The
+metrics listener serves `/metrics` in Prometheus text format
 ([Metrics](statistics.md#metrics)), and the `phoebis_attention` gauge carries what needs an operator
 ([Conditions and gauges](statistics.md#conditions-and-gauges)). A failed credential refresh raises `refresh_failed` in
 the serious tone. A plan-side figure prices under the regime of the client's entrypoint, the interactive regime (the
@@ -407,25 +434,33 @@ The profile is read again on every third usage poll, a quarter hour apart, so a 
 within a quarter hour ([Statistics](statistics.md#quota-samples)).
 A re-fold after a moved prompt-length threshold writes into no hour the rollup purge dropped
 ([Statistics](statistics.md#retention)).
+Every route that prices a subscription row answers one figure, the Pro-week equivalent, null where a row it sums priced
+nothing, and the ledger raises `model_unpriced`, an attention item at the info level, for a plan-funded model that
+prices nothing ([Plan meter](statistics.md#plan-meter), [Conditions and gauges](statistics.md#conditions-and-gauges)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
 the request arrived. The price table and the subscription cost model are revision lists keyed by effective date, the
-account's tier and the prompt-length band join the hourly rollups, a model the cost model does not weight reads its
-model tier's latest weight as an estimate and raises an attention item, and the cost model names each model's tier
-([statistics](statistics.md#pricing), [installation](installation.md#stats)). The shipped price table carries Claude
-Sonnet 4.6 and Claude Sonnet 4.5 and reads Claude Fable 5's cache read at $1 per million tokens in every revision
+cost model's unit is the Pro 7-day window, of which one percent is 900,000 units, so every subscription figure is a
+Pro-week figure the console reads in the chosen week, the account's tier and the prompt-length band join the hourly
+rollups, a model the cost model does not weight prices nothing, its figure null, and raises an attention item, and the
+cost model names each model's tier ([statistics](statistics.md#pricing), [installation](installation.md#stats)). The
+shipped price table carries Claude Sonnet 4.6 and Claude Sonnet 4.5 and reads Claude
+Fable 5's cache read at $1 per million tokens in every revision
 ([statistics](statistics.md#pricing)). The subscription cost model weighs Claude Fable 5, Opus 5, Opus 4.8 and Sonnet
 4.6 as the plan meter measured them on 2026-10-29, the measurement confirming Sonnet 5's weight
 ([statistics](statistics.md#plan-meter)).
 
-The console prices every figure in the unit the shell's Unit switch names, native by default (a subscription request as
-20x window equivalents, a billed request in dollars), with a legend beside it. The cost reference shows one row per
-model tier with the older models folded, and a revision select ([analytics](console.md#analytics),
-[cost reference](console.md#the-cost-reference)). The analytics, dashboard, keys and pools routes flag each window a
-subscription request priced nothing on, its model in no tier the cost model weighs, and count the probes and kept-warm
+The console prices every figure in the unit the shell's Unit switch names, one of four positions, Native, All in
+dollars, Billed dollars and Dollar equivalent, Native by default (a subscription request as a share of the chosen week,
+a billed request in dollars), with the Week control beside it, Pro week, Max week or Ultra week, Ultra week by default,
+and a legend ([The shell](console.md#the-shell)). The cost reference names the plans Pro, Max and Ultra with Pro first
+in its tier chooser, shows one row per model tier with the older models folded, dashes with "not weighed" for a model
+without a weight, and a revision select ([analytics](console.md#analytics), [cost
+reference](console.md#the-cost-reference)). The analytics, dashboard, keys and pools routes answer a null figure where a
+subscription request priced nothing, its model without a weight in the cost model, and count the probes and kept-warm
 credits a plan funded, so the Dashboard, Keys and Pools tiles read a dash with the hover "No subscription request
-priced on this window: its model has no tier the cost model weighs" and the Analytics Cost by chart notes the groups it
-draws unpriced in range ([dashboard](console.md#dashboard), [analytics](console.md#analytics)). The Requests and
+priced: its model has no weight in the cost model" and the Analytics Cost by chart notes the groups it draws unpriced in
+range ([dashboard](console.md#dashboard), [analytics](console.md#analytics)). The Requests and
 Dashboard Cost cells follow the unit legend per position: a subscription request reads its dollar equivalent under All
 in dollars and Dollar equivalent and a dash under Billed dollars, and a billed request its dollars under All in dollars
 and Billed dollars and a dash under Dollar equivalent ([dashboard](console.md#dashboard),
