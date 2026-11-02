@@ -6758,7 +6758,8 @@ async fn a_replay_the_writer_claimed_inside_the_bound_answers_its_rows_past_it()
     stays_for(Duration::from_millis(400), || !replay.is_finished()).await;
     let hold = h.db.debug_hold_next_writer_read(WriterRead::ParkedCount);
     h.db.free_the_disk();
-    // Halfway: the hold runs out, the batch lands, and the writer's next turn claims the replay and lands the row.
+    // Halfway: the batch's retry hold runs out, the batch lands, and the writer's next turn claims the replay and lands
+    // the row.
     step(&h, BOUND / 2);
     wait_for(Duration::from_secs(5), || hold.is_parked().then_some(())).await;
     step(&h, BOUND / 2 + Duration::from_secs(1));

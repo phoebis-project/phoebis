@@ -1306,6 +1306,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_writer_side_read_recovers_a_poisoned_writer_guard_and_maps_its_own_panic_to_read_canceled(
+    ) {
+        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            db.write(|_| -> Result<(), LedgerError> { panic!("a bug inside the closure") })
+        }));
+        assert!(poisoned.is_err());
+        let panicked = db
+            .writer_read(WriterRead::ParkedCount, |_| -> Result<(), LedgerError> {
+                panic!("a read closure that never means to answer")
+            })
+            .await;
+        assert!(
+            matches!(panicked, Err(LedgerError::ReadCanceled)),
+            "{panicked:?}"
+        );
+        assert_eq!(
+            db.writer_read(WriterRead::ParkedCount, crate::query::parked_count)
+                .await
+                .unwrap(),
+            0,
+            "the poisoned guard recovered rather than turning every later writer-side read into ReadCanceled"
+        );
+    }
+
+    #[tokio::test]
     async fn a_panic_inside_a_write_closure_leaves_the_writer_usable() {
         let db = Arc::new(LedgerDb::open_in_memory().unwrap());
         let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
