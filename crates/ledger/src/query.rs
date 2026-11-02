@@ -3163,8 +3163,9 @@ macro_rules! hour_floor {
     };
 }
 
-/// Binds `?1` and `?2`, the range, and `?3` and `?4`, the first and the past hour it touches. The ranking reads the
-/// whole hours, so a sample of the range is the last of its hour against the hour's samples outside the range too.
+/// Binds `?1` and `?2`, the range, and `?3` and `?4`, the hour floor of `?1` and the hour ceiling of `?2`. The
+/// ranking reads the whole hours, so a sample of the range is the last of its hour against the hour's samples outside
+/// the range too.
 pub(crate) const HOURLY_WINDOW_SAMPLES_SQL: &str = concat!(
     quota_account_windows_cte!(),
     ", ranked AS ( \

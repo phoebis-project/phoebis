@@ -2771,6 +2771,17 @@ fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
         vec![4_500, 4_400],
         "the bounds are hours in seconds, the upper one exclusive"
     );
+    let unaligned = db
+        .read_blocking(|c| hourly_window_samples(c, 3_600, 4_450))
+        .unwrap();
+    assert_eq!(
+        unaligned
+            .iter()
+            .map(|r| (r.account_id.as_str(), r.bucket))
+            .collect::<Vec<_>>(),
+        vec![("b", 4_400)],
+        "a bound inside an hour ranks the whole hour: `a`'s 4,500 past it outranks its 3,900 and 4,200 inside it"
+    );
 }
 
 #[test]
