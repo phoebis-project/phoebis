@@ -471,7 +471,7 @@ exhausted member.
 
 The analytics, the burn chart and the dashboard read the hourly rollups in pages of a day, each page its own read, so a
 400-day range holds one day of rows in memory and a reader connection is free between pages. The pool cards' traffic
-walks its pages on one reader for the bounded day it charts, so a day with several pools reads the table once.
+reads the bounded day it charts in one statement on one reader, so a day with several pools reads the table once.
 
 A prompt-length threshold that moves re-folds the hours whose attempts the ledger still holds at the next start, and the
 older hours keep their split. Where the request retention is 0 the re-fold reads every request, and a request received

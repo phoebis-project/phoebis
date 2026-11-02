@@ -4364,7 +4364,7 @@ async fn a_pool_row_answers_moves_per_hour_by_reason() {
     assert_eq!(
         pool("empty")["moves_per_hour"],
         serde_json::json!({}),
-        "a memberless pool answers an empty map without a query to attribute moves against"
+        "a memberless pool answers an empty map"
     );
 }
 

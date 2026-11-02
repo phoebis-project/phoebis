@@ -5156,8 +5156,7 @@ mod tests {
             && !aliases.iter().any(|alias| walks(alias))
     }
 
-    /// The seek's terms as `EXPLAIN QUERY PLAN` prints them: the account, the window where the table has one, and the
-    /// bucket's range.
+    /// The seek's terms as `EXPLAIN QUERY PLAN` prints them: the account and the bucket's range.
     const EXTRA_USAGE_SEEK: &[&str] = &["account_id=?", "bucket>?"];
 
     // Negative controls: each walks its table under its alias with a correlated seek per row, which the helper must

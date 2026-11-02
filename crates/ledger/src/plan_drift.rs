@@ -262,13 +262,15 @@ fn decision() -> DecisionRow {
     DecisionRow::of(summary, record, FROM)
 }
 
-/// `PRAGMA analysis_limit` at `ANALYSIS_LIMIT` and `ANALYZE` on the purger connection, the open's limit, then the
-/// pool's statistics generation bumped through `debug_bump_statistics_generation`: a pooled reader loads its schema and
-/// `sqlite_stat1` at its open, where the `cache_size` pragma loads the schema, and a re-analysis of a table that has
-/// statistics moves no schema cookie, so without the bump every plan below would read the pre-seed statistics. Before
-/// it returns it proves the readers see the new rows: planted statistics that favor the key index, explained through
-/// a reader, then the analysis, then the same statement explained again, and the two plans differ, the second naming
-/// `requests_session`.
+/// `PRAGMA analysis_limit` at `ANALYSIS_LIMIT` and `ANALYZE` on the purger connection, the open's limit. Before it
+/// returns it proves the readers see the new rows through two control plans of `CONTROL_SQL`: planted statistics that
+/// favor the key index, explained through a reader, then the analysis, then the same statement explained again, and
+/// the two plans differ, the second naming `requests_session`. Each control follows a bump of the pool's statistics
+/// generation through `debug_bump_statistics_generation`: a pooled reader loads its schema and `sqlite_stat1` at its
+/// open, where the `cache_size` pragma loads the schema, and a re-analysis of a table that has statistics moves no
+/// schema cookie, so without the bump a control would plan on the statistics its reader loaded at its open. The tests
+/// below need no bump, since each plans on a fresh ledger over a copy of the analyzed file, whose readers load the
+/// seeded statistics at their open.
 fn analyzed(db: &LedgerDb) {
     db.purge(|c| {
         c.execute("DELETE FROM sqlite_stat1", [])?;
@@ -308,8 +310,8 @@ fn analyzed(db: &LedgerDb) {
 const CONTROL_SQL: &str =
     "SELECT id FROM requests WHERE key_id = ?1 AND session_id = ?2 ORDER BY received_at LIMIT 1";
 
-/// The plan through a pooled reader. `analyzed` moved the pool's generation, so the read reopens the reader in `lend`
-/// and it plans on the seeded statistics.
+/// The plan through a pooled reader, which plans on the statistics it loaded at its open. A test's reader opened on the
+/// analyzed copy, and `analyzed` bumps the generation before each control, so `lend` reopens the reader first.
 fn plan(db: &LedgerDb, sql: &str, params: impl rusqlite::Params) -> Vec<String> {
     db.read_blocking(|c| {
         let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
@@ -572,8 +574,8 @@ fn the_request_list_by_session_keeps_its_plan_under_statistics() {
     );
 }
 
-/// Either index serves the session's decisions: the session's own, or the range's, whose `LIKE` arm keeps the session
-/// index off.
+/// Either index serves the session's decisions: the session's own, or the range's where the `LIKE` arm of the session
+/// filter's `OR` keeps the session index off.
 #[test]
 fn the_routing_log_by_session_keeps_its_plan_under_statistics() {
     let (_dir, db) = seeded();

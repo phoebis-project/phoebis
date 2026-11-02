@@ -410,8 +410,9 @@ impl LedgerDb {
         task.await.map_err(|_| LedgerError::ReadCanceled)?
     }
 
-    /// The same read on the calling thread, for the ledger task's own thread and for tests that hold no runtime
-    /// worker to spare. It waits only while every pooled connection is out.
+    /// The same read on the calling thread, for the ledger task's own thread, for `Attention::conditions`, which the
+    /// attention route and the metrics scrape run on a blocking worker, and for tests that hold no runtime worker to
+    /// spare. It waits only while every pooled connection is out.
     pub fn read_blocking<T>(
         &self,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError>,
@@ -1506,7 +1507,10 @@ mod tests {
                     .await
                 }
             }));
-            takes.recv().await.unwrap();
+            tokio::time::timeout(Duration::from_secs(1), takes.recv())
+                .await
+                .expect("the newest hold took a free reader")
+                .unwrap();
             if releases.len() < READERS {
                 // A read completes beside the held ones while a connection is still free.
                 let beside =
