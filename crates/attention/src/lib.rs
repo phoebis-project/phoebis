@@ -91,8 +91,7 @@ impl Attention {
         // Read from the file on every call, as `refresh_failed` reads the registry, so the condition holds across a
         // restart and clears on its own when the next start or a replay lands the rows. A read that fails fails the
         // whole answer, as the refresh read's does: a scrape never reports clear what it could not read. Read before
-        // the state lock, so a read waiting on the ledger's reader connection never holds the bus arm's `observe`
-        // behind it.
+        // the state lock, so a read waiting on a reader connection never holds the bus arm's `observe` behind it.
         let parked = self
             .ledger
             .as_ref()

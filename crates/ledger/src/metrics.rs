@@ -669,14 +669,26 @@ pub fn metrics_router(
                 async move {
                     // A scrape answered without the conditions would read 0 for a held one and clear the alarm a
                     // rule fires on, so the scraper records a failed scrape instead. The listener asks for no
-                    // credential, so the store's or the ledger's words stay in the log.
-                    let attention = match attention.map(|a| a()).transpose() {
-                        Ok(attention) => attention.unwrap_or_default(),
-                        Err(error) => {
-                            tracing::warn!(%error, "the attention read failed, so the scrape answers 500");
-                            return (StatusCode::INTERNAL_SERVER_ERROR, "attention read failed")
-                                .into_response();
-                        }
+                    // credential, so the store's or the ledger's words stay in the log. The read waits on a pooled
+                    // ledger connection, so it runs on a blocking worker and parks no runtime thread.
+                    let attention = match attention {
+                        None => AttentionGauges::default(),
+                        Some(source) => match tokio::task::spawn_blocking(move || source()).await {
+                            Ok(Ok(gauges)) => gauges,
+                            Ok(Err(error)) => {
+                                tracing::warn!(%error, "the attention read failed, so the scrape answers 500");
+                                return (StatusCode::INTERNAL_SERVER_ERROR, "attention read failed")
+                                    .into_response();
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    %error,
+                                    "the attention read did not finish, so the scrape answers 500"
+                                );
+                                return (StatusCode::INTERNAL_SERVER_ERROR, "attention read failed")
+                                    .into_response();
+                            }
+                        },
                     };
                     let revisions = pricing.revisions();
                     let gauges = gather(

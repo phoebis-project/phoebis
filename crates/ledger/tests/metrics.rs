@@ -3,7 +3,8 @@
 mod common;
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::*;
@@ -937,6 +938,98 @@ async fn an_attention_read_that_fails_answers_the_scrape_500_with_no_family() {
         !text.contains("disk gone"),
         "the listener asks for no credential, so the store's words stay in the log"
     );
+}
+
+/// A source that waits parks a blocking worker: the runtime thread stays free to run the release, after which the
+/// scrape answers. A handler that blocks the runtime thread instead is released by the watchdog alone, which its flag
+/// records.
+#[tokio::test]
+async fn the_scrape_answers_while_its_attention_source_waits() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use phoebis_store::{StorageKey, Store};
+    use std::sync::atomic::Ordering;
+    let router = phoebis_routing::spawn(
+        Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
+        Arc::new(|| 1_000),
+        phoebis_routing::RouterConfig::default(),
+    )
+    .unwrap();
+    let (release, parked) = std::sync::mpsc::channel::<()>();
+    // The source must be `Sync`, which a std `Receiver` is not, so the receiver sits behind a mutex the source locks
+    // for its wait.
+    let parked = Mutex::new(parked);
+    let source: AttentionGaugeSource = Arc::new(move || {
+        parked.lock().unwrap().recv()?;
+        Ok(AttentionGauges::default())
+    });
+    let releases = Arc::new(Mutex::new(vec![release]));
+    let (done, fired) = watchdog(releases.clone(), Duration::from_secs(5));
+    tokio::spawn({
+        let releases = releases.clone();
+        async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            for release in releases.lock().unwrap().drain(..) {
+                release.send(()).unwrap();
+            }
+        }
+    });
+    let app = phoebis_ledger::metrics_router(
+        Arc::new(Metrics::new()),
+        router,
+        Arc::new(Pricing::new(PriceRevisions::shipped())),
+        phoebis_bus::Bus::new(),
+        Arc::new(|| 1_000),
+        Duration::from_secs(60),
+        None,
+        Some(source),
+        None,
+    );
+    let response = app
+        .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    done.send(()).unwrap();
+    assert!(
+        !fired.load(Ordering::SeqCst),
+        "the scrape parked the runtime thread, so the watchdog released the source"
+    );
+    assert_eq!(response.status(), 200);
+}
+
+/// Off the runtime, so a handler that blocks the runtime thread cannot stall it. After `bound` without `done` it
+/// releases every parked source, the stand-in for a read waiting on a held reader, which lets the blocked scrape
+/// finish and the test reach its assertion, and sets the flag that assertion reads. A test that ends before then,
+/// through `done` or through its own panic, lets the thread exit.
+fn watchdog(
+    releases: Arc<Mutex<Vec<std::sync::mpsc::Sender<()>>>>,
+    bound: Duration,
+) -> (std::sync::mpsc::Sender<()>, Arc<AtomicBool>) {
+    use std::sync::atomic::Ordering;
+    use std::sync::mpsc::RecvTimeoutError::Timeout;
+    let (done, finished) = std::sync::mpsc::channel::<()>();
+    let fired = Arc::new(AtomicBool::new(false));
+    std::thread::spawn({
+        let fired = fired.clone();
+        move || {
+            if finished.recv_timeout(bound) != Err(Timeout) {
+                return;
+            }
+            fired.store(true, Ordering::SeqCst);
+            for release in releases.lock().unwrap().drain(..) {
+                let _ = release.send(());
+            }
+            // Released and still no answer after a second bound: nothing on the runtime can end the test, so the
+            // process ends with the cause in its output rather than hanging the run.
+            if finished.recv_timeout(bound) == Err(Timeout) {
+                eprintln!(
+                    "the parked source was released {bound:?} ago and the scrape has not answered"
+                );
+                std::process::abort();
+            }
+        }
+    });
+    (done, fired)
 }
 
 /// A price revision that lists a model under another key moves its `model` label at its own date: the landing labels

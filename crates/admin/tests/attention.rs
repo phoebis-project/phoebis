@@ -1,7 +1,8 @@
 //! `GET /admin/attention`: the conditions that hold now, worst first, oldest first within a kind.
 mod common;
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::body::Body;
@@ -12,9 +13,12 @@ use phoebis_bus::{
     ClientFacts, Event, Kind, Origin, Outcome, RequestComplete, RequestObserved, RequestShape,
     ResponseFacts,
 };
-use phoebis_ledger::{AttemptRecord, Metrics, Record, RequestRecord};
+use phoebis_ledger::{
+    AttemptRecord, LedgerDb, LedgerError, Metrics, Record, RequestRecord, READERS,
+};
 use phoebis_store::{AccountState, AttemptOutcome, StateCause};
 use serde_json::json as j;
+use tokio::task::JoinHandle;
 use tower::ServiceExt;
 
 fn observed(id: &str, key: &str, pool: &str) -> Event {
@@ -507,4 +511,106 @@ async fn a_held_model_unpriced_condition_lists_on_the_route_after_every_degraded
         text.contains(r#"phoebis_attention{kind="model_unpriced",subject="claude-opus-5"} 1"#),
         "{text}"
     );
+}
+
+/// A read that holds its pooled reader until its release is sent.
+type Hold = JoinHandle<Result<(), LedgerError>>;
+
+/// Holds every pooled reader at once, each read signalling its take and then waiting on its own release. Each hold
+/// must take its reader within a second, so a harness without the pool fails here instead of hanging.
+async fn hold_every_reader(db: &Arc<LedgerDb>) -> (Vec<std::sync::mpsc::Sender<()>>, Vec<Hold>) {
+    let (taken, mut takes) = tokio::sync::mpsc::channel::<()>(READERS);
+    let mut releases = Vec::new();
+    let mut held = Vec::new();
+    for _ in 0..READERS {
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let taken = taken.clone();
+        held.push(tokio::spawn({
+            let db = db.clone();
+            async move {
+                db.read(move |_| {
+                    taken.blocking_send(()).unwrap();
+                    released.recv().unwrap();
+                    Ok(())
+                })
+                .await
+            }
+        }));
+        releases.push(release);
+    }
+    for _ in 0..READERS {
+        tokio::time::timeout(Duration::from_secs(1), takes.recv())
+            .await
+            .expect(
+                "a hold took no reader within a second, likely on the in-memory harness, whose one connection \
+                 serves one read at a time",
+            )
+            .unwrap();
+    }
+    (releases, held)
+}
+
+/// A read held on every pooled connection parks the route's read on a blocking worker: the runtime thread stays free
+/// to run the release, after which the route answers. A handler that blocks the runtime thread instead is released
+/// by the watchdog alone, which its flag records.
+#[tokio::test]
+async fn the_attention_route_answers_while_every_pooled_reader_is_held() {
+    let (_dir, parts) = common::admin_parts_full_on_disk().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let (releases, held) = hold_every_reader(&parts.db).await;
+    let releases = Arc::new(Mutex::new(releases));
+    let (done, fired) = watchdog(releases.clone(), Duration::from_secs(5));
+    tokio::spawn({
+        let releases = releases.clone();
+        async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            for release in releases.lock().unwrap().drain(..) {
+                release.send(()).unwrap();
+            }
+        }
+    });
+    let response = get(&parts.app, "/admin/attention", Some(&cookie)).await;
+    done.send(()).unwrap();
+    assert!(
+        !fired.load(Ordering::SeqCst),
+        "the route parked the runtime thread, so the watchdog released the readers"
+    );
+    assert_eq!(response.status(), 200);
+    for task in held {
+        task.await.unwrap().unwrap();
+    }
+}
+
+/// Off the runtime, so a handler that blocks the runtime thread cannot stall it. After `bound` without `done` it
+/// releases every held reader, which lets the blocked read finish and the test reach its assertion, and sets the
+/// flag that assertion reads. A test that ends before then, through `done` or through its own panic, lets the thread
+/// exit.
+fn watchdog(
+    releases: Arc<Mutex<Vec<std::sync::mpsc::Sender<()>>>>,
+    bound: Duration,
+) -> (std::sync::mpsc::Sender<()>, Arc<AtomicBool>) {
+    use std::sync::mpsc::RecvTimeoutError::Timeout;
+    let (done, finished) = std::sync::mpsc::channel::<()>();
+    let fired = Arc::new(AtomicBool::new(false));
+    std::thread::spawn({
+        let fired = fired.clone();
+        move || {
+            if finished.recv_timeout(bound) != Err(Timeout) {
+                return;
+            }
+            fired.store(true, Ordering::SeqCst);
+            for release in releases.lock().unwrap().drain(..) {
+                let _ = release.send(());
+            }
+            // Released and still no answer after a second bound: nothing on the runtime can end the test, so the
+            // process ends with the cause in its output rather than hanging the run.
+            if finished.recv_timeout(bound) == Err(Timeout) {
+                eprintln!(
+                    "the held readers were released {bound:?} ago and the route has not answered"
+                );
+                std::process::abort();
+            }
+        }
+    });
+    (done, fired)
 }

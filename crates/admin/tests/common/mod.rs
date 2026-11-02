@@ -37,6 +37,7 @@ use phoebis_transport::{
     pool::Pool,
     trust_extra_ca, Plane,
 };
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -129,6 +130,30 @@ pub struct Full {
 
 pub async fn admin_parts_full() -> Full {
     full_from(app_with(None, ACCOUNT_UUID, false, None).await)
+}
+
+/// The full harness over a file-backed ledger under the directory it answers, whose pool of `READERS` connections a
+/// test holds one by one, where the in-memory ledger's one connection serves every role and a second held read would
+/// wait on the first. The directory comes back beside the parts so the file outlives the test's last read.
+pub async fn admin_parts_full_on_disk() -> (tempfile::TempDir, Full) {
+    let dir = tempfile::tempdir().unwrap();
+    let parts = build_app_bounded(
+        None,
+        ACCOUNT_UUID,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        RouterConfig::default(),
+        LedgerConfig::default(),
+        Duration::from_secs(86_400),
+        Duration::from_secs(3_600),
+        Some(dir.path().join("ledger.sqlite")),
+    )
+    .await;
+    (dir, full_from(parts))
 }
 
 /// The full harness with its relay's admission reading the ledger's standing through `accounting`, as the router
@@ -292,6 +317,7 @@ pub async fn admin_parts_full_on_bounded(
             LedgerConfig::default(),
             session_expiry,
             non_companion_idle,
+            None,
         )
         .await,
     )
@@ -962,12 +988,13 @@ async fn build_app_routed(
         ledger_config,
         Duration::from_secs(86_400),
         Duration::from_secs(3_600),
+        None,
     )
     .await
 }
 
 /// `build_app_routed` with the sessions route bounded by `session_expiry` and `non_companion_idle`, which the settings
-/// view mirrors.
+/// view mirrors, and the ledger on the file at `ledger_path` where one is given, in memory otherwise.
 #[allow(clippy::too_many_arguments)]
 async fn build_app_bounded(
     identity: Option<Identity>,
@@ -982,6 +1009,7 @@ async fn build_app_bounded(
     ledger_config: LedgerConfig,
     session_expiry: Duration,
     non_companion_idle: Duration,
+    ledger_path: Option<PathBuf>,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_310_linux_x64();
@@ -1105,7 +1133,10 @@ async fn build_app_bounded(
         Duration::from_secs(5),
     ));
     let bus = Bus::new();
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let db = Arc::new(match ledger_path {
+        Some(path) => LedgerDb::open(&path).unwrap(),
+        None => LedgerDb::open_in_memory().unwrap(),
+    });
     let pricing = Arc::new(Pricing::new(prices.unwrap_or_else(PriceRevisions::shipped)));
     let metrics = Arc::new(Metrics::new());
     let tables = Arc::new(costs.unwrap_or_else(PlanTables::shipped));

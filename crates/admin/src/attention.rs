@@ -113,10 +113,18 @@ pub(crate) struct AttentionLink {
 )]
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     // A failed read answers 500 and never an empty list, which the dashboard would draw as the quiet state.
-    let mut held: Vec<_> = match state.attention.conditions((state.clock)()) {
-        Ok(conditions) => conditions.into_iter().filter(|c| c.holds).collect(),
-        Err(error) => {
+    let attention = state.attention.clone();
+    let now = (state.clock)();
+    let mut held: Vec<_> = match tokio::task::spawn_blocking(move || attention.conditions(now))
+        .await
+    {
+        Ok(Ok(conditions)) => conditions.into_iter().filter(|c| c.holds).collect(),
+        Ok(Err(error)) => {
             tracing::warn!(%error, "the attention read failed, so the route answers 500");
+            return failure(StatusCode::INTERNAL_SERVER_ERROR, "storage failure");
+        }
+        Err(error) => {
+            tracing::warn!(%error, "the attention read did not finish, so the route answers 500");
             return failure(StatusCode::INTERNAL_SERVER_ERROR, "storage failure");
         }
     };
