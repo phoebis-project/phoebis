@@ -7,9 +7,10 @@ import { type Followed, followPages, merged, type Overrun, type Paging, pagingFo
  * The auto reload poll both logs run: every `intervalMs` while the tab is visible, the page's `paused` is false and the
  * first page shows, read the newest pages up to now over the rows shown under `address` (the followed rows it holds,
  * else the list's), merge them under the fresh tint, keep an overrun's cursor with its poll's end, and toast a failing
- * streak once. When a wait ends a full interval after the last answer, the poll reads at once. The caller hands in the
- * list's last answer, its error and its paging state, and reads back the rows to draw, the error to show, the pager's
- * next cursor and the pager's handlers, so nothing the caller passes depends on the hook's own state.
+ * streak once. When a wait ends a full interval after the last answer, the poll reads at once. A tick that finds a
+ * poll of the hook still out is skipped. The caller hands in the list's last answer, its error and its paging state,
+ * and reads back the rows to draw, the error to show, the pager's next cursor and the pager's handlers, so nothing the
+ * caller passes depends on the hook's own state.
  *
  * A list that answers `landedThrough` runs the poll under a watermark: every page of a poll reads the rows written
  * after it (`read`'s `landedAfter`), the list's own stamp first and then each poll's first page's, so a request that

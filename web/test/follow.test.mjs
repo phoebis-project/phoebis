@@ -327,6 +327,25 @@ test("a poll still out across a drawer's open and close skips the next tick, and
   assert.deepEqual(g.sent, [ORIGIN + 5_000, ORIGIN + 15_000], 'the tick after it lands polls again');
 });
 
+test("a poll still out across a drawer's open and close that fails clears the guard, so the next tick polls", async () => {
+  const clock = frozen();
+  const r = route(60);
+  const sent = [];
+  let fail = () => {};
+  const read = (cursor, to) => {
+    if (cursor === undefined) sent.push(to);
+    return sent.length === 1 ? new Promise((_, reject) => (fail = () => reject(new Error('ledger locked')))) : r.read(cursor);
+  };
+  const f = follow({ read });
+  act(() => clock.tick(5_000));
+  f.render({ paused: true });
+  f.render({ paused: false });
+  fail();
+  await settled();
+  act(() => clock.tick(5_000));
+  assert.deepEqual(sent, [ORIGIN + 5_000, ORIGIN + 10_000], 'the tick after the failed poll polls again');
+});
+
 test('a poll for an old address that lands after the page moved clears the guard', async () => {
   const clock = frozen();
   const g = gated();

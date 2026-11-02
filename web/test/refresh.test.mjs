@@ -152,6 +152,43 @@ test('a load for old deps that lands after the deps changed clears the guard', a
   assert.deepEqual(calls, ['a', 'b', 'b'], "the tick after the old deps' load landed reads");
 });
 
+test('a load for old deps that fails after the deps changed clears the guard, so the next tick reads', async () => {
+  const clock = frozen();
+  const calls = [];
+  let fail = () => {};
+  const load = (id) => {
+    calls.push(id);
+    return id === 'a' ? new Promise((_, reject) => (fail = () => reject(new Error('ledger locked')))) : Promise.resolve(id);
+  };
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  const seen = [];
+  act(() => root.render(h(KeyedProbe, { id: 'a', load, seen })));
+  act(() => root.render(h(KeyedProbe, { id: 'b', load, seen })));
+  await settled();
+  fail();
+  await settled();
+  act(() => clock.tick(30_000));
+  assert.deepEqual(calls, ['a', 'b', 'b'], "the tick after the old deps' failed load reads");
+});
+
+test('a refresh whose read fails after the pause starts clears the guard, so the refresh re-armed when the pause ends reads', async () => {
+  const clock = frozen();
+  let fail = () => {};
+  const load = counting((n) => (n === 2 ? new Promise((_, reject) => (fail = () => reject(new Error('ledger locked')))) : Promise.resolve(n)));
+  const p = await probe(load);
+  act(() => clock.tick(30_000));
+  p.render({ paused: true, refreshMs: 30_000 });
+  fail();
+  await settled();
+  p.render({ refreshMs: 30_000 });
+  await settled();
+  act(() => clock.tick(30_000));
+  assert.equal(load.calls, 4, "after the failed refresh, the pause's end reads at once and the tick after it reads again");
+});
+
 test('a hidden document reads nothing, and reads at once when it comes back a full period after the last answer', async () => {
   const clock = frozen();
   const load = counting();
