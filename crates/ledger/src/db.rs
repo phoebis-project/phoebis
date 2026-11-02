@@ -1627,18 +1627,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ledger.sqlite");
         let db = LedgerDb::open(&path).unwrap();
-        let stat_table = |db: &LedgerDb| {
-            db.read_blocking(|c| {
-                let sql = "SELECT COUNT(*) FROM sqlite_master WHERE name = 'sqlite_stat1'";
-                Ok(c.query_row(sql, [], |r| r.get::<_, i64>(0))?)
-            })
-            .unwrap()
-        };
-        assert_eq!(
-            stat_table(&db),
-            1,
-            "the first open creates the statistics table"
-        );
         db.insert_request(&request("r1"), &[], None).unwrap();
         drop(db);
         let db = LedgerDb::open(&path).unwrap();

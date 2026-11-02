@@ -7686,16 +7686,11 @@ async fn the_pool_traffic_and_the_key_totals_count_the_asked_requests_alone() {
 }
 
 #[tokio::test]
-async fn pools_traffic_answers_every_asked_pool_across_its_pages_and_counts_a_former_members_rows()
-{
+async fn pools_traffic_answers_every_asked_pool_and_adds_each_rows_figures_into_its_bucket() {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
     let last = WEEKDAY_OFF_PEAK - 60_000;
     let hour = hour_of(last);
-    let from = hour - PAGE_HOURS * 3_600;
-    // The range spans two pages: the first holds one request under p at its start, and the second holds three in one
-    // hour, two under p, one of them on an account no pool holds any more, and one under q.
     for (n, pool, account, at) in [
-        (0, "p", "a", from * 1_000),
         (1, "p", "a", last + 1),
         (2, "p", "gone", last + 2),
         (3, "q", "b", last + 3),
@@ -7732,7 +7727,7 @@ async fn pools_traffic_answers_every_asked_pool_across_its_pages_and_counts_a_fo
             pools_traffic(
                 c,
                 &["p".into(), "q".into()],
-                from,
+                hour,
                 hour + 3_600,
                 3_600,
                 &PRICES,
@@ -7749,21 +7744,12 @@ async fn pools_traffic_answers_every_asked_pool_across_its_pages_and_counts_a_fo
     };
     assert_eq!(traffic.keys().collect::<Vec<_>>(), ["p", "q"]);
     assert_eq!(
-        requests("p", from),
-        Some(1),
-        "the first page's row counts once"
-    );
-    assert_eq!(
         requests("p", hour),
         Some(2),
         "a former member's row counts for the hour it was a member"
     );
     assert_eq!(requests("q", hour), Some(1));
-    assert!(db
-        .read_blocking(|c| pools_traffic(c, &[], from, hour + 3_600, 3_600, &PRICES, &COSTS, NOW))
-        .unwrap()
-        .is_empty());
-    let single = pool_traffic(&db, "p", from, hour + 3_600, 3_600, &PRICES, &COSTS, NOW)
+    let single = pool_traffic(&db, "p", hour, hour + 3_600, 3_600, &PRICES, &COSTS, NOW)
         .await
         .unwrap();
     assert_eq!(

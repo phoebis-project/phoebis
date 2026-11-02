@@ -1,8 +1,9 @@
 //! The pinned plans under statistics shaped like a live file's: one key holding nearly every row, many sessions
 //! holding few, a few accounts. Every statement whose plan a test pins without statistics runs here against an
-//! analyzed file, so a plan the statistics move is caught before a live file moves it. The session identities read is
-//! the one exception: each of its `requests` references names its index or seeks the primary key, so no statistics
-//! move its plan, and its own test's planted statistics catch a dropped hint.
+//! analyzed file, so a plan the statistics move is caught before a live file moves it. The session identities read, the
+//! top sessions read and the extra usage reads are the exceptions: each of their table references names its index,
+//! seeks the primary key on its leading column or reads by rowid, so no statistics move their plans. Each keeps its own
+//! test in `query.rs`, and the session identities test's planted statistics catch a dropped hint.
 //!
 //! The file is seeded and analyzed once per process and each test opens its own copy of the bytes, since the seed is
 //! most of a second's writes and every test reads the same file. A copy per test keeps the tests independent of each
@@ -20,11 +21,10 @@ use crate::bodies::{
 use crate::db::{begin_write, insert_decision_in, ANALYSIS_LIMIT, LANDING_STAMP_SQL};
 use crate::query::{
     decision_rows_statement, decision_statement, list_requests_statement,
-    session_attempts_statement, top_sessions_statement, LiveKeys, RequestFilter, RoutingLogFilter,
+    session_attempts_statement, LiveKeys, RequestFilter, RoutingLogFilter,
     GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL, GUARDRAIL_SAMPLE_CURSOR_SQL,
     GUARDRAIL_SAMPLE_KEY_SQL, GUARDRAIL_SAMPLE_ORDER_SQL, GUARDRAIL_SAMPLE_POOL_SQL,
-    HOURLY_WINDOW_SAMPLES_SQL, LATEST_EXTRA_USAGE_POLLED_SQL, LATEST_EXTRA_USAGE_SHARE_SQL,
-    LATEST_EXTRA_USAGE_SQL, LATEST_QUOTA_SQL, RECENT_EVENTS_OF_KIND,
+    HOURLY_WINDOW_SAMPLES_SQL, LATEST_QUOTA_SQL, RECENT_EVENTS_OF_KIND,
 };
 use crate::record::{
     AttemptRecord, BodyRecord, DecisionRow, EventRecord, ExtraUsageSampleRecord,
@@ -342,24 +342,6 @@ fn walks(plan: &[String], names: &[&str]) -> bool {
 }
 
 #[test]
-fn the_top_sessions_read_keeps_its_plan_under_statistics() {
-    let (_dir, db) = seeded();
-    for accounts in [Vec::new(), vec!["a1".to_string(), "a2".to_string()]] {
-        let (sql, binds) = top_sessions_statement(FROM, TO, 20, &accounts);
-        let steps = plan(&db, &sql, params_from_iter(binds));
-        assert!(
-            seeks(
-                &steps,
-                "requests_received",
-                &["received_at>?", "received_at<?"]
-            ) && seeks(&steps, "sqlite_autoindex_attempts_1", &["request_id=?"])
-                && !walks(&steps, &["attempts", "a", "requests", "r"]),
-            "{accounts:?}: {steps:?}"
-        );
-    }
-}
-
-#[test]
 fn the_session_attempts_read_keeps_its_plan_under_statistics() {
     let (_dir, db) = seeded();
     let (sql, binds) = session_attempts_statement(FROM, TO, &["s007".into(), "s008".into()]);
@@ -555,26 +537,6 @@ fn the_quota_sample_reads_keep_their_plans_under_statistics() {
                 &["account_id=?", "window=?", "bucket>?"]
             ) && !walks(&steps, &["quota_samples", "q", "s"]),
             "{steps:?}"
-        );
-    }
-}
-
-#[test]
-fn the_extra_usage_sample_reads_keep_their_plans_under_statistics() {
-    let (_dir, db) = seeded();
-    for sql in [
-        LATEST_EXTRA_USAGE_SQL,
-        LATEST_EXTRA_USAGE_POLLED_SQL,
-        LATEST_EXTRA_USAGE_SHARE_SQL,
-    ] {
-        let steps = plan(&db, sql, params![FROM / 1_000]);
-        assert!(
-            seeks(
-                &steps,
-                "sqlite_autoindex_extra_usage_samples_1",
-                &["account_id=?", "bucket>?"]
-            ) && !walks(&steps, &["extra_usage_samples", "e", "s"]),
-            "{sql}: {steps:?}"
         );
     }
 }

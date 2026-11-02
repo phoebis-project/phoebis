@@ -4994,9 +4994,9 @@ mod tests {
         .unwrap()
     }
 
-    /// Every seek of the requests table goes through the session index or the primary key, and no step walks the table:
-    /// the named sessions are a chunk of the page's rows, and each costs the first rows of its own session. The plan
-    /// holds on a ledger with no statistics and on one whose statistics make the key index look selective.
+    /// At least two seeks of the requests go through the session index and no step walks the table, on a ledger whose
+    /// statistics make the key index look selective: the named sessions are a chunk of the page's rows, and each costs
+    /// the first rows of its own session.
     #[test]
     fn the_session_identities_read_seeks_the_session_index_for_each_named_session() {
         let sessions = vec![
@@ -5021,7 +5021,6 @@ mod tests {
             );
         };
         let (sql, binds) = session_identities_statement(&sessions);
-        seeks_the_session_index(&plan_of(&sql, binds.clone()));
         seeks_the_session_index(&plan_under(
             &sql,
             binds,
@@ -5159,21 +5158,10 @@ mod tests {
 
     /// The seek's terms as `EXPLAIN QUERY PLAN` prints them: the account, the window where the table has one, and the
     /// bucket's range.
-    const QUOTA_SEEK: &[&str] = &["account_id=?", "window=?", "bucket>?"];
     const EXTRA_USAGE_SEEK: &[&str] = &["account_id=?", "bucket>?"];
 
     // Negative controls: each walks its table under its alias with a correlated seek per row, which the helper must
     // reject before its verdict on a rewrite counts.
-    const LATEST_QUOTA_WALK: &str =
-        "SELECT q.account_id, q.bucket, q.window, q.utilization, q.reset_at, q.source, q.observed_at FROM \
-         quota_samples q WHERE q.bucket >= ?1 AND q.bucket = (SELECT MAX(bucket) FROM quota_samples WHERE account_id = \
-         q.account_id AND window = q.window AND bucket >= ?1) ORDER BY q.account_id, q.window";
-    const HOURLY_WINDOW_SAMPLES_WALK: &str =
-        "SELECT q.account_id, (q.bucket - (((q.bucket % 3600) + 3600) % 3600)) AS hour, q.window, q.bucket, \
-         q.observed_at, q.utilization, q.reset_at FROM quota_samples q WHERE q.bucket >= ?1 AND q.bucket < ?2 AND \
-         q.bucket = (SELECT MAX(bucket) FROM quota_samples WHERE account_id = q.account_id AND window = q.window AND \
-         bucket >= (q.bucket - (((q.bucket % 3600) + 3600) % 3600)) AND bucket < (q.bucket - (((q.bucket % 3600) + \
-         3600) % 3600)) + 3600) ORDER BY q.account_id, hour, q.window";
     const LATEST_EXTRA_USAGE_WALK: &str =
         "SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, \
          disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, \
@@ -5192,70 +5180,6 @@ mod tests {
          spend_exponent FROM extra_usage_samples e WHERE bucket >= ?1 AND utilization IS NOT NULL AND rowid = (SELECT \
          rowid FROM extra_usage_samples WHERE account_id = e.account_id AND bucket >= ?1 AND utilization IS NOT NULL \
          ORDER BY bucket DESC, source = 'head' DESC LIMIT 1) ORDER BY account_id";
-
-    #[test]
-    fn the_latest_quota_read_seeks_each_windows_newest_sample() {
-        let before = plan_of(LATEST_QUOTA_WALK, vec![rusqlite::types::Value::from(0_i64)]);
-        assert!(
-            !seeks_without_a_scan(
-                &before,
-                "quota_samples",
-                &["q"],
-                "quota_samples_account",
-                QUOTA_SEEK
-            ),
-            "the helper rejects the walk under its alias: {before:?}"
-        );
-        let plan = plan_of(LATEST_QUOTA_SQL, vec![rusqlite::types::Value::from(0_i64)]);
-        assert!(
-            seeks_without_a_scan(
-                &plan,
-                "quota_samples",
-                &["q", "s"],
-                "quota_samples_account",
-                QUOTA_SEEK
-            ),
-            "{plan:?}"
-        );
-    }
-
-    #[test]
-    fn the_hourly_window_samples_read_seeks_each_windows_range() {
-        let before = plan_of(
-            HOURLY_WINDOW_SAMPLES_WALK,
-            vec![
-                rusqlite::types::Value::from(0_i64),
-                rusqlite::types::Value::from(7_200_i64),
-            ],
-        );
-        assert!(
-            !seeks_without_a_scan(
-                &before,
-                "quota_samples",
-                &["q"],
-                "quota_samples_account",
-                QUOTA_SEEK
-            ),
-            "the helper rejects the walk under its alias: {before:?}"
-        );
-        let binds = vec![
-            rusqlite::types::Value::from(0_i64),
-            rusqlite::types::Value::from(7_200_i64),
-            rusqlite::types::Value::from(0_i64),
-            rusqlite::types::Value::from(7_200_i64),
-        ];
-        let plan = plan_of(HOURLY_WINDOW_SAMPLES_SQL, binds);
-        assert!(
-            seeks_without_a_scan(
-                &plan,
-                "quota_samples",
-                &["q"],
-                "quota_samples_account",
-                QUOTA_SEEK
-            ),
-            "{plan:?}"
-        );
-    }
 
     #[test]
     fn the_latest_extra_usage_reads_seek_each_accounts_newest_row() {

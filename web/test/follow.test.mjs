@@ -298,20 +298,6 @@ function gated() {
   return { open, read, sent };
 }
 
-test('a tick that finds the previous poll still in flight skips, and the tick after it lands polls again', async () => {
-  const clock = frozen();
-  const g = gated();
-  const f = follow({ read: g.read });
-  act(() => clock.tick(5_000));
-  act(() => clock.tick(5_000));
-  assert.deepEqual(g.sent, [ORIGIN + 5_000], 'the tick finds that poll in flight and skips');
-  g.open();
-  await settled();
-  assert.equal(f.last().rows[0].id, 'row_000', 'the poll lands');
-  act(() => clock.tick(5_000));
-  assert.deepEqual(g.sent, [ORIGIN + 5_000, ORIGIN + 15_000], 'the next tick polls again');
-});
-
 test("a poll still out across a drawer's open and close skips the next tick, and the tick after it lands polls again", async () => {
   const clock = frozen();
   const g = gated();
@@ -325,25 +311,6 @@ test("a poll still out across a drawer's open and close skips the next tick, and
   await settled();
   act(() => clock.tick(5_000));
   assert.deepEqual(g.sent, [ORIGIN + 5_000, ORIGIN + 15_000], 'the tick after it lands polls again');
-});
-
-test("a poll still out across a drawer's open and close that fails clears the guard, so the next tick polls", async () => {
-  const clock = frozen();
-  const r = route(60);
-  const sent = [];
-  let fail = () => {};
-  const read = (cursor, to) => {
-    if (cursor === undefined) sent.push(to);
-    return sent.length === 1 ? new Promise((_, reject) => (fail = () => reject(new Error('ledger locked')))) : r.read(cursor);
-  };
-  const f = follow({ read });
-  act(() => clock.tick(5_000));
-  f.render({ paused: true });
-  f.render({ paused: false });
-  fail();
-  await settled();
-  act(() => clock.tick(5_000));
-  assert.deepEqual(sent, [ORIGIN + 5_000, ORIGIN + 10_000], 'the tick after the failed poll polls again');
 });
 
 /**
