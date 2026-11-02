@@ -6025,6 +6025,47 @@ fn the_rewrite_series_and_the_moves_by_reason_read_the_account_rollups() {
 }
 
 #[test]
+fn the_rewrite_series_sums_the_named_accounts_alone() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_account(
+            &tx,
+            &phoebis_ledger::AccountRollupRow {
+                hour: 3_600,
+                account_id: "a".into(),
+                rewrite_tokens: 40,
+                ..Default::default()
+            },
+        )?;
+        fold_account(
+            &tx,
+            &phoebis_ledger::AccountRollupRow {
+                hour: 3_600,
+                account_id: "b".into(),
+                rewrite_tokens: 700,
+                ..Default::default()
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let filter = SeriesFilter {
+        from: 0,
+        to: 7_200_000,
+        bucket_seconds: 3_600,
+        accounts: vec!["a".into()],
+        ..SeriesFilter::default()
+    };
+    assert_eq!(
+        db.read_blocking(|c| rewrite_series(c, &filter)).unwrap(),
+        vec![(0, 0), (3_600_000, 40)],
+        "the named account's rewrite tokens count, and the other account's in the same hour do not"
+    );
+}
+
+#[test]
 fn the_held_series_reads_the_slow_down_columns_per_bucket() {
     let db = LedgerDb::open_in_memory().unwrap();
     // Two rows of `a` in the second hour, apart by their key, and one of `b`, which the filter leaves out.
