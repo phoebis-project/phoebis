@@ -44,37 +44,55 @@ const ACCOUNTS: [&str; 3] = ["a1", "a2", "a3"];
 const POOLS: [&str; 2] = ["p1", "p2"];
 const MODEL: &str = "claude-sonnet-5";
 
-/// The seeded and analyzed file's bytes. The initializer's directory goes when it returns or unwinds, so the shared
-/// seed leaves nothing behind.
-static SEEDED: OnceLock<Vec<u8>> = OnceLock::new();
+/// `sqlite_stat1`'s rows as (`tbl`, `idx`, `stat`), ordered by all three.
+type Statistics = Vec<(String, Option<String>, String)>;
 
-/// A ledger of its own on a copy of the seeded file. The control is asserted again through a pooled reader before the
-/// test's plan, so a copy whose statistics no longer pick the session index fails here rather than in a pinned plan.
+/// The seeded and analyzed file's bytes beside the statistics the analysis wrote. The initializer's directory goes
+/// when it returns or unwinds, so the shared seed leaves nothing behind.
+static SEEDED: OnceLock<(Vec<u8>, Statistics)> = OnceLock::new();
+
+/// A ledger of its own on a copy of the seeded file. Its `sqlite_stat1` rows, read through a pooled reader, must equal
+/// the seed's: that proves the copy carries the seed's statistics in full and that the reader the tests plan on sees
+/// them, so no test plans on an unanalyzed file.
 fn seeded() -> (tempfile::TempDir, Arc<LedgerDb>) {
-    let bytes = SEEDED.get_or_init(|| {
+    let (bytes, analyzed_statistics) = SEEDED.get_or_init(|| {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ledger.sqlite");
         let db = LedgerDb::open(&path).unwrap();
         seed(&db);
         analyzed(&db);
+        let kept = statistics(&db);
         // A copy carries the main file alone, so every page the seed wrote leaves the WAL first.
         let busy: i64 = db
             .write(|c| Ok(c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?))
             .unwrap();
         assert_eq!(busy, 0, "the checkpoint moved every page into the file");
         drop(db);
-        std::fs::read(&path).unwrap()
+        (std::fs::read(&path).unwrap(), kept)
     });
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ledger.sqlite");
     std::fs::write(&path, bytes).unwrap();
     let db = Arc::new(LedgerDb::open(&path).unwrap());
-    let control = plan(&db, CONTROL_SQL, params!["main", "s007"]);
-    assert!(
-        seeks(&control, "requests_session", &["session_id=?"]),
-        "the copy plans on the seeded statistics: {control:?}"
+    assert_eq!(
+        &statistics(&db),
+        analyzed_statistics,
+        "the copy's statistics, read through a pooled reader, differ from the seed's"
     );
     (dir, db)
+}
+
+/// `sqlite_stat1` through a pooled reader.
+fn statistics(db: &LedgerDb) -> Statistics {
+    db.read_blocking(|c| {
+        let mut stmt =
+            c.prepare("SELECT tbl, idx, stat FROM sqlite_stat1 ORDER BY tbl, idx, stat")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })
+    .unwrap()
 }
 
 /// 2,000 requests over 400 sessions of five, 1,990 of them under the key `main` and one under each of ten other
