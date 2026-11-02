@@ -886,16 +886,17 @@ const WIDEST_WEEK_FIGURE = '0.00998% of an Ultra week';
 const COMMON_WEEK_FIGURE = '12.5% of an Ultra week';
 
 /**
- * The Dashboard's Estimated cost, 24h tile at 360 by 800, 900 by 800, 1280 by 800 and 1440 by 900 with the widest week
- * figure written into its subscription line, where the story's day draws the unpriced dash: the figure ends inside the
- * tile's content box, breaking between its words where the tile is narrower, from the left edge and in the type of the
- * billed line's figure, the rows its line then takes recorded. At 1280 by 800 and 1440 by 900, where the day grid holds
- * four tiles to a row, the common week figure written into the same line takes one line of its own, its lines counted
- * off the figure's text since the funding's word may still move to a row of its own. The dash is restored in the same
- * read, so the shot and the measures after it read the tile as it drew. At 1280 by 800 the widths of the widest and the
- * common week figure on one line are read off a range over a span in the subscription line, which takes the line's
- * 15 px and the value's letter spacing, for the day grid's width comments. The mock pass's alone, since the router's
- * seed holds no subscription account and so draws no subscription line.
+ * The Dashboard's Estimated cost, 24h tile at 360 by 800, 511 by 800, 900 by 800, 1260 by 800, 1280 by 800 and 1440 by
+ * 900 with the widest week figure written into its subscription line, where the story's day draws the unpriced dash:
+ * the figure ends inside the tile's content box, breaking between its words where the tile is narrower, from the left
+ * edge and in the type of the billed line's figure, the rows its line then takes recorded. At 1280 by 800 and 1440 by
+ * 900, where the day grid holds four tiles to a row, and at 511 by 800 and 1260 by 800, the breakpoints where its two
+ * and four columns leave the tile least room, the common week figure written into the same line takes one line of its
+ * own, its lines counted off the figure's text since the funding's word may still move to a row of its own. The dash is
+ * restored in the same read, so the shot and the measures after it read the tile as it drew. At 1280 by 800 the widths
+ * of the widest and the common week figure on one line are read off a range over a span in the subscription line,
+ * which takes the line's 15 px and the value's letter spacing, for the day grid's width comments. The mock pass's
+ * alone, since the router's seed holds no subscription account and so draws no subscription line.
  */
 async function dashboardWidestFigure(theme) {
   const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
@@ -959,7 +960,9 @@ async function dashboardWidestFigure(theme) {
   try {
     for (const { common, ...size } of [
       { common: null, height: 800, width: 360 },
+      { common: COMMON_WEEK_FIGURE, height: 800, width: 511 },
       { common: null, height: 800, width: 900 },
+      { common: COMMON_WEEK_FIGURE, height: 800, width: 1260 },
       { common: COMMON_WEEK_FIGURE, height: 800, width: 1280 },
       { common: COMMON_WEEK_FIGURE, height: 900, width: 1440 },
     ]) {

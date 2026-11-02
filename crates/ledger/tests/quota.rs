@@ -1983,7 +1983,7 @@ fn plan_refused() -> Respond {
     }
 }
 
-/// Stores the Max 20x tier as the account's plan, the tier a profile read before the end left.
+/// Stores the `default_claude_max_20x` tier as the account's plan, the tier a profile read before the end left.
 fn store_max_20x(store: &Store, id: &str) {
     store
         .set_profile(

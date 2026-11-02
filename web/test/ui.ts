@@ -20,6 +20,7 @@ export { RangeControl } from '@/components/RangeControl';
 export { RefreshControl } from '@/components/RefreshControl';
 export { SortControl } from '@/components/SortControl';
 export { ChartTooltip } from '@/components/charts/Tooltip';
+export { PlanRates } from '@/components/costs/PlanRates';
 export { PAGE_TITLES } from '@/components/shell/Shell';
 export { OptionList } from '@/components/ui/OptionList';
 export { Popover, PopoverHost } from '@/components/ui/Popover';

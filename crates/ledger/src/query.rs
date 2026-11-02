@@ -4155,8 +4155,8 @@ pub(crate) fn price_usage(
         Funding::Plan => 0.0,
         _ => priced.usd.as_ref().map_or(0.0, CostSplit::total),
     };
-    // A failed request books a row with no token, and the model refuses a model it has no weight for before it reads
-    // the usage: such a row would null a priced hour for a charge of nothing.
+    // A failed request books a row with no token, and the cost model refuses a model it has no weight for before it
+    // reads the usage: such a row would null a priced hour for a charge of nothing.
     if tokens > 0 {
         match row.funding {
             Funding::Plan => {

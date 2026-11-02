@@ -109,7 +109,7 @@ fn all_close(got: [Option<f64>; 5], want: [Option<f64>; 5]) -> bool {
     })
 }
 
-// One Opus 5.5 input token a second is 2 units a second: 2 / 100 of the Max 20x 5-hour window per second out of
+// One Opus 5.5 input token a second is 2 units a second: 2 / 100 of the Ultra 5-hour window per second out of
 // band, over the band's 0.5 inside it.
 #[test]
 fn one_input_token_a_second_burns_its_weight_over_the_capacity_per_second_and_twice_that_inside_the_band(
@@ -300,7 +300,7 @@ fn the_tables_price_a_burn_at_the_revision_in_force_at_the_instant() {
     }
 }
 
-// The week holds 1000 units on Max 20x and its capacity factor is 1, so the band leaves it at 2 / 1000.
+// The week holds 1000 units on Ultra and its capacity factor is 1, so the band leaves it at 2 / 1000.
 #[test]
 fn the_week_prices_on_its_own_capacity_and_its_factor_of_one_leaves_it_unbanded() {
     let tables = first();
@@ -416,7 +416,7 @@ fn the_tables_price_at_the_revision_in_force_at_the_instant_and_hold_the_next_on
     assert_eq!(tables.revisions.pending(OUT_OF_BAND), None);
     assert!(tables.priced(FIVE_HOUR, None, MAX_20X, OPUS, JANUARY_2026));
     assert!(tables.measured(SEVEN_DAY_FABLE, JANUARY_2026));
-    // Max 20x's 5-hour row of 100 over the anchor's 5.
+    // Ultra's 5-hour row of 100 over the anchor's 5.
     assert_eq!(
         tables.tier_factor(MAX_20X, FIVE_HOUR, None, JANUARY_2026),
         Some(20.0)
@@ -583,7 +583,7 @@ fn the_pro_week_figure_is_the_seven_day_share_on_the_anchor_and_none_for_a_model
 }
 
 // Haiku 4.5 keeps its override of 1 on the week with its shared weight set to null: the week prices on the override's
-// own weight, 1 / 1000 on Max 20x and 1 / 50 in the Pro-week figure, and the 5-hour window prices nothing.
+// own weight, 1 / 1000 on Ultra and 1 / 50 in the Pro-week figure, and the 5-hour window prices nothing.
 #[test]
 fn a_null_weight_with_an_override_on_one_window_prices_that_window_alone() {
     let text = test_tables::first_entry_costs_text().replace(
@@ -621,7 +621,7 @@ fn a_null_weight_with_an_override_on_one_window_prices_that_window_alone() {
     );
 }
 
-// Max 20x holds 100 against the anchor's 5 on the 5-hour window, Max 5x 250 against its 50 on the week.
+// Ultra holds 100 against the anchor's 5 on the 5-hour window, Max 5x 250 against its 50 on the week.
 #[test]
 fn the_tier_factor_is_the_capacity_over_the_anchors_and_reads_a_tier_with_or_without_its_prefix() {
     let tables = first();
@@ -893,7 +893,7 @@ fn a_listed_id_its_model_tier_leaves_unpriced_takes_no_rate_from_the_model_tier_
     assert_eq!(rates.price("claude-opus-7", input(1), 0), None);
 }
 
-// The test regime holds twice the base Max 20x 5-hour row and 1.25 times its week (200 and 1,250 against 100 and
+// The test regime holds twice the base Ultra 5-hour row and 1.25 times its week (200 and 1,250 against 100 and
 // 1,000), so one Opus 5.5 input token, 2 units, reads 2 / 200 and 2 / 1,250 under it, and one Fable 5.1 input token,
 // 10 units, reads 10 / 1,250 over the model week's 0.5.
 #[test]
@@ -946,8 +946,8 @@ fn the_band_moves_the_base_share_and_not_the_regimes() {
     assert_eq!(tables.band_factor(FIVE_HOUR, None, IN_BAND), 2.0);
 }
 
-// The test regime names Pro and Max 20x alone, so Max 5x reads its base 25 under it, 2 / 25. A tier factor divides by
-// the regime's own anchor row: Max 20x's 200 over 10 is the base ratio of 100 over 5, and Max 5x's base 25 over 10 is
+// The test regime names Pro and Ultra alone, so Max 5x reads its base 25 under it, 2 / 25. A tier factor divides by
+// the regime's own anchor row: Ultra's 200 over 10 is the base ratio of 100 over 5, and Max 5x's base 25 over 10 is
 // the factor that turns the regime's anchor rate of 2 / 10 back into the 0.08.
 #[test]
 fn a_tier_the_regime_leaves_out_prices_at_the_base_row_under_it() {
@@ -960,7 +960,7 @@ fn a_tier_the_regime_leaves_out_prices_at_the_base_row_under_it() {
     assert_share(
         tables.tier_factor(MAX_20X, FIVE_HOUR, Some("desk")),
         20.0,
-        "Max 20x under the regime",
+        "Ultra under the regime",
     );
     assert_share(
         tables.tier_factor(MAX_5X, FIVE_HOUR, Some("desk")),

@@ -4165,7 +4165,7 @@ async fn a_request_with_usage_on_an_unlisted_model_is_counted_once_at_the_landin
     up.shutdown().await;
 }
 
-/// A profile read that names the Max 20x tier, as the quota poll stores it.
+/// A profile read that names `tier`, as the quota poll stores it.
 fn set_tier(store: &Store, account: &str, tier: &str) {
     store
         .set_profile(

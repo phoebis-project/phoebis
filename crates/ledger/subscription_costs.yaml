@@ -69,7 +69,7 @@ revisions:
       interactive:
         entrypoints: [claude-desktop, claude-desktop-3p, claude-vscode, cli]
         capacity:
-          default_claude_ai:      {five_hour: 15000000, seven_day: 112500000}    # assumed: the Max 20x factor
+          default_claude_ai:      {five_hour: 15000000, seven_day: 112500000}    # assumed: the Ultra factor
           default_claude_max_5x:  {five_hour: 75000000, seven_day: 562500000}    # 2026-10-15, the Max 5x account
           default_claude_max_20x: {five_hour: 300000000, seven_day: 1125000000}  # 2026-10-08 to 15, eight accounts
         peak:

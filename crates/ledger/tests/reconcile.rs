@@ -17,7 +17,7 @@ const DAY: i64 = 24 * HOUR;
 /// every share here is read off the band.
 const SATURDAY: i64 = JANUARY_2026 + 2 * DAY;
 const MAX_20X: &str = "default_claude_max_20x";
-/// Weight 1 in the fixture's first entry, so `n` input tokens are `n` units: `n / 100` of the Max 20x 5-hour window
+/// Weight 1 in the fixture's first entry, so `n` input tokens are `n` units: `n / 100` of the Ultra 5-hour window
 /// and `n / 1000` of its week, `n / 200` of the 5-hour window under the `desk` regime.
 const SONNET: &str = "claude-sonnet-5-5";
 /// Weight 2.
@@ -52,7 +52,7 @@ fn seed_request(db: &LedgerDb, id: &str, at: i64) {
     .unwrap();
 }
 
-/// One request of `client` whose single plan-funded attempt on Max 20x account `a` completed at `completed` with
+/// One request of `client` whose single plan-funded attempt on Ultra account `a` completed at `completed` with
 /// `input` plain input tokens of `model`.
 fn served(db: &LedgerDb, id: &str, model: &str, completed: i64, input: u64, client: Option<&str>) {
     answered(db, id, model, completed, input, client, None);
@@ -987,7 +987,7 @@ fn a_run_mixing_two_regimes_prices_each_attempt_under_its_own() {
         None,
     )
     .unwrap();
-    // Twenty Sonnet units each: 0.1 of the window under `desk`, which sizes Max 20x at 200, and 0.2 at the base.
+    // Twenty Sonnet units each: 0.1 of the window under `desk`, which sizes Ultra at 200, and 0.2 at the base.
     served(
         &db,
         "desk",

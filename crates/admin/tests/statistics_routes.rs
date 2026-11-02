@@ -4149,7 +4149,7 @@ async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ra
         .rfind(|p| p["group"] == "business")
         .unwrap();
     // 500 input and 50 output tokens of Sonnet 5.5 at its shipped weight 1.5 are 1.5 * (500 + 50 * 5) = 1,125 units,
-    // 0.00000125 of Max 20x's 900,000,000 on the week.
+    // 0.00000125 of Ultra's 900,000,000 on the week.
     let seven_day = 0.00000125;
     assert!(
         account_trailing["five_hour_share"].as_f64().unwrap_or(0.0) > 0.0

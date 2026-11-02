@@ -697,7 +697,8 @@ pub struct ShedPinFacts {
     /// The pin's rewrite as the Pro-week figure, the share of the Pro 7-day window a Pro account would spend on it,
     /// `None` where the cost model cannot size it, where the pin has no destination, or where the pick never read it.
     pub rewrite: Option<f64>,
-    /// The window the pick compared the pin on, `seven_day` or the pin's model week, `None` with no figure.
+    /// The window the pick compared the pin on, `seven_day` or the pin's model week, `None` where the pick never read
+    /// the pin or the pin's cost on that window is none, even where `rewrite` holds a 7-day figure.
     pub rewrite_window: Option<&'static str>,
     /// The destination the round found for the pin.
     pub planned: Option<String>,

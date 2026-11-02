@@ -169,7 +169,7 @@ mod tests {
         }
     }
 
-    /// A standard, plan-funded Opus 5.5 inference row on Max 20x, out of band in January, read in February.
+    /// A standard, plan-funded Opus 5.5 inference row on Ultra, out of band in January, read in February.
     fn plan_row() -> RowKey<'static> {
         RowKey {
             model: OPUS,
@@ -202,7 +202,7 @@ mod tests {
             .collect()
     }
 
-    // One Opus 5.5 input token: $10 per million, 2 units over Max 20x's 100 and 1000, and over the anchor Pro's 50 in
+    // One Opus 5.5 input token: $10 per million, 2 units over Ultra's 100 and 1000, and over the anchor Pro's 50 in
     // the Pro-week figure.
     #[test]
     fn a_plan_row_on_a_sized_tier_answers_dollars_shares_and_the_equivalent() {
@@ -210,12 +210,12 @@ mod tests {
         let usd = priced.usd.expect("Opus 5.5 is listed");
         assert!(close(Some(usd.input_usd), 10e-6), "{usd:?}");
         assert_eq!(usd.total(), usd.input_usd);
-        let shares = priced.shares.as_ref().expect("Max 20x is sized");
+        let shares = priced.shares.as_ref().expect("Ultra is sized");
         assert!(close(shares[FIVE_HOUR], 0.02) && close(shares[SEVEN_DAY], 0.002));
         assert!(close(priced.equivalent, 0.04), "{:?}", priced.equivalent);
     }
 
-    // The test regime holds 200 and 1,250 units on Max 20x against the base 100 and 1,000, so the one token's 2 units
+    // The test regime holds 200 and 1,250 units on Ultra against the base 100 and 1,000, so the one token's 2 units
     // read half the base 5-hour share and four fifths of the week's. The Pro-week figure reads the regime's Pro row,
     // 2 / 62.5.
     #[test]
@@ -227,7 +227,7 @@ mod tests {
             },
             input(1),
         );
-        let shares = priced.shares.as_ref().expect("a plan row on Max 20x");
+        let shares = priced.shares.as_ref().expect("a plan row on Ultra");
         assert!(close(shares[FIVE_HOUR], 0.01), "{shares:?}");
         assert!(close(shares[SEVEN_DAY], 0.0016), "{shares:?}");
         assert!(close(priced.equivalent, 0.032), "{priced:?}");
@@ -313,7 +313,7 @@ mod tests {
     }
 
     // Mystery 2 sits on a model tier with no weighted model, so a priced row reads both windows unpriced, while the
-    // marker's zero maps come from Max 20x's capacity alone.
+    // marker's zero maps come from Ultra's capacity alone.
     #[test]
     fn a_classifier_call_on_a_model_the_weight_table_lacks_answers_the_full_zero_maps() {
         let row = RowKey {

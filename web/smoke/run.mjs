@@ -11026,26 +11026,35 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   const unpricedRow = requests.find((r) => r.canonicalModel === 'claude-sonnet-4-5' && costUnitOf(r, 'native', null).kind === 'unpriced');
   // A request no account served (a refusal or an exhaustion) is billed in dollars at zero with no funding to name.
   const unservedRow = requests.find((r) => r.attempts.length === 0 && (r.status === 401 || r.status === 429));
-  const costAt = [...m.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Cost');
+  // The runner counts pushed results alone, so a case whose story row is missing fails by its name rather than
+  // skipping out of the count.
+  const rowsMissing = (names, rows) => {
+    const missing = Object.entries(rows).filter(([, row]) => !row).map(([label]) => `${label} missing from the story`);
+    for (const name of names) results.push({ name, ok: false, missing });
+  };
+  const costAt =[...m.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Cost');
   const costCellOf = async (id) => {
     const { row, rows } = await rowById(id);
     const td = costAt < 0 ? null : (row?.children[costAt] ?? null);
     return { main: td ? [...td.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim() : `${rows} rows`, sub: td?.querySelector('.sub')?.textContent?.trim() ?? null, title: td?.getAttribute('title') ?? null };
   };
+  const billedCellCheck = "/requests an API key row's Cost cell reads dollars over API key with its title";
+  const unpricedCellCheck = "/requests a subscription row on a model the cost model has no weight for reads its dollar equivalent over equivalent with the title that says it priced nothing";
   if (apiKeyRow && unpricedRow) {
     const billed = await costCellOf(apiKeyRow.id);
-    results.push({ name: "/requests an API key row's Cost cell reads dollars over API key with its title", ok: billed.main.startsWith('$') && billed.sub === 'API key' && (billed.title ?? '').startsWith('Billed in dollars'), missing: [apiKeyRow.id, JSON.stringify(billed)] });
+    results.push({ name: billedCellCheck, ok: billed.main.startsWith('$') && billed.sub === 'API key' && (billed.title ?? '').startsWith('Billed in dollars'), missing: [apiKeyRow.id, JSON.stringify(billed)] });
     const unpriced = await costCellOf(unpricedRow.id);
     results.push({
-      name: "/requests a subscription row on a model the cost model has no weight for reads its dollar equivalent over equivalent with the title that says it priced nothing",
+      name: unpricedCellCheck,
       ok: unpriced.main === fmtUsd(unpricedRow.costUsd) && unpriced.sub === 'equivalent' && unpriced.title === 'The cost model prices no share for this request',
       missing: [unpricedRow.id, JSON.stringify(unpriced)],
     });
-  }
+  } else rowsMissing([billedCellCheck, unpricedCellCheck], { 'an API key row': apiKeyRow, 'an unpriced Sonnet 4.5 row': unpricedRow });
+  const unservedCheck = '/requests a row no account served reads $0.00 with no funding word and no title';
   if (unservedRow) {
     const unserved = await costCellOf(unservedRow.id);
-    results.push({ name: "/requests a row no account served reads $0.00 with no funding word and no title", ok: unserved.main === '$0.00' && unserved.sub === null && unserved.title === null, missing: [unservedRow.id, JSON.stringify(unserved)] });
-  }
+    results.push({ name: unservedCheck, ok: unserved.main === '$0.00' && unserved.sub === null && unserved.title === null, missing: [unservedRow.id, JSON.stringify(unserved)] });
+  } else rowsMissing([unservedCheck], { 'an unserved 401 or 429 row': unservedRow });
   // A priced subscription request on primary, whose window set carries the 5-hour window, and one on workshop, the
   // approved Ultra account, whose set does not. An overage row of nightly and a fast row read dollars.
   const pricedOn = (account) => requests.find((r) => servedBy(r)?.accountId === account && r.shareReason === null && costUnitOf(r, 'native', null).kind === 'equivalent' && r.costEquivalent > 0 && r.costShares !== null);
@@ -11056,31 +11065,34 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   // Read while the list shows, since the drawer checks below compare their chips against these cells' titles.
   const nativeCell = sharedRow ? await costCellOf(sharedRow.id) : null;
   const sharedHint = sharedRow ? requestHintOf(sharedRow, accounts) : null;
+  const sharedCellCheck = "/requests a subscription row's Cost cell reads its figure in the Ultra week's short form on one line, and its title the hint, the account's plan and its share of each window it has, then the dollar equivalent";
   if (sharedRow && nativeCell) {
     results.push({
-      name: "/requests a subscription row's Cost cell reads its figure in the Ultra week's short form on one line, and its title the hint, the account's plan and its share of each window it has, then the dollar equivalent",
+      name: sharedCellCheck,
       ok: nativeCell.main === weekCell(sharedRow.costEquivalent) && /^\d[\d.]*% Ultra week$/.test(nativeCell.main) && nativeCell.sub === null && (sharedHint ?? '').startsWith('Ultra: ') && (sharedHint ?? '').includes(' of the 5-hour window') && nativeCell.title === sentences([sharedHint, `${fmtUsd(sharedRow.costUsd)} equivalent`]),
       missing: [sharedRow.id, JSON.stringify(nativeCell), String(sharedHint)],
     });
-  }
+  } else rowsMissing([sharedCellCheck], { 'a priced primary row': sharedRow });
+  const workshopCellCheck = "/requests the workshop row's hint names its 7-day share and no 5-hour share, since the approved Ultra account has no 5-hour window";
   if (workshopRow) {
     const cell = await costCellOf(workshopRow.id);
     const hint = requestHintOf(workshopRow, accounts);
     results.push({
-      name: "/requests the workshop row's hint names its 7-day share and no 5-hour share, since the approved Ultra account has no 5-hour window",
+      name: workshopCellCheck,
       ok: (hint ?? '').startsWith('Ultra: ') && (hint ?? '').includes(' of the 7-day window') && !(hint ?? '').includes('5-hour') && cell.main === weekCell(workshopRow.costEquivalent) && cell.title === sentences([hint, `${fmtUsd(workshopRow.costUsd)} equivalent`]),
       missing: [workshopRow.id, JSON.stringify(cell), String(hint)],
     });
-  }
+  } else rowsMissing([workshopCellCheck], { 'a priced workshop row': workshopRow });
+  const billedFundingCheck = '/requests an overage row of nightly and a fast row read dollars over overage and fast mode';
   if (overageRow && fastRow) {
     const overage = await costCellOf(overageRow.id);
     const fast = await costCellOf(fastRow.id);
     results.push({
-      name: '/requests an overage row of nightly and a fast row read dollars over overage and fast mode',
+      name: billedFundingCheck,
       ok: overage.main.startsWith('$') && overage.sub === 'overage' && overage.title === 'Billed in dollars: overage' && fast.main.startsWith('$') && fast.sub === 'fast mode' && fast.title === 'Billed in dollars: fast mode',
       missing: [overageRow.id, JSON.stringify(overage), fastRow.id, JSON.stringify(fast)],
     });
-  }
+  } else rowsMissing([billedFundingCheck], { 'a fast row': fastRow, 'an overage row of nightly': overageRow });
   // The three dollar positions read what the unit legend names: a subscription row's dollar equivalent over equivalent
   // under All in dollars and Dollar equivalent, its title the hint, then the figure in the stored week and the dollars,
   // and a dash titled nothing billed under Billed dollars. A billed row reads its native dollars under All in dollars
@@ -11103,30 +11115,33 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     ok: Object.entries(byPosition).every(([position, read]) => read.unit === position && read.header === COST_HEADER_TITLE[position]),
     missing: Object.entries(byPosition).map(([position, read]) => `${position} (${read.unit}): ${read.header}`),
   });
+  const dollarPositionsCheck = "/requests under All in dollars and Dollar equivalent a subscription row's Cost cell reads its dollar equivalent over equivalent with the hint and its figure on the title, and a row that priced nothing reads as under Native";
+  const nothingBilledCheck = "/requests under Billed dollars a subscription row's Cost cell reads a dash titled nothing billed";
   if (sharedRow && unpricedRow) {
     const want = { main: fmtUsd(sharedRow.costUsd), sub: 'equivalent', title: sentences([sharedHint, `${weekFull(sharedRow.costEquivalent)}, ${fmtUsd(sharedRow.costUsd)} equivalent`]) };
     const wrong = ['all', 'equivalent'].filter((position) => JSON.stringify(byPosition[position].shared) !== JSON.stringify(want) || JSON.stringify(byPosition[position].unpriced) !== JSON.stringify(byPosition.native.unpriced));
     results.push({
-      name: "/requests under All in dollars and Dollar equivalent a subscription row's Cost cell reads its dollar equivalent over equivalent with the hint and its figure on the title, and a row that priced nothing reads as under Native",
+      name: dollarPositionsCheck,
       ok: wrong.length === 0,
       missing: [JSON.stringify(want), ...wrong.map((position) => `${position}: ${JSON.stringify({ shared: byPosition[position].shared, unpriced: byPosition[position].unpriced })}`)],
     });
     const dash = { main: '-', sub: null, title: NOTHING_BILLED_TITLE };
     results.push({
-      name: "/requests under Billed dollars a subscription row's Cost cell reads a dash titled nothing billed",
+      name: nothingBilledCheck,
       ok: JSON.stringify(byPosition.usd.shared) === JSON.stringify(dash) && JSON.stringify(byPosition.usd.unpriced) === JSON.stringify(dash),
       missing: [JSON.stringify(byPosition.usd.shared), JSON.stringify(byPosition.usd.unpriced)],
     });
-  }
+  } else rowsMissing([dollarPositionsCheck, nothingBilledCheck], { 'a priced primary row': sharedRow, 'an unpriced Sonnet 4.5 row': unpricedRow });
+  const noEquivalentCheck = '/requests an overage row and a fast row read their dollars under All in dollars and Billed dollars and a dash titled no subscription equivalent under Dollar equivalent';
   if (overageRow && fastRow) {
     const dash = { main: '-', sub: null, title: NO_EQUIVALENT_TITLE };
     const wrong = ['overage', 'fast'].filter((row) => ['all', 'usd'].some((position) => JSON.stringify(byPosition[position][row]) !== JSON.stringify(byPosition.native[row])) || JSON.stringify(byPosition.equivalent[row]) !== JSON.stringify(dash));
     results.push({
-      name: '/requests an overage row and a fast row read their dollars under All in dollars and Billed dollars and a dash titled no subscription equivalent under Dollar equivalent',
+      name: noEquivalentCheck,
       ok: (byPosition.native.overage?.main ?? '').startsWith('$') && (byPosition.native.fast?.main ?? '').startsWith('$') && wrong.length === 0,
       missing: wrong.map((row) => `${row}: ${JSON.stringify(Object.fromEntries(Object.entries(byPosition).map(([position, read]) => [position, read[row]])))}`),
     });
-  }
+  } else rowsMissing([noEquivalentCheck], { 'a fast row': fastRow, 'an overage row of nightly': overageRow });
   await chooseUnit(m, 'native');
   setter.call(heldSearch, '');
   heldSearch?.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -11164,6 +11179,8 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     });
     await chooseUnit(m, 'native');
   }
+  const drawerFigureCheck = "/requests the drawer's cost row of a subscription row reads its figure in the Ultra week as one chip with the dollars after it and the hint's lines as chips on a row of their own under it, and its title names the hint and the account tier as the attempt stored it and the two revisions in force";
+  const drawerDollarsCheck = "/requests the drawer's cost row of a subscription row reads its dollar equivalent with equivalent under All in dollars and Dollar equivalent, and a dash titled nothing billed under Billed dollars";
   if (sharedRow && nativeCell) {
     // The figure reads as one chip in the chosen week, the hint's lines follow it as chips of their own, and the dollar
     // equivalent follows them muted in the one run that ends at the cell's edge. The row's title names the hint, the
@@ -11192,7 +11209,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     const native = readRow();
     const [figureChip, planChip, ...shareChips] = native.chips;
     results.push({
-      name: "/requests the drawer's cost row of a subscription row reads its figure in the Ultra week as one chip with the dollars after it and the hint's lines as chips on a row of their own under it, and its title names the hint and the account tier as the attempt stored it and the two revisions in force",
+      name: drawerFigureCheck,
       ok: figureChip === weekFull(sharedRow.costEquivalent) && sharedHint !== null && `${planChip}: ${shareChips.join(', ')}` === sharedHint && shareChips.length >= 2 && native.equivalent === `${fmtUsd(sharedRow.costUsd)} equivalent` && native.ends && sharedRow.tier !== null && native.title === `${sharedHint}. ${tiered}`,
       missing: [sharedRow.id, JSON.stringify(native), String(sharedHint), tiered],
     });
@@ -11205,12 +11222,12 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     const equivalentRow = { chips: [], ends: false, equivalent: 'equivalent', figure: `${fmtUsd(sharedRow.costUsd)} equivalent`, title: `${sharedHint}. ${tiered}` };
     const dashRow = { chips: [], ends: false, equivalent: null, figure: '-', title: `${NOTHING_BILLED_TITLE}. ${tiered}` };
     results.push({
-      name: "/requests the drawer's cost row of a subscription row reads its dollar equivalent with equivalent under All in dollars and Dollar equivalent, and a dash titled nothing billed under Billed dollars",
+      name: drawerDollarsCheck,
       ok: JSON.stringify(dollars.all) === JSON.stringify(equivalentRow) && JSON.stringify(dollars.equivalent) === JSON.stringify(equivalentRow) && JSON.stringify(dollars.usd) === JSON.stringify(dashRow),
       missing: [sharedRow.id, JSON.stringify(dollars), JSON.stringify({ dashRow, equivalentRow })],
     });
     await chooseUnit(m, 'native');
-  }
+  } else rowsMissing([drawerFigureCheck, drawerDollarsCheck], { 'a priced primary row': sharedRow });
   if (unpricedRow) {
     // A row that priced nothing reads its dollar equivalent with why under native and All in dollars, and the dash
     // under Billed dollars.
@@ -17846,7 +17863,7 @@ m.unmount();
 
   // One bucket at 14:00 holding $18: its rate is $18 over the minutes the read saw of it.
   const wiringCheck = "/analytics the burn charts rate the last bucket up to the instant its read was made";
-  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [burnPoint({ at: new Date(at14).toISOString(), fiveHourEquivalent: 0, group: 'overflow', sevenDayEquivalent: 0, tokens: 18_000, uncachedTokens: 18_000, unit: 'usd', usd: 18 })] });
+  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [burnPoint({ at: new Date(at14).toISOString(), group: 'overflow', tokens: 18_000, uncachedTokens: 18_000, unit: 'usd', usd: 18 })] });
   const burnPage = await mount('/analytics#burn', { now: at14 + 20 * 60_000 });
   const rate = () => {
     const card = [...burnPage.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Spend per minute');
@@ -17914,7 +17931,7 @@ m.unmount();
   // A lone bucket 20 seconds old sets no scale, so recharts spans its $0.004 a minute alone, and the labels have to
   // read at that precision rather than all as $0.00.
   const precisionCheck = "/analytics a spend axis recharts spans on its own labels its ticks at the drawn rows' precision";
-  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [burnPoint({ at: new Date(at13 + 3_600_000).toISOString(), fiveHourEquivalent: 0, group: 'overflow', sevenDayEquivalent: 0, tokens: 600, uncachedTokens: 600, unit: 'usd', usd: 0.004 / 3 })] });
+  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [burnPoint({ at: new Date(at13 + 3_600_000).toISOString(), group: 'overflow', tokens: 600, uncachedTokens: 600, unit: 'usd', usd: 0.004 / 3 })] });
   const lone = await mount('/analytics#burn', { now: at13 + 3_600_000 + 20_000 });
   const labels = ticksOf(lone);
   results.push({ name: precisionCheck, ok: labels.length > 1 && new Set(labels).size === labels.length, missing: labels });
@@ -24494,8 +24511,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   }
   {
     // The fold counts a session's plan rows as the route counts a group's, so under native the per-request tiles divide
-    // the plan rows' 20x 7-day equivalent and the billed rows' dollars by their own requests and output tokens, read
-    // here off the request rows the view folds, as the request route answers them.
+    // the plan rows' Pro-week figure and the billed rows' dollars by their own requests and output tokens, read here
+    // off the request rows the view folds, as the request route answers them.
     localStorage.removeItem('phoebis.unit');
     const spy = countCalls('listRequests');
     const view = await mount(`/analytics${m.location().search}#cost`, { now: CLOCK_ORIGIN });
@@ -27325,8 +27342,12 @@ m.unmount();
     const own = where === `/requests/${laptopRow.id}` ? badges.filter((b) => b.closest('.drawer')) : badges.filter((b) => !b.closest('.topbar'));
     counts.push({ onPage: own.length, seen: badges.length, where });
   };
+  // The keys list draws once its read lands, which can outlast the navigation's settle, so each read of the page waits
+  // for the list's laptop row first.
+  const laptopKey = () => [...page.container.querySelectorAll('.card--table tbody tr')].find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop');
   for (const path of ['/', '/accounts', '/analytics', '/keys', '/pools', '/quota', '/requests', `/requests/${laptopRow.id}`, '/sessions', '/settings']) {
     await page.navigate(path);
+    if (path === '/keys') await until(page, () => laptopKey() !== undefined);
     if (path === '/sessions') await expandAll();
     sweep(path);
   }
@@ -27334,7 +27355,8 @@ m.unmount();
   // story has to show one.
   const thin = counts.filter((c) => ['/', '/accounts', '/keys', '/pools', '/requests', `/requests/${laptopRow.id}`, '/sessions'].includes(c.where) && c.onPage === 0);
   await page.navigate('/keys');
-  [...page.container.querySelectorAll('.card--table tbody tr')].find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop')?.querySelector('.menu__trigger')?.click();
+  await until(page, () => laptopKey() !== undefined);
+  laptopKey()?.querySelector('.menu__trigger')?.click();
   await page.settle(120);
   [...page.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
   await until(page, () => {

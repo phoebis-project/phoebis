@@ -6,7 +6,7 @@ import { Skeleton } from './primitives';
  * A compact stat tile. A null value or a null note draws a placeholder; an absent note draws no line; a failed read
  * draws a dash with its message in the tile's title. A text note draws in the note's type; any other node draws as it
  * is, so a tile can carry markup of its own, such as a bar or a list, in its own type. `title` is the tile's hover
- * text, such as the estimated sentence of a marked figure, and a failed read's message takes its place.
+ * text, such as the unpriced title where a plan row priced nothing, and a failed read's message takes its place.
  */
 export function Tile({ error, label, note, title, tone, value }: { error?: string | null; label: string; note?: ReactNode | null; title?: string; tone?: 'critical' | 'warning'; value: ReactNode }) {
   return (
