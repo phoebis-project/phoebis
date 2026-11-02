@@ -99,6 +99,14 @@ test("the chosen week's scale is the anchor tier's 7-day capacity over the chose
   close(d.weekScale(halved, 'ultra'), 50 / 500, 'the 7-day window, not the 5-hour one');
 });
 
+test("a loaded table that sizes no week for the chosen tier reads unpriced, and with no table the reading waits or carries the read's failure", () => {
+  // Max 5x's week unsized while Pro's stays, so the Max week has no scale over a table that did load.
+  const maxless = { ...costs, capacity: { ...costs.capacity, default_claude_max_5x: { fiveHour: 25, sevenDay: null } } };
+  assert.deepEqual(d.weekReadingOf(maxless, null, 'max'), { error: 'Unpriced: the cost model holds no 7-day capacity for the Max week', scale: null, week: 'max' }, 'a loaded table never reads pending');
+  assert.deepEqual(d.weekReadingOf(null, null, 'max'), { error: null, scale: null, week: 'max' }, 'the read still out');
+  assert.deepEqual(d.weekReadingOf(null, 'HTTP 503', 'max'), { error: 'HTTP 503', scale: null, week: 'max' }, "the read's failure");
+});
+
 test("a tier's capacity is read as stored, then with the default_ prefix taken off or put on", () => {
   assert.equal(d.tierCapacity(costs, 'claude_ai', 'five_hour'), 5);
   assert.equal(d.tierCapacity(costs, 'default_claude_team', 'seven_day'), null);

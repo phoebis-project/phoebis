@@ -1,5 +1,7 @@
 import type { Attempt, ModelTiers, SubscriptionCosts, TypeMultiplier } from '@/api/types';
+import type { WeekReading } from '@/lib/analytics';
 import { undatedModel } from '@/lib/format';
+import { planLabel } from '@/lib/quota';
 import { WEEK_TIER, type WeekPosition } from '@/lib/unit';
 
 /**
@@ -224,6 +226,18 @@ export const weekScale = (costs: SubscriptionCosts | null, week: WeekPosition): 
   const anchor = tierCapacity(costs, anchorTier(costs), 'seven_day');
   const chosen = tierCapacity(costs, WEEK_TIER[week], 'seven_day');
   return anchor === null || chosen === null ? null : anchor / chosen;
+};
+
+/** The dash's hover and the fleet's note where the chosen week's tier has no 7-day capacity to read a figure in. */
+export const weekUnpricedTitle = (week: WeekPosition): string => `Unpriced: the cost model holds no 7-day capacity for the ${planLabel(WEEK_TIER[week])} week`;
+
+/** A page's week reading from its settings read: `error` is that read's failure. A table that loaded and sizes no week
+ *  for the chosen tier will not size one on a later read either, so its figures draw the unpriced dash, not the
+ *  skeleton that waits for the table. */
+export const weekReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => {
+  const scale = weekScale(costs, week);
+  if (scale !== null) return { error: null, scale, week };
+  return { error: costs === null ? error : weekUnpricedTitle(week), scale, week };
 };
 
 /** The account tiers a model week applies to: the cost model sizes the Fable week for every tier, and Pro has no

@@ -14,7 +14,7 @@ import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { figuresValue } from '@/components/ui/Tile';
 import { equivalentOrDash, nativeFiguresOf, shareHint, UNPRICED_TITLE } from '@/lib/analytics';
-import { weekScale } from '@/lib/costs';
+import { weekReadingOf } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
@@ -56,7 +56,7 @@ interface CostTile {
  * reading of a day, over the billed rows' dollars, a side with no rows left out, and an empty day reads its zero in
  * each unit. A day a plan row priced nothing on reads the dash under `UNPRICED_TITLE`, its note a dash too while no
  * request was billed, and its spark leaves an unpriced hour a gap. The figure waits on the scale, so native draws the
- * skeleton while the cost model is out, and the settings read's failure as a dash titled with it. The dollar
+ * skeleton while the cost model is out, and the reading's error as a dash titled with it. The dollar
  * positions read their dollars.
  */
 function costTileOf(unit: UnitPosition, o: Overview, week: WeekPosition, scale: number | null, error: string | null): CostTile {
@@ -97,8 +97,8 @@ export function DashboardPage() {
   const o = overview.data;
   const hourly = o?.hourly ?? [];
   const costs = settings.data?.subscriptionCosts ?? null;
-  const scale = weekScale(costs, week);
-  const costTile = o ? costTileOf(unit, o, week, scale, settings.error) : null;
+  const reading = weekReadingOf(costs, settings.error, week);
+  const costTile = o ? costTileOf(unit, o, week, reading.scale, reading.error) : null;
   const ringFailure = failedFirst(accounts) ? (
     <ReadFailed title="Could not load the accounts" error={accounts.error} retry={accounts.reload} />
   ) : failedFirst(settings) ? (
@@ -186,7 +186,7 @@ export function DashboardPage() {
 
       <div className="dash-bottom">
         <Card title="Recent requests" subtitle="Last 10 across every pool" actions={<Link to="/requests">All requests</Link>} padded={false} className="card--table">
-          <RecentTable rows={requests.data?.requests ?? null} error={requests.error} settings={settings.data} settingsError={settings.error} accounts={accounts.data} scale={scale} />
+          <RecentTable rows={requests.data?.requests ?? null} error={requests.error} settings={settings.data} settingsError={reading.error} accounts={accounts.data} scale={reading.scale} />
         </Card>
         <Card title="Sessions" subtitle="Sticky pins and cache-warming agents" actions={<Link to="/sessions">Open</Link>}>
           {failedFirst(overview) || failedFirst(sessions) ? (
@@ -332,7 +332,7 @@ const MODEL_CHARS = 12;
 /**
  * A recent request's Cost cell, read under each position as the Requests cell reads it, with the hint composed from the
  * accounts read and the cost model and the revisions in force on a native figure's title. The skeleton stands while
- * the scale is out, and a dash titled with the settings read's failure where it failed.
+ * the scale is out, and a dash titled with the reading's error where it carries one.
  */
 function RecentCost({ accounts, error, request, scale, settings, unit, week }: { accounts: Account[] | null; error: string | null; request: RequestLog; scale: number | null; settings: Settings | null; unit: UnitPosition; week: WeekPosition }) {
   const args = requestHintArgs(request, accounts, settings?.subscriptionCosts ?? null);

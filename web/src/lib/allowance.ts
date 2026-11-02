@@ -1,9 +1,9 @@
 import type { AllowanceAccount, AllowanceReset, AllowanceWindow, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
 import { HINT_WINDOW, own } from '@/lib/analytics';
-import { anchorTier, pricedWindow, tierCapacity, weekScale } from '@/lib/costs';
+import { anchorTier, pricedWindow, tierCapacity, weekScale, weekUnpricedTitle } from '@/lib/costs';
 import { fmtAbsolute, fmtShare, fmtShortTime, weekShort } from '@/lib/format';
-import { planLabel, pricedTier } from '@/lib/quota';
-import { WEEK_TIER, type WeekPosition } from '@/lib/unit';
+import { pricedTier } from '@/lib/quota';
+import type { WeekPosition } from '@/lib/unit';
 import { WINDOW_LABEL, WINDOW_ORDER, windowKeyId } from '@/lib/windows';
 
 /** The weeks the Accounts block and the Analytics card read: the latest reset and the three before it. */
@@ -33,8 +33,6 @@ export type AllowanceFigure = { kind: 'equivalent'; share: number; text: string 
 /** The dash's hover where the plan prices no capacity. Named apart from `lib/analytics.ts`'s `UNPRICED_TITLE`, whose
  *  words differ, so the test bundle's star exports keep both. */
 export const ALLOWANCE_UNPRICED_TITLE = "Unpriced: the cost model holds no capacity for this account's plan";
-/** The dash's hover and the fleet's note where the chosen week's tier has no 7-day capacity to read a figure in. */
-const weekUnpricedTitle = (week: WeekPosition): string => `Unpriced: the cost model holds no 7-day capacity for the ${planLabel(WEEK_TIER[week])} week`;
 export const NO_READING_TITLE = 'no reading at this reset';
 export const FREE_NOTE = 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it.';
 

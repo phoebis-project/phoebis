@@ -323,7 +323,9 @@ const UNIT_META: Record<DollarPosition, string> = { all: 'all requests', equival
 const UNIT_TILE_LABEL: Record<DollarPosition, string> = { all: 'Estimated cost', equivalent: 'Dollar equivalent', usd: 'Billed dollars' };
 
 /** The chosen week a page's figures read in, and `scale` its factor over the Pro-week figure, null while the cost model
- *  is out. `error` is the settings read's failure while the scale is out, which a figure draws in its skeleton's place. */
+ *  is out or where it sizes no week for the chosen tier. `error` is the settings read's failure while the scale is out,
+ *  or the unpriced sentence where the cost model loaded without that week, which a figure draws in its skeleton's
+ *  place. */
 export interface WeekReading {
   error: string | null;
   scale: number | null;

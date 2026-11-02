@@ -25,7 +25,7 @@ import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, Erro
 import { KEYS_CODEC } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, UNPRICED_TITLE, equivalentOrDash, moveLabel, nativeFiguresOf, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
-import { weekScale } from '@/lib/costs';
+import { weekReadingOf } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, shortModel } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
@@ -229,8 +229,7 @@ export function PoolsPage() {
   const { unit, week } = useAppSettings();
   // The cost model whose capacities scale the day's figures to the chosen week. The Pro week reads without it.
   const settings = useAsync(() => api.getSettings(), []);
-  const scale = weekScale(settings.data?.subscriptionCosts ?? null, week);
-  const reading: WeekReading = { error: scale === null ? settings.error : null, scale, week };
+  const reading = weekReadingOf(settings.data?.subscriptionCosts ?? null, settings.error, week);
   // The return rate's range is the dialog's own, so each opening, a fresh state without one, starts on 7 days.
   const [dialog, setDialog] = useState<{ initialGroup: PoolGroup | null; pool: Pool | null; range?: OverviewRange } | null>(null);
   const returnRange = dialog?.range ?? '7d';
@@ -597,7 +596,7 @@ const dayOf = (p: Pool): FundedSum => ({ billedUsd: p.billed24h, cost: p.cost24h
  * A pool card's Cost 24h under the unit. Native stacks the day's figure in the chosen week over its billed dollars, a
  * side with no rows left out, and a day a plan row priced nothing on reads the dash under `UNPRICED_TITLE`. A pool sums
  * its members' accounts, so its figure carries no hint. The figure waits on the scale, so the card draws its skeleton
- * while the cost model is out, and the settings read's failure as a dash titled with it.
+ * while the cost model is out, and the reading's error as a dash titled with it.
  */
 function PoolCost({ pool, reading }: { pool: Pool; reading: WeekReading }) {
   const { unit } = useAppSettings();

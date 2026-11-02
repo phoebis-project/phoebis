@@ -18,7 +18,7 @@ import { nativeFiguresOf, UNPRICED_TITLE, type DollarPosition, type WeekReading 
 import { anchorOf } from '@/lib/attention';
 import { effectiveCaptureHours } from '@/lib/capture';
 import { clock } from '@/lib/clock';
-import { weekScale } from '@/lib/costs';
+import { weekReadingOf } from '@/lib/costs';
 import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
@@ -103,7 +103,7 @@ export const keyRankOf = (unit: UnitPosition, lifetime: FundedSum): number | nul
   return unit === 'native' ? lifetime.equivalent : dollarsUnder(unit, lifetime);
 };
 
-/** A key's figure while the scale is out: the skeleton, or the settings read's failure as a dash titled with it. */
+/** A key's figure while the scale is out: the skeleton, or the reading's error as a dash titled with it. */
 function PendingFigure({ error }: { error: string | null }) {
   return error === null ? <Skeleton width={72} height={12} /> : <span title={error}>-</span>;
 }
@@ -122,8 +122,7 @@ export function KeysPage() {
   const { unit, week } = useAppSettings();
   // The cost model whose capacities scale every figure to the chosen week. The Pro week reads without it.
   const settings = useAsync(() => api.getSettings(), []);
-  const scale = weekScale(settings.data?.subscriptionCosts ?? null, week);
-  const reading: WeekReading = { error: scale === null ? settings.error : null, scale, week };
+  const reading = weekReadingOf(settings.data?.subscriptionCosts ?? null, settings.error, week);
   const now = useNow();
   const ink = useChartInk();
   const location = useLocation();

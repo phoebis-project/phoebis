@@ -23,7 +23,7 @@ import { bodyLines, bodyText, findHits } from '@/lib/bodies';
 import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
-import { weekScale } from '@/lib/costs';
+import { weekReadingOf } from '@/lib/costs';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, pollQuery, readEnd, spanEnded } from '@/lib/follow';
@@ -140,8 +140,8 @@ const routingLogHref = (r: RequestLog, now: number) => {
 };
 
 /** The figure's context a request's cost reads: the accounts read and the cost model the hint is composed from, and the
- *  chosen week with its scale, null while the cost model is out. `error` is the settings read's failure, which a figure
- *  waiting on the scale draws as a dash titled with it. */
+ *  chosen week with its scale and `error`, as `weekReadingOf` reads them, which a figure waiting on the scale draws as
+ *  a dash titled with the error. */
 interface CostContext {
   accounts: Account[] | null;
   costs: SubscriptionCosts | null;
@@ -159,7 +159,7 @@ function requestCost(request: RequestLog, unit: UnitPosition, context: CostConte
 
 /**
  * The Cost cell: the position's main line over its second, the hint and the dollar equivalent on the title, the
- * skeleton while the scale is out, and a dash titled with the settings read's failure where it failed.
+ * skeleton while the scale is out, and a dash titled with the context's error where it carries one.
  */
 function CostCell({ context, request, unit }: { context: CostContext; request: RequestLog; unit: UnitPosition }) {
   const cell = costCellOf(requestCost(request, unit, context).unit, context.week, context.scale);
@@ -195,7 +195,7 @@ function HeldBadge({ held }: { held: CohortHold }) {
  * The drawer's cost value: the figure in the chosen week as one chip with the dollar equivalent muted after it, the
  * dollars, the dollar equivalent with `equivalent` muted after it, or the dash of a position that reads nothing for the
  * request. The figure waits on the scale, so it draws its skeleton while the cost model is out and a dash where the
- * settings read failed.
+ * context carries an error.
  */
 function costRowValue(unit: CostUnit, context: CostContext) {
   const { error, scale, week } = context;
@@ -224,7 +224,7 @@ function costRowValue(unit: CostUnit, context: CostContext) {
 }
 
 /**
- * The drawer's Estimated cost row under one title: the settings read's failure where the figure waits on it, why a
+ * The drawer's Estimated cost row under one title: the context's error where the figure waits on it, why a
  * dollar figure, a dash or a free call's figure stands where it does, the hint, the serving account's tier as the
  * attempt stored it, and the price list and the cost model in force at the request's instant while the settings are at
  * hand. A title on an element inside the cell would hide the row's own wherever the figure is hovered. The hint's
@@ -298,7 +298,7 @@ export function RequestsPage() {
   const settings = useAsync(() => api.getSettings(), []);
   const { timeFormat, unit, week } = useAppSettings();
   const costs = settings.data?.subscriptionCosts ?? null;
-  const context: CostContext = { accounts: accounts.data, costs, error: settings.error, scale: weekScale(costs, week), week };
+  const context: CostContext = { accounts: accounts.data, costs, ...weekReadingOf(costs, settings.error, week) };
 
   const { address, filters: read, replace } = useQueryFilters(REQUESTS_CODEC);
   const filters = useMemo<Filters>(() => ({ ...read, outcomes: outcomesOf(read.outcomes), rows: Number(read.rows), statuses: read.statuses.filter((code) => /^\d+$/.test(code)) }), [read]);
