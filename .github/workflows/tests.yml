@@ -16,6 +16,9 @@ jobs:
     env:
       # The console is built once below and embedded as it is, as the image's builder does.
       PHOEBIS_SKIP_UI_BUILD: "1"
+      # Each test binary links BoringSSL and every dependency, and with debug info the set fills the runner's disk
+      # before the last one links. Cargo's `test` profile inherits `dev`, so this one variable covers the test build.
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # clang, cmake, libclang-dev and pkg-config build BoringSSL and its bindings.
@@ -32,11 +35,18 @@ jobs:
       # The registry and target/ with BoringSSL's compiled output, keyed on Cargo.lock and the toolchain: the step
       # that costs the most on a cold runner.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # A red run saves the cache too, so the run after it starts warm.
+          cache-on-failure: true
+      - run: df -h
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
         env:
           PHOEBIS_UI_EXPECT: bundle
+      # Runs after a red build too, since the next fix needs the disk figure.
+      - run: df -h
+        if: always()
       - run: scripts/tests/capture-tooling.sh
       - run: python3 -I scripts/build-fixtures.py --self-test
   web:
