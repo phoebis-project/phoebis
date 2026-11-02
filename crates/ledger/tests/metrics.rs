@@ -938,6 +938,12 @@ async fn an_attention_read_that_fails_answers_the_scrape_500_with_no_family() {
         !text.contains("disk gone"),
         "the listener asks for no credential, so the store's words stay in the log"
     );
+    let (status, text) = scrape(Arc::new(|| panic!("the attention source panicked"))).await;
+    assert_eq!(
+        status, 500,
+        "a source that panics on its worker fails the scrape rather than reading 0 for a held one"
+    );
+    assert_eq!(text, "attention read failed");
 }
 
 /// A source that waits parks a blocking worker: the runtime thread stays free to run the release, after which the

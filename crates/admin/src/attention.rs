@@ -113,6 +113,7 @@ pub(crate) struct AttentionLink {
 )]
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     // A failed read answers 500 and never an empty list, which the dashboard would draw as the quiet state.
+    // The read waits on a pooled ledger connection, so it runs on a blocking worker and parks no runtime thread.
     let attention = state.attention.clone();
     let now = (state.clock)();
     let mut held: Vec<_> = match tokio::task::spawn_blocking(move || attention.conditions(now))
