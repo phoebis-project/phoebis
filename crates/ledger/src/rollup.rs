@@ -1996,13 +1996,20 @@ pub struct RollupSelect {
     pub keys: Vec<KeySelector>,
 }
 
-/// The range in pages of `PAGE_HOURS`, each page its own read, folded into the accumulators as it arrives: a long
-/// range holds one page in memory and releases the reader connection between pages.
+/// The page of the paged read, `read_rollups_paged`, which takes each page as its own read and folds it into the
+/// accumulators as it arrives: a long range holds one page in memory and releases a reader connection between pages.
+/// `pools_traffic` walks its range in pages of the same size on one connection.
 pub const PAGE_HOURS: i64 = 24;
 
 /// The selecting statement and its binds, spelled once so the plan test explains the statement the read runs.
 fn select_statement(from_hour: i64, to_hour: i64, select: &RollupSelect) -> (String, Vec<Value>) {
-    fn in_list(column: &str, values: &[String], binds: &mut Vec<Value>, clauses: &mut Vec<String>) {
+    fn in_list(
+        column: &str,
+        bare: bool,
+        values: &[String],
+        binds: &mut Vec<Value>,
+        clauses: &mut Vec<String>,
+    ) {
         if values.is_empty() {
             return;
         }
@@ -2013,14 +2020,36 @@ fn select_statement(from_hour: i64, to_hour: i64, select: &RollupSelect) -> (Str
                 format!("?{}", binds.len())
             })
             .collect();
-        clauses.push(format!("{column} IN ({})", marks.join(", ")));
+        let plus = if bare { "+" } else { "" };
+        clauses.push(format!("{plus}{column} IN ({})", marks.join(", ")));
     }
     let mut binds = vec![Value::Integer(from_hour), Value::Integer(to_hour)];
     let mut clauses = vec!["hour >= ?1 AND hour < ?2".to_string()];
-    in_list("pool_id", &select.pools, &mut binds, &mut clauses);
-    in_list("account_id", &select.accounts, &mut binds, &mut clauses);
-    in_list("kind", &select.kinds, &mut binds, &mut clauses);
-    in_list("canonical_model", &select.models, &mut binds, &mut clauses);
+    // The member index leads with the pool, so a pool bound alone would have the planner walk the pool's whole
+    // retention before the hour filter. The unary plus keeps that term off the index, as `top_sessions_statement`
+    // keeps its accounts off theirs, and a pool with an account bound keeps the member index's full prefix.
+    in_list(
+        "pool_id",
+        select.accounts.is_empty(),
+        &select.pools,
+        &mut binds,
+        &mut clauses,
+    );
+    in_list(
+        "account_id",
+        false,
+        &select.accounts,
+        &mut binds,
+        &mut clauses,
+    );
+    in_list("kind", false, &select.kinds, &mut binds, &mut clauses);
+    in_list(
+        "canonical_model",
+        false,
+        &select.models,
+        &mut binds,
+        &mut clauses,
+    );
     if !select.keys.is_empty() {
         let parts: Vec<String> = select
             .keys
@@ -2403,6 +2432,40 @@ mod tests {
                 .any(|step| step.starts_with("SEARCH rollups_hourly")
                     && step.contains("pool_id=?")
                     && step.contains("account_id=?")),
+            "{plan:?}"
+        );
+    }
+
+    /// A pool alone binds no leading column the hour range would not serve better: the member index would walk the
+    /// pool's whole retention before the hour filter, so the hour range stays the outer search.
+    #[test]
+    fn the_pool_only_read_searches_the_hour_range_off_the_member_index() {
+        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let select = RollupSelect {
+            pools: vec!["p".into()],
+            ..RollupSelect::default()
+        };
+        let (sql, binds) = select_statement(0, 3_600, &select);
+        let plan: Vec<String> = db
+            .read_blocking(|c| {
+                let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+                let rows = stmt
+                    .query_map(rusqlite::params_from_iter(binds), |r| r.get::<_, String>(3))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .unwrap();
+        assert!(
+            plan.iter()
+                .any(|step| step.starts_with("SEARCH rollups_hourly")
+                    && step.contains("hour>?")
+                    && step.contains("hour<?")),
+            "{plan:?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|step| step.contains("rollups_hourly_member")),
             "{plan:?}"
         );
     }

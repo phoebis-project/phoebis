@@ -7,14 +7,14 @@ use phoebis_ledger::{
     apply_filter, breakdown, breakdown_paged, bucket_index, bucket_seconds, burn_groups_paged,
     burn_rows, burn_series, burn_series_over, deltas_of, fold_account, fold_event, fold_keepalive,
     held_series, hour_ceil, hour_of, key_request_totals, list_requests, member_spends,
-    moves_by_reason, placements, price_equivalent, price_shares, read_account_rollups,
-    read_rollups, refusal_categories, request_totals, rewrite_series, run_retention_blocking,
-    series, series_paged, session_identities, AttemptRecord, BudgetedMember, CostRevisions,
-    EventRecord, FundingFilter, GroupRow, Histogram, KeepaliveDelta, LedgerConfig, LedgerDb,
-    LiveKeys, ModelPrice, ModelRow, PlanTables, PriceRevisions, PriceTable, RequestFilter,
-    RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter, SharePricing, Speed,
-    WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS,
-    PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
+    moves_by_reason, placements, pool_traffic, pools_traffic, price_equivalent, price_shares,
+    read_account_rollups, read_rollups, refusal_categories, request_totals, rewrite_series,
+    run_retention_blocking, series, series_paged, session_identities, AttemptRecord,
+    BudgetedMember, CostRevisions, EventRecord, FundingFilter, GroupRow, Histogram, KeepaliveDelta,
+    LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables, PriceRevisions, PriceTable,
+    RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter,
+    SharePricing, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING,
+    PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 use phoebis_routing::{
     PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
@@ -7631,6 +7631,73 @@ async fn the_pool_traffic_and_the_key_totals_count_the_asked_requests_alone() {
         .read_blocking(|c| key_request_totals(c, hour, hour + 3_600, &live, &PRICES, &COSTS, NOW))
         .unwrap();
     assert_eq!(totals["desktop"].requests, 3, "the three asked requests");
+}
+
+#[tokio::test]
+async fn pools_traffic_answers_every_asked_pool_in_one_pass_and_counts_a_former_members_rows() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    // Three requests in one hour: two under pool p, one of them on an account no pool holds any more, and one under q.
+    for (n, pool, account) in [(1, "p", "a"), (2, "p", "gone"), (3, "q", "b")] {
+        let at = WEEKDAY_OFF_PEAK - 60_000 + n;
+        let request = RequestRecord {
+            id: format!("r{n}"),
+            received_at: at,
+            finished_at: Some(at + 4),
+            key_id: Some("k".into()),
+            pool_id: Some(pool.into()),
+            model: "claude-opus-5-5".into(),
+            canonical_model: "claude-opus-5-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..RequestRecord::default()
+        };
+        let attempt = AttemptRecord {
+            request_id: format!("r{n}"),
+            attempt: 1,
+            account_id: account.into(),
+            account_kind: "oauth".into(),
+            started_at: at,
+            upstream_status: Some(200),
+            outcome: "succeeded".into(),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[attempt], None).unwrap();
+    }
+    let hour = hour_of(WEEKDAY_OFF_PEAK - 60_000);
+    let traffic = db
+        .read_blocking(|c| {
+            pools_traffic(
+                c,
+                &["p".into(), "q".into()],
+                hour,
+                hour + 3_600,
+                3_600,
+                &PRICES,
+                &COSTS,
+                NOW,
+            )
+        })
+        .unwrap();
+    assert_eq!(traffic.keys().collect::<Vec<_>>(), ["p", "q"]);
+    assert_eq!(
+        traffic["p"][0].requests, 2,
+        "a former member's row counts for the hour it was a member"
+    );
+    assert_eq!(traffic["q"][0].requests, 1);
+    assert!(db
+        .read_blocking(|c| pools_traffic(c, &[], hour, hour + 3_600, 3_600, &PRICES, &COSTS, NOW))
+        .unwrap()
+        .is_empty());
+    let single = pool_traffic(&db, "p", hour, hour + 3_600, 3_600, &PRICES, &COSTS, NOW)
+        .await
+        .unwrap();
+    assert_eq!(
+        single, traffic["p"],
+        "the one-pool read answers the same buckets"
+    );
 }
 
 /// The day's requests, its error rate and its most common error code read the asked requests alone, and the refused

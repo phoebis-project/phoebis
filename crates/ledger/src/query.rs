@@ -27,12 +27,10 @@ use crate::pricing::{effective_instant, prompt_tokens, Band, PriceRevisions, Spe
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
 };
-#[cfg(any(test, feature = "test-support"))]
-use crate::rollup::read_rollups;
 use crate::rollup::{
-    fold_identifier, fold_user_agent, hour_of, read_account_rollups, read_rollups_paged, CostSplit,
-    KeySelector, RollupRow, RollupSelect, DIMENSION_MAX_BYTES, EFFORTS, NO_CLASS, NO_EFFORT,
-    OTHER_DIMENSION, PLAN_FUNDING, UNATTRIBUTED,
+    fold_identifier, fold_user_agent, hour_of, read_account_rollups, read_rollups,
+    read_rollups_paged, CostSplit, KeySelector, RollupRow, RollupSelect, DIMENSION_MAX_BYTES,
+    EFFORTS, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -4061,40 +4059,118 @@ pub async fn pool_traffic(
     costs: &PlanTables,
     now: i64,
 ) -> Result<Vec<TrafficBucket>, LedgerError> {
-    if bucket_seconds <= 0 {
-        return Err(LedgerError::Yaml(
-            "bucket_seconds must be positive".to_string(),
-        ));
-    }
-    let first = from_hour.div_euclid(bucket_seconds) * bucket_seconds;
-    let count = (to_hour - first).checked_div(bucket_seconds).unwrap_or(0);
-    if !(0..=MAX_POINTS).contains(&count) {
-        return Err(LedgerError::Yaml(format!(
-            "the range needs {count} points, and the most a chart carries is {MAX_POINTS}"
-        )));
-    }
-    let mut out: Vec<TrafficBucket> = (0..)
-        .map(|i| first + i * bucket_seconds)
-        .take_while(|at| *at < to_hour)
-        .map(|at| TrafficBucket {
-            at: at * 1_000,
-            requests: 0,
-            failed: 0,
-            tokens: 0,
-            cost_usd: 0.0,
-            billed_usd: 0.0,
-            equivalent: Some(0.0),
-        })
-        .collect();
+    let fold = TrafficFold::new(from_hour, to_hour, bucket_seconds, prices, costs, now)?;
+    let mut out = fold.zero.clone();
     let select = RollupSelect {
         pools: vec![pool_id.to_string()],
         ..RollupSelect::default()
     };
-    read_rollups_paged(db, &select, from_hour, to_hour, |r| {
-        if r.kind == "probe" || r.hour < first {
+    read_rollups_paged(db, &select, from_hour, to_hour, |r| fold.add(&mut out, r)).await?;
+    Ok(out)
+}
+
+/// Every bucket in the range per pool of `pool_ids`, probes left out, from one pass over the pools' rollups on `conn`
+/// in pages of `PAGE_HOURS`, so a long range holds one page in memory and a page with several pools reads the table
+/// once. Each row's dollars and Pro-week figure are priced from its counts, the figure against the anchor row in force
+/// at `now`. A pool without a row answers its zero buckets, and an empty `pool_ids` answers an empty map and runs no
+/// statement.
+#[allow(clippy::too_many_arguments)]
+pub fn pools_traffic(
+    conn: &Connection,
+    pool_ids: &[String],
+    from_hour: i64,
+    to_hour: i64,
+    bucket_seconds: i64,
+    prices: &PriceRevisions,
+    costs: &PlanTables,
+    now: i64,
+) -> Result<BTreeMap<String, Vec<TrafficBucket>>, LedgerError> {
+    if pool_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let fold = TrafficFold::new(from_hour, to_hour, bucket_seconds, prices, costs, now)?;
+    let mut out: BTreeMap<String, Vec<TrafficBucket>> = pool_ids
+        .iter()
+        .map(|pool_id| (pool_id.clone(), fold.zero.clone()))
+        .collect();
+    let select = RollupSelect {
+        pools: pool_ids.to_vec(),
+        ..RollupSelect::default()
+    };
+    let mut page = from_hour;
+    while page < to_hour {
+        let end = page.saturating_add(PAGE_HOURS * 3_600).min(to_hour);
+        for r in read_rollups(conn, page, end, &select)? {
+            if let Some(buckets) = out.get_mut(&r.pool_id) {
+                fold.add(buckets, &r);
+            }
+        }
+        page = end;
+    }
+    Ok(out)
+}
+
+/// The zero buckets of a traffic range and the fold that adds one rollup row to its bucket, probes and rows before
+/// the first bucket left out. `pool_traffic` and `pools_traffic` both fold through it, so one pool reads the same
+/// buckets through either.
+struct TrafficFold<'a> {
+    first: i64,
+    bucket_seconds: i64,
+    zero: Vec<TrafficBucket>,
+    prices: &'a PriceRevisions,
+    costs: &'a PlanTables,
+    now: i64,
+}
+
+impl<'a> TrafficFold<'a> {
+    fn new(
+        from_hour: i64,
+        to_hour: i64,
+        bucket_seconds: i64,
+        prices: &'a PriceRevisions,
+        costs: &'a PlanTables,
+        now: i64,
+    ) -> Result<Self, LedgerError> {
+        if bucket_seconds <= 0 {
+            return Err(LedgerError::Yaml(
+                "bucket_seconds must be positive".to_string(),
+            ));
+        }
+        let first = from_hour.div_euclid(bucket_seconds) * bucket_seconds;
+        let count = (to_hour - first).checked_div(bucket_seconds).unwrap_or(0);
+        if !(0..=MAX_POINTS).contains(&count) {
+            return Err(LedgerError::Yaml(format!(
+                "the range needs {count} points, and the most a chart carries is {MAX_POINTS}"
+            )));
+        }
+        let zero = (0..)
+            .map(|i| first + i * bucket_seconds)
+            .take_while(|at| *at < to_hour)
+            .map(|at| TrafficBucket {
+                at: at * 1_000,
+                requests: 0,
+                failed: 0,
+                tokens: 0,
+                cost_usd: 0.0,
+                billed_usd: 0.0,
+                equivalent: Some(0.0),
+            })
+            .collect();
+        Ok(TrafficFold {
+            first,
+            bucket_seconds,
+            zero,
+            prices,
+            costs,
+            now,
+        })
+    }
+
+    fn add(&self, out: &mut [TrafficBucket], r: &RollupRow) {
+        if r.kind == "probe" || r.hour < self.first {
             return;
         }
-        if let Some(bucket) = out.get_mut(((r.hour - first) / bucket_seconds) as usize) {
+        if let Some(bucket) = out.get_mut(((r.hour - self.first) / self.bucket_seconds) as usize) {
             bucket.requests += r.requests;
             bucket.failed += r.requests.saturating_sub(r.succeeded);
             bucket.tokens += r.input_tokens
@@ -4102,14 +4178,12 @@ pub async fn pool_traffic(
                 + r.cache_write_5m_tokens
                 + r.cache_write_1h_tokens
                 + r.output_tokens;
-            let (usd, billed, equivalent) = shared_figures(r, prices, costs, now);
+            let (usd, billed, equivalent) = shared_figures(r, self.prices, self.costs, self.now);
             bucket.cost_usd += usd;
             bucket.billed_usd += billed;
             bucket.equivalent = add_figures(bucket.equivalent, equivalent);
         }
-    })
-    .await?;
-    Ok(out)
+    }
 }
 
 /// The range and scope of a burn, rewrite or moves series; `RollupFilter` is the analytics routes' filter.
