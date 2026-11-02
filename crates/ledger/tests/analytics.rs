@@ -7170,6 +7170,45 @@ fn a_forked_sessions_identity_skips_an_auxiliary_request_ahead_of_its_first_main
 }
 
 #[test]
+fn a_forked_sessions_identity_skips_a_probe_and_another_keys_session_of_the_same_id() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    // The probe is the earliest row of the id and the other key's row lands before the session's own first request,
+    // so a lookup that drops either filter answers that row's facts.
+    plant_identity(&db, "r1", "k1", 0, "s2", "probe", 500, None, None);
+    plant_identity(
+        &db,
+        "r2",
+        "k2",
+        0,
+        "s2",
+        "inference",
+        700,
+        Some("s9"),
+        Some(1),
+    );
+    plant_identity(
+        &db,
+        "r3",
+        "k1",
+        0,
+        "s2",
+        "inference",
+        1_000,
+        Some("s1"),
+        Some(3),
+    );
+    let rows = db
+        .read_blocking(|c| session_identities(c, &[("k1".into(), 0, "s2".into())]))
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].forked_from.as_deref(), rows[0].fork_depth),
+        (Some("s1"), Some(3)),
+        "the fork facts come from the session's own first client request under its key"
+    );
+}
+
+#[test]
 fn a_session_the_ledger_holds_no_client_request_for_is_absent_from_the_answer() {
     let db = LedgerDb::open_in_memory().unwrap();
     plant_identity(&db, "r1", "k1", 0, "s3", "probe", 1_000, None, None);
