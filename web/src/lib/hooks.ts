@@ -69,8 +69,9 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   const started = useRef(0);
   const landedSeq = useRef(0);
   // The hook's reads still out, the load effect's and the refreshes' alike, since a load for new deps can outlast the
-  // period and a tick would read the route a second time beside it. Each settle arm counts down before its drop checks,
-  // so a dropped answer clears its read too.
+  // period and a tick would read the route a second time beside it. A read counts once its call has returned a promise,
+  // so a loader that throws counts nothing, and each settle arm counts down before its drop checks, so a dropped answer
+  // clears its read too.
   const inFlight = useRef(0);
   /** Whether the read numbered `seq` may land, which marks it as the newest landed. */
   const lands = (seq: number) => {
@@ -117,8 +118,9 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     started.current += 1;
     const seq = started.current;
     loadReadInCommit.current = true;
+    const pending = latest.current.load();
     inFlight.current += 1;
-    latest.current.load().then(
+    pending.then(
       (value) => {
         inFlight.current -= 1;
         if (!current.alive || !lands(seq)) return;
@@ -149,9 +151,10 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
       const { deps: answered, load: read } = latest.current;
       started.current += 1;
       const seq = started.current;
+      const pending = failing.current ? quietly(read) : read();
       inFlight.current += 1;
       // A refresh that outruns the load it supersedes ends the loading too, since that load's answer will be dropped.
-      (failing.current ? quietly(read) : read()).then(
+      pending.then(
         (value) => {
           inFlight.current -= 1;
           if (!armed.alive || !loadRun.alive || !lands(seq)) return;

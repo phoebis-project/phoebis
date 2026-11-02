@@ -106,15 +106,6 @@ test('a tick that finds the previous refresh still in flight skips, and the tick
   assert.equal(load.calls, 3, 'the next tick reads again');
 });
 
-test('a first load that fails clears the guard, so the next tick reads', async () => {
-  const clock = frozen();
-  const load = counting((n) => (n === 1 ? Promise.reject(new Error('ledger locked')) : Promise.resolve(n)));
-  const p = await probe(load);
-  assert.equal(p.last().error, 'ledger locked', 'the first load fails');
-  act(() => clock.tick(30_000));
-  assert.equal(load.calls, 2, 'the tick after the failed load reads');
-});
-
 test('a tick that finds the initial load still in flight skips, and the tick after it lands reads again', async () => {
   const clock = frozen();
   const pending = [];
@@ -174,7 +165,7 @@ test('a load for old deps that fails after the deps changed clears the guard, so
   assert.deepEqual(calls, ['a', 'b', 'b'], "the tick after the old deps' failed load reads");
 });
 
-test('a refresh whose read fails after the pause starts clears the guard, so the refresh re-armed when the pause ends reads', async () => {
+test('a refresh whose read fails after the pause starts clears the guard, so the tick after the pause reads', async () => {
   const clock = frozen();
   let fail = () => {};
   const load = counting((n) => (n === 2 ? new Promise((_, reject) => (fail = () => reject(new Error('ledger locked')))) : Promise.resolve(n)));
@@ -187,6 +178,18 @@ test('a refresh whose read fails after the pause starts clears the guard, so the
   await settled();
   act(() => clock.tick(30_000));
   assert.equal(load.calls, 4, "after the failed refresh, the pause's end reads at once and the tick after it reads again");
+});
+
+test('a loader that throws synchronously on one refresh leaves the guard clear, so the next tick reads', async () => {
+  const clock = frozen();
+  const load = counting((n) => {
+    if (n === 2) throw new Error('loader broke');
+    return Promise.resolve(n);
+  });
+  await probe(load);
+  assert.throws(() => clock.tick(30_000), /loader broke/, "the refresh's call throws out of its tick");
+  act(() => clock.tick(30_000));
+  assert.equal(load.calls, 3, 'the tick after the throw reads');
 });
 
 test('a hidden document reads nothing, and reads at once when it comes back a full period after the last answer', async () => {

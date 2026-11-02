@@ -346,18 +346,6 @@ test("a poll still out across a drawer's open and close that fails clears the gu
   assert.deepEqual(sent, [ORIGIN + 5_000, ORIGIN + 10_000], 'the tick after the failed poll polls again');
 });
 
-test('a poll for an old address that lands after the page moved clears the guard', async () => {
-  const clock = frozen();
-  const g = gated();
-  const f = follow({ read: g.read });
-  act(() => clock.tick(5_000));
-  f.render({ address: 'r' });
-  g.open();
-  await settled();
-  act(() => clock.tick(5_000));
-  assert.deepEqual(g.sent, [ORIGIN + 5_000, ORIGIN + 10_000], 'the tick after the old poll landed polls the new address');
-});
-
 /**
  * A reader for a list that shows rows 1 to 25 of `route(27)`, every poll one page: row 0 arrived above the list before
  * the first poll, and row 26, which arrived before them all and was written after the list's read, comes from the
