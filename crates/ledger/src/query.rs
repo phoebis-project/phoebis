@@ -3596,21 +3596,22 @@ pub fn session_identities(
     Ok(out)
 }
 
-fn session_identities_chunk(
-    conn: &Connection,
+/// `session_identities_chunk`'s statement and its binds, spelled once so the plan test explains the statement the
+/// read runs. Each named session costs two seeks of the session index, the `EXISTS` and the marking request's lookup,
+/// each stopping early, and the two fork facts are read off the marking row by primary key. The index is named: the
+/// lookup binds a key and a session, two indexes lead with one of them each, and the planner weighs them by
+/// statistics the file may lack or that a key holding most rows can mislead.
+pub(crate) fn session_identities_statement(
     sessions: &[(String, i64, String)],
-) -> Result<Vec<SessionIdentity>, LedgerError> {
-    if sessions.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut args: Vec<Box<dyn ToSql>> = Vec::with_capacity(sessions.len() * 3);
+) -> (String, Vec<rusqlite::types::Value>) {
+    let mut binds = Vec::with_capacity(sessions.len() * 3);
     let values: Vec<String> = sessions
         .iter()
         .map(|(key_id, key_generation, session_id)| {
-            args.push(Box::new(key_id.clone()));
-            args.push(Box::new(*key_generation));
-            args.push(Box::new(session_id.clone()));
-            let n = args.len();
+            binds.push(rusqlite::types::Value::Text(key_id.clone()));
+            binds.push(rusqlite::types::Value::Integer(*key_generation));
+            binds.push(rusqlite::types::Value::Text(session_id.clone()));
+            let n = binds.len();
             format!("(?{}, ?{}, ?{n})", n - 2, n - 1)
         })
         .collect();
@@ -3622,16 +3623,34 @@ fn session_identities_chunk(
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!(
-        "WITH named(key_id, key_generation, session_id) AS (VALUES {}) \
-         SELECT n.key_id, n.key_generation, n.session_id, \
-         (SELECT r.forked_from FROM requests r WHERE r.key_id = n.key_id AND r.key_generation = n.key_generation AND r.session_id = n.session_id AND r.kind != 'probe' AND (r.request_class IS NULL OR r.request_class IN ({refreshing})) ORDER BY r.received_at ASC, r.id ASC LIMIT 1), \
-         (SELECT r.fork_depth FROM requests r WHERE r.key_id = n.key_id AND r.key_generation = n.key_generation AND r.session_id = n.session_id AND r.kind != 'probe' AND (r.request_class IS NULL OR r.request_class IN ({refreshing})) ORDER BY r.received_at ASC, r.id ASC LIMIT 1) \
-         FROM named n \
-         WHERE EXISTS (SELECT 1 FROM requests r WHERE r.key_id = n.key_id AND r.key_generation = n.key_generation AND r.session_id = n.session_id AND r.kind != 'probe')",
+        "WITH named(key_id, key_generation, session_id) AS (VALUES {}), \
+         marked AS ( \
+           SELECT n.key_id, n.key_generation, n.session_id, \
+                  (SELECT r.id FROM requests r INDEXED BY requests_session \
+                    WHERE r.session_id = n.session_id AND r.key_id = n.key_id AND r.key_generation = n.key_generation \
+                      AND r.kind != 'probe' AND (r.request_class IS NULL OR r.request_class IN ({refreshing})) \
+                    ORDER BY r.received_at ASC, r.id ASC LIMIT 1) AS marking_id \
+             FROM named n \
+            WHERE EXISTS (SELECT 1 FROM requests r INDEXED BY requests_session \
+                           WHERE r.session_id = n.session_id AND r.key_id = n.key_id \
+                             AND r.key_generation = n.key_generation AND r.kind != 'probe')) \
+         SELECT m.key_id, m.key_generation, m.session_id, r.forked_from, r.fork_depth \
+           FROM marked m LEFT JOIN requests r ON r.id = m.marking_id",
         values.join(", ")
     );
+    (sql, binds)
+}
+
+fn session_identities_chunk(
+    conn: &Connection,
+    sessions: &[(String, i64, String)],
+) -> Result<Vec<SessionIdentity>, LedgerError> {
+    if sessions.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (sql, binds) = session_identities_statement(sessions);
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
+    let rows = stmt.query_map(params_from_iter(binds), |r| {
         Ok(SessionIdentity {
             key_id: r.get(0)?,
             key_generation: r.get(1)?,
@@ -4827,6 +4846,74 @@ mod tests {
             Ok(rows)
         })
         .unwrap()
+    }
+
+    /// `plan_of` on a ledger whose `sqlite_stat1` holds `rows` as (table, index, stat).
+    fn plan_under(
+        sql: &str,
+        binds: Vec<rusqlite::types::Value>,
+        rows: &[(&str, &str, &str)],
+    ) -> Vec<String> {
+        let db = crate::LedgerDb::open_in_memory().unwrap();
+        db.purge(|c| {
+            for (tbl, idx, stat) in rows {
+                c.execute(
+                    "INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES (?1, ?2, ?3)",
+                    params![tbl, idx, stat],
+                )?;
+            }
+            // A connection keeps the statistics it loaded with its schema, and a row written by hand moves no schema
+            // cookie, so the planner reads the new rows only once `ANALYZE sqlite_schema` reloads them.
+            c.execute_batch("ANALYZE sqlite_schema")?;
+            Ok(())
+        })
+        .unwrap();
+        db.read_blocking(|c| {
+            let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+            let rows = stmt
+                .query_map(params_from_iter(binds), |r| r.get::<_, String>(3))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .unwrap()
+    }
+
+    /// Every seek of the requests table goes through the session index or the primary key, and no step walks the table:
+    /// the named sessions are a chunk of the page's rows, and each costs the first rows of its own session. The plan
+    /// holds on a ledger with no statistics and on one whose statistics make the key index look selective.
+    #[test]
+    fn the_session_identities_read_seeks_the_session_index_for_each_named_session() {
+        let sessions = vec![
+            ("k".to_string(), 0, "s1".to_string()),
+            ("k".to_string(), 0, "s2".to_string()),
+        ];
+        let seeks_the_session_index = |plan: &[String]| {
+            // SQLite runs the `EXISTS` as a join and prints its seek as `SEARCH r EXISTS USING INDEX ...`.
+            assert!(
+                plan.iter()
+                    .filter(|step| step.starts_with("SEARCH r ")
+                        && step.contains(" USING INDEX requests_session "))
+                    .count()
+                    >= 2,
+                "{plan:?}"
+            );
+            assert!(
+                !plan
+                    .iter()
+                    .any(|step| step.starts_with("SCAN r") || step.contains("SCAN requests")),
+                "a named session never walks the table: {plan:?}"
+            );
+        };
+        let (sql, binds) = session_identities_statement(&sessions);
+        seeks_the_session_index(&plan_of(&sql, binds.clone()));
+        seeks_the_session_index(&plan_under(
+            &sql,
+            binds,
+            &[
+                ("requests", "requests_key", "1000 1 1"),
+                ("requests", "requests_session", "1000 1000 1"),
+            ],
+        ));
     }
 
     /// The session burn chart's two reads bound the request by its own `received_at` beside the attempt's start,
