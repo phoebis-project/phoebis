@@ -81,8 +81,7 @@ pub const MAX_POINTS: i64 = 10_000;
 
 /// The first hour boundary at or after `at_ms`, in seconds: the exclusive upper bound of a range in hours.
 pub fn hour_ceil(at_ms: i64) -> i64 {
-    let seconds = at_ms.div_euclid(1_000);
-    let floor = seconds.div_euclid(3_600) * 3_600;
+    let floor = hour_of(at_ms);
     if floor * 1_000 == at_ms {
         floor
     } else {
@@ -171,26 +170,20 @@ pub struct RequestFilter {
     pub fixed_end: bool,
 }
 
-fn in_list(
+fn in_list<T: ToSql + Clone + 'static>(
     column: &str,
-    values: &[String],
+    values: &[T],
     args: &mut Vec<Box<dyn ToSql>>,
     clauses: &mut Vec<String>,
 ) {
     if values.is_empty() {
         return;
     }
-    let marks: Vec<String> = values
-        .iter()
-        .map(|v| {
-            args.push(Box::new(v.clone()));
-            format!("?{}", args.len())
-        })
-        .collect();
-    clauses.push(format!("{column} IN ({})", marks.join(", ")));
+    let marks = bind_all(values, args);
+    clauses.push(format!("{column} IN ({marks})"));
 }
 
-fn bind_all(values: &[String], args: &mut Vec<Box<dyn ToSql>>) -> String {
+fn bind_all<T: ToSql + Clone + 'static>(values: &[T], args: &mut Vec<Box<dyn ToSql>>) -> String {
     values
         .iter()
         .map(|v| {
@@ -232,9 +225,8 @@ fn in_list_or_null(
     if !values.iter().any(|v| v == UNATTRIBUTED) {
         return in_list(column, values, args, clauses);
     }
-    let mut inner = Vec::new();
-    in_list(column, values, args, &mut inner);
-    clauses.push(format!("({} OR {column} IS NULL)", inner.remove(0)));
+    let marks = bind_all(values, args);
+    clauses.push(format!("({column} IN ({marks}) OR {column} IS NULL)"));
 }
 
 /// The request log reads a `keys` selector as the analytics do: a bare id is the live generation,
@@ -354,16 +346,7 @@ fn filter_clauses(filter: &RequestFilter, live: &LiveKeys) -> (Vec<Box<dyn ToSql
     );
     in_list("kind", &filter.kinds, &mut args, &mut clauses);
     in_list("outcome", &filter.outcomes, &mut args, &mut clauses);
-    in_list(
-        "status",
-        &filter
-            .statuses
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>(),
-        &mut args,
-        &mut clauses,
-    );
+    in_list("status", &filter.statuses, &mut args, &mut clauses);
     if !filter.accounts.is_empty() {
         let marks = bind_all(&filter.accounts, &mut args);
         // The serving attempt is the last, the account the rollups file a request under, so a request that failed
@@ -374,20 +357,12 @@ fn filter_clauses(filter: &RequestFilter, live: &LiveKeys) -> (Vec<Box<dyn ToSql
         ));
     }
     if !filter.speeds.is_empty() {
-        let marks: Vec<String> = filter
-            .speeds
-            .iter()
-            .map(|v| {
-                args.push(Box::new(v.clone()));
-                format!("?{}", args.len())
-            })
-            .collect();
+        let marks = bind_all(&filter.speeds, &mut args);
         // The serving attempt is the last: an earlier 429 carries no speed and must not read as standard. The speed
         // follows the rollups' fold: the speed the serving attempt's answer reported, `standard` for an answer with
         // usage that reported none, and the speed the request asked for where no attempt answered.
         clauses.push(format!(
-            "COALESCE((SELECT COALESCE(a.speed, CASE WHEN COALESCE(a.input_tokens, a.output_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens) IS NOT NULL THEN 'standard' END) FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), CASE WHEN requests.requested_speed = 'fast' THEN 'fast' ELSE 'standard' END) IN ({})",
-            marks.join(", ")
+            "COALESCE((SELECT COALESCE(a.speed, CASE WHEN COALESCE(a.input_tokens, a.output_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens) IS NOT NULL THEN 'standard' END) FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), CASE WHEN requests.requested_speed = 'fast' THEN 'fast' ELSE 'standard' END) IN ({marks})"
         ));
     }
     if !filter.cache_miss_reasons.is_empty() {
@@ -488,7 +463,7 @@ fn filter_clauses(filter: &RequestFilter, live: &LiveKeys) -> (Vec<Box<dyn ToSql
         }
         clauses.push(format!("({})", either.join(" OR ")));
     }
-    if !filter.include_probes && !filter.kinds.iter().any(|k| k == "probe") {
+    if !filter.include_probes && !filter.kinds.iter().any(|k| k == PROBE_KIND) {
         clauses.push("kind != 'probe'".into());
     }
     if let Some(from) = filter.from {
@@ -1293,12 +1268,7 @@ impl LogStatement {
 pub(crate) fn decision_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
     let mut statement = LogStatement::new("d", filter);
     if !filter.accounts.is_empty() {
-        let mut marks = Vec::new();
-        for account in &filter.accounts {
-            statement.args.push(Box::new(account.clone()));
-            marks.push(format!("?{}", statement.args.len()));
-        }
-        let marks = marks.join(", ");
+        let marks = bind_all(&filter.accounts, &mut statement.args);
         statement.clauses.push(format!(
             "(d.account_id IN ({marks}) OR d.from_account_id IN ({marks}))"
         ));
@@ -1310,9 +1280,9 @@ pub(crate) fn decision_statement(filter: &RoutingLogFilter) -> Option<LogStateme
             .cloned()
             .collect();
         let probes = kinds.iter().any(|k| k == PROBE_KIND);
-        let mut of_kind = Vec::new();
-        in_list("d.kind", &named, &mut statement.args, &mut of_kind);
-        let clause = match (of_kind.pop(), probes) {
+        let of_kind = (!named.is_empty())
+            .then(|| format!("d.kind IN ({})", bind_all(&named, &mut statement.args)));
+        let clause = match (of_kind, probes) {
             (None, false) => return None,
             (None, true) => "d.probe = 1".to_string(),
             (Some(kind), false) => format!("{kind} AND d.probe = 0"),
@@ -1758,14 +1728,6 @@ pub struct SharePricing<'a> {
     pub tables: &'a PlanTables,
 }
 
-impl SharePricing<'_> {
-    /// The account tier `row` recorded at its landing: `None` under `UNATTRIBUTED`, which an api_key account's rows,
-    /// a profile not yet read and every row folded before the tier was recorded carry, none of which answers a share.
-    fn tier_of<'r>(&self, row: &'r RollupRow) -> Option<&'r str> {
-        (row.tier != UNATTRIBUTED).then_some(row.tier.as_str())
-    }
-}
-
 /// Whether every group of a read holds one account's rows, the one place the own-window shares add: the account
 /// grouping, or a filter naming exactly one account under any grouping.
 fn holds_one_account(group_by: &str, accounts: &[String]) -> bool {
@@ -1825,19 +1787,26 @@ fn add_figures(sum: Option<f64>, figure: Option<f64>) -> Option<f64> {
     sum.zip(figure).map(|(sum, figure)| sum + figure)
 }
 
-/// One row priced for a reader that sums across models: its dollars, the billed part of them, and its Pro-week figure
-/// as a sum of one row, so a billed row reads zero and a plan row with tokens the cost model cannot price `None`.
+/// One row priced for a reader that sums across models, its figures as `shared_of` reads them.
 fn shared_figures(
     row: &RollupRow,
     prices: &PriceRevisions,
     costs: &PlanTables,
     now: i64,
 ) -> (f64, f64, Option<f64>) {
-    let priced = priced(row, prices, costs, now);
-    let usd = priced.usd.map_or(0.0, |usd| usd.total());
-    let funding = Funding::of_rollup(&row.funding);
+    shared_of(
+        &priced(row, prices, costs, now),
+        Funding::of_rollup(&row.funding),
+        row.usage(),
+    )
+}
+
+/// A priced usage's dollars, the billed part of them, and its Pro-week figure as a sum of one row, so a billed row
+/// reads zero and a plan row with tokens the cost model cannot price `None`.
+fn shared_of(priced: &Priced, funding: Funding, usage: PinUsage) -> (f64, f64, Option<f64>) {
+    let usd = priced.usd.as_ref().map_or(0.0, |usd| usd.total());
     let mut equivalent = EquivalentSum::default();
-    equivalent.add(priced.equivalent, funding, tokens_of(row.usage()));
+    equivalent.add(priced.equivalent, funding, tokens_of(usage));
     let billed = if funding == Funding::Plan { 0.0 } else { usd };
     (usd, billed, equivalent.figure())
 }
@@ -1957,7 +1926,7 @@ impl RollupFilter {
     /// The probe side of a group is summed either way, so the probe cost and the wasted probes read the same under
     /// both.
     pub fn probes_counted(&self) -> bool {
-        self.include_probes || self.kinds.iter().any(|k| k == "probe")
+        self.include_probes || self.kinds.iter().any(|k| k == PROBE_KIND)
     }
 
     /// The fixed filters as the read binds them, each key selector resolved as `LiveKeys::selects` reads it: the
@@ -2040,13 +2009,10 @@ impl LiveKeys {
     /// holds, generation 0 included, and `unattributed` for the reserved id. Two earlier holders of one id share the
     /// label, and `holder_of` answers each one's creation instant for a reader to print in its own zone.
     pub fn label_of(&self, key: &str) -> String {
-        if key == UNATTRIBUTED {
-            return "unattributed".into();
-        }
         // A key id never carries `@` (the admin's slug rule), so the split is unambiguous.
         match key.rsplit_once('@') {
             Some((id, _)) => format!("{id} (deleted)"),
-            None => key.into(),
+            None => label_of(key, "key"),
         }
     }
 
@@ -2446,15 +2412,8 @@ impl EquivalentSums {
         // class and effort apart from its request's own row.
         let kept = row.kept_warm_usage();
         if tokens_of(kept) > 0 {
-            let read = price(PinUsage {
-                cache_read: kept.cache_read,
-                ..PinUsage::default()
-            });
-            let write = price(PinUsage {
-                write_5m: kept.write_5m,
-                write_1h: kept.write_1h,
-                ..PinUsage::default()
-            });
+            let (read, write) = cache_parts(kept);
+            let (read, write) = (price(read), price(write));
             self.saving.add(
                 read.zip(write).map(|(read, write)| write - read),
                 Funding::Plan,
@@ -2469,15 +2428,7 @@ impl EquivalentSums {
         }
         if counted {
             self.cost.add(whole, Funding::Plan, tokens);
-            let read = PinUsage {
-                cache_read: usage.cache_read,
-                ..PinUsage::default()
-            };
-            let write = PinUsage {
-                write_5m: usage.write_5m,
-                write_1h: usage.write_1h,
-                ..PinUsage::default()
-            };
+            let (read, write) = cache_parts(usage);
             // Both halves read the one model, so a row that priced nothing latches both, whatever tokens each carries.
             self.cache_read.add(price(read), Funding::Plan, tokens);
             self.cache_write.add(price(write), Funding::Plan, tokens);
@@ -2541,20 +2492,14 @@ impl SplitSum {
             }
             costs.equivalent_at(SEVEN_DAY, entrypoint, canonical_model, usage, at, at, now)
         };
+        let (cache_read, cache_write) = cache_parts(usage);
         let parts = [
             week(PinUsage {
                 input: usage.input,
                 ..PinUsage::default()
             }),
-            week(PinUsage {
-                cache_read: usage.cache_read,
-                ..PinUsage::default()
-            }),
-            week(PinUsage {
-                write_5m: usage.write_5m,
-                write_1h: usage.write_1h,
-                ..PinUsage::default()
-            }),
+            week(cache_read),
+            week(cache_write),
             week(PinUsage {
                 output: usage.output,
                 ..PinUsage::default()
@@ -2638,6 +2583,21 @@ fn tokens_of(usage: PinUsage) -> u64 {
     usage.input + usage.cache_read + usage.write_5m + usage.write_1h + usage.output
 }
 
+/// The cache read part of `usage` and its write part over both lifetimes, the halves the Pro-week folds price apart.
+fn cache_parts(usage: PinUsage) -> (PinUsage, PinUsage) {
+    (
+        PinUsage {
+            cache_read: usage.cache_read,
+            ..PinUsage::default()
+        },
+        PinUsage {
+            write_5m: usage.write_5m,
+            write_1h: usage.write_1h,
+            ..PinUsage::default()
+        },
+    )
+}
+
 /// A group's dollars, each row priced at its own key as it joins: the counted rows' split, the billed rows' part of
 /// it, the probe rows' total, the wasted counts' total and the kept-warm counts' saving.
 #[derive(Default)]
@@ -2710,11 +2670,12 @@ impl GroupSums {
                 entry.dollars.billed.add(&usd);
             }
         }
+        let own_key = row_key(row, now);
         // Keyed as `priced` keys the row, since the group's shares come from `ShareSums::add` and a tier would price
         // share windows nothing reads.
         let price_key = RowKey {
             tier: None,
-            ..row_key(row, now)
+            ..own_key
         };
         if tokens_of(row.wasted_usage()) > 0 {
             let wasted = price_row(prices, costs, &price_key, row.wasted_usage());
@@ -2740,11 +2701,12 @@ impl GroupSums {
             entry.plan.add(row, row_priced, costs, counted, now);
         }
         // The caller passes `pricing` only where each group holds one account's rows, and each row prices under the
-        // account tier it recorded.
+        // account tier it recorded. A tier of `UNATTRIBUTED` (an api_key account's row, a profile not yet read, a row
+        // folded before the tier was recorded) answers no share.
         let Some(pricing) = pricing else {
             return;
         };
-        let Some(tier) = pricing.tier_of(row) else {
+        let Some(tier) = own_key.tier else {
             return;
         };
         let shares = entry.shares.get_or_insert_with(ShareSums::default);
@@ -3046,7 +3008,7 @@ pub fn dashboard_on(
     prices: &PriceRevisions,
     costs: &PlanTables,
 ) -> Result<Dashboard, LedgerError> {
-    let to_hour = (now / 1_000).div_euclid(3_600) * 3_600 + 3_600;
+    let to_hour = hour_of(now) + 3_600;
     let from_hour = to_hour - 24 * 3_600;
     let mut errors: BTreeMap<String, u64> = BTreeMap::new();
     let mut refusals: BTreeMap<String, u64> = BTreeMap::new();
@@ -3065,7 +3027,7 @@ pub fn dashboard_on(
         .collect();
     let mut tokens_cached = 0;
     for r in read_rollups(conn, from_hour, to_hour, &RollupSelect::default())? {
-        if r.kind == "probe" {
+        if r.kind == PROBE_KIND {
             continue;
         }
         if let Some(point) = hourly.get_mut(((r.hour - from_hour) / 3_600) as usize) {
@@ -3076,11 +3038,7 @@ pub fn dashboard_on(
             point.cost += usd;
             point.billed += billed;
             point.equivalent = add_figures(point.equivalent, equivalent);
-            point.tokens += r.input_tokens
-                + r.cache_read_tokens
-                + r.cache_write_5m_tokens
-                + r.cache_write_1h_tokens
-                + r.output_tokens;
+            point.tokens += tokens_of(r.usage());
         }
         for (code, n) in &r.errors {
             *errors.entry(code.clone()).or_default() += n;
@@ -3517,20 +3475,14 @@ fn price_group(
         band_at: None,
         now,
     };
-    let priced = price_row(prices, costs, &key, usage);
-    let usd = priced.usd.map_or(0.0, |usd| usd.total());
-    let mut equivalent = EquivalentSum::default();
-    equivalent.add(priced.equivalent, key.funding, tokens_of(usage));
+    let (cost_usd, billed_usd, equivalent) =
+        shared_of(&price_row(prices, costs, &key, usage), key.funding, usage);
     Ok(Totals {
-        cost_usd: usd,
+        cost_usd,
         requests: count(7)?,
         tokens: tokens_of(usage),
-        billed_usd: if key.funding == Funding::Plan {
-            0.0
-        } else {
-            usd
-        },
-        equivalent: equivalent.figure(),
+        billed_usd,
+        equivalent,
     })
 }
 
@@ -3829,17 +3781,10 @@ pub(crate) fn period_bounds(period: BudgetPeriod, now: i64) -> (i64, i64) {
                     .expect("a day past any date stays in jiff's date range"),
             ),
         ),
-        BudgetPeriod::Month => {
-            let first = date.first_of_month();
-            (
-                midnight(first),
-                midnight(
-                    first.checked_add(jiff::Span::new().months(1)).expect(
-                        "one month past any first-of-month date stays in jiff's date range",
-                    ),
-                ),
-            )
-        }
+        BudgetPeriod::Month => (
+            midnight(date.first_of_month()),
+            phoebis_relay::next_month_start(now),
+        ),
     }
 }
 
@@ -4197,17 +4142,13 @@ impl<'a> TrafficFold<'a> {
     }
 
     fn add(&self, out: &mut [TrafficBucket], r: &RollupRow) {
-        if r.kind == "probe" || r.hour < self.first {
+        if r.kind == PROBE_KIND || r.hour < self.first {
             return;
         }
         if let Some(bucket) = out.get_mut(((r.hour - self.first) / self.bucket_seconds) as usize) {
             bucket.requests += r.requests;
             bucket.failed += r.requests.saturating_sub(r.succeeded);
-            bucket.tokens += r.input_tokens
-                + r.cache_read_tokens
-                + r.cache_write_5m_tokens
-                + r.cache_write_1h_tokens
-                + r.output_tokens;
+            bucket.tokens += tokens_of(r.usage());
             let (usd, billed, equivalent) = shared_figures(r, self.prices, self.costs, self.now);
             bucket.cost_usd += usd;
             bucket.billed_usd += billed;
@@ -4245,7 +4186,7 @@ fn bucket_range(filter: &SeriesFilter) -> Result<(i64, i64), LedgerError> {
     }
     let first = (filter.from / 1_000).div_euclid(filter.bucket_seconds) * filter.bucket_seconds;
     let last = hour_ceil(filter.to);
-    // The ceiling: the series' `while at < last` loops walk a trailing partial bucket as a point of its own.
+    // The ceiling: the series answer a trailing partial bucket as a point of its own.
     let count = (last - first).saturating_add(filter.bucket_seconds - 1) / filter.bucket_seconds;
     if !(0..=MAX_POINTS).contains(&count) {
         return Err(LedgerError::Yaml(format!(
@@ -4516,8 +4457,8 @@ pub fn burn_series_over(
     Ok(points)
 }
 
-/// Every bucket of `[first, last)`, empty. Ceiling, as `session_burn_series` counts them: a trailing partial bucket
-/// is a point of its own.
+/// Every bucket of `[first, last)`, empty. Ceiling, not floor: `last` is only rounded up to the hour (`hour_ceil`),
+/// so a 6-hour or daily bucket can leave a trailing partial bucket, which is a point of its own.
 fn empty_burn_points(first: i64, last: i64, bucket_seconds: i64) -> Vec<BurnPoint> {
     let count = ((last - first + bucket_seconds - 1) / bucket_seconds).max(0) as usize;
     (0..count)
@@ -4553,6 +4494,7 @@ fn price_burn_row(
     let Some(point) = points.get_mut(((row.hour - first) / bucket_seconds) as usize) else {
         return;
     };
+    let key = row_key(row, now);
     price_usage(
         point,
         prices,
@@ -4567,12 +4509,12 @@ fn price_burn_row(
             output_tokens: row.output_tokens,
             at: row.hour * 1_000,
             received_at: row.hour * 1_000,
-            funding: Funding::of_rollup(&row.funding),
-            speed: Speed::of(Some(row.speed.as_str())),
-            band: Band::of_rollup(&row.band),
-            kind: &row.kind,
-            tier: (row.tier != UNATTRIBUTED).then_some(row.tier.as_str()),
-            classifier: row.classifier == Classifier::Client.as_str(),
+            funding: key.funding,
+            speed: key.speed,
+            band: key.band,
+            kind: key.kind,
+            tier: key.tier,
+            classifier: key.classifier,
         },
         shares,
         now,
@@ -4648,17 +4590,20 @@ pub fn rewrite_series(
 ) -> Result<Vec<(i64, u64)>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
     let rows = read_account_rollups(conn, first, last)?;
-    let mut points = Vec::new();
-    let mut at = first;
-    while at < last {
-        let sum = rows
-            .iter()
-            .filter(|r| r.hour >= at && r.hour < at + filter.bucket_seconds)
-            .filter(|r| filter.accounts.is_empty() || filter.accounts.contains(&r.account_id))
-            .map(|r| r.rewrite_tokens)
-            .sum();
-        points.push((at * 1_000, sum));
-        at += filter.bucket_seconds;
+    let mut points: Vec<(i64, u64)> = (first..last)
+        .step_by(filter.bucket_seconds as usize)
+        .map(|at| (at * 1_000, 0))
+        .collect();
+    for r in rows
+        .iter()
+        .filter(|r| filter.accounts.is_empty() || filter.accounts.contains(&r.account_id))
+    {
+        if r.hour < first {
+            continue;
+        }
+        if let Some(point) = points.get_mut(((r.hour - first) / filter.bucket_seconds) as usize) {
+            point.1 += r.rewrite_tokens;
+        }
     }
     Ok(points)
 }
@@ -4688,17 +4633,18 @@ pub fn held_series(
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut points = Vec::new();
-    let mut at = first;
-    while at < last {
-        let (held_ms, requests) = hours
-            .iter()
-            .filter(|(hour, _, _)| *hour >= at && *hour < at + filter.bucket_seconds)
-            .fold((0, 0), |(ms, n), (_, held_ms, requests)| {
-                (ms + held_ms, n + requests)
-            });
-        points.push((at * 1_000, held_ms, requests));
-        at += filter.bucket_seconds;
+    let mut points: Vec<(i64, u64, u64)> = (first..last)
+        .step_by(filter.bucket_seconds as usize)
+        .map(|at| (at * 1_000, 0, 0))
+        .collect();
+    for (hour, held_ms, requests) in hours {
+        if hour < first {
+            continue;
+        }
+        if let Some(point) = points.get_mut(((hour - first) / filter.bucket_seconds) as usize) {
+            point.1 += held_ms;
+            point.2 += requests;
+        }
     }
     Ok(points)
 }
@@ -4809,7 +4755,7 @@ pub(crate) fn top_sessions_statement(
         "SELECT r.session_id FROM attempts a \
          JOIN requests r INDEXED BY requests_received ON r.id = a.request_id \
          WHERE r.session_id IS NOT NULL AND a.started_at >= ?1 AND a.started_at < ?2 \
-         AND r.received_at >= ?1 - 3600000 AND r.received_at < ?2{named} \
+         AND r.received_at >= ?1 - {HOUR_MS} AND r.received_at < ?2{named} \
          GROUP BY r.session_id \
          ORDER BY SUM(COALESCE(a.input_tokens, 0) + COALESCE(a.cache_read_tokens, 0) \
              + COALESCE(a.cache_write_5m_tokens, 0) + COALESCE(a.cache_write_1h_tokens, 0) \
@@ -4906,7 +4852,7 @@ pub(crate) fn session_attempts_statement(
         .collect();
     bind.push(rusqlite::types::Value::Integer(from));
     bind.push(rusqlite::types::Value::Integer(to));
-    bind.push(rusqlite::types::Value::Integer(from - 3_600_000));
+    bind.push(rusqlite::types::Value::Integer(from - HOUR_MS));
     bind.push(rusqlite::types::Value::Integer(to));
     (sql, bind)
 }
@@ -4975,21 +4921,14 @@ pub fn session_burn_series(
     if sessions.is_empty() {
         return Ok(Vec::new());
     }
-    // Ceiling, not floor: `last` is only rounded up to the hour (`hour_ceil`), so a 6-hour or daily bucket can
-    // leave a trailing partial one, the same partial bucket `burn_series`'s `while at < last` loop still walks.
-    let bucket_count =
-        ((last - first + filter.bucket_seconds - 1) / filter.bucket_seconds) as usize;
-    let empty_series = || {
-        (0..bucket_count)
-            .map(|i| BurnPoint {
-                at: (first + i as i64 * filter.bucket_seconds) * 1_000,
-                ..BurnPoint::default()
-            })
-            .collect::<Vec<_>>()
-    };
     let mut by_session: HashMap<String, Vec<BurnPoint>> = sessions
         .iter()
-        .map(|id| (id.clone(), empty_series()))
+        .map(|id| {
+            (
+                id.clone(),
+                empty_burn_points(first, last, filter.bucket_seconds),
+            )
+        })
         .collect();
     for a in read_session_attempts(conn, first * 1_000, last * 1_000, &sessions)? {
         if !filter.accounts.is_empty() && !filter.accounts.contains(&a.account_id) {
@@ -5172,16 +5111,13 @@ mod tests {
 
     #[test]
     fn the_newest_events_of_a_kind_are_read_by_seeking_to_the_kind() {
-        let db = crate::LedgerDb::open_in_memory().unwrap();
-        let plan: Vec<String> = db
-            .read_blocking(|c| {
-                let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {RECENT_EVENTS_OF_KIND}"))?;
-                let rows = stmt
-                    .query_map(params!["model_rejected", 50], |r| r.get::<_, String>(3))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows)
-            })
-            .unwrap();
+        let plan = plan_of(
+            RECENT_EVENTS_OF_KIND,
+            vec![
+                rusqlite::types::Value::Text("model_rejected".into()),
+                rusqlite::types::Value::Integer(50),
+            ],
+        );
         assert!(
             plan.iter()
                 .any(|step| step.starts_with("SEARCH events USING")

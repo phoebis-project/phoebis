@@ -17,6 +17,7 @@ use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
 use crate::plan::{funding_of, PlanTables};
 use crate::pricing::{prompt_tokens, Band, PriceRevisions, Speed};
+use crate::query::PROBE_KIND;
 use crate::reconcile::{newest_rows, ReconciliationRow};
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
 use crate::LedgerError;
@@ -132,7 +133,7 @@ pub fn fold_identifier(raw: &str) -> String {
 /// How far past its announcement a cooldown is booked. The deadline is the upstream's to set, and the
 /// classifier saturates an absurd `Retry-After` to `i64::MAX`, so booking every hour up to it would hold the
 /// writer's transaction for good.
-const COOLDOWN_BOOKING_HORIZON_MS: i64 = 7 * 24 * 3_600 * 1_000;
+const COOLDOWN_BOOKING_HORIZON_MS: i64 = WEEK_MS;
 
 pub fn hour_of(at_ms: i64) -> i64 {
     at_ms.div_euclid(1_000).div_euclid(3_600) * 3_600
@@ -668,7 +669,7 @@ pub fn deltas_of(
     d.attempts += attempts.iter().filter(|a| !a.has_usage()).count() as u64;
     // Read off the row's kind, status and code rather than its outcome: the relay files a refusal before any attempt
     // as `rejected`, the router's own `503 ledger_behind` among them, though no account was asked.
-    let held = request.kind == "probe"
+    let held = request.kind == PROBE_KIND
         && request.status == Some(503)
         && request.error_code.as_deref() == Some("ledger_behind");
     // A refusal before any account was asked files under the map alone, its slow-down hold among the figures it
@@ -1892,10 +1893,10 @@ fn row_to_rollup(r: &rusqlite::Row<'_>) -> rusqlite::Result<RollupRow> {
 fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<RollupRow> {
     let u = |i: usize| -> rusqlite::Result<u64> { Ok(r.get::<_, i64>(offset + i)? as u64) };
     let counts = |i: usize| -> rusqlite::Result<BTreeMap<String, u64>> {
-        Ok(serde_json::from_str(&r.get::<_, String>(offset + i)?).unwrap_or_default())
+        Ok(serde_json::from_str(r.get_ref(offset + i)?.as_str()?).unwrap_or_default())
     };
     let hist = |i: usize| -> rusqlite::Result<Histogram> {
-        Ok(Histogram::from_le_bytes(&r.get::<_, Vec<u8>>(offset + i)?))
+        Ok(Histogram::from_le_bytes(r.get_ref(offset + i)?.as_blob()?))
     };
     Ok(RollupRow {
         hour: r.get(offset)?,
@@ -1972,7 +1973,7 @@ fn row_to_account(r: &rusqlite::Row<'_>) -> rusqlite::Result<AccountRollupRow> {
         pins_migrated_in: r.get::<_, i64>(8)? as u64,
         pins_migrated_out: r.get::<_, i64>(9)? as u64,
         rewrite_tokens: r.get::<_, i64>(10)? as u64,
-        migrations: serde_json::from_str(&r.get::<_, String>(11)?).unwrap_or_default(),
+        migrations: serde_json::from_str(r.get_ref(11)?.as_str()?).unwrap_or_default(),
         wall_early_ms: r.get::<_, i64>(12)? as u64,
     })
 }
