@@ -882,6 +882,7 @@ export function AnalyticsPage() {
               }
               loading={cacheEquivalent ? figureLoading : costLoading}
               error={cacheEquivalent ? figureError : costError}
+              unpriced={cacheEquivalent && figureUnpriced}
               legend={
                 cacheScale !== null
                   ? [
@@ -2003,6 +2004,7 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, reading
             }
             loading={loading || weekFactor === null}
             error={error}
+            unpriced={unpriced}
             legend={keys.map((k) => ({ color: color(k), label: label(k) }))}
           >
             {weekFactor !== null && (
