@@ -65,7 +65,7 @@ no Vue code, a marker check that also fails when no chunk the reference loads ca
 `node --test --localstorage-file test/dist/localstorage.json test/*.test.mjs`.
 
 The browser checks run from `web/` on a developer's host before a merge, since on the hosted runner they run past the
-`web` job's cap and would spend most of the free plan's monthly minutes:
+`web` job's cap:
 
 ```sh
 npx playwright install --with-deps chromium

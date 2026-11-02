@@ -56,8 +56,8 @@ jobs:
       - run: npm run build
       - run: node scripts/check-build.mjs
       - run: npm run lint
-      # The smoke, the mock pass and the reference smoke run on a developer's host before a merge. On the hosted
-      # runner they run past this job's cap and would spend most of the free plan's monthly minutes.
+      # The smoke, the mock pass and the reference smoke run on a developer's host before a merge: on the hosted
+      # runner they run past this job's cap.
       - run: npm test
   tests:
     name: Tests
