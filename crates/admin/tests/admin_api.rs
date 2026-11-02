@@ -6881,6 +6881,60 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
 }
 
 #[tokio::test]
+async fn a_pin_used_within_the_hour_names_its_session_to_the_fork_facts_when_its_requests_predate_the_window(
+) {
+    use common::{get, json, landed, login, NOW};
+    use phoebis_ledger::{Record, RequestRecord};
+    let parts = sessions_harness_with(|generation| {
+        vec![context_pin(
+            "pinned-forked",
+            "main",
+            "claude-opus-5",
+            "business",
+            generation,
+            10_000,
+            NOW - 1_000,
+        )]
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // Older than the 24-hour activity window, so the activity read never sees the session and only its pin can
+    // name it to the fork facts.
+    let at = NOW - 90_000_000;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "r-forked-old".into(),
+            received_at: at,
+            key_id: Some("desktop".into()),
+            key_generation: common::generation(&parts.store, "desktop"),
+            session_id: Some("pinned-forked".into()),
+            model: "claude-opus-5".into(),
+            canonical_model: "claude-opus-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            forked_from: Some("base".into()),
+            fork_depth: Some(2),
+            ..Default::default()
+        },
+        attempts: vec![],
+        bodies: None,
+    });
+    landed(&parts, "r-forked-old").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = session_row(&sessions, "pinned-forked");
+    assert_eq!(
+        (
+            row["forked_from"].as_str(),
+            row["fork_depth"].as_i64(),
+            row["requests"].as_u64()
+        ),
+        (Some("base"), Some(2), None),
+        "the pin lists the session with no request in the window and still names it to the fork facts: {row}"
+    );
+}
+
+#[tokio::test]
 async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_releasing_it_frees_the_pin(
 ) {
     use common::{generation, login, post, wait_json};
