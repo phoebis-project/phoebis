@@ -796,6 +796,67 @@ fn a_polls_samples_lacking_five_hour_remove_its_series_and_a_heads_remove_nothin
 }
 
 #[test]
+fn a_heads_shared_window_the_newest_clean_polls_set_lacks_sets_no_series() {
+    let sample = |account: &str, window: &str, utilization: f64| QuotaSampleRecord {
+        account_id: account.into(),
+        window: window.into(),
+        utilization: Some(utilization),
+        ..Default::default()
+    };
+    let gauges = RoutingGauges {
+        live_accounts: BTreeSet::from(["a".to_string(), "b".to_string()]),
+        ..RoutingGauges::default()
+    };
+    let utilization = |metrics: &Metrics| -> BTreeSet<String> {
+        metrics
+            .render(&gauges, &[], 0)
+            .lines()
+            .filter(|l| l.starts_with("phoebis_account_ratelimit_utilization{"))
+            .map(str::to_string)
+            .collect()
+    };
+    let metrics = Metrics::new();
+    metrics.observe_samples(&[sample("a", "seven_day", 0.2)], true);
+    metrics.observe_samples(
+        &[
+            sample("a", "five_hour", 0.6),
+            sample("a", "seven_day", 0.3),
+            sample("a", "seven_day_fable", 0.5),
+            sample("b", "five_hour", 0.7),
+            sample("b", "seven_day", 0.1),
+        ],
+        false,
+    );
+    assert_eq!(
+        utilization(&metrics),
+        BTreeSet::from([
+            r#"phoebis_account_ratelimit_utilization{account="a",window="seven_day"} 0.3"#.to_string(),
+            r#"phoebis_account_ratelimit_utilization{account="a",window="seven_day_fable"} 0.5"#
+                .to_string(),
+            r#"phoebis_account_ratelimit_utilization{account="b",window="five_hour"} 0.7"#.to_string(),
+            r#"phoebis_account_ratelimit_utilization{account="b",window="seven_day"} 0.1"#.to_string(),
+        ]),
+        "a head restores no shared window the account's newest clean poll dropped, and an account never polled \
+         reads both"
+    );
+
+    metrics.observe_samples(
+        &[
+            sample("a", "five_hour", 0.4),
+            sample("a", "seven_day", 0.35),
+        ],
+        true,
+    );
+    metrics.observe_samples(&[sample("a", "five_hour", 0.8)], false);
+    assert!(
+        utilization(&metrics).contains(
+            r#"phoebis_account_ratelimit_utilization{account="a",window="five_hour"} 0.8"#
+        ),
+        "a head sets the 5-hour window once a clean poll carries it again"
+    );
+}
+
+#[test]
 fn the_attention_gauge_reads_one_series_per_condition_with_its_labels_escaped() {
     let gauges = RoutingGauges {
         attention: AttentionGauges {

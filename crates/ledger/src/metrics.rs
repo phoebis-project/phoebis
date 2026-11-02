@@ -48,6 +48,8 @@ impl Default for Series {
 struct Registry {
     counters: BTreeMap<&'static str, BTreeMap<Labels, f64>>,
     gauges: BTreeMap<&'static str, BTreeMap<Labels, f64>>,
+    /// The shared windows each account's newest clean poll carried, which bound what a head may set.
+    polled_windows: BTreeMap<String, BTreeSet<&'static str>>,
     ttfb: BTreeMap<String, Series>,
 }
 
@@ -170,11 +172,15 @@ impl Metrics {
 
     /// Sets each sample's series and, under `poll`, removes the `phoebis_account_ratelimit_utilization` series of a
     /// shared window the account's samples lack where they carry at least one shared window, so a dropped window's
-    /// series leaves with it. A head removes nothing.
+    /// series leaves with it. A head removes nothing, and it sets no shared window the account's newest clean poll
+    /// lacked, so it cannot restore a series that poll removed.
     pub fn observe_samples(&self, quota: &[QuotaSampleRecord], poll: bool) {
         let mut carried: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
         for q in quota {
             if let Some(u) = q.utilization {
+                if !poll && self.poll_lacks(&q.account_id, &q.window) {
+                    continue;
+                }
                 self.set(
                     "phoebis_account_ratelimit_utilization",
                     vec![
@@ -195,6 +201,15 @@ impl Metrics {
             if !windows.contains(FIVE_HOUR) && !windows.contains(SEVEN_DAY) {
                 continue;
             }
+            let shared: BTreeSet<&'static str> = [FIVE_HOUR, SEVEN_DAY]
+                .into_iter()
+                .filter(|window| windows.contains(window))
+                .collect();
+            self.inner
+                .lock()
+                .expect(LOCK_POISONED)
+                .polled_windows
+                .insert(account.to_string(), shared);
             for window in [FIVE_HOUR, SEVEN_DAY] {
                 if !windows.contains(window) {
                     self.remove(
@@ -204,6 +219,19 @@ impl Metrics {
                 }
             }
         }
+    }
+
+    /// Before the process's first clean poll of an account no set is kept, so a head sets both shared windows, as the
+    /// router reads both until that poll.
+    fn poll_lacks(&self, account: &str, window: &str) -> bool {
+        if window != FIVE_HOUR && window != SEVEN_DAY {
+            return false;
+        }
+        let inner = self.inner.lock().expect(LOCK_POISONED);
+        inner
+            .polled_windows
+            .get(account)
+            .is_some_and(|shared| !shared.contains(window))
     }
 
     pub fn observe_drop(&self, table: &'static str) {
