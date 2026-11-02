@@ -605,6 +605,8 @@ export function AnalyticsPage() {
   const figureError = costError ?? (weekWait ? reading.error : null);
   const figureUnpriced = costError === null && weekWait && reading.unpriced;
   const warmingError = sessionId === null ? (warmingSeries.error ?? billedWarmingSeries.error) : null;
+  const modelError = byModel.error ?? byModelFunded.error;
+  const poolError = sessionId === null ? (byPool.error ?? fundedByPool.error) : null;
   const billedTotals = useMemo(() => (nativeWarming && !billedBreakdown.stale && billedBreakdown.data !== null ? sumGroups(billedBreakdown.data) : null), [nativeWarming, billedBreakdown.stale, billedBreakdown.data]);
   const probeTile = probeTileOf(unit, costTotals, billedTotals, figureLoading, sessionId !== null, reading);
   const savingTile = savingTileOf(unit, costTotals, billedTotals, figureLoading, sessionId !== null, reading);
@@ -935,7 +937,8 @@ export function AnalyticsPage() {
             <CacheByModel
               groups={byModel.stale ? [] : (byModel.data ?? [])}
               funded={fundedModels}
-              error={byModel.error ?? byModelFunded.error ?? (weekWait ? reading.error : null)}
+              error={modelError ?? (weekWait ? reading.error : null)}
+              unpriced={modelError === null && weekWait && reading.unpriced}
               loading={byModel.data === null || byModel.stale || (funded && (byModelFunded.data === null || byModelFunded.stale)) || weekWait}
               reading={reading}
               unit={unit}
@@ -995,6 +998,7 @@ export function AnalyticsPage() {
               title={`Cost by ${groupLabel.toLowerCase()}`}
               subtitle={`Totals for the selected range and filters, ${NATIVE_SUBSET}`}
               error={figureError}
+              unpriced={figureUnpriced}
               loading={figureLoading}
               groupLabel={groupLabel}
               columns={NATIVE_COLUMNS}
@@ -1097,7 +1101,8 @@ export function AnalyticsPage() {
           <KeepaliveByPool
             groups={poolGroups}
             funded={fundedPools}
-            error={(sessionId === null ? (byPool.error ?? fundedByPool.error) : null) ?? (weekWait ? reading.error : null)}
+            error={poolError ?? (weekWait ? reading.error : null)}
+            unpriced={poolError === null && weekWait && reading.unpriced}
             loading={(sessionId === null ? byPool.data === null || byPool.stale || (poolFunding !== undefined && (fundedByPool.data === null || fundedByPool.stale)) : loading) || weekWait}
             reading={reading}
             unit={unit}
@@ -1338,6 +1343,7 @@ function BreakdownTable({
   error = null,
   loading = false,
   subtitle = 'Totals for the selected range and filters',
+  unpriced = false,
 }: {
   className?: string;
   columns: ReactNode[];
@@ -1348,6 +1354,8 @@ function BreakdownTable({
   rows: { cells: ReactNode[]; key: string; label: string; title?: string }[];
   subtitle?: string;
   title: string;
+  /** `error` is the week reading's unpriced sentence, which no retry clears, so the state heads it unpriced. */
+  unpriced?: boolean;
 }) {
   return (
     <Card title={title} subtitle={subtitle} padded={false} className={className ? `card--table ${className}` : 'card--table'}>
@@ -1382,7 +1390,7 @@ function BreakdownTable({
             {(error !== null || rows.length === 0) && (
               <tr>
                 <td colSpan={columns.length + 1} className={error ? '' : 'muted'}>
-                  {error ? <ErrorState title="Could not load this breakdown" body={error} /> : loading ? <Skeleton height={22} /> : 'No rows.'}
+                  {error ? <ErrorState title={unpriced ? `Unpriced: ${title.toLowerCase()}` : 'Could not load this breakdown'} body={error} /> : loading ? <Skeleton height={22} /> : 'No rows.'}
                 </td>
               </tr>
             )}
@@ -1749,7 +1757,7 @@ function Histogram({ h, format, p99 }: { format: (v: number) => string; h: numbe
  * cell, and a dollar side reads its own read by model (`funded`, by key). The cells sum every account a model ran on,
  * so they carry no hint, and the table reads no rows while the scale is out, which its loading draws.
  */
-function CacheByModel({ error, funded, groups, loading, reading, unit }: { error: string | null; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; reading: WeekReading; unit: UnitPosition }) {
+function CacheByModel({ error, funded, groups, loading, reading, unit, unpriced }: { error: string | null; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; reading: WeekReading; unit: UnitPosition; unpriced: boolean }) {
   // A request refused before it resolved a model reads no cache, so the group without a model has no row here.
   const rows = useMemo(() => groups.filter((g) => g.key !== '').sort((a, b) => b.tokens.cacheRead - a.tokens.cacheRead), [groups]);
   const subtitle = unit === 'native' ? `Totals for the selected range and filters, ${NATIVE_SUBSET}` : `Totals for the selected range and filters, ${UNIT_SUBSET[dollarsOf(unit)]}`;
@@ -1773,6 +1781,7 @@ function CacheByModel({ error, funded, groups, loading, reading, unit }: { error
       title="Cache by model"
       subtitle={subtitle}
       error={error}
+      unpriced={unpriced}
       loading={loading}
       groupLabel="Model"
       columns={['Reads', 'Writes 5m', 'Writes 1h', 'Hit ratio', 'Cached share', 'Read cost', 'Write cost']}
@@ -1795,7 +1804,7 @@ function CacheByModel({ error, funded, groups, loading, reading, unit }: { error
  * the chosen week with its billed side's dollars (`funded`, the billed read by pool), and a dollar side reads its own
  * read by pool. The other columns read every row, and the table reads no rows while the scale is out.
  */
-function KeepaliveByPool({ error, funded, groups, loading, reading, unit }: { error: string | null; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; reading: WeekReading; unit: UnitPosition }) {
+function KeepaliveByPool({ error, funded, groups, loading, reading, unit, unpriced }: { error: string | null; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; reading: WeekReading; unit: UnitPosition; unpriced: boolean }) {
   const rows = useMemo(() => [...groups].sort((a, b) => (b.keptWarm === null ? 0 : keptWarmTokens(b.keptWarm)) - (a.keptWarm === null ? 0 : keptWarmTokens(a.keptWarm))), [groups]);
   const { scale: weekFactor, week } = reading;
   const probeCost = (g: AnalyticsGroup, factor: number): ReactNode => {
@@ -1818,6 +1827,7 @@ function KeepaliveByPool({ error, funded, groups, loading, reading, unit }: { er
     <BreakdownTable
       title="Cache warming by pool"
       error={error}
+      unpriced={unpriced}
       loading={loading}
       groupLabel="Pool"
       columns={['Probes OK', 'Held', 'Skipped', 'Failed', 'Kept-warm requests', 'Kept-warm tokens', 'Probe cost', 'Saved']}
