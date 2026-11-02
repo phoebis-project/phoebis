@@ -31,7 +31,9 @@ pub use bodies::{
     run_retention, run_retention_blocking, Purged, MAX_CAPTURED_BODY, PURGE_SLICE,
     PURGE_SLICE_BYTES,
 };
-pub use db::LedgerDb;
+#[cfg(any(test, feature = "debug-hooks"))]
+pub use db::WriterReadHold;
+pub use db::{LedgerDb, WriterRead};
 pub use events::{
     catalog_changed, event_of, plan_ended, plan_restored, poll_backoff, poll_failed,
     spawn_event_mirror, MirrorBaseline,

@@ -38,7 +38,19 @@ pub struct LedgerDb {
     #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_read: AtomicBool,
     #[cfg(any(test, feature = "debug-hooks"))]
+    fail_next_writer_read: Mutex<Option<WriterRead>>,
+    #[cfg(any(test, feature = "debug-hooks"))]
+    hold_next_writer_read: Mutex<Option<ArmedHold>>,
+    #[cfg(any(test, feature = "debug-hooks"))]
     page_reads: AtomicUsize,
+}
+
+/// The writer's own reads, named so a test can hold or fail one of them and no other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriterRead {
+    AnnouncedCrossings,
+    MemberSpends,
+    ParkedCount,
 }
 
 /// One `parked_records` row as the start reads it: the row's id and the serialized `ParkedRecord`.
@@ -67,6 +79,33 @@ impl Drop for Ended<'_> {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
 }
+
+/// A test's hold on the next writer-side read that names its `WriterRead`, from
+/// `LedgerDb::debug_hold_next_writer_read`.
+#[cfg(any(test, feature = "debug-hooks"))]
+#[doc(hidden)]
+pub struct WriterReadHold {
+    parked: Arc<AtomicBool>,
+    release: std::sync::mpsc::Sender<()>,
+}
+
+#[cfg(any(test, feature = "debug-hooks"))]
+impl WriterReadHold {
+    /// Whether the writer has reached the held read and is parked on it. Never blocks: a test polls it through its
+    /// harness's `wait_for`, since the park happens on a blocking worker the test's runtime must stay free to start.
+    pub fn is_parked(&self) -> bool {
+        self.parked.load(Ordering::SeqCst)
+    }
+
+    /// Lets the parked read run. Dropping the hold releases it too, so a failing test never leaves the writer parked.
+    pub fn release(self) {
+        let _ = self.release.send(());
+    }
+}
+
+/// The read a hold parks, the flag its `WriterReadHold` reads and the receiver its release or drop wakes.
+#[cfg(any(test, feature = "debug-hooks"))]
+type ArmedHold = (WriterRead, Arc<AtomicBool>, std::sync::mpsc::Receiver<()>);
 
 impl LedgerDb {
     pub fn open(path: &Path) -> Result<LedgerDb, LedgerError> {
@@ -111,6 +150,10 @@ impl LedgerDb {
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_read: AtomicBool::new(false),
             #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_writer_read: Mutex::new(None),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            hold_next_writer_read: Mutex::new(None),
+            #[cfg(any(test, feature = "debug-hooks"))]
             page_reads: AtomicUsize::new(0),
         })
     }
@@ -125,6 +168,10 @@ impl LedgerDb {
             writes: Writes::default(),
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_read: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_writer_read: Mutex::new(None),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            hold_next_writer_read: Mutex::new(None),
             #[cfg(any(test, feature = "debug-hooks"))]
             page_reads: AtomicUsize::new(0),
         })
@@ -218,6 +265,53 @@ impl LedgerDb {
         }
     }
 
+    /// Runs `f` on the writer connection on a blocking worker. The writer loop awaits it between two batches, so it
+    /// reads every batch the writer committed and never queues behind a console read. It counts no write, so the purge
+    /// handoff of `purge` waits for no read.
+    #[cfg_attr(not(any(test, feature = "debug-hooks")), allow(unused_variables))]
+    pub async fn writer_read<T: Send + 'static>(
+        self: &Arc<Self>,
+        which: WriterRead,
+        f: impl FnOnce(&Connection) -> Result<T, LedgerError> + Send + 'static,
+    ) -> Result<T, LedgerError> {
+        let db = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            // Recovered as `write` recovers it, for the same reason: a closure that panicked rolled its transaction
+            // back, so the connection is consistent.
+            let conn = db.writer.lock().unwrap_or_else(PoisonError::into_inner);
+            #[cfg(any(test, feature = "debug-hooks"))]
+            db.writer_read_hooks(which)?;
+            f(&conn)
+        })
+        .await
+        .map_err(|_| LedgerError::ReadCanceled)?
+    }
+
+    #[cfg(any(test, feature = "debug-hooks"))]
+    fn writer_read_hooks(&self, which: WriterRead) -> Result<(), LedgerError> {
+        let failing = self
+            .fail_next_writer_read
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take_if(|armed| *armed == which);
+        if failing.is_some() {
+            return Err(LedgerError::Io(std::io::Error::other(
+                "injected ledger read failure",
+            )));
+        }
+        let held = self
+            .hold_next_writer_read
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take_if(|(armed, _, _)| *armed == which);
+        if let Some((_, parked, released)) = held {
+            parked.store(true, Ordering::SeqCst);
+            // A send and a dropped hold both end the wait.
+            let _ = released.recv();
+        }
+        Ok(())
+    }
+
     /// `insert_request_at` with `PriceRevisions::shipped()`. The production landing goes through `insert_request_in`
     /// inside the writer with the list it was started on, so this entry serves the test suites, and a test that
     /// prices on a list of its own lands through `insert_request_at`. Built for tests alone, since a production
@@ -257,12 +351,37 @@ impl LedgerDb {
         })
     }
 
-    /// The next `read` or `read_blocking` answers an injected failure, so the writer's failed spend refresh has a
-    /// test.
+    /// The next `read` or `read_blocking` answers an injected failure once.
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_fail_next_read(&self) {
         self.fail_next_read.store(true, Ordering::SeqCst);
+    }
+
+    /// Fails the next `writer_read` that names `which` with an I/O error whose text reads
+    /// `injected ledger read failure`, the text `debug_fail_next_read` injects.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_fail_next_writer_read(&self, which: WriterRead) {
+        *self
+            .fail_next_writer_read
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(which);
+    }
+
+    /// Parks the next `writer_read` that names `which` on its blocking worker, with the writer connection taken,
+    /// until the hold is released or dropped. It parks there because the tests that use it keep the writer short of a
+    /// commit while another connection reads, which is what a writer-side read does in production too.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_hold_next_writer_read(&self, which: WriterRead) -> WriterReadHold {
+        let parked = Arc::new(AtomicBool::new(false));
+        let (release, released) = std::sync::mpsc::channel();
+        *self
+            .hold_next_writer_read
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((which, parked.clone(), released));
+        WriterReadHold { parked, release }
     }
 
     /// The `read` calls this handle has run since it opened. A paged walk such as the guardrail dry run's takes one
@@ -1135,6 +1254,55 @@ mod tests {
             2,
             "the poisoned guard recovered rather than turning every later read into ReadCanceled too"
         );
+    }
+
+    #[tokio::test]
+    async fn a_writer_side_hook_fails_or_holds_the_read_it_names_and_no_other() {
+        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        assert_eq!(
+            db.writer_read(WriterRead::ParkedCount, crate::query::parked_count)
+                .await
+                .unwrap(),
+            0
+        );
+        db.debug_fail_next_writer_read(WriterRead::MemberSpends);
+        assert_eq!(
+            db.writer_read(WriterRead::ParkedCount, crate::query::parked_count)
+                .await
+                .unwrap(),
+            0,
+            "a hook on the spend read leaves the count read alone"
+        );
+        let failed = db.writer_read(WriterRead::MemberSpends, |_| Ok(())).await;
+        assert!(
+            matches!(failed, Err(LedgerError::Io(ref e)) if e.to_string() == "injected ledger read failure"),
+            "{failed:?}"
+        );
+        assert!(
+            db.writer_read(WriterRead::MemberSpends, |_| Ok(()))
+                .await
+                .is_ok(),
+            "the hook fires once"
+        );
+        let hold = db.debug_hold_next_writer_read(WriterRead::ParkedCount);
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            db.writer_read(WriterRead::MemberSpends, |_| Ok(())),
+        )
+        .await
+        .expect("a hold on the count read leaves the spend read alone")
+        .unwrap();
+        let parked = tokio::spawn({
+            let db = db.clone();
+            async move {
+                db.writer_read(WriterRead::ParkedCount, crate::query::parked_count)
+                    .await
+            }
+        });
+        fake_upstream::wait_for(Duration::from_secs(5), || hold.is_parked().then_some(())).await;
+        fake_upstream::stays_for(Duration::from_millis(200), || !parked.is_finished()).await;
+        hold.release();
+        assert_eq!(parked.await.unwrap().unwrap(), 0);
     }
 
     #[tokio::test]

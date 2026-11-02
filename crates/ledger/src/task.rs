@@ -28,7 +28,7 @@ use crate::query::{member_spends, period_bounds, BudgetedMember};
 use crate::record::{
     AttemptRecord, EventRecord, ParkedRecord, ParkedRows, QuotaSampleRecord, RequestRecord,
 };
-use crate::{LedgerDb, LedgerError};
+use crate::{LedgerDb, LedgerError, WriterRead};
 
 pub const CHANNEL_DEPTH: usize = 4_096;
 
@@ -717,7 +717,9 @@ async fn writer(
                         // start's own do, so a replay on the writer's first turn lands none ahead of the start row.
                         member_revision = router.snapshot().revision;
                         spend_due = spends.read(spend_due, &[]).await;
-                        let remaining = db.read(crate::query::parked_count).await;
+                        let remaining = db
+                            .writer_read(WriterRead::ParkedCount, crate::query::parked_count)
+                            .await;
                         remaining.map(|remaining| Replayed { landed, remaining })
                     }
                     Err(error) => Err(error),
@@ -1458,7 +1460,9 @@ impl Spends {
         let (from, _) = period_bounds(BudgetPeriod::Month, (self.clock)());
         match self
             .db
-            .read(move |conn| announced_crossings(conn, from))
+            .writer_read(WriterRead::AnnouncedCrossings, move |conn| {
+                announced_crossings(conn, from)
+            })
             .await
         {
             Ok(announced) => self.budgets.announced = announced,
@@ -1576,7 +1580,9 @@ async fn refresh_member_spends(
     }
     let revisions = pricing.revisions();
     let rows = db
-        .read(move |conn| member_spends(conn, &members, now, &revisions))
+        .writer_read(WriterRead::MemberSpends, move |conn| {
+            member_spends(conn, &members, now, &revisions)
+        })
         .await;
     match rows {
         Ok(rows) => {

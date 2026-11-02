@@ -8,7 +8,7 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{
     event_of, recent_events_of_kind, unused_allowance, AllowanceReset, EventRecord, LedgerConfig,
-    LedgerDb, QuotaSampleRecord,
+    LedgerDb, QuotaSampleRecord, WriterRead,
 };
 use phoebis_routing::RouterEvent;
 use phoebis_store::{AccountState, MemberWrite, PoolRow, StateCause, StorageKey, Store};
@@ -3379,6 +3379,9 @@ async fn the_start_fold_waits_for_the_start_row_so_a_span_the_previous_run_left_
         .unwrap();
     let clock: phoebis_oauth::Clock = Arc::new(|| NOW);
     let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
+    // The hold on the start's crossings read is armed before the ledger's tasks first run, which keeps the writer
+    // short of the start row's commit while the purge connection stays free for the fold.
+    let hold = db.debug_hold_next_writer_read(WriterRead::AnnouncedCrossings);
     let ledger = phoebis_ledger::spawn(
         db.clone(),
         Arc::new(phoebis_ledger::Pricing::new(
@@ -3395,23 +3398,7 @@ async fn the_start_fold_waits_for_the_start_row_so_a_span_the_previous_run_left_
             ..polled_every_50_ms()
         },
     );
-    // A read held on the reader connection before the ledger's tasks first run keeps the writer at the start's spend
-    // read, short of the start row's commit, while the purge connection stays free for the fold.
-    let (locked, on_lock) = std::sync::mpsc::channel::<()>();
-    let (release, released) = std::sync::mpsc::channel::<()>();
-    let reader = std::thread::spawn({
-        let db = db.clone();
-        move || {
-            db.read_blocking(|_| {
-                locked.send(()).unwrap();
-                // A case that fails first drops the sender, which ends the hold all the same.
-                let _ = released.recv();
-                Ok(())
-            })
-            .unwrap()
-        }
-    });
-    on_lock.recv().unwrap();
+    wait_for(Duration::from_secs(5), || hold.is_parked().then_some(())).await;
     let folds = || {
         ledger
             .stats()
@@ -3419,8 +3406,7 @@ async fn the_start_fold_waits_for_the_start_row_so_a_span_the_previous_run_left_
             .load(std::sync::atomic::Ordering::SeqCst)
     };
     stays_for(Duration::from_millis(300), || folds() == 0).await;
-    release.send(()).unwrap();
-    reader.join().unwrap();
+    hold.release();
     wait_for(Duration::from_secs(5), || (folds() >= 1).then_some(())).await;
     let rows: Vec<_> = db
         .read_blocking(phoebis_ledger::routing_conditions)

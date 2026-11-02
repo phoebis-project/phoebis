@@ -18,7 +18,7 @@ use phoebis_ledger::{
     read_rollups, run_retention, Assembler, AttemptRecord, AttentionGauges, BodyRecord,
     BudgetedMember, CacheMapWrite, DecisionRow, EventRecord, LedgerConfig, LedgerDb, LedgerError,
     LiveKeys, ParkedSummary, PlanTables, PriceRevisions, Purged, Record, Replayed, RequestFilter,
-    RequestRecord, RollupFilter, RollupRow, RollupSelect, Speed, BATCH_RETRY_DELAYS,
+    RequestRecord, RollupFilter, RollupRow, RollupSelect, Speed, WriterRead, BATCH_RETRY_DELAYS,
     BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH, UNATTRIBUTED,
 };
 
@@ -6054,8 +6054,8 @@ async fn a_landing_batch_whose_spend_read_fails_keeps_the_degradation() {
         (write_failures(&h) == 1 && h.ledger.degraded()).then_some(())
     })
     .await;
-    // Armed before the retry lands; nothing below reads through the ledger until the refresh has taken it.
-    h.db.debug_fail_next_read();
+    // Armed before the retry lands, for the spend read the landed batch runs.
+    h.db.debug_fail_next_writer_read(WriterRead::MemberSpends);
     drop_trigger(&h.db, "refuse");
     step(&h, BATCH_RETRY_DELAYS[0]);
     wait_for(Duration::from_secs(5), || (retrying(&h) == 0).then_some(())).await;
@@ -6583,12 +6583,6 @@ fn replay_on_a_task(
     tokio::spawn(async move { ledger.replay_parked(now, BOUND).await })
 }
 
-/// The parked rows counted on the writer's connection, for a test that holds the reader.
-fn parked_on_the_writer(h: &Harness) -> i64 {
-    h.db.write(|c| Ok(c.query_row("SELECT COUNT(*) FROM parked_records", [], |r| r.get(0))?))
-        .unwrap()
-}
-
 /// Frees the disk and steps the clock a hold at a time until the held batch lands.
 async fn free_the_writer(h: &Harness) {
     h.db.free_the_disk();
@@ -6744,8 +6738,8 @@ async fn a_replay_whose_caller_went_away_before_its_deadline_never_runs_after_it
 }
 
 /// The claim decides who owns a replay, never the clock: a replay the writer took before the deadline answers its
-/// rows to a caller still waiting past it. The test holds the reader connection from before the claim until after the
-/// deadline, so the writer has landed the row and waits on the count it answers with while the bound runs out.
+/// rows to a caller still waiting past it. The test parks the writer's count read from before the claim until after
+/// the deadline, so the writer has landed the row and waits on the count it answers with while the bound runs out.
 #[tokio::test]
 async fn a_replay_the_writer_claimed_inside_the_bound_answers_its_rows_past_it() {
     let up = FakeUpstream::start(vec![]).await;
@@ -6762,31 +6756,14 @@ async fn a_replay_the_writer_claimed_inside_the_bound_answers_its_rows_past_it()
     let now = h.clock.load(Ordering::SeqCst);
     let replay = replay_on_a_task(&h, now);
     stays_for(Duration::from_millis(400), || !replay.is_finished()).await;
-    let (taken, held) = std::sync::mpsc::channel();
-    let (release, released) = std::sync::mpsc::channel::<()>();
-    let reader = std::thread::spawn({
-        let db = h.db.clone();
-        move || {
-            db.read_blocking(|_| {
-                taken.send(()).unwrap();
-                released.recv().unwrap();
-                Ok(())
-            })
-            .unwrap()
-        }
-    });
-    held.recv().unwrap();
+    let hold = h.db.debug_hold_next_writer_read(WriterRead::ParkedCount);
     h.db.free_the_disk();
     // Halfway: the hold runs out, the batch lands, and the writer's next turn claims the replay and lands the row.
     step(&h, BOUND / 2);
-    wait_for(Duration::from_secs(5), || {
-        (parked_on_the_writer(&h) == 0).then_some(())
-    })
-    .await;
+    wait_for(Duration::from_secs(5), || hold.is_parked().then_some(())).await;
     step(&h, BOUND / 2 + Duration::from_secs(1));
     stays_for(Duration::from_millis(400), || !replay.is_finished()).await;
-    release.send(()).unwrap();
-    reader.join().unwrap();
+    hold.release();
     let answer = tokio::time::timeout(Duration::from_secs(5), replay)
         .await
         .expect("the claimed replay answers once the count is read")
