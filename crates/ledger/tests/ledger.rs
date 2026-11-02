@@ -1782,11 +1782,12 @@ async fn a_completion_cut_after_its_head_writes_one_stream_interrupted_row_its_r
             "attempt": 1,
         })
     );
+    let now = h.clock.load(Ordering::SeqCst);
     let own =
-        h.db.read(|c| {
+        h.db.read(move |c| {
             let (request, _) =
                 phoebis_ledger::request_by_id(c, "cut-alone")?.expect("the request landed");
-            phoebis_ledger::request_events(c, &request)
+            phoebis_ledger::request_events(c, &request, now)
         })
         .await
         .unwrap();
@@ -1799,6 +1800,42 @@ async fn a_completion_cut_after_its_head_writes_one_stream_interrupted_row_its_r
         "a request with no session reads its own row by its id"
     );
     up.shutdown().await;
+}
+
+#[test]
+fn a_live_requests_events_are_read_up_to_the_clock_and_a_finished_ones_up_to_its_end() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let live = RequestRecord {
+        finished_at: None,
+        received_at: 1_000,
+        session_id: Some("s".into()),
+        ..finished_row("live")
+    };
+    for at in [1_500, 2_500] {
+        let event = EventRecord {
+            at,
+            kind: "pin_migrated".into(),
+            session_id: Some("s".into()),
+            ..Default::default()
+        };
+        db.insert_event(&event).unwrap();
+    }
+    let at = |events: Vec<EventRecord>| events.iter().map(|e| e.at).collect::<Vec<_>>();
+    assert_eq!(
+        at(db
+            .read_blocking(|c| phoebis_ledger::request_events(c, &live, 2_000))
+            .unwrap()),
+        [1_500],
+        "a live request reads to the clock"
+    );
+    let finished = RequestRecord {
+        finished_at: Some(1_800),
+        ..live.clone()
+    };
+    let ended = at(db
+        .read_blocking(|c| phoebis_ledger::request_events(c, &finished, 3_000))
+        .unwrap());
+    assert_eq!(ended, [1_500], "a finished request reads to its own end");
 }
 
 fn auto_mode_observed(id: &str, auto_mode: Option<AutoMode>) -> BusEvent {

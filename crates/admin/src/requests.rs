@@ -1049,6 +1049,7 @@ pub(crate) async fn list(
 pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     let shares = ShareContext::read(&state);
     let reported = reported_samples(&state).await;
+    let now = (state.clock)();
     let found = state
         .ledger
         .db()
@@ -1056,7 +1057,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<St
             let Some((r, a)) = request_by_id(c, &id)? else {
                 return Ok(None);
             };
-            let events = request_events(c, &r)?;
+            let events = request_events(c, &r, now)?;
             Ok(Some((r, a, events)))
         })
         .await;

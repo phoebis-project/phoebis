@@ -866,12 +866,15 @@ pub fn request_body(conn: &Connection, id: &str, now: i64) -> Result<Option<Vec<
 }
 
 /// The events of the request's window under its own session, the one its pin is keyed by, and every event that
-/// names the request itself, by its `request_id` column or the `source_request_id` of its detail.
+/// names the request itself, by its `request_id` column or the `source_request_id` of its detail. A request still
+/// running is read up to `now`, the caller's clock: no event is stamped in the future, so the bound loses nothing and
+/// the read stops at the present rather than at the table's end.
 pub fn request_events(
     conn: &Connection,
     request: &RequestRecord,
+    now: i64,
 ) -> Result<Vec<EventRecord>, LedgerError> {
-    let to = request.finished_at.unwrap_or(i64::MAX);
+    let to = request.finished_at.unwrap_or(now);
     let marker = format!("%\"source_request_id\":\"{}\"%", request.id);
     let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE at >= ?1 AND at <= ?2 AND (session_id = ?3 OR detail LIKE ?4 OR request_id = ?5) ORDER BY at, rowid")?;
     let rows = stmt.query_map(
