@@ -2326,8 +2326,8 @@ impl ShareSums {
     fn add(&mut self, row: &RollupRow, tier: &str, tables: &PlanTables, counted: bool) {
         let usage = row.usage();
         // A failed request books a row with no token and an accounting row carries the wasted counts alone, while the
-        // model refuses a model it has no weight for before it reads the usage: such a row would null a priced window
-        // for a charge of nothing.
+        // cost model refuses a model it has no weight for before it reads the usage: such a row would null a priced
+        // window for a charge of nothing.
         if !counted || tokens_of(usage) == 0 {
             return;
         }
