@@ -2,6 +2,7 @@ import { type Dispatch, type SetStateAction, useEffect, useLayoutEffect, useRef,
 import { ApiError, quietly, reportRecovery } from '@/api/http';
 import { clock } from '@/lib/clock';
 import { type Followed, followPages, merged, type Overrun, type Paging, pagingFor } from '@/lib/follow';
+import { armPoll, counted } from '@/lib/hooks';
 
 /**
  * The auto reload poll both logs run: every `intervalMs` while the tab is visible, the page's `paused` is false and the
@@ -69,8 +70,7 @@ export function useFollow<R>(input: {
   // When the last poll answered, null until one has, so a wait that ends reads at once only after a full interval.
   const lastAnswered = useRef<number | null>(null);
   // The hook's polls still out. It outlives the poll's effect, so the first tick after a drawer closes, the interval
-  // changes or the first page returns skips while a poll from before it is out. Each arm counts down before its drop
-  // checks, so a dropped answer clears its poll too.
+  // changes or the first page returns skips while a poll from before it is out.
   const out = useRef(0);
   // The rows under the reader would move on an older page, so its cursor holds the poll until the first page returns.
   const polling = intervalMs > 0 && !paused && cursor === undefined;
@@ -120,10 +120,8 @@ export function useFollow<R>(input: {
       // cursor past it for the answer that stands in for a list read that failed.
       const pages: Promise<{ cursor?: string | null; landedThrough?: number; overrun: string | null; rows: R[] }> =
         start === null ? page(undefined).then((p) => ({ cursor: p.nextCursor, landedThrough: p.landedThrough, overrun: null, rows: p.rows })) : followPages(page, new Set(start.map(identify)), identify, below, landedAfter === undefined, () => armed.alive, lands);
-      out.current += 1;
-      pages.then(
+      counted(out, pages).then(
         (polledPages) => {
-          out.current -= 1;
           if (!armed.alive) return;
           lastAnswered.current = clock.now();
           for (const path of failures.paths) reportRecovery(path);
@@ -157,7 +155,6 @@ export function useFollow<R>(input: {
           setFollowed({ for: polled, fresh, landedThrough: withheld ? landedAfter : (polledPages.landedThrough ?? landedAfter), overrun: next, rows, standIn: current.standIn });
         },
         (err: unknown) => {
-          out.current -= 1;
           if (!armed.alive) return;
           // A failure under an address the reader has left since leaves the new address's streak to its own polls.
           if (latest.current.address === polled) failures.failing = true;
@@ -165,23 +162,11 @@ export function useFollow<R>(input: {
         },
       );
     };
-    // A tick that finds a poll still out skips with no catch-up poll, which would read back to back under a slow
-    // server, and the next tick arrives one interval later at most.
-    const id = clock.setInterval(() => {
-      if (!document.hidden && out.current === 0) poll();
-    }, intervalMs);
-    // The tab's return and the end of a pause read at once only when the last answer is a full interval old, and only
-    // the return's read keeps its tint through the tick after it.
-    const readDue = (returned: boolean) => {
-      if (!document.hidden && lastAnswered.current !== null && clock.now() - lastAnswered.current >= intervalMs) poll(returned);
-    };
-    const onVisible = () => readDue(true);
-    readDue(false);
-    document.addEventListener('visibilitychange', onVisible);
+    // Only the tab's return read keeps its tint through the tick after it.
+    const disarm = armPoll(intervalMs, poll, () => out.current === 0, () => lastAnswered.current, true);
     return () => {
       armed.alive = false;
-      clock.clearInterval(id);
-      document.removeEventListener('visibilitychange', onVisible);
+      disarm();
     };
     // The poll reads the address, the rows and the reader through `latest`, so the effect re-arms only when the
     // interval or the pause changes.

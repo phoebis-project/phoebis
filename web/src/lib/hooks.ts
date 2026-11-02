@@ -37,6 +37,44 @@ const sameDeps = (a: readonly unknown[], b: readonly unknown[]) => a.length === 
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const stamp = () => new Date(clock.now()).toISOString();
 
+/**
+ * Counts `pending` in `out` until it settles, and hands it back for the caller's arms. A read counts once its call has
+ * returned a promise, so a reader that throws counts nothing. Reactions run in the order they were chained, so the
+ * count-down runs before the arms the caller chains and their drop checks, and a dropped answer clears its read too.
+ */
+export function counted<T>(out: { current: number }, pending: Promise<T>): Promise<T> {
+  out.current += 1;
+  const settle = () => {
+    out.current -= 1;
+  };
+  pending.then(settle, settle);
+  return pending;
+}
+
+/**
+ * Arms a poll that reads every `periodMs` while the tab is visible and `idle()` holds. When the tab comes back, and on
+ * arming with `readDueNow`, it reads at once if `answeredAt()` is a full period old, with `returned` true only for the
+ * tab's return. Returns the cleanup.
+ */
+export function armPoll(periodMs: number, read: (returned: boolean) => void, idle: () => boolean, answeredAt: () => number | null, readDueNow: boolean): () => void {
+  // A tick that finds a read still out skips with no catch-up read, which would read back to back under a slow server,
+  // and the next tick arrives one period later at most.
+  const id = clock.setInterval(() => {
+    if (!document.hidden && idle()) read(false);
+  }, periodMs);
+  const readDue = (returned: boolean) => {
+    const at = answeredAt();
+    if (!document.hidden && at !== null && clock.now() - at >= periodMs) read(returned);
+  };
+  const onVisible = () => readDue(true);
+  if (readDueNow) readDue(false);
+  document.addEventListener('visibilitychange', onVisible);
+  return () => {
+    clock.clearInterval(id);
+    document.removeEventListener('visibilitychange', onVisible);
+  };
+}
+
 export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [], options: AsyncOptions = {}): Loaded<T> {
   const { paused = false, refreshMs } = options;
   const [data, setData] = useState<T | null>(null);
@@ -69,9 +107,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   const started = useRef(0);
   const landedSeq = useRef(0);
   // The hook's reads still out, the load effect's and the refreshes' alike, since a load for new deps can outlast the
-  // period and a tick would read the route a second time beside it. A read counts once its call has returned a promise,
-  // so a loader that throws counts nothing, and each settle arm counts down before its drop checks, so a dropped answer
-  // clears its read too.
+  // period and a tick would read the route a second time beside it.
   const inFlight = useRef(0);
   /** Whether the read numbered `seq` may land, which marks it as the newest landed. */
   const lands = (seq: number) => {
@@ -118,17 +154,13 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     started.current += 1;
     const seq = started.current;
     loadReadInCommit.current = true;
-    const pending = latest.current.load();
-    inFlight.current += 1;
-    pending.then(
+    counted(inFlight, latest.current.load()).then(
       (value) => {
-        inFlight.current -= 1;
         if (!current.alive || !lands(seq)) return;
         landed(value, held);
         setLoading(false);
       },
       (err: unknown) => {
-        inFlight.current -= 1;
         if (!current.alive || !lands(seq)) return;
         failed(err);
         setLoading(false);
@@ -151,41 +183,26 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
       const { deps: answered, load: read } = latest.current;
       started.current += 1;
       const seq = started.current;
-      const pending = failing.current ? quietly(read) : read();
-      inFlight.current += 1;
       // A refresh that outruns the load it supersedes ends the loading too, since that load's answer will be dropped.
-      pending.then(
+      counted(inFlight, failing.current ? quietly(read) : read()).then(
         (value) => {
-          inFlight.current -= 1;
           if (!armed.alive || !loadRun.alive || !lands(seq)) return;
           landed(value, answered);
           setLoading(false);
         },
         (err: unknown) => {
-          inFlight.current -= 1;
           if (!armed.alive || !loadRun.alive || !lands(seq)) return;
           failed(err);
           setLoading(false);
         },
       );
     };
-    // A tick that finds a read still out skips with no catch-up read, which would read back to back under a slow
-    // server, and the next tick arrives one period later at most.
-    const id = clock.setInterval(() => {
-      if (!document.hidden && inFlight.current === 0) refresh();
-    }, refreshMs);
-    // A tab that comes back, and a pause that ends, read at once only when the last answer is a full period old. The
-    // arm yields to a read the load effect started in the same commit, so one render that changes the deps and arms
-    // the refresh reads once.
-    const onVisible = () => {
-      if (!document.hidden && fetched.current !== null && clock.now() - Date.parse(fetched.current) >= refreshMs) refresh();
-    };
-    if (!loadReadInCommit.current) onVisible();
-    document.addEventListener('visibilitychange', onVisible);
+    // The arm's read at once yields to a read the load effect started in the same commit, so one render that changes
+    // the deps and arms the refresh reads once.
+    const disarm = armPoll(refreshMs, () => refresh(), () => inFlight.current === 0, () => (fetched.current === null ? null : Date.parse(fetched.current)), !loadReadInCommit.current);
     return () => {
       armed.alive = false;
-      clock.clearInterval(id);
-      document.removeEventListener('visibilitychange', onVisible);
+      disarm();
     };
     // The load is read through `latest` when the period fires, so the effect re-arms only when the period or the pause
     // changes.
