@@ -368,7 +368,10 @@ keep the window's row with the same words muted, and an account whose poll has r
 Dashboard's cards and the Accounts list ([Dashboard](console.md#dashboard), [Accounts](console.md#accounts),
 [Quota](console.md#quota)). The top bar's Week control reads a subscription figure as a share of the Pro, Max or Ultra
 week, Ultra week until you pick one, stored in the browser beside the unit position, mirrored on the Settings view's
-Unit row and disabled under the dollar positions ([The shell](console.md#the-shell), [Settings](console.md#settings)).
+Unit row and disabled under the dollar positions ([The shell](console.md#the-shell), [Settings](console.md#settings)). A
+cost model that sizes no 7-day capacity for the chosen week's plan draws the unpriced dash on every cost figure in that
+week, titled "Unpriced: the cost model holds no 7-day capacity for the {plan} week", the tiles' note reading "unpriced"
+([The shell](console.md#the-shell)).
 
 Every finished request lands in the ledger as one row for the client request, one per attempt and one per routing
 decision, folded into the hourly rollup the analytics read ([Statistics](statistics.md#the-ledger)). Each attempt
