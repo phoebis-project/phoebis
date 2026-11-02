@@ -191,7 +191,9 @@ export function shedPreview(
   // ceiling on every window the pin's model draws. The router also adds the pin's rewrite and burn and counts the
   // round's planned reservations, which the served figures cannot replay, so this is an approximation of its read. A
   // sibling whose end falls inside the pool's wind-down is no destination whatever it reads, an end exactly the
-  // wind-down away included.
+  // wind-down away included. A sibling whose windows hold the 7-day window and no 5-hour one, as an approved Ultra
+  // account's set does, is read on the 7-day window alone, since the router's fit books the windows of the
+  // destination's set and nothing on a window that set lacks.
   const hasRunway = (source: string, model: string | null) =>
     listed.some(
       ({ account, eligible }) =>
@@ -200,10 +202,12 @@ export function shedPreview(
         (endOf(account, now) ?? Number.POSITIVE_INFINITY) - pool.windDownMinutes * 60_000 > now &&
         (account.kind === 'api_key'
           ? bucketRoom(account, now)
-          : windowsOf(model).every((id) => {
-              const projection = readingOf(account, id)?.projection ?? null;
-              return projection !== null && projection < ceiling;
-            })),
+          : windowsOf(model)
+              .filter((id) => id !== '5h' || readingOf(account, '5h') !== null || readingOf(account, '7d') === null)
+              .every((id) => {
+                const projection = readingOf(account, id)?.projection ?? null;
+                return projection !== null && projection < ceiling;
+              })),
     );
   const windowMs = pool.burnAverageSeconds * 1_000;
   const hot: ShedHot[] = [];

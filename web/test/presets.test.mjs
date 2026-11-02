@@ -189,6 +189,8 @@ test('the preview names every member over the ceiling, and says no sibling has r
   assert.equal(d.shedPreviewLine(d.shedPreview(cooled, [hot, cool], three, NOW), NOW), '1 member projects over the ceiling: hot. No sibling has runway for them, so nothing would be marked.', 'a member the router skips is no destination');
   const unread = oauth('unread', null, 0.2);
   assert.equal(line([hot, unread], three), '1 member projects over the ceiling: hot. No sibling has runway for them, so nothing would be marked.', 'a sibling with no reading on a window the pin draws has no runway');
+  const weekOnly = { fableWindow: null, id: 'week-only', kind: 'oauth', label: 'week-only', windows: [win('7d', 0.2, 5 * HOUR)] };
+  assert.equal(line([hot, weekOnly], three), '1 member projects over the ceiling: hot. A round there would mark 2 sessions (1 warm), 4.5 %/h of the excess, to move to a sibling with runway.', 'a sibling whose window set lacks the 5-hour window has runway on its 7-day window');
   const room = { fableWindow: null, id: 'key', kind: 'api_key', label: 'key', windows: [{ id: 'itpm:claude-sonnet-5', label: 'itpm', observedAt: at(NOW), periodHours: 1 / 60, resetsAt: at(NOW + MINUTE), utilization: 0.4 }] };
   assert.equal(line([hot, room], three), '1 member projects over the ceiling: hot. A round there would mark 2 sessions (1 warm), 4.5 %/h of the excess, to move to a sibling with runway.', 'an API-key sibling with room in its bucket takes them');
   const ordered = d.shedPreview({ ...pool([second, hot, cool]), members: [member('second', 'eligible', 1), member('hot'), member('cool', 'eligible', 1)] }, [second, hot, cool], pins, NOW);
