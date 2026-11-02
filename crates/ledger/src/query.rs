@@ -3087,9 +3087,44 @@ pub async fn dashboard(
     })
 }
 
+/// The accounts of `quota_samples` and each one's windows, by a skip over an index that leads with the account and
+/// over the account index's second column: one seek per account and per window rather than a walk of the table, since
+/// no index leads with `bucket`. The recursion's last row is the `NULL` that ends it, which every reader filters out.
+macro_rules! quota_account_windows_cte {
+    () => {
+        "WITH RECURSIVE \
+           accounts(account_id) AS ( \
+             SELECT MIN(account_id) FROM quota_samples \
+             UNION ALL \
+             SELECT (SELECT MIN(q.account_id) FROM quota_samples q WHERE q.account_id > accounts.account_id) \
+               FROM accounts WHERE accounts.account_id IS NOT NULL), \
+           windows(account_id, window) AS ( \
+             SELECT account_id, (SELECT MIN(q.window) FROM quota_samples q WHERE q.account_id = accounts.account_id) \
+               FROM accounts WHERE accounts.account_id IS NOT NULL \
+             UNION ALL \
+             SELECT account_id, (SELECT MIN(q.window) FROM quota_samples q \
+                                  WHERE q.account_id = windows.account_id AND q.window > windows.window) \
+               FROM windows WHERE windows.window IS NOT NULL)"
+    };
+}
+
+/// The newest sample of the last day per account and window. Binds `?1`, the day's first bucket. The seek names the
+/// account index, since the primary key leads with the account too but ranges over the bucket before the window.
+pub(crate) const LATEST_QUOTA_SQL: &str = concat!(
+    quota_account_windows_cte!(),
+    " SELECT q.account_id, q.bucket, q.window, q.utilization, q.reset_at, q.source, q.observed_at \
+        FROM windows w \
+        JOIN quota_samples q ON q.rowid = ( \
+          SELECT s.rowid FROM quota_samples s INDEXED BY quota_samples_account \
+           WHERE s.account_id = w.account_id AND s.window = w.window AND s.bucket >= ?1 \
+           ORDER BY s.bucket DESC LIMIT 1) \
+       WHERE w.window IS NOT NULL \
+       ORDER BY q.account_id, q.window"
+);
+
 pub fn latest_quota(conn: &Connection, now: i64) -> Result<Vec<QuotaSampleRecord>, LedgerError> {
     let since = now / 1_000 - 86_400;
-    let mut stmt = conn.prepare("SELECT q.account_id, q.bucket, q.window, q.utilization, q.reset_at, q.source, q.observed_at FROM quota_samples q WHERE q.bucket >= ?1 AND q.bucket = (SELECT MAX(bucket) FROM quota_samples WHERE account_id = q.account_id AND window = q.window AND bucket >= ?1) ORDER BY q.account_id, q.window")?;
+    let mut stmt = conn.prepare(LATEST_QUOTA_SQL)?;
     let rows = stmt.query_map(params![since], |r| {
         Ok(QuotaSampleRecord {
             account_id: r.get(0)?,
@@ -3120,6 +3155,32 @@ pub struct HourlyWindowSample {
     pub reset_at: Option<i64>,
 }
 
+/// The hour of `q.bucket` in seconds. SQLite's `/` truncates toward zero, so the hour is floored through a modulus kept
+/// positive, the hour `hour_of` files a bucket before the epoch under.
+macro_rules! hour_floor {
+    () => {
+        "(q.bucket - (((q.bucket % 3600) + 3600) % 3600))"
+    };
+}
+
+/// Binds `?1` and `?2`, the range, and `?3` and `?4`, the first and the past hour it touches. The ranking reads the
+/// whole hours, so a sample of the range is the last of its hour against the hour's samples outside the range too.
+pub(crate) const HOURLY_WINDOW_SAMPLES_SQL: &str = concat!(
+    quota_account_windows_cte!(),
+    ", ranked AS ( \
+         SELECT q.account_id, q.window, q.bucket, q.observed_at, q.utilization, q.reset_at, ",
+    hour_floor!(),
+    " AS hour, ROW_NUMBER() OVER (PARTITION BY q.account_id, q.window, ",
+    hour_floor!(),
+    " ORDER BY q.bucket DESC) AS nth \
+           FROM windows w JOIN quota_samples q INDEXED BY quota_samples_account \
+             ON q.account_id = w.account_id AND q.window = w.window \
+          WHERE w.window IS NOT NULL AND q.bucket >= ?3 AND q.bucket < ?4) \
+     SELECT account_id, hour, window, bucket, observed_at, utilization, reset_at \
+       FROM ranked WHERE nth = 1 AND bucket >= ?1 AND bucket < ?2 \
+      ORDER BY account_id, hour, window"
+);
+
 /// Every account's last sample per window and hour over `[from, to)` in Unix seconds, ordered by account, hour,
 /// window.
 pub fn hourly_window_samples(
@@ -3127,13 +3188,11 @@ pub fn hourly_window_samples(
     from: i64,
     to: i64,
 ) -> Result<Vec<HourlyWindowSample>, LedgerError> {
-    // SQLite's `/` truncates toward zero, so the hour is floored through a modulus kept positive, the hour `hour_of`
-    // files a bucket before the epoch under.
-    const HOUR: &str = "(q.bucket - (((q.bucket % 3600) + 3600) % 3600))";
-    let mut stmt = conn.prepare(&format!(
-        "SELECT q.account_id, {HOUR} AS hour, q.window, q.bucket, q.observed_at, q.utilization, q.reset_at FROM quota_samples q WHERE q.bucket >= ?1 AND q.bucket < ?2 AND q.bucket = (SELECT MAX(bucket) FROM quota_samples WHERE account_id = q.account_id AND window = q.window AND bucket >= {HOUR} AND bucket < {HOUR} + 3600) ORDER BY q.account_id, hour, q.window"
-    ))?;
-    let rows = stmt.query_map(params![from, to], |r| {
+    // Rust's `/` truncates toward zero as SQLite's does, so the hours the range touches floor the Euclidean way.
+    let first_hour = from.div_euclid(3_600) * 3_600;
+    let past_hour = to.div_euclid(3_600) * 3_600 + if to.rem_euclid(3_600) > 0 { 3_600 } else { 0 };
+    let mut stmt = conn.prepare(HOURLY_WINDOW_SAMPLES_SQL)?;
+    let rows = stmt.query_map(params![from, to, first_hour, past_hour], |r| {
         Ok(HourlyWindowSample {
             account_id: r.get(0)?,
             hour: r.get(1)?,
@@ -3147,6 +3206,34 @@ pub fn hourly_window_samples(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// The accounts of `extra_usage_samples`, by the same skip over its primary key, which leads with the account. The
+/// recursion's last row is the `NULL` that ends it, which every reader filters out.
+macro_rules! extra_usage_accounts_cte {
+    () => {
+        "WITH RECURSIVE \
+           accounts(account_id) AS ( \
+             SELECT MIN(account_id) FROM extra_usage_samples \
+             UNION ALL \
+             SELECT (SELECT MIN(e.account_id) FROM extra_usage_samples e WHERE e.account_id > accounts.account_id) \
+               FROM accounts WHERE accounts.account_id IS NOT NULL)"
+    };
+}
+
+/// Binds `?1`, the day's first bucket.
+pub(crate) const LATEST_EXTRA_USAGE_SQL: &str = concat!(
+    extra_usage_accounts_cte!(),
+    " SELECT e.account_id, e.bucket, e.is_enabled, e.in_use, e.monthly_limit, e.used_credits, e.utilization, \
+             e.currency, e.disabled_reason, e.overage_reset, e.source, e.spend_limit_minor, e.spend_used_minor, \
+             e.spend_percent, e.spend_currency, e.spend_exponent \
+        FROM accounts a \
+        JOIN extra_usage_samples e ON e.rowid = ( \
+          SELECT s.rowid FROM extra_usage_samples s \
+           WHERE s.account_id = a.account_id AND s.bucket >= ?1 \
+           ORDER BY s.bucket DESC, s.source = 'head' DESC LIMIT 1) \
+       WHERE a.account_id IS NOT NULL \
+       ORDER BY e.account_id"
+);
+
 /// The newest row of the last day per account, one row each. A head and a poll may share the newest bucket, and the
 /// head row answers for it, as the insert ranks a head the newest truth of its bucket.
 pub fn latest_extra_usage(
@@ -3154,7 +3241,7 @@ pub fn latest_extra_usage(
     now: i64,
 ) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
     let since = now / 1_000 - 86_400;
-    let mut stmt = conn.prepare("SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent FROM extra_usage_samples e WHERE bucket >= ?1 AND rowid = (SELECT rowid FROM extra_usage_samples WHERE account_id = e.account_id AND bucket >= ?1 ORDER BY bucket DESC, source = 'head' DESC LIMIT 1) ORDER BY account_id")?;
+    let mut stmt = conn.prepare(LATEST_EXTRA_USAGE_SQL)?;
     let rows = stmt.query_map(params![since], |r| {
         Ok(ExtraUsageSampleRecord {
             account_id: r.get(0)?,
@@ -3177,6 +3264,21 @@ pub fn latest_extra_usage(
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
+
+/// Binds `?1`, the day's first bucket.
+pub(crate) const LATEST_EXTRA_USAGE_POLLED_SQL: &str = concat!(
+    extra_usage_accounts_cte!(),
+    " SELECT e.account_id, e.bucket, e.is_enabled, e.in_use, e.monthly_limit, e.used_credits, e.utilization, \
+             e.currency, e.disabled_reason, e.overage_reset, e.source, e.spend_limit_minor, e.spend_used_minor, \
+             e.spend_percent, e.spend_currency, e.spend_exponent \
+        FROM accounts a \
+        JOIN extra_usage_samples e ON e.rowid = ( \
+          SELECT s.rowid FROM extra_usage_samples s \
+           WHERE s.account_id = a.account_id AND s.bucket >= ?1 AND s.source = 'poll' \
+           ORDER BY s.bucket DESC LIMIT 1) \
+       WHERE a.account_id IS NOT NULL \
+       ORDER BY e.account_id"
+);
 
 /// The newest extra-usage row of the last day per account whose source is `poll`: the row that carries the amounts,
 /// which a later head row never hides.
@@ -3185,7 +3287,7 @@ pub fn latest_extra_usage_polled(
     now: i64,
 ) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
     let since = now / 1_000 - 86_400;
-    let mut stmt = conn.prepare("SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent FROM extra_usage_samples e WHERE bucket >= ?1 AND source = 'poll' AND rowid = (SELECT rowid FROM extra_usage_samples WHERE account_id = e.account_id AND bucket >= ?1 AND source = 'poll' ORDER BY bucket DESC LIMIT 1) ORDER BY account_id")?;
+    let mut stmt = conn.prepare(LATEST_EXTRA_USAGE_POLLED_SQL)?;
     let rows = stmt.query_map(params![since], |r| {
         Ok(ExtraUsageSampleRecord {
             account_id: r.get(0)?,
@@ -3209,6 +3311,21 @@ pub fn latest_extra_usage_polled(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Binds `?1`, the day's first bucket.
+pub(crate) const LATEST_EXTRA_USAGE_SHARE_SQL: &str = concat!(
+    extra_usage_accounts_cte!(),
+    " SELECT e.account_id, e.bucket, e.is_enabled, e.in_use, e.monthly_limit, e.used_credits, e.utilization, \
+             e.currency, e.disabled_reason, e.overage_reset, e.source, e.spend_limit_minor, e.spend_used_minor, \
+             e.spend_percent, e.spend_currency, e.spend_exponent \
+        FROM accounts a \
+        JOIN extra_usage_samples e ON e.rowid = ( \
+          SELECT s.rowid FROM extra_usage_samples s \
+           WHERE s.account_id = a.account_id AND s.bucket >= ?1 AND s.utilization IS NOT NULL \
+           ORDER BY s.bucket DESC, s.source = 'head' DESC LIMIT 1) \
+       WHERE a.account_id IS NOT NULL \
+       ORDER BY e.account_id"
+);
+
 /// The newest extra-usage row of the last day per account that carries a share, ranked as `latest_extra_usage` ranks
 /// a bucket's rows: a head that names the overage reset alone writes a row with none, which hides no earlier share.
 pub fn latest_extra_usage_share(
@@ -3216,7 +3333,7 @@ pub fn latest_extra_usage_share(
     now: i64,
 ) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
     let since = now / 1_000 - 86_400;
-    let mut stmt = conn.prepare("SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent FROM extra_usage_samples e WHERE bucket >= ?1 AND utilization IS NOT NULL AND rowid = (SELECT rowid FROM extra_usage_samples WHERE account_id = e.account_id AND bucket >= ?1 AND utilization IS NOT NULL ORDER BY bucket DESC, source = 'head' DESC LIMIT 1) ORDER BY account_id")?;
+    let mut stmt = conn.prepare(LATEST_EXTRA_USAGE_SHARE_SQL)?;
     let rows = stmt.query_map(params![since], |r| {
         Ok(ExtraUsageSampleRecord {
             account_id: r.get(0)?,
@@ -5017,6 +5134,169 @@ mod tests {
     fn the_key_sample_page_seeks_requests_key() {
         for plan in sample_page_plans(GUARDRAIL_SAMPLE_KEY_SQL, "k1") {
             assert!(seeks_through(&plan, "requests_key"), "{plan:?}");
+        }
+    }
+
+    /// Whether the plan seeks `table` through `index` on every column of `seek`, and no step walks `table` under its
+    /// own name or under any of `aliases`. A `SCAN` step names the alias where the statement has one, and a correlated
+    /// seek on an inner reference satisfies the seek half on its own, so both halves are checked against the
+    /// statement's aliases and the columns the seek must bind.
+    fn seeks_without_a_scan(
+        plan: &[String],
+        table: &str,
+        aliases: &[&str],
+        index: &str,
+        seek: &[&str],
+    ) -> bool {
+        let walks = |name: &str| {
+            plan.iter().any(|step| {
+                *step == format!("SCAN {name}") || step.starts_with(&format!("SCAN {name} "))
+            })
+        };
+        plan.iter().any(|step| {
+            step.starts_with("SEARCH ")
+                && step.contains(index)
+                && seek.iter().all(|column| step.contains(column))
+        }) && !walks(table)
+            && !aliases.iter().any(|alias| walks(alias))
+    }
+
+    /// The seek's terms as `EXPLAIN QUERY PLAN` prints them: the account, the window where the table has one, and the
+    /// bucket's range.
+    const QUOTA_SEEK: &[&str] = &["account_id=?", "window=?", "bucket>?"];
+    const EXTRA_USAGE_SEEK: &[&str] = &["account_id=?", "bucket>?"];
+
+    // Negative controls: each walks its table under its alias with a correlated seek per row, which the helper must
+    // reject before its verdict on a rewrite counts.
+    const LATEST_QUOTA_WALK: &str =
+        "SELECT q.account_id, q.bucket, q.window, q.utilization, q.reset_at, q.source, q.observed_at FROM \
+         quota_samples q WHERE q.bucket >= ?1 AND q.bucket = (SELECT MAX(bucket) FROM quota_samples WHERE account_id = \
+         q.account_id AND window = q.window AND bucket >= ?1) ORDER BY q.account_id, q.window";
+    const HOURLY_WINDOW_SAMPLES_WALK: &str =
+        "SELECT q.account_id, (q.bucket - (((q.bucket % 3600) + 3600) % 3600)) AS hour, q.window, q.bucket, \
+         q.observed_at, q.utilization, q.reset_at FROM quota_samples q WHERE q.bucket >= ?1 AND q.bucket < ?2 AND \
+         q.bucket = (SELECT MAX(bucket) FROM quota_samples WHERE account_id = q.account_id AND window = q.window AND \
+         bucket >= (q.bucket - (((q.bucket % 3600) + 3600) % 3600)) AND bucket < (q.bucket - (((q.bucket % 3600) + \
+         3600) % 3600)) + 3600) ORDER BY q.account_id, hour, q.window";
+    const LATEST_EXTRA_USAGE_WALK: &str =
+        "SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, \
+         disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, \
+         spend_exponent FROM extra_usage_samples e WHERE bucket >= ?1 AND rowid = (SELECT rowid FROM \
+         extra_usage_samples WHERE account_id = e.account_id AND bucket >= ?1 ORDER BY bucket DESC, source = 'head' \
+         DESC LIMIT 1) ORDER BY account_id";
+    const LATEST_EXTRA_USAGE_POLLED_WALK: &str =
+        "SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, \
+         disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, \
+         spend_exponent FROM extra_usage_samples e WHERE bucket >= ?1 AND source = 'poll' AND rowid = (SELECT rowid \
+         FROM extra_usage_samples WHERE account_id = e.account_id AND bucket >= ?1 AND source = 'poll' ORDER BY bucket \
+         DESC LIMIT 1) ORDER BY account_id";
+    const LATEST_EXTRA_USAGE_SHARE_WALK: &str =
+        "SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, \
+         disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, \
+         spend_exponent FROM extra_usage_samples e WHERE bucket >= ?1 AND utilization IS NOT NULL AND rowid = (SELECT \
+         rowid FROM extra_usage_samples WHERE account_id = e.account_id AND bucket >= ?1 AND utilization IS NOT NULL \
+         ORDER BY bucket DESC, source = 'head' DESC LIMIT 1) ORDER BY account_id";
+
+    #[test]
+    fn the_latest_quota_read_seeks_each_windows_newest_sample() {
+        let before = plan_of(LATEST_QUOTA_WALK, vec![rusqlite::types::Value::from(0_i64)]);
+        assert!(
+            !seeks_without_a_scan(
+                &before,
+                "quota_samples",
+                &["q"],
+                "quota_samples_account",
+                QUOTA_SEEK
+            ),
+            "the helper rejects the walk under its alias: {before:?}"
+        );
+        let plan = plan_of(LATEST_QUOTA_SQL, vec![rusqlite::types::Value::from(0_i64)]);
+        assert!(
+            seeks_without_a_scan(
+                &plan,
+                "quota_samples",
+                &["q", "s"],
+                "quota_samples_account",
+                QUOTA_SEEK
+            ),
+            "{plan:?}"
+        );
+    }
+
+    #[test]
+    fn the_hourly_window_samples_read_seeks_each_windows_range() {
+        let before = plan_of(
+            HOURLY_WINDOW_SAMPLES_WALK,
+            vec![
+                rusqlite::types::Value::from(0_i64),
+                rusqlite::types::Value::from(7_200_i64),
+            ],
+        );
+        assert!(
+            !seeks_without_a_scan(
+                &before,
+                "quota_samples",
+                &["q"],
+                "quota_samples_account",
+                QUOTA_SEEK
+            ),
+            "the helper rejects the walk under its alias: {before:?}"
+        );
+        let binds = vec![
+            rusqlite::types::Value::from(0_i64),
+            rusqlite::types::Value::from(7_200_i64),
+            rusqlite::types::Value::from(0_i64),
+            rusqlite::types::Value::from(7_200_i64),
+        ];
+        let plan = plan_of(HOURLY_WINDOW_SAMPLES_SQL, binds);
+        assert!(
+            seeks_without_a_scan(
+                &plan,
+                "quota_samples",
+                &["q"],
+                "quota_samples_account",
+                QUOTA_SEEK
+            ),
+            "{plan:?}"
+        );
+    }
+
+    #[test]
+    fn the_latest_extra_usage_reads_seek_each_accounts_newest_row() {
+        const PRIMARY_KEY: &str = "sqlite_autoindex_extra_usage_samples_1";
+        for before in [
+            LATEST_EXTRA_USAGE_WALK,
+            LATEST_EXTRA_USAGE_POLLED_WALK,
+            LATEST_EXTRA_USAGE_SHARE_WALK,
+        ] {
+            let plan = plan_of(before, vec![rusqlite::types::Value::from(0_i64)]);
+            assert!(
+                !seeks_without_a_scan(
+                    &plan,
+                    "extra_usage_samples",
+                    &["e"],
+                    PRIMARY_KEY,
+                    EXTRA_USAGE_SEEK
+                ),
+                "the helper rejects the walk under its alias: {before}: {plan:?}"
+            );
+        }
+        for sql in [
+            LATEST_EXTRA_USAGE_SQL,
+            LATEST_EXTRA_USAGE_POLLED_SQL,
+            LATEST_EXTRA_USAGE_SHARE_SQL,
+        ] {
+            let plan = plan_of(sql, vec![rusqlite::types::Value::from(0_i64)]);
+            assert!(
+                seeks_without_a_scan(
+                    &plan,
+                    "extra_usage_samples",
+                    &["e", "s"],
+                    PRIMARY_KEY,
+                    EXTRA_USAGE_SEEK
+                ),
+                "{sql}: {plan:?}"
+            );
         }
     }
 

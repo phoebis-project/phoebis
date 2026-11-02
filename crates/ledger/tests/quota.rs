@@ -12,11 +12,11 @@ use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{
-    hourly_window_samples, lead_over_pace, HourlyWindowSample, LedgerConfig, LedgerDb, PlanTables,
-    QuotaPoll, QuotaSampleRecord, Sampled, POLL_INTERVAL,
+    hourly_window_samples, latest_quota, lead_over_pace, HourlyWindowSample, LedgerConfig,
+    LedgerDb, PlanTables, QuotaPoll, QuotaSampleRecord, Sampled, POLL_INTERVAL,
 };
 use phoebis_oauth::PollOutcome;
-use phoebis_routing::{EvidenceSource, FIVE_HOUR};
+use phoebis_routing::{EvidenceSource, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Identity, NewBundle, Secret, StateCause, StorageKey,
     Store, SubscriptionRow,
@@ -2770,6 +2770,45 @@ fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
         bounded.iter().map(|r| r.bucket).collect::<Vec<_>>(),
         vec![4_500, 4_400],
         "the bounds are hours in seconds, the upper one exclusive"
+    );
+}
+
+#[test]
+fn latest_quota_answers_each_windows_newest_sample_of_the_day_and_an_account_whose_samples_are_older_is_absent(
+) {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let sample = |account: &str, window: &str, bucket: i64, utilization: f64| QuotaSampleRecord {
+        account_id: account.into(),
+        bucket,
+        window: window.into(),
+        utilization: Some(utilization),
+        reset_at: Some(bucket * 1_000 + 3_600_000),
+        source: "poll".into(),
+        observed_at: Some(bucket * 1_000 + 17_000),
+    };
+    // `a` has two windows, the five-hour one sampled twice in the day, `b` one sample older than the day, and `c` one
+    // sample: the table holds one row per bucket and window, so the read answers one row per window it holds.
+    db.insert_samples(
+        &[
+            sample("a", FIVE_HOUR, 90_000, 0.1),
+            sample("a", FIVE_HOUR, 90_300, 0.2),
+            sample("a", SEVEN_DAY, 90_000, 0.5),
+            sample("b", FIVE_HOUR, 1_000, 0.9),
+            sample("c", FIVE_HOUR, 90_000, 0.3),
+        ],
+        None,
+    )
+    .unwrap();
+    let rows = db.read_blocking(|c| latest_quota(c, 100_000_000)).unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.account_id.as_str(), r.window.as_str(), r.bucket))
+            .collect::<Vec<_>>(),
+        [
+            ("a", FIVE_HOUR, 90_300),
+            ("a", SEVEN_DAY, 90_000),
+            ("c", FIVE_HOUR, 90_000)
+        ]
     );
 }
 
