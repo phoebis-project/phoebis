@@ -10,7 +10,8 @@ use axum::Router;
 use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_admin::{
-    router, AdminSecrets, AdminState, PairingVault, Readiness, Sessions, SettingsView, TlsReload,
+    router, AdminSecrets, AdminState, OldTotals, PairingVault, Readiness, Sessions, SettingsView,
+    TlsReload,
 };
 use phoebis_attention::{Attention, AttentionHandles, AttentionParts};
 use phoebis_bus::Bus;
@@ -718,6 +719,16 @@ pub async fn wait_json(
     }
 }
 
+/// Waits until the writer has committed the request `id`, read off the ledger rather than a route: `record` queues a
+/// row and lands it a batch later, and a route poll that reads first caches the older part of its lifetime without
+/// the row for the hour, so a test lands its historical rows through this before its first poll.
+pub async fn landed(parts: &Full, id: &str) {
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        parts.db.request(id).await.unwrap()
+    })
+    .await;
+}
+
 pub fn cookie_of(response: &Response<Body>) -> String {
     response
         .headers()
@@ -1222,6 +1233,7 @@ async fn build_app_bounded(
         non_companion_idle,
         bus: bus.clone(),
         ledger: ledger.clone(),
+        old_totals: OldTotals::default(),
         metrics: metrics.clone(),
         pricing: pricing.clone(),
         tables,

@@ -12,6 +12,7 @@ mod guardrails;
 mod keepalive;
 mod keys;
 mod ledger;
+mod lifetime;
 mod models;
 mod openapi;
 mod pools;
@@ -43,6 +44,7 @@ use phoebis_store::{NewBundle, Store};
 use phoebis_transport::control::ControlClient;
 
 pub use guardrails::SAMPLE_PAGE;
+pub use lifetime::{OldPart, OldTotals};
 pub use pricing::table_envelopes;
 pub use readiness::{Readiness, ReadinessSource};
 pub use routes::path_count;
@@ -89,6 +91,9 @@ pub struct AdminState {
     pub non_companion_idle: Duration,
     pub bus: Bus,
     pub ledger: Ledger,
+    /// The rows older than the week that the account and key lifetimes add to their week, cached per route so a poll
+    /// walks them once an hour.
+    pub old_totals: OldTotals,
     pub metrics: Arc<Metrics>,
     pub pricing: Arc<Pricing>,
     /// The subscription cost model in force, the one copy the router's burn rates and the keepalive read too, so the

@@ -1,5 +1,9 @@
 mod common;
+use std::time::Duration;
+
 use common::{delete, get, json, login, patch, post, put};
+
+const HOUR: i64 = 3_600_000;
 
 #[tokio::test]
 async fn pools_are_created_edited_and_deleted_with_their_members_and_validation() {
@@ -1298,6 +1302,95 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
     assert_eq!(
         json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0]["status"],
         "disabled"
+    );
+}
+
+#[tokio::test]
+async fn the_key_lifetime_walks_the_older_rows_once_an_hour_and_a_key_created_again_carries_none_of_them(
+) {
+    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let pool = r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}]}"#;
+    post(&parts.app, "/admin/pools", pool, Some(&cookie)).await;
+    let key = r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#;
+    post(&parts.app, "/admin/keys", key, Some(&cookie)).await;
+    let key_generation = parts.store.api_key("desktop").unwrap().unwrap().created_at;
+    let land = |id: &str, at: i64| {
+        parts.ledger.record(Record::Request {
+            request: RequestRecord {
+                id: id.into(),
+                received_at: at,
+                finished_at: Some(at + 100),
+                key_id: Some("desktop".into()),
+                key_generation,
+                pool_id: Some("main".into()),
+                model: "claude-sonnet-5".into(),
+                canonical_model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                status: Some(200),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            attempts: vec![AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: "direct".into(),
+                account_kind: "api_key".into(),
+                started_at: at,
+                outcome: "succeeded".into(),
+                input_tokens: Some(100),
+                output_tokens: Some(50),
+                ..Default::default()
+            }],
+            bodies: None,
+        });
+    };
+    land("old", now - 30 * 24 * HOUR);
+    land("new", now);
+    common::landed(&parts, "old").await;
+    // The key's create answered through the lifetime totals, which cached this hour's older part before "old" landed,
+    // so the first poll reads an hour on. The step outlasts the admin session's idle bound.
+    common::step(&parts, Duration::from_secs(3_600));
+    let cookie = login(&parts.app, "admin-secret").await;
+    let lifetime = |v: &serde_json::Value| v["keys"][0]["lifetime"]["requests"].as_u64();
+    common::wait_json(&parts.app, "/admin/keys", &cookie, |v| {
+        lifetime(v) == Some(2)
+    })
+    .await;
+    let reads = || parts.db.debug_page_reads();
+    let app = &parts.app;
+    let poll =
+        |cookie: String| async move { json(get(app, "/admin/keys", Some(&cookie)).await).await };
+    let r = reads();
+    poll(cookie.clone()).await;
+    let warm = reads() - r;
+    common::step(&parts, Duration::from_secs(3_600));
+    let cookie = login(&parts.app, "admin-secret").await;
+    let r = reads();
+    poll(cookie.clone()).await;
+    assert_eq!(
+        reads() - r,
+        warm + 1,
+        "the first poll after the hour moved walks the older rows once more"
+    );
+    let r = reads();
+    poll(cookie.clone()).await;
+    assert_eq!(
+        reads() - r,
+        warm,
+        "the second poll of the hour takes the older rows from the cache"
+    );
+    delete(&parts.app, "/admin/keys/desktop", Some(&cookie)).await;
+    post(&parts.app, "/admin/keys", key, Some(&cookie)).await;
+    assert_eq!(
+        lifetime(&poll(cookie.clone()).await),
+        Some(0),
+        "a key created again under a deleted id carries none of the earlier holder's rows, and the cache follows \
+         the live generations rather than the hour alone"
     );
 }
 

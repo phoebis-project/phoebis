@@ -3509,7 +3509,7 @@ fn price_group(
 }
 
 impl Totals {
-    fn add(&mut self, o: &Totals) {
+    pub fn add(&mut self, o: &Totals) {
         self.cost_usd += o.cost_usd;
         self.requests += o.requests;
         self.tokens += o.tokens;

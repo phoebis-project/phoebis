@@ -1,10 +1,13 @@
 mod common;
 use std::sync::Arc;
+use std::time::Duration;
 
 use common::{
     backing_off_parts, delete, get, json, login, patch, post, succeed_token_requests, Captured,
 };
 use fake_upstream::Respond;
+
+const HOUR: i64 = 3_600_000;
 
 #[tokio::test]
 async fn creating_an_api_key_account_verifies_it_and_a_rejected_key_is_refused() {
@@ -1108,6 +1111,7 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
             bodies: None,
         });
     }
+    common::landed(&parts, "r3").await;
     let accounts = common::wait_json(&parts.app, "/admin/accounts", &cookie, |v| {
         v["accounts"]
             .as_array()
@@ -1247,6 +1251,101 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
             .contains("PLACEHOLDER"),
         "no credential in the list"
     );
+}
+
+#[tokio::test]
+async fn the_account_lifetime_walks_the_older_rows_once_an_hour_and_a_row_landed_between_two_polls_shows(
+) {
+    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let land = |id: &str, at: i64| {
+        parts.ledger.record(Record::Request {
+            request: RequestRecord {
+                id: id.into(),
+                received_at: at,
+                finished_at: Some(at + 100),
+                key_id: Some("k".into()),
+                pool_id: Some("main".into()),
+                model: "claude-sonnet-5".into(),
+                canonical_model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                status: Some(200),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            attempts: vec![AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: "business".into(),
+                account_kind: "oauth".into(),
+                started_at: at,
+                outcome: "succeeded".into(),
+                input_tokens: Some(10),
+                output_tokens: Some(5),
+                ..Default::default()
+            }],
+            bodies: None,
+        });
+    };
+    land("old", now - 30 * 24 * HOUR);
+    land("new", now);
+    // The first poll caches the older part for the hour, so the row older than the week has landed before it.
+    common::landed(&parts, "old").await;
+    let lifetime = |v: &serde_json::Value| {
+        let accounts = v["accounts"].as_array().unwrap();
+        accounts
+            .iter()
+            .find(|a| a["id"] == "business")
+            .map(|a| a["requests"]["lifetime"].as_u64().unwrap())
+    };
+    common::wait_json(&parts.app, "/admin/accounts", &cookie, |v| {
+        lifetime(v) == Some(2)
+    })
+    .await;
+    let reads = || parts.db.debug_page_reads();
+    let app = &parts.app;
+    let poll = |cookie: String| async move {
+        json(get(app, "/admin/accounts", Some(&cookie)).await).await
+    };
+    let r = reads();
+    poll(cookie.clone()).await;
+    let warm = reads() - r;
+    common::step(&parts, Duration::from_secs(3_600));
+    // The step outlasts the admin session's idle bound.
+    let cookie = login(&parts.app, "admin-secret").await;
+    let r = reads();
+    poll(cookie.clone()).await;
+    assert_eq!(
+        reads() - r,
+        warm + 1,
+        "the first poll after the hour moved walks the older rows once more"
+    );
+    let r = reads();
+    poll(cookie.clone()).await;
+    assert_eq!(
+        reads() - r,
+        warm,
+        "the second poll of the hour takes the older rows from the cache"
+    );
+    common::step(&parts, Duration::from_secs(3_600));
+    let cookie = login(&parts.app, "admin-secret").await;
+    let r = reads();
+    tokio::join!(poll(cookie.clone()), poll(cookie.clone()));
+    assert_eq!(
+        reads() - r,
+        2 * warm + 1,
+        "two polls at a moved key share one walk"
+    );
+    // A guard against a cache that holds the week too: a row landed inside the week shows on a poll of the same hour.
+    land("newer", now + 2 * HOUR);
+    common::wait_json(&parts.app, "/admin/accounts", &cookie, |v| {
+        lifetime(v) == Some(3)
+    })
+    .await;
 }
 
 #[tokio::test]

@@ -370,7 +370,8 @@ immediately. If the account is still rate limited, the next request re-enters co
 `priority {n}`, or reads "Not a member of a pool." "Credential" lists Access token, Refresh token, Last refresh and Last
 error for a subscription account, and Secret ("stored encrypted at rest") and Last error for an API-key account.
 "Requests" reads Last 24h, Last 7d and Lifetime, with a "Routing log" link that opens the log on the account's rows over
-the last hour.
+the last hour. Lifetime counts its rows older than the week from a read made once an hour, so a request older than a
+week that lands late joins the figure within the hour.
 
 "Catalog" opens `Catalog of {label}`: `As of {ago}` with "Refresh", and the models as Model, Name, Released, Input
 tokens, Output tokens and Effort levels, or "The upstream lists no models."
@@ -598,12 +599,14 @@ Disabled, Expired or Revoked. Pool takes any number of pools, each as a chip of 
 all", and a pool the address names that the router does not list keeps its chip until the pools load. The search and the
 filters live in the page's address, so the pool card's key count link lands on its pool's keys. Auto reload starts at 5
 s and waits while a dialog or a row's menu is open. The tiles Keys, Active, Lifetime requests and Lifetime cost follow,
-and the card "Lifetime cost by key" ("Relative spend across all keys"), a bar per key. Lifetime cost, each bar's figure
-and the cost line under a key's "Usage, 7d" read in the top bar's unit: under Native the tile stacks the subscription
-traffic's figure in the chosen week over the billed traffic's dollars, and a bar's figure and a cost line read a key's
-figure beside its billed dollars, a side with no traffic left out, the tile, the bar's figure and the cost line each
-reading the subscription side as a dash with the Dashboard's hover where a request priced nothing, and its bar draws no
-fill and sorts last. A key spans its pool's accounts, so its figures carry no hint. The
+and the card "Lifetime cost by key" ("Relative spend across all keys"), a bar per key. The lifetime tiles and the card's
+bars count their rows older than the week from a read made once an hour, so a request older than a week that lands late
+joins them within the hour. Lifetime cost, each bar's figure and the cost line under a key's "Usage, 7d" read in the top
+bar's unit: under Native the tile stacks the subscription traffic's figure in the chosen week over the billed traffic's
+dollars, and a bar's figure and a cost line read a key's figure beside its billed dollars, a side with no traffic left
+out, the tile, the bar's figure and the cost line each reading the subscription side as a dash with the Dashboard's
+hover where a request priced nothing, and its bar draws no fill and sorts last. A key spans its pool's accounts, so its
+figures carry no hint. The
 columns are Name, Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and each row ends in its menu. Under the name a
 row notes the capture setting, `bodies captured, {h}h` or `bodies not captured`, with "inherited" where the key follows
 its pool and "keepalive off" for a key opted out of cache warming. Models reads `{n} rules`, with "(replace)" where they

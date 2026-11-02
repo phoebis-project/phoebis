@@ -295,28 +295,50 @@ async fn totals(
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
     let to = crate::analytics::hour_end(hour);
+    let week_start = hour - 7 * 24 * 3_600;
     let live = phoebis_ledger::LiveKeys::from_snapshot(&state.router.snapshot());
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
-    let read = state
-        .ledger
-        .db()
-        .read(move |c| {
-            Ok((
-                phoebis_ledger::key_request_totals(
-                    c,
-                    hour - 7 * 24 * 3_600,
-                    to,
-                    &live,
-                    &prices,
-                    &tables,
-                    now,
-                )?,
-                // Lifetime: `i64::MIN` sits at or below the earliest hour the rollups can hold, so every row clears it.
-                phoebis_ledger::key_request_totals(c, i64::MIN, to, &live, &prices, &tables, now)?,
-            ))
-        })
-        .await;
+    let read = async {
+        let old = state
+            .old_totals
+            .keys
+            .get((week_start, live.0.clone()), || {
+                let (db, live, prices, tables) = (
+                    state.ledger.db().clone(),
+                    live.clone(),
+                    prices.clone(),
+                    tables.clone(),
+                );
+                async move {
+                    db.read(move |c| {
+                        // `i64::MIN` sits at or below the earliest hour the rollups can hold, so every row older
+                        // than the week clears it.
+                        phoebis_ledger::key_request_totals(
+                            c,
+                            i64::MIN,
+                            week_start,
+                            &live,
+                            &prices,
+                            &tables,
+                            now,
+                        )
+                    })
+                    .await
+                }
+            })
+            .await?;
+        let week = state
+            .ledger
+            .db()
+            .read(move |c| {
+                phoebis_ledger::key_request_totals(c, week_start, to, &live, &prices, &tables, now)
+            })
+            .await?;
+        let lifetime = crate::lifetime::lifetime_of(&old, &week);
+        Ok::<_, phoebis_ledger::LedgerError>((week, lifetime))
+    }
+    .await;
     match read {
         Ok(totals) => totals,
         Err(error) => {

@@ -2116,48 +2116,76 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
     let to = crate::analytics::hour_end(hour);
+    let week_start = hour - 7 * 24 * 3_600;
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
-    let ledger = state
-        .ledger
-        .db()
-        .read(move |c| {
-            Ok((
-                phoebis_ledger::latest_quota(c, now)?,
-                phoebis_ledger::latest_extra_usage(c, now)?,
-                phoebis_ledger::latest_extra_usage_polled(c, now)?,
-                phoebis_ledger::latest_extra_usage_share(c, now)?,
-                phoebis_ledger::request_totals(
-                    c,
-                    "account_id",
-                    hour - 24 * 3_600,
-                    to,
-                    &prices,
-                    &tables,
-                    now,
-                )?,
-                phoebis_ledger::request_totals(
-                    c,
-                    "account_id",
-                    hour - 7 * 24 * 3_600,
-                    to,
-                    &prices,
-                    &tables,
-                    now,
-                )?,
-                // Lifetime: `i64::MIN` sits at or below the earliest hour the rollups can hold, so every row clears it.
-                phoebis_ledger::request_totals(
-                    c,
-                    "account_id",
-                    i64::MIN,
-                    to,
-                    &prices,
-                    &tables,
-                    now,
-                )?,
-            ))
-        })
-        .await;
+    let ledger = async {
+        let old = state
+            .old_totals
+            .accounts
+            .get((week_start, BTreeMap::new()), || {
+                let (db, prices, tables) =
+                    (state.ledger.db().clone(), prices.clone(), tables.clone());
+                async move {
+                    db.read(move |c| {
+                        // `i64::MIN` sits at or below the earliest hour the rollups can hold, so every row older
+                        // than the week clears it.
+                        phoebis_ledger::request_totals(
+                            c,
+                            "account_id",
+                            i64::MIN,
+                            week_start,
+                            &prices,
+                            &tables,
+                            now,
+                        )
+                    })
+                    .await
+                }
+            })
+            .await?;
+        let (quota, extra, extra_polled, extra_share, day, week) = state
+            .ledger
+            .db()
+            .read(move |c| {
+                Ok((
+                    phoebis_ledger::latest_quota(c, now)?,
+                    phoebis_ledger::latest_extra_usage(c, now)?,
+                    phoebis_ledger::latest_extra_usage_polled(c, now)?,
+                    phoebis_ledger::latest_extra_usage_share(c, now)?,
+                    phoebis_ledger::request_totals(
+                        c,
+                        "account_id",
+                        hour - 24 * 3_600,
+                        to,
+                        &prices,
+                        &tables,
+                        now,
+                    )?,
+                    phoebis_ledger::request_totals(
+                        c,
+                        "account_id",
+                        week_start,
+                        to,
+                        &prices,
+                        &tables,
+                        now,
+                    )?,
+                ))
+            })
+            .await?;
+        let lifetime = crate::lifetime::lifetime_of(&old, &week);
+        Ok::<_, phoebis_ledger::LedgerError>((
+            quota,
+            extra,
+            extra_polled,
+            extra_share,
+            day,
+            week,
+            lifetime,
+        ))
+    }
+    .await;
     let (quota, extra, extra_polled, extra_share, day, week, lifetime) = match ledger {
         Ok(read) => read,
         Err(error) => {
