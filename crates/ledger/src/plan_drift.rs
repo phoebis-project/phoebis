@@ -1,9 +1,15 @@
 //! The pinned plans under statistics shaped like a live file's: one key holding nearly every row, many sessions
 //! holding few, a few accounts. Every statement whose plan a test pins without statistics runs here against an
-//! analyzed file, so a plan the statistics move is caught before a live file moves it.
+//! analyzed file, so a plan the statistics move is caught before a live file moves it. The session identities read is
+//! the one exception: each of its `requests` references names its index or seeks the primary key, so no statistics
+//! move its plan, and its own test's planted statistics catch a dropped hint.
+//!
+//! The file is seeded and analyzed once per process and each test opens its own copy of the bytes, since the seed is
+//! most of a second's writes and every test reads the same file. A copy per test keeps the tests independent of each
+//! other's reads and opens.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use rusqlite::{params, params_from_iter};
 
@@ -38,14 +44,44 @@ const ACCOUNTS: [&str; 3] = ["a1", "a2", "a3"];
 const POOLS: [&str; 2] = ["p1", "p2"];
 const MODEL: &str = "claude-sonnet-5";
 
+/// The seeded and analyzed file's bytes. The initializer's directory goes when it returns or unwinds, so the shared
+/// seed leaves nothing behind.
+static SEEDED: OnceLock<Vec<u8>> = OnceLock::new();
+
+/// A ledger of its own on a copy of the seeded file. The control is asserted again through a pooled reader before the
+/// test's plan, so a copy whose statistics no longer pick the session index fails here rather than in a pinned plan.
+fn seeded() -> (tempfile::TempDir, Arc<LedgerDb>) {
+    let bytes = SEEDED.get_or_init(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        let db = LedgerDb::open(&path).unwrap();
+        seed(&db);
+        analyzed(&db);
+        // A copy carries the main file alone, so every page the seed wrote leaves the WAL first.
+        let busy: i64 = db
+            .write(|c| Ok(c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?))
+            .unwrap();
+        assert_eq!(busy, 0, "the checkpoint moved every page into the file");
+        drop(db);
+        std::fs::read(&path).unwrap()
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    std::fs::write(&path, bytes).unwrap();
+    let db = Arc::new(LedgerDb::open(&path).unwrap());
+    let control = plan(&db, CONTROL_SQL, params!["main", "s007"]);
+    assert!(
+        seeks(&control, "requests_session", &["session_id=?"]),
+        "the copy plans on the seeded statistics: {control:?}"
+    );
+    (dir, db)
+}
+
 /// 2,000 requests over 400 sessions of five, 1,990 of them under the key `main` and one under each of ten other
 /// keys, their attempts over three accounts, under two pools, with a decision per request, a `pin_migrated` event
 /// per ten requests, a captured body per ten requests with its expiry spread as the arrivals are, a guardrail row per
-/// hundred, and a day of quota and extra-usage samples for the three accounts. Analyzed before it returns, so each
-/// test plans on the seeded statistics.
-fn seeded() -> (tempfile::TempDir, Arc<LedgerDb>) {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Arc::new(LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap());
+/// hundred, and a day of quota and extra-usage samples for the three accounts.
+fn seed(db: &LedgerDb) {
     // Parsed once, since `insert_request` parses the shipped list on every call and the seed lands 2,000 requests.
     let prices = crate::test_tables::api_prices();
     let template = decision();
@@ -175,8 +211,6 @@ fn seeded() -> (tempfile::TempDir, Arc<LedgerDb>) {
             db.insert_samples(&quota, Some(&extra)).unwrap();
         }
     }
-    analyzed(&db);
-    (dir, db)
 }
 
 /// A decision row whose record and summary the seed's rows share. The plans read the columns alone, which each seeded
@@ -438,7 +472,7 @@ fn the_key_range_rollup_read_keeps_its_plan_under_statistics() {
     );
 }
 
-/// The purge's cutoff and slice size, the cutoff past the seeded day so every slice has rows to take.
+/// The purge's cutoff and slice size.
 const PURGE_BINDS: (i64, i64) = (TO, 1_000);
 
 #[test]
@@ -567,7 +601,7 @@ fn the_request_list_by_session_keeps_its_plan_under_statistics() {
 }
 
 /// Either index serves the session's decisions: the session's own, or the range's, whose `LIKE` arm keeps the session
-/// index off without statistics.
+/// index off.
 #[test]
 fn the_routing_log_by_session_keeps_its_plan_under_statistics() {
     let (_dir, db) = seeded();

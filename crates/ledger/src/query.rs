@@ -1415,7 +1415,8 @@ pub fn list_routing_log(
     })
 }
 
-/// The routing log's decision page statement and its binds, spelled once for the same reason.
+/// The routing log's decision page statement and its binds, spelled once so the seeded plan test explains the statement
+/// the read runs, its binds and its order included.
 pub(crate) fn decision_rows_statement(
     mut statement: LogStatement,
     cursor: Option<&RoutingLogCursor>,
