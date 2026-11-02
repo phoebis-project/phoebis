@@ -16,7 +16,7 @@ use rusqlite::{
 };
 
 use crate::pricing::PriceRevisions;
-use crate::query::request_by_id;
+use crate::query::{request_by_id, row_to_extra_usage};
 use crate::record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
     GuardrailMatchRecord, QuotaSampleRecord, RequestRecord,
@@ -765,26 +765,7 @@ impl LedgerDb {
         let account_id = account_id.to_string();
         self.read(move |conn| {
             let mut stmt = conn.prepare("SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent FROM extra_usage_samples WHERE account_id = ?1 AND bucket >= ?2 AND bucket < ?3 ORDER BY bucket, source")?;
-            let rows = stmt.query_map(params![account_id, from, to], |r| {
-                Ok(ExtraUsageSampleRecord {
-                    account_id: r.get(0)?,
-                    bucket: r.get(1)?,
-                    is_enabled: r.get(2)?,
-                    in_use: r.get(3)?,
-                    monthly_limit: r.get(4)?,
-                    used_credits: r.get(5)?,
-                    utilization: r.get(6)?,
-                    currency: r.get(7)?,
-                    disabled_reason: r.get(8)?,
-                    overage_reset: r.get(9)?,
-                    source: r.get(10)?,
-                    spend_limit_minor: r.get(11)?,
-                    spend_used_minor: r.get(12)?,
-                    spend_percent: r.get(13)?,
-                    spend_currency: r.get(14)?,
-                    spend_exponent: r.get(15)?,
-                })
-            })?;
+            let rows = stmt.query_map(params![account_id, from, to], row_to_extra_usage)?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }

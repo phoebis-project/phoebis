@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use phoebis_bus::Classifier;
+use phoebis_bus::{Classifier, Kind};
 use phoebis_routing::{
     window_for, MemberSpend, PinUsage, FIVE_HOUR, REFRESHING_CLASSES, SEVEN_DAY,
 };
@@ -28,9 +28,9 @@ use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
 };
 use crate::rollup::{
-    fold_identifier, fold_user_agent, hour_of, read_account_rollups, read_rollups,
-    read_rollups_paged, CostSplit, KeySelector, RollupRow, RollupSelect, DIMENSION_MAX_BYTES,
-    EFFORTS, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
+    add_counts, fold_identifier, fold_user_agent, hour_of, read_account_rollups,
+    read_rollups_paged, visit_rollups, CostSplit, KeySelector, RollupRow, RollupSelect,
+    DIMENSION_MAX_BYTES, EFFORTS, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, PLAN_FUNDING, UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -463,7 +463,7 @@ fn filter_clauses(filter: &RequestFilter, live: &LiveKeys) -> (Vec<Box<dyn ToSql
         }
         clauses.push(format!("({})", either.join(" OR ")));
     }
-    if !filter.include_probes && !filter.kinds.iter().any(|k| k == PROBE_KIND) {
+    if !filter.include_probes && !filter.kinds.iter().any(|k| k == Kind::Probe.as_str()) {
         clauses.push("kind != 'probe'".into());
     }
     if let Some(from) = filter.from {
@@ -1926,7 +1926,7 @@ impl RollupFilter {
     /// The probe side of a group is summed either way, so the probe cost and the wasted probes read the same under
     /// both.
     pub fn probes_counted(&self) -> bool {
-        self.include_probes || self.kinds.iter().any(|k| k == PROBE_KIND)
+        self.include_probes || self.kinds.iter().any(|k| k == Kind::Probe.as_str())
     }
 
     /// The fixed filters as the read binds them, each key selector resolved as `LiveKeys::selects` reads it: the
@@ -2147,8 +2147,8 @@ fn row_key(row: &RollupRow, now: i64) -> RowKey<'_> {
 }
 
 /// One rollup row priced through `price_row` at its own key with no tier, a plain call that fills nothing in after it:
-/// a probe row on a model the revision lacks takes its dearest-cell dollars inside `price_row`. Every rollup row reader
-/// of the module prices a row through it and reads its `usd` and `equivalent`, and none reads its `shares`, since the
+/// a probe row on a model the revision lacks takes its dearest-cell dollars inside `price_row`. Its readers,
+/// `shared_figures` and the `/v1/usage` sums, read its `usd` and `equivalent`, and none reads its `shares`, since the
 /// shares a route answers come from `ShareSums::add` under the caller's `pricing`. So the key carries no tier, as
 /// `price_group`'s does, and `price_row` prices no share window.
 pub(crate) fn priced(
@@ -2316,7 +2316,14 @@ impl ShareSums {
     /// Folds one plan-funded row in when `counted`, as the request dollars take the row, each window priced at the
     /// row's own hour under `tier` and the regime the row's `client` names, so a group that mixes clients prices each
     /// row under its own.
-    fn add(&mut self, row: &RollupRow, tier: &str, tables: &PlanTables, counted: bool) {
+    fn add(
+        &mut self,
+        row: &RollupRow,
+        key: &RowKey<'_>,
+        tier: &str,
+        tables: &PlanTables,
+        counted: bool,
+    ) {
         let usage = row.usage();
         // A failed request books a row with no token and an accounting row carries the wasted counts alone, while the
         // cost model refuses a model it has no weight for before it reads the usage: such a row would null a priced
@@ -2324,19 +2331,17 @@ impl ShareSums {
         if !counted || tokens_of(usage) == 0 {
             return;
         }
-        let at = row.hour * 1_000;
-        let entrypoint = entrypoint_of_client(&row.client);
-        let shares = if row.classifier == Classifier::Client.as_str() {
-            free_shares(tables, entrypoint, tier, &row.canonical_model, at)
+        let shares = if key.classifier {
+            free_shares(tables, key.entrypoint, tier, key.model, key.at)
         } else {
             price_shares(
                 tables,
-                entrypoint,
+                key.entrypoint,
                 tier,
-                &row.canonical_model,
+                key.model,
                 usage,
-                at,
-                at,
+                key.at,
+                key.at,
             )
         };
         for (window, share) in shares {
@@ -2376,19 +2381,17 @@ impl EquivalentSums {
     fn add_equivalent(
         &mut self,
         row: &RollupRow,
+        key: &RowKey<'_>,
         costs: &PlanTables,
         counted: bool,
         whole: Option<f64>,
         now: i64,
     ) {
-        let free = row.classifier == Classifier::Client.as_str();
         self.add_priced(row, counted, whole, |usage| {
-            if free {
+            if key.classifier {
                 return Some(free_equivalent());
             }
-            let at = row.hour * 1_000;
-            let entrypoint = entrypoint_of_client(&row.client);
-            price_equivalent(costs, entrypoint, &row.canonical_model, usage, at, at, now)
+            price_equivalent(costs, key.entrypoint, key.model, usage, key.at, key.at, now)
         });
     }
 
@@ -2401,7 +2404,7 @@ impl EquivalentSums {
         price: impl Fn(PinUsage) -> Option<f64>,
     ) {
         let usage = row.usage();
-        if row.kind == PROBE_KIND {
+        if row.kind == Kind::Probe.as_str() {
             let wasted = row.wasted_usage();
             if tokens_of(wasted) > 0 {
                 self.wasted
@@ -2433,7 +2436,7 @@ impl EquivalentSums {
             self.cache_read.add(price(read), Funding::Plan, tokens);
             self.cache_write.add(price(write), Funding::Plan, tokens);
         }
-        if row.kind == PROBE_KIND {
+        if row.kind == Kind::Probe.as_str() {
             self.probe_cost.add(whole, Funding::Plan, tokens);
         }
     }
@@ -2549,6 +2552,7 @@ impl PlanSums {
     fn add(
         &mut self,
         row: &RollupRow,
+        key: &RowKey<'_>,
         priced: Priced,
         costs: &PlanTables,
         counted: bool,
@@ -2559,19 +2563,19 @@ impl PlanSums {
             self.output_tokens += row.output_tokens;
         }
         self.equivalent
-            .add_equivalent(row, costs, counted, priced.equivalent, now);
+            .add_equivalent(row, key, costs, counted, priced.equivalent, now);
         let usage = row.usage();
         if tokens_of(usage) == 0 {
             return;
         }
         if counted {
             self.split.add(
-                row.classifier == Classifier::Client.as_str(),
+                key.classifier,
                 costs,
-                entrypoint_of_client(&row.client),
-                &row.canonical_model,
+                key.entrypoint,
+                key.model,
                 usage,
-                row.hour * 1_000,
+                key.at,
                 now,
             );
         }
@@ -2653,23 +2657,6 @@ impl GroupSums {
             shares: None,
             plan: PlanSums::default(),
         });
-        let row_priced = priced(row, prices, costs, now);
-        let usd = row_priced.usd.clone().unwrap_or_default();
-        let plan = Funding::of_rollup(&row.funding) == Funding::Plan;
-        if row.kind == PROBE_KIND {
-            entry.probes.add(row);
-            entry.dollars.probe_usd += usd.total();
-        } else {
-            entry.saw_non_probe = true;
-        }
-        let counted = probes_counted || row.kind != PROBE_KIND;
-        if counted {
-            entry.sum.add(row);
-            entry.dollars.usd.add(&usd);
-            if !plan {
-                entry.dollars.billed.add(&usd);
-            }
-        }
         let own_key = row_key(row, now);
         // Keyed as `priced` keys the row, since the group's shares come from `ShareSums::add` and a tier would price
         // share windows nothing reads.
@@ -2677,6 +2664,23 @@ impl GroupSums {
             tier: None,
             ..own_key
         };
+        let row_priced = price_row(prices, costs, &price_key, row.usage());
+        let usd = row_priced.usd.clone().unwrap_or_default();
+        let plan = own_key.funding == Funding::Plan;
+        if row.kind == Kind::Probe.as_str() {
+            entry.probes.add(row);
+            entry.dollars.probe_usd += usd.total();
+        } else {
+            entry.saw_non_probe = true;
+        }
+        let counted = probes_counted || row.kind != Kind::Probe.as_str();
+        if counted {
+            entry.sum.add(row);
+            entry.dollars.usd.add(&usd);
+            if !plan {
+                entry.dollars.billed.add(&usd);
+            }
+        }
         if tokens_of(row.wasted_usage()) > 0 {
             let wasted = price_row(prices, costs, &price_key, row.wasted_usage());
             entry.dollars.wasted_usd += wasted.usd.map_or(0.0, |usd| usd.total());
@@ -2695,10 +2699,12 @@ impl GroupSums {
                 entry.plan.kept_warm_5m_tokens += row.kept_warm_5m_tokens;
                 entry.plan.kept_warm_1h_tokens += row.kept_warm_1h_tokens;
             }
-            if row.kind == PROBE_KIND {
+            if row.kind == Kind::Probe.as_str() {
                 entry.plan.probes_ok += row.succeeded;
             }
-            entry.plan.add(row, row_priced, costs, counted, now);
+            entry
+                .plan
+                .add(row, &own_key, row_priced, costs, counted, now);
         }
         // The caller passes `pricing` only where each group holds one account's rows, and each row prices under the
         // account tier it recorded. A tier of `UNATTRIBUTED` (a profile not yet read, a row folded before the tier was
@@ -2711,7 +2717,7 @@ impl GroupSums {
         };
         let shares = entry.shares.get_or_insert_with(ShareSums::default);
         if plan {
-            shares.add(row, tier, pricing.tables, counted);
+            shares.add(row, &own_key, tier, pricing.tables, counted);
         }
     }
 
@@ -2869,33 +2875,17 @@ pub async fn series_paged(
     costs: &PlanTables,
     now: i64,
 ) -> Result<Vec<SeriesPoint>, LedgerError> {
-    if bucket_seconds <= 0 {
-        return Err(LedgerError::Yaml(
-            "bucket_seconds must be positive".to_string(),
-        ));
-    }
-    let first = (from / 1_000).div_euclid(bucket_seconds) * bucket_seconds;
     let last = hour_ceil(to);
-    let count = (last - first).checked_div(bucket_seconds).unwrap_or(0);
-    if !(0..=MAX_POINTS).contains(&count) {
-        return Err(LedgerError::Yaml(format!(
-            "the range needs {count} points, and the most a chart carries is {MAX_POINTS}"
-        )));
-    }
-    let starts: Vec<i64> = (0..)
-        .map(|i| first + i * bucket_seconds)
-        .take_while(|at| *at < last)
-        .collect();
+    let (first, starts) = aligned_starts(from / 1_000, last, bucket_seconds)?;
     let mut buckets: Vec<GroupSums> = starts.iter().map(|_| GroupSums::default()).collect();
     let probes_counted = filter.probes_counted();
     let pricing = pricing.filter(|_| holds_one_account(group_by, &filter.accounts));
     if let Some(select) = filter.rollup_select(live) {
         read_rollups_paged(db, &select, hour_of(from), last, |row| {
-            if !passes_patterns(row, filter) || !passes_funding(row, filter) || row.hour < first {
+            if !passes_patterns(row, filter) || !passes_funding(row, filter) {
                 return;
             }
-            let index = ((row.hour - first) / bucket_seconds) as usize;
-            if let Some(sums) = buckets.get_mut(index) {
+            if let Some(sums) = bucket_slot(&mut buckets, first, bucket_seconds, row.hour) {
                 sums.add(
                     row,
                     group_by,
@@ -3010,44 +3000,38 @@ pub fn dashboard_on(
 ) -> Result<Dashboard, LedgerError> {
     let to_hour = hour_of(now) + 3_600;
     let from_hour = to_hour - 24 * 3_600;
+    let fold = TrafficFold::new(from_hour, to_hour, 3_600, prices, costs, now)?;
+    let mut buckets = fold.zero.clone();
+    let mut refused = vec![0_u64; buckets.len()];
     let mut errors: BTreeMap<String, u64> = BTreeMap::new();
     let mut refusals: BTreeMap<String, u64> = BTreeMap::new();
-    let mut hourly: Vec<HourPoint> = (from_hour..to_hour)
-        .step_by(3_600)
-        .map(|hour| HourPoint {
-            at: hour * 1_000,
-            cost: 0.0,
-            errors: 0,
-            refused: 0,
-            requests: 0,
-            tokens: 0,
-            billed: 0.0,
-            equivalent: Some(0.0),
+    let mut tokens_cached = 0;
+    visit_rollups(conn, from_hour, to_hour, &RollupSelect::default(), |r| {
+        if r.kind == Kind::Probe.as_str() {
+            return;
+        }
+        fold.add(&mut buckets, &r);
+        if let Some(slot) = bucket_slot(&mut refused, from_hour, 3_600, r.hour) {
+            *slot += r.refusals.values().sum::<u64>();
+        }
+        add_counts(&mut errors, &r.errors);
+        add_counts(&mut refusals, &r.refusals);
+        tokens_cached += r.cache_read_tokens;
+    })?;
+    let hourly: Vec<HourPoint> = buckets
+        .into_iter()
+        .zip(refused)
+        .map(|(bucket, refused)| HourPoint {
+            at: bucket.at,
+            cost: bucket.cost_usd,
+            errors: bucket.failed,
+            refused,
+            requests: bucket.requests,
+            tokens: bucket.tokens,
+            billed: bucket.billed_usd,
+            equivalent: bucket.equivalent,
         })
         .collect();
-    let mut tokens_cached = 0;
-    for r in read_rollups(conn, from_hour, to_hour, &RollupSelect::default())? {
-        if r.kind == PROBE_KIND {
-            continue;
-        }
-        if let Some(point) = hourly.get_mut(((r.hour - from_hour) / 3_600) as usize) {
-            let (usd, billed, equivalent) = shared_figures(&r, prices, costs, now);
-            point.requests += r.requests;
-            point.errors += r.requests.saturating_sub(r.succeeded);
-            point.refused += r.refusals.values().sum::<u64>();
-            point.cost += usd;
-            point.billed += billed;
-            point.equivalent = add_figures(point.equivalent, equivalent);
-            point.tokens += tokens_of(r.usage());
-        }
-        for (code, n) in &r.errors {
-            *errors.entry(code.clone()).or_default() += n;
-        }
-        for (code, n) in &r.refusals {
-            *refusals.entry(code.clone()).or_default() += n;
-        }
-        tokens_cached += r.cache_read_tokens;
-    }
     let requests: u64 = hourly.iter().map(|h| h.requests).sum();
     let failed: u64 = hourly.iter().map(|h| h.errors).sum();
     Ok(Dashboard {
@@ -3175,9 +3159,7 @@ pub fn hourly_window_samples(
     from: i64,
     to: i64,
 ) -> Result<Vec<HourlyWindowSample>, LedgerError> {
-    // Rust's `/` truncates toward zero as SQLite's does, so the hours the range touches floor the Euclidean way.
-    let first_hour = from.div_euclid(3_600) * 3_600;
-    let past_hour = to.div_euclid(3_600) * 3_600 + if to.rem_euclid(3_600) > 0 { 3_600 } else { 0 };
+    let (first_hour, past_hour) = (hour_of(from * 1_000), hour_ceil(to * 1_000));
     let mut stmt = conn.prepare(HOURLY_WINDOW_SAMPLES_SQL)?;
     let rows = stmt.query_map(params![from, to, first_hour, past_hour], |r| {
         Ok(HourlyWindowSample {
@@ -3206,20 +3188,68 @@ macro_rules! extra_usage_accounts_cte {
     };
 }
 
+/// The newest row of the last day per account, `$filter` narrowing the rows the newest is taken from and `$rank`
+/// breaking a tie inside the newest bucket. Binds `?1`, the day's first bucket.
+macro_rules! latest_extra_usage_sql {
+    ($filter:literal, $rank:literal) => {
+        concat!(
+            extra_usage_accounts_cte!(),
+            " SELECT e.account_id, e.bucket, e.is_enabled, e.in_use, e.monthly_limit, e.used_credits, e.utilization, \
+                 e.currency, e.disabled_reason, e.overage_reset, e.source, e.spend_limit_minor, e.spend_used_minor, \
+                 e.spend_percent, e.spend_currency, e.spend_exponent \
+            FROM accounts a \
+            JOIN extra_usage_samples e ON e.rowid = ( \
+              SELECT s.rowid FROM extra_usage_samples s \
+               WHERE s.account_id = a.account_id AND s.bucket >= ?1",
+            $filter,
+            " ORDER BY s.bucket DESC",
+            $rank,
+            " LIMIT 1) \
+           WHERE a.account_id IS NOT NULL \
+           ORDER BY e.account_id"
+        )
+    };
+}
+
 /// Binds `?1`, the day's first bucket.
-pub(crate) const LATEST_EXTRA_USAGE_SQL: &str = concat!(
-    extra_usage_accounts_cte!(),
-    " SELECT e.account_id, e.bucket, e.is_enabled, e.in_use, e.monthly_limit, e.used_credits, e.utilization, \
-             e.currency, e.disabled_reason, e.overage_reset, e.source, e.spend_limit_minor, e.spend_used_minor, \
-             e.spend_percent, e.spend_currency, e.spend_exponent \
-        FROM accounts a \
-        JOIN extra_usage_samples e ON e.rowid = ( \
-          SELECT s.rowid FROM extra_usage_samples s \
-           WHERE s.account_id = a.account_id AND s.bucket >= ?1 \
-           ORDER BY s.bucket DESC, s.source = 'head' DESC LIMIT 1) \
-       WHERE a.account_id IS NOT NULL \
-       ORDER BY e.account_id"
-);
+pub(crate) const LATEST_EXTRA_USAGE_SQL: &str =
+    latest_extra_usage_sql!("", ", s.source = 'head' DESC");
+
+/// An `extra_usage_samples` row in the column order every reader of the table selects.
+pub(crate) fn row_to_extra_usage(
+    r: &rusqlite::Row<'_>,
+) -> rusqlite::Result<ExtraUsageSampleRecord> {
+    Ok(ExtraUsageSampleRecord {
+        account_id: r.get(0)?,
+        bucket: r.get(1)?,
+        is_enabled: r.get(2)?,
+        in_use: r.get(3)?,
+        monthly_limit: r.get(4)?,
+        used_credits: r.get(5)?,
+        utilization: r.get(6)?,
+        currency: r.get(7)?,
+        disabled_reason: r.get(8)?,
+        overage_reset: r.get(9)?,
+        source: r.get(10)?,
+        spend_limit_minor: r.get(11)?,
+        spend_used_minor: r.get(12)?,
+        spend_percent: r.get(13)?,
+        spend_currency: r.get(14)?,
+        spend_exponent: r.get(15)?,
+    })
+}
+
+/// The rows of one `latest_extra_usage_sql!` statement over the day before `now`.
+fn latest_extra_usage_of(
+    conn: &Connection,
+    sql: &str,
+    now: i64,
+) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
+    let since = now / 1_000 - 86_400;
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(params![since], row_to_extra_usage)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
 
 /// The newest row of the last day per account, one row each. A head and a poll may share the newest bucket, and the
 /// head row answers for it, as the insert ranks a head the newest truth of its bucket.
@@ -3227,45 +3257,12 @@ pub fn latest_extra_usage(
     conn: &Connection,
     now: i64,
 ) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
-    let since = now / 1_000 - 86_400;
-    let mut stmt = conn.prepare(LATEST_EXTRA_USAGE_SQL)?;
-    let rows = stmt.query_map(params![since], |r| {
-        Ok(ExtraUsageSampleRecord {
-            account_id: r.get(0)?,
-            bucket: r.get(1)?,
-            is_enabled: r.get(2)?,
-            in_use: r.get(3)?,
-            monthly_limit: r.get(4)?,
-            used_credits: r.get(5)?,
-            utilization: r.get(6)?,
-            currency: r.get(7)?,
-            disabled_reason: r.get(8)?,
-            overage_reset: r.get(9)?,
-            source: r.get(10)?,
-            spend_limit_minor: r.get(11)?,
-            spend_used_minor: r.get(12)?,
-            spend_percent: r.get(13)?,
-            spend_currency: r.get(14)?,
-            spend_exponent: r.get(15)?,
-        })
-    })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    latest_extra_usage_of(conn, LATEST_EXTRA_USAGE_SQL, now)
 }
 
 /// Binds `?1`, the day's first bucket.
-pub(crate) const LATEST_EXTRA_USAGE_POLLED_SQL: &str = concat!(
-    extra_usage_accounts_cte!(),
-    " SELECT e.account_id, e.bucket, e.is_enabled, e.in_use, e.monthly_limit, e.used_credits, e.utilization, \
-             e.currency, e.disabled_reason, e.overage_reset, e.source, e.spend_limit_minor, e.spend_used_minor, \
-             e.spend_percent, e.spend_currency, e.spend_exponent \
-        FROM accounts a \
-        JOIN extra_usage_samples e ON e.rowid = ( \
-          SELECT s.rowid FROM extra_usage_samples s \
-           WHERE s.account_id = a.account_id AND s.bucket >= ?1 AND s.source = 'poll' \
-           ORDER BY s.bucket DESC LIMIT 1) \
-       WHERE a.account_id IS NOT NULL \
-       ORDER BY e.account_id"
-);
+pub(crate) const LATEST_EXTRA_USAGE_POLLED_SQL: &str =
+    latest_extra_usage_sql!(" AND s.source = 'poll'", "");
 
 /// The newest extra-usage row of the last day per account whose source is `poll`: the row that carries the amounts,
 /// which a later head row never hides.
@@ -3273,45 +3270,12 @@ pub fn latest_extra_usage_polled(
     conn: &Connection,
     now: i64,
 ) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
-    let since = now / 1_000 - 86_400;
-    let mut stmt = conn.prepare(LATEST_EXTRA_USAGE_POLLED_SQL)?;
-    let rows = stmt.query_map(params![since], |r| {
-        Ok(ExtraUsageSampleRecord {
-            account_id: r.get(0)?,
-            bucket: r.get(1)?,
-            is_enabled: r.get(2)?,
-            in_use: r.get(3)?,
-            monthly_limit: r.get(4)?,
-            used_credits: r.get(5)?,
-            utilization: r.get(6)?,
-            currency: r.get(7)?,
-            disabled_reason: r.get(8)?,
-            overage_reset: r.get(9)?,
-            source: r.get(10)?,
-            spend_limit_minor: r.get(11)?,
-            spend_used_minor: r.get(12)?,
-            spend_percent: r.get(13)?,
-            spend_currency: r.get(14)?,
-            spend_exponent: r.get(15)?,
-        })
-    })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    latest_extra_usage_of(conn, LATEST_EXTRA_USAGE_POLLED_SQL, now)
 }
 
 /// Binds `?1`, the day's first bucket.
-pub(crate) const LATEST_EXTRA_USAGE_SHARE_SQL: &str = concat!(
-    extra_usage_accounts_cte!(),
-    " SELECT e.account_id, e.bucket, e.is_enabled, e.in_use, e.monthly_limit, e.used_credits, e.utilization, \
-             e.currency, e.disabled_reason, e.overage_reset, e.source, e.spend_limit_minor, e.spend_used_minor, \
-             e.spend_percent, e.spend_currency, e.spend_exponent \
-        FROM accounts a \
-        JOIN extra_usage_samples e ON e.rowid = ( \
-          SELECT s.rowid FROM extra_usage_samples s \
-           WHERE s.account_id = a.account_id AND s.bucket >= ?1 AND s.utilization IS NOT NULL \
-           ORDER BY s.bucket DESC, s.source = 'head' DESC LIMIT 1) \
-       WHERE a.account_id IS NOT NULL \
-       ORDER BY e.account_id"
-);
+pub(crate) const LATEST_EXTRA_USAGE_SHARE_SQL: &str =
+    latest_extra_usage_sql!(" AND s.utilization IS NOT NULL", ", s.source = 'head' DESC");
 
 /// The newest extra-usage row of the last day per account that carries a share, ranked as `latest_extra_usage` ranks
 /// a bucket's rows: a head that names the overage reset alone writes a row with none, which hides no earlier share.
@@ -3319,29 +3283,7 @@ pub fn latest_extra_usage_share(
     conn: &Connection,
     now: i64,
 ) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
-    let since = now / 1_000 - 86_400;
-    let mut stmt = conn.prepare(LATEST_EXTRA_USAGE_SHARE_SQL)?;
-    let rows = stmt.query_map(params![since], |r| {
-        Ok(ExtraUsageSampleRecord {
-            account_id: r.get(0)?,
-            bucket: r.get(1)?,
-            is_enabled: r.get(2)?,
-            in_use: r.get(3)?,
-            monthly_limit: r.get(4)?,
-            used_credits: r.get(5)?,
-            utilization: r.get(6)?,
-            currency: r.get(7)?,
-            disabled_reason: r.get(8)?,
-            overage_reset: r.get(9)?,
-            source: r.get(10)?,
-            spend_limit_minor: r.get(11)?,
-            spend_used_minor: r.get(12)?,
-            spend_percent: r.get(13)?,
-            spend_currency: r.get(14)?,
-            spend_exponent: r.get(15)?,
-        })
-    })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    latest_extra_usage_of(conn, LATEST_EXTRA_USAGE_SHARE_SQL, now)
 }
 
 /// One span of hours over which both lists' revisions are constant: the SQL bounds (seconds, half-open) and the
@@ -4045,9 +3987,9 @@ pub async fn pool_traffic(
 }
 
 /// Every bucket in the range per pool of `pool_ids`, probes left out, from one pass over the pools' rollups on `conn`
-/// in pages of `PAGE_HOURS`, so a long range holds one page in memory and a page with several pools reads the table
-/// once. Each row's dollars and Pro-week figure are priced from its counts, the figure against the anchor row in force
-/// at `now`. A pool without a row answers its zero buckets, and an empty `pool_ids` answers an empty map and runs no
+/// folded as the statement steps, so a long range holds one row in memory and several pools read the table once.
+/// Each row's dollars and Pro-week figure are priced from its counts, the figure against the anchor row in force at
+/// `now`. A pool without a row answers its zero buckets, and an empty `pool_ids` answers an empty map and runs no
 /// statement.
 #[allow(clippy::too_many_arguments)]
 pub fn pools_traffic(
@@ -4072,16 +4014,11 @@ pub fn pools_traffic(
         pools: pool_ids.to_vec(),
         ..RollupSelect::default()
     };
-    let mut page = from_hour;
-    while page < to_hour {
-        let end = page.saturating_add(PAGE_HOURS * 3_600).min(to_hour);
-        for r in read_rollups(conn, page, end, &select)? {
-            if let Some(buckets) = out.get_mut(&r.pool_id) {
-                fold.add(buckets, &r);
-            }
+    visit_rollups(conn, from_hour, to_hour, &select, |r| {
+        if let Some(buckets) = out.get_mut(&r.pool_id) {
+            fold.add(buckets, &r);
         }
-        page = end;
-    }
+    })?;
     Ok(out)
 }
 
@@ -4106,21 +4043,9 @@ impl<'a> TrafficFold<'a> {
         costs: &'a PlanTables,
         now: i64,
     ) -> Result<Self, LedgerError> {
-        if bucket_seconds <= 0 {
-            return Err(LedgerError::Yaml(
-                "bucket_seconds must be positive".to_string(),
-            ));
-        }
-        let first = from_hour.div_euclid(bucket_seconds) * bucket_seconds;
-        let count = (to_hour - first).checked_div(bucket_seconds).unwrap_or(0);
-        if !(0..=MAX_POINTS).contains(&count) {
-            return Err(LedgerError::Yaml(format!(
-                "the range needs {count} points, and the most a chart carries is {MAX_POINTS}"
-            )));
-        }
-        let zero = (0..)
-            .map(|i| first + i * bucket_seconds)
-            .take_while(|at| *at < to_hour)
+        let (first, starts) = aligned_starts(from_hour, to_hour, bucket_seconds)?;
+        let zero = starts
+            .into_iter()
             .map(|at| TrafficBucket {
                 at: at * 1_000,
                 requests: 0,
@@ -4142,10 +4067,10 @@ impl<'a> TrafficFold<'a> {
     }
 
     fn add(&self, out: &mut [TrafficBucket], r: &RollupRow) {
-        if r.kind == PROBE_KIND || r.hour < self.first {
+        if r.kind == Kind::Probe.as_str() {
             return;
         }
-        if let Some(bucket) = out.get_mut(((r.hour - self.first) / self.bucket_seconds) as usize) {
+        if let Some(bucket) = bucket_slot(out, self.first, self.bucket_seconds, r.hour) {
             bucket.requests += r.requests;
             bucket.failed += r.requests.saturating_sub(r.succeeded);
             bucket.tokens += tokens_of(r.usage());
@@ -4175,6 +4100,28 @@ pub struct SeriesFilter {
     pub request_classes: Vec<String>,
 }
 
+/// The first bucket's edge at or below `start` and every bucket start below `end`, in seconds: the bucket must be
+/// positive, and the whole buckets between the edge and `end` at most `MAX_POINTS`.
+fn aligned_starts(
+    start: i64,
+    end: i64,
+    bucket_seconds: i64,
+) -> Result<(i64, Vec<i64>), LedgerError> {
+    if bucket_seconds <= 0 {
+        return Err(LedgerError::Yaml(
+            "bucket_seconds must be positive".to_string(),
+        ));
+    }
+    let first = start.div_euclid(bucket_seconds) * bucket_seconds;
+    let count = (end - first).checked_div(bucket_seconds).unwrap_or(0);
+    if !(0..=MAX_POINTS).contains(&count) {
+        return Err(LedgerError::Yaml(format!(
+            "the range needs {count} points, and the most a chart carries is {MAX_POINTS}"
+        )));
+    }
+    Ok((first, bucket_starts(first, end, bucket_seconds).collect()))
+}
+
 /// The bucket edges a `SeriesFilter` reads over, and the `MAX_POINTS` guard every series function shares.
 fn bucket_range(filter: &SeriesFilter) -> Result<(i64, i64), LedgerError> {
     // Checked before the division below it: `SeriesFilter::default()` carries `bucket_seconds: 0`, and
@@ -4194,6 +4141,20 @@ fn bucket_range(filter: &SeriesFilter) -> Result<(i64, i64), LedgerError> {
         )));
     }
     Ok((first, last))
+}
+
+/// Every bucket start of `[first, last)`, a trailing partial bucket included. The bucket must be positive.
+fn bucket_starts(first: i64, last: i64, bucket_seconds: i64) -> impl Iterator<Item = i64> {
+    (first..last).step_by(bucket_seconds as usize)
+}
+
+/// The point of `points` whose bucket holds `hour`, the first bucket starting at `first`: `None` past the last point
+/// and before `first`, where the truncating division would file the hour in the first bucket.
+fn bucket_slot<T>(points: &mut [T], first: i64, bucket_seconds: i64, hour: i64) -> Option<&mut T> {
+    if hour < first {
+        return None;
+    }
+    points.get_mut(((hour - first) / bucket_seconds) as usize)
 }
 
 /// One point of the burn series: a subscription row's tokens as the share of the account tier's own windows it
@@ -4410,7 +4371,7 @@ pub(crate) fn price_usage(
 #[cfg(any(test, feature = "test-support"))]
 pub fn burn_rows(conn: &Connection, filter: &SeriesFilter) -> Result<Vec<RollupRow>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
-    read_rollups(conn, first, last, &RollupSelect::default())
+    crate::rollup::read_rollups(conn, first, last, &RollupSelect::default())
 }
 
 /// `burn_series_over` on the rows `burn_rows` reads for `filter`, read at `now`.
@@ -4460,10 +4421,9 @@ pub fn burn_series_over(
 /// Every bucket of `[first, last)`, empty. Ceiling, not floor: `last` is only rounded up to the hour (`hour_ceil`),
 /// so a 6-hour or daily bucket can leave a trailing partial bucket, which is a point of its own.
 fn empty_burn_points(first: i64, last: i64, bucket_seconds: i64) -> Vec<BurnPoint> {
-    let count = ((last - first + bucket_seconds - 1) / bucket_seconds).max(0) as usize;
-    (0..count)
-        .map(|i| BurnPoint {
-            at: (first + i as i64 * bucket_seconds) * 1_000,
+    bucket_starts(first, last, bucket_seconds)
+        .map(|at| BurnPoint {
+            at: at * 1_000,
             ..BurnPoint::default()
         })
         .collect()
@@ -4488,10 +4448,7 @@ fn price_burn_row(
     shares: bool,
     now: i64,
 ) {
-    if row.hour < first {
-        return;
-    }
-    let Some(point) = points.get_mut(((row.hour - first) / bucket_seconds) as usize) else {
+    let Some(point) = bucket_slot(points, first, bucket_seconds, row.hour) else {
         return;
     };
     let key = row_key(row, now);
@@ -4583,26 +4540,30 @@ pub async fn burn_groups_paged(
 }
 
 /// The cache-write tokens the account rollups booked as a rewrite, per bucket; the bucket's `at` is
-/// milliseconds, like `BurnPoint.at`.
+/// milliseconds, like `BurnPoint.at`. The sums are SQLite's, so the read decodes no account row.
 pub fn rewrite_series(
     conn: &Connection,
     filter: &SeriesFilter,
 ) -> Result<Vec<(i64, u64)>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
-    let rows = read_account_rollups(conn, first, last)?;
-    let mut points: Vec<(i64, u64)> = (first..last)
-        .step_by(filter.bucket_seconds as usize)
+    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(first), Box::new(last)];
+    let mut clauses = vec!["hour >= ?1 AND hour < ?2".to_string()];
+    in_list("account_id", &filter.accounts, &mut args, &mut clauses);
+    let mut stmt = conn.prepare(&format!(
+        "SELECT hour, SUM(rewrite_tokens) FROM account_rollups_hourly WHERE {} GROUP BY hour",
+        clauses.join(" AND ")
+    ))?;
+    let hours = stmt
+        .query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? as u64))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut points: Vec<(i64, u64)> = bucket_starts(first, last, filter.bucket_seconds)
         .map(|at| (at * 1_000, 0))
         .collect();
-    for r in rows
-        .iter()
-        .filter(|r| filter.accounts.is_empty() || filter.accounts.contains(&r.account_id))
-    {
-        if r.hour < first {
-            continue;
-        }
-        if let Some(point) = points.get_mut(((r.hour - first) / filter.bucket_seconds) as usize) {
-            point.1 += r.rewrite_tokens;
+    for (hour, tokens) in hours {
+        if let Some(point) = bucket_slot(&mut points, first, filter.bucket_seconds, hour) {
+            point.1 += tokens;
         }
     }
     Ok(points)
@@ -4633,15 +4594,11 @@ pub fn held_series(
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut points: Vec<(i64, u64, u64)> = (first..last)
-        .step_by(filter.bucket_seconds as usize)
+    let mut points: Vec<(i64, u64, u64)> = bucket_starts(first, last, filter.bucket_seconds)
         .map(|at| (at * 1_000, 0, 0))
         .collect();
     for (hour, held_ms, requests) in hours {
-        if hour < first {
-            continue;
-        }
-        if let Some(point) = points.get_mut(((hour - first) / filter.bucket_seconds) as usize) {
+        if let Some(point) = bucket_slot(&mut points, first, filter.bucket_seconds, hour) {
             point.1 += held_ms;
             point.2 += requests;
         }
@@ -4938,11 +4895,11 @@ pub fn session_burn_series(
             continue;
         };
         let bucket_at = a.at / 1_000;
-        if bucket_at < first || bucket_at >= last {
+        // The last bucket can reach past `last`, and an attempt there falls outside the range.
+        if bucket_at >= last {
             continue;
         }
-        let index = ((bucket_at - first) / filter.bucket_seconds) as usize;
-        let Some(point) = series.get_mut(index) else {
+        let Some(point) = bucket_slot(series, first, filter.bucket_seconds, bucket_at) else {
             continue;
         };
         let band = prices.in_force(a.received_at).band_of(
@@ -5476,6 +5433,7 @@ mod tests {
         let mut plan = PlanSums::default();
         plan.add(
             &row,
+            &row_key(&row, at),
             Priced {
                 equivalent: Some(sentinel),
                 ..Priced::default()

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction};
 
+use phoebis_bus::Kind;
 use phoebis_routing::{PinUsage, FIVE_HOUR, WEEK_MS};
 use phoebis_store::AccountKind;
 
@@ -17,7 +18,6 @@ use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
 use crate::plan::{funding_of, PlanTables};
 use crate::pricing::{prompt_tokens, Band, PriceRevisions, Speed};
-use crate::query::PROBE_KIND;
 use crate::reconcile::{newest_rows, ReconciliationRow};
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
 use crate::LedgerError;
@@ -526,7 +526,7 @@ impl RollupRow {
     }
 }
 
-fn add_counts(into: &mut BTreeMap<String, u64>, from: &BTreeMap<String, u64>) {
+pub(crate) fn add_counts(into: &mut BTreeMap<String, u64>, from: &BTreeMap<String, u64>) {
     for (k, v) in from {
         *into.entry(k.clone()).or_default() += v;
     }
@@ -669,7 +669,7 @@ pub fn deltas_of(
     d.attempts += attempts.iter().filter(|a| !a.has_usage()).count() as u64;
     // Read off the row's kind, status and code rather than its outcome: the relay files a refusal before any attempt
     // as `rejected`, the router's own `503 ledger_behind` among them, though no account was asked.
-    let held = request.kind == PROBE_KIND
+    let held = request.kind == Kind::Probe.as_str()
         && request.status == Some(503)
         && request.error_code.as_deref() == Some("ledger_behind");
     // A refusal before any account was asked files under the map alone, its slow-down hold among the figures it
@@ -1892,9 +1892,7 @@ fn row_to_rollup(r: &rusqlite::Row<'_>) -> rusqlite::Result<RollupRow> {
 /// needs no second mapper.
 fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<RollupRow> {
     let u = |i: usize| -> rusqlite::Result<u64> { Ok(r.get::<_, i64>(offset + i)? as u64) };
-    let counts = |i: usize| -> rusqlite::Result<BTreeMap<String, u64>> {
-        Ok(serde_json::from_str(r.get_ref(offset + i)?.as_str()?).unwrap_or_default())
-    };
+    let counts = |i: usize| counts_at(r, offset + i);
     let hist = |i: usize| -> rusqlite::Result<Histogram> {
         Ok(Histogram::from_le_bytes(r.get_ref(offset + i)?.as_blob()?))
     };
@@ -1960,6 +1958,11 @@ fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Ro
     })
 }
 
+/// A JSON count map's column, read in place, an unparsable text reading as no count.
+fn counts_at(r: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<BTreeMap<String, u64>> {
+    Ok(serde_json::from_str(r.get_ref(i)?.as_str()?).unwrap_or_default())
+}
+
 fn row_to_account(r: &rusqlite::Row<'_>) -> rusqlite::Result<AccountRollupRow> {
     Ok(AccountRollupRow {
         hour: r.get(0)?,
@@ -1973,7 +1976,7 @@ fn row_to_account(r: &rusqlite::Row<'_>) -> rusqlite::Result<AccountRollupRow> {
         pins_migrated_in: r.get::<_, i64>(8)? as u64,
         pins_migrated_out: r.get::<_, i64>(9)? as u64,
         rewrite_tokens: r.get::<_, i64>(10)? as u64,
-        migrations: serde_json::from_str(r.get_ref(11)?.as_str()?).unwrap_or_default(),
+        migrations: counts_at(r, 11)?,
         wall_early_ms: r.get::<_, i64>(12)? as u64,
     })
 }
@@ -1999,7 +2002,6 @@ pub struct RollupSelect {
 
 /// The page of the paged read, `read_rollups_paged`, which takes each page as its own read and folds it into the
 /// accumulators as it arrives: a long range holds one page in memory and releases a reader connection between pages.
-/// `pools_traffic` walks its range in pages of the same size on one connection.
 pub const PAGE_HOURS: i64 = 24;
 
 /// The selecting statement and its binds, spelled once so the plan test explains the statement the read runs. A pool
@@ -2012,13 +2014,7 @@ pub(crate) fn select_statement(
     to_hour: i64,
     select: &RollupSelect,
 ) -> (String, Vec<Value>) {
-    fn in_list(
-        column: &str,
-        bare: bool,
-        values: &[String],
-        binds: &mut Vec<Value>,
-        clauses: &mut Vec<String>,
-    ) {
+    fn in_list(column: &str, values: &[String], binds: &mut Vec<Value>, clauses: &mut Vec<String>) {
         if values.is_empty() {
             return;
         }
@@ -2029,8 +2025,7 @@ pub(crate) fn select_statement(
                 format!("?{}", binds.len())
             })
             .collect();
-        let plus = if bare { "+" } else { "" };
-        clauses.push(format!("{plus}{column} IN ({})", marks.join(", ")));
+        clauses.push(format!("{column} IN ({})", marks.join(", ")));
     }
     let mut binds = vec![Value::Integer(from_hour), Value::Integer(to_hour)];
     let mut clauses = vec!["hour >= ?1 AND hour < ?2".to_string()];
@@ -2038,27 +2033,18 @@ pub(crate) fn select_statement(
     // retention before the hour filter. The unary plus keeps that term off the index, as `top_sessions_statement`
     // keeps its accounts off theirs, and a pool with an account bound keeps the member index's full prefix.
     in_list(
-        "pool_id",
-        select.accounts.is_empty(),
+        if select.accounts.is_empty() {
+            "+pool_id"
+        } else {
+            "pool_id"
+        },
         &select.pools,
         &mut binds,
         &mut clauses,
     );
-    in_list(
-        "account_id",
-        false,
-        &select.accounts,
-        &mut binds,
-        &mut clauses,
-    );
-    in_list("kind", false, &select.kinds, &mut binds, &mut clauses);
-    in_list(
-        "canonical_model",
-        false,
-        &select.models,
-        &mut binds,
-        &mut clauses,
-    );
+    in_list("account_id", &select.accounts, &mut binds, &mut clauses);
+    in_list("kind", &select.kinds, &mut binds, &mut clauses);
+    in_list("canonical_model", &select.models, &mut binds, &mut clauses);
     if !select.keys.is_empty() {
         let parts: Vec<String> = select
             .keys
@@ -2097,10 +2083,26 @@ pub fn read_rollups(
     to_hour: i64,
     select: &RollupSelect,
 ) -> Result<Vec<RollupRow>, LedgerError> {
+    let mut rows = Vec::new();
+    visit_rollups(conn, from_hour, to_hour, select, |row| rows.push(row))?;
+    Ok(rows)
+}
+
+/// The rows of `[from_hour, to_hour)` under `select` on `conn`, handed to `visit` as the statement steps, so a caller
+/// that folds them holds one row at a time.
+pub(crate) fn visit_rollups(
+    conn: &Connection,
+    from_hour: i64,
+    to_hour: i64,
+    select: &RollupSelect,
+    mut visit: impl FnMut(RollupRow),
+) -> Result<(), LedgerError> {
     let (sql, binds) = select_statement(from_hour, to_hour, select);
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params_from_iter(binds), row_to_rollup)?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    for row in stmt.query_map(params_from_iter(binds), row_to_rollup)? {
+        visit(row?);
+    }
+    Ok(())
 }
 
 /// The rows of `[from_hour, to_hour)` under `select`, one `PAGE_HOURS` page per `read`, handed to `visit` in the
