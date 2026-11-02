@@ -412,9 +412,10 @@ impl LedgerDb {
 
     /// The same read on the calling thread, for the event mirror's one read as the ledger task starts and for tests
     /// that hold no runtime worker to spare. It waits only while every pooled connection is out. Under the runtime
-    /// every wait on the pool is `read`'s, and no blocking worker of the runtime calls this: a worker waiting here can
-    /// be the worker a queued `read` closure needs to return its connection, and with every worker waiting the pool
-    /// never gets one back.
+    /// every wait on the pool is `read`'s, and no blocking worker of the runtime waits on the pool here (`read`'s
+    /// in-memory arm calls this on a worker, where it takes the writer's mutex and never the pool): a worker waiting
+    /// on the pool can be the worker a queued `read` closure needs to return its connection, and with every worker
+    /// waiting the pool never gets one back.
     pub fn read_blocking<T>(
         &self,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError>,

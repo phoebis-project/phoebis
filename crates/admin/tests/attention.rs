@@ -553,9 +553,9 @@ async fn hold_every_reader(db: &Arc<LedgerDb>) -> (Vec<std::sync::mpsc::Sender<(
     (releases, held)
 }
 
-/// A read held on every pooled connection parks the route's read on a blocking worker: the runtime thread stays free
-/// to run the release, after which the route answers. A handler that blocks the runtime thread instead is released
-/// by the watchdog alone, which its flag records.
+/// A read held on every pooled connection leaves the route's read waiting on the runtime for a connection, holding no
+/// worker: the runtime thread stays free to run the release, after which the route answers. A handler that blocks the
+/// runtime thread instead is released by the watchdog alone, which its flag records.
 #[tokio::test]
 async fn the_attention_route_answers_while_every_pooled_reader_is_held() {
     let (_dir, parts) = common::admin_parts_full_on_disk().await;
@@ -631,13 +631,14 @@ async fn reach_wait(mut step: Pin<&mut impl Future>) {
     .await;
 }
 
-/// The route waits for its ledger connection without holding a blocking worker. The runtime gets one blocking worker,
-/// held on a gate. The route's read starts first, then `READERS` reads take every pooled connection and queue their
-/// closures behind it, and then the gate opens. A route that waits for its connection on a blocking worker takes the
-/// one worker ahead of the closures that would return a connection, so it waits for good and never answers. That
-/// order is what deadlocks such a route, so the steps keep it.
+/// The route's read holds no blocking worker while the pool is out. The runtime gets one blocking worker, held on a
+/// gate. The route's read starts first and takes a connection, its closure queued behind the gate, then `READERS`
+/// reads take the other connections or wait for one, their closures queued behind the route's, and then the gate
+/// opens. A route that waits for its connection on a blocking worker instead takes the one worker ahead of the
+/// closures that would return a connection, so it waits for good and never answers. That order is what deadlocks
+/// such a route, so the steps keep it.
 #[test]
-fn the_attention_route_waits_for_its_reader_without_holding_a_blocking_worker() {
+fn the_attention_route_answers_when_queued_reads_hold_the_pool_behind_its_job() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .max_blocking_threads(1)

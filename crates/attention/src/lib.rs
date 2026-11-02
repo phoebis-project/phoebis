@@ -117,8 +117,8 @@ impl Attention {
     }
 
     /// The same read for a caller on a thread of its own, such as a test's, which waits for the ledger's connection on
-    /// that thread. A blocking worker of the runtime calls `conditions` instead: waiting here, it can be the worker a
-    /// queued ledger read needs to return its connection.
+    /// that thread. A task on the runtime awaits `conditions` instead, and no blocking worker of the runtime calls
+    /// this: waiting here, it can be the worker a queued ledger read needs to return its connection.
     pub fn conditions_blocking(&self, now: i64) -> Result<Vec<Condition>, AttentionError> {
         let ledger = self
             .ledger
