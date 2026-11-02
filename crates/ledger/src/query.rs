@@ -2492,14 +2492,14 @@ impl SplitSum {
             }
             costs.equivalent_at(SEVEN_DAY, entrypoint, canonical_model, usage, at, at, now)
         };
-        let (cache_read, cache_write) = cache_parts(usage);
+        let (read_part, write_part) = cache_parts(usage);
         let parts = [
             week(PinUsage {
                 input: usage.input,
                 ..PinUsage::default()
             }),
-            week(cache_read),
-            week(cache_write),
+            week(read_part),
+            week(write_part),
             week(PinUsage {
                 output: usage.output,
                 ..PinUsage::default()
@@ -2701,8 +2701,8 @@ impl GroupSums {
             entry.plan.add(row, row_priced, costs, counted, now);
         }
         // The caller passes `pricing` only where each group holds one account's rows, and each row prices under the
-        // account tier it recorded. A tier of `UNATTRIBUTED` (an api_key account's row, a profile not yet read, a row
-        // folded before the tier was recorded) answers no share.
+        // account tier it recorded. A tier of `UNATTRIBUTED` (a profile not yet read, a row folded before the tier was
+        // recorded, an api_key account's row) answers no share.
         let Some(pricing) = pricing else {
             return;
         };

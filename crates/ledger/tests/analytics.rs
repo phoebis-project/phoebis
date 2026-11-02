@@ -6004,7 +6004,11 @@ fn the_rewrite_series_and_the_moves_by_reason_read_the_account_rollups() {
         ..SeriesFilter::default()
     };
     let series = db.read_blocking(|c| rewrite_series(c, &filter)).unwrap();
-    assert_eq!(series.iter().map(|(_, n)| n).sum::<u64>(), 40);
+    assert_eq!(
+        series,
+        vec![(0, 0), (3_600_000, 40)],
+        "one point per bucket, at its millisecond edge: the row's rewrite tokens in the hour it fell in"
+    );
     let moves = db.read_blocking(|c| moves_by_reason(c, &filter)).unwrap();
     assert_eq!(moves.get("shed"), Some(&1));
     let by_fit = db
