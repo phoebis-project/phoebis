@@ -84,15 +84,7 @@ fn seeded() -> (tempfile::TempDir, Arc<LedgerDb>) {
 
 /// `sqlite_stat1` through a pooled reader.
 fn statistics(db: &LedgerDb) -> Statistics {
-    db.read_blocking(|c| {
-        let mut stmt =
-            c.prepare("SELECT tbl, idx, stat FROM sqlite_stat1 ORDER BY tbl, idx, stat")?;
-        let rows = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
-    })
-    .unwrap()
+    db.read_blocking(|c| Ok(crate::db::stat1_rows(c)?)).unwrap()
 }
 
 /// 2,000 requests over 400 sessions of five, 1,990 of them under the key `main` and one under each of ten other

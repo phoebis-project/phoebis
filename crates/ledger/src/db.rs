@@ -53,8 +53,9 @@ const OPEN_OPTIMIZE_MASK: i64 = 0x10012;
 
 pub struct LedgerDb {
     writer: Mutex<Connection>,
-    /// `None` for an in-memory ledger, whose one connection serves every role.
-    readers: Option<Readers>,
+    /// `None` for an in-memory ledger, whose one connection serves every role. In an `Arc`, so `read` hands its
+    /// blocking worker the pool it matched.
+    readers: Option<Arc<Readers>>,
     /// The retention purge's own connection, so a slice never holds the writer's lock or turn; `None` in memory.
     purger: Option<Mutex<Connection>>,
     /// The writes begun and ended through `write`, which `purge` reads to let a waiting write go first.
@@ -109,6 +110,7 @@ impl Drop for Ended<'_> {
 /// holds its connection for its closure's span alone, every return wakes one blocking waiter and one async waiter,
 /// and `Notify` wakes its waiters in order, so no caller starves under a steady 5 s poll.
 struct Readers {
+    /// Recovered from poisoning, since a push or a pop leaves the stack whole whatever panicked.
     idle: Mutex<Vec<Reader>>,
     returned: Condvar,
     wakeup: tokio::sync::Notify,
@@ -152,7 +154,7 @@ impl Readers {
         loop {
             let mut notified = std::pin::pin!(self.wakeup.notified());
             notified.as_mut().enable();
-            let popped = self.idle().pop();
+            let popped = recovered(&self.idle).pop();
             if let Some(reader) = popped {
                 return reader;
             }
@@ -162,7 +164,7 @@ impl Readers {
 
     /// The same on the calling thread, waiting on `returned`.
     fn take_blocking(&self) -> Reader {
-        let mut idle = self.idle();
+        let mut idle = recovered(&self.idle);
         loop {
             if let Some(reader) = idle.pop() {
                 return reader;
@@ -177,25 +179,31 @@ impl Readers {
     /// Pushes the reader back and wakes one waiter of each kind. A woken waiter that finds the stack empty, because a
     /// third caller popped first, registers again and waits on.
     fn put_back(&self, reader: Reader) {
-        self.idle().push(reader);
+        recovered(&self.idle).push(reader);
         self.returned.notify_one();
         self.wakeup.notify_one();
     }
+}
 
-    /// Recovered as `write` recovers its guard, since a push or a pop leaves the stack whole whatever panicked.
-    fn idle(&self) -> MutexGuard<'_, Vec<Reader>> {
-        self.idle.lock().unwrap_or_else(PoisonError::into_inner)
-    }
+/// The guard whether or not a panic poisoned the mutex, for state that a panic leaves whole.
+fn recovered<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// One pooled reader: read-only, no mutex, `BUSY_TIMEOUT`, `cache_size` at `-READER_CACHE_KIB`.
 fn open_reader(path: &Path) -> Result<Connection, LedgerError> {
+    let conn = open_read_only(path)?;
+    conn.pragma_update(None, "cache_size", -READER_CACHE_KIB)?;
+    Ok(conn)
+}
+
+/// The open a pooled reader shares with `read_schema_version`, whose one meta read sets no page cache.
+fn open_read_only(path: &Path) -> Result<Connection, LedgerError> {
     let conn = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
-    conn.pragma_update(None, "cache_size", -READER_CACHE_KIB)?;
     Ok(conn)
 }
 
@@ -241,6 +249,9 @@ impl WriterReadHold {
 #[cfg(any(test, feature = "debug-hooks"))]
 type ArmedHold = (WriterRead, Arc<AtomicBool>, std::sync::mpsc::Receiver<()>);
 
+#[cfg(any(test, feature = "debug-hooks"))]
+const INJECTED_READ_FAILURE: &str = "injected ledger read failure";
+
 impl LedgerDb {
     pub fn open(path: &Path) -> Result<LedgerDb, LedgerError> {
         use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
@@ -273,34 +284,27 @@ impl LedgerDb {
         purger.busy_timeout(BUSY_TIMEOUT)?;
         purger.pragma_update(None, "synchronous", "NORMAL")?;
         // Before the readers open, since a connection loads `sqlite_stat1` with its schema and keeps what it loaded.
-        purger.pragma_update(None, "analysis_limit", ANALYSIS_LIMIT)?;
-        purger.execute_batch(&format!("PRAGMA optimize={OPEN_OPTIMIZE_MASK:#x}"))?;
+        analyze_at_open(&purger)?;
         let readers = Readers::open(path)?;
-        Ok(LedgerDb {
-            writer: Mutex::new(writer),
-            readers: Some(readers),
-            purger: Some(Mutex::new(purger)),
-            writes: Writes::default(),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            fail_next_read: AtomicBool::new(false),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            fail_next_writer_read: Mutex::new(None),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            hold_next_writer_read: Mutex::new(None),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            page_reads: AtomicUsize::new(0),
-        })
+        Ok(LedgerDb::from_parts(writer, Some(readers), Some(purger)))
     }
 
     pub fn open_in_memory() -> Result<LedgerDb, LedgerError> {
         let mut writer = Connection::open_in_memory()?;
         prepare(&mut writer, Path::new(":memory:"), schema::MIGRATIONS)?;
-        writer.pragma_update(None, "analysis_limit", ANALYSIS_LIMIT)?;
-        writer.execute_batch(&format!("PRAGMA optimize={OPEN_OPTIMIZE_MASK:#x}"))?;
-        Ok(LedgerDb {
+        analyze_at_open(&writer)?;
+        Ok(LedgerDb::from_parts(writer, None, None))
+    }
+
+    fn from_parts(
+        writer: Connection,
+        readers: Option<Readers>,
+        purger: Option<Connection>,
+    ) -> LedgerDb {
+        LedgerDb {
             writer: Mutex::new(writer),
-            readers: None,
-            purger: None,
+            readers: readers.map(Arc::new),
+            purger: purger.map(Mutex::new),
             writes: Writes::default(),
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_read: AtomicBool::new(false),
@@ -310,7 +314,7 @@ impl LedgerDb {
             hold_next_writer_read: Mutex::new(None),
             #[cfg(any(test, feature = "debug-hooks"))]
             page_reads: AtomicUsize::new(0),
-        })
+        }
     }
 
     pub async fn schema_version(self: &Arc<Self>) -> Result<u32, LedgerError> {
@@ -323,11 +327,7 @@ impl LedgerDb {
         if !path.try_exists()? {
             return Ok(None);
         }
-        let conn = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        conn.busy_timeout(BUSY_TIMEOUT)?;
+        let conn = open_read_only(path)?;
         Ok(Some(read_version(&conn)?).filter(|version| *version != 0))
     }
 
@@ -345,7 +345,7 @@ impl LedgerDb {
         // A panic inside a closure rolls its transaction back when the guard drops, so the connection is
         // consistent and the next batch lands; refusing every later write for one bug would stall the ledger for
         // good.
-        let mut conn = self.writer.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut conn = recovered(&self.writer);
         f(&mut conn)
     }
 
@@ -361,7 +361,7 @@ impl LedgerDb {
             std::thread::sleep(Duration::from_millis(1));
         }
         let purger = self.purger.as_ref().unwrap_or(&self.writer);
-        let mut conn = purger.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut conn = recovered(purger);
         f(&mut conn)
     }
 
@@ -371,27 +371,21 @@ impl LedgerDb {
     /// until the next restart. It runs at the end of every purge, so the statistics' cadence is the purge's interval
     /// and no constant of its own.
     pub fn refresh_statistics(&self) -> Result<bool, LedgerError> {
-        fn statistics(
-            conn: &Connection,
-        ) -> Result<Vec<(String, Option<String>, String)>, LedgerError> {
-            let mut stmt =
-                conn.prepare("SELECT tbl, idx, stat FROM sqlite_stat1 ORDER BY tbl, idx")?;
-            let rows = stmt
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows)
-        }
         let changed = self.purge(|conn| {
-            let before = statistics(conn)?;
+            let before = stat1_rows(conn)?;
             conn.execute_batch("PRAGMA optimize")?;
-            Ok(statistics(conn)? != before)
+            Ok(stat1_rows(conn)? != before)
         })?;
         if changed {
-            if let Some(readers) = &self.readers {
-                readers.generation.fetch_add(1, Ordering::SeqCst);
-            }
+            self.bump_statistics_generation();
         }
         Ok(changed)
+    }
+
+    fn bump_statistics_generation(&self) {
+        if let Some(readers) = &self.readers {
+            readers.generation.fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     /// Runs `f` on a blocking worker under a pooled reader connection, so a slow read never parks the runtime thread
@@ -408,7 +402,8 @@ impl LedgerDb {
         let task = match &self.readers {
             Some(readers) => {
                 let reader = readers.take().await;
-                tokio::task::spawn_blocking(move || db.lend(reader, f))
+                let pool = Arc::clone(readers);
+                tokio::task::spawn_blocking(move || db.lend(&pool, reader, f))
             }
             None => tokio::task::spawn_blocking(move || db.read_blocking(f)),
         };
@@ -427,11 +422,8 @@ impl LedgerDb {
         // rather than propagating the poisoning, keeps one panicked read from turning every later read into a
         // `ReadCanceled`.
         match &self.readers {
-            Some(readers) => self.lend(readers.take_blocking(), f),
-            None => self.serve(
-                &self.writer.lock().unwrap_or_else(PoisonError::into_inner),
-                f,
-            ),
+            Some(readers) => self.lend(readers, readers.take_blocking(), f),
+            None => self.serve(&recovered(&self.writer), f),
         }
     }
 
@@ -446,13 +438,10 @@ impl LedgerDb {
     /// the error, so the pool never shrinks and the next read tries again.
     fn lend<T>(
         &self,
+        pool: &Readers,
         reader: Reader,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError>,
     ) -> Result<T, LedgerError> {
-        let pool = self
-            .readers
-            .as_ref()
-            .expect("a pooled reader comes from a file-backed ledger, which holds the pool");
         let mut lent = Returned { reader: None, pool };
         let reader = lent.reader.insert(reader);
         let generation = pool.generation.load(Ordering::SeqCst);
@@ -473,7 +462,7 @@ impl LedgerDb {
         #[cfg(any(test, feature = "debug-hooks"))]
         if self.fail_next_read.swap(false, Ordering::SeqCst) {
             return Err(LedgerError::Io(std::io::Error::other(
-                "injected ledger read failure",
+                INJECTED_READ_FAILURE,
             )));
         }
         f(conn)
@@ -492,7 +481,7 @@ impl LedgerDb {
         tokio::task::spawn_blocking(move || {
             // Recovered as `write` recovers it, for the same reason: a closure that panicked rolled its transaction
             // back, so the connection is consistent.
-            let conn = db.writer.lock().unwrap_or_else(PoisonError::into_inner);
+            let conn = recovered(&db.writer);
             #[cfg(any(test, feature = "debug-hooks"))]
             db.writer_read_hooks(which)?;
             f(&conn)
@@ -503,21 +492,13 @@ impl LedgerDb {
 
     #[cfg(any(test, feature = "debug-hooks"))]
     fn writer_read_hooks(&self, which: WriterRead) -> Result<(), LedgerError> {
-        let failing = self
-            .fail_next_writer_read
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take_if(|armed| *armed == which);
+        let failing = recovered(&self.fail_next_writer_read).take_if(|armed| *armed == which);
         if failing.is_some() {
             return Err(LedgerError::Io(std::io::Error::other(
-                "injected ledger read failure",
+                INJECTED_READ_FAILURE,
             )));
         }
-        let held = self
-            .hold_next_writer_read
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take_if(|(armed, _, _)| *armed == which);
+        let held = recovered(&self.hold_next_writer_read).take_if(|(armed, _, _)| *armed == which);
         if let Some((_, parked, released)) = held {
             parked.store(true, Ordering::SeqCst);
             // A send and a dropped hold both end the wait.
@@ -572,15 +553,11 @@ impl LedgerDb {
         self.fail_next_read.store(true, Ordering::SeqCst);
     }
 
-    /// Fails the next `writer_read` that names `which` with an I/O error whose text reads
-    /// `injected ledger read failure`, the text `debug_fail_next_read` injects.
+    /// Fails the next `writer_read` that names `which` with an I/O error whose text is `INJECTED_READ_FAILURE`.
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_fail_next_writer_read(&self, which: WriterRead) {
-        *self
-            .fail_next_writer_read
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(which);
+        *recovered(&self.fail_next_writer_read) = Some(which);
     }
 
     /// Parks the next `writer_read` that names `which` on its blocking worker, with the writer connection taken,
@@ -591,10 +568,7 @@ impl LedgerDb {
     pub fn debug_hold_next_writer_read(&self, which: WriterRead) -> WriterReadHold {
         let parked = Arc::new(AtomicBool::new(false));
         let (release, released) = std::sync::mpsc::channel();
-        *self
-            .hold_next_writer_read
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some((which, parked.clone(), released));
+        *recovered(&self.hold_next_writer_read) = Some((which, parked.clone(), released));
         WriterReadHold { parked, release }
     }
 
@@ -622,9 +596,7 @@ impl LedgerDb {
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_bump_statistics_generation(&self) {
-        if let Some(readers) = &self.readers {
-            readers.generation.fetch_add(1, Ordering::SeqCst);
-        }
+        self.bump_statistics_generation();
     }
 
     /// Caps the writer connection's file at the pages it holds once a vacuum has left none free, so the next insert
@@ -1286,6 +1258,25 @@ pub(crate) fn read_version(conn: &Connection) -> Result<u32, LedgerError> {
     Ok(stored.and_then(|v| v.parse().ok()).unwrap_or(0))
 }
 
+/// Shared by both opens, so an in-memory ledger analyzes at its open as a file does.
+fn analyze_at_open(conn: &Connection) -> Result<(), LedgerError> {
+    conn.pragma_update(None, "analysis_limit", ANALYSIS_LIMIT)?;
+    conn.execute_batch(&format!("PRAGMA optimize={OPEN_OPTIMIZE_MASK:#x}"))?;
+    Ok(())
+}
+
+/// `sqlite_stat1`'s rows as (`tbl`, `idx`, `stat`), ordered by all three so two reads of the same rows compare equal.
+pub(crate) fn stat1_rows(
+    conn: &Connection,
+) -> rusqlite::Result<Vec<(String, Option<String>, String)>> {
+    let mut stmt =
+        conn.prepare("SELECT tbl, idx, stat FROM sqlite_stat1 ORDER BY tbl, idx, stat")?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1876,7 +1867,7 @@ mod tests {
         );
         let failed = db.writer_read(WriterRead::MemberSpends, |_| Ok(())).await;
         assert!(
-            matches!(failed, Err(LedgerError::Io(ref e)) if e.to_string() == "injected ledger read failure"),
+            matches!(failed, Err(LedgerError::Io(ref e)) if e.to_string() == INJECTED_READ_FAILURE),
             "{failed:?}"
         );
         assert!(
