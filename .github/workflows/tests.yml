@@ -35,9 +35,6 @@ jobs:
       # The registry and target/ with BoringSSL's compiled output, keyed on Cargo.lock and the toolchain: the step
       # that costs the most on a cold runner.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          # A red run saves the cache too, so the run after it starts warm.
-          cache-on-failure: true
       - run: df -h
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
