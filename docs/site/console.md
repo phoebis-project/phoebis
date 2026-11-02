@@ -606,16 +606,15 @@ bar's unit: under Native the tile stacks the subscription traffic's figure in th
 dollars, and a bar's figure and a cost line read a key's figure beside its billed dollars, a side with no traffic left
 out, the tile, the bar's figure and the cost line each reading the subscription side as a dash with the Dashboard's
 hover where a request priced nothing, and its bar draws no fill and sorts last. A key spans its pool's accounts, so its
-figures carry no hint. The
-columns are Name, Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and each row ends in its menu. Under the name a
-row notes the capture setting, `bodies captured, {h}h` or `bodies not captured`, with "inherited" where the key follows
-its pool and "keepalive off" for a key opted out of cache warming. Models reads `{n} rules`, with "(replace)" where they
-replace the pool's, or "Pool rules" or "No rules". Expiry reads the date or "Never". Status carries the key's state with
-`used {ago}` and, after a rotation, `{n} sessions still on the previous secret`. The menu offers Edit, Rotate (`Rotate
-{name}`), Revoke (`Revoke {name}`: "Requests with this key are rejected immediately. Its history stays in the ledger.")
-and Delete (`Delete {name}`: "Removes the key and detaches its request history from the key name. This cannot be
-undone."). Before the first key the table reads "No keys yet" with "Create key". What a key's settings mean is on
-[Keys](routing.md#keys).
+figures carry no hint. The columns are Name, Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and each row ends in
+its menu. Under the name a row notes the capture setting, `bodies captured, {h}h` or `bodies not captured`, with
+"inherited" where the key follows its pool and "keepalive off" for a key opted out of cache warming. Models reads `{n}
+rules`, with "(replace)" where they replace the pool's, or "Pool rules" or "No rules". Expiry reads the date or "Never".
+Status carries the key's state with `used {ago}` and, after a rotation, `{n} sessions still on the previous secret`. The
+menu offers Edit, Rotate (`Rotate {name}`), Revoke (`Revoke {name}`: "Requests with this key are rejected immediately.
+Its history stays in the ledger.") and Delete (`Delete {name}`: "Removes the key and detaches its request history from
+the key name. This cannot be undone."). Before the first key the table reads "No keys yet" with "Create key". What a
+key's settings mean is on [Keys](routing.md#keys).
 
 "Create key" and Rotate end on the dialog "Key created" or "Key rotated", which shows the secret once with a copy
 button under "Copy the secret now. The router stores only a hash, so it cannot be shown again." and "Set it as

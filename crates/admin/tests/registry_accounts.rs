@@ -1260,7 +1260,7 @@ async fn the_account_lifetime_walks_the_older_rows_once_an_hour_and_a_row_landed
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
-    let land = |id: &str, at: i64| {
+    let land = |id: &str, (account, kind): (&str, &str), at: i64| {
         parts.ledger.record(Record::Request {
             request: RequestRecord {
                 id: id.into(),
@@ -1280,8 +1280,8 @@ async fn the_account_lifetime_walks_the_older_rows_once_an_hour_and_a_row_landed
             attempts: vec![AttemptRecord {
                 request_id: id.into(),
                 attempt: 1,
-                account_id: "business".into(),
-                account_kind: "oauth".into(),
+                account_id: account.into(),
+                account_kind: kind.into(),
                 started_at: at,
                 outcome: "succeeded".into(),
                 input_tokens: Some(10),
@@ -1291,21 +1291,30 @@ async fn the_account_lifetime_walks_the_older_rows_once_an_hour_and_a_row_landed
             bodies: None,
         });
     };
-    land("old", now - 30 * 24 * HOUR);
-    land("new", now);
-    // The first poll caches the older part for the hour, so the row older than the week has landed before it.
+    let (business, direct) = (("business", "oauth"), ("direct", "api_key"));
+    land("old", business, now - 30 * 24 * HOUR);
+    land("new", business, now);
+    // An account whose every row is older than the week, so its lifetime comes from the older part alone.
+    land("direct-old", direct, now - 30 * 24 * HOUR);
+    // The first poll caches the older part for the hour, so the rows older than the week have landed before it.
     common::landed(&parts, "old").await;
-    let lifetime = |v: &serde_json::Value| {
+    common::landed(&parts, "direct-old").await;
+    let lifetime = |v: &serde_json::Value, id: &str| {
         let accounts = v["accounts"].as_array().unwrap();
         accounts
             .iter()
-            .find(|a| a["id"] == "business")
+            .find(|a| a["id"] == id)
             .map(|a| a["requests"]["lifetime"].as_u64().unwrap())
     };
-    common::wait_json(&parts.app, "/admin/accounts", &cookie, |v| {
-        lifetime(v) == Some(2)
+    let accounts = common::wait_json(&parts.app, "/admin/accounts", &cookie, |v| {
+        lifetime(v, "business") == Some(2)
     })
     .await;
+    assert_eq!(
+        lifetime(&accounts, "direct"),
+        Some(1),
+        "an account with no row inside the week keeps its older rows in its lifetime"
+    );
     let reads = || parts.db.debug_page_reads();
     let app = &parts.app;
     let poll = |cookie: String| async move {
@@ -1341,9 +1350,9 @@ async fn the_account_lifetime_walks_the_older_rows_once_an_hour_and_a_row_landed
         "two polls at a moved key share one walk"
     );
     // A guard against a cache that holds the week too: a row landed inside the week shows on a poll of the same hour.
-    land("newer", now + 2 * HOUR);
+    land("newer", business, now + 2 * HOUR);
     common::wait_json(&parts.app, "/admin/accounts", &cookie, |v| {
-        lifetime(v) == Some(3)
+        lifetime(v, "business") == Some(3)
     })
     .await;
 }
