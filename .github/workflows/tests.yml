@@ -53,18 +53,12 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci --no-audit --no-fund
-      - run: npx playwright install --with-deps chromium
       - run: npm run build
       - run: node scripts/check-build.mjs
       - run: npm run lint
+      # The smoke, the mock pass and the reference smoke run on a developer's host before a merge. On the hosted
+      # runner they run past this job's cap and would spend most of the free plan's monthly minutes.
       - run: npm test
-      - run: npm run smoke
-      # The mock pass and the reference smoke are CI's browser checks. The live pass needs a router with a secret
-      # and stays local.
-      - run: npm run e2e:mock
-        env:
-          PHOEBIS_SCREENSHOT_DIR: ${{ runner.temp }}/screenshots
-      - run: npm run e2e:reference
   tests:
     name: Tests
     needs: [rust, web]
