@@ -2001,8 +2001,16 @@ pub struct RollupSelect {
 /// `pools_traffic` walks its range in pages of the same size on one connection.
 pub const PAGE_HOURS: i64 = 24;
 
-/// The selecting statement and its binds, spelled once so the plan test explains the statement the read runs.
-fn select_statement(from_hour: i64, to_hour: i64, select: &RollupSelect) -> (String, Vec<Value>) {
+/// The selecting statement and its binds, spelled once so the plan test explains the statement the read runs. A pool
+/// with an account bound names the member index: the primary key's hour range yields the order's leading terms, and
+/// statistics can price that range below the member's seek, which on a long range reads one member's rows where the
+/// range reads every member's. Every other form names nothing, the pool alone under its unary plus included, since on
+/// a form that binds no leading column the named index forces a walk of the whole index and a sort.
+pub(crate) fn select_statement(
+    from_hour: i64,
+    to_hour: i64,
+    select: &RollupSelect,
+) -> (String, Vec<Value>) {
     fn in_list(
         column: &str,
         bare: bool,
@@ -2068,9 +2076,14 @@ fn select_statement(from_hour: i64, to_hour: i64, select: &RollupSelect) -> (Str
             .collect();
         clauses.push(format!("({})", parts.join(" OR ")));
     }
+    let indexed = if select.pools.is_empty() || select.accounts.is_empty() {
+        ""
+    } else {
+        " INDEXED BY rollups_hourly_member"
+    };
     (
         format!(
-            "SELECT {COLUMNS} FROM rollups_hourly WHERE {} ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, classifier",
+            "SELECT {COLUMNS} FROM rollups_hourly{indexed} WHERE {} ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, classifier",
             clauses.join(" AND ")
         ),
         binds,
@@ -2143,6 +2156,12 @@ pub(crate) fn read_rollups_of_key_generation(
 pub const KEY_RANGE_PREDICATE: &str =
     "key_id = ?1 AND key_generation = ?2 AND hour >= ?3 AND hour < ?4";
 
+/// `read_rollups_for_key`'s statement, its order included, spelled once so the seeded plan test explains the
+/// statement the read runs. It binds `KEY_RANGE_PREDICATE`'s four values.
+pub(crate) fn key_range_statement() -> String {
+    format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, classifier")
+}
+
 /// The rows of one key over a range, narrowed by SQLite rather than in memory: a reader that wants a single
 /// key pays for that key's rows and not for every key's.
 pub fn read_rollups_for_key(
@@ -2152,7 +2171,7 @@ pub fn read_rollups_for_key(
     from_hour: i64,
     to_hour: i64,
 ) -> Result<Vec<RollupRow>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, classifier"))?;
+    let mut stmt = conn.prepare(&key_range_statement())?;
     let rows = stmt.query_map(
         params![key_id, key_generation, from_hour, to_hour],
         row_to_rollup,

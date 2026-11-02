@@ -42,8 +42,9 @@ const READER_CACHE_KIB: i64 = 32 * 1024;
 /// The rows an `ANALYZE` visits per index before it skips ahead (SQLite's approximate analysis,
 /// <https://www.sqlite.org/lang_analyze.html> section 5), so the start of a large file scans a bounded slice of each
 /// index rather than the file: the planner needs the ratio between two indexes, which the sample gets right, and the
-/// statements whose plan must hold name their index.
-const ANALYSIS_LIMIT: i64 = 1_000;
+/// statements whose plan must hold name their index. Crate-visible, so the seeded plan pass analyzes under the limit
+/// the open uses.
+pub(crate) const ANALYSIS_LIMIT: i64 = 1_000;
 
 /// The open's `PRAGMA optimize` mask (<https://www.sqlite.org/pragma.html#pragma_optimize>, the mask table):
 /// `0x10000` examines every table, and `0x2` runs `ANALYZE` where a table has no statistics or outgrew them. The
@@ -893,13 +894,12 @@ pub(crate) fn insert_samples_in(
 /// column, which no `landed_after` filter answers. The previous stamp is read in the row's own transaction, so a
 /// writer that starts again under a clock set back still stamps above every row written before.
 fn landing_stamp(tx: &Transaction<'_>, now: i64) -> Result<i64, LedgerError> {
-    let previous: i64 = tx.query_row(
-        "SELECT COALESCE(MAX(landed_at), 0) FROM requests",
-        [],
-        |r| r.get(0),
-    )?;
+    let previous: i64 = tx.query_row(LANDING_STAMP_SQL, [], |r| r.get(0))?;
     Ok(now.max(previous + 1))
 }
+
+/// The writer's landing stamp read, a `MAX` the landed-at index answers from its last entry.
+pub(crate) const LANDING_STAMP_SQL: &str = "SELECT COALESCE(MAX(landed_at), 0) FROM requests";
 
 /// Writes the request and its attempts, answering the rows the id held before, if any: a replacement has to
 /// take its earlier contribution out of every aggregate that was folded from it. `now` is the writer's clock, which

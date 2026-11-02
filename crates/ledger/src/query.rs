@@ -502,14 +502,14 @@ fn filter_clauses(filter: &RequestFilter, live: &LiveKeys) -> (Vec<Box<dyn ToSql
     (args, clauses)
 }
 
-/// The request log's page under `filter`, newest first, from `cursor` on.
-pub fn list_requests(
-    conn: &Connection,
+/// The request list's statement and its binds, spelled once so the seeded plan test explains the statement the
+/// read runs under each filter.
+pub(crate) fn list_requests_statement(
     filter: &RequestFilter,
     live: &LiveKeys,
     cursor: Option<&str>,
     limit: usize,
-) -> Result<(Vec<RequestWithAttempts>, Option<String>), LedgerError> {
+) -> Result<(String, Vec<Box<dyn ToSql>>), LedgerError> {
     let (mut args, mut clauses) = filter_clauses(filter, live);
     if let Some(cursor) = cursor {
         let (at, id) = cursor
@@ -538,6 +538,18 @@ pub fn list_requests(
         "{REQUEST_SELECT}{where} ORDER BY received_at DESC, id DESC LIMIT ?{}",
         args.len()
     );
+    Ok((sql, args))
+}
+
+/// The request log's page under `filter`, newest first, from `cursor` on.
+pub fn list_requests(
+    conn: &Connection,
+    filter: &RequestFilter,
+    live: &LiveKeys,
+    cursor: Option<&str>,
+    limit: usize,
+) -> Result<(Vec<RequestWithAttempts>, Option<String>), LedgerError> {
+    let (sql, args) = list_requests_statement(filter, live, cursor, limit)?;
     let mut stmt = conn.prepare(&sql)?;
     let mut requests = stmt
         .query_map(
@@ -904,7 +916,7 @@ pub fn request_events(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-const RECENT_EVENTS_OF_KIND: &str = "SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE kind = ?1 ORDER BY at DESC, rowid DESC LIMIT ?2";
+pub(crate) const RECENT_EVENTS_OF_KIND: &str = "SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE kind = ?1 ORDER BY at DESC, rowid DESC LIMIT ?2";
 
 /// The newest `limit` events of one kind, newest first.
 pub fn recent_events_of_kind(
@@ -1221,7 +1233,7 @@ impl Answered {
 }
 
 /// One statement's clauses and their arguments, over alias `d` for the decisions or `e` for the events.
-struct LogStatement {
+pub(crate) struct LogStatement {
     clauses: Vec<String>,
     args: Vec<Box<dyn ToSql>>,
 }
@@ -1278,7 +1290,7 @@ impl LogStatement {
 }
 
 /// `None` when the kinds name no decision, so the statement is never run.
-fn decision_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
+pub(crate) fn decision_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
     let mut statement = LogStatement::new("d", filter);
     if !filter.accounts.is_empty() {
         let mut marks = Vec::new();
@@ -1403,13 +1415,12 @@ pub fn list_routing_log(
     })
 }
 
-/// Up to `page` decisions past `cursor`, each with the facts of the attempt that completed it.
-fn decision_rows(
-    conn: &Connection,
+/// The routing log's decision page statement and its binds, spelled once for the same reason.
+pub(crate) fn decision_rows_statement(
     mut statement: LogStatement,
     cursor: Option<&RoutingLogCursor>,
     page: i64,
-) -> Result<Vec<DecisionListRow>, LedgerError> {
+) -> (String, Vec<Box<dyn ToSql>>) {
     if let Some(cursor) = cursor {
         let n = statement.args.len() + 1;
         statement.args.push(Box::new(cursor.at));
@@ -1435,9 +1446,20 @@ fn decision_rows(
         statement.sql(),
         statement.args.len()
     );
+    (sql, statement.args)
+}
+
+/// Up to `page` decisions past `cursor`, each with the facts of the attempt that completed it.
+fn decision_rows(
+    conn: &Connection,
+    statement: LogStatement,
+    cursor: Option<&RoutingLogCursor>,
+    page: i64,
+) -> Result<Vec<DecisionListRow>, LedgerError> {
+    let (sql, args) = decision_rows_statement(statement, cursor, page);
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
-        .query_map(params_from_iter(statement.params()), |r| {
+        .query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
             Ok((
                 DecisionListRow {
                     request_id: r.get(0)?,
@@ -4764,10 +4786,10 @@ const SESSION_BURN_LIMIT: usize = 20;
 
 /// `top_sessions_by_tokens`' statement and its binds, spelled once so the plan test explains the statement the read
 /// runs. A request is admitted within an hour of any attempt's start, so the request's own index carries the range.
-/// The index is named: the ledger keeps no planner statistics, and without them SQLite prices a scan of every attempt
-/// below this range search. Named accounts rank by their own attempts alone, the attempts the series then prices, and
-/// the unary plus keeps them off the attempts' account index so the requests' range stays the outer loop.
-fn top_sessions_statement(
+/// The index is named: without statistics, as on a fresh file, SQLite prices a scan of every attempt below this range
+/// search. Named accounts rank by their own attempts alone, the attempts the series then prices, and the unary plus
+/// keeps them off the attempts' account index so the requests' range stays the outer loop.
+pub(crate) fn top_sessions_statement(
     from: i64,
     to: i64,
     limit: usize,
@@ -4861,7 +4883,7 @@ struct SessionAttempt {
 /// `read_session_attempts`' statement for `sessions` ids and its binds, spelled once so the plan test explains the
 /// statement the read runs. A request is admitted within an hour of any attempt's start, so the request's own index
 /// carries the range.
-fn session_attempts_statement(
+pub(crate) fn session_attempts_statement(
     from: i64,
     to: i64,
     sessions: &[String],

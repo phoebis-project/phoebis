@@ -12,6 +12,8 @@ mod keys;
 mod metrics;
 mod pattern;
 mod plan;
+#[cfg(test)]
+mod plan_drift;
 mod price;
 mod pricing;
 mod query;

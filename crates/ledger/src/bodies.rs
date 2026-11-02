@@ -170,7 +170,7 @@ pub fn run_retention_blocking(
 /// The bodies slice, ordered by the cutoff column the expiry index covers with `rowid` breaking ties: `ORDER BY rowid`
 /// alone plans as a scan of the table whatever index the filter has, and the slice would walk every row for its
 /// oldest thousand.
-const PURGE_BODIES: &str = "DELETE FROM bodies WHERE rowid IN (SELECT rowid FROM bodies WHERE expires_at <= ?1 ORDER BY expires_at, rowid LIMIT ?2)";
+pub(crate) const PURGE_BODIES: &str = "DELETE FROM bodies WHERE rowid IN (SELECT rowid FROM bodies WHERE expires_at <= ?1 ORDER BY expires_at, rowid LIMIT ?2)";
 
 /// The bodies `PURGE_BODIES` takes next, in its order, with their request rows' request counts and the stored
 /// responses' lengths. The join reads the bodies record's first column and the request row by its key, and SQLite
@@ -178,7 +178,7 @@ const PURGE_BODIES: &str = "DELETE FROM bodies WHERE rowid IN (SELECT rowid FROM
 /// behind both blobs, and reading it would walk each row's overflow pages under the lock the budget exists to shorten.
 /// The request row's `response_bytes` counts what the caller received, while the bodies row keeps what the bus
 /// delivered up to the capture's bound, so a stored response counts at its own length.
-const EXPIRED_BODY_BYTES: &str = "SELECT r.id IS NOT NULL, r.request_bytes, length(b.response_body) FROM bodies b LEFT JOIN requests r ON r.id = b.request_id WHERE b.expires_at <= ?1 ORDER BY b.expires_at, b.rowid LIMIT ?2";
+pub(crate) const EXPIRED_BODY_BYTES: &str = "SELECT r.id IS NOT NULL, r.request_bytes, length(b.response_body) FROM bodies b LEFT JOIN requests r ON r.id = b.request_id WHERE b.expires_at <= ?1 ORDER BY b.expires_at, b.rowid LIMIT ?2";
 
 /// What one body frees: the request as its row counts it, received whole since the capture never cuts it, at
 /// `MAX_CAPTURED_BODY` where the count is null, and the stored response at its length, 0 where none was stored. A body
@@ -215,17 +215,19 @@ fn bodies_within_budget(tx: &Transaction<'_>, now: i64) -> Result<(usize, bool),
 
 /// The attempts of the requests `PURGE_REQUESTS` selects next in the same transaction, so a request row never
 /// outlives its attempts or the other way round. Ordered as the bodies slice is, by the received index.
-const PURGE_ATTEMPTS: &str = "DELETE FROM attempts WHERE request_id IN (SELECT id FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)";
+pub(crate) const PURGE_ATTEMPTS: &str = "DELETE FROM attempts WHERE request_id IN (SELECT id FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)";
 
 /// The guardrail matches of the requests `PURGE_REQUESTS` selects next in the same transaction, so no match outlives
-/// its request. The same slice as the attempts'.
-const PURGE_REQUEST_GUARDRAILS: &str = "DELETE FROM request_guardrails WHERE request_id IN (SELECT id FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)";
+/// its request. The same slice as the attempts'. The primary key is named: once statistics count few matches, SQLite
+/// prices a walk of every match below a lookup per request, and a table grown past its statistics would then be walked
+/// whole on every slice.
+pub(crate) const PURGE_REQUEST_GUARDRAILS: &str = "DELETE FROM request_guardrails INDEXED BY sqlite_autoindex_request_guardrails_1 WHERE request_id IN (SELECT id FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)";
 
-const PURGE_REQUESTS: &str = "DELETE FROM requests WHERE rowid IN (SELECT rowid FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)";
+pub(crate) const PURGE_REQUESTS: &str = "DELETE FROM requests WHERE rowid IN (SELECT rowid FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)";
 
 /// Under the requests' cutoff and after their family, so a decision leaves in the pass that takes its request, which
 /// was received before it was decided. One whose request never landed leaves at the same age by its own stamp.
-const PURGE_DECISIONS: &str = "DELETE FROM decisions WHERE rowid IN (SELECT rowid FROM decisions WHERE at < ?1 ORDER BY at, rowid LIMIT ?2)";
+pub(crate) const PURGE_DECISIONS: &str = "DELETE FROM decisions WHERE rowid IN (SELECT rowid FROM decisions WHERE at < ?1 ORDER BY at, rowid LIMIT ?2)";
 
 /// One transaction under the purger over at most `PURGE_SLICE` rows of one family, selected by rowid, a bodies slice
 /// freeing about `PURGE_SLICE_BYTES` with the stored response counted at its length, a body above it alone in its
