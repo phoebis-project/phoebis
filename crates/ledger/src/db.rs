@@ -439,10 +439,10 @@ impl LedgerDb {
     /// A reader behind the pool's statistics generation is reopened through `open_reader` first, since the bundled
     /// SQLite reloads statistics on the analyzing connection alone and a connection reads `sqlite_stat1` again only
     /// when it loads its schema. The reopen runs here, on the blocking worker or the caller's thread and after the
-    /// stack's lock is released, so a file open never holds the runtime or another taker. The generation is read
-    /// before the open, so a refresh that lands during it leaves this reader behind and its next read reopens it
-    /// again. A reopen that fails puts the old reader back and answers the error, so the pool never shrinks and the
-    /// next read tries again.
+    /// stack's lock is released, so on the `read` path a file open never holds the runtime, and on either path it
+    /// never holds another taker. The generation is read before the open, so a refresh that lands during it leaves
+    /// this reader behind and its next read reopens it again. A reopen that fails puts the old reader back and answers
+    /// the error, so the pool never shrinks and the next read tries again.
     fn lend<T>(
         &self,
         reader: Reader,
@@ -1692,19 +1692,25 @@ mod tests {
         write_statistics(&db, 1, 1_000);
         db.debug_bump_statistics_generation();
         assert!(
-            plan(&db).iter().any(|s| s.contains("requests_key")),
+            plan(&db)
+                .iter()
+                .any(|s| s.starts_with("SEARCH requests USING INDEX requests_key")),
             "{:?}",
             plan(&db)
         );
         write_statistics(&db, 1_000, 1);
         assert!(
-            plan(&db).iter().any(|s| s.contains("requests_key")),
+            plan(&db)
+                .iter()
+                .any(|s| s.starts_with("SEARCH requests USING INDEX requests_key")),
             "a reader keeps its loaded statistics until the generation moves: {:?}",
             plan(&db)
         );
         db.debug_bump_statistics_generation();
         assert!(
-            plan(&db).iter().any(|s| s.contains("requests_session")),
+            plan(&db)
+                .iter()
+                .any(|s| s.starts_with("SEARCH requests USING INDEX requests_session")),
             "{:?}",
             plan(&db)
         );
@@ -1723,7 +1729,9 @@ mod tests {
         let db = Arc::new(LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap());
         write_statistics(&db, 1, 1_000);
         db.debug_bump_statistics_generation();
-        assert!(plan(&db).iter().any(|s| s.contains("requests_key")));
+        assert!(plan(&db)
+            .iter()
+            .any(|s| s.starts_with("SEARCH requests USING INDEX requests_key")));
         let (taken, on_taken) = std::sync::mpsc::channel::<()>();
         let (release, released) = std::sync::mpsc::channel::<()>();
         let held = std::thread::spawn({
@@ -1747,14 +1755,77 @@ mod tests {
         release.send(()).unwrap();
         let inside = held.join().unwrap();
         assert!(
-            inside.iter().any(|s| s.contains("requests_key")),
+            inside
+                .iter()
+                .any(|s| s.starts_with("SEARCH requests USING INDEX requests_key")),
             "the closure in flight finished on its connection: {inside:?}"
         );
         assert!(
-            plan(&db).iter().any(|s| s.contains("requests_session")),
+            plan(&db)
+                .iter()
+                .any(|s| s.starts_with("SEARCH requests USING INDEX requests_session")),
             "and that connection reopened at its next read: {:?}",
             plan(&db)
         );
+    }
+
+    #[test]
+    fn a_refresh_moves_the_readers_generation_only_when_it_changed_the_statistics() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
+        assert_eq!(
+            (
+                db.refresh_statistics().unwrap(),
+                db.debug_statistics_generation()
+            ),
+            (false, 0),
+            "the open analyzed every table that held a row"
+        );
+        db.insert_request(&request("r1"), &[], None).unwrap();
+        assert_eq!(
+            (
+                db.refresh_statistics().unwrap(),
+                db.debug_statistics_generation()
+            ),
+            (true, 1),
+            "the requests table holds a row and its indexes have no statistics"
+        );
+        assert_eq!(
+            (
+                db.refresh_statistics().unwrap(),
+                db.debug_statistics_generation()
+            ),
+            (false, 1),
+            "every table that holds a row has its statistics"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_reopen_answers_its_error_and_leaves_every_reader_in_the_pool() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        let db = Arc::new(LedgerDb::open(&path).unwrap());
+        // A read-only open fails on a missing main file whatever its WAL sidecars hold, and the connections already
+        // open keep their descriptors, so moving the main file away fails the reopen and nothing else.
+        let away = dir.path().join("away.sqlite");
+        std::fs::rename(&path, &away).unwrap();
+        db.debug_bump_statistics_generation();
+        let failed = db.read_blocking(read_version);
+        assert!(
+            matches!(
+                failed,
+                Err(LedgerError::Sqlite(rusqlite::Error::SqliteFailure(ref e, _)))
+                    if e.code == rusqlite::ErrorCode::CannotOpen
+            ),
+            "{failed:?}"
+        );
+        std::fs::rename(&away, &path).unwrap();
+        assert_eq!(db.read_blocking(read_version).unwrap(), 2);
+        let short = "the reader whose reopen failed came back to the pool";
+        for (release, task) in hold_every_reader(&db, short).await {
+            release.send(()).unwrap();
+            assert_eq!(task.await.unwrap().unwrap(), 2);
+        }
     }
 
     #[tokio::test]

@@ -6090,14 +6090,19 @@ async fn the_hourly_purge_refreshes_the_planner_statistics_and_moves_the_readers
         purge_interval: Duration::from_millis(200),
         ..quick()
     };
-    let h = on_disk(
-        &up,
+    // Read before the harness spawns the purge task, whose first pass would race the read.
+    let db = Arc::new(LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap());
+    assert_eq!(db.debug_statistics_generation(), 0);
+    let h = harness_on(
         fresh_store(),
-        &dir.path().join("ledger.sqlite"),
+        db,
+        &up,
+        &[api_key("a", C, 0)],
+        (0, None),
         config,
+        false,
     )
     .await;
-    assert_eq!(h.db.debug_statistics_generation(), 0);
     h.ledger.record_request(finished("r1", true)).await;
     // The open found the requests table empty and gave it no `sqlite_stat1` row, so the first pass after the landing
     // finds an index without statistics on a table that holds a row, analyzes it, and the generation moves.
