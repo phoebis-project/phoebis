@@ -88,15 +88,23 @@ pub struct Attention {
 impl Attention {
     /// Every subject of every kind, holding or clear; a failed store or ledger read fails the whole read.
     pub fn conditions(&self, now: i64) -> Result<Vec<Condition>, AttentionError> {
-        // Read from the file on every call, as `refresh_failed` reads the registry, so the condition holds across a
-        // restart and clears on its own when the next start or a replay lands the rows. A read that fails fails the
-        // whole answer, as the refresh read's does: a scrape never reports clear what it could not read. Read before
-        // the state lock, so a read waiting on a reader connection never holds the bus arm's `observe` behind it.
-        let parked = self
+        // The parked rows and the fold's table share one read, so a call waits on the reader pool once. The parked
+        // rows are read from the file on every call, as `refresh_failed` reads the registry, so the condition holds
+        // across a restart and clears on its own when the next start or a replay lands the rows. The fold's table is
+        // one lookup, since the ledger folds the routing log into it hourly and at start rather than on this read. A
+        // read that fails fails the whole answer, as the refresh read's does: a scrape never reports clear what it
+        // could not read. Read before the state lock, so a read waiting on a reader connection never holds the bus
+        // arm's `observe` behind it.
+        let (parked, routing) = self
             .ledger
             .as_ref()
-            .map(|ledger| ledger.db().read_blocking(parked_summary))
-            .transpose()?;
+            .map(|ledger| {
+                ledger
+                    .db()
+                    .read_blocking(|c| Ok((parked_summary(c)?, routing_conditions(c)?)))
+            })
+            .transpose()?
+            .unzip();
         // The registry's reads come before the lock for the same reason: a stalled registry file holds the store's
         // connection mutex, and `observe` waits on this lock.
         let accounts = self.store.accounts()?;
@@ -109,13 +117,6 @@ impl Attention {
             .as_ref()
             .map(Ledger::unpriced_served)
             .unwrap_or_default();
-        // The fold's table, read before the lock as the parked rows are: one lookup, since the ledger folds the
-        // routing log into it hourly and at start rather than on this read.
-        let routing = self
-            .ledger
-            .as_ref()
-            .map(|ledger| ledger.db().read_blocking(routing_conditions))
-            .transpose()?;
         let mut state = self.state.lock().expect(STATE_POISONED);
         reader::conditions(
             &mut state,

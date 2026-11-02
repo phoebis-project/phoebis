@@ -211,6 +211,14 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         .keys()
         .map(|k| (k.id.clone(), k.created_at))
         .collect();
+    // `delete_api_key` deletes the key's pins, so a pin always names the live generation of its id.
+    let pin_key = |p: &phoebis_store::PinRow| {
+        Some((
+            p.key_id.clone(),
+            *live.get(&p.key_id)?,
+            p.session_id.clone(),
+        ))
+    };
     let now = (state.clock)();
     let accounts = match state.store.accounts() {
         Ok(accounts) => accounts,
@@ -220,6 +228,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     let reported = crate::routes::reported_samples(state).await;
     let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     let cutoff = now - state.session_expiry.as_millis() as i64;
+    let idle_bound = now
+        - state
+            .non_companion_idle
+            .min(state.session_expiry)
+            .as_millis() as i64;
     let engine: std::collections::BTreeMap<(String, i64, String), phoebis_keepalive::SessionView> =
         state
             .keepalive
@@ -234,17 +247,14 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             .collect();
     let mut candidates: std::collections::BTreeSet<(String, i64, String)> = pins
         .iter()
-        .filter(|standing| standing.pin.last_used_at >= cutoff)
-        .filter_map(|standing| {
-            let p = &standing.pin;
-            let generation = *live.get(&p.key_id)?;
-            Some((p.key_id.clone(), generation, p.session_id.clone()))
-        })
+        .filter(|standing| standing.pin.last_used_at >= idle_bound)
+        .filter_map(|standing| pin_key(&standing.pin))
         .chain(engine.keys().cloned())
         .collect();
     // One read for the activity and the fork facts: the keys the pin and engine passes can surface are known before
     // the read, the activity's come from the read itself, and a row's fork facts come from the requests of its own
-    // session whichever pass surfaced it.
+    // session whichever pass surfaced it. Only the sessions the retain below can keep are named: every engine
+    // session, and one with a pin use or a request at or after `idle_bound`.
     let (activity, identities) = match state
         .ledger
         .db()
@@ -255,7 +265,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             candidates.extend(
                 activity
                     .iter()
-                    .map(|a| (a.key_id.clone(), a.key_generation, a.session_id.clone())),
+                    .filter(|a| a.last_request_at >= idle_bound)
+                    .map(activity_key),
             );
             let keys: Vec<(String, i64, String)> = candidates.into_iter().collect();
             Ok((activity, phoebis_ledger::session_identities(c, &keys)?))
@@ -299,24 +310,15 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     // so a row reads it whichever pin, if any, the row shows.
     let created: std::collections::BTreeMap<(String, i64, String), i64> = pins
         .iter()
-        .filter_map(|standing| {
-            let p = &standing.pin;
-            let generation = *live.get(&p.key_id)?;
-            Some((
-                (p.key_id.clone(), generation, p.session_id.clone()),
-                standing.session_first_seen_at?,
-            ))
-        })
+        .filter_map(|standing| Some((pin_key(&standing.pin)?, standing.session_first_seen_at?)))
         .collect();
     // The router decays each pin's copies to the read and reads its runway in the same ask, so the burn priced below
     // and the runway are one instant's, and this crate projects nothing.
     for standing in pins.into_iter().filter(|s| s.pin.last_used_at >= cutoff) {
         let p = &standing.pin;
-        // `delete_api_key` deletes the key's pins, so a pin always names the live generation of its id.
-        let Some(&generation) = live.get(&p.key_id) else {
+        let Some(key @ (_, generation, _)) = pin_key(p) else {
             continue;
         };
-        let key = (p.key_id.clone(), generation, p.session_id.clone());
         agents_by_session
             .entry(key.clone())
             .or_default()
@@ -413,7 +415,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     }
     // Every row is keyed by its own session, as the pins are, so a session's requests land on the row of its pin.
     for a in activity {
-        let key = (a.key_id.clone(), a.key_generation, a.session_id.clone());
+        let key = activity_key(&a);
         let created_at = created.get(&key).copied();
         let entry = rows
             .entry(key)
@@ -477,11 +479,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     // is the display pin's, main's even where a subagent's request is in flight and has no ledger row yet. An ended
     // session the engine still holds is measured by its end as well, its `companion_since`, so one that sent no request
     // leaves after the timeout too.
-    let idle_bound = now
-        - state
-            .non_companion_idle
-            .min(state.session_expiry)
-            .as_millis() as i64;
     rows.retain(|key, entry| {
         let newest_pin_use = agent_pins
             .get(key)
@@ -604,6 +601,12 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     };
     out.sort_by_key(|v| std::cmp::Reverse(latest(v)));
     Ok(out)
+}
+
+/// The row a session's ledger activity lands on, spelled once so the fork-facts read names the row the activity pass
+/// files it under.
+fn activity_key(a: &phoebis_ledger::SessionActivity) -> (String, i64, String) {
+    (a.key_id.clone(), a.key_generation, a.session_id.clone())
 }
 
 /// Read the per-model cost card.

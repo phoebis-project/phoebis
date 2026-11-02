@@ -1603,16 +1603,14 @@ pub fn decision_record(
     Ok(Some(Value::Object(answer)))
 }
 
-/// The `pin_migrated` events of `[from, to)` counted by reason under each named account, so a page with several
-/// pools reads the events once and sums each pool's members in memory. An account without a move is absent, and an
-/// empty `accounts` list answers an empty map. The reason is the move's `detail.reason`, `unknown` when the event
-/// named none, and the read takes the events table's `(kind, at)` index rather than an hourly rollup bucket, so a pool
-/// card's "last hour" figure is the last hour exactly.
+/// The `pin_migrated` events of `[from, to)` counted by reason per account, so a page with several pools reads the
+/// events once and sums each pool's members in memory. An account without a move is absent. The reason is the move's
+/// `detail.reason`, `unknown` when the event named none, and the read takes the events table's `(kind, at)` index
+/// rather than an hourly rollup bucket, so a pool card's "last hour" figure is the last hour exactly.
 pub fn pin_migrations_by_account_and_reason(
     conn: &Connection,
     from: i64,
     to: i64,
-    accounts: &[String],
 ) -> Result<BTreeMap<String, BTreeMap<String, u64>>, LedgerError> {
     let mut stmt = conn.prepare(
         "SELECT account_id, detail FROM events WHERE kind = 'pin_migrated' AND at >= ?1 AND at < ?2",
@@ -1626,7 +1624,7 @@ pub fn pin_migrations_by_account_and_reason(
     let mut out: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
     for row in rows {
         let (account_id, detail) = row?;
-        let Some(account_id) = account_id.filter(|id| accounts.contains(id)) else {
+        let Some(account_id) = account_id else {
             continue;
         };
         let parsed: Value = detail

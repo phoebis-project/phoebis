@@ -1365,7 +1365,7 @@ pub(crate) struct PoolContext {
     guardrails: AttachmentIndex,
     keys: Vec<ApiKeyRow>,
     members: Vec<PoolMember>,
-    /// The last hour's moves by reason, by member account.
+    /// The last hour's moves by reason, by account.
     moves: BTreeMap<String, BTreeMap<String, u64>>,
     now: i64,
     overages: Vec<(String, OverageEvidence)>,
@@ -1380,7 +1380,7 @@ pub(crate) struct PoolContext {
 }
 
 /// One registry read for the pools, members, keys and accounts, one ledger read for the day's totals, every pool's
-/// traffic and every member's moves, and one ask of the router for each of its tables, in the shape of the account
+/// traffic and every account's moves, and one ask of the router for each of its tables, in the shape of the account
 /// list's context.
 pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, StoreError> {
     let registry = state.store.load_registry()?;
@@ -1391,45 +1391,19 @@ pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, Stor
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
     let pool_ids: Vec<String> = registry.pools.iter().map(|p| p.id.clone()).collect();
-    let mut member_accounts: Vec<String> = registry
-        .members
-        .iter()
-        .map(|m| m.account_id.clone())
-        .collect();
-    member_accounts.sort_unstable();
-    member_accounts.dedup();
     // The traffic starts at the hour the day's totals start at, so a pool's bars sum to its `requests_24h`: 25
     // buckets, the current partial hour last.
+    let day_start = hour - 24 * 3_600;
     let (day, traffic, moves) = state
         .ledger
         .db()
         .read(move |c| {
             Ok((
-                phoebis_ledger::request_totals(
-                    c,
-                    "pool_id",
-                    hour - 24 * 3_600,
-                    to,
-                    &prices,
-                    &tables,
-                    now,
-                )?,
+                phoebis_ledger::request_totals(c, "pool_id", day_start, to, &prices, &tables, now)?,
                 phoebis_ledger::pools_traffic(
-                    c,
-                    &pool_ids,
-                    hour - 24 * 3_600,
-                    to,
-                    3_600,
-                    &prices,
-                    &tables,
-                    now,
+                    c, &pool_ids, day_start, to, 3_600, &prices, &tables, now,
                 )?,
-                phoebis_ledger::pin_migrations_by_account_and_reason(
-                    c,
-                    now - 3_600_000,
-                    now,
-                    &member_accounts,
-                )?,
+                phoebis_ledger::pin_migrations_by_account_and_reason(c, now - 3_600_000, now)?,
             ))
         })
         .await

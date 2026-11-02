@@ -16,9 +16,17 @@ use phoebis_ledger::{LedgerError, Totals};
 /// revision in force moves only when the week-start hour does and the two parts add under one anchor.
 pub type OldKey = (i64, BTreeMap<String, i64>);
 
+/// The hour a lifetime splits at, seven days before the poll's hour: the week's part reads from it and the older part
+/// up to it.
+pub fn week_start(hour: i64) -> i64 {
+    hour - 7 * 24 * 3_600
+}
+
 /// One route's older part of its lifetime totals: the rows older than the week's start, summed per group, recomputed
 /// by the first poll that finds the key moved and shared with the polls that arrive while that read runs, which wait
-/// on the lock rather than read again. An error caches nothing, so the next poll reads again.
+/// on the lock rather than read again. An error caches nothing, so the next poll reads again. A route reads it from
+/// `i64::MIN`, which sits at or below the earliest hour the rollups can hold, so every row older than the week clears
+/// it.
 #[derive(Default)]
 pub struct OldPart(tokio::sync::Mutex<Option<(OldKey, BTreeMap<String, Totals>)>>);
 
@@ -51,12 +59,11 @@ pub struct OldTotals {
 /// `old` and `week` added per group through `Totals::add`: every field of `Totals` is a sum, and `equivalent` reads
 /// null when a part is unpriced, so the two parts add to the figure one walk over every row answers.
 pub fn lifetime_of(
-    old: &BTreeMap<String, Totals>,
+    mut old: BTreeMap<String, Totals>,
     week: &BTreeMap<String, Totals>,
 ) -> BTreeMap<String, Totals> {
-    let mut lifetime = old.clone();
     for (group, totals) in week {
-        lifetime.entry(group.clone()).or_default().add(totals);
+        old.entry(group.clone()).or_default().add(totals);
     }
-    lifetime
+    old
 }

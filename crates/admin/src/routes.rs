@@ -2116,7 +2116,8 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
     let to = crate::analytics::hour_end(hour);
-    let week_start = hour - 7 * 24 * 3_600;
+    let week_start = crate::lifetime::week_start(hour);
+    let day_start = hour - 24 * 3_600;
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
     let ledger = async {
@@ -2124,27 +2125,21 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
             .old_totals
             .accounts
             .get((week_start, BTreeMap::new()), || {
-                let (db, prices, tables) =
-                    (state.ledger.db().clone(), prices.clone(), tables.clone());
-                async move {
-                    db.read(move |c| {
-                        // `i64::MIN` sits at or below the earliest hour the rollups can hold, so every row older
-                        // than the week clears it.
-                        phoebis_ledger::request_totals(
-                            c,
-                            "account_id",
-                            i64::MIN,
-                            week_start,
-                            &prices,
-                            &tables,
-                            now,
-                        )
-                    })
-                    .await
-                }
+                let (prices, tables) = (prices.clone(), tables.clone());
+                state.ledger.db().read(move |c| {
+                    phoebis_ledger::request_totals(
+                        c,
+                        "account_id",
+                        i64::MIN,
+                        week_start,
+                        &prices,
+                        &tables,
+                        now,
+                    )
+                })
             })
             .await?;
-        let (quota, extra, extra_polled, extra_share, day, week) = state
+        let read = state
             .ledger
             .db()
             .read(move |c| {
@@ -2156,7 +2151,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
                     phoebis_ledger::request_totals(
                         c,
                         "account_id",
-                        hour - 24 * 3_600,
+                        day_start,
                         to,
                         &prices,
                         &tables,
@@ -2166,7 +2161,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
                         c,
                         "account_id",
                         week_start,
-                        to,
+                        day_start,
                         &prices,
                         &tables,
                         now,
@@ -2174,25 +2169,20 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
                 ))
             })
             .await?;
-        let lifetime = crate::lifetime::lifetime_of(&old, &week);
-        Ok::<_, phoebis_ledger::LedgerError>((
-            quota,
-            extra,
-            extra_polled,
-            extra_share,
-            day,
-            week,
-            lifetime,
-        ))
+        Ok::<_, phoebis_ledger::LedgerError>((old, read))
     }
     .await;
-    let (quota, extra, extra_polled, extra_share, day, week, lifetime) = match ledger {
+    let (old, (quota, extra, extra_polled, extra_share, day, six_days)) = match ledger {
         Ok(read) => read,
         Err(error) => {
             tracing::warn!(%error, "the account view could not read the ledger, so totals and windows are empty");
             Default::default()
         }
     };
+    // The read takes the six days before the day, so the day's rows are read once, and the week joins the two here:
+    // only the request counts reach the answer, and integer sums add exactly in any split.
+    let week = crate::lifetime::lifetime_of(six_days, &day);
+    let lifetime = crate::lifetime::lifetime_of(old, &week);
     let members = state
         .store
         .load_registry()

@@ -763,13 +763,14 @@ pub(crate) async fn accounts(
         Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
     };
     // The same hour bounds in seconds as the rollups read, so a sample never falls outside the hours answered.
+    let (from_hour, to_hour) = (hour_of(from), hour_ceil(to));
     let (rows, samples) = match state
         .ledger
         .db()
         .read(move |c| {
             Ok((
-                read_account_rollups(c, hour_of(from), hour_ceil(to))?,
-                hourly_window_samples(c, hour_of(from), hour_ceil(to))?,
+                read_account_rollups(c, from_hour, to_hour)?,
+                hourly_window_samples(c, from_hour, to_hour)?,
             ))
         })
         .await

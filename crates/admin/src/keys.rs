@@ -295,7 +295,7 @@ async fn totals(
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
     let to = crate::analytics::hour_end(hour);
-    let week_start = hour - 7 * 24 * 3_600;
+    let week_start = crate::lifetime::week_start(hour);
     let live = phoebis_ledger::LiveKeys::from_snapshot(&state.router.snapshot());
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
@@ -304,28 +304,18 @@ async fn totals(
             .old_totals
             .keys
             .get((week_start, live.0.clone()), || {
-                let (db, live, prices, tables) = (
-                    state.ledger.db().clone(),
-                    live.clone(),
-                    prices.clone(),
-                    tables.clone(),
-                );
-                async move {
-                    db.read(move |c| {
-                        // `i64::MIN` sits at or below the earliest hour the rollups can hold, so every row older
-                        // than the week clears it.
-                        phoebis_ledger::key_request_totals(
-                            c,
-                            i64::MIN,
-                            week_start,
-                            &live,
-                            &prices,
-                            &tables,
-                            now,
-                        )
-                    })
-                    .await
-                }
+                let (live, prices, tables) = (live.clone(), prices.clone(), tables.clone());
+                state.ledger.db().read(move |c| {
+                    phoebis_ledger::key_request_totals(
+                        c,
+                        i64::MIN,
+                        week_start,
+                        &live,
+                        &prices,
+                        &tables,
+                        now,
+                    )
+                })
             })
             .await?;
         let week = state
@@ -335,17 +325,18 @@ async fn totals(
                 phoebis_ledger::key_request_totals(c, week_start, to, &live, &prices, &tables, now)
             })
             .await?;
-        let lifetime = crate::lifetime::lifetime_of(&old, &week);
-        Ok::<_, phoebis_ledger::LedgerError>((week, lifetime))
+        Ok::<_, phoebis_ledger::LedgerError>((old, week))
     }
     .await;
-    match read {
+    let (old, week) = match read {
         Ok(totals) => totals,
         Err(error) => {
             tracing::warn!(%error, "the key view could not read the ledger, so usage and lifetime totals are empty");
             Default::default()
         }
-    }
+    };
+    let lifetime = crate::lifetime::lifetime_of(old, &week);
+    (week, lifetime)
 }
 
 /// The (key, generation) sessions the ledger has seen inside the console's own session window, read once
