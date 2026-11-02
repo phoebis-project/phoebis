@@ -11032,7 +11032,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     const missing = Object.entries(rows).filter(([, row]) => !row).map(([label]) => `${label} missing from the story`);
     for (const name of names) results.push({ name, ok: false, missing });
   };
-  const costAt =[...m.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Cost');
+  const costAt = [...m.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Cost');
   const costCellOf = async (id) => {
     const { row, rows } = await rowById(id);
     const td = costAt < 0 ? null : (row?.children[costAt] ?? null);
