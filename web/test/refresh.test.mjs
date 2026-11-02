@@ -11,7 +11,7 @@ for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'g
 globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
-const { act, ApiError, createElement: h, createRoot, fakeClock, installClock, Menu, queueToast, setHooks, useAsync } = await import('./dist/ui.js');
+const { act, ApiError, call, createElement: h, createRoot, fakeClock, installClock, Menu, queueToast, setHooks, useAsync } = await import('./dist/ui.js');
 
 const ORIGIN = Date.UTC(2026, 8, 16, 14, 30);
 const at = (ms) => new Date(ORIGIN + ms).toISOString();
@@ -131,6 +131,28 @@ test('a loader that throws synchronously on one refresh leaves the guard clear, 
   assert.throws(() => clock.tick(30_000), /loader broke/, "the refresh's call throws out of its tick");
   act(() => clock.tick(30_000));
   assert.equal(load.calls, 3, 'the tick after the throw reads');
+});
+
+test('a read the router never answers fails at the read deadline, and the next tick reads again', async () => {
+  const clock = frozen();
+  const wire = globalThis.fetch;
+  const urls = [];
+  // A router that took the read and never answers it, so only the read's own deadline settles it.
+  globalThis.fetch = (url, init = {}) => {
+    urls.push(url);
+    return new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(init.signal.reason)));
+  };
+  try {
+    const p = await probe(() => call('GET', '/admin/x'), { refreshMs: 5_000 });
+    act(() => clock.tick(60_000));
+    await settled();
+    assert.match(p.last().error ?? '', /\b60 s\b/, 'the read fails naming its deadline');
+    assert.equal(p.last().stale, true, 'the view marks what it draws as not current');
+    act(() => clock.tick(5_000));
+    assert.equal(urls.length, 2, 'the tick after the failed read reads the route again');
+  } finally {
+    globalThis.fetch = wire;
+  }
 });
 
 test('a hidden document reads nothing, and reads at once when it comes back a full period after the last answer', async () => {

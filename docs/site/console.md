@@ -16,10 +16,11 @@ filters, and each filter in force stands as a chip on a line under the bar. The 
 again now, and its dropdown sets auto reload to Off, 5 s, 10 s, 30 s or 1 min, 5 s when a view opens and off on Requests
 and the Routing log. Auto reload waits while the tab is hidden, while a drawer, a dialog or a menu is open and on an
 older page, with a muted mark and the cause in the dropdown's hover. A tick that arrives while the view's previous read
-is still in flight is skipped, and the first tick after it lands reads again. The filters, the search and the range live
-in the view's address, so a reload or a shared link keeps them, and the interval stays with the open page. An Accounts
-address that names no account, or names one the router no longer holds, opens the first account the router lists among
-the rows the list shows, or the router's first account where the filters hide every row.
+is still in flight is skipped, and the first tick after it lands reads again. A read with no answer after a minute fails
+as if the router never answered, and the next tick reads again. The filters, the search and the range live in the view's
+address, so a reload or a shared link keeps them, and the interval stays with the open page. An Accounts address that
+names no account, or names one the router no longer holds, opens the first account the router lists among the rows the
+list shows, or the router's first account where the filters hide every row.
 
 ## The shell
 

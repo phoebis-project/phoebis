@@ -4,7 +4,7 @@ export { act, createElement, lazy, Suspense, useEffect, useState } from 'react';
 export { createRoot } from 'react-dom/client';
 export { createMemoryRouter, MemoryRouter, Outlet, RouterProvider } from 'react-router-dom';
 export { api } from '@/api';
-export { ApiError, setHooks } from '@/api/http';
+export { ApiError, call, setHooks } from '@/api/http';
 export { queueToast } from '@/app/session';
 export { AppSettingsProvider } from '@/app/settings';
 export { useFollow } from '@/app/useFollow';

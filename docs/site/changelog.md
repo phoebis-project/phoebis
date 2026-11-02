@@ -373,7 +373,8 @@ cost model that sizes no 7-day capacity for the chosen week's plan draws the unp
 week, titled "Unpriced: the cost model holds no 7-day capacity for the {plan} week", the tiles' note reading "unpriced"
 ([The shell](console.md#the-shell)). The Accounts view's lifetime figures and the Keys view's lifetime tiles and card
 re-read their rows older than the week once an hour ([Accounts](console.md#accounts), [Keys](console.md#keys)). Auto
-reload skips a tick while the view's previous read is still in flight ([The console](console.md)).
+reload skips a tick while the view's previous read is still in flight, and a read with no answer after a minute fails
+and frees the next tick ([The console](console.md)).
 
 Every finished request lands in the ledger as one row for the client request, one per attempt and one per routing
 decision, folded into the hourly rollup the analytics read ([Statistics](statistics.md#the-ledger)). Each attempt

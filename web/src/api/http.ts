@@ -2,6 +2,7 @@ import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from './c
 import type { GuardrailInput, GuardrailRange, GuardrailTestInput, OverviewRange } from './client';
 import * as d from './decode';
 import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingConfirmed, PairingInput, PairingPreview, PairingStart, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
+import { clock } from '@/lib/clock';
 
 export class ApiError extends Error {
   code: string | null;
@@ -99,6 +100,13 @@ export const reportRecovery = (path: string) => {
 };
 
 /**
+ * How long a read waits for its whole answer, head and body, before it fails as a router that never answered. Far
+ * above the slowest honest admin read (a seven-day custom range on the statistics routes answers in seconds), so an
+ * honest read never meets it, and a stalled one frees its hook's next tick within a minute.
+ */
+const READ_DEADLINE_MS = 60_000;
+
+/**
  * `quiet` keeps a failure from the shell's toast for a read that draws its own failed state and repeats on a schedule,
  * which would otherwise toast once per tick; a 401 still returns the console to the login.
  */
@@ -108,19 +116,28 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
   // The login screen draws every refusal of its own route, and the shell that would toast one mounts only after
   // the next login succeeds, where it would report a failure the operator has already read.
   const login = method === 'POST' && path === '/admin/session';
+  // A write gets no deadline: one the router landed after the console gave up would read as failed, and the page
+  // would offer to retry a write that already happened.
+  const deadline = method === 'GET' ? new AbortController() : null;
+  const timer = deadline === null ? null : clock.setTimeout(() => deadline.abort(), READ_DEADLINE_MS);
   let response: Response;
+  let text: string;
   try {
-    response = await fetch(path, { body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin', headers: body === undefined ? {} : { 'content-type': 'application/json' }, method });
+    response = await fetch(path, { body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin', headers: body === undefined ? {} : { 'content-type': 'application/json' }, method, signal: deadline?.signal });
+    // Before the 204's return, since every answer names the router's build, a refusal's and an empty one's among them.
+    noteBuild(response.headers.get('x-phoebis-build'));
+    if (response.status === 204) return undefined as T;
+    // Under the deadline too, so a router that sends the head and stalls the body fails the read the same way.
+    text = await response.text();
   } catch (e) {
-    // A router that never answered: the page below draws its error state, and the hook says which route.
-    const message = e instanceof Error ? e.message : String(e);
+    // A router that never answered, or not within the deadline: the page below draws its error state, and the hook
+    // says which route.
+    const message = deadline?.signal.aborted ? `no answer within ${READ_DEADLINE_MS / 1_000} s` : e instanceof Error ? e.message : String(e);
     if (!login && !silent) reportFailure({ message, path, status: 0 });
     throw new ApiError(0, message, null, path);
+  } finally {
+    if (timer !== null) clock.clearTimeout(timer);
   }
-  // Before the 204's return, since every answer names the router's build, a refusal's and an empty one's among them.
-  noteBuild(response.headers.get('x-phoebis-build'));
-  if (response.status === 204) return undefined as T;
-  const text = await response.text();
   let parsed: unknown;
   try {
     parsed = text ? JSON.parse(text) : null;
