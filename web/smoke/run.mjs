@@ -10110,7 +10110,8 @@ await readsAgain('/keys', 'listKeys', 5_000);
   const listed = page.container.querySelectorAll('.menu__list').length;
   const whileOpen = await period();
   trigger?.click();
-  await page.settle(100);
+  // A poll skips its tick while the previous read is out, so the read the close starts lands before the clock steps.
+  await page.settle();
   const reopened = await period();
   results.push({ name: '/keys a row menu holds the refresh only while open', ok: listed === 1 && closed === 1 && whileOpen === 0 && reopened === 1, missing: [`list ${listed}`, `closed ${closed}, open ${whileOpen}, closed again ${reopened}`] });
   spy.restore();
@@ -17886,6 +17887,10 @@ m.unmount();
   // Read again ten minutes past the end: the route answered 30 minutes of the hour.
   const later = rate();
   tick(31 * 60_000);
+  // A poll skips its tick while the previous read is out, so the read the first tick started lands before the clock
+  // steps past 15:00 once more.
+  await burnPage.settle();
+  tick(5_000);
   await burnPage.settle();
   // Past 15:00 auto reload has read the custom window again, and a read past the hour saw all of its bucket.
   const pastBoundary = rate();
