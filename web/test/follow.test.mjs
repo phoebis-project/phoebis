@@ -278,6 +278,68 @@ test('the poll reads at the chosen interval through the installed clock', async 
 });
 
 /**
+ * A reader over `route(60)` that parks every page on a gate until `open` releases them, and notes the end each poll
+ * read to by its read of the newest page.
+ */
+function gated() {
+  const r = route(60);
+  const sent = [];
+  let gate = [];
+  const read = (cursor, to) => {
+    if (cursor === undefined) sent.push(to);
+    if (gate === null) return r.read(cursor);
+    return new Promise((resolve) => gate.push(() => resolve(r.read(cursor))));
+  };
+  const open = () => {
+    const parked = gate;
+    gate = null;
+    for (const release of parked) release();
+  };
+  return { open, read, sent };
+}
+
+test('a tick that finds the previous poll still in flight skips, and the tick after it lands polls again', async () => {
+  const clock = frozen();
+  const g = gated();
+  const f = follow({ read: g.read });
+  act(() => clock.tick(5_000));
+  act(() => clock.tick(5_000));
+  assert.deepEqual(g.sent, [ORIGIN + 5_000], 'the tick finds that poll in flight and skips');
+  g.open();
+  await settled();
+  assert.equal(f.last().rows[0].id, 'row_000', 'the poll lands');
+  act(() => clock.tick(5_000));
+  assert.deepEqual(g.sent, [ORIGIN + 5_000, ORIGIN + 15_000], 'the next tick polls again');
+});
+
+test("a poll still out across a drawer's open and close skips the next tick, and the tick after it lands polls again", async () => {
+  const clock = frozen();
+  const g = gated();
+  const f = follow({ read: g.read });
+  act(() => clock.tick(5_000));
+  f.render({ paused: true });
+  f.render({ paused: false });
+  act(() => clock.tick(5_000));
+  assert.deepEqual(g.sent, [ORIGIN + 5_000], 'the tick finds the poll from before the drawer in flight and skips');
+  g.open();
+  await settled();
+  act(() => clock.tick(5_000));
+  assert.deepEqual(g.sent, [ORIGIN + 5_000, ORIGIN + 15_000], 'the tick after it lands polls again');
+});
+
+test('a poll for an old address that lands after the page moved clears the guard', async () => {
+  const clock = frozen();
+  const g = gated();
+  const f = follow({ read: g.read });
+  act(() => clock.tick(5_000));
+  f.render({ address: 'r' });
+  g.open();
+  await settled();
+  act(() => clock.tick(5_000));
+  assert.deepEqual(g.sent, [ORIGIN + 5_000, ORIGIN + 10_000], 'the tick after the old poll landed polls the new address');
+});
+
+/**
  * A reader for a list that shows rows 1 to 25 of `route(27)`, every poll one page: row 0 arrived above the list before
  * the first poll, and row 26, which arrived before them all and was written after the list's read, comes from the
  * second poll on, below the list's last row.
@@ -454,36 +516,41 @@ test("the rows the tab's return brought keep the tint through the tick after it,
   assert.deepEqual([polls.at(-1), [...f.last().fresh]], [ORIGIN + 20_000, []], 'the poll after it takes the tint away');
 });
 
-test("a tick's answer that lands before the tab's return read keeps its tint when the return's answer lands after it", async () => {
+test("the tab's return read that answers before a tick's poll still out keeps its tint through the tick's late answer and the tick after it", async () => {
   const clock = frozen();
   const r = route(60);
   // As above, row 1 arrives before the first poll and row 0 while the tab is hidden. The first page of each read after
-  // the return waits for the case to release it, so the tick's read can answer before the return's.
+  // the first poll waits for the case to release it, so the return's read can answer before the tick's that went out
+  // ahead of it.
   const polls = [];
   const holds = new Map();
   const read = (cursor, to) => {
     if (cursor === undefined) polls.push(to);
     const page = r.read(cursor).then((p) => (to > ORIGIN + 10_000 ? p : { ...p, rows: p.rows.filter((row) => row.id !== 'row_000') }));
-    if (cursor !== undefined || to <= ORIGIN + 10_000) return page;
+    if (cursor !== undefined || to <= ORIGIN + 5_000) return page;
     return new Promise((resolve) => holds.set(to, () => resolve(page)));
   };
   const f = follow({ list: { nextCursor: '27', rows: r.rows.slice(2, 27) }, read });
   act(() => clock.tick(5_000));
   await settled();
+  act(() => clock.tick(5_000));
   let hidden = true;
   Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
-  act(() => clock.tick(9_990));
+  act(() => clock.tick(4_990));
   hidden = false;
   visibility();
-  act(() => clock.tick(10));
-  assert.deepEqual(polls, [ORIGIN + 5_000, ORIGIN + 14_990, ORIGIN + 15_000], "the return's read and the tick's go out 10 ms apart");
-  act(() => holds.get(ORIGIN + 15_000)());
-  await settled();
-  assert.deepEqual([...f.last().fresh], ['row_000'], "the tick's answer tints the row it brought");
+  assert.deepEqual(polls, [ORIGIN + 5_000, ORIGIN + 10_000, ORIGIN + 14_990], "the return reads while the tick's poll is still out");
   act(() => holds.get(ORIGIN + 14_990)());
   await settled();
+  assert.deepEqual([...f.last().fresh], ['row_000'], "the return's answer tints the row it brought");
+  act(() => holds.get(ORIGIN + 10_000)());
+  await settled();
   assert.equal(f.last().rows[0].id, 'row_000');
-  assert.deepEqual([...f.last().fresh], ['row_000'], "the return's late answer leaves the tint the tick's answer set");
+  assert.deepEqual([...f.last().fresh], ['row_000'], "the tick's late answer leaves the tint the return's answer set");
+  act(() => clock.tick(10));
+  act(() => holds.get(ORIGIN + 15_000)());
+  await settled();
+  assert.deepEqual([...f.last().fresh], ['row_000'], 'the tick after the return keeps that tint');
 });
 
 test("the tick after the tab's return tints the row it brought beside the rows the return's read brought", async () => {

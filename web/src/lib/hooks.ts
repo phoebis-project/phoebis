@@ -26,7 +26,8 @@ export interface AsyncOptions {
    * never turns `loading` on, replaces `data` on success and keeps it on failure with `error` set, and one still in
    * flight when `paused` turns true is dropped. When the pause ends, the period is set or the tab comes back, a refresh
    * runs at once if the last answer is a full period old, unless the same render changed the deps, whose read stands
-   * for it. A read that settles after a newer one has landed is dropped.
+   * for it. A read that settles after a newer one has landed is dropped. A tick that finds a read of the hook still
+   * out, a load or a refresh, is skipped.
    */
   refreshMs?: number;
   paused?: boolean;
@@ -67,6 +68,10 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   // failure alike, so an older answer never replaces a newer one; a slow read still lands while nothing newer has.
   const started = useRef(0);
   const landedSeq = useRef(0);
+  // The hook's reads still out, the load effect's and the refreshes' alike, since a load for new deps can outlast the
+  // period and a tick would read the route a second time beside it. Each settle arm counts down before its drop checks,
+  // so a dropped answer clears its read too.
+  const inFlight = useRef(0);
   /** Whether the read numbered `seq` may land, which marks it as the newest landed. */
   const lands = (seq: number) => {
     if (seq < landedSeq.current) return false;
@@ -112,13 +117,16 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     started.current += 1;
     const seq = started.current;
     loadReadInCommit.current = true;
+    inFlight.current += 1;
     latest.current.load().then(
       (value) => {
+        inFlight.current -= 1;
         if (!current.alive || !lands(seq)) return;
         landed(value, held);
         setLoading(false);
       },
       (err: unknown) => {
+        inFlight.current -= 1;
         if (!current.alive || !lands(seq)) return;
         failed(err);
         setLoading(false);
@@ -141,22 +149,27 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
       const { deps: answered, load: read } = latest.current;
       started.current += 1;
       const seq = started.current;
+      inFlight.current += 1;
       // A refresh that outruns the load it supersedes ends the loading too, since that load's answer will be dropped.
       (failing.current ? quietly(read) : read()).then(
         (value) => {
+          inFlight.current -= 1;
           if (!armed.alive || !loadRun.alive || !lands(seq)) return;
           landed(value, answered);
           setLoading(false);
         },
         (err: unknown) => {
+          inFlight.current -= 1;
           if (!armed.alive || !loadRun.alive || !lands(seq)) return;
           failed(err);
           setLoading(false);
         },
       );
     };
+    // A tick that finds a read still out skips with no catch-up read, which would read back to back under a slow
+    // server, and the next tick arrives one period later at most.
     const id = clock.setInterval(() => {
-      if (!document.hidden) refresh();
+      if (!document.hidden && inFlight.current === 0) refresh();
     }, refreshMs);
     // A tab that comes back, and a pause that ends, read at once only when the last answer is a full period old. The
     // arm yields to a read the load effect started in the same commit, so one render that changes the deps and arms
