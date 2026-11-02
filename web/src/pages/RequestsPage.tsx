@@ -147,6 +147,7 @@ interface CostContext {
   costs: SubscriptionCosts | null;
   error: string | null;
   scale: number | null;
+  unpriced: boolean;
   week: WeekPosition;
 }
 
