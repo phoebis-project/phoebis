@@ -762,23 +762,19 @@ pub(crate) async fn accounts(
         Ok(r) => r,
         Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
     };
-    let rows = match state
-        .ledger
-        .db()
-        .read(move |c| read_account_rollups(c, hour_of(from), hour_ceil(to)))
-        .await
-    {
-        Ok(rows) => rows,
-        Err(e) => return ledger_failure(e),
-    };
     // The same hour bounds in seconds as the rollups read, so a sample never falls outside the hours answered.
-    let samples = match state
+    let (rows, samples) = match state
         .ledger
         .db()
-        .read(move |c| hourly_window_samples(c, hour_of(from), hour_ceil(to)))
+        .read(move |c| {
+            Ok((
+                read_account_rollups(c, hour_of(from), hour_ceil(to))?,
+                hourly_window_samples(c, hour_of(from), hour_ceil(to))?,
+            ))
+        })
         .await
     {
-        Ok(samples) => samples,
+        Ok(read) => read,
         Err(e) => return ledger_failure(e),
     };
     type Hour = (AccountRollupRow, Map<String, Value>);

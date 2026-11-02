@@ -1607,17 +1607,17 @@ pub fn decision_record(
     Ok(Some(Value::Object(answer)))
 }
 
-/// The `pin_migrated` events in `[from, to)` for the given accounts, counted by the move's `detail.reason`
-/// (`unknown` when the event named none). Reads the events table's `(kind, at)` index directly rather than an
-/// hourly rollup bucket, so a pool card's "last hour" figure is the last hour exactly. An empty `accounts` list
-/// answers an empty map, unlike `SeriesFilter`'s scopes; a memberless pool skips the read outright rather than
-/// spend one on this.
-pub fn pin_migrations_by_reason(
+/// The `pin_migrated` events of `[from, to)` counted by reason under each named account, so a page with several
+/// pools reads the events once and sums each pool's members in memory. An account without a move is absent, and an
+/// empty `accounts` list answers an empty map. The reason is the move's `detail.reason`, `unknown` when the event
+/// named none, and the read takes the events table's `(kind, at)` index rather than an hourly rollup bucket, so a pool
+/// card's "last hour" figure is the last hour exactly.
+pub fn pin_migrations_by_account_and_reason(
     conn: &Connection,
     from: i64,
     to: i64,
     accounts: &[String],
-) -> Result<BTreeMap<String, u64>, LedgerError> {
+) -> Result<BTreeMap<String, BTreeMap<String, u64>>, LedgerError> {
     let mut stmt = conn.prepare(
         "SELECT account_id, detail FROM events WHERE kind = 'pin_migrated' AND at >= ?1 AND at < ?2",
     )?;
@@ -1627,18 +1627,21 @@ pub fn pin_migrations_by_reason(
             r.get::<_, Option<String>>(1)?,
         ))
     })?;
-    let mut out = BTreeMap::new();
+    let mut out: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
     for row in rows {
         let (account_id, detail) = row?;
-        if !account_id.is_some_and(|id| accounts.contains(&id)) {
+        let Some(account_id) = account_id.filter(|id| accounts.contains(id)) else {
             continue;
-        }
+        };
         let parsed: Value = detail
             .as_deref()
             .and_then(|d| serde_json::from_str(d).ok())
             .unwrap_or(Value::Null);
         let reason = parsed["reason"].as_str().unwrap_or("unknown").to_string();
-        *out.entry(reason).or_insert(0u64) += 1;
+        *out.entry(account_id)
+            .or_default()
+            .entry(reason)
+            .or_insert(0) += 1;
     }
     Ok(out)
 }
@@ -3007,10 +3010,12 @@ pub struct Dashboard {
     pub equivalent_24h: Option<f64>,
 }
 
-/// The last day's rollups folded hour by hour through `read_rollups_paged`, each row's dollars and Pro-week figure
-/// priced from its counts, the figure against the anchor row in force at `now`.
-pub async fn dashboard(
-    db: &Arc<LedgerDb>,
+/// The dashboard's day on `conn`, the last day's rollups folded hour by hour, each row's dollars and Pro-week figure
+/// priced from its counts, the figure against the anchor row in force at `now`. The day is one page of `PAGE_HOURS`,
+/// so one read holds the connection no longer than a page of `read_rollups_paged` would, and a caller folds another
+/// read into the same hold.
+pub fn dashboard_on(
+    conn: &Connection,
     now: i64,
     prices: &PriceRevisions,
     costs: &PlanTables,
@@ -3033,12 +3038,12 @@ pub async fn dashboard(
         })
         .collect();
     let mut tokens_cached = 0;
-    read_rollups_paged(db, &RollupSelect::default(), from_hour, to_hour, |r| {
+    for r in read_rollups(conn, from_hour, to_hour, &RollupSelect::default())? {
         if r.kind == "probe" {
-            return;
+            continue;
         }
         if let Some(point) = hourly.get_mut(((r.hour - from_hour) / 3_600) as usize) {
-            let (usd, billed, equivalent) = shared_figures(r, prices, costs, now);
+            let (usd, billed, equivalent) = shared_figures(&r, prices, costs, now);
             point.requests += r.requests;
             point.errors += r.requests.saturating_sub(r.succeeded);
             point.refused += r.refusals.values().sum::<u64>();
@@ -3058,8 +3063,7 @@ pub async fn dashboard(
             *refusals.entry(code.clone()).or_default() += n;
         }
         tokens_cached += r.cache_read_tokens;
-    })
-    .await?;
+    }
     let requests: u64 = hourly.iter().map(|h| h.requests).sum();
     let failed: u64 = hourly.iter().map(|h| h.errors).sum();
     Ok(Dashboard {

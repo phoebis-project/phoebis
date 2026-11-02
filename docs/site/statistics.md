@@ -469,8 +469,9 @@ the account view reads, and each key id's newest create and delete, which tell a
 budgeted member's hourly rows stay from its period's start on, so a retention shorter than the period never reopens an
 exhausted member.
 
-The analytics, the dashboard, the pool cards and the burn chart read the hourly rollups in pages of a day, each page
-its own read, so a 400-day range holds one day of rows in memory and a reader connection is free between pages.
+The analytics, the burn chart and the dashboard read the hourly rollups in pages of a day, each page its own read, so a
+400-day range holds one day of rows in memory and a reader connection is free between pages. The pool cards' traffic
+walks its pages on one reader for the bounded day it charts, so a day with several pools reads the table once.
 
 A prompt-length threshold that moves re-folds the hours whose attempts the ledger still holds at the next start, and the
 older hours keep their split. Where the request retention is 0 the re-fold reads every request, and a request received

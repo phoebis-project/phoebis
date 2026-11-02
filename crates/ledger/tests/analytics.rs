@@ -2172,9 +2172,12 @@ async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_doll
     }
     let hour = hour_of(at);
     let (from, to) = hour_range(at);
-    let day = phoebis_ledger::dashboard(&db, at, &prices, &costs)
-        .await
-        .unwrap();
+    let day = {
+        let (prices, costs) = (prices.clone(), costs.clone());
+        db.read(move |c| phoebis_ledger::dashboard_on(c, at, &prices, &costs))
+            .await
+            .unwrap()
+    };
     let traffic =
         phoebis_ledger::pool_traffic(&db, "p", hour, hour + 3_600, 3_600, &prices, &costs, NOW)
             .await
@@ -2529,7 +2532,9 @@ async fn shared_sums(
 ) -> Vec<(&'static str, Option<f64>)> {
     let hour = hour_of(WEEKDAY_OFF_PEAK);
     let live = LiveKeys(BTreeMap::from([("k".to_string(), 0)]));
-    let day = phoebis_ledger::dashboard(db, WEEKDAY_OFF_PEAK, &PRICES, costs)
+    let day_costs = costs.clone();
+    let day = db
+        .read(move |c| phoebis_ledger::dashboard_on(c, WEEKDAY_OFF_PEAK, &PRICES, &day_costs))
         .await
         .unwrap();
     let point = day
@@ -7473,7 +7478,8 @@ async fn the_dashboard_the_traffic_and_the_totals_split_the_billed_dollars_from_
         );
     };
     let hour = hour_of(WEEKDAY_OFF_PEAK);
-    let day = phoebis_ledger::dashboard(&db, WEEKDAY_OFF_PEAK, &PRICES, &COSTS)
+    let day = db
+        .read(move |c| phoebis_ledger::dashboard_on(c, WEEKDAY_OFF_PEAK, &PRICES, &COSTS))
         .await
         .unwrap();
     read(day.billed_24h, day.equivalent_24h, "the day");
@@ -7531,7 +7537,8 @@ async fn the_dashboard_counts_an_unflagged_block_in_the_rate_and_the_top_code_li
         db.insert_request(&request, &[], None).unwrap();
     }
     let hour = hour_of(WEEKDAY_OFF_PEAK - 60_000);
-    let day = phoebis_ledger::dashboard(&db, WEEKDAY_OFF_PEAK, &PRICES, &COSTS)
+    let day = db
+        .read(move |c| phoebis_ledger::dashboard_on(c, WEEKDAY_OFF_PEAK, &PRICES, &COSTS))
         .await
         .unwrap();
     let point = day
@@ -7728,7 +7735,8 @@ async fn the_dashboard_leaves_the_refused_requests_out_of_its_counts_and_reads_t
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
     plant_asked_and_refused(&db);
     let hour = hour_of(WEEKDAY_OFF_PEAK - 60_000);
-    let day = phoebis_ledger::dashboard(&db, WEEKDAY_OFF_PEAK, &PRICES, &COSTS)
+    let day = db
+        .read(move |c| phoebis_ledger::dashboard_on(c, WEEKDAY_OFF_PEAK, &PRICES, &COSTS))
         .await
         .unwrap();
     let point = day

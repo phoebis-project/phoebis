@@ -1365,6 +1365,8 @@ pub(crate) struct PoolContext {
     guardrails: AttachmentIndex,
     keys: Vec<ApiKeyRow>,
     members: Vec<PoolMember>,
+    /// The last hour's moves by reason, by member account.
+    moves: BTreeMap<String, BTreeMap<String, u64>>,
     now: i64,
     overages: Vec<(String, OverageEvidence)>,
     pins: Vec<PinRow>,
@@ -1373,10 +1375,13 @@ pub(crate) struct PoolContext {
     projections: BTreeMap<String, Vec<phoebis_routing::AccountProjection>>,
     snapshot: Arc<RegistrySnapshot>,
     spends: Vec<MemberSpend>,
+    /// Every pool's 25 buckets of the day, by pool.
+    traffic: BTreeMap<String, Vec<phoebis_ledger::TrafficBucket>>,
 }
 
-/// One registry read for the pools, members, keys and accounts, one ledger read for the day's totals and one ask
-/// of the router for each of its tables, in the shape of the account list's context.
+/// One registry read for the pools, members, keys and accounts, one ledger read for the day's totals, every pool's
+/// traffic and every member's moves, and one ask of the router for each of its tables, in the shape of the account
+/// list's context.
 pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, StoreError> {
     let registry = state.store.load_registry()?;
     let guardrails = AttachmentIndex::from_load(&registry);
@@ -1385,19 +1390,47 @@ pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, Stor
     let to = crate::analytics::hour_end(hour);
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
-    let day = state
+    let pool_ids: Vec<String> = registry.pools.iter().map(|p| p.id.clone()).collect();
+    let mut member_accounts: Vec<String> = registry
+        .members
+        .iter()
+        .map(|m| m.account_id.clone())
+        .collect();
+    member_accounts.sort_unstable();
+    member_accounts.dedup();
+    // The traffic starts at the hour the day's totals start at, so a pool's bars sum to its `requests_24h`: 25
+    // buckets, the current partial hour last.
+    let (day, traffic, moves) = state
         .ledger
         .db()
         .read(move |c| {
-            phoebis_ledger::request_totals(
-                c,
-                "pool_id",
-                hour - 24 * 3_600,
-                to,
-                &prices,
-                &tables,
-                now,
-            )
+            Ok((
+                phoebis_ledger::request_totals(
+                    c,
+                    "pool_id",
+                    hour - 24 * 3_600,
+                    to,
+                    &prices,
+                    &tables,
+                    now,
+                )?,
+                phoebis_ledger::pools_traffic(
+                    c,
+                    &pool_ids,
+                    hour - 24 * 3_600,
+                    to,
+                    3_600,
+                    &prices,
+                    &tables,
+                    now,
+                )?,
+                phoebis_ledger::pin_migrations_by_account_and_reason(
+                    c,
+                    now - 3_600_000,
+                    now,
+                    &member_accounts,
+                )?,
+            ))
         })
         .await
         .unwrap_or_default();
@@ -1414,6 +1447,7 @@ pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, Stor
         guardrails,
         keys: registry.keys,
         members: registry.members,
+        moves,
         now,
         overages: state.router.overages().await.unwrap_or_default(),
         pins: state.router.pins().await.unwrap_or_default(),
@@ -1421,6 +1455,7 @@ pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, Stor
         projections,
         snapshot: state.router.snapshot(),
         spends: state.router.member_spends().await.unwrap_or_default(),
+        traffic,
     })
 }
 
@@ -1430,8 +1465,8 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Pool,
     Ok(pool_json_from(state, &context, row).await)
 }
 
-/// One pool row from the shared context; the traffic and the moves stay per pool, since they are ledger reads over
-/// that pool's own id and accounts and take no store lock.
+/// One pool row from the shared context, whose one read carries every pool's traffic and moves, so a row takes no
+/// ledger read and no store lock.
 pub(crate) async fn pool_json_from(
     state: &AdminState,
     context: &PoolContext,
@@ -1456,37 +1491,14 @@ pub(crate) async fn pool_json_from(
         })
         .collect();
     let now = context.now;
-    let hour = phoebis_ledger::hour_of(now);
     let day = &context.day;
-    // From the hour `pool_context` totals the day from, so the bars sum to `requests_24h`: 25 buckets, the current
-    // partial hour last.
-    let traffic = phoebis_ledger::pool_traffic(
-        state.ledger.db(),
-        &row.id,
-        hour - 24 * 3_600,
-        crate::analytics::hour_end(hour),
-        3_600,
-        &state.pricing.revisions(),
-        &state.tables,
-        now,
-    )
-    .await
-    .unwrap_or_default();
-    // A memberless pool has no account to attribute a move against, so this skips the read outright rather
-    // than spend one on a query `pin_migrations_by_reason` would answer empty anyway.
-    let account_ids: Vec<String> = members.iter().map(|m| m.account_id.clone()).collect();
-    let moves = if account_ids.is_empty() {
-        std::collections::BTreeMap::new()
-    } else {
-        state
-            .ledger
-            .db()
-            .read(move |c| {
-                phoebis_ledger::pin_migrations_by_reason(c, now - 3_600_000, now, &account_ids)
-            })
-            .await
-            .unwrap_or_default()
-    };
+    let traffic = context.traffic.get(&row.id).cloned().unwrap_or_default();
+    let mut moves: BTreeMap<String, u64> = BTreeMap::new();
+    for member in &members {
+        for (reason, count) in context.moves.get(&member.account_id).into_iter().flatten() {
+            *moves.entry(reason.clone()).or_default() += count;
+        }
+    }
     let (cooldowns, overages, pins) = (&context.cooldowns, &context.overages, &context.pins);
     let key_ids: Vec<String> = keys.iter().map(|k| k.id.clone()).collect();
     let active_pins = pins.iter().filter(|p| key_ids.contains(&p.key_id)).count();

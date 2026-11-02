@@ -220,15 +220,49 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     let reported = crate::routes::reported_samples(state).await;
     let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     let cutoff = now - state.session_expiry.as_millis() as i64;
-    // Grouped by the client's own session, which the router keys pins under, so a request shows on the row of the
-    // pin it took.
-    let activity = match state
+    let engine: std::collections::BTreeMap<(String, i64, String), phoebis_keepalive::SessionView> =
+        state
+            .keepalive
+            .sessions()
+            .into_iter()
+            .map(|s| {
+                (
+                    (s.key_id.clone(), s.key_generation, s.session_id.clone()),
+                    s,
+                )
+            })
+            .collect();
+    let mut candidates: std::collections::BTreeSet<(String, i64, String)> = pins
+        .iter()
+        .filter(|standing| standing.pin.last_used_at >= cutoff)
+        .filter_map(|standing| {
+            let p = &standing.pin;
+            let generation = *live.get(&p.key_id)?;
+            Some((p.key_id.clone(), generation, p.session_id.clone()))
+        })
+        .chain(engine.keys().cloned())
+        .collect();
+    // One read for the activity and the fork facts: the keys the pin and engine passes can surface are known before
+    // the read, the activity's come from the read itself, and a row's fork facts come from the requests of its own
+    // session whichever pass surfaced it.
+    let (activity, identities) = match state
         .ledger
         .db()
-        .read(move |c| phoebis_ledger::session_activity(c, cutoff))
+        .read(move |c| {
+            // Grouped by the client's own session, which the router keys pins under, so a request shows on the row
+            // of the pin it took.
+            let activity = phoebis_ledger::session_activity(c, cutoff)?;
+            candidates.extend(
+                activity
+                    .iter()
+                    .map(|a| (a.key_id.clone(), a.key_generation, a.session_id.clone())),
+            );
+            let keys: Vec<(String, i64, String)> = candidates.into_iter().collect();
+            Ok((activity, phoebis_ledger::session_identities(c, &keys)?))
+        })
         .await
     {
-        Ok(a) => a,
+        Ok(read) => read,
         Err(e) => return Err(crate::analytics::ledger_failure(e)),
     };
     let mut rows: std::collections::BTreeMap<(String, i64, String), serde_json::Value> =
@@ -402,18 +436,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             entry["account_id"] = json!(a.account_id);
         }
     }
-    let engine: std::collections::BTreeMap<(String, i64, String), phoebis_keepalive::SessionView> =
-        state
-            .keepalive
-            .sessions()
-            .into_iter()
-            .map(|s| {
-                (
-                    (s.key_id.clone(), s.key_generation, s.session_id.clone()),
-                    s,
-                )
-            })
-            .collect();
     for (key, view) in &engine {
         let entry = rows.entry(key.clone()).or_insert_with(|| {
             json!({
@@ -556,18 +578,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             entry["account_id"] = json!(recipe.account_id);
         }
     }
-    // One read over every row's key, after the pin, activity and engine passes have settled who belongs on the page
-    // at all, so a row's fork facts come from the requests of its own session whichever pass surfaced it.
-    let identity_keys: Vec<(String, i64, String)> = rows.keys().cloned().collect();
-    let identities = match state
-        .ledger
-        .db()
-        .read(move |c| phoebis_ledger::session_identities(c, &identity_keys))
-        .await
-    {
-        Ok(identities) => identities,
-        Err(e) => return Err(crate::analytics::ledger_failure(e)),
-    };
     let identity_by_key: std::collections::BTreeMap<
         (String, i64, String),
         phoebis_ledger::SessionIdentity,

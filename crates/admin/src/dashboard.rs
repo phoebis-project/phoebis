@@ -6,7 +6,7 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_ledger::{dashboard, latest_quota};
+use phoebis_ledger::{dashboard_on, latest_quota};
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
@@ -85,19 +85,20 @@ pub(crate) struct DashboardSessions {
 )]
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let now = (state.clock)();
-    let board = match dashboard(
-        state.ledger.db(),
-        now,
-        &state.pricing.revisions(),
-        &state.tables,
-    )
-    .await
+    let prices = state.pricing.revisions();
+    let tables = state.tables.clone();
+    let (board, quota) = match state
+        .ledger
+        .db()
+        .read(move |c| {
+            Ok((
+                dashboard_on(c, now, &prices, &tables)?,
+                latest_quota(c, now)?,
+            ))
+        })
+        .await
     {
-        Ok(board) => board,
-        Err(e) => return ledger_failure(e),
-    };
-    let quota = match state.ledger.db().read(move |c| latest_quota(c, now)).await {
-        Ok(quota) => quota,
+        Ok(read) => read,
         Err(e) => return ledger_failure(e),
     };
     let mut accounts: std::collections::BTreeMap<String, Vec<DashboardWindow>> =

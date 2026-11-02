@@ -4369,6 +4369,56 @@ async fn a_pool_row_answers_moves_per_hour_by_reason() {
 }
 
 #[tokio::test]
+async fn a_polled_route_holds_the_reader_once_per_poll() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // Two pools with a member each, so the pools route has per-pool work to fold.
+    let pool = |id: &str, label: &str, member: &str| {
+        format!(
+            r#"{{"id":"{id}","label":"{label}","strategy":"priority","members":[{{"account_id":"{member}","priority":0}}]}}"#
+        )
+    };
+    let main = post(
+        &parts.app,
+        "/admin/pools",
+        &pool("main", "Main", "direct"),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(main.status(), 201, "the pool main is created");
+    let second = post(
+        &parts.app,
+        "/admin/pools",
+        &pool("second", "Second", "business"),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(second.status(), 201, "the pool second is created");
+    let mut reads = Vec::new();
+    for path in [
+        "/admin/pools",
+        "/admin/sessions",
+        "/admin/dashboard",
+        "/admin/analytics/accounts?range=24h",
+    ] {
+        let before = parts.db.debug_page_reads();
+        let response = get(&parts.app, path, Some(&cookie)).await;
+        assert_eq!(response.status(), 200, "{path}");
+        reads.push((path, parts.db.debug_page_reads() - before));
+    }
+    assert_eq!(
+        reads,
+        [
+            ("/admin/pools", 1),
+            ("/admin/sessions", 1),
+            ("/admin/dashboard", 1),
+            ("/admin/analytics/accounts?range=24h", 1)
+        ],
+        "each route holds the reader once per poll"
+    );
+}
+
+#[tokio::test]
 async fn a_request_answers_its_class_and_each_attempts_trace_with_skipped_as_named_objects_on_the_wire(
 ) {
     let parts = common::admin_parts_full().await;
