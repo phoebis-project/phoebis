@@ -6082,6 +6082,32 @@ async fn a_landing_batch_whose_spend_read_fails_keeps_the_degradation() {
     up.shutdown().await;
 }
 
+#[tokio::test]
+async fn the_hourly_purge_refreshes_the_planner_statistics_and_moves_the_readers_generation() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = LedgerConfig {
+        purge_interval: Duration::from_millis(200),
+        ..quick()
+    };
+    let h = on_disk(
+        &up,
+        fresh_store(),
+        &dir.path().join("ledger.sqlite"),
+        config,
+    )
+    .await;
+    assert_eq!(h.db.debug_statistics_generation(), 0);
+    h.ledger.record_request(finished("r1", true)).await;
+    // The open found the requests table empty and gave it no `sqlite_stat1` row, so the first pass after the landing
+    // finds an index without statistics on a table that holds a row, analyzes it, and the generation moves.
+    wait_for(Duration::from_secs(5), || {
+        (h.db.debug_statistics_generation() >= 1).then_some(())
+    })
+    .await;
+    up.shutdown().await;
+}
+
 /// Parks the priced record `finished(id, true)` straight into the file at `path`, as a writer that met a poison row
 /// would have, with `error` and `at` as its last try.
 fn park_in_file(path: &std::path::Path, id: &str, error: &str, at: i64) {

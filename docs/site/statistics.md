@@ -439,7 +439,11 @@ refusal drops it.
 The attention reader, the console's routes, the metrics scrape and the proxy listener's `/v1/usage` read the ledger
 through a pool of four read-only connections, each with its own 32 MiB page cache, so a slow read holds its own caller
 and no other, and the writer reads its own budget figures on its own connection between two batches, so it never waits
-for a console read.
+for a console read. The ledger keeps planner statistics: the start analyzes a bounded sample of every table that has
+none, about a thousand rows per index, so a first start on a large file waits seconds rather than minutes, and the
+hourly purge refreshes the statistics of a table the purge reads that grew or shrank tenfold since they were taken, and
+of a table that holds rows and has none. After a refresh the read-only connections reopen at their next read and plan on
+the new figures.
 
 ## Retention
 

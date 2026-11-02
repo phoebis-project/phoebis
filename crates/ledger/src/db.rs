@@ -39,6 +39,17 @@ pub const READERS: usize = 4;
 /// tens of gigabytes large buys nothing for cold random reads.
 const READER_CACHE_KIB: i64 = 32 * 1024;
 
+/// The rows an `ANALYZE` visits per index before it skips ahead (SQLite's approximate analysis,
+/// <https://www.sqlite.org/lang_analyze.html> section 5), so the start of a large file scans a bounded slice of each
+/// index rather than the file: the planner needs the ratio between two indexes, which the sample gets right, and the
+/// statements whose plan must hold name their index.
+const ANALYSIS_LIMIT: i64 = 1_000;
+
+/// The open's `PRAGMA optimize` mask (<https://www.sqlite.org/pragma.html#pragma_optimize>, the mask table):
+/// `0x10000` examines every table, and `0x2` runs `ANALYZE` where a table has no statistics or outgrew them. The
+/// explicit `ANALYSIS_LIMIT` bounds the pragma's `ANALYZE`, and the `0x10` bit is kept as the default mask keeps it.
+const OPEN_OPTIMIZE_MASK: i64 = 0x10012;
+
 pub struct LedgerDb {
     writer: Mutex<Connection>,
     /// `None` for an in-memory ledger, whose one connection serves every role.
@@ -100,19 +111,27 @@ struct Readers {
     idle: Mutex<Vec<Reader>>,
     returned: Condvar,
     wakeup: tokio::sync::Notify,
+    /// The ledger file, which a reader behind `generation` reopens.
+    path: std::path::PathBuf,
+    /// The statistics generation the readers follow, moved by `refresh_statistics`.
+    generation: AtomicU64,
 }
 
 struct Reader {
     conn: Connection,
+    /// The pool's generation when this connection was opened.
+    generation: u64,
 }
 
 impl Readers {
     /// `READERS` connections through `open_reader`.
     fn open(path: &Path) -> Result<Readers, LedgerError> {
+        let generation = 0;
         let idle = (0..READERS)
             .map(|_| {
                 Ok(Reader {
                     conn: open_reader(path)?,
+                    generation,
                 })
             })
             .collect::<Result<_, LedgerError>>()?;
@@ -120,6 +139,8 @@ impl Readers {
             idle: Mutex::new(idle),
             returned: Condvar::new(),
             wakeup: tokio::sync::Notify::new(),
+            path: path.to_path_buf(),
+            generation: AtomicU64::new(generation),
         })
     }
 
@@ -250,6 +271,9 @@ impl LedgerDb {
         let purger = Connection::open(path)?;
         purger.busy_timeout(BUSY_TIMEOUT)?;
         purger.pragma_update(None, "synchronous", "NORMAL")?;
+        // Before the readers open, since a connection loads `sqlite_stat1` with its schema and keeps what it loaded.
+        purger.pragma_update(None, "analysis_limit", ANALYSIS_LIMIT)?;
+        purger.execute_batch(&format!("PRAGMA optimize={OPEN_OPTIMIZE_MASK:#x}"))?;
         let readers = Readers::open(path)?;
         Ok(LedgerDb {
             writer: Mutex::new(writer),
@@ -270,6 +294,8 @@ impl LedgerDb {
     pub fn open_in_memory() -> Result<LedgerDb, LedgerError> {
         let mut writer = Connection::open_in_memory()?;
         prepare(&mut writer, Path::new(":memory:"), schema::MIGRATIONS)?;
+        writer.pragma_update(None, "analysis_limit", ANALYSIS_LIMIT)?;
+        writer.execute_batch(&format!("PRAGMA optimize={OPEN_OPTIMIZE_MASK:#x}"))?;
         Ok(LedgerDb {
             writer: Mutex::new(writer),
             readers: None,
@@ -338,6 +364,35 @@ impl LedgerDb {
         f(&mut conn)
     }
 
+    /// Runs `PRAGMA optimize` on the purger connection under the purge handoff, answers whether `sqlite_stat1` changed,
+    /// and moves the pooled readers' statistics generation when it did, so a reader plans on the new figures at its
+    /// next read. A re-analysis moves no schema cookie, so the readers would otherwise keep their open-time statistics
+    /// until the next restart. It runs at the end of every purge, so the statistics' cadence is the purge's interval
+    /// and no constant of its own.
+    pub fn refresh_statistics(&self) -> Result<bool, LedgerError> {
+        fn statistics(
+            conn: &Connection,
+        ) -> Result<Vec<(String, Option<String>, String)>, LedgerError> {
+            let mut stmt =
+                conn.prepare("SELECT tbl, idx, stat FROM sqlite_stat1 ORDER BY tbl, idx")?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        }
+        let changed = self.purge(|conn| {
+            let before = statistics(conn)?;
+            conn.execute_batch("PRAGMA optimize")?;
+            Ok(statistics(conn)? != before)
+        })?;
+        if changed {
+            if let Some(readers) = &self.readers {
+                readers.generation.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        Ok(changed)
+    }
+
     /// Runs `f` on a blocking worker under a pooled reader connection, so a slow read never parks the runtime thread
     /// that serves proxy traffic. A read waits only while every pooled connection is out, and it waits before its
     /// worker spawns, so a waiting read holds no blocking worker. In memory it runs on the one connection, behind the
@@ -380,6 +435,14 @@ impl LedgerDb {
     }
 
     /// Runs `f` on a pooled reader under `Returned`, so the reader goes back to the pool however `f` ends.
+    ///
+    /// A reader behind the pool's statistics generation is reopened through `open_reader` first, since the bundled
+    /// SQLite reloads statistics on the analyzing connection alone and a connection reads `sqlite_stat1` again only
+    /// when it loads its schema. The reopen runs here, on the blocking worker or the caller's thread and after the
+    /// stack's lock is released, so a file open never holds the runtime or another taker. The generation is read
+    /// before the open, so a refresh that lands during it leaves this reader behind and its next read reopens it
+    /// again. A reopen that fails puts the old reader back and answers the error, so the pool never shrinks and the
+    /// next read tries again.
     fn lend<T>(
         &self,
         reader: Reader,
@@ -391,6 +454,11 @@ impl LedgerDb {
             .expect("a pooled reader comes from a file-backed ledger, which holds the pool");
         let mut lent = Returned { reader: None, pool };
         let reader = lent.reader.insert(reader);
+        let generation = pool.generation.load(Ordering::SeqCst);
+        if reader.generation < generation {
+            reader.conn = open_reader(&pool.path)?;
+            reader.generation = generation;
+        }
         self.serve(&reader.conn, f)
     }
 
@@ -535,6 +603,27 @@ impl LedgerDb {
     #[doc(hidden)]
     pub fn debug_page_reads(&self) -> usize {
         self.page_reads.load(Ordering::SeqCst)
+    }
+
+    /// The pooled readers' statistics generation. 0 on an in-memory ledger, since the generation lives on the pool,
+    /// which an in-memory ledger lacks.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_statistics_generation(&self) -> u64 {
+        self.readers
+            .as_ref()
+            .map_or(0, |readers| readers.generation.load(Ordering::SeqCst))
+    }
+
+    /// Moves the pooled readers' statistics generation as a refresh that changed `sqlite_stat1` moves it, so statistics
+    /// a test wrote by hand reach each reader at its next read. Does nothing on an in-memory ledger, since the
+    /// generation lives on the pool, which an in-memory ledger lacks.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_bump_statistics_generation(&self) {
+        if let Some(readers) = &self.readers {
+            readers.generation.fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     /// Caps the writer connection's file at the pages it holds once a vacuum has left none free, so the next insert
@@ -1529,6 +1618,143 @@ mod tests {
             release.send(()).unwrap();
             task.await.unwrap().unwrap();
         }
+    }
+
+    const TWO_INDEX_SQL: &str =
+        "SELECT id FROM requests WHERE key_id = ?1 AND session_id = ?2 ORDER BY received_at LIMIT 1";
+
+    /// The plan of `TWO_INDEX_SQL`, which both `requests_key` and `requests_session` answer. `read_blocking` takes the
+    /// newest idle reader, so consecutive calls on an otherwise idle pool land on one connection.
+    fn plan(db: &LedgerDb) -> Vec<String> {
+        db.read_blocking(|c| {
+            let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {TWO_INDEX_SQL}"))?;
+            let rows = stmt
+                .query_map(params!["main", "s"], |r| r.get::<_, String>(3))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .unwrap()
+    }
+
+    /// `stat` rows that make `requests_key` read as `per_key` rows per key and the session index as `per_session` per
+    /// session.
+    fn write_statistics(db: &LedgerDb, per_key: u32, per_session: u32) {
+        db.purge(|c| {
+            c.execute_batch(&format!(
+                "DELETE FROM sqlite_stat1; \
+                 INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES \
+                 ('requests', 'requests_key', '1000 {per_key} 1'), ('requests', 'requests_session', '1000 {per_session} 1');"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn the_open_analyzes_a_file_whose_tables_hold_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        let db = LedgerDb::open(&path).unwrap();
+        let stat_table = |db: &LedgerDb| {
+            db.read_blocking(|c| {
+                let sql = "SELECT COUNT(*) FROM sqlite_master WHERE name = 'sqlite_stat1'";
+                Ok(c.query_row(sql, [], |r| r.get::<_, i64>(0))?)
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            stat_table(&db),
+            1,
+            "the first open creates the statistics table"
+        );
+        db.insert_request(&request("r1"), &[], None).unwrap();
+        drop(db);
+        let db = LedgerDb::open(&path).unwrap();
+        let rows: i64 = db
+            .read_blocking(|c| {
+                Ok(c.query_row(
+                    "SELECT COUNT(*) FROM sqlite_stat1 WHERE tbl = 'requests'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert!(
+            rows >= 1,
+            "the open analyzed the requests table once it held a row"
+        );
+    }
+
+    #[test]
+    fn a_pooled_reader_behind_the_statistics_generation_reopens_and_plans_on_the_new_statistics() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
+        write_statistics(&db, 1, 1_000);
+        db.debug_bump_statistics_generation();
+        assert!(
+            plan(&db).iter().any(|s| s.contains("requests_key")),
+            "{:?}",
+            plan(&db)
+        );
+        write_statistics(&db, 1_000, 1);
+        assert!(
+            plan(&db).iter().any(|s| s.contains("requests_key")),
+            "a reader keeps its loaded statistics until the generation moves: {:?}",
+            plan(&db)
+        );
+        db.debug_bump_statistics_generation();
+        assert!(
+            plan(&db).iter().any(|s| s.contains("requests_session")),
+            "{:?}",
+            plan(&db)
+        );
+        let cache: i64 = db
+            .read_blocking(|c| Ok(c.query_row("PRAGMA cache_size", [], |r| r.get(0))?))
+            .unwrap();
+        assert_eq!(
+            cache, -READER_CACHE_KIB,
+            "the reopened reader carries the pool's page cache"
+        );
+    }
+
+    #[test]
+    fn a_reader_inside_a_closure_finishes_on_its_connection_and_reopens_at_its_next_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap());
+        write_statistics(&db, 1, 1_000);
+        db.debug_bump_statistics_generation();
+        assert!(plan(&db).iter().any(|s| s.contains("requests_key")));
+        let (taken, on_taken) = std::sync::mpsc::channel::<()>();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let held = std::thread::spawn({
+            let db = db.clone();
+            move || {
+                db.read_blocking(|c| {
+                    taken.send(()).unwrap();
+                    released.recv().unwrap();
+                    let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {TWO_INDEX_SQL}"))?;
+                    let rows = stmt
+                        .query_map(params!["main", "s"], |r| r.get::<_, String>(3))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    Ok(rows)
+                })
+                .unwrap()
+            }
+        });
+        on_taken.recv().unwrap();
+        write_statistics(&db, 1_000, 1);
+        db.debug_bump_statistics_generation();
+        release.send(()).unwrap();
+        let inside = held.join().unwrap();
+        assert!(
+            inside.iter().any(|s| s.contains("requests_key")),
+            "the closure in flight finished on its connection: {inside:?}"
+        );
+        assert!(
+            plan(&db).iter().any(|s| s.contains("requests_session")),
+            "and that connection reopened at its next read: {:?}",
+            plan(&db)
+        );
     }
 
     #[tokio::test]

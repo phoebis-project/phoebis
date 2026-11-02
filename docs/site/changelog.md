@@ -429,7 +429,9 @@ figure, the Pro-week figure, null where a row it sums priced nothing, and the le
 attention item at the info level, for a plan-funded model that prices nothing ([Plan meter](statistics.md#plan-meter),
 [Conditions and gauges](statistics.md#conditions-and-gauges)). The attention reader, the console's reads, the metrics
 scrape and `/v1/usage` run beside each other on four read-only connections, and the ledger's writer reads its own budget
-figures on its own connection ([The ledger writer](statistics.md#the-ledger-writer)).
+figures on its own connection ([The ledger writer](statistics.md#the-ledger-writer)). The ledger keeps planner
+statistics from the first start on and refreshes them after each hourly purge ([The ledger
+writer](statistics.md#the-ledger-writer)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
 the request arrived. The price table and the subscription cost model are revision lists keyed by effective date, the
