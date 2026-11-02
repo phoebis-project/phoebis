@@ -76,7 +76,11 @@ on [Plan meter](statistics.md#plan-meter).
 The "Week" control beside the switch sets the week a subscription figure reads in under Native, "Pro week", "Max week"
 or "Ultra week", stored under `phoebis.week` (`ultra` until you pick one). Under All in dollars, Billed dollars or
 Dollar equivalent it reads disabled with the title "The week applies under Native". On a narrow window it reads the
-short labels `Pro`, `Max` and `Ultra`, and the Settings view's Unit row carries it too.
+short labels `Pro`, `Max` and `Ultra`, and the Settings view's Unit row carries it too. Where the cost model sizes no
+7-day capacity for the chosen week's plan, every cost figure in that week reads a dash titled "Unpriced: the cost model
+holds no 7-day capacity for the {plan} week", a card draws its error state with that sentence and a tile's note under
+the dash reads `unpriced`, until you pick a week the cost model sizes or a cost model that sizes it replaces the table
+at the next start ([The cost reference](#the-cost-reference)).
 
 The expert view, whose switch carries the title "Shows every field of the pool and key dialogs, the advanced ones
 included.", is stored in the browser under `phoebis.expertView` and starts off. With it on, the pool dialog's rail gains

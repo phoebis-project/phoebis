@@ -377,7 +377,7 @@ export function PoolsPage() {
         <Tile label="Accounts in pools" value={totals ? fmtInt(totals.accounts) : null} />
         <Tile label="Keys" value={totals && totals.keys !== null ? fmtInt(totals.keys) : keysRead === 'failed' ? <span className="muted">n/a</span> : null} />
         <Tile label="Requests, 24h" value={totals ? fmtInt(totals.requests) : null} />
-        <Tile label="Cost, 24h" value={dayTile?.value ?? null} title={dayTile?.title} error={dayTile?.value === null ? reading.error : null} />
+        <Tile label="Cost, 24h" value={dayTile?.value ?? null} title={dayTile?.title} error={dayTile?.value === null ? reading.error : null} unpriced={reading.unpriced} />
       </div>
       {/* A failed read leaves the cards on the last answer's items, or none before the first. This line says so. */}
       {attention.error !== null && <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />}

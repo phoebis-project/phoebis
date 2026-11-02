@@ -20,8 +20,8 @@ const MIDNIGHT = Date.UTC(2026, 8, 17);
 // 0.05 of it.
 const TABLES = JSON.parse(readFileSync(new URL('./fixtures/test_tables.json', import.meta.url), 'utf8')).body.subscription_costs;
 const COSTS = d.decodeSubscriptionCosts(TABLES.content, TABLES.unit);
-const PRO = { error: null, scale: d.weekScale(COSTS, 'pro'), week: 'pro' };
-const ULTRA = { error: null, scale: d.weekScale(COSTS, 'ultra'), week: 'ultra' };
+const PRO = { error: null, scale: d.weekScale(COSTS, 'pro'), unpriced: false, week: 'pro' };
+const ULTRA = { error: null, scale: d.weekScale(COSTS, 'ultra'), unpriced: false, week: 'ultra' };
 
 const fact = (key, value, unit, entity = null) => ({ entity, key, unit, value });
 const decision = (o) => ({
@@ -1133,8 +1133,8 @@ test("a round's Pro-week rewrite waits on the week's scale, and a failed setting
     const c = d.detailPairs(event('shedding_round', detail), NOW, [], week).find((x) => x.label === 'Pins').table.rows[0][5];
     return [chipText(c), c.title ?? null];
   };
-  assert.deepEqual(cell({ error: null, scale: null, week: 'ultra' }), ['-', null]);
-  assert.deepEqual(cell({ error: 'settings read failed', scale: null, week: 'ultra' }), ['-', 'settings read failed']);
+  assert.deepEqual(cell({ error: null, scale: null, unpriced: false, week: 'ultra' }), ['-', null]);
+  assert.deepEqual(cell({ error: 'settings read failed', scale: null, unpriced: false, week: 'ultra' }), ['-', 'settings read failed']);
 });
 
 test("an approved account's booking names its 7-day reservation in the strip's reserved chip", () => {

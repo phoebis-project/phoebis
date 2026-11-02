@@ -13,7 +13,7 @@ import { Badge, Button, Card, EmptyState, ErrorState, Skeleton } from '@/compone
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { figuresValue } from '@/components/ui/Tile';
-import { equivalentOrDash, nativeFiguresOf, shareHint, UNPRICED_TITLE } from '@/lib/analytics';
+import { equivalentOrDash, nativeFiguresOf, shareHint, UNPRICED_TITLE, type WeekReading } from '@/lib/analytics';
 import { weekReadingOf } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
@@ -56,10 +56,11 @@ interface CostTile {
  * reading of a day, over the billed rows' dollars, a side with no rows left out, and an empty day reads its zero in
  * each unit. A day a plan row priced nothing on reads the dash under `UNPRICED_TITLE`, its note a dash too while no
  * request was billed, and its spark leaves an unpriced hour a gap. The figure waits on the scale, so native draws the
- * skeleton while the cost model is out, and the reading's error as a dash titled with it. The dollar
- * positions read their dollars.
+ * skeleton while the cost model is out, and the reading's error as a dash titled with it, noted unpriced where the
+ * cost model sizes no chosen week. The dollar positions read their dollars.
  */
-function costTileOf(unit: UnitPosition, o: Overview, week: WeekPosition, scale: number | null, error: string | null): CostTile {
+function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading): CostTile {
+  const { error, scale, week } = reading;
   if (unit === 'all') return { note: `${fmtUsd(o.cost24h / 24)} per hour`, spark: o.hourly.map((h) => h.cost), value: fmtUsd(o.cost24h) };
   if (unit === 'usd') return { note: `${fmtUsd(o.billed24h / 24)} per hour`, spark: o.hourly.map((h) => h.billed), value: fmtUsd(o.billed24h) };
   if (unit === 'equivalent') return { note: 'at the API price list, the subscription requests', spark: o.hourly.map((h) => h.cost - h.billed), value: fmtUsd(o.cost24h - o.billed24h) };
@@ -69,7 +70,7 @@ function costTileOf(unit: UnitPosition, o: Overview, week: WeekPosition, scale: 
   // In percent: the spark's scale floors at one, a dollar an hour on the dollar positions, and a floor of a whole
   // week an hour would flatten the day. An unpriced hour is no idle one, so it draws as a gap.
   const spark = (factor: number) => (plan || !billed ? o.hourly.map((h) => (h.equivalent === null ? null : h.equivalent * factor * 100)) : o.hourly.map((h) => h.billed));
-  if (scale === null) return error === null ? { note: null, spark: spark(1), value: null } : { note: 'could not load', spark: spark(1), title: error, value: '-' };
+  if (scale === null) return error === null ? { note: null, spark: spark(1), value: null } : { note: reading.unpriced ? 'unpriced' : 'could not load', spark: spark(1), title: error, value: '-' };
   const { figures, unpriced } = nativeFiguresOf({ billed: billed ? o.billed24h : undefined, equivalent: plan ? day : undefined }, week, scale);
   return {
     note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash(day === null ? null : day / 24, week, scale)} per hour`,
@@ -98,7 +99,7 @@ export function DashboardPage() {
   const hourly = o?.hourly ?? [];
   const costs = settings.data?.subscriptionCosts ?? null;
   const reading = weekReadingOf(costs, settings.error, week);
-  const costTile = o ? costTileOf(unit, o, week, reading.scale, reading.error) : null;
+  const costTile = o ? costTileOf(unit, o, reading) : null;
   const ringFailure = failedFirst(accounts) ? (
     <ReadFailed title="Could not load the accounts" error={accounts.error} retry={accounts.reload} />
   ) : failedFirst(settings) ? (

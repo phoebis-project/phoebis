@@ -236,8 +236,9 @@ export const weekUnpricedTitle = (week: WeekPosition): string => `Unpriced: the 
  *  skeleton that waits for the table. */
 export const weekReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => {
   const scale = weekScale(costs, week);
-  if (scale !== null) return { error: null, scale, week };
-  return { error: costs === null ? error : weekUnpricedTitle(week), scale, week };
+  if (scale !== null) return { error: null, scale, unpriced: false, week };
+  if (costs === null) return { error, scale, unpriced: false, week };
+  return { error: weekUnpricedTitle(week), scale, unpriced: true, week };
 };
 
 /** The account tiers a model week applies to: the cost model sizes the Fable week for every tier, and Pro has no

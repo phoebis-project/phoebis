@@ -24,7 +24,7 @@ import { CONVERSATION_CLASSES, MAX_BURN_LINES, NATIVE_SUBSET, UNIT_SUBSET, costH
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
-import { weekScale } from '@/lib/costs';
+import { weekReadingOf, weekScale } from '@/lib/costs';
 import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, readEnd, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
@@ -405,8 +405,8 @@ export function AnalyticsPage() {
   // allowance card prices its figures through it.
   const costSettings = useAsync(() => api.getSettings(), []);
   const costs = costSettings.data?.subscriptionCosts ?? null;
-  const scale = weekScale(costs, week);
-  const reading: WeekReading = { error: scale === null ? costSettings.error : null, scale, week };
+  const reading = weekReadingOf(costs, costSettings.error, week);
+  const { scale } = reading;
   const sized = useMemo(() => (burn.data && costs ? sizedAccounts(burn.data.accounts, costs) : null), [burn.data, costs]);
   const rewrites = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRewrites({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
   const refusalCategories = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRefusalCategories(query) : Promise.resolve(null)), [query, tab, generation], reload);
@@ -571,7 +571,7 @@ export function AnalyticsPage() {
   const burnAccount = filters.accountId.length === 1 ? filters.accountId[0] : null;
   // The plan chart sizes its lines by tier where each group holds one account's rows.
   const burnSizes = pageBy === 'account' || burnAccount !== null;
-  const burnReading: WeekReading = burnSizes && sized === null ? { error: costSettings.error, scale: null, week } : reading;
+  const burnReading: WeekReading = burnSizes && sized === null ? { error: costSettings.error, scale: null, unpriced: false, week } : reading;
 
   const groupSlot = useMemo(() => {
     // Slots follow the range's whole key list so a filter never repaints the survivors, and an account's slot is the
@@ -599,10 +599,11 @@ export function AnalyticsPage() {
       : loading;
   const costError = funded ? (costSeries.error ?? costBreakdown.error) : warming ? (costBreakdown.error ?? billedBreakdown.error) : null;
   // Under native every week figure waits on the scale: a surface draws its skeleton while the cost model is out and the
-  // settings read's failure in its place, never a Pro-week figure under another week's label.
+  // reading's error in its place, never a Pro-week figure under another week's label.
   const weekWait = unit === 'native' && scale === null;
   const figureLoading = costLoading || weekWait;
-  const figureError = costError ?? (weekWait ? costSettings.error : null);
+  const figureError = costError ?? (weekWait ? reading.error : null);
+  const figureUnpriced = costError === null && weekWait && reading.unpriced;
   const billedTotals = useMemo(() => (nativeWarming && !billedBreakdown.stale && billedBreakdown.data !== null ? sumGroups(billedBreakdown.data) : null), [nativeWarming, billedBreakdown.stale, billedBreakdown.data]);
   const probeTile = probeTileOf(unit, costTotals, billedTotals, figureLoading, sessionId !== null, reading);
   const savingTile = savingTileOf(unit, costTotals, billedTotals, figureLoading, sessionId !== null, reading);
@@ -933,7 +934,7 @@ export function AnalyticsPage() {
             <CacheByModel
               groups={byModel.stale ? [] : (byModel.data ?? [])}
               funded={fundedModels}
-              error={byModel.error ?? byModelFunded.error ?? (weekWait ? costSettings.error : null)}
+              error={byModel.error ?? byModelFunded.error ?? (weekWait ? reading.error : null)}
               loading={byModel.data === null || byModel.stale || (funded && (byModelFunded.data === null || byModelFunded.stale)) || weekWait}
               reading={reading}
               unit={unit}
@@ -953,11 +954,11 @@ export function AnalyticsPage() {
       {tab === 'cost' && (
         <Section id="cost" shown={shown} title="Cost" meta={figureLoading || figureError !== null || costHead === null ? undefined : costHead.meta} metaTitle={costHead?.unpriced ? UNPRICED_TITLE : undefined}>
           <div className="tiles-row">
-            <Tile label={costHead?.tile.label ?? 'Cost'} value={figureLoading || costHead === null ? null : figuresValue(costHead.tile.figures)} note={costHead?.tile.note ?? NATIVE_SUBSET} title={costHead?.unpriced ? UNPRICED_TITLE : unit === 'native' ? (tileHint ?? undefined) : undefined} error={figureError} />
+            <Tile label={costHead?.tile.label ?? 'Cost'} value={figureLoading || costHead === null ? null : figuresValue(costHead.tile.figures)} note={costHead?.tile.note ?? NATIVE_SUBSET} title={costHead?.unpriced ? UNPRICED_TITLE : unit === 'native' ? (tileHint ?? undefined) : undefined} error={figureError} unpriced={figureUnpriced} />
             {unit === 'native' ? (
               <>
-                <Tile label="Cost per request" value={figureLoading || nativeRatios === null ? null : figuresValue(nativeRatios.perRequest.figures)} note={nativeRatios === null ? null : nativeRatios.perRequest.note} error={figureError} />
-                <Tile label="Cost per 1k output tokens" value={figureLoading || nativeRatios === null ? null : figuresValue(nativeRatios.perThousand.figures)} note={nativeRatios === null ? null : nativeRatios.perThousand.note} error={figureError} />
+                <Tile label="Cost per request" value={figureLoading || nativeRatios === null ? null : figuresValue(nativeRatios.perRequest.figures)} note={nativeRatios === null ? null : nativeRatios.perRequest.note} error={figureError} unpriced={figureUnpriced} />
+                <Tile label="Cost per 1k output tokens" value={figureLoading || nativeRatios === null ? null : figuresValue(nativeRatios.perThousand.figures)} note={nativeRatios === null ? null : nativeRatios.perThousand.note} error={figureError} unpriced={figureUnpriced} />
               </>
             ) : (
               <>
@@ -1029,9 +1030,9 @@ export function AnalyticsPage() {
       {tab === 'cache-warming' && (
         <Section id="cache-warming" shown={shown} title="Cache warming" meta={sessionId === null ? 'Probe rows are always counted here, whatever the toggle above says' : SESSION_SOURCE_NOTE}>
           <div className="tiles-row">
-            <Tile label="Probe cost" value={probeTile.value} note={probeTile.note} error={figureError} />
-            <Tile label="Saved by probes" value={savingTile.value} note={savingTile.note} error={figureError} />
-            <Tile label="Net saving" value={netTile.value} note={netTile.note} tone={netTile.critical ? 'critical' : undefined} error={figureError} />
+            <Tile label="Probe cost" value={probeTile.value} note={probeTile.note} error={figureError} unpriced={figureUnpriced} />
+            <Tile label="Saved by probes" value={savingTile.value} note={savingTile.note} error={figureError} unpriced={figureUnpriced} />
+            <Tile label="Net saving" value={netTile.value} note={netTile.note} tone={netTile.critical ? 'critical' : undefined} error={figureError} unpriced={figureUnpriced} />
             <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : keptWarmNote(keptWarm)} />
           </div>
           <div className="grid-2 warming-grid">
@@ -1063,7 +1064,7 @@ export function AnalyticsPage() {
             <SavingChart
               axis={axis}
               billed={billedWarmingPoints}
-              error={(sessionId === null ? (warmingSeries.error ?? billedWarmingSeries.error) : null) ?? (weekWait ? costSettings.error : null)}
+              error={(sessionId === null ? (warmingSeries.error ?? billedWarmingSeries.error) : null) ?? (weekWait ? reading.error : null)}
               loading={(sessionId === null ? warmingLoading : loading) || weekWait}
               points={sessionId === null ? warmingPoints : points}
               reading={reading}
@@ -1094,7 +1095,7 @@ export function AnalyticsPage() {
           <KeepaliveByPool
             groups={poolGroups}
             funded={fundedPools}
-            error={(sessionId === null ? (byPool.error ?? fundedByPool.error) : null) ?? (weekWait ? costSettings.error : null)}
+            error={(sessionId === null ? (byPool.error ?? fundedByPool.error) : null) ?? (weekWait ? reading.error : null)}
             loading={(sessionId === null ? byPool.data === null || byPool.stale || (poolFunding !== undefined && (fundedByPool.data === null || fundedByPool.stale)) : loading) || weekWait}
             reading={reading}
             unit={unit}

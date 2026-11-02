@@ -12,9 +12,8 @@ import type { Option } from '@/components/ui/OptionList';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft } from '@/components/ui/icons';
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, useDescription } from '@/components/ui/primitives';
 import { addressWindow, type LogFilters, RANGE_PRESETS, ROUTING_LOG_CODEC } from '@/lib/address';
-import type { WeekReading } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
-import { weekScale } from '@/lib/costs';
+import { weekReadingOf } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, readEnd, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtDatedTime, fmtInt, fmtTime, upperFirst } from '@/lib/format';
@@ -64,8 +63,7 @@ export function RoutingLogPage() {
   // The cost model whose capacities scale a shedding round's Pro-week rewrite to the chosen week. The Pro week reads
   // without it.
   const settings = useAsync(() => api.getSettings(), []);
-  const scale = weekScale(settings.data?.subscriptionCosts ?? null, week);
-  const reading: WeekReading = { error: scale === null ? settings.error : null, scale, week };
+  const reading = weekReadingOf(settings.data?.subscriptionCosts ?? null, settings.error, week);
   const modelOptions = useMemo<Option[]>(() => {
     void modelTiers;
     return (catalog.data ?? [])
