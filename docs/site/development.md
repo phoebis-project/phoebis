@@ -68,7 +68,7 @@ The browser checks run from `web/` on a developer's host before a merge, since o
 `web` job's cap:
 
 ```sh
-npx playwright install --with-deps chromium
+npx playwright install chromium
 npm run smoke
 PHOEBIS_SCREENSHOT_DIR=/tmp/phoebis-mock-shots npm run e2e:mock
 npm run e2e:reference
@@ -395,11 +395,11 @@ against the real one, so the checker fails on what it exists to catch.
 Two GitHub Actions workflows run on every pull request and every push to `main`. `Tests` runs the `rust` and `web` jobs
 of [The tests](#the-tests) and a third job, also named `Tests`, that reports the two as the one check the branch
 protection on `main` requires, a canceled or skipped job included. The `web` job runs the console's build,
-`check-build`, lint and unit tests, and the browser checks run on a developer's host before a merge. A newer push to a
-pull request cancels its older run. `Documentation` builds and checks this site
-([Publishing the site](#publishing-the-site)). The third workflow, `Release`, runs on a release, a manual dispatch,
-and a pull request that touches the image's or the binary's inputs ([Releasing](#releasing)). The three are separate
-workflows, so a failed test never blocks the site's build.
+`check-build`, lint and unit tests, and the browser checks run on a developer's host before a merge, since on the
+hosted runner they run past the job's cap. A newer push to a pull request cancels its older run. `Documentation`
+builds and checks this site ([Publishing the site](#publishing-the-site)). The third workflow, `Release`, runs on a
+release, a manual dispatch, and a pull request that touches the image's or the binary's inputs
+([Releasing](#releasing)). The three are separate workflows, so a failed test never blocks the site's build.
 
 The release workflow's jobs run with a read-only token except `build`, which writes packages, `publish`, which writes
 packages and the release's archives, and `smoke`, which reads packages. The `Tests` jobs read alone, and in
