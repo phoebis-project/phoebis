@@ -410,9 +410,11 @@ impl LedgerDb {
         task.await.map_err(|_| LedgerError::ReadCanceled)?
     }
 
-    /// The same read on the calling thread, for the ledger task's own thread, for `Attention::conditions`, which the
-    /// attention route and the metrics scrape run on a blocking worker, and for tests that hold no runtime worker to
-    /// spare. It waits only while every pooled connection is out.
+    /// The same read on the calling thread, for the event mirror's one read as the ledger task starts and for tests
+    /// that hold no runtime worker to spare. It waits only while every pooled connection is out. Under the runtime
+    /// every wait on the pool is `read`'s, and no blocking worker of the runtime calls this: a worker waiting here can
+    /// be the worker a queued `read` closure needs to return its connection, and with every worker waiting the pool
+    /// never gets one back.
     pub fn read_blocking<T>(
         &self,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError>,

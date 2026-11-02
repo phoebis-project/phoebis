@@ -2,6 +2,8 @@
 //! one histogram over the same 64 buckets the rollups use.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -546,9 +548,17 @@ pub struct AttentionGauges {
 
 /// A closure over the attention reader, read fresh on every scrape: the attention crate depends on this one for these
 /// types, so the binary supplies the closure rather than a type the ledger could name, and the reader's error crosses
-/// boxed for the same reason.
+/// boxed for the same reason. It answers a future, so the read waits for its ledger connection on the runtime, where a
+/// wait holds no blocking worker.
 pub type AttentionGaugeSource = Arc<
-    dyn Fn() -> Result<AttentionGauges, Box<dyn std::error::Error + Send + Sync>> + Send + Sync,
+    dyn Fn() -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<AttentionGauges, Box<dyn std::error::Error + Send + Sync>>,
+                    > + Send,
+            >,
+        > + Send
+        + Sync,
 >;
 
 #[derive(Clone, Debug, Default)]
@@ -669,22 +679,15 @@ pub fn metrics_router(
                 async move {
                     // A scrape answered without the conditions would read 0 for a held one and clear the alarm a
                     // rule fires on, so the scraper records a failed scrape instead. The listener asks for no
-                    // credential, so the store's or the ledger's words stay in the log. The read waits on a pooled
-                    // ledger connection, so it runs on a blocking worker and parks no runtime thread.
+                    // credential, so the store's or the ledger's words stay in the log. The read waits for its ledger
+                    // connection on the runtime, where a wait holds no blocking worker, and runs on a blocking worker,
+                    // so it parks no runtime thread.
                     let attention = match attention {
                         None => AttentionGauges::default(),
-                        Some(source) => match tokio::task::spawn_blocking(move || source()).await {
-                            Ok(Ok(gauges)) => gauges,
-                            Ok(Err(error)) => {
-                                tracing::warn!(%error, "the attention read failed, so the scrape answers 500");
-                                return (StatusCode::INTERNAL_SERVER_ERROR, "attention read failed")
-                                    .into_response();
-                            }
+                        Some(source) => match source().await {
+                            Ok(gauges) => gauges,
                             Err(error) => {
-                                tracing::warn!(
-                                    %error,
-                                    "the attention read did not finish, so the scrape answers 500"
-                                );
+                                tracing::warn!(%error, "the attention read failed, so the scrape answers 500");
                                 return (StatusCode::INTERNAL_SERVER_ERROR, "attention read failed")
                                     .into_response();
                             }

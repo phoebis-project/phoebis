@@ -1,8 +1,11 @@
 //! `GET /admin/attention`: the conditions that hold now, worst first, oldest first within a kind.
 mod common;
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::Duration;
 
 use axum::body::Body;
@@ -444,7 +447,7 @@ async fn a_held_model_unpriced_condition_lists_on_the_route_after_every_degraded
     fake_upstream::wait_for(Duration::from_secs(5), || {
         parts
             .attention
-            .conditions(common::NOW)
+            .conditions_blocking(common::NOW)
             .unwrap()
             .iter()
             .any(|c| c.kind == phoebis_attention::Kind::ModelUnpriced && c.holds)
@@ -613,4 +616,58 @@ fn watchdog(
         }
     });
     (done, fired)
+}
+
+/// Polls `step` once on the test's own thread, so its synchronous part runs up to its first wait before the next step
+/// starts. A spawned task would run on the runtime's worker instead, where the next step could overtake it.
+async fn reach_wait(mut step: Pin<&mut impl Future>) {
+    std::future::poll_fn(|cx| {
+        assert!(
+            step.as_mut().poll(cx).is_pending(),
+            "the step finished while the one blocking worker was still held"
+        );
+        Poll::Ready(())
+    })
+    .await;
+}
+
+/// The route waits for its ledger connection without holding a blocking worker. The runtime gets one blocking worker,
+/// held on a gate. The route's read starts first, then `READERS` reads take every pooled connection and queue their
+/// closures behind it, and then the gate opens. A route that waits for its connection on a blocking worker takes the
+/// one worker ahead of the closures that would return a connection, so it waits for good and never answers. That
+/// order is what deadlocks such a route, so the steps keep it.
+#[test]
+fn the_attention_route_waits_for_its_reader_without_holding_a_blocking_worker() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let status = runtime.block_on(async {
+        let (_dir, parts) = common::admin_parts_full_on_disk().await;
+        let cookie = login(&parts.app, "admin-secret").await;
+        let (open, gate) = std::sync::mpsc::channel::<()>();
+        let _held = tokio::task::spawn_blocking(move || gate.recv());
+        let mut request = std::pin::pin!(get(&parts.app, "/admin/attention", Some(&cookie)));
+        reach_wait(request.as_mut()).await;
+        let mut reads: Vec<_> = (0..READERS)
+            .map(|_| Box::pin(parts.db.read(|_| Ok(()))))
+            .collect();
+        for read in &mut reads {
+            reach_wait(read.as_mut()).await;
+        }
+        open.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), request)
+            .await
+            .map(|response| response.status().as_u16())
+    });
+    // A runtime's drop waits for its blocking jobs without a bound, and a route that deadlocked leaves one that never
+    // ends.
+    runtime.shutdown_timeout(Duration::from_secs(1));
+    assert_eq!(
+        status.ok(),
+        Some(200),
+        "the route waited for a pooled reader on the one blocking worker the queued reads needed to return theirs"
+    );
 }

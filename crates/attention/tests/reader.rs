@@ -31,7 +31,7 @@ fn find<'a>(conditions: &'a [Condition], kind: Kind, subject: &str) -> Option<&'
 }
 
 fn read(attention: &Attention, at: i64) -> Vec<Condition> {
-    attention.conditions(at).unwrap()
+    attention.conditions_blocking(at).unwrap()
 }
 
 /// Every series of the read as `(kind, subject, holds)`, sorted, since the pools and the drift records come in
@@ -959,7 +959,7 @@ async fn a_failed_holder_read_fails_the_conditions_and_the_scrape() {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
     rig.store.debug_fail_next_refresh_read();
-    assert!(attention.conditions(NOW).is_err());
+    assert!(attention.conditions_blocking(NOW).is_err());
     rig.store.debug_fail_next_refresh_read();
     let (status, text) = scrape(&rig, &attention).await;
     assert_eq!(
@@ -1664,7 +1664,10 @@ async fn a_failed_parked_read_fails_the_attention_read_as_the_refresh_read_does(
     let (attention, _arm) = rig.attention(None);
     ledger_sql(&rig, "DROP TABLE parked_records;");
     assert!(
-        matches!(attention.conditions(NOW), Err(AttentionError::Ledger(_))),
+        matches!(
+            attention.conditions_blocking(NOW),
+            Err(AttentionError::Ledger(_))
+        ),
         "a read without the parked rows would report a held condition clear"
     );
     let (status, text) = scrape(&rig, &attention).await;
@@ -1787,7 +1790,7 @@ async fn a_read_waiting_on_the_registry_leaves_the_bus_arm_free() {
     let before = rig.store.debug_lock_count();
     let reading = std::thread::spawn({
         let attention = attention.clone();
-        move || attention.conditions(NOW).map(|read| read.len())
+        move || attention.conditions_blocking(NOW).map(|read| read.len())
     });
     // The counter moves as a caller reaches for the registry's connection, before it blocks on the holder, so
     // once it moves the read is the one waiting there.

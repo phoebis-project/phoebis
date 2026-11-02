@@ -915,8 +915,10 @@ async fn an_attention_read_that_fails_answers_the_scrape_500_with_no_family() {
         }
     };
     let (status, text) = scrape(Arc::new(|| {
-        Ok(AttentionGauges {
-            conditions: vec![("poll_backoff", "a".into(), true)],
+        Box::pin(async {
+            Ok(AttentionGauges {
+                conditions: vec![("poll_backoff", "a".into(), true)],
+            })
         })
     }))
     .await;
@@ -926,7 +928,7 @@ async fn an_attention_read_that_fails_answers_the_scrape_500_with_no_family() {
         "{text}"
     );
     let (status, text) = scrape(Arc::new(|| {
-        Err(Box::new(StoreError::Io(std::io::Error::other("disk gone"))))
+        Box::pin(async { Err(Box::new(StoreError::Io(std::io::Error::other("disk gone"))) as _) })
     }))
     .await;
     assert_eq!(
@@ -938,7 +940,13 @@ async fn an_attention_read_that_fails_answers_the_scrape_500_with_no_family() {
         !text.contains("disk gone"),
         "the listener asks for no credential, so the store's words stay in the log"
     );
-    let (status, text) = scrape(Arc::new(|| panic!("the attention source panicked"))).await;
+    let (status, text) = scrape(Arc::new(|| {
+        Box::pin(async {
+            tokio::task::spawn_blocking(|| panic!("the attention source panicked")).await?;
+            Ok(AttentionGauges::default())
+        })
+    }))
+    .await;
     assert_eq!(
         status, 500,
         "a source that panics on its worker fails the scrape rather than reading 0 for a held one"
@@ -962,12 +970,15 @@ async fn the_scrape_answers_while_its_attention_source_waits() {
     )
     .unwrap();
     let (release, parked) = std::sync::mpsc::channel::<()>();
-    // The source must be `Sync`, which a std `Receiver` is not, so the receiver sits behind a mutex the source locks
-    // for its wait.
-    let parked = Mutex::new(parked);
+    // The source must be `Sync`, which a std `Receiver` is not, so the receiver sits behind a mutex the source's
+    // blocking worker locks for its wait.
+    let parked = Arc::new(Mutex::new(parked));
     let source: AttentionGaugeSource = Arc::new(move || {
-        parked.lock().unwrap().recv()?;
-        Ok(AttentionGauges::default())
+        let parked = parked.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || parked.lock().unwrap().recv()).await??;
+            Ok(AttentionGauges::default())
+        })
     });
     let releases = Arc::new(Mutex::new(vec![release]));
     let (done, fired) = watchdog(releases.clone(), Duration::from_secs(5));

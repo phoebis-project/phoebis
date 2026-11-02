@@ -1671,7 +1671,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     fake_upstream::wait_for(Duration::from_secs(5), || {
         parts
             .attention
-            .conditions(now)
+            .conditions_blocking(now)
             .unwrap()
             .iter()
             .any(|c| c.kind == phoebis_attention::Kind::ModelUnpriced && c.holds)

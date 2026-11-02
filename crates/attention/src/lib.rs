@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use phoebis_bus::{spawn_subscriber, Bus, Delivery, Event};
 use phoebis_ledger::{
     parked_summary, routing_conditions, AttentionGaugeSource, AttentionGauges, Ledger, LedgerError,
+    ParkedSummary, RoutingCondition,
 };
 use phoebis_oauth::{Clock, UsageService};
 use phoebis_routing::RouterHandle;
@@ -64,10 +65,14 @@ pub struct AttentionParts {
     pub usage: Option<Arc<UsageService>>,
 }
 
-/// A read the reader could not finish. The route answers 500 and the scrape answers 500 on either, so no condition
-/// is reported clear that was not read.
+/// A read the reader could not finish. The route answers 500 and the scrape answers 500 on any of them, so no
+/// condition is reported clear that was not read.
 #[derive(Debug, thiserror::Error)]
 pub enum AttentionError {
+    /// The blocking worker that runs the registry's reads and the conditions ended without an answer, as a panic there
+    /// ends it. Its own variant, since `LedgerError::ReadCanceled` names a ledger read.
+    #[error("the attention read did not finish")]
+    Canceled,
     #[error(transparent)]
     Ledger(#[from] LedgerError),
     #[error(transparent)]
@@ -86,16 +91,36 @@ pub struct Attention {
 }
 
 impl Attention {
-    /// Every subject of every kind, holding or clear; a failed store or ledger read fails the whole read.
-    pub fn conditions(&self, now: i64) -> Result<Vec<Condition>, AttentionError> {
+    /// Every subject of every kind, holding or clear. A failed store or ledger read fails the whole read. For a caller
+    /// on the runtime: the ledger read waits for its connection there, where a wait holds no blocking worker, and the
+    /// rest runs on a blocking worker, since the registry's reads are SQLite reads that stay off the runtime thread.
+    pub async fn conditions(self: &Arc<Self>, now: i64) -> Result<Vec<Condition>, AttentionError> {
         // The parked rows and the fold's table share one read, so a call waits on the reader pool once. The parked
         // rows are read from the file on every call, as `refresh_failed` reads the registry, so the condition holds
         // across a restart and clears on its own when the next start or a replay lands the rows. The fold's table is
         // one lookup, since the ledger folds the routing log into it hourly and at start rather than on this read. A
         // read that fails fails the whole answer, as the refresh read's does: a scrape never reports clear what it
-        // could not read. Read before the state lock, so a read waiting on a reader connection never holds the bus
-        // arm's `observe` behind it.
-        let (parked, routing) = self
+        // could not read.
+        let ledger = match &self.ledger {
+            Some(ledger) => Some(
+                ledger
+                    .db()
+                    .read(|c| Ok((parked_summary(c)?, routing_conditions(c)?)))
+                    .await?,
+            ),
+            None => None,
+        };
+        let attention = Arc::clone(self);
+        tokio::task::spawn_blocking(move || attention.conditions_over(ledger, now))
+            .await
+            .map_err(|_| AttentionError::Canceled)?
+    }
+
+    /// The same read for a caller on a thread of its own, such as a test's, which waits for the ledger's connection on
+    /// that thread. A blocking worker of the runtime calls `conditions` instead: waiting here, it can be the worker a
+    /// queued ledger read needs to return its connection.
+    pub fn conditions_blocking(&self, now: i64) -> Result<Vec<Condition>, AttentionError> {
+        let ledger = self
             .ledger
             .as_ref()
             .map(|ledger| {
@@ -103,8 +128,18 @@ impl Attention {
                     .db()
                     .read_blocking(|c| Ok((parked_summary(c)?, routing_conditions(c)?)))
             })
-            .transpose()?
-            .unzip();
+            .transpose()?;
+        self.conditions_over(ledger, now)
+    }
+
+    /// The conditions over the ledger's parked rows and routing conditions, read before this runs so a read waiting on
+    /// a reader connection never holds the bus arm's `observe` behind the state lock.
+    fn conditions_over(
+        &self,
+        ledger: Option<(Vec<ParkedSummary>, Vec<RoutingCondition>)>,
+        now: i64,
+    ) -> Result<Vec<Condition>, AttentionError> {
+        let (parked, routing) = ledger.unzip();
         // The registry's reads come before the lock for the same reason: a stalled registry file holds the store's
         // connection mutex, and `observe` waits on this lock.
         let accounts = self.store.accounts()?;
@@ -144,13 +179,16 @@ impl Attention {
     pub fn gauge_source(self: &Arc<Self>) -> AttentionGaugeSource {
         let attention = self.clone();
         Arc::new(move || {
-            let mut conditions = attention.conditions((attention.clock)())?;
-            conditions.sort_by(|a, b| (a.kind, &a.subject.id).cmp(&(b.kind, &b.subject.id)));
-            Ok(AttentionGauges {
-                conditions: conditions
-                    .into_iter()
-                    .map(|c| (c.kind.as_str(), c.subject.id, c.holds))
-                    .collect(),
+            let attention = attention.clone();
+            Box::pin(async move {
+                let mut conditions = attention.conditions((attention.clock)()).await?;
+                conditions.sort_by(|a, b| (a.kind, &a.subject.id).cmp(&(b.kind, &b.subject.id)));
+                Ok(AttentionGauges {
+                    conditions: conditions
+                        .into_iter()
+                        .map(|c| (c.kind.as_str(), c.subject.id, c.holds))
+                        .collect(),
+                })
             })
         })
     }
