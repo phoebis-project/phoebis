@@ -50,14 +50,10 @@ The `web` job, from `web/`:
 
 ```sh
 npm ci --no-audit --no-fund
-npx playwright install --with-deps chromium
 npm run build
 node scripts/check-build.mjs
 npm run lint
 npm test
-npm run smoke
-PHOEBIS_SCREENSHOT_DIR=/tmp/phoebis-mock-shots npm run e2e:mock
-npm run e2e:reference
 ```
 
 `npm run build` is `tsc --noEmit && vite build`. `node scripts/check-build.mjs` reads the built files and fails when the
@@ -66,10 +62,21 @@ pages stay chunks of their own and the first paint loads none of them, and it ho
 the same Recharts rule and to loading neither entry from the other, and the console's entry and the chunks it loads to
 no Vue code, a marker check that also fails when no chunk the reference loads carries the marker. `npm run lint` is
 `eslint . --max-warnings 0`. `npm test` builds the test bundle and runs
-`node --test --localstorage-file test/dist/localstorage.json test/*.test.mjs`. `npm run smoke` builds the smoke bundle
-and runs `smoke/run.mjs` under jsdom with `TZ=UTC`. The last two lines are the browser pass against the mock and the
-reference smoke, both in the next section. The workflow writes the screenshots under the runner's temporary directory,
-and locally the directory has to lie outside the repository.
+`node --test --localstorage-file test/dist/localstorage.json test/*.test.mjs`.
+
+The browser checks run from `web/` on a developer's host before a merge, since on the hosted runner they run past the
+`web` job's cap:
+
+```sh
+npx playwright install chromium
+npm run smoke
+PHOEBIS_SCREENSHOT_DIR=/tmp/phoebis-mock-shots npm run e2e:mock
+npm run e2e:reference
+```
+
+`npm run smoke` builds the smoke bundle and runs `smoke/run.mjs` under jsdom with `TZ=UTC`. The last two lines are the
+browser pass against the mock and the reference smoke, both in the next section. The screenshot directory has to lie
+outside the repository.
 
 ## The browser pass
 
@@ -387,9 +394,11 @@ against the real one, so the checker fails on what it exists to catch.
 
 Two GitHub Actions workflows run on every pull request and every push to `main`. `Tests` runs the `rust` and `web` jobs
 of [The tests](#the-tests) and a third job, also named `Tests`, that reports the two as the one check the branch
-protection on `main` requires, a canceled or skipped job included. A newer push to a pull request cancels its older
-run. `Documentation` builds and checks this site ([Publishing the site](#publishing-the-site)). The third workflow,
-`Release`, runs on a release, a manual dispatch, and a pull request that touches the image's or the binary's inputs
+protection on `main` requires, a canceled or skipped job included. The `web` job runs the console's build,
+`check-build`, lint and unit tests, and the browser checks run on a developer's host before a merge, since on the
+hosted runner they run past the job's cap. A newer push to a pull request cancels its older run. `Documentation`
+builds and checks this site ([Publishing the site](#publishing-the-site)). The third workflow, `Release`, runs on a
+release, a manual dispatch, and a pull request that touches the image's or the binary's inputs
 ([Releasing](#releasing)). The three are separate workflows, so a failed test never blocks the site's build.
 
 The release workflow's jobs run with a read-only token except `build`, which writes packages, `publish`, which writes
