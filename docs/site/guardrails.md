@@ -256,5 +256,5 @@ The record is the count and the bytes. The Analytics card reports the blocked re
 what a block saved, since a token figure would be a guess over a body the upstream never read. A block writes one
 `refused` decision record carrying the guardrail's name, and no route lists a guardrail's matches, since the Requests
 view with the Guardrail filter lists them. The dry run has no rate limit, since its cap of 500 requests, its pages of 50
-and the ledger's one reader connection bound the work. No preset covers the client's `short` summary mode, since no
-router the presets were measured on has seen it.
+and a reader connection held for one page at a time bound the work. No preset covers the client's `short` summary mode,
+since no router the presets were measured on has seen it.

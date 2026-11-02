@@ -1,13 +1,14 @@
-//! The ledger's SQLite file: one writer connection the ledger task owns through `write`, one connection the
-//! retention purge owns through `purge`, and one read-only connection the admin routes share through `read`. WAL
-//! lets a read run beside either writer; the two writers take SQLite's one write lock in turn, each waiting for
-//! the other's transaction under the busy timeout.
+//! The ledger's SQLite file: one writer connection the ledger task owns through `write` and reads its own figures on
+//! through `writer_read`, one connection the retention purge owns through `purge`, and a pool of `READERS` read-only
+//! connections the admin routes, the attention reader, the metrics scrape and `/v1/usage` share through `read` and
+//! `read_blocking`. WAL lets a read run beside either writer, and the two take SQLite's one write lock in turn, each
+//! waiting for the other's transaction under the busy timeout.
 
 use std::path::Path;
 #[cfg(any(test, feature = "debug-hooks"))]
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use rusqlite::{
@@ -27,10 +28,21 @@ use crate::{schema, LedgerError};
 /// write waits behind one slice at most. The registry waits as long.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How many read-only connections serve the attention reader, the console, the metrics scrape and `/v1/usage` at
+/// once. Four covers the five routes a Pools page polls on one tick with the sessions read still in flight, and bounds
+/// the readers' page caches at 128 MiB.
+pub const READERS: usize = 4;
+
+/// Each pooled reader's page cache in KiB, 32 MiB, set through `cache_size`'s negative form. A day of rollups or a
+/// session walk stays in the connection between two polls, and four such caches stay inside what a router host
+/// spares. No `mmap_size`: the operating system's page cache already serves the warm reads, and a map of a ledger file
+/// tens of gigabytes large buys nothing for cold random reads.
+const READER_CACHE_KIB: i64 = 32 * 1024;
+
 pub struct LedgerDb {
     writer: Mutex<Connection>,
     /// `None` for an in-memory ledger, whose one connection serves every role.
-    reader: Option<Mutex<Connection>>,
+    readers: Option<Readers>,
     /// The retention purge's own connection, so a slice never holds the writer's lock or turn; `None` in memory.
     purger: Option<Mutex<Connection>>,
     /// The writes begun and ended through `write`, which `purge` reads to let a waiting write go first.
@@ -77,6 +89,106 @@ struct Ended<'a>(&'a AtomicU64);
 impl Drop for Ended<'_> {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// The pool: the idle connections as a stack, so the warmest cache serves the next read, a `Condvar` for a caller
+/// that waits on its own thread and a `Notify` for one that waits on the runtime, both woken once per return. A read
+/// holds its connection for its closure's span alone, every return wakes one blocking waiter and one async waiter,
+/// and `Notify` wakes its waiters in order, so no caller starves under a steady 5 s poll.
+struct Readers {
+    idle: Mutex<Vec<Reader>>,
+    returned: Condvar,
+    wakeup: tokio::sync::Notify,
+}
+
+struct Reader {
+    conn: Connection,
+}
+
+impl Readers {
+    /// `READERS` connections through `open_reader`.
+    fn open(path: &Path) -> Result<Readers, LedgerError> {
+        let idle = (0..READERS)
+            .map(|_| {
+                Ok(Reader {
+                    conn: open_reader(path)?,
+                })
+            })
+            .collect::<Result<_, LedgerError>>()?;
+        Ok(Readers {
+            idle: Mutex::new(idle),
+            returned: Condvar::new(),
+            wakeup: tokio::sync::Notify::new(),
+        })
+    }
+
+    /// The newest idle reader, waiting on `wakeup` while none is idle. The waiter is registered before the stack is
+    /// looked at, so a return between the look and the wait wakes this waiter and two returns wake two waiters.
+    /// Dropping the future while it waits leaves nothing behind, since the waiter holds no reader until it returns.
+    async fn take(&self) -> Reader {
+        loop {
+            let mut notified = std::pin::pin!(self.wakeup.notified());
+            notified.as_mut().enable();
+            let popped = self.idle().pop();
+            if let Some(reader) = popped {
+                return reader;
+            }
+            notified.await;
+        }
+    }
+
+    /// The same on the calling thread, waiting on `returned`.
+    fn take_blocking(&self) -> Reader {
+        let mut idle = self.idle();
+        loop {
+            if let Some(reader) = idle.pop() {
+                return reader;
+            }
+            idle = self
+                .returned
+                .wait(idle)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    /// Pushes the reader back and wakes one waiter of each kind. A woken waiter that finds the stack empty, because a
+    /// third caller popped first, registers again and waits on.
+    fn put_back(&self, reader: Reader) {
+        self.idle().push(reader);
+        self.returned.notify_one();
+        self.wakeup.notify_one();
+    }
+
+    /// Recovered as `write` recovers its guard, since a push or a pop leaves the stack whole whatever panicked.
+    fn idle(&self) -> MutexGuard<'_, Vec<Reader>> {
+        self.idle.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// One pooled reader: read-only, no mutex, `BUSY_TIMEOUT`, `cache_size` at `-READER_CACHE_KIB`.
+fn open_reader(path: &Path) -> Result<Connection, LedgerError> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    conn.pragma_update(None, "cache_size", -READER_CACHE_KIB)?;
+    Ok(conn)
+}
+
+/// Puts its reader back when dropped, a panic's unwind included, so a closure that panics mid-row leaves the pool
+/// whole and the connection as consistent as its rolled-back read transaction left it.
+struct Returned<'a> {
+    reader: Option<Reader>,
+    pool: &'a Readers,
+}
+
+impl Drop for Returned<'_> {
+    fn drop(&mut self) {
+        if let Some(reader) = self.reader.take() {
+            self.pool.put_back(reader);
+        }
     }
 }
 
@@ -134,17 +246,14 @@ impl LedgerDb {
         // best-effort ledger; `FULL` would fsync on every request.
         writer.pragma_update(None, "synchronous", "NORMAL")?;
         prepare(&mut writer, path, schema::MIGRATIONS)?;
-        let reader = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
         // The journal mode is the file's, which the writer set; `synchronous` is the connection's own.
         let purger = Connection::open(path)?;
         purger.busy_timeout(BUSY_TIMEOUT)?;
         purger.pragma_update(None, "synchronous", "NORMAL")?;
+        let readers = Readers::open(path)?;
         Ok(LedgerDb {
             writer: Mutex::new(writer),
-            reader: Some(Mutex::new(reader)),
+            readers: Some(readers),
             purger: Some(Mutex::new(purger)),
             writes: Writes::default(),
             #[cfg(any(test, feature = "debug-hooks"))]
@@ -163,7 +272,7 @@ impl LedgerDb {
         prepare(&mut writer, Path::new(":memory:"), schema::MIGRATIONS)?;
         Ok(LedgerDb {
             writer: Mutex::new(writer),
-            reader: None,
+            readers: None,
             purger: None,
             writes: Writes::default(),
             #[cfg(any(test, feature = "debug-hooks"))]
@@ -213,8 +322,8 @@ impl LedgerDb {
         f(&mut conn)
     }
 
-    /// Runs `f` under the purger connection (the writer's in memory). A poisoned guard is recovered as
-    /// `read_blocking` recovers its own: a rolled-back transaction leaves the connection consistent.
+    /// Runs `f` under the purger connection (the writer's in memory). A poisoned guard is recovered as `write`
+    /// recovers its own: a rolled-back transaction leaves the connection consistent.
     pub fn purge<T>(
         &self,
         f: impl FnOnce(&mut Connection) -> Result<T, LedgerError>,
@@ -229,8 +338,10 @@ impl LedgerDb {
         f(&mut conn)
     }
 
-    /// Runs `f` on a blocking worker under the shared reader connection, so a slow read never parks the runtime
-    /// thread that serves proxy traffic; the reader mutex still serializes the reads themselves.
+    /// Runs `f` on a blocking worker under a pooled reader connection, so a slow read never parks the runtime thread
+    /// that serves proxy traffic. A read waits only while every pooled connection is out, and it waits before its
+    /// worker spawns, so a waiting read holds no blocking worker. In memory it runs on the one connection, behind the
+    /// writer's mutex.
     pub async fn read<T: Send + 'static>(
         self: &Arc<Self>,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError> + Send + 'static,
@@ -238,15 +349,56 @@ impl LedgerDb {
         #[cfg(any(test, feature = "debug-hooks"))]
         self.page_reads.fetch_add(1, Ordering::SeqCst);
         let db = Arc::clone(self);
-        tokio::task::spawn_blocking(move || db.read_blocking(f))
-            .await
-            .map_err(|_| LedgerError::ReadCanceled)?
+        let task = match &self.readers {
+            Some(readers) => {
+                let reader = readers.take().await;
+                tokio::task::spawn_blocking(move || db.lend(reader, f))
+            }
+            None => tokio::task::spawn_blocking(move || db.read_blocking(f)),
+        };
+        task.await.map_err(|_| LedgerError::ReadCanceled)?
     }
 
     /// The same read on the calling thread, for the ledger task's own thread and for tests that hold no runtime
-    /// worker to spare.
+    /// worker to spare. It waits only while every pooled connection is out.
     pub fn read_blocking<T>(
         &self,
+        f: impl FnOnce(&Connection) -> Result<T, LedgerError>,
+    ) -> Result<T, LedgerError> {
+        // A read opens no transaction but a read one, such as `list_request_page`'s, which rolls back as it drops
+        // while the panic unwinds, so a closure that panics mid-row leaves the connection as consistent as it was
+        // before the call. Returning the reader through `Returned`, and recovering the writer's guard in memory,
+        // rather than propagating the poisoning, keeps one panicked read from turning every later read into a
+        // `ReadCanceled`.
+        match &self.readers {
+            Some(readers) => self.lend(readers.take_blocking(), f),
+            None => self.serve(
+                &self.writer.lock().unwrap_or_else(PoisonError::into_inner),
+                f,
+            ),
+        }
+    }
+
+    /// Runs `f` on a pooled reader under `Returned`, so the reader goes back to the pool however `f` ends.
+    fn lend<T>(
+        &self,
+        reader: Reader,
+        f: impl FnOnce(&Connection) -> Result<T, LedgerError>,
+    ) -> Result<T, LedgerError> {
+        let pool = self
+            .readers
+            .as_ref()
+            .expect("a pooled reader comes from a file-backed ledger, which holds the pool");
+        let mut lent = Returned { reader: None, pool };
+        let reader = lent.reader.insert(reader);
+        self.serve(&reader.conn, f)
+    }
+
+    /// Both read paths of both ledgers run their closure here, so `debug_fail_next_read` fails the next read
+    /// whichever path and connection it takes.
+    fn serve<T>(
+        &self,
+        conn: &Connection,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError>,
     ) -> Result<T, LedgerError> {
         #[cfg(any(test, feature = "debug-hooks"))]
@@ -255,14 +407,7 @@ impl LedgerDb {
                 "injected ledger read failure",
             )));
         }
-        // A read opens no transaction but a read one, such as `list_request_page`'s, which rolls back as it drops
-        // while the panic unwinds, so a closure that panics mid-row leaves the connection as consistent as it was
-        // before the call. Recovering the guard here, rather than propagating the poisoning, keeps one panicked read
-        // from turning every later read into a `ReadCanceled`.
-        match &self.reader {
-            Some(reader) => f(&reader.lock().unwrap_or_else(PoisonError::into_inner)),
-            None => f(&self.writer.lock().unwrap_or_else(PoisonError::into_inner)),
-        }
+        f(conn)
     }
 
     /// Runs `f` on the writer connection on a blocking worker. The writer loop awaits it between two batches, so it
@@ -1056,6 +1201,44 @@ pub(crate) fn read_version(conn: &Connection) -> Result<u32, LedgerError> {
 mod tests {
     use super::*;
     use crate::record::*;
+    use std::future::Future;
+    use std::task::Poll;
+
+    /// A read that holds its pooled reader until its release is sent, then answers the schema's version.
+    type Held = (
+        std::sync::mpsc::Sender<()>,
+        tokio::task::JoinHandle<Result<u32, LedgerError>>,
+    );
+
+    /// Holds every pooled reader at once. Each hold must take its reader within 1 s, so a pool short of a reader fails
+    /// at `short` instead of hanging, and a failing test drops the releases, which ends the holds.
+    async fn hold_every_reader(db: &Arc<LedgerDb>, short: &str) -> Vec<Held> {
+        let (taken, mut takes) = tokio::sync::mpsc::channel::<()>(READERS);
+        let mut held = Vec::new();
+        for _ in 0..READERS {
+            let (release, released) = std::sync::mpsc::channel::<()>();
+            let taken = taken.clone();
+            let task = tokio::spawn({
+                let db = db.clone();
+                async move {
+                    db.read(move |conn| {
+                        taken.blocking_send(()).unwrap();
+                        released.recv().unwrap();
+                        read_version(conn)
+                    })
+                    .await
+                }
+            });
+            held.push((release, task));
+        }
+        for _ in 0..READERS {
+            tokio::time::timeout(Duration::from_secs(1), takes.recv())
+                .await
+                .expect(short)
+                .unwrap();
+        }
+        held
+    }
 
     fn request(id: &str) -> RequestRecord {
         RequestRecord {
@@ -1241,6 +1424,114 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reads_run_beside_each_other_and_a_writer_side_read_runs_while_every_reader_is_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap());
+        let (taken, mut takes) = tokio::sync::mpsc::channel::<()>(READERS);
+        let mut releases = Vec::new();
+        let mut held = Vec::new();
+        for _ in 0..READERS {
+            let (release, released) = std::sync::mpsc::channel::<()>();
+            releases.push(release);
+            let taken = taken.clone();
+            held.push(tokio::spawn({
+                let db = db.clone();
+                async move {
+                    db.read(move |_| {
+                        taken.blocking_send(()).unwrap();
+                        released.recv().unwrap();
+                        Ok(())
+                    })
+                    .await
+                }
+            }));
+            takes.recv().await.unwrap();
+            if releases.len() < READERS {
+                // A read completes beside the held ones while a connection is still free.
+                let beside =
+                    tokio::time::timeout(Duration::from_secs(1), db.read(read_version)).await;
+                assert_eq!(
+                    beside
+                        .expect("a read never waited behind an unrelated held read")
+                        .unwrap(),
+                    2
+                );
+            }
+        }
+        // Every pooled reader is held: the writer's own read still answers, and a fifth read waits.
+        let writer = db.writer_read(WriterRead::ParkedCount, crate::query::parked_count);
+        let writer = tokio::time::timeout(Duration::from_secs(1), writer).await;
+        assert_eq!(
+            writer
+                .expect("the writer's read never waits for a reader")
+                .unwrap(),
+            0
+        );
+        let mut fifth = Box::pin(db.read(read_version));
+        let waiting = tokio::time::timeout(Duration::from_millis(200), &mut fifth).await;
+        assert!(waiting.is_err(), "the fifth read waits for a connection");
+        // Dropped while it waits: the pool owes it nothing.
+        drop(fifth);
+        // Two waiters registered on an empty pool, then two returns: each return wakes its own waiter.
+        let mut first = std::pin::pin!(db.read(read_version));
+        let mut second = std::pin::pin!(db.read(read_version));
+        // One poll each drives both futures to their waits, so both wait before the first return.
+        std::future::poll_fn(|cx| {
+            let _ = Future::poll(first.as_mut(), cx);
+            let _ = Future::poll(second.as_mut(), cx);
+            Poll::Ready(())
+        })
+        .await;
+        let mut releases = releases.into_iter();
+        let mut held = held.into_iter();
+        for _ in 0..2 {
+            releases.next().unwrap().send(()).unwrap();
+            held.next().unwrap().await.unwrap().unwrap();
+        }
+        let both = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::join!(first, second)
+        })
+        .await;
+        let (a, b) = both.expect("two returns woke two waiters");
+        assert_eq!((a.unwrap(), b.unwrap()), (2, 2));
+        for release in releases {
+            release.send(()).unwrap();
+        }
+        for task in held {
+            task.await.unwrap().unwrap();
+        }
+        let short = "every connection came back to the pool";
+        for (release, task) in hold_every_reader(&db, short).await {
+            release.send(()).unwrap();
+            assert_eq!(task.await.unwrap().unwrap(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_blocking_read_waits_while_every_reader_is_held_and_wakes_on_one_return() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap());
+        let mut held = hold_every_reader(&db, "every pooled reader was free to hold").await;
+        let blocked = std::thread::spawn({
+            let db = db.clone();
+            move || db.read_blocking(read_version)
+        });
+        fake_upstream::stays_for(Duration::from_millis(200), || !blocked.is_finished()).await;
+        let (release, task) = held.pop().unwrap();
+        release.send(()).unwrap();
+        assert_eq!(task.await.unwrap().unwrap(), 2);
+        fake_upstream::wait_for(Duration::from_secs(1), || {
+            blocked.is_finished().then_some(())
+        })
+        .await;
+        assert_eq!(blocked.join().unwrap().unwrap(), 2);
+        for (release, task) in held {
+            release.send(()).unwrap();
+            task.await.unwrap().unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn a_panicked_read_answers_read_canceled_and_the_next_read_on_the_same_ledger_succeeds() {
         let db = Arc::new(LedgerDb::open_in_memory().unwrap());
         let panicked = db
@@ -1254,6 +1545,19 @@ mod tests {
             2,
             "the poisoned guard recovered rather than turning every later read into ReadCanceled too"
         );
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap());
+        let panicked = db
+            .read(|_conn| -> Result<(), LedgerError> {
+                panic!("a read closure that never means to answer");
+            })
+            .await;
+        assert!(matches!(panicked, Err(LedgerError::ReadCanceled)));
+        let short = "the panicked closure's connection came back to the pool";
+        for (release, task) in hold_every_reader(&db, short).await {
+            release.send(()).unwrap();
+            assert_eq!(task.await.unwrap().unwrap(), 2);
+        }
     }
 
     #[tokio::test]

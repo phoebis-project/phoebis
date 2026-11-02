@@ -33,7 +33,7 @@ pub use bodies::{
 };
 #[cfg(any(test, feature = "debug-hooks"))]
 pub use db::WriterReadHold;
-pub use db::{LedgerDb, WriterRead};
+pub use db::{LedgerDb, WriterRead, READERS};
 pub use events::{
     catalog_changed, event_of, plan_ended, plan_restored, poll_backoff, poll_failed,
     spawn_event_mirror, MirrorBaseline,
@@ -119,8 +119,8 @@ pub enum LedgerError {
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     /// The blocking worker running the read panicked, or was dropped before it answered. This falls on the one
-    /// call it happened to: `LedgerDb::read_blocking` recovers a poisoned guard, so the next read on the same
-    /// `LedgerDb` runs as if nothing happened.
+    /// call it happened to: `LedgerDb`'s reads return their connection whatever the closure did, so the next read on
+    /// the same ledger runs as if nothing happened.
     #[error("the ledger read was canceled before it ran")]
     ReadCanceled,
     /// A replay's bound passed before the writer took its turn, so nothing was replayed.

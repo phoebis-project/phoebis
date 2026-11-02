@@ -436,6 +436,11 @@ row, and the system page's `router.writer` reads `degraded` until they drain. A 
 refuses is tried once more at the writer's next wake and counted under `router.writer.failed_batches`. A second
 refusal drops it.
 
+The attention reader, the console's routes, the metrics scrape and the proxy listener's `/v1/usage` read the ledger
+through a pool of four read-only connections, each with its own 32 MiB page cache, so a slow read holds its own caller
+and no other, and the writer reads its own budget figures on its own connection between two batches, so it never waits
+for a console read.
+
 ## Retention
 
 | Data | Kept for |
@@ -461,7 +466,7 @@ budgeted member's hourly rows stay from its period's start on, so a retention sh
 exhausted member.
 
 The analytics, the dashboard, the pool cards and the burn chart read the hourly rollups in pages of a day, each page
-its own read, so a 400-day range holds one day of rows in memory and the reader connection is free between pages.
+its own read, so a 400-day range holds one day of rows in memory and a reader connection is free between pages.
 
 A prompt-length threshold that moves re-folds the hours whose attempts the ledger still holds at the next start, and the
 older hours keep their split. Where the request retention is 0 the re-fold reads every request, and a request received
