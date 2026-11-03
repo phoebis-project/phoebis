@@ -24,7 +24,10 @@ use crate::events::{spawn_event_mirror, MirrorBaseline};
 use crate::metrics::Metrics;
 use crate::plan::{funding_of, Funding, PlanTables};
 use crate::pricing::{PriceRevisions, Pricing, Speed};
-use crate::query::{member_spends, period_bounds, BudgetedMember};
+use crate::query::{
+    member_spends, period_bounds, BudgetedMember, BUDGET_PERIOD_ENDED, BUDGET_REACHED, LEDGER_GAP,
+    ROUTER_STARTED,
+};
 use crate::record::{
     AttemptRecord, EventRecord, ParkedRecord, ParkedRows, QuotaSampleRecord, RequestRecord,
 };
@@ -801,7 +804,7 @@ async fn writer(
             if dropped > reported {
                 let gap = Arc::new(vec![Record::Event(EventRecord {
                     at: clock(),
-                    kind: "ledger_gap".into(),
+                    kind: LEDGER_GAP.into(),
                     detail: Some(format!(r#"{{"dropped":{}}}"#, dropped - reported)),
                     ..Default::default()
                 })]);
@@ -1361,10 +1364,10 @@ fn announced_crossings(
     from: i64,
 ) -> Result<HashMap<SpendKey, i64>, LedgerError> {
     let mut stmt = conn.prepare(
-        "SELECT pool_id, account_id, detail FROM events WHERE kind = 'budget_reached' AND at >= ?1 \
+        "SELECT pool_id, account_id, detail FROM events WHERE kind = ?2 AND at >= ?1 \
          ORDER BY at, rowid",
     )?;
-    let rows = stmt.query_map([from], |row| {
+    let rows = stmt.query_map(rusqlite::params![from, BUDGET_REACHED], |row| {
         Ok((
             row.get::<_, Option<String>>(0)?,
             row.get::<_, Option<String>>(1)?,
@@ -1395,7 +1398,7 @@ fn budget_reached(
 ) -> EventRecord {
     EventRecord {
         at,
-        kind: "budget_reached".into(),
+        kind: BUDGET_REACHED.into(),
         account_id: Some(spend.account_id.clone()),
         detail: Some(
             json!({
@@ -1416,7 +1419,7 @@ fn budget_reached(
 fn budget_period_ended(previous: &MemberSpend, spend: &MemberSpend, at: i64) -> EventRecord {
     EventRecord {
         at,
-        kind: "budget_period_ended".into(),
+        kind: BUDGET_PERIOD_ENDED.into(),
         account_id: Some(spend.account_id.clone()),
         detail: Some(
             json!({
@@ -1814,7 +1817,7 @@ async fn land_acknowledging(
                     } => {
                         let event = EventRecord {
                             at: *at,
-                            kind: "router_started".into(),
+                            kind: ROUTER_STARTED.into(),
                             detail: Some(
                                 json!({
                                     "version": version,

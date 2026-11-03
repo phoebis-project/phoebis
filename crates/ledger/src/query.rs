@@ -890,7 +890,7 @@ pub fn recent_events_of_kind(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-const RECENT_GAPS: &str = "SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE kind = 'ledger_gap' AND at >= ?1 ORDER BY at DESC LIMIT ?2";
+const RECENT_GAPS: &str = "SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE kind = ?3 AND at >= ?1 ORDER BY at DESC LIMIT ?2";
 
 /// The newest `limit` `ledger_gap` events at or after `since`, newest first: what the system page lists beside the
 /// writer's gap counter.
@@ -900,51 +900,61 @@ pub fn recent_gaps(
     limit: usize,
 ) -> Result<Vec<EventRecord>, LedgerError> {
     let mut stmt = conn.prepare(RECENT_GAPS)?;
-    let rows = stmt.query_map(params![since, limit as i64], row_to_event)?;
+    let rows = stmt.query_map(params![since, limit as i64, LEDGER_GAP], row_to_event)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// Every event kind the ledger writes, alphabetical: the `kinds` key is validated against it and the decision
-/// kinds, and a 400 names a kind outside both.
-pub const EVENT_KINDS: &[&str] = &[
-    "account_state_changed",
-    "budget_period_ended",
-    "budget_reached",
-    "catalog_changed",
-    "cooldown_cleared",
-    "cooldown_set",
-    "fast_credits_changed",
-    "ledger_gap",
-    "mark_cleared",
-    "model_permitted",
-    "model_rejected",
-    "overage_ended",
-    "overage_started",
-    "pin_created",
-    "pin_expired",
-    "pin_migrated",
-    "pin_released",
-    "plan_ended",
-    "plan_restored",
-    "poll_backoff_ended",
-    "poll_backoff_started",
-    "poll_failed",
-    "refresh_failed",
-    "refresh_succeeded",
-    "refresh_uncertain",
-    "registry_changed",
-    "reservation_expired",
-    "router_started",
-    "shedding_round",
-    "slow_down_ended",
-    "slow_down_started",
-    "stream_interrupted",
-    "warm_prefix_expired",
-    "wind_down_started",
-    "window_cleared",
-    "window_reset",
-    "window_spent",
-];
+// One invocation declares each kind's constant and the table, so a writer, a fold or a statement that names a kind
+// names one the admin's `kinds` filter accepts.
+macro_rules! event_kinds {
+    ($($name:ident => $word:literal),* $(,)?) => {
+        $(pub const $name: &str = $word;)*
+
+        /// Every event kind the ledger writes, alphabetical: the `kinds` key is validated against it and the decision
+        /// kinds, and a 400 names a kind outside both.
+        pub const EVENT_KINDS: &[&str] = &[$($name),*];
+    };
+}
+
+event_kinds! {
+    ACCOUNT_STATE_CHANGED => "account_state_changed",
+    BUDGET_PERIOD_ENDED => "budget_period_ended",
+    BUDGET_REACHED => "budget_reached",
+    CATALOG_CHANGED => "catalog_changed",
+    COOLDOWN_CLEARED => "cooldown_cleared",
+    COOLDOWN_SET => "cooldown_set",
+    FAST_CREDITS_CHANGED => "fast_credits_changed",
+    LEDGER_GAP => "ledger_gap",
+    MARK_CLEARED => "mark_cleared",
+    MODEL_PERMITTED => "model_permitted",
+    MODEL_REJECTED => "model_rejected",
+    OVERAGE_ENDED => "overage_ended",
+    OVERAGE_STARTED => "overage_started",
+    PIN_CREATED => "pin_created",
+    PIN_EXPIRED => "pin_expired",
+    PIN_MIGRATED => "pin_migrated",
+    PIN_RELEASED => "pin_released",
+    PLAN_ENDED => "plan_ended",
+    PLAN_RESTORED => "plan_restored",
+    POLL_BACKOFF_ENDED => "poll_backoff_ended",
+    POLL_BACKOFF_STARTED => "poll_backoff_started",
+    POLL_FAILED => "poll_failed",
+    REFRESH_FAILED => "refresh_failed",
+    REFRESH_SUCCEEDED => "refresh_succeeded",
+    REFRESH_UNCERTAIN => "refresh_uncertain",
+    REGISTRY_CHANGED => "registry_changed",
+    RESERVATION_EXPIRED => "reservation_expired",
+    ROUTER_STARTED => "router_started",
+    SHEDDING_ROUND => "shedding_round",
+    SLOW_DOWN_ENDED => "slow_down_ended",
+    SLOW_DOWN_STARTED => "slow_down_started",
+    STREAM_INTERRUPTED => "stream_interrupted",
+    WARM_PREFIX_EXPIRED => "warm_prefix_expired",
+    WIND_DOWN_STARTED => "wind_down_started",
+    WINDOW_CLEARED => "window_cleared",
+    WINDOW_RESET => "window_reset",
+    WINDOW_SPENT => "window_spent",
+}
 
 pub const DECISION_KINDS: &[&str] = &["exhausted", "held", "moved", "placed", "refused", "renewed"];
 
@@ -1571,9 +1581,9 @@ pub fn pin_migrations_by_account_and_reason(
     to: i64,
 ) -> Result<BTreeMap<String, BTreeMap<String, u64>>, LedgerError> {
     let mut stmt = conn.prepare(
-        "SELECT account_id, detail FROM events WHERE kind = 'pin_migrated' AND at >= ?1 AND at < ?2",
+        "SELECT account_id, detail FROM events WHERE kind = ?3 AND at >= ?1 AND at < ?2",
     )?;
-    let rows = stmt.query_map(params![from, to], |r| {
+    let rows = stmt.query_map(params![from, to, PIN_MIGRATED], |r| {
         Ok((
             r.get::<_, Option<String>>(0)?,
             r.get::<_, Option<String>>(1)?,

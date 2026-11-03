@@ -17,6 +17,7 @@ use phoebis_transport::response::ResponseHead as WireHead;
 use serde_json::json;
 
 use crate::bodies::MAX_CAPTURED_BODY;
+use crate::query::{LEDGER_GAP, MODEL_PERMITTED, MODEL_REJECTED, STREAM_INTERRUPTED};
 use crate::quota::samples_from_unified;
 use crate::record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
@@ -253,7 +254,7 @@ impl Assembler {
                     entry.rejected_by.push(attempt.account_id.clone());
                     records.push(Record::Event(EventRecord {
                         at: head.observed_at,
-                        kind: "model_rejected".into(),
+                        kind: MODEL_REJECTED.into(),
                         account_id: Some(attempt.account_id.clone()),
                         key_id,
                         session_id,
@@ -367,7 +368,7 @@ fn capture_size(entry: &InFlight) -> usize {
 pub(crate) fn gap(request_id: &str, reason: &str, at: i64) -> Record {
     Record::Event(EventRecord {
         at,
-        kind: "ledger_gap".into(),
+        kind: LEDGER_GAP.into(),
         detail: Some(json!({ "request_id": request_id, "reason": reason }).to_string()),
         request_id: Some(request_id.into()),
         ..Default::default()
@@ -547,7 +548,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         if last.outcome == "succeeded" && !rejected_by.is_empty() {
             records.push(Record::Event(EventRecord {
                 at: complete.finished_at,
-                kind: "model_permitted".into(),
+                kind: MODEL_PERMITTED.into(),
                 account_id: Some(last.account_id.clone()),
                 key_id: observed.key_id.clone(),
                 session_id: observed.session_id.clone(),
@@ -573,7 +574,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         let serving = serving.map(|i| &attempts[i]);
         records.push(Record::Event(EventRecord {
             at: complete.finished_at,
-            kind: "stream_interrupted".into(),
+            kind: STREAM_INTERRUPTED.into(),
             account_id: serving
                 .map(|a| a.account_id.clone())
                 .or_else(|| complete.account_id.clone()),

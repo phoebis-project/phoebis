@@ -15,6 +15,14 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::assemble::Record;
 use crate::db::newest_row_at;
+use crate::query::{
+    ACCOUNT_STATE_CHANGED, CATALOG_CHANGED, COOLDOWN_CLEARED, COOLDOWN_SET, FAST_CREDITS_CHANGED,
+    MARK_CLEARED, OVERAGE_ENDED, OVERAGE_STARTED, PIN_CREATED, PIN_EXPIRED, PIN_MIGRATED,
+    PIN_RELEASED, PLAN_ENDED, PLAN_RESTORED, POLL_BACKOFF_ENDED, POLL_BACKOFF_STARTED, POLL_FAILED,
+    REFRESH_FAILED, REFRESH_SUCCEEDED, REFRESH_UNCERTAIN, REGISTRY_CHANGED, RESERVATION_EXPIRED,
+    SHEDDING_ROUND, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED, WARM_PREFIX_EXPIRED, WINDOW_CLEARED,
+    WINDOW_RESET, WINDOW_SPENT, WIND_DOWN_STARTED,
+};
 use crate::record::{CacheMapWrite, DecisionRow, EventRecord};
 use crate::task::Ledger;
 use crate::LedgerDb;
@@ -35,7 +43,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "cooldown_cleared".into(),
+            kind: COOLDOWN_CLEARED.into(),
             account_id: Some(account_id.clone()),
             model: model_of(scope),
             detail: Some(json!({ "cause": cause, "scope": scope }).to_string()),
@@ -51,7 +59,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "cooldown_set".into(),
+            kind: COOLDOWN_SET.into(),
             account_id: Some(account_id.clone()),
             model: model_of(scope),
             detail: Some(
@@ -67,14 +75,14 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "overage_ended".into(),
+            kind: OVERAGE_ENDED.into(),
             account_id: Some(account_id.clone()),
             detail: Some(json!({ "since": since }).to_string()),
             ..Default::default()
         },
         RouterEvent::OverageStarted { account_id, at } => EventRecord {
             at: *at,
-            kind: "overage_started".into(),
+            kind: OVERAGE_STARTED.into(),
             account_id: Some(account_id.clone()),
             ..Default::default()
         },
@@ -88,7 +96,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "pin_created".into(),
+            kind: PIN_CREATED.into(),
             account_id: Some(account_id.clone()),
             key_id: Some(key_id.clone()),
             session_id: Some(session_id.clone()),
@@ -107,7 +115,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "pin_expired".into(),
+            kind: PIN_EXPIRED.into(),
             account_id: Some(account_id.clone()),
             key_id: Some(key_id.clone()),
             session_id: Some(session_id.clone()),
@@ -132,7 +140,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "pin_migrated".into(),
+            kind: PIN_MIGRATED.into(),
             account_id: Some(to_account.clone()),
             key_id: Some(key_id.clone()),
             session_id: Some(session_id.clone()),
@@ -169,7 +177,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "mark_cleared".into(),
+            kind: MARK_CLEARED.into(),
             account_id: Some(account_id.clone()),
             key_id: Some(key_id.clone()),
             session_id: Some(session_id.clone()),
@@ -199,7 +207,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "pin_released".into(),
+            kind: PIN_RELEASED.into(),
             account_id: Some(account_id.clone()),
             key_id: Some(key_id.clone()),
             session_id: Some(session_id.clone()),
@@ -218,7 +226,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "reservation_expired".into(),
+            kind: RESERVATION_EXPIRED.into(),
             account_id: Some(account_id.clone()),
             detail: Some(
                 json!({ "attempt": attempt, "cause": cause, "shares": shares, "age_ms": age_ms }).to_string(),
@@ -238,7 +246,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "shedding_round".into(),
+            kind: SHEDDING_ROUND.into(),
             account_id: Some(account_id.clone()),
             key_id: Some(key_id.clone()),
             session_id: Some(session_id.clone()),
@@ -266,7 +274,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "slow_down_started".into(),
+            kind: SLOW_DOWN_STARTED.into(),
             account_id: Some(account_id.clone()),
             detail: Some(
                 json!({
@@ -291,7 +299,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "slow_down_ended".into(),
+            kind: SLOW_DOWN_ENDED.into(),
             account_id: Some(account_id.clone()),
             detail: Some(
                 json!({
@@ -322,7 +330,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             };
             EventRecord {
                 at: *at,
-                kind: "fast_credits_changed".into(),
+                kind: FAST_CREDITS_CHANGED.into(),
                 account_id: Some(account_id.clone()),
                 detail: Some(
                     json!({
@@ -347,7 +355,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "window_spent".into(),
+            kind: WINDOW_SPENT.into(),
             account_id: Some(account_id.clone()),
             detail: Some(
                 json!({
@@ -373,7 +381,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "window_cleared".into(),
+            kind: WINDOW_CLEARED.into(),
             account_id: Some(account_id.clone()),
             detail: Some(
                 json!({
@@ -402,7 +410,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             tier,
         } => EventRecord {
             at: *at,
-            kind: "window_reset".into(),
+            kind: WINDOW_RESET.into(),
             account_id: Some(account_id.clone()),
             detail: Some(
                 json!({
@@ -430,7 +438,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "warm_prefix_expired".into(),
+            kind: WARM_PREFIX_EXPIRED.into(),
             account_id: Some(account_id.clone()),
             key_id: Some(key_id.clone()),
             // The root is the conversation's identity, which is what the session column holds.
@@ -458,7 +466,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at,
         } => EventRecord {
             at: *at,
-            kind: "wind_down_started".into(),
+            kind: WIND_DOWN_STARTED.into(),
             account_id: Some(account_id.clone()),
             detail: Some(
                 json!({
@@ -491,7 +499,7 @@ pub fn poll_backoff(edge: &BackoffEdge) -> Record {
             last_clean_at,
         } => (
             *at,
-            "poll_backoff_started",
+            POLL_BACKOFF_STARTED,
             account_id,
             json!({
                 "reason": reason,
@@ -510,7 +518,7 @@ pub fn poll_backoff(edge: &BackoffEdge) -> Record {
             cause,
         } => (
             *at,
-            "poll_backoff_ended",
+            POLL_BACKOFF_ENDED,
             account_id,
             json!({
                 "duration_ms": at - since,
@@ -533,7 +541,7 @@ pub fn poll_backoff(edge: &BackoffEdge) -> Record {
 pub fn poll_failed(account_id: &str, at: i64, fault: &PollFault) -> Record {
     Record::Event(EventRecord {
         at,
-        kind: "poll_failed".into(),
+        kind: POLL_FAILED.into(),
         account_id: Some(account_id.to_string()),
         detail: Some(
             json!({
@@ -552,7 +560,7 @@ pub fn poll_failed(account_id: &str, at: i64, fault: &PollFault) -> Record {
 /// subscription_status}: `source` is `profile` for a profile read and `usage_403` for one a usage 403 made due, and the
 /// other three are the profile document's words.
 pub fn plan_ended(account_id: &str, at: i64, source: &str, profile: &serde_json::Value) -> Record {
-    plan_event("plan_ended", account_id, at, source, profile)
+    plan_event(PLAN_ENDED, account_id, at, source, profile)
 }
 
 /// `plan_restored` on the account whose plan-ended flag a profile with a plan or a pairing confirm cleared, detail
@@ -563,7 +571,7 @@ pub fn plan_restored(
     source: &str,
     profile: &serde_json::Value,
 ) -> Record {
-    plan_event("plan_restored", account_id, at, source, profile)
+    plan_event(PLAN_RESTORED, account_id, at, source, profile)
 }
 
 fn plan_event(
@@ -596,7 +604,7 @@ fn plan_event(
 pub fn catalog_changed(change: &CatalogChange) -> Record {
     Record::Event(EventRecord {
         at: change.at,
-        kind: "catalog_changed".into(),
+        kind: CATALOG_CHANGED.into(),
         account_id: Some(change.account_id.clone()),
         detail: Some(
             json!({
@@ -636,7 +644,7 @@ fn record_transition(
 ) {
     ledger.record(Record::Event(EventRecord {
         at,
-        kind: "account_state_changed".into(),
+        kind: ACCOUNT_STATE_CHANGED.into(),
         account_id: Some(account_id.to_string()),
         detail: Some(
             json!({ "from": from.as_str(), "to": to.as_str(), "cause": cause.as_str(), "detail": detail })
@@ -652,7 +660,7 @@ fn record_deletion(ledger: &Ledger, account_id: &str, from: AccountState, at: i6
     let deleted = StateCause::Deleted.as_str();
     ledger.record(Record::Event(EventRecord {
         at,
-        kind: "account_state_changed".into(),
+        kind: ACCOUNT_STATE_CHANGED.into(),
         account_id: Some(account_id.to_string()),
         detail: Some(
             json!({ "from": from.as_str(), "to": deleted, "cause": deleted, "detail": null })
@@ -868,7 +876,7 @@ pub fn spawn_event_mirror(
                             last_change = change.id;
                             ledger.record(Record::Event(EventRecord {
                                 at: change.at,
-                                kind: "registry_changed".into(),
+                                kind: REGISTRY_CHANGED.into(),
                                 actor: Some(change.actor.clone()),
                                 // Every pool change names the pool as its target.
                                 pool_id: change.kind.starts_with("pool_").then(|| change.target.clone()),
@@ -888,9 +896,9 @@ pub fn spawn_event_mirror(
                         for attempt in attempts {
                             last_resolved = (attempt.resolved_at, attempt.id);
                             let kind = match attempt.settled() {
-                                Settled::Committed | Settled::Paired => "refresh_succeeded",
-                                Settled::Uncertain => "refresh_uncertain",
-                                Settled::Failed | Settled::Superseded => "refresh_failed",
+                                Settled::Committed | Settled::Paired => REFRESH_SUCCEEDED,
+                                Settled::Uncertain => REFRESH_UNCERTAIN,
+                                Settled::Failed | Settled::Superseded => REFRESH_FAILED,
                             };
                             let detail = refresh_detail(&store, &attempt, &mut credential_read_failing).to_string();
                             ledger.record(Record::Event(EventRecord {

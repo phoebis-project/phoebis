@@ -7,6 +7,7 @@ use phoebis_routing::{SEVEN_DAY, SEVEN_DAY_FABLE};
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection};
 
+use crate::query::WINDOW_RESET;
 // The relay hands the router the head's overage-included week as `seven_day_fable`, so the events name the Fable week
 // where the samples may name this key, and the read folds the two as the account view does (`account_window_id` in the
 // admin routes).
@@ -76,14 +77,18 @@ pub fn unused_allowance(
             .and_modify(|end| *end = (*end).min(*end_at))
             .or_insert(*end_at);
     }
-    let mut binds = vec![Value::Integer(from), Value::Integer(to)];
+    let mut binds = vec![
+        Value::Integer(from),
+        Value::Integer(to),
+        Value::Text(WINDOW_RESET.into()),
+    ];
     let filter = if accounts.is_empty() {
         String::new()
     } else {
         binds.extend(accounts.iter().cloned().map(Value::Text));
         format!(
             " AND account_id IN ({})",
-            (3..3 + accounts.len())
+            (4..4 + accounts.len())
                 .map(|n| format!("?{n}"))
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -91,7 +96,7 @@ pub fn unused_allowance(
     };
     let mut stmt = conn.prepare(&format!(
         "SELECT account_id, at, detail FROM events \
-         WHERE kind = 'window_reset' AND at >= ?1 AND at <= ?2{filter} \
+         WHERE kind = ?3 AND at >= ?1 AND at <= ?2{filter} \
          ORDER BY account_id, at DESC"
     ))?;
     let events = stmt.query_map(params_from_iter(binds), |r| {

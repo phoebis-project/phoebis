@@ -18,6 +18,10 @@ use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
 use crate::plan::{funding_of, Funding, PlanTables};
 use crate::pricing::{Band, PriceRevisions, Speed};
+use crate::query::{
+    COOLDOWN_CLEARED, COOLDOWN_SET, OVERAGE_ENDED, PIN_CREATED, PIN_MIGRATED, ROUTER_STARTED,
+    SHEDDING_ROUND, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED, WINDOW_CLEARED, WINDOW_SPENT,
+};
 use crate::reconcile::{newest_rows, ReconciliationRow};
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
 use crate::LedgerError;
@@ -1056,14 +1060,14 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
         ..Default::default()
     };
     match (event.kind.as_str(), event.account_id.as_deref()) {
-        ("pin_created", Some(account)) => fold_account(
+        (PIN_CREATED, Some(account)) => fold_account(
             tx,
             &AccountRollupRow {
                 pins_created: 1,
                 ..row(account)
             },
         ),
-        ("pin_migrated", Some(to)) => {
+        (PIN_MIGRATED, Some(to)) => {
             let reason = detail["reason"].as_str().unwrap_or("unknown");
             let fit = detail["fit"].as_str().unwrap_or("unknown");
             fold_account(
@@ -1085,7 +1089,7 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
                 None => Ok(()),
             }
         }
-        ("window_spent", Some(account)) => {
+        (WINDOW_SPENT, Some(account)) => {
             let window = detail["window"].as_str().unwrap_or("unknown");
             let round = newest_round(tx, account, window, event.at)?;
             // A wall at or after its reset came early by nothing, which the hour's longest already holds.
@@ -1100,7 +1104,7 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
                 None => Ok(()),
             }
         }
-        ("cooldown_set", Some(account)) => {
+        (COOLDOWN_SET, Some(account)) => {
             let scope = detail["scope"].as_str().unwrap_or("account");
             let accounted = read_span(tx, account, scope)?;
             let Some(until) = detail["until"].as_i64() else {
@@ -1132,7 +1136,7 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             }
             write_span(tx, account, scope, accounted.unwrap_or(booked).max(booked))
         }
-        ("cooldown_cleared", Some(account)) => {
+        (COOLDOWN_CLEARED, Some(account)) => {
             let scope = detail["scope"].as_str().unwrap_or("account");
             let Some(until) = take_span(tx, account, scope)? else {
                 return Ok(());
@@ -1150,7 +1154,7 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             }
             Ok(())
         }
-        ("overage_ended", Some(account)) => {
+        (OVERAGE_ENDED, Some(account)) => {
             let seconds = detail["since"]
                 .as_i64()
                 .map(|since| (event.at - since).max(0) / 1_000)
@@ -1213,10 +1217,10 @@ fn newest_round(
     let length = window_length_ms(window);
     Ok(tx
         .query_row(
-            "SELECT detail FROM events WHERE kind = 'shedding_round' AND account_id = ?1 \
+            "SELECT detail FROM events WHERE kind = ?5 AND account_id = ?1 \
              AND at >= ?2 AND at <= ?3 AND json_extract(detail, '$.window') = ?4 \
              ORDER BY at DESC, rowid DESC LIMIT 1",
-            params![account, at - length, at, window],
+            params![account, at - length, at, window, SHEDDING_ROUND],
             |r| r.get::<_, Option<String>>(0),
         )
         .optional()?
@@ -1271,28 +1275,40 @@ pub fn fold_routing_conditions(
     let events: Vec<Row> = tx
         .prepare(
             "SELECT at, kind, account_id, pool_id, detail FROM events \
-             WHERE kind IN ('shedding_round', 'pin_migrated', 'window_spent', 'window_cleared', \
-             'router_started', 'slow_down_ended', 'slow_down_started') AND at >= ?1 AND at <= ?2 \
+             WHERE kind IN (?3, ?4, ?5, ?6, ?7, ?8, ?9) AND at >= ?1 AND at <= ?2 \
              ORDER BY at, rowid",
         )?
-        .query_map(params![now - CONDITION_SPAN_MS, now], |r| {
-            Ok(Row {
-                at: r.get(0)?,
-                kind: r.get(1)?,
-                account_id: r.get(2)?,
-                pool_id: r.get(3)?,
-                detail: r
-                    .get::<_, Option<String>>(4)?
-                    .and_then(|d| serde_json::from_str(&d).ok())
-                    .unwrap_or(serde_json::Value::Null),
-            })
-        })?
+        .query_map(
+            params![
+                now - CONDITION_SPAN_MS,
+                now,
+                SHEDDING_ROUND,
+                PIN_MIGRATED,
+                WINDOW_SPENT,
+                WINDOW_CLEARED,
+                ROUTER_STARTED,
+                SLOW_DOWN_ENDED,
+                SLOW_DOWN_STARTED
+            ],
+            |r| {
+                Ok(Row {
+                    at: r.get(0)?,
+                    kind: r.get(1)?,
+                    account_id: r.get(2)?,
+                    pool_id: r.get(3)?,
+                    detail: r
+                        .get::<_, Option<String>>(4)?
+                        .and_then(|d| serde_json::from_str(&d).ok())
+                        .unwrap_or(serde_json::Value::Null),
+                })
+            },
+        )?
         .collect::<Result<_, _>>()?;
     let mut held: BTreeMap<(&'static str, &'static str, String), Held> = BTreeMap::new();
     let setting = |names: &[&str]| serde_json::json!(names);
 
     let mut rounds: BTreeMap<&str, (i64, u64, BTreeSet<&str>)> = BTreeMap::new();
-    for event in events.iter().filter(|e| e.kind == "shedding_round") {
+    for event in events.iter().filter(|e| e.kind == SHEDDING_ROUND) {
         let no_runway =
             event.detail["outcome"] == "nothing_to_mark" && event.detail["reason"] == "no_runway";
         let Some(pool) = event.pool_id.as_deref().filter(|_| no_runway) else {
@@ -1321,7 +1337,7 @@ pub fn fold_routing_conditions(
     let cleared: Vec<(usize, &str, &str)> = events
         .iter()
         .enumerate()
-        .filter(|(_, e)| e.kind == "window_cleared")
+        .filter(|(_, e)| e.kind == WINDOW_CLEARED)
         .filter_map(|(index, e)| {
             Some((
                 index,
@@ -1335,7 +1351,7 @@ pub fn fold_routing_conditions(
     let spent: Vec<(&str, i64, &str, &serde_json::Value, bool)> = events
         .iter()
         .enumerate()
-        .filter(|(_, e)| e.kind == "window_spent")
+        .filter(|(_, e)| e.kind == WINDOW_SPENT)
         .filter_map(|(index, e)| {
             let account = e.account_id.as_deref()?;
             let window = e.detail["window"].as_str().unwrap_or("unknown");
@@ -1349,7 +1365,7 @@ pub fn fold_routing_conditions(
         .collect();
     type Moves<'a> = (i64, u64, BTreeMap<&'a str, u64>, BTreeSet<&'a str>);
     let mut moves: BTreeMap<&str, Moves> = BTreeMap::new();
-    for event in events.iter().filter(|e| e.kind == "pin_migrated") {
+    for event in events.iter().filter(|e| e.kind == PIN_MIGRATED) {
         let Some(to) = event.account_id.as_deref() else {
             continue;
         };
@@ -1462,7 +1478,7 @@ pub fn fold_routing_conditions(
         }
     };
     for event in &events {
-        if event.kind == "router_started" {
+        if event.kind == ROUTER_STARTED {
             // The previous run's newest row is the last instant its slow-down can have held, so the downtime before
             // the restart counts as no slowed time. A run that stopped right after the start row has that row as its
             // newest, and the span it closes is of no length.
@@ -1479,7 +1495,7 @@ pub fn fold_routing_conditions(
         };
         let key = (account.to_string(), pool.to_string());
         match event.kind.as_str() {
-            "slow_down_started" => {
+            SLOW_DOWN_STARTED => {
                 let factor = event.detail["factor"].as_f64();
                 // The router emits an end before every next start, so a second start before any end or restart
                 // follows a lost row alone. It lowers the standing span's factor and opens no second span, which would
@@ -1489,7 +1505,7 @@ pub fn fold_routing_conditions(
                     .and_modify(|span| span.1 = lowest(span.1, factor))
                     .or_insert((event.at, factor, event.detail["threshold_ms"].as_i64()));
             }
-            "slow_down_ended" => {
+            SLOW_DOWN_ENDED => {
                 // An end with no span standing closes nothing this fold counts: the state at the cutoff opens a span
                 // only from a start newer than any end or restart, so its start was lost or a restart closed it.
                 let Some((start, factor, threshold_ms)) = standing.remove(&key) else {
@@ -1632,9 +1648,9 @@ type OpenSpans = BTreeMap<(String, String), (i64, Option<f64>, Option<i64>)>;
 fn slow_down_open_at(tx: &Transaction<'_>, cutoff: i64) -> Result<OpenSpans, LedgerError> {
     let restart: Option<(i64, i64)> = tx
         .query_row(
-            "SELECT at, rowid FROM events WHERE kind = 'router_started' AND at < ?1 \
+            "SELECT at, rowid FROM events WHERE kind = ?2 AND at < ?1 \
              ORDER BY at DESC, rowid DESC LIMIT 1",
-            params![cutoff],
+            params![cutoff, ROUTER_STARTED],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
@@ -1642,12 +1658,12 @@ fn slow_down_open_at(tx: &Transaction<'_>, cutoff: i64) -> Result<OpenSpans, Led
         "SELECT at, id, account_id, pool_id, detail FROM ( \
            SELECT at, rowid AS id, kind, account_id, pool_id, detail, ROW_NUMBER() OVER ( \
              PARTITION BY account_id, pool_id ORDER BY at DESC, rowid DESC) AS newest \
-           FROM events WHERE kind IN ('slow_down_ended', 'slow_down_started') AND at < ?1 \
+           FROM events WHERE kind IN (?2, ?3) AND at < ?1 \
              AND account_id IS NOT NULL AND pool_id IS NOT NULL) \
-         WHERE newest = 1 AND kind = 'slow_down_started'",
+         WHERE newest = 1 AND kind = ?3",
     )?;
     let starts = stmt
-        .query_map(params![cutoff], |r| {
+        .query_map(params![cutoff, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED], |r| {
             Ok((
                 (r.get::<_, i64>(0)?, r.get::<_, i64>(1)?),
                 r.get::<_, String>(2)?,
