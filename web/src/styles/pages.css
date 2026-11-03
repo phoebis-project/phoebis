@@ -290,7 +290,7 @@
   flex-direction: column;
   gap: 10px;
   color: inherit;
-  transition: border-color 100ms;
+  transition: border-color var(--motion-fast);
 }
 
 .account-mini:hover {
@@ -365,7 +365,7 @@
   grid-template-columns: 10px 1fr auto;
   gap: 10px;
   align-items: center;
-  transition: opacity 120ms;
+  transition: opacity var(--motion-base);
 }
 
 .remaining__list li.is-dim {
@@ -2232,7 +2232,7 @@
 .routing-log__chevron svg {
   display: block;
   margin-top: 3px;
-  transition: transform 120ms ease;
+  transition: transform var(--motion-base) ease;
 }
 
 .routing-log__row.is-open .routing-log__chevron svg {
