@@ -760,17 +760,12 @@ pub(crate) fn relay_body(relayed: Relayed, tracker: &TaskTracker) -> Body {
                         if let Some(publish) = publish.as_mut() {
                             publish.prefix(&piece, &mut waiting).await;
                         }
-                        match send(&tx, &cancel, Ok(piece)).await {
-                            Delivery::Delivered => {}
-                            Delivery::Canceled => break 'body BodyEnd::Canceled,
-                            Delivery::Gone => break 'body BodyEnd::ClientGone,
+                        if let Some(end) = send(&tx, &cancel, Ok(piece)).await {
+                            break 'body end;
                         }
                     }
                     Err(error) => {
-                        let cut = Cut::of(&error);
-                        let text = error.to_string();
-                        let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Failed { cut, text };
+                        break 'body decode_failure(&tx, &cancel, error).await;
                     }
                 }
             }
@@ -809,10 +804,7 @@ pub(crate) fn relay_body(relayed: Relayed, tracker: &TaskTracker) -> Body {
                 let piece = match decode_piece(decoder.as_mut(), chunk) {
                     Ok(piece) => piece,
                     Err(error) => {
-                        let cut = Cut::of(&error);
-                        let text = error.to_string();
-                        let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Failed { cut, text };
+                        break 'body decode_failure(&tx, &cancel, error).await;
                     }
                 };
                 // Published before the piece goes out, so a late rate-limit error is acted on no later than the
@@ -822,10 +814,8 @@ pub(crate) fn relay_body(relayed: Relayed, tracker: &TaskTracker) -> Body {
                 if piece.is_empty() {
                     continue;
                 }
-                match send(&tx, &cancel, Ok(piece)).await {
-                    Delivery::Delivered => {}
-                    Delivery::Canceled => break 'body BodyEnd::Canceled,
-                    Delivery::Gone => break 'body BodyEnd::ClientGone,
+                if let Some(end) = send(&tx, &cancel, Ok(piece)).await {
+                    break 'body end;
                 }
             }
             if let Some(mut decoder) = decoder {
@@ -835,17 +825,12 @@ pub(crate) fn relay_body(relayed: Relayed, tracker: &TaskTracker) -> Body {
                         // The tail is the rest of the decoded body, so the chunks a consumer joins are the
                         // whole of what the caller received.
                         publish_piece(&mut publish, &tail, &mut waiting).await;
-                        match send(&tx, &cancel, Ok(tail)).await {
-                            Delivery::Delivered => {}
-                            Delivery::Canceled => break 'body BodyEnd::Canceled,
-                            Delivery::Gone => break 'body BodyEnd::ClientGone,
+                        if let Some(end) = send(&tx, &cancel, Ok(tail)).await {
+                            break 'body end;
                         }
                     }
                     Err(error) => {
-                        let cut = Cut::of(&error);
-                        let text = error.to_string();
-                        let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Failed { cut, text };
+                        break 'body decode_failure(&tx, &cancel, error).await;
                     }
                     Ok(_) => {}
                 }
@@ -956,25 +941,32 @@ impl Cut {
     }
 }
 
-enum Delivery {
-    Canceled,
-    Delivered,
-    Gone,
-}
-
-/// One piece downstream, raced against cancellation. Without the race a caller that stops reading with the
-/// channel full would pin this task inside `send` and, with it, the upstream connection: cancellation could
-/// not be observed until the caller resumed or hung up. A receiver that is gone resolves the send on its own.
+/// One piece downstream, raced against cancellation, answering how the body ends when the piece did not go out.
+/// Without the race a caller that stops reading with the channel full would pin this task inside `send` and, with
+/// it, the upstream connection: cancellation could not be observed until the caller resumed or hung up. A receiver
+/// that is gone resolves the send on its own.
 async fn send(
     tx: &mpsc::Sender<Result<Bytes, TransportError>>,
     cancel: &CancellationToken,
     item: Result<Bytes, TransportError>,
-) -> Delivery {
+) -> Option<BodyEnd> {
     match until_canceled(tx.send(item), cancel).await {
-        None => Delivery::Canceled,
-        Some(Ok(())) => Delivery::Delivered,
-        Some(Err(_)) => Delivery::Gone,
+        None => Some(BodyEnd::Canceled),
+        Some(Ok(())) => None,
+        Some(Err(_)) => Some(BodyEnd::ClientGone),
     }
+}
+
+/// A decoder's failure goes to the caller as the body's last item, and the end names its cause and its words.
+async fn decode_failure(
+    tx: &mpsc::Sender<Result<Bytes, TransportError>>,
+    cancel: &CancellationToken,
+    error: TransportError,
+) -> BodyEnd {
+    let cut = Cut::of(&error);
+    let text = error.to_string();
+    let _ = send(tx, cancel, Err(error)).await;
+    BodyEnd::Failed { cut, text }
 }
 
 /// Hands a forwarded piece, the decoded text the caller is sent, to the bus.
