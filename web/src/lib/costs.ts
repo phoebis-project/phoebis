@@ -307,6 +307,16 @@ const offsetIn = (at: number, zone: string): number => {
   return wallIn(minute, zone) - minute;
 };
 
+/** The first whole minute past `lo` at which `reached` holds, which it does not at `lo` and does at `hi`. */
+const firstMinute = (lo: number, hi: number, reached: (at: number) => boolean): number => {
+  while (hi - lo > MINUTE) {
+    const mid = lo + Math.floor((hi - lo) / (2 * MINUTE)) * MINUTE;
+    if (reached(mid)) hi = mid;
+    else lo = mid;
+  }
+  return hi;
+};
+
 /** The first instant at which `zone`'s clock reads `wall` or later. A zone changes its clocks at most once within a day
  *  of `wall`, so the instant is `wall` read at the offset a day before or the one a day after, the earlier where both
  *  read it (an hour the clocks repeat), or the change itself where the clocks skip `wall`. */
@@ -316,13 +326,7 @@ const firstReading = (wall: number, zone: string): number => {
   const exact = [early, late].filter((t) => wallIn(t, zone) === wall);
   if (exact.length > 0) return Math.min(...exact);
   // Skipped: the clock reads before `wall` at `late` and past it at `early`, and changes on a whole minute between.
-  let [lo, hi] = [late, early];
-  while (hi - lo > MINUTE) {
-    const mid = lo + Math.floor((hi - lo) / (2 * MINUTE)) * MINUTE;
-    if (wallIn(mid, zone) >= wall) hi = mid;
-    else lo = mid;
-  }
-  return hi;
+  return firstMinute(late, early, (at) => wallIn(at, zone) >= wall);
 };
 
 const spanOn = (peak: SubscriptionCosts['peak'], date: string): BandSpan | null => {
@@ -360,16 +364,7 @@ const piecesIn = (span: BandSpan, zone: string): { date: string; run: BandRun }[
     const p = partsIn(t, zone);
     const offset = offsetIn(t, zone);
     let stop = Math.min(span.end, t + (1440 - p.minute) * MINUTE);
-    if (offsetIn(stop - MINUTE, zone) !== offset) {
-      let lo = t;
-      let hi = stop - MINUTE;
-      while (hi - lo > MINUTE) {
-        const mid = lo + Math.floor((hi - lo) / (2 * MINUTE)) * MINUTE;
-        if (offsetIn(mid, zone) === offset) lo = mid;
-        else hi = mid;
-      }
-      stop = hi;
-    }
+    if (offsetIn(stop - MINUTE, zone) !== offset) stop = firstMinute(t, stop - MINUTE, (at) => offsetIn(at, zone) !== offset);
     pieces.push({ date: p.date, run: { from: p.minute, to: p.minute + (stop - t) / MINUTE } });
     t = stop;
   }
