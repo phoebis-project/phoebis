@@ -2,7 +2,7 @@ import { isoOrNull } from '@/api/decode';
 import type { AttentionItem, AttentionKind } from '@/api/types';
 import { METER_CODEC } from './address';
 import { lookup } from './counts';
-import { fmtAbsolute, fmtRelative, instant as clockInstant } from './format';
+import { fmtAbsolute, fmtRelative, instant as clockInstant, percentText } from './format';
 import { WINDOW_WORD, entityHref, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
 import { speedWord } from './selection';
 
@@ -199,7 +199,7 @@ function conditionWords(item: AttentionItem, now: number): string {
   const settings = words(
     names(d.setting).map((name) => {
       const value = settingValues[name];
-      return typeof value === 'number' ? `${name} ${Math.round(value * 100)} %` : name;
+      return typeof value === 'number' ? `${name} ${percentText(value)}` : name;
     }),
   );
   const what = (() => {
@@ -211,7 +211,7 @@ function conditionWords(item: AttentionItem, now: number): string {
         return `${plural(count(d.moves), 'move', 'moves')} landed${spent ? ` and${spent} ${names(d.windows).length === 1 ? 'was' : 'were'} spent` : ''} within the hour`;
       }
       default: {
-        const error = typeof d.projection_error === 'number' && Number.isFinite(d.projection_error) ? `, the last round projected ${Math.round((1 - d.projection_error) * 100)} %` : '';
+        const error = typeof d.projection_error === 'number' && Number.isFinite(d.projection_error) ? `, the last round projected ${percentText(1 - d.projection_error)}` : '';
         // A slow-down round paces the window to its reset, so its wall reads how early it came instead.
         const early = typeof d.early_ms === 'number' && Number.isFinite(d.early_ms) ? (d.early_ms > 0 ? `, the wall came ${formatFact(d.early_ms, 'ms', now)} before the reset` : ', the wall came at the reset') : null;
         const on = windowsOf(d.windows);

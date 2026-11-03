@@ -1,6 +1,6 @@
 import type { Account, MemberEligibility, Pool, RateLimitWindow, Session } from '@/api/types';
 import { lookup } from './counts';
-import { fmtDuration, instant } from './format';
+import { fmtDuration, instant, percentText } from './format';
 import { endOf, minuteSpan, windowOf } from './quota';
 import { speedWord, windingDown } from './selection';
 
@@ -312,9 +312,6 @@ export function shedPreview(
     warm: warmMarked,
   };
 }
-
-/** A share as a whole percent with the space before the sign, as the pool card's badge writes it. */
-const percentText = (share: number) => `${Math.round(share * 100)} %`;
 
 const QUIET_REASON: Record<NonNullable<ShedPreview['quiet']>, string> = { burnless: 'none burns.', last: "each is its member's last.", warm: 'each is warm.' };
 
