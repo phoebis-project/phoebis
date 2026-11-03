@@ -4,6 +4,7 @@ import type {
   RefusalCategoriesAnswer, RequestKind, RequestLog, RewritePoint, RewritesAnswer, UnusedAllowanceAnswer, WastedProbeReason,
 } from '@/api/types';
 import { bucketShare } from '@/lib/analytics';
+import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { anchorTier, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf, type Usage } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
@@ -101,9 +102,6 @@ export interface HourlyRollup {
   wastedProbeReasons: Record<WastedProbeReason, number>;
   wastedProbeUsd: number;
 }
-
-/** The widths the analytics route buckets a range at, so a mock point covers the same hours the router's does. */
-const bucketMsFor = (spanMs: number) => (spanMs <= 48 * HOUR ? HOUR : spanMs <= 30 * DAY ? 6 * HOUR : DAY);
 
 const GROUP_KEY: Record<AnalyticsGroupBy, (r: HourlyRollup) => string> = {
   account: (r) => r.accountId,
@@ -469,7 +467,7 @@ type Range = Pick<AnalyticsQuery, 'from' | 'to'>;
 function bucketsOf(range: Range): { bucketMs: number; starts: number[] } {
   const fromMs = Date.parse(range.from);
   const toMs = Date.parse(range.to);
-  const bucketMs = bucketMsFor(toMs - fromMs);
+  const bucketMs = bucketSizeFor(toMs - fromMs);
   const starts: number[] = [];
   for (let at = Math.floor(fromMs / bucketMs) * bucketMs; at < Math.ceil(toMs / HOUR) * HOUR; at += bucketMs) starts.push(at);
   return { bucketMs, starts };
