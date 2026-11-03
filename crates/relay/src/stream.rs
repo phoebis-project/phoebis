@@ -24,6 +24,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::catalog::CatalogService;
 use crate::credit::CreditStore;
+use crate::dispatch::until_canceled;
 use crate::hold::INSPECT_BUFFER;
 use crate::identity::PendingReports;
 use crate::messages::{cut_code, Guards, RelayOutcome, Trace, CANCELED, REFUSED, TRANSPORT_ERROR};
@@ -964,12 +965,10 @@ async fn send(
     cancel: &CancellationToken,
     item: Result<Bytes, TransportError>,
 ) -> Delivery {
-    tokio::select! {
-        _ = cancel.cancelled() => Delivery::Canceled,
-        sent = tx.send(item) => match sent {
-            Ok(()) => Delivery::Delivered,
-            Err(_) => Delivery::Gone,
-        },
+    match until_canceled(tx.send(item), cancel).await {
+        None => Delivery::Canceled,
+        Some(Ok(())) => Delivery::Delivered,
+        Some(Err(_)) => Delivery::Gone,
     }
 }
 
