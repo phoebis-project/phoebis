@@ -17,7 +17,9 @@ use phoebis_relay::{CacheTtl, CacheTtlPolicy, Relay};
 use phoebis_routing::{
     budget_deadline, listing, MemberSpend, RegistrySnapshot, RouterHandle, SEVEN_DAY,
 };
-use phoebis_store::{AccountKind, AccountRow, AccountState, OveragePolicy, PoolRow, Store};
+use phoebis_store::{
+    AccountKind, AccountRow, AccountState, CooldownScope, OveragePolicy, PoolRow, Store,
+};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -4217,7 +4219,7 @@ pub(crate) struct RouterView {
     /// A retained model name to the one the router keys its rows on, for the names that differ.
     pub canonical: HashMap<String, String>,
     /// `(account, scope)` of every live cooldown row to its window, so the gate can tell a plan-window row apart.
-    pub cooled: BTreeMap<(String, String), String>,
+    pub cooled: BTreeMap<(String, CooldownScope), String>,
     pub overage: BTreeSet<String>,
     /// `(key, session, agent, canonical model)` to the pinned account: the account a probe would actually run
     /// on, so a sibling's pin never overwrites an agent's own.
@@ -4839,7 +4841,10 @@ revisions:
     #[test]
     fn a_fast_recipe_passes_a_plan_window_hold_takes_no_overage_hold_and_holds_on_a_fast_row() {
         let cooled = |scope: &str, window: &str| RouterView {
-            cooled: BTreeMap::from([(("o".to_string(), scope.to_string()), window.to_string())]),
+            cooled: BTreeMap::from([(
+                ("o".to_string(), CooldownScope::parse(scope).unwrap()),
+                window.to_string(),
+            )]),
             ..pool_view(false)
         };
         let plan_window = cooled("account", "five_hour");
@@ -4886,7 +4891,7 @@ revisions:
         for (scope, window, holds) in rows {
             let view = RouterView {
                 cooled: BTreeMap::from([(
-                    ("o".to_string(), scope.to_string()),
+                    ("o".to_string(), CooldownScope::parse(scope).unwrap()),
                     window.to_string(),
                 )]),
                 ..pool_view(false)

@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
-use phoebis_store::{ApiKeyRow, CooldownRow, RulesMode};
+use phoebis_store::{ApiKeyRow, CooldownRow, CooldownScope, RulesMode};
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAAAAAAAAAAAAAA";
@@ -223,7 +223,7 @@ async fn a_member_whose_fetch_fails_contributes_nothing_and_a_cooled_model_still
             account_id: "b".into(),
             row: CooldownRow {
                 account_id: "b".into(),
-                scope: "model:claude-sonnet-4-5-20250929".into(),
+                scope: CooldownScope::Model("claude-sonnet-4-5-20250929".into()),
                 until: now + 3_600_000,
                 set_at: now,
                 reason: phoebis_routing::MODEL_REJECTED_REASON.into(),

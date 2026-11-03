@@ -7814,7 +7814,7 @@ async fn a_sessions_creation_time_is_mains_first_placement_across_a_failover_and
             account_id: "business".into(),
             row: phoebis_store::CooldownRow {
                 account_id: "business".into(),
-                scope: "account".into(),
+                scope: phoebis_store::CooldownScope::Account,
                 until: NOW + 3_600_000,
                 set_at: 0,
                 reason: "rate_limit".into(),
@@ -8583,7 +8583,7 @@ async fn deleting_either_fast_cooldown_clears_its_own_row_and_leaves_the_others(
         account_id: "business".into(),
         row: phoebis_store::CooldownRow {
             account_id: "business".into(),
-            scope: scope.into(),
+            scope: phoebis_store::CooldownScope::parse(scope).unwrap(),
             until: NOW + 600_000,
             set_at: 0,
             reason: reason.into(),

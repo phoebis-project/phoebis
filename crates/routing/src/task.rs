@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, UsageSnapshot};
 use phoebis_store::{
-    AccountState, CooldownRow, PinBurn, PinKey, PinRow, PoolRow, RegistryLoad, RekeyWrite,
-    RoutingLoad, RoutingTx, ShedRoundRow, StateCause, Store, StoreError,
+    AccountState, CooldownRow, CooldownScope, PinBurn, PinKey, PinRow, PoolRow, RegistryLoad,
+    RekeyWrite, RoutingLoad, RoutingTx, ShedRoundRow, StateCause, Store, StoreError,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, Notify};
 use tokio::time::Instant;
@@ -926,7 +926,7 @@ enum Command {
     },
     ClearCooldown {
         account_id: String,
-        scope: String,
+        scope: CooldownScope,
         reply: oneshot::Sender<bool>,
     },
     /// A replacing reading landed in the pending map; the loop drains the map on every turn whether or not the
@@ -1483,11 +1483,15 @@ impl RouterHandle {
         })
         .await
     }
-    pub async fn clear_cooldown(&self, account_id: &str, scope: &str) -> Result<bool, RouterGone> {
-        let (a, s) = (account_id.to_string(), scope.to_string());
+    pub async fn clear_cooldown(
+        &self,
+        account_id: &str,
+        scope: CooldownScope,
+    ) -> Result<bool, RouterGone> {
+        let a = account_id.to_string();
         self.ask(|reply| Command::ClearCooldown {
             account_id: a,
-            scope: s,
+            scope,
             reply,
         })
         .await
@@ -3708,13 +3712,12 @@ impl Task {
                 row.scope = self.state.canonical_scope(&row.scope);
                 // A fast-lane row moves the session for fast mode alone; the name tells the drawer it was no
                 // rate limit on the account's standard traffic.
-                let moved = if row.scope == "fast" || row.scope == "fast_credits" {
-                    "fast_lane"
-                } else {
-                    "cooldown"
+                let moved = match row.scope {
+                    CooldownScope::Fast | CooldownScope::FastCredits => "fast_lane",
+                    CooldownScope::Account | CooldownScope::Model(_) => "cooldown",
                 };
                 let cause = MoveCause::Cooldown {
-                    scope: row.scope.clone(),
+                    scope: row.scope.to_string(),
                     reason: row.reason.clone(),
                     window: Some(row.window.clone()),
                 };
@@ -3722,7 +3725,7 @@ impl Task {
                 if self.state.record_cooldown(row.clone()) {
                     self.emit(RouterEvent::CooldownSet {
                         account_id: account_id.clone(),
-                        scope: row.scope.clone(),
+                        scope: row.scope.to_string(),
                         until: row.until,
                         reason: row.reason.clone(),
                         window: row.window.clone(),
@@ -3829,15 +3832,17 @@ impl Task {
                 // window, and a model's rate limit, which on an OAuth account (the only kind the poll reads) is its
                 // week's. The fast lane's rate limit and a model rejection stay, since the reading measures neither.
                 let now = (self.clock)();
-                let mut lifted: Vec<String> = self
+                let mut lifted: Vec<CooldownScope> = self
                     .state
                     .cooldowns_of(&account_id, now)
                     .filter(|row| observed_at > row.set_at)
-                    .filter(|row| {
-                        row.scope == "fast_credits"
-                            || (row.reason == "rate_limit"
-                                && (row.scope.starts_with("model:")
-                                    || (row.scope == "account" && is_plan_window(&row.window))))
+                    .filter(|row| match row.scope {
+                        CooldownScope::FastCredits => true,
+                        CooldownScope::Model(_) => row.reason == "rate_limit",
+                        CooldownScope::Account => {
+                            row.reason == "rate_limit" && is_plan_window(&row.window)
+                        }
+                        CooldownScope::Fast => false,
                     })
                     .map(|row| row.scope.clone())
                     .collect();
@@ -4642,12 +4647,17 @@ impl Task {
 
     /// The three steps a release takes wherever it starts: drop the row, say what released it, and delete it.
     /// The purge tick has its own, because it clears a batch the state already dropped.
-    fn release_cooldown(&mut self, account_id: String, scope: String, cause: &'static str) -> bool {
+    fn release_cooldown(
+        &mut self,
+        account_id: String,
+        scope: CooldownScope,
+        cause: &'static str,
+    ) -> bool {
         let cleared = self.state.clear_cooldown(&account_id, &scope);
         if cleared {
             self.emit(RouterEvent::CooldownCleared {
                 account_id: account_id.clone(),
-                scope: scope.clone(),
+                scope: scope.to_string(),
                 cause,
                 at: (self.clock)(),
             });
@@ -4714,7 +4724,7 @@ impl Task {
         for (account_id, scope) in &purged.cooldowns {
             self.emit(RouterEvent::CooldownCleared {
                 account_id: account_id.clone(),
-                scope: scope.clone(),
+                scope: scope.to_string(),
                 cause: "expired",
                 at: now,
             });
@@ -5229,7 +5239,7 @@ enum DeferredKey {
     },
     Cooldown {
         account_id: String,
-        scope: String,
+        scope: CooldownScope,
     },
     Credits(String),
     /// An agent's record by key id, session id and agent id.
@@ -5621,7 +5631,7 @@ mod tests {
     fn cooldown(account_id: &str, scope: &str) -> CooldownRow {
         CooldownRow {
             account_id: account_id.into(),
-            scope: scope.into(),
+            scope: CooldownScope::parse(scope).unwrap(),
             until: 10_000,
             set_at: 0,
             reason: "rate_limit".into(),
@@ -5997,7 +6007,7 @@ mod tests {
             .unwrap()
             .cooldowns
             .into_iter()
-            .map(|row| row.scope)
+            .map(|row| row.scope.to_string())
             .collect();
         scopes.sort();
         assert_eq!(

@@ -13,7 +13,7 @@ use phoebis_relay::{CacheTtl, CacheTtlPolicy};
 use phoebis_routing::{MemberSpend, OverageEvidence, RegistrySnapshot};
 use phoebis_store::{
     stamp_token, AccountRow, Affinity, AffinityMode, ApiKeyRow, AttachmentSubject, CooldownRow,
-    Failover, MemberWrite, OveragePolicy, PinRow, PoolMember, PoolRow, ReturnToPlan,
+    CooldownScope, Failover, MemberWrite, OveragePolicy, PinRow, PoolMember, PoolRow, ReturnToPlan,
     SessionPlacement, Shedding, SlowDown, StoreError, Strategy, SubagentPlacement, WarmSessions,
     GUARDRAIL_BOUND,
 };
@@ -1503,10 +1503,9 @@ pub(crate) async fn pool_json_from(
         if !ready || ended {
             return Some("unavailable");
         }
-        if cooldowns
-            .iter()
-            .any(|c| c.account_id == m.account_id && c.scope == "account" && c.until > now)
-        {
+        if cooldowns.iter().any(|c| {
+            c.account_id == m.account_id && c.scope == CooldownScope::Account && c.until > now
+        }) {
             return Some("cooldown");
         }
         let rows = crate::routes::spend_rows(spends, &row.id, &m.account_id);

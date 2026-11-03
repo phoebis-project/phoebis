@@ -14,7 +14,7 @@ use phoebis_routing::{
     DecisionRecord, DecisionSummary, HoldOutcome, Report, RouterConfig, RouterEvent, SharePricer,
     UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
 };
-use phoebis_store::{CooldownRow, Failover, SlowDown, SubscriptionRow};
+use phoebis_store::{CooldownRow, CooldownScope, Failover, SlowDown, SubscriptionRow};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
@@ -1424,7 +1424,7 @@ async fn a_slow_down_hold_is_cut_at_the_request_deadline_and_a_slot_wait_after_i
             account_id: "a".into(),
             row: CooldownRow {
                 account_id: "a".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: NOW + 3_600_000,
                 set_at: 0,
                 reason: "rate_limit".into(),
@@ -1587,7 +1587,7 @@ async fn a_slot_that_frees_inside_the_bound_dispatches_the_pin_at_the_admission_
             account_id: "a".into(),
             row: CooldownRow {
                 account_id: "a".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: NOW + 3_600_000,
                 set_at: 0,
                 reason: "rate_limit".into(),

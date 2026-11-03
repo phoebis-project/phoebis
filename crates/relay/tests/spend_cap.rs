@@ -66,7 +66,7 @@ async fn a_spend_cap_answer_excludes_the_account_and_the_exhaustion_claims_overa
     assert_eq!(
         (
             cooldowns[0].account_id.as_str(),
-            cooldowns[0].scope.as_str(),
+            cooldowns[0].scope.to_string().as_str(),
             cooldowns[0].reason.as_str(),
             cooldowns[0].window.as_str()
         ),

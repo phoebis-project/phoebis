@@ -13,7 +13,7 @@ use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery};
 use phoebis_ledger::{Assembler, Record};
 use phoebis_routing::{CreditsState, Report};
-use phoebis_store::CooldownRow;
+use phoebis_store::{CooldownRow, CooldownScope};
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -47,13 +47,13 @@ async fn body_json(resp: axum::http::Response<Body>) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-fn rows(cooldowns: &[CooldownRow]) -> Vec<(&str, &str, &str, &str, i64)> {
+fn rows(cooldowns: &[CooldownRow]) -> Vec<(&str, &CooldownScope, &str, &str, i64)> {
     cooldowns
         .iter()
         .map(|c| {
             (
                 c.account_id.as_str(),
-                c.scope.as_str(),
+                &c.scope,
                 c.reason.as_str(),
                 c.window.as_str(),
                 c.until,
@@ -87,7 +87,13 @@ async fn a_fast_429_on_the_first_account_walks_to_the_sibling_and_migrates_the_p
     body_json(resp).await;
     assert_eq!(
         rows(&h.router.cooldowns().await.unwrap()),
-        [("a", "fast", "fast_rate_limit", "fast", 1_090_000 + 1_000)],
+        [(
+            "a",
+            &CooldownScope::Fast,
+            "fast_rate_limit",
+            "fast",
+            1_090_000 + 1_000
+        )],
         "the later fast reset cools a's fast lane alone"
     );
     let events = drain_until_complete(&mut sub).await;
@@ -194,7 +200,7 @@ async fn with_every_account_credits_blocked_the_router_answers_fast_credits_unav
         rows(&h.router.cooldowns().await.unwrap()),
         [(
             "a",
-            "fast_credits",
+            &CooldownScope::FastCredits,
             "fast_credits",
             "out_of_credits",
             NOW + HOUR + 1_000
@@ -294,10 +300,16 @@ async fn concurrent_credits_and_rate_limit_refusals_keep_a_row_each_and_a_credit
         assert_eq!(
             rows(&h.router.cooldowns().await.unwrap()),
             [
-                ("a", "fast", "fast_rate_limit", "fast", 1_090_000 + 1_000),
                 (
                     "a",
-                    "fast_credits",
+                    &CooldownScope::Fast,
+                    "fast_rate_limit",
+                    "fast",
+                    1_090_000 + 1_000
+                ),
+                (
+                    "a",
+                    &CooldownScope::FastCredits,
                     "fast_credits",
                     "out_of_credits",
                     NOW + HOUR + 1_000
@@ -334,7 +346,13 @@ async fn concurrent_credits_and_rate_limit_refusals_keep_a_row_each_and_a_credit
             .await;
         assert_eq!(
             rows(&h.router.cooldowns().await.unwrap()),
-            [("a", "fast", "fast_rate_limit", "fast", 1_090_000 + 1_000)],
+            [(
+                "a",
+                &CooldownScope::Fast,
+                "fast_rate_limit",
+                "fast",
+                1_090_000 + 1_000
+            )],
             "{order}: the credits reading lifts its own row alone"
         );
         let resp = h.app.clone().oneshot(fast_request("s4")).await.unwrap();
@@ -365,7 +383,7 @@ async fn a_pinned_fast_session_under_a_plan_window_cooldown_is_served_on_its_acc
             account_id: "a".into(),
             row: CooldownRow {
                 account_id: "a".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: NOW + HOUR,
                 set_at: 0,
                 reason: "rate_limit".into(),
@@ -459,7 +477,7 @@ async fn a_fast_retry_after_under_the_bound_retries_in_place_once() {
         rows(&h.router.cooldowns().await.unwrap()),
         [(
             "a",
-            "fast",
+            &CooldownScope::Fast,
             "fast_rate_limit",
             "retry_after",
             NOW + 1_000 + 1_000
@@ -468,7 +486,10 @@ async fn a_fast_retry_after_under_the_bound_retries_in_place_once() {
     );
 
     // A second throttle on the same leg is past the one retry, so the request moves on.
-    h.router.clear_cooldown("a", "fast").await.unwrap();
+    h.router
+        .clear_cooldown("a", CooldownScope::Fast)
+        .await
+        .unwrap();
     up.push_credential_rule(A, "/v1/messages", json_429_fast_rate_limit(Some(1), None));
     up.push_credential_rule(A, "/v1/messages", json_429_fast_rate_limit(Some(1), None));
     let resp = h.app.clone().oneshot(fast_request("s2")).await.unwrap();
@@ -497,7 +518,7 @@ async fn a_fast_429_that_rejects_a_shared_window_cools_the_whole_account() {
         rows(&h.router.cooldowns().await.unwrap()),
         [(
             "a",
-            "account",
+            &CooldownScope::Account,
             "rate_limit",
             "five_hour",
             RESET * 1_000 + 1_000

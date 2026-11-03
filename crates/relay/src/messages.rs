@@ -33,8 +33,8 @@ use phoebis_routing::{
     SelectionTrace, BUDGET_WINDOW,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore, Secret, StateCause,
-    Store,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, CooldownScope, MemoryStore,
+    Secret, StateCause, Store,
 };
 use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding, request_encoding, Decoder, Encoding};
@@ -1107,14 +1107,19 @@ fn pays_for_writes(kind: AccountKind, usage_based: bool, in_overage: bool) -> bo
     in_overage || usage_based || kind == AccountKind::ApiKey
 }
 
+/// The row a verdict's scope cools, a model scope naming the request's canonical model.
+fn cooldown_scope(scope: Scope, canonical_model: &str) -> CooldownScope {
+    match scope {
+        Scope::Account => CooldownScope::Account,
+        Scope::Fast => CooldownScope::Fast,
+        Scope::FastCredits => CooldownScope::FastCredits,
+        Scope::Model => CooldownScope::Model(canonical_model.to_string()),
+    }
+}
+
 fn cooldown_set(cooldown: Option<&Cooldown>, canonical_model: &str) -> Option<CooldownSet> {
     cooldown.map(|c| CooldownSet {
-        scope: match c.scope {
-            Scope::Account => "account".into(),
-            Scope::Fast => "fast".into(),
-            Scope::FastCredits => "fast_credits".into(),
-            Scope::Model => format!("model:{canonical_model}"),
-        },
+        scope: cooldown_scope(c.scope, canonical_model).to_string(),
         until: c.until,
         reason: c.reason.to_string(),
         window: c.window.clone(),
@@ -5423,15 +5428,9 @@ pub(crate) fn failover_reports(
 ) -> Vec<Report> {
     let mut reports = Vec::new();
     if let Some(cooldown) = cooldown {
-        let scope = match cooldown.scope {
-            Scope::Account => "account".to_string(),
-            Scope::Fast => "fast".to_string(),
-            Scope::FastCredits => "fast_credits".to_string(),
-            Scope::Model => format!("model:{canonical_model}"),
-        };
         let row = CooldownRow {
             account_id: account_id.to_string(),
-            scope,
+            scope: cooldown_scope(cooldown.scope, canonical_model),
             until: cooldown.until,
             set_at,
             reason: cooldown.reason.to_string(),

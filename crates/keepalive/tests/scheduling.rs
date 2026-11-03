@@ -12,7 +12,7 @@ use phoebis_routing::{
     SelectResult,
 };
 use phoebis_store::{
-    AccountState, BudgetPeriod, CooldownRow, MemberWrite, OveragePolicy, StateCause,
+    AccountState, BudgetPeriod, CooldownRow, CooldownScope, MemberWrite, OveragePolicy, StateCause,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -56,7 +56,7 @@ async fn a_cooled_account_holds_the_probe_until_the_cooldown_clears() {
             account_id: "a".into(),
             row: CooldownRow {
                 account_id: "a".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until,
                 set_at: r.now(),
                 reason: "rate_limit".into(),
@@ -86,7 +86,10 @@ async fn a_cooled_account_holds_the_probe_until_the_cooldown_clears() {
         (0, Reason::Cooled)
     );
     assert_eq!(r.up.requests().len(), 1, "nothing went upstream");
-    r.h.router.clear_cooldown("a", "account").await.unwrap();
+    r.h.router
+        .clear_cooldown("a", CooldownScope::Account)
+        .await
+        .unwrap();
     r.step().await;
     assert_eq!(
         (r.status("main").probes, r.status("main").reason),
@@ -195,7 +198,10 @@ async fn a_hold_lifted_after_the_expiry_sends_no_probe() {
     );
     // The entry written at the start expired at 300 s; the cooldown lifts after it.
     r.advance(60_000);
-    r.h.router.clear_cooldown("a", "account").await.unwrap();
+    r.h.router
+        .clear_cooldown("a", CooldownScope::Account)
+        .await
+        .unwrap();
     r.step().await;
     assert_eq!(
         (r.status("main").probes, r.status("main").reason),
@@ -1131,7 +1137,7 @@ async fn two_agents_of_one_session_pinned_to_two_accounts_each_probe_their_own_a
             account_id: worker_account.clone(),
             row: CooldownRow {
                 account_id: worker_account.clone(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until,
                 set_at: r.now(),
                 reason: "rate_limit".into(),
@@ -1193,7 +1199,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
             account_id: first.clone(),
             row: CooldownRow {
                 account_id: first.clone(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: r.now() + 600_000,
                 set_at: r.now(),
                 reason: "rate_limit".into(),
@@ -1283,7 +1289,10 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
         Some(first.as_str()),
         "the recipe still names the old account until the tick reads the pin"
     );
-    r.h.router.clear_cooldown(&first, "account").await.unwrap();
+    r.h.router
+        .clear_cooldown(&first, CooldownScope::Account)
+        .await
+        .unwrap();
     r.advance(270_000);
     r.step().await;
     let probes: Vec<_> =
@@ -1425,7 +1434,7 @@ async fn a_hold_counts_one_skipped_probe_however_many_ticks_it_spans() {
             account_id: "a".into(),
             row: CooldownRow {
                 account_id: "a".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until,
                 set_at: r.now(),
                 reason: "rate_limit".into(),
@@ -1463,7 +1472,10 @@ async fn a_hold_counts_one_skipped_probe_however_many_ticks_it_spans() {
     );
     assert_eq!(skipped(&r, 1).await, 1, "one withheld probe, not ten");
     // A hold whose reason changes is a new hold: the account comes out of the cooldown disabled.
-    r.h.router.clear_cooldown("a", "account").await.unwrap();
+    r.h.router
+        .clear_cooldown("a", CooldownScope::Account)
+        .await
+        .unwrap();
     r.h.store.set_enabled("a", false).unwrap();
     r.h.router.reload().await.unwrap();
     for _ in 0..5 {
@@ -1638,7 +1650,7 @@ async fn cool_account(r: &Rig) {
             account_id: "a".into(),
             row: CooldownRow {
                 account_id: "a".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: r.now() + 600_000,
                 set_at: r.now(),
                 reason: "rate_limit".into(),
@@ -1747,7 +1759,7 @@ async fn a_recipe_retained_before_its_model_resolved_is_held_by_a_cooldown_under
             account_id: "a".into(),
             row: CooldownRow {
                 account_id: "a".into(),
-                scope: format!("model:{DATED}"),
+                scope: CooldownScope::Model(DATED.into()),
                 until: r.now() + 600_000,
                 set_at: r.now(),
                 reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
@@ -1767,7 +1779,7 @@ async fn a_recipe_retained_before_its_model_resolved_is_held_by_a_cooldown_under
             .await
             .unwrap()
             .iter()
-            .any(|c| c.scope == format!("model:{DATED}"))
+            .any(|c| c.scope == CooldownScope::Model(DATED.into()))
     })
     .await;
     r.advance(270_000);

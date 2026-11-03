@@ -365,7 +365,8 @@ async fn a_scrape_reads_the_routers_drop_counters_at_gather() {
 #[tokio::test]
 async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_longer_wait() {
     use phoebis_store::{
-        AccountKind, AccountRow, AccountState, CooldownRow, StateCause, StorageKey, Store,
+        AccountKind, AccountRow, AccountState, CooldownRow, CooldownScope, StateCause, StorageKey,
+        Store,
     };
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     store
@@ -386,7 +387,7 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
         store
             .upsert_cooldown(&CooldownRow {
                 account_id: "a".into(),
-                scope: format!("model:{model}"),
+                scope: CooldownScope::Model(model.into()),
                 until,
                 set_at: 0,
                 reason: "rate_limit".into(),

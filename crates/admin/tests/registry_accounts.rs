@@ -1,4 +1,5 @@
 mod common;
+use phoebis_store::CooldownScope;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -742,7 +743,7 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
             account_id: "direct".into(),
             row: phoebis_store::CooldownRow {
                 account_id: "direct".into(),
-                scope: "model:claude-opus-5".into(),
+                scope: CooldownScope::Model("claude-opus-5".into()),
                 until: common::NOW + 60_000,
                 set_at: 0,
                 reason: "rate_limit".into(),
@@ -764,7 +765,7 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
             .unwrap()
             .cooldowns
             .into_iter()
-            .find(|c| c.scope == "model:claude-opus-5")
+            .find(|c| c.scope == CooldownScope::Model("claude-opus-5".into()))
     })
     .await;
     let shown = json(get(&app, "/admin/accounts/direct", Some(&cookie)).await).await;

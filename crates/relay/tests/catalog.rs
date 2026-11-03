@@ -11,8 +11,8 @@ use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_relay::{Warmth, ERROR_HOLD, MAX_BODY};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, NewBundle, RekeyWrite, ResolutionRow,
-    RulesMode, Secret, StateCause, StorageKey, Store,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownScope, NewBundle, RekeyWrite,
+    ResolutionRow, RulesMode, Secret, StateCause, StorageKey, Store,
 };
 use tower::ServiceExt;
 
@@ -858,7 +858,7 @@ async fn a_listing_that_drops_the_dated_entry_keeps_the_dated_id_and_its_denial_
             account_id: "a".into(),
             row: phoebis_store::CooldownRow {
                 account_id: "a".into(),
-                scope: "model:claude-sonnet-4-5-20250929".into(),
+                scope: CooldownScope::Model("claude-sonnet-4-5-20250929".into()),
                 until: now + 3_600_000,
                 set_at: now,
                 reason: phoebis_routing::MODEL_REJECTED_REASON.into(),

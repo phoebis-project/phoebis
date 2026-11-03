@@ -1,5 +1,8 @@
 //! Routing state that survives a restart: session pins, cooldowns, and the overage evidence per account.
 
+use std::fmt;
+
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 
 use crate::accounts::set_state_if_generations_on;
@@ -98,10 +101,61 @@ impl PinRow {
     }
 }
 
+/// What a cooldown row holds off: the whole account, the fast lane's rate limit, the fast lane's usage-credits
+/// refusal, or one model by its canonical id. The column, the admin field and the clear route carry it as the text
+/// `account`, `fast`, `fast_credits` or `model:<canonical>`.
+///
+/// The variants and the model ids order as their stored texts do, so a sort by scope keeps the order the text gave.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CooldownScope {
+    Account,
+    Fast,
+    FastCredits,
+    Model(String),
+}
+
+impl CooldownScope {
+    /// The scope a stored text names, `None` for text no row holds. Any `model:` suffix names a model, the empty
+    /// one included.
+    pub fn parse(text: &str) -> Option<CooldownScope> {
+        match text {
+            "account" => Some(CooldownScope::Account),
+            "fast" => Some(CooldownScope::Fast),
+            "fast_credits" => Some(CooldownScope::FastCredits),
+            _ => text
+                .strip_prefix("model:")
+                .map(|model| CooldownScope::Model(model.to_string())),
+        }
+    }
+}
+
+impl fmt::Display for CooldownScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CooldownScope::Account => f.write_str("account"),
+            CooldownScope::Fast => f.write_str("fast"),
+            CooldownScope::FastCredits => f.write_str("fast_credits"),
+            CooldownScope::Model(model) => write!(f, "model:{model}"),
+        }
+    }
+}
+
+impl FromSql for CooldownScope {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        CooldownScope::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
+    }
+}
+
+impl ToSql for CooldownScope {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.to_string().into())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CooldownRow {
     pub account_id: String,
-    pub scope: String,
+    pub scope: CooldownScope,
     pub until: i64,
     /// When the rejection that set this row arrived, so a usage sample can be told apart from the cached view
     /// the account had before it.
@@ -180,7 +234,7 @@ pub struct RekeyWrite {
     pub delete_pins: Vec<PinKey>,
     pub upsert_pins: Vec<PinRow>,
     /// `(account_id, scope)` of each cooldown under the spelling.
-    pub delete_cooldowns: Vec<(String, String)>,
+    pub delete_cooldowns: Vec<(String, CooldownScope)>,
     pub upsert_cooldowns: Vec<CooldownRow>,
 }
 
@@ -457,7 +511,11 @@ impl Store {
         self.routing_commit(|conn| upsert_cooldown_on(conn, row))
     }
 
-    pub fn delete_cooldown(&self, account_id: &str, scope: &str) -> Result<bool, StoreError> {
+    pub fn delete_cooldown(
+        &self,
+        account_id: &str,
+        scope: &CooldownScope,
+    ) -> Result<bool, StoreError> {
         self.routing_commit(|conn| delete_cooldown_on(conn, account_id, scope))
     }
 
@@ -563,7 +621,11 @@ impl RoutingTx<'_> {
         delete_affinity_on(self.tx, keys)
     }
 
-    pub fn delete_cooldown(&mut self, account_id: &str, scope: &str) -> Result<bool, StoreError> {
+    pub fn delete_cooldown(
+        &mut self,
+        account_id: &str,
+        scope: &CooldownScope,
+    ) -> Result<bool, StoreError> {
         delete_cooldown_on(self.tx, account_id, scope)
     }
 
@@ -855,7 +917,7 @@ fn upsert_cooldown_on(conn: &Connection, row: &CooldownRow) -> Result<(), StoreE
 fn delete_cooldown_on(
     conn: &Connection,
     account_id: &str,
-    scope: &str,
+    scope: &CooldownScope,
 ) -> Result<bool, StoreError> {
     Ok(conn.execute(
         "DELETE FROM cooldowns WHERE account_id = ?1 AND scope = ?2",

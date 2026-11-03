@@ -11,7 +11,7 @@ use phoebis_routing::{
     FactValue, MoveCause, Report, RouterConfig, RouterEvent, SharePricer, UtilizationSample,
     WindowReading, WindowSource, FIVE_HOUR,
 };
-use phoebis_store::{AccountState, Failover, StateCause, SubscriptionRow};
+use phoebis_store::{AccountState, CooldownScope, Failover, StateCause, SubscriptionRow};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
@@ -206,14 +206,17 @@ async fn a_429_migrates_the_session_and_it_stays_on_the_replacement_after_recove
     assert_eq!(
         (
             cooldowns[0].account_id.as_str(),
-            cooldowns[0].scope.as_str(),
+            cooldowns[0].scope.to_string().as_str(),
             cooldowns[0].until,
             cooldowns[0].window.as_str()
         ),
         ("a", "account", RESET * 1_000 + 1_000, "five_hour")
     );
     up.set_credential_rule_after(A, 1, "/v1/messages", json_200());
-    h.router.clear_cooldown("a", "account").await.unwrap();
+    h.router
+        .clear_cooldown("a", CooldownScope::Account)
+        .await
+        .unwrap();
     let resp = h
         .app
         .clone()
@@ -398,7 +401,10 @@ async fn every_eligible_account_is_tried_once_and_then_the_exhaustion_answers() 
         serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(body["error"]["type"], "rate_limit_error");
     for id in ["a", "b", "c", "d"] {
-        h.router.clear_cooldown(id, "account").await.unwrap();
+        h.router
+            .clear_cooldown(id, CooldownScope::Account)
+            .await
+            .unwrap();
     }
     for id in ["a", "c"] {
         h.store
@@ -439,7 +445,7 @@ async fn every_eligible_account_is_tried_once_and_then_the_exhaustion_answers() 
             account_id: "d".into(),
             row: phoebis_store::CooldownRow {
                 account_id: "d".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: NOW + 90_000,
                 set_at: 0,
                 reason: "rate_limit".into(),
@@ -596,7 +602,7 @@ async fn every_member_cooled_for_a_rejection_answers_404_model_rejected_without_
             account_id: "a".into(),
             row: phoebis_store::CooldownRow {
                 account_id: "a".into(),
-                scope: "model:claude-sonnet-4-5".into(),
+                scope: CooldownScope::Model("claude-sonnet-4-5".into()),
                 until: NOW + 3_600_000,
                 set_at: 0,
                 reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
@@ -726,13 +732,13 @@ async fn a_permission_error_cools_one_model_for_an_hour_and_leaves_the_credentia
     let cooldowns = wait_for_async(Duration::from_secs(2), || async {
         let rows = h.router.cooldowns().await.unwrap();
         rows.iter()
-            .any(|c| c.scope == "model:claude-sonnet-4-5-20250929")
+            .any(|c| c.scope == CooldownScope::Model("claude-sonnet-4-5-20250929".into()))
             .then_some(rows)
     })
     .await;
     assert_eq!(
         (
-            cooldowns[0].scope.as_str(),
+            cooldowns[0].scope.to_string().as_str(),
             cooldowns[0].reason.as_str(),
             cooldowns[0].until
         ),
@@ -803,19 +809,22 @@ async fn cooldowns_are_partitioned_by_account_kind() {
     let c = wait_for_async(Duration::from_secs(2), || async {
         let rows = h.router.cooldowns().await.unwrap();
         rows.iter()
-            .any(|row| row.account_id == "k1" && row.scope == "model:claude-sonnet-4-5-20250929")
+            .any(|row| {
+                row.account_id == "k1"
+                    && row.scope == CooldownScope::Model("claude-sonnet-4-5-20250929".into())
+            })
             .then_some(rows)
     })
     .await;
     let k1 = c.iter().find(|c| c.account_id == "k1").unwrap();
     assert_eq!(
-        (k1.scope.as_str(), k1.until),
+        (k1.scope.to_string().as_str(), k1.until),
         ("model:claude-sonnet-4-5-20250929", NOW + 90_000 + 1_000),
         "an api_key 429 with Retry-After cools the model"
     );
     assert!(
         c.iter()
-            .any(|c| c.account_id == "b" && c.scope == "account"),
+            .any(|c| c.account_id == "b" && c.scope == CooldownScope::Account),
         "an oauth 429 without unified headers cools the account"
     );
     let resp = h
@@ -849,7 +858,7 @@ async fn cooldowns_are_partitioned_by_account_kind() {
     let c = h.router.cooldowns().await.unwrap();
     assert!(
         c.iter().any(|c| c.account_id == "k1"
-            && c.scope == "account"
+            && c.scope == CooldownScope::Account
             && c.until == NOW + 60_000 + 1_000),
         "a malformed Retry-After takes the account-wide fallback"
     );
@@ -917,7 +926,7 @@ async fn a_model_only_rejection_leaves_opus_eligible_and_a_5h_rejection_cools_ev
     );
     let c = h.router.cooldowns().await.unwrap();
     assert_eq!(
-        (c[0].scope.as_str(), c[0].window.as_str()),
+        (c[0].scope.to_string().as_str(), c[0].window.as_str()),
         ("model:claude-fable-5-1", "seven_day_fable")
     );
     assert_eq!(
@@ -1011,7 +1020,7 @@ async fn a_spend_cap_429_on_a_fable_request_answers_the_exhausted_pool_with_the_
         .unwrap();
     let c = h.router.cooldowns().await.unwrap();
     assert_eq!(
-        (c[0].scope.as_str(), c[0].window.as_str()),
+        (c[0].scope.to_string().as_str(), c[0].window.as_str()),
         ("model:claude-fable-5-1", "seven_day_overage_included"),
         "the model row keeps the upstream's claim"
     );
@@ -3700,9 +3709,9 @@ async fn a_429_over_the_buffer_bound_is_classified_from_its_prefix_and_fails_ove
     assert_eq!(
         cooldowns
             .iter()
-            .map(|c| (c.account_id.as_str(), c.scope.as_str(), c.window.as_str()))
+            .map(|c| (c.account_id.as_str(), &c.scope, c.window.as_str()))
             .collect::<Vec<_>>(),
-        [("a", "account", "five_hour")]
+        [("a", &CooldownScope::Account, "five_hour")]
     );
     assert!(
         h.router
@@ -3856,9 +3865,13 @@ async fn a_model_404_over_the_buffer_bound_cools_the_model_and_fails_over() {
     assert_eq!(
         cooldowns
             .iter()
-            .map(|c| (c.account_id.as_str(), c.scope.as_str(), c.reason.as_str()))
+            .map(|c| (c.account_id.as_str(), &c.scope, c.reason.as_str()))
             .collect::<Vec<_>>(),
-        [("a", "model:claude-sonnet-4-5-20250929", "model_rejected")]
+        [(
+            "a",
+            &CooldownScope::Model("claude-sonnet-4-5-20250929".into()),
+            "model_rejected"
+        )]
     );
     up.shutdown().await;
 }

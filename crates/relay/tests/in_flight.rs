@@ -18,7 +18,7 @@ use phoebis_routing::{
     DecisionRecord, FactValue, HoldOutcome, Report, RouterConfig, RouterEvent, SharePricer,
     UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
 };
-use phoebis_store::{Failover, SlowDown, SubscriptionRow};
+use phoebis_store::{CooldownScope, Failover, SlowDown, SubscriptionRow};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
@@ -915,7 +915,7 @@ async fn a_client_reads_a_committed_responses_end_while_its_report_waits_on_a_fu
                         account_id: "a".into(),
                         row: phoebis_store::CooldownRow {
                             account_id: "a".into(),
-                            scope: "model:claude-unused".into(),
+                            scope: CooldownScope::Model("claude-unused".into()),
                             until: i64::MAX,
                             set_at: 0,
                             reason: "rate_limit".into(),
@@ -2575,7 +2575,7 @@ async fn the_forks_commit_alone_releases_the_waiter_and_an_error_event_releases_
             account_id: "a".into(),
             row: phoebis_store::CooldownRow {
                 account_id: "a".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: NOW + 10 * 3_600_000,
                 set_at: NOW,
                 reason: "rate_limit".into(),

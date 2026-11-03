@@ -1,8 +1,9 @@
 use phoebis_routing::lane_key;
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, ApiKeyRow, CooldownRow,
-    CreditsRow, FirstSeenRow, OverageRow, PinBurn, PinKey, PinRow, PoolRow, RekeyWrite,
-    ResolutionRow, RulesMode, ShedRoundRow, StateCause, StorageKey, Store, WindowRow, WindowSetRow,
+    CooldownScope, CreditsRow, FirstSeenRow, OverageRow, PinBurn, PinKey, PinRow, PoolRow,
+    RekeyWrite, ResolutionRow, RulesMode, ShedRoundRow, StateCause, StorageKey, Store, WindowRow,
+    WindowSetRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -74,7 +75,7 @@ fn seed_accounts(store: &Store, ids: &[&str]) {
 fn cooldown(account: &str, scope: &str, until: i64) -> CooldownRow {
     CooldownRow {
         account_id: account.into(),
-        scope: scope.into(),
+        scope: CooldownScope::parse(scope).unwrap(),
         until,
         set_at: 0,
         reason: "rate_limit".into(),
@@ -104,8 +105,44 @@ fn a_cooldown_deadline_is_never_shortened_and_expired_rows_are_purged() {
         .unwrap();
     assert_eq!(store.purge_cooldowns_before(1_500).unwrap(), 1);
     assert_eq!(store.load_routing().unwrap().cooldowns.len(), 1);
-    assert!(store.delete_cooldown("a", "account").unwrap());
-    assert!(!store.delete_cooldown("a", "account").unwrap());
+    assert!(store.delete_cooldown("a", &CooldownScope::Account).unwrap());
+    assert!(!store.delete_cooldown("a", &CooldownScope::Account).unwrap());
+}
+
+#[test]
+fn every_stored_cooldown_scope_text_loads_as_its_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    seed_accounts(&Store::open(&path, &storage_key).unwrap(), &["a"]);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT INTO cooldowns (account_id, scope, until, reason, window, incarnation) VALUES \
+         ('a', 'account', 1, 'rate_limit', 'five_hour', 1), \
+         ('a', 'fast', 1, 'rate_limit', 'fast', 1), \
+         ('a', 'fast_credits', 1, 'out_of_credits', 'out_of_credits', 1), \
+         ('a', 'model:claude-opus-5', 1, 'rate_limit', 'retry_after', 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let scopes: Vec<CooldownScope> = Store::open(&path, &storage_key)
+        .unwrap()
+        .load_routing()
+        .unwrap()
+        .cooldowns
+        .into_iter()
+        .map(|row| row.scope)
+        .collect();
+    assert_eq!(
+        scopes,
+        [
+            CooldownScope::Account,
+            CooldownScope::Fast,
+            CooldownScope::FastCredits,
+            CooldownScope::Model("claude-opus-5".into()),
+        ]
+    );
 }
 
 #[test]
@@ -1225,7 +1262,7 @@ fn rekey_of_a() -> RekeyWrite {
             model: DATED.into(),
             ..spelling_pin()
         }],
-        delete_cooldowns: vec![("a".into(), format!("model:{SPELLING}"))],
+        delete_cooldowns: vec![("a".into(), CooldownScope::Model(SPELLING.into()))],
         upsert_cooldowns: vec![cooldown("a", &format!("model:{DATED}"), 10_000)],
     }
 }

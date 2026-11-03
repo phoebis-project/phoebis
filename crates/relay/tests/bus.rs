@@ -648,10 +648,16 @@ async fn after_the_head_an_sse_error_fails_a_lost_upstream_reads_incomplete_and_
         Some(5)
     );
     // The post-commit observer may have cooled the account on that error; the next leg needs it eligible.
-    let _ = h.router.clear_cooldown("a", "account").await;
     let _ = h
         .router
-        .clear_cooldown("a", "model:claude-sonnet-4-5")
+        .clear_cooldown("a", phoebis_store::CooldownScope::Account)
+        .await;
+    let _ = h
+        .router
+        .clear_cooldown(
+            "a",
+            phoebis_store::CooldownScope::Model("claude-sonnet-4-5".into()),
+        )
         .await;
     // The upstream dies after the head: the body task reports the transport failure.
     up.set_rule_after(0, "/v1/messages", Respond::DropAfterHead);

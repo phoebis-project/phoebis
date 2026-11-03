@@ -11,7 +11,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_relay::DiscoveryError;
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AccountUpdate, Secret, StateCause, StoreError,
+    AccountKind, AccountRow, AccountState, AccountUpdate, CooldownScope, Secret, StateCause,
+    StoreError,
 };
 use serde_json::Value;
 use utoipa::ToSchema;
@@ -540,15 +541,13 @@ pub(crate) async fn clear_cooldown(
     if let Err(refusal) = account(&state, &id) {
         return refusal;
     }
-    if !matches!(scope.as_str(), "account" | "fast" | "fast_credits")
-        && !scope.starts_with("model:")
-    {
+    let Some(scope) = CooldownScope::parse(&scope) else {
         return failure(
             StatusCode::BAD_REQUEST,
             "scope is account, fast, fast_credits or model:<canonical>",
         );
-    }
-    match state.router.clear_cooldown(&id, &scope).await {
+    };
+    match state.router.clear_cooldown(&id, scope).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => failure(StatusCode::NOT_FOUND, "no such cooldown"),
         Err(_) => failure(

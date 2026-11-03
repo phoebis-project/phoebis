@@ -15,9 +15,10 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
-    CooldownRow, Failover, FirstSeenRow, OveragePolicy, PinBurn, PinKey, PinRow, PoolMember,
-    PoolRow, RegistryLoad, ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow,
-    Shedding, SlowDown, StateCause, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
+    CooldownRow, CooldownScope, Failover, FirstSeenRow, OveragePolicy, PinBurn, PinKey, PinRow,
+    PoolMember, PoolRow, RegistryLoad, ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement,
+    ShedRoundRow, Shedding, SlowDown, StateCause, Strategy, SubagentPlacement, SubscriptionTerm,
+    WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -450,7 +451,7 @@ fn select_request(
 fn cooled(account: &str, scope: &str, until: i64, window: &str, reason: &str) -> CooldownRow {
     CooldownRow {
         account_id: account.into(),
-        scope: scope.into(),
+        scope: CooldownScope::parse(scope).unwrap(),
         until,
         set_at: 0,
         reason: reason.into(),
@@ -644,7 +645,7 @@ fn priority_zero_wins_until_every_priority_zero_account_is_ineligible_and_a_pin_
     assert!(writes.iter().any(
         |w| matches!(w, StateWrite::UpsertPin(p) if p.account_id == "b" && p.session_id == "s2")
     ));
-    st.clear_cooldown("a", "account");
+    st.clear_cooldown("a", &CooldownScope::Account);
     assert_eq!(
         picked(
             &select(
@@ -2457,7 +2458,7 @@ fn the_local_answer_is_fast_lane_exhausted_with_the_earliest_reset_while_one_acc
         SelectResult::Exhausted(Exhaustion::FastLane { deadline: 5_000 }),
         "b's credits row answers ahead of the rate limit beside it, so b holds no rate limit alone"
     );
-    st.clear_cooldown("b", "fast_credits");
+    st.clear_cooldown("b", &CooldownScope::FastCredits);
     assert_eq!(
         select(&mut st, &s, &at(1_000), &mut rng()).0,
         SelectResult::Exhausted(Exhaustion::FastLane { deadline: 4_000 }),
@@ -2763,8 +2764,8 @@ fn a_fast_pin_released_by_its_fast_lane_names_the_fast_reason_and_a_standard_one
         release_reasons(&st, &s, &pin, &standard_at(2_000)),
         vec!["cooldown"]
     );
-    st.clear_cooldown("a", "account");
-    st.clear_cooldown("a", "fast");
+    st.clear_cooldown("a", &CooldownScope::Account);
+    st.clear_cooldown("a", &CooldownScope::Fast);
     st.record_credits("a", credits(false, None, None, 1_500));
     assert_eq!(
         release_reasons(&st, &s, &pin, &fast_at(2_000)),
@@ -3075,7 +3076,7 @@ fn an_attempted_account_still_dates_the_exhaustion_with_its_cooldown() {
         matches!(result, SelectResult::Exhausted(Exhaustion::Timed { deadline: 5_000, ref window }) if window == "seven_day"),
         "three accounts rate-limited inside one request answer with the earliest reset"
     );
-    st.clear_cooldown("b", "account");
+    st.clear_cooldown("b", &CooldownScope::Account);
     let (result, _) = select(
         &mut st,
         &s,
@@ -3092,8 +3093,8 @@ fn an_attempted_account_still_dates_the_exhaustion_with_its_cooldown() {
         ),
         "one attempted account without a cooldown does not hide the others' deadlines"
     );
-    st.clear_cooldown("a", "account");
-    st.clear_cooldown("c", "account");
+    st.clear_cooldown("a", &CooldownScope::Account);
+    st.clear_cooldown("c", &CooldownScope::Account);
     let (result, _) = select(
         &mut st,
         &s,
@@ -3201,8 +3202,8 @@ fn round_robin_serves_the_first_tier_in_turn_and_a_tier_change_starts_its_own_ro
         "c",
         "the pointer of tier 0 does not reach tier 1"
     );
-    st.clear_cooldown("a", "account");
-    st.clear_cooldown("b", "account");
+    st.clear_cooldown("a", &CooldownScope::Account);
+    st.clear_cooldown("b", &CooldownScope::Account);
     assert_eq!(
         pick(&mut st, &mut r, 5),
         "b",
@@ -8023,12 +8024,18 @@ fn a_resolution_moves_every_row_in_one_rekey_and_a_repeat_carries_only_the_resol
             first
                 .upsert_cooldowns
                 .iter()
-                .map(|c| (c.account_id.as_str(), c.scope.as_str()))
+                .map(|c| (c.account_id.as_str(), &c.scope))
                 .collect::<Vec<_>>()
         ),
         (
-            vec![("b".to_string(), "model:claude-sonnet-4-5".to_string())],
-            vec![("b", "model:claude-sonnet-4-5-20250929")]
+            vec![(
+                "b".to_string(),
+                CooldownScope::Model("claude-sonnet-4-5".into())
+            )],
+            vec![(
+                "b",
+                &CooldownScope::Model("claude-sonnet-4-5-20250929".into())
+            )]
         ),
         "and the cooldown with it: {first:?}"
     );

@@ -6,9 +6,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use phoebis_store::{
-    AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CreditsRow, FirstSeenRow,
-    OverageRow, PinBurn, PinKey, PinRow, PoolMember, PoolRow, RekeyWrite, ResolutionRow,
-    RoutingLoad, StateCause, WindowRow, WindowSetRow,
+    AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CooldownScope, CreditsRow,
+    FirstSeenRow, OverageRow, PinBurn, PinKey, PinRow, PoolMember, PoolRow, RekeyWrite,
+    ResolutionRow, RoutingLoad, StateCause, WindowRow, WindowSetRow,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -253,11 +253,16 @@ pub(crate) fn all_plan_windows() -> impl Iterator<Item = &'static str> {
 /// since a fast request draws usage credits and no plan window; the model's `model:` row holds either speed; the
 /// fast lane's two rows, `fast` (its rate limit) and `fast_credits` (its usage-credits refusal), hold a fast request
 /// alone. For the same reason no overage hold applies to a fast request, a rule both callers apply beside this one.
-pub fn cooldown_holds(scope: &str, window: &str, canonical_model: &str, fast: bool) -> bool {
+pub fn cooldown_holds(
+    scope: &CooldownScope,
+    window: &str,
+    canonical_model: &str,
+    fast: bool,
+) -> bool {
     match scope {
-        "account" => !(fast && is_plan_window(window)),
-        "fast" | "fast_credits" => fast,
-        _ => scope.strip_prefix("model:") == Some(canonical_model),
+        CooldownScope::Account => !(fast && is_plan_window(window)),
+        CooldownScope::Fast | CooldownScope::FastCredits => fast,
+        CooldownScope::Model(model) => model == canonical_model,
     }
 }
 
@@ -377,7 +382,7 @@ pub enum StateWrite {
         marked_ordinal: Option<u64>,
     },
     DeleteAffinity(Vec<(String, String)>),
-    DeleteCooldown(String, String),
+    DeleteCooldown(String, CooldownScope),
     DeletePin(PinKey),
     /// A shared window a clean poll dropped: its stored reading leaves, fenced by the incarnation.
     DeleteWindow {
@@ -432,7 +437,7 @@ pub struct Purged {
     pub affinity: Vec<(String, String)>,
     /// The same entries whole, with why each left, for the expiry events.
     pub affinity_entries: Vec<PurgedEntry>,
-    pub cooldowns: Vec<(String, String)>,
+    pub cooldowns: Vec<(String, CooldownScope)>,
     /// Each dropped pin with the one fact that dropped it: `deleted`, `expired`, or `unserved`.
     pub pins: Vec<(PinKey, &'static str)>,
     /// The slow-down entries dropped, by pool id and account id, whole: an open span ends with its entry.
@@ -1303,7 +1308,7 @@ pub struct RoutingState {
     /// The router's own requests since each account's readings, what `predicted` adds to them. Memory only: a
     /// restart loads the newest readings and predicts from them alone until the next request completes.
     charges: HashMap<String, Charges>,
-    cooldowns: HashMap<(String, String), CooldownRow>,
+    cooldowns: HashMap<(String, CooldownScope), CooldownRow>,
     /// The poll's newest extra-usage state per account, loaded at startup from the rows the last run persisted.
     credits: HashMap<String, CreditsState>,
     /// Each agent's first placement by key id and session id, then agent id. It outlives `take_pin`, since a move, a
@@ -1503,10 +1508,12 @@ impl RoutingState {
     }
 
     /// `canonical` applied to a cooldown scope: `model:{spelling}` becomes `model:{dated}`; `account` stays.
-    pub fn canonical_scope(&self, scope: &str) -> String {
-        match scope.strip_prefix("model:") {
-            Some(spelling) => format!("model:{}", self.canonical(spelling)),
-            None => scope.to_string(),
+    pub fn canonical_scope(&self, scope: &CooldownScope) -> CooldownScope {
+        match scope {
+            CooldownScope::Model(spelling) => {
+                CooldownScope::Model(self.canonical(spelling).to_string())
+            }
+            other => other.clone(),
         }
     }
 
@@ -1729,9 +1736,9 @@ impl RoutingState {
         later_deadline || later_rejection
     }
 
-    pub fn clear_cooldown(&mut self, account_id: &str, scope: &str) -> bool {
+    pub fn clear_cooldown(&mut self, account_id: &str, scope: &CooldownScope) -> bool {
         self.cooldowns
-            .remove(&(account_id.to_string(), scope.to_string()))
+            .remove(&(account_id.to_string(), scope.clone()))
             .is_some()
     }
 
@@ -1755,7 +1762,7 @@ impl RoutingState {
             }
             // A model row recovers on the model's own week: its window keeps the upstream's claim, which the
             // client reads, and the spend cap's claim names no family's week.
-            if let Some(model) = row.scope.strip_prefix("model:") {
+            if let CooldownScope::Model(model) = &row.scope {
                 return below(window_for(model));
             }
             match row.window.as_str() {
@@ -1805,20 +1812,21 @@ impl RoutingState {
         fast: bool,
     ) -> Option<&CooldownRow> {
         let canonical_model = self.canonical(canonical_model);
-        let model_scope = format!("model:{canonical_model}");
-        ["account", "fast", "fast_credits", model_scope.as_str()]
-            .into_iter()
-            .filter_map(|scope| {
-                self.cooldowns
-                    .get(&(account_id.to_string(), scope.to_string()))
-            })
-            .filter(|row| {
-                row.until > now && cooldown_holds(&row.scope, &row.window, canonical_model, fast)
-            })
-            .fold(None, |held: Option<&CooldownRow>, row| match held {
-                Some(held) if held.until >= row.until => Some(held),
-                _ => Some(row),
-            })
+        [
+            CooldownScope::Account,
+            CooldownScope::Fast,
+            CooldownScope::FastCredits,
+            CooldownScope::Model(canonical_model.to_string()),
+        ]
+        .into_iter()
+        .filter_map(|scope| self.cooldowns.get(&(account_id.to_string(), scope)))
+        .filter(|row| {
+            row.until > now && cooldown_holds(&row.scope, &row.window, canonical_model, fast)
+        })
+        .fold(None, |held: Option<&CooldownRow>, row| match held {
+            Some(held) if held.until >= row.until => Some(held),
+            _ => Some(row),
+        })
     }
 
     /// Only a newer reading replaces the held one, so a slow poll cannot roll the state back; a reading of another
@@ -3535,8 +3543,8 @@ impl RoutingState {
             }
         }
 
-        let old_scope = format!("model:{spelling}");
-        let new_scope = format!("model:{dated_id}");
+        let old_scope = CooldownScope::Model(spelling.to_string());
+        let new_scope = CooldownScope::Model(dated_id.to_string());
         let moved_cooldowns: Vec<CooldownRow> = self
             .cooldowns
             .values()
@@ -5186,26 +5194,26 @@ mod tests {
     #[test]
     fn the_fast_lane_rule_passes_a_plan_window_row_for_a_fast_request_alone() {
         const MODEL: &str = "claude-opus-5-5";
-        let own_model = format!("model:{MODEL}");
+        let own_model = CooldownScope::Model(MODEL.into());
         for fast in [false, true] {
             for plan in [FIVE_HOUR, SEVEN_DAY, "seven_day_opus"] {
                 assert_eq!(
-                    cooldown_holds("account", plan, MODEL, fast),
+                    cooldown_holds(&CooldownScope::Account, plan, MODEL, fast),
                     !fast,
                     "an account row at {plan}, fast {fast}"
                 );
             }
             assert!(
-                cooldown_holds("account", "retry_after", MODEL, fast),
+                cooldown_holds(&CooldownScope::Account, "retry_after", MODEL, fast),
                 "an account row no plan window names, fast {fast}"
             );
             assert_eq!(
-                cooldown_holds("fast", "fast", MODEL, fast),
+                cooldown_holds(&CooldownScope::Fast, "fast", MODEL, fast),
                 fast,
                 "the fast lane's own row"
             );
             assert_eq!(
-                cooldown_holds("fast_credits", "out_of_credits", MODEL, fast),
+                cooldown_holds(&CooldownScope::FastCredits, "out_of_credits", MODEL, fast),
                 fast,
                 "the fast lane's credits row"
             );
@@ -5214,7 +5222,12 @@ mod tests {
                 "the model's own row, fast {fast}"
             );
             assert!(
-                !cooldown_holds("model:claude-sonnet-5", "retry_after", MODEL, fast),
+                !cooldown_holds(
+                    &CooldownScope::Model("claude-sonnet-5".into()),
+                    "retry_after",
+                    MODEL,
+                    fast
+                ),
                 "another model's row, fast {fast}"
             );
         }
@@ -5223,7 +5236,7 @@ mod tests {
         let mut state = RoutingState::from_load(RoutingLoad::default());
         let row = |scope: &str, until: i64, window: &str| CooldownRow {
             account_id: "a".into(),
-            scope: scope.into(),
+            scope: CooldownScope::parse(scope).unwrap(),
             until,
             set_at: 0,
             reason: "rate_limit".into(),
@@ -5233,7 +5246,7 @@ mod tests {
         };
         state.record_cooldown(row("account", 5_000, FIVE_HOUR));
         state.record_cooldown(row("fast", 3_000, "fast"));
-        state.record_cooldown(row(&own_model, 4_000, "retry_after"));
+        state.record_cooldown(row(&own_model.to_string(), 4_000, "retry_after"));
         let until = |fast: bool| {
             state
                 .blocking_cooldown("a", MODEL, 1_000, fast)
@@ -5267,7 +5280,7 @@ mod tests {
     fn a_model_row_recovers_on_its_models_own_week_whatever_window_the_row_names() {
         let row = |window: &str| CooldownRow {
             account_id: "a".into(),
-            scope: "model:claude-fable-5-1".into(),
+            scope: CooldownScope::Model("claude-fable-5-1".into()),
             until: 10_000,
             set_at: 1_000,
             reason: "rate_limit".into(),
@@ -5300,7 +5313,7 @@ mod tests {
             state
                 .recovered_cooldowns("a", &sample(readings), 3_000)
                 .into_iter()
-                .map(|r| r.scope)
+                .map(|r| r.scope.to_string())
                 .collect::<Vec<_>>()
         };
         // The spend cap's row keeps the upstream's claim, which names no family's week.
@@ -5336,7 +5349,7 @@ mod tests {
         state.record_sample("a", sampled(&[SEVEN_DAY], 1.0, 500, true), 500);
         state.record_cooldown(CooldownRow {
             account_id: "a".into(),
-            scope: "account".into(),
+            scope: CooldownScope::Account,
             until: 10_000,
             set_at: 1_000,
             reason: "rate_limit".into(),
@@ -5350,7 +5363,7 @@ mod tests {
             state
                 .recovered_cooldowns("a", &poll, 3_000)
                 .into_iter()
-                .map(|row| row.scope)
+                .map(|row| row.scope.to_string())
                 .collect::<Vec<_>>(),
             ["account"],
             "the account's one shared window has allowance again, and it has no 5-hour window to wait for"

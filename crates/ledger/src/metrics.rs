@@ -15,6 +15,7 @@ use axum::Router;
 use phoebis_bus::{Bus, SubscriberStats};
 use phoebis_oauth::Clock;
 use phoebis_routing::{RouterHandle, WriterStatus, FIVE_HOUR, SEVEN_DAY};
+use phoebis_store::CooldownScope;
 
 use crate::histogram::{bucket_edges, bucket_index, top_edge, BUCKET_COUNT};
 use crate::pricing::{PriceTable, Pricing};
@@ -616,9 +617,9 @@ pub async fn gather(
         // longer remaining wait is the one that matters.
         let mut coalesced: BTreeMap<(String, String), i64> = BTreeMap::new();
         for c in cooldowns {
-            let scope = match c.scope.strip_prefix("model:") {
-                Some(model) => format!("model:{}", table.model_label(model)),
-                None => c.scope.clone(),
+            let scope = match &c.scope {
+                CooldownScope::Model(model) => format!("model:{}", table.model_label(model)),
+                other => other.to_string(),
             };
             let remaining = ((c.until - now) / 1_000).max(0);
             let entry = coalesced.entry((c.account_id, scope)).or_insert(0);

@@ -2811,7 +2811,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             .iter()
             .filter(|cooldown| cooldown.account_id == row.id)
             .map(|cooldown| Cooldown {
-                scope: cooldown.scope.clone(),
+                scope: cooldown.scope.to_string(),
                 until: cooldown.until,
                 reason: cooldown.reason.clone(),
                 window: cooldown.window.clone(),

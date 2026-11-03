@@ -49,7 +49,9 @@ async fn a_404_naming_the_model_cools_the_pair_and_fails_over() {
     let cooldowns = wait_for_async(Duration::from_secs(2), || async {
         let rows = h.router.cooldowns().await.unwrap();
         rows.iter()
-            .any(|c| c.scope == "model:claude-sonnet-4-5-20250929")
+            .any(|c| {
+                c.scope == phoebis_store::CooldownScope::Model("claude-sonnet-4-5-20250929".into())
+            })
             .then_some(rows)
     })
     .await;
@@ -57,7 +59,7 @@ async fn a_404_naming_the_model_cools_the_pair_and_fails_over() {
     assert_eq!(
         (
             cooldowns[0].account_id.as_str(),
-            cooldowns[0].scope.as_str(),
+            cooldowns[0].scope.to_string().as_str(),
             cooldowns[0].until,
             cooldowns[0].window.as_str()
         ),
@@ -301,12 +303,16 @@ async fn a_non_portable_request_keeps_the_upstreams_404_and_records_the_cooldown
     let cooldowns = wait_for_async(Duration::from_secs(2), || async {
         let rows = h.router.cooldowns().await.unwrap();
         rows.iter()
-            .any(|c| c.account_id == "a" && c.scope == "model:claude-sonnet-4-5-20250929")
+            .any(|c| {
+                c.account_id == "a"
+                    && c.scope
+                        == phoebis_store::CooldownScope::Model("claude-sonnet-4-5-20250929".into())
+            })
             .then_some(rows)
     })
     .await;
     assert!(cooldowns.iter().any(|c| c.account_id == "a"
-        && c.scope == "model:claude-sonnet-4-5-20250929"
+        && c.scope == phoebis_store::CooldownScope::Model("claude-sonnet-4-5-20250929".into())
         && c.reason == "model_rejected"));
     let pins = h.router.pins().await.unwrap();
     assert_eq!(
@@ -335,7 +341,7 @@ async fn the_suffix_is_folded_before_the_cooldown_lookup_and_absent_from_the_wir
             account_id: "a".into(),
             row: phoebis_store::CooldownRow {
                 account_id: "a".into(),
-                scope: "model:claude-sonnet-4-5".into(),
+                scope: phoebis_store::CooldownScope::Model("claude-sonnet-4-5".into()),
                 until: NOW + 3_600_000,
                 set_at: 0,
                 reason: phoebis_routing::MODEL_REJECTED_REASON.into(),

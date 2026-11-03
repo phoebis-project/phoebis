@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_routing::{pattern, rules};
-use phoebis_store::CooldownRow;
+use phoebis_store::{CooldownRow, CooldownScope};
 use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, RouterUnavailable, StorageFailure};
@@ -57,7 +57,7 @@ pub(crate) struct ModelCooldown {
 fn cooldown_json(row: &CooldownRow) -> ModelCooldown {
     ModelCooldown {
         account_id: row.account_id.clone(),
-        scope: row.scope.clone(),
+        scope: row.scope.to_string(),
         reason: row.reason.clone(),
         until: row.until,
         window: row.window.clone(),
@@ -66,8 +66,11 @@ fn cooldown_json(row: &CooldownRow) -> ModelCooldown {
 }
 
 /// The model a `model:`-scoped row cools, or `None` for an account-wide row.
-fn model_of(scope: &str) -> Option<&str> {
-    scope.strip_prefix("model:")
+fn model_of(scope: &CooldownScope) -> Option<&str> {
+    match scope {
+        CooldownScope::Model(model) => Some(model),
+        CooldownScope::Account | CooldownScope::Fast | CooldownScope::FastCredits => None,
+    }
 }
 
 /// Read the key's processed model rules.

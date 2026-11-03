@@ -16,10 +16,10 @@ use phoebis_routing::{
     IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
-    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, FirstSeenRow,
-    MemberWrite, ModelRule, OveragePolicy, OverageRow, PinBurn, PinKey, PinRow, PoolRow,
-    RoutingLoad, RulesMode, Shedding, StateCause, StorageKey, Store, Strategy, SubscriptionRow,
-    WindowRow, WindowSetRow,
+    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, CooldownScope,
+    FirstSeenRow, MemberWrite, ModelRule, OveragePolicy, OverageRow, PinBurn, PinKey, PinRow,
+    PoolRow, RoutingLoad, RulesMode, Shedding, StateCause, StorageKey, Store, Strategy,
+    SubscriptionRow, WindowRow, WindowSetRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -640,7 +640,7 @@ async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
             account_id: "a".into(),
             row: CooldownRow {
                 account_id: "a".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: 1_000 + HOUR,
                 set_at: 0,
                 reason: "rate_limit".into(),
@@ -790,7 +790,8 @@ async fn a_parked_loop_holds_every_control_fact_and_drops_none() {
     assert_eq!(
         cooldowns
             .iter()
-            .filter(|c| c.account_id == "a" && c.scope == "model:claude-sonnet-5")
+            .filter(|c| c.account_id == "a"
+                && c.scope == CooldownScope::Model("claude-sonnet-5".into()))
             .count(),
         1,
         "the held reports land once the loop runs again: {cooldowns:?}"
@@ -1055,7 +1056,7 @@ async fn a_cooldown_survives_a_restart_and_an_expired_row_does_not_revive() {
                 account_id: "a".into(),
                 row: CooldownRow {
                     account_id: "a".into(),
-                    scope: "account".into(),
+                    scope: CooldownScope::Account,
                     until: 1_000 + 2 * HOUR,
                     set_at: 0,
                     reason: "rate_limit".into(),
@@ -1075,14 +1076,14 @@ async fn a_cooldown_survives_a_restart_and_an_expired_row_does_not_revive() {
                 .unwrap()
                 .cooldowns
                 .into_iter()
-                .find(|c| c.scope == "account")
+                .find(|c| c.scope == CooldownScope::Account)
         })
         .await;
     }
     store
         .upsert_cooldown(&CooldownRow {
             account_id: "a".into(),
-            scope: "model:claude-opus-5".into(),
+            scope: CooldownScope::Model("claude-opus-5".into()),
             until: 500,
             set_at: 0,
             reason: "rate_limit".into(),
@@ -1102,7 +1103,10 @@ async fn a_cooldown_survives_a_restart_and_an_expired_row_does_not_revive() {
         1,
         "the expired model row was purged at start"
     );
-    assert!(handle.clear_cooldown("a", "account").await.unwrap());
+    assert!(handle
+        .clear_cooldown("a", CooldownScope::Account)
+        .await
+        .unwrap());
     assert!(matches!(
         handle
             .select(request(&handle, None, 1_000))
@@ -1206,7 +1210,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             account_id: "a".into(),
             row: CooldownRow {
                 account_id: "a".into(),
-                scope: "model:claude-sonnet-4-5".into(),
+                scope: CooldownScope::Model("claude-sonnet-4-5".into()),
                 until: 2_000 + HOUR,
                 set_at: 0,
                 reason: "rate_limit".into(),
@@ -1226,7 +1230,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             .await
             .unwrap()
             .into_iter()
-            .find(|c| c.scope == "model:claude-sonnet-4-5-20250929")
+            .find(|c| c.scope == CooldownScope::Model("claude-sonnet-4-5-20250929".into()))
     })
     .await;
     assert_eq!(cooled.until, 2_000 + HOUR);
@@ -1238,7 +1242,7 @@ fn model_cooldown(account_id: &str, scope: &str, now: i64) -> Report {
         account_id: account_id.into(),
         row: CooldownRow {
             account_id: account_id.into(),
-            scope: scope.into(),
+            scope: CooldownScope::parse(scope).unwrap(),
             until: now + HOUR,
             set_at: now,
             reason: "rate_limit".into(),
@@ -1332,7 +1336,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
     assert_eq!(
         cooldowns
             .iter()
-            .map(|c| c.scope.as_str())
+            .map(|c| c.scope.to_string())
             .collect::<Vec<_>>(),
         ["model:claude-sonnet-4-5-20250929"]
     );
@@ -1391,7 +1395,7 @@ async fn landed(store: &Store, scope: &str) {
             .unwrap()
             .cooldowns
             .iter()
-            .any(|c| c.account_id == "b" && c.scope == scope)
+            .any(|c| c.account_id == "b" && c.scope.to_string() == scope)
             .then_some(())
     })
     .await;
@@ -1415,9 +1419,8 @@ async fn a_rekey_the_store_refused_is_retried_once_at_the_next_write_and_then_dr
         "the retry landed the spelling row"
     );
     assert!(
-        load.cooldowns
-            .iter()
-            .any(|c| c.account_id == "a" && c.scope == "model:claude-sonnet-4-5-20250929"),
+        load.cooldowns.iter().any(|c| c.account_id == "a"
+            && c.scope == CooldownScope::Model("claude-sonnet-4-5-20250929".into())),
         "beside the row it moved"
     );
 
@@ -1447,7 +1450,7 @@ async fn queued(handle: &RouterHandle, scopes: &[String]) {
             .all(|scope| {
                 cooldowns
                     .iter()
-                    .any(|c| c.account_id == "b" && &c.scope == scope)
+                    .any(|c| c.account_id == "b" && c.scope.to_string() == *scope)
             })
             .then_some(())
     })
@@ -2097,7 +2100,7 @@ async fn a_cooldown_about_a_replaced_credential_is_dropped_and_the_pin_survives(
             account_id: "a".into(),
             row: CooldownRow {
                 account_id: "a".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: 1_000 + HOUR,
                 set_at: 0,
                 reason: "permission".into(),
@@ -2130,7 +2133,7 @@ async fn a_cooldown_about_a_replaced_credential_is_dropped_and_the_pin_survives(
             account_id: "a".into(),
             row: CooldownRow {
                 account_id: "a".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: 1_000 + HOUR,
                 set_at: 0,
                 reason: "permission".into(),
@@ -2177,7 +2180,7 @@ async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state
             account_id: "a".into(),
             row: CooldownRow {
                 account_id: "a".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: 1_000 + 48 * HOUR,
                 set_at: 0,
                 reason: "rate_limit".into(),
@@ -2305,7 +2308,7 @@ fn insert_key_k(store: &Store) {
 fn cooldown_row(account: &str) -> CooldownRow {
     CooldownRow {
         account_id: account.into(),
-        scope: "account".into(),
+        scope: CooldownScope::Account,
         until: 1_000 + 48 * HOUR,
         set_at: 0,
         reason: "rate_limit".into(),
@@ -4261,7 +4264,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
             account_id: a.clone(),
             row: CooldownRow {
                 account_id: a.clone(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: 1_000 + HOUR,
                 set_at: 0,
                 reason: "rate_limit".into(),
@@ -4360,7 +4363,10 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
     );
     // Clearing the cooldown, releasing the session, and the purge each say so, and each says what released
     // the row it took.
-    assert!(handle.clear_cooldown(&a, "account").await.unwrap());
+    assert!(handle
+        .clear_cooldown(&a, CooldownScope::Account)
+        .await
+        .unwrap());
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, cause, .. } if account_id == a && cause == "admin")
     );
@@ -4596,7 +4602,7 @@ fn cooled(account: &str, scope: &str, until: i64, reason: &str, window: &str) ->
         account_id: account.into(),
         row: CooldownRow {
             account_id: account.into(),
-            scope: scope.into(),
+            scope: CooldownScope::parse(scope).unwrap(),
             until,
             set_at: 0,
             reason: reason.into(),
@@ -5251,7 +5257,7 @@ async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
             account_id: a.clone(),
             row: CooldownRow {
                 account_id: a.clone(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: 1_000 + HOUR,
                 set_at: 0,
                 reason: "rate_limit".into(),
@@ -5340,7 +5346,7 @@ async fn a_fast_row_with_a_pin_invalidates_it_under_fast_lane() {
             account_id: from.clone(),
             row: CooldownRow {
                 account_id: from.clone(),
-                scope: "fast".into(),
+                scope: CooldownScope::Fast,
                 until: 1_000 + 600_000,
                 set_at: 0,
                 reason: FAST_RATE_LIMIT_REASON.into(),
@@ -5486,7 +5492,7 @@ async fn a_fail_over_after_a_cooldown_lands_on_the_invalidated_pins_own_burn() {
             account_id: "a".into(),
             row: CooldownRow {
                 account_id: "a".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: AT + HOUR,
                 set_at: 0,
                 reason: "rate_limit".into(),
@@ -5580,7 +5586,7 @@ async fn fast_rows(handle: &RouterHandle) -> Vec<String> {
         .await
         .unwrap()
         .into_iter()
-        .filter(|row| row.scope == "fast" || row.scope == "fast_credits")
+        .filter(|row| row.scope == CooldownScope::Fast || row.scope == CooldownScope::FastCredits)
         .map(|row| row.reason)
         .collect()
 }
@@ -5716,7 +5722,7 @@ async fn a_credits_reading_with_room_lifts_the_spent_window_rows_and_leaves_a_mo
             .await
             .unwrap()
             .into_iter()
-            .map(|row| row.scope)
+            .map(|row| row.scope.to_string())
             .collect::<Vec<_>>()
     };
     assert_eq!(
@@ -5839,7 +5845,7 @@ async fn a_restart_restores_both_fast_rows_and_a_fast_request_waits_on_whichever
             .await
             .unwrap()
             .into_iter()
-            .map(|row| (row.scope, row.reason, row.until))
+            .map(|row| (row.scope.to_string(), row.reason, row.until))
             .collect::<Vec<_>>(),
         [
             (
@@ -5867,7 +5873,10 @@ async fn a_restart_restores_both_fast_rows_and_a_fast_request_waits_on_whichever
         }),
         "the credits row answers ahead of the rate limit beside it"
     );
-    assert!(again.clear_cooldown("a", "fast_credits").await.unwrap());
+    assert!(again
+        .clear_cooldown("a", CooldownScope::FastCredits)
+        .await
+        .unwrap());
     assert_eq!(
         again.select(fast()).await.unwrap().result,
         SelectResult::Exhausted(Exhaustion::FastLane {
@@ -6843,7 +6852,7 @@ async fn a_siblings_fresh_placement_in_the_window_never_consumes_another_agents_
             account_id: a.clone(),
             row: CooldownRow {
                 account_id: a.clone(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: 1_000 + HOUR,
                 set_at: 0,
                 reason: "rate_limit".into(),
@@ -7064,7 +7073,7 @@ async fn a_late_fast_429_from_the_lane_the_session_left_never_deletes_its_standa
             account_id: account.clone(),
             row: CooldownRow {
                 account_id: account.clone(),
-                scope: "fast".into(),
+                scope: CooldownScope::Fast,
                 until: 1_000 + 600_000,
                 set_at: 0,
                 reason: FAST_RATE_LIMIT_REASON.into(),
@@ -9148,7 +9157,7 @@ async fn a_marked_pin_released_inside_a_decision_clears_its_mark_as_released() {
     store
         .upsert_cooldown(&CooldownRow {
             account_id: "a".into(),
-            scope: "model:claude-sonnet-5".into(),
+            scope: CooldownScope::Model("claude-sonnet-5".into()),
             until: AT + 600_000,
             set_at: AT - 1_000,
             reason: "rate_limit".into(),
@@ -9226,7 +9235,7 @@ async fn a_cooldown_report_naming_a_marked_pin_clears_its_mark_as_released() {
             account_id: "a".into(),
             row: CooldownRow {
                 account_id: "a".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: AT + 600_000,
                 set_at: 0,
                 reason: "rate_limit".into(),
@@ -9399,7 +9408,7 @@ async fn a_mark_a_round_makes_on_the_requests_own_pin_is_released_with_it_in_the
     store
         .upsert_cooldown(&CooldownRow {
             account_id: "a".into(),
-            scope: "model:claude-sonnet-5".into(),
+            scope: CooldownScope::Model("claude-sonnet-5".into()),
             until: AT + 600_000,
             set_at: AT - 1_000,
             reason: "rate_limit".into(),
@@ -14050,7 +14059,7 @@ fn rejected(account: &str, pin: PinRef, until: i64) -> Report {
         account_id: account.into(),
         row: CooldownRow {
             account_id: account.into(),
-            scope: "account".into(),
+            scope: CooldownScope::Account,
             until,
             set_at: 0,
             reason: "rate_limit".into(),
@@ -14842,7 +14851,7 @@ async fn a_fail_over_whose_landing_was_held_names_the_account_left_on_the_next_r
             account_id: "a".into(),
             row: CooldownRow {
                 account_id: "a".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: AT + HOUR,
                 set_at: 0,
                 reason: "rate_limit".into(),

@@ -17,7 +17,8 @@ use phoebis_ledger::{
 };
 use phoebis_routing::{lane_key, ClientClass};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Identity, NewBundle, Secret, StateCause, SubscriptionRow,
+    AccountKind, AccountRow, AccountState, CooldownScope, Identity, NewBundle, Secret, StateCause,
+    SubscriptionRow,
 };
 use serde_json::{json as j, Value};
 
@@ -963,7 +964,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             account_id: "business".into(),
             row: phoebis_store::CooldownRow {
                 account_id: "business".into(),
-                scope: "model:claude-haiku-4-5-20251001".into(),
+                scope: CooldownScope::Model("claude-haiku-4-5-20251001".into()),
                 until: now + 1_800_000,
                 set_at: 0,
                 reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
@@ -2650,7 +2651,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
                 account_id: account_id.into(),
                 row: phoebis_store::CooldownRow {
                     account_id: account_id.into(),
-                    scope: "account".into(),
+                    scope: CooldownScope::Account,
                     until: now + 600_000,
                     set_at: now,
                     reason: "rate_limit".into(),

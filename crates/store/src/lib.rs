@@ -94,9 +94,9 @@ pub use registry::{
     WarmSessions, GUARDRAIL_BOUND, ROTATION_GRACE_MS,
 };
 pub use routing::{
-    AffinityChain, AffinityRow, CooldownRow, CreditsRow, FirstSeenRow, OverageRow, PinBurn, PinKey,
-    PinRow, RekeyWrite, ResolutionRow, RoutingLoad, RoutingTx, ShedRoundRow, WindowRow,
-    WindowSetRow,
+    AffinityChain, AffinityRow, CooldownRow, CooldownScope, CreditsRow, FirstSeenRow, OverageRow,
+    PinBurn, PinKey, PinRow, RekeyWrite, ResolutionRow, RoutingLoad, RoutingTx, ShedRoundRow,
+    WindowRow, WindowSetRow,
 };
 pub use schema::SCHEMA_VERSION;
 
@@ -1905,7 +1905,7 @@ mod tests {
     fn cooldown(account_id: &str, scope: &str) -> CooldownRow {
         CooldownRow {
             account_id: account_id.into(),
-            scope: scope.into(),
+            scope: CooldownScope::parse(scope).unwrap(),
             until: 10_000,
             set_at: 0,
             reason: "rate_limit".into(),
@@ -2006,7 +2006,7 @@ mod tests {
         let refused = store
             .upsert_cooldown(&CooldownRow {
                 account_id: "ghost".into(),
-                scope: "account".into(),
+                scope: CooldownScope::Account,
                 until: 10_000,
                 set_at: 0,
                 reason: "rate_limit".into(),

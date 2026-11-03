@@ -5,9 +5,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AffinityMode, BudgetPeriod, CooldownRow, OveragePolicy,
-    PinBurn, PinKey, PinRow, PoolMember, PoolRow, ReturnToPlan, SessionPlacement, Strategy,
-    SubagentPlacement, WarmSessions,
+    AccountKind, AccountRow, AccountState, AffinityMode, BudgetPeriod, CooldownRow, CooldownScope,
+    OveragePolicy, PinBurn, PinKey, PinRow, PoolMember, PoolRow, ReturnToPlan, SessionPlacement,
+    Strategy, SubagentPlacement, WarmSessions,
 };
 use rand::{Rng, RngExt};
 
@@ -1071,17 +1071,17 @@ pub fn release_reasons(
         request.fast,
     ) {
         // A fast-lane row names its own reason, so the drawer never reads it as a cooled account.
-        reasons.push(match row.scope.as_str() {
-            "fast" => FAST_RATE_LIMIT_REASON,
-            "fast_credits" => FAST_CREDITS_REASON,
-            _ => "cooldown",
+        reasons.push(match row.scope {
+            CooldownScope::Fast => FAST_RATE_LIMIT_REASON,
+            CooldownScope::FastCredits => FAST_CREDITS_REASON,
+            CooldownScope::Account | CooldownScope::Model(_) => "cooldown",
         });
     }
     // The credits row blocks beside a later row too, and so does the poll's state, which no row records.
     let credits_row = || {
         state
             .cooldowns_of(&pin.account_id, request.now)
-            .any(|row| row.scope == "fast_credits")
+            .any(|row| row.scope == CooldownScope::FastCredits)
     };
     let credits_state = || {
         snapshot.account(&pin.account_id).is_some_and(|account| {
@@ -5279,14 +5279,14 @@ fn obstacle(
     // A fast rate limit dates the fast lane alone: where the account's credits (their row or the poll's state) or
     // its budget block the request too, that blocker answers, since the fast reset would pass with the request
     // still refused.
-    let fast_limited = blocking.filter(|row| row.scope == "fast");
+    let fast_limited = blocking.filter(|row| row.scope == CooldownScope::Fast);
     if let Some(row) = blocking.filter(|_| fast_limited.is_none()) {
         return Some(cooldown(row));
     }
     if fast {
         if let Some(row) = state
             .cooldowns_of(&candidate.account_id, now)
-            .find(|row| row.scope == "fast_credits")
+            .find(|row| row.scope == CooldownScope::FastCredits)
         {
             return Some(cooldown(row));
         }
@@ -6757,7 +6757,7 @@ fn candidate_facts(
     let mut cooldowns: Vec<CooldownFacts> = state
         .cooldowns_of(id, now)
         .map(|row| CooldownFacts {
-            scope: row.scope.clone(),
+            scope: row.scope.to_string(),
             reason: row.reason.clone(),
             window: row.window.clone(),
             until: row.until,

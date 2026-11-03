@@ -4,7 +4,8 @@ mod common;
 use common::{get, json, login, NOW};
 use phoebis_routing::{Report, MODEL_REJECTED_REASON};
 use phoebis_store::{
-    ApiKeyRow, CooldownRow, MemberWrite, ModelRule, OveragePolicy, PoolRow, RulesMode, Strategy,
+    ApiKeyRow, CooldownRow, CooldownScope, MemberWrite, ModelRule, OveragePolicy, PoolRow,
+    RulesMode, Strategy,
 };
 use serde_json::json as j;
 
@@ -16,7 +17,7 @@ fn report_cooldown(account_id: &str, scope: &str, until: i64) -> Report {
         account_id: account_id.into(),
         row: CooldownRow {
             account_id: account_id.into(),
-            scope: scope.into(),
+            scope: CooldownScope::parse(scope).unwrap(),
             until,
             // The task stamps its own clock over this on arrival, so the value here does not matter.
             set_at: 0,

@@ -119,7 +119,7 @@ async fn a_ping_then_an_error_before_message_start_fails_over_with_no_client_byt
     assert_eq!(
         (
             c[0].account_id.as_str(),
-            c[0].scope.as_str(),
+            c[0].scope.to_string().as_str(),
             c[0].window.as_str()
         ),
         ("a", "account", "seven_day")
