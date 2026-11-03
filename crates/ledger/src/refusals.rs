@@ -7,13 +7,8 @@
 
 use phoebis_bus::{Kind, Outcome};
 
-macro_rules! refusal_codes {
-    ($first:literal $(, $rest:literal)* $(,)?) => {
-        /// The codes that flag a rejected request with no attempt as refused, alphabetical.
-        pub const REFUSAL_CODES: &[&str] = &[$first $(, $rest)*];
-    };
-}
-refusal_codes!(
+/// The codes that flag a rejected request with no attempt as refused, alphabetical.
+pub const REFUSAL_CODES: &[&str] = &[
     "auth_ambiguous",
     "auth_malformed",
     "auth_missing",
@@ -33,7 +28,7 @@ refusal_codes!(
     "request_timeout",
     "request_too_large",
     "unsupported_content_encoding",
-);
+];
 
 /// The ledger's reading of a row's own facts: a kind other than `probe`, the outcome `rejected`, a code of
 /// `REFUSAL_CODES` and an attempt count of zero, the count the row stores. An `auth_unknown` or a `model_not_allowed`
