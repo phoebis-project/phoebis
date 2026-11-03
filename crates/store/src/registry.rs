@@ -1084,12 +1084,7 @@ impl Store {
     pub fn insert_api_key(&self, row: &ApiKeyRow, actor: &str) -> Result<ApiKeyRow, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        if tx.query_row(
-            "SELECT COUNT(*) FROM pools WHERE id = ?1",
-            params![row.pool_id],
-            |r| r.get::<_, i64>(0),
-        )? == 0
-        {
+        if !row_exists(&tx, "pools", &row.pool_id)? {
             return Err(StoreError::PoolNotFound(row.pool_id.clone()));
         }
         // The id is reusable and the generation is this stamp, so a key created inside the millisecond its
@@ -1164,12 +1159,7 @@ impl Store {
         self.park_on_key_write_hold();
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        if tx.query_row(
-            "SELECT COUNT(*) FROM pools WHERE id = ?1",
-            params![row.pool_id],
-            |r| r.get::<_, i64>(0),
-        )? == 0
-        {
+        if !row_exists(&tx, "pools", &row.pool_id)? {
             return Err(StoreError::PoolNotFound(row.pool_id.clone()));
         }
         let key_row = format!("{KEY_SELECT} WHERE id = ?1");
@@ -1689,17 +1679,9 @@ impl Store {
                 row.incarnation as i64
             ],
         )?;
+        // The row stands, read above, so a fence that matched nothing means another write moved it.
         if updated == 0 {
-            let exists: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM guardrails WHERE id = ?1",
-                params![row.id],
-                |r| r.get(0),
-            )?;
-            return Err(if exists > 0 {
-                StoreError::Stale
-            } else {
-                StoreError::GuardrailNotFound(row.id.clone())
-            });
+            return Err(StoreError::Stale);
         }
         if let Some(pools) = pools {
             set_guardrail_subjects_in(&tx, &row.id, "pool", pools, at)?;
@@ -1766,12 +1748,7 @@ fn set_subject_guardrails_in(
     at: i64,
 ) -> Result<(), StoreError> {
     for id in ids {
-        if tx.query_row(
-            "SELECT COUNT(*) FROM guardrails WHERE id = ?1",
-            params![id],
-            |r| r.get::<_, i64>(0),
-        )? == 0
-        {
+        if !row_exists(tx, "guardrails", id)? {
             return Err(StoreError::GuardrailNotFound(id.clone()));
         }
     }
@@ -1811,12 +1788,7 @@ fn set_guardrail_subjects_in(
         ("api_keys", StoreError::KeyNotFound)
     };
     for id in ids {
-        if tx.query_row(
-            &format!("SELECT COUNT(*) FROM {table} WHERE id = ?1"),
-            params![id],
-            |r| r.get::<_, i64>(0),
-        )? == 0
-        {
+        if !row_exists(tx, table, id)? {
             return Err(missing(id.clone()));
         }
     }
@@ -2028,12 +2000,7 @@ fn set_pool_members_in(
         return Err(StoreError::PoolNotFound(pool_id.to_string()));
     }
     for member in members {
-        if tx.query_row(
-            "SELECT COUNT(*) FROM accounts WHERE id = ?1",
-            params![member.account_id],
-            |r| r.get::<_, i64>(0),
-        )? == 0
-        {
+        if !row_exists(tx, "accounts", &member.account_id)? {
             return Err(StoreError::AccountNotFound(member.account_id.clone()));
         }
     }
