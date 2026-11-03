@@ -1751,7 +1751,7 @@ struct Task {
     clock: Clock,
     config: RouterConfig,
     /// The writes the full channel could not take; while it holds any, every new write folds into it.
-    deferred: Mutex<Deferred>,
+    deferred: Deferred,
     events: broadcast::Sender<RouterEvent>,
     /// The loop's own way back into its mailbox, weak so it never keeps its receiver alive: upgraded for the one
     /// load a task runs, and dropped with that task.
@@ -1931,7 +1931,7 @@ pub fn spawn(
         cancel: HashMap::new(),
         clock,
         config,
-        deferred: Mutex::default(),
+        deferred: Deferred::default(),
         events,
         handle_tx: tx.downgrade(),
         invalidated: HashMap::new(),
@@ -2867,10 +2867,7 @@ impl Task {
     /// Dropping the sender ends the writer's loop; waiting on `writer_done` is what makes an acknowledged pin or
     /// cooldown durable before the process exits.
     async fn drain_writer(&mut self) {
-        let backlog = {
-            let mut deferred = self.deferred.lock().expect(DEFERRED_POISONED);
-            (!deferred.is_empty()).then(|| deferred.take())
-        };
+        let backlog = (!self.deferred.is_empty()).then(|| self.deferred.take());
         if let Some(backlog) = backlog {
             // Awaited: the channel is bounded and the writer is still draining it, so the backlog takes the next
             // slot it frees, and a shutdown after a full channel still lands every acknowledged pin and cooldown.
@@ -5041,18 +5038,17 @@ impl Task {
         }
     }
 
-    fn write(&self, writes: Vec<StateWrite>) {
+    fn write(&mut self, writes: Vec<StateWrite>) {
         if writes.is_empty() {
             return;
         }
-        let mut deferred = self.deferred.lock().expect(DEFERRED_POISONED);
         // Nothing passes the backlog: a slot that frees between the backlog's offer and a newer write would let
         // the newer write land first, and a pin's upsert behind its own delete puts a released pin back.
-        if !deferred.is_empty() {
-            deferred.fold(writes);
+        if !self.deferred.is_empty() {
+            self.deferred.fold(writes);
             self.writer_status
                 .deferred
-                .store(deferred.len(), Ordering::Relaxed);
+                .store(self.deferred.len(), Ordering::Relaxed);
             return;
         }
         match self.writer.try_reserve() {
@@ -5062,10 +5058,10 @@ impl Task {
                 permit.send(writes);
             }
             Err(mpsc::error::TrySendError::Full(())) => {
-                deferred.fold(writes);
+                self.deferred.fold(writes);
                 self.writer_status
                     .deferred
-                    .store(deferred.len(), Ordering::Relaxed);
+                    .store(self.deferred.len(), Ordering::Relaxed);
                 if !self.writer_status.degraded.swap(true, Ordering::Relaxed) {
                     tracing::warn!(
                         depth = WRITER_DEPTH,
@@ -5079,15 +5075,14 @@ impl Task {
     }
 
     /// Hands the backlog to the channel as one batch once a slot is free.
-    fn offer_deferred(&self) {
-        let mut deferred = self.deferred.lock().expect(DEFERRED_POISONED);
-        if deferred.is_empty() {
+    fn offer_deferred(&mut self) {
+        if self.deferred.is_empty() {
             return;
         }
         match self.writer.try_reserve() {
             Ok(permit) => {
                 self.writer_status.depth.fetch_add(1, Ordering::Relaxed);
-                permit.send(deferred.take());
+                permit.send(self.deferred.take());
                 self.writer_status.deferred.store(0, Ordering::Relaxed);
                 self.writer_status.degraded.store(false, Ordering::Relaxed);
                 tracing::info!(
@@ -5098,7 +5093,7 @@ impl Task {
             // The writer task is gone, so nothing would ever take the backlog. It closes as the loop shuts down,
             // where the loss is expected, so this warns as `drain_writer` does.
             Err(mpsc::error::TrySendError::Closed(())) => {
-                let lost = deferred.take().len();
+                let lost = self.deferred.take().len();
                 self.writer_status.deferred.store(0, Ordering::Relaxed);
                 tracing::warn!(
                     lost,
@@ -5109,7 +5104,7 @@ impl Task {
     }
 
     fn has_deferred(&self) -> bool {
-        !self.deferred.lock().expect(DEFERRED_POISONED).is_empty()
+        !self.deferred.is_empty()
     }
 
     /// Resolves once the writer's channel has a free slot, which the next turn's offer takes.
@@ -5117,8 +5112,6 @@ impl Task {
         let _ = self.writer.reserve().await;
     }
 }
-
-const DEFERRED_POISONED: &str = "deferred writes lock poisoned";
 
 /// A row the backlog keeps one write for.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
