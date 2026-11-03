@@ -1,6 +1,6 @@
 import { isoOrNull, list, num, numOrNull, rec } from '@/api/decode';
 import type { AttentionItem, AttentionKind } from '@/api/types';
-import { METER_CODEC } from './address';
+import { accountMeterHref } from './address';
 import { lookup } from './counts';
 import { fmtAbsolute, fmtRelative, instant as clockInstant, listWords, messageOf, percentText, plural } from './format';
 import { WINDOW_WORD, entityHref, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
@@ -93,7 +93,7 @@ export function attentionHref(item: LinkedItem, now: number): string | null {
   if (pool !== null) return logHref({ pools: [pool], kinds: ['exhausted'], ...since });
   const condition = conditionLog(item);
   if (condition !== null) return logHref({ ...condition.log, ...since });
-  if (item.kind === 'meter_drift' && link.page === 'accounts') return `/meter?${METER_CODEC.toParams({ accounts: [link.id] })}`;
+  if (item.kind === 'meter_drift' && link.page === 'accounts') return accountMeterHref(link.id);
   return entityHref(PAGE_ENTITY[link.page], link.id);
 }
 

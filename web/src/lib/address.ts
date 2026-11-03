@@ -319,6 +319,8 @@ export interface MeterAddress {
 }
 
 export const METER_CODEC = codecOf<MeterAddress>({ accounts: list('accounts') });
+/** The Meter view on one account's groups. */
+export const accountMeterHref = (accountId: string): string => `/meter?${METER_CODEC.toParams({ accounts: [accountId] })}`;
 
 export interface KeysAddress {
   pools: string[];
@@ -333,6 +335,8 @@ export const KEYS_CODEC = codecOf<KeysAddress>({
   search: text('search'),
   status: { default: 'all', kind: 'choice', name: 'status', values: KEY_STATUSES },
 });
+/** The Keys view on one pool's keys, every other filter at its default. */
+export const poolKeysHref = (poolId: string): string => `/keys?${KEYS_CODEC.toParams({ pools: [poolId], search: '', status: 'all' })}`;
 
 export interface AccountsAddress {
   /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */

@@ -17,7 +17,7 @@ import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, Refusal, Segmented, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
-import { accountHref, ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, METER_CODEC, sortAddressOf, sortDirOf } from '@/lib/address';
+import { accountHref, accountMeterHref, ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, sortAddressOf, sortDirOf } from '@/lib/address';
 import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, newestResets, ownShareHover, pairOf, resetDate, resetHover, resetInstant, weeklyResetsKey, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
@@ -822,7 +822,7 @@ function DriftCard({ accountId, answer, error, onRetry }: { accountId: string; a
   const rows = answer === null ? null : answer.reconciliations.filter((r) => r.accountId === accountId);
   const groups = rows === null ? [] : Object.values(meterGroups(rows)).flat();
   return (
-    <Card title="Meter drift" subtitle={DRIFT_SUBTITLE} actions={<Link to={`/meter?${METER_CODEC.toParams({ accounts: [accountId] })}`}>Meter</Link>}>
+    <Card title="Meter drift" subtitle={DRIFT_SUBTITLE} actions={<Link to={accountMeterHref(accountId)}>Meter</Link>}>
       {error !== null ? (
         <ErrorState title="Could not load the meter reconciliation" body={error} retry={onRetry} />
       ) : rows === null ? (

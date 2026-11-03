@@ -23,7 +23,7 @@ import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
-import { accountHref, KEYS_CODEC } from '@/lib/address';
+import { accountHref, poolKeysHref } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, dollarsUnder, moveLabel, nativeSidesOf, sidesLine, sumFunded, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
@@ -675,7 +675,7 @@ function PoolCard({
             {pool.status}
           </Badge>
           {keysRead === 'loaded' ? (
-            <Link to={`/keys?${KEYS_CODEC.toParams({ pools: [pool.id], search: '', status: 'all' })}`} className={`pool__keys ${keys.length === 0 ? 'pool__keys--none' : ''}`}>
+            <Link to={poolKeysHref(pool.id)} className={`pool__keys ${keys.length === 0 ? 'pool__keys--none' : ''}`}>
               {keys.length === 0 ? 'No keys yet' : plural(keys.length, 'key')}
             </Link>
           ) : (

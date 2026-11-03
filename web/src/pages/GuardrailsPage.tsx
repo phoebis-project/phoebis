@@ -9,7 +9,7 @@ import { OptionList, type Option, walkFocus } from '@/components/ui/OptionList';
 import { Popover } from '@/components/ui/Popover';
 import { IconChevron, IconInfo, IconPlus } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
-import { KEYS_CODEC, requestHref } from '@/lib/address';
+import { poolKeysHref, requestHref } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtInt, messageOf, noun } from '@/lib/format';
@@ -484,7 +484,7 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
     const pool = pools.find((p) => p.id === (key ? key.poolId : run.subjectId)) ?? null;
     const hours = key ? effectiveCaptureHours(key, pool) : (pool?.bodyCaptureHours ?? 0);
     if (hours > 0) return <p className="muted">No captured bodies for {key?.name ?? pool?.name ?? run.subjectId} in the last {hours} hours.</p>;
-    const keysOfPool = `/keys?${KEYS_CODEC.toParams({ pools: [pool?.id ?? run.subjectId], search: '', status: 'all' }).toString()}`;
+    const keysOfPool = poolKeysHref(pool?.id ?? run.subjectId);
     return (
       <p className="muted">
         Body capture is off, so there is nothing to test against. Turn it on in the key&apos;s Capture group. <PageLink to={keysOfPool}>The pool&apos;s keys</PageLink>
