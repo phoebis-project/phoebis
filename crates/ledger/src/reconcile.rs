@@ -123,19 +123,24 @@ struct Part {
     readings: Vec<Reading>,
 }
 
+/// The source a stretch of readings is read under: the polls where two or more stand, else the heads.
+fn chosen_source<'a>(readings: impl IntoIterator<Item = &'a Reading>) -> SampleSource {
+    let polls = readings
+        .into_iter()
+        .filter(|r| r.source == SampleSource::Poll)
+        .count();
+    if polls >= 2 {
+        SampleSource::Poll
+    } else {
+        SampleSource::Head
+    }
+}
+
 impl Part {
     /// The part's two ends under one source: its first and last polls where it holds two or more, else its first
     /// and last heads, `None` for a part with fewer than two readings of the chosen source.
     fn ends(&self) -> Option<(Reading, Reading)> {
-        let polls = self
-            .readings
-            .iter()
-            .filter(|r| r.source == SampleSource::Poll);
-        let source = if polls.count() >= 2 {
-            SampleSource::Poll
-        } else {
-            SampleSource::Head
-        };
+        let source = chosen_source(&self.readings);
         let mut chosen = self.readings.iter().filter(|r| r.source == source);
         let first = *chosen.next()?;
         let last = *chosen.next_back()?;
@@ -241,15 +246,7 @@ fn drop_faulty_dips(
         .enumerate()
         .flat_map(|(label, part)| part.readings.iter().map(move |r| (label, *r)))
         .collect();
-    let polls = readings
-        .iter()
-        .filter(|(_, r)| r.source == SampleSource::Poll)
-        .count();
-    let source = if polls >= 2 {
-        SampleSource::Poll
-    } else {
-        SampleSource::Head
-    };
+    let source = chosen_source(readings.iter().map(|(_, r)| r));
     let chosen: Vec<usize> = readings
         .iter()
         .enumerate()
