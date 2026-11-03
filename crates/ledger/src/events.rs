@@ -9,7 +9,7 @@ use std::time::Duration;
 use phoebis_oauth::{BackoffEdge, Clock, PollFault};
 use phoebis_relay::CatalogChange;
 use phoebis_routing::{CreditsState, RouterEvent, RouterHandle};
-use phoebis_store::{AccountState, ResolvedAttempt, Settled, StateCause, Store};
+use phoebis_store::{AccountRow, AccountState, ResolvedAttempt, Settled, StateCause, Store};
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -633,6 +633,91 @@ impl Observed {
     }
 }
 
+impl From<&AccountRow> for Observed {
+    fn from(account: &AccountRow) -> Observed {
+        Observed {
+            state: account.state,
+            incarnation: account.incarnation,
+            revision: account.revision,
+        }
+    }
+}
+
+/// The account states the mirror holds, from the registry's rows and the routing loop's events alike, so both sources
+/// write an account's transitions by one set of rules.
+struct AccountWatch {
+    states: HashMap<String, Observed>,
+    /// A deleted holder's incarnation, so an event about it that arrives after the tick wrote its last row is dropped
+    /// rather than read as a holder the mirror never saw.
+    gone: HashMap<String, u64>,
+}
+
+impl AccountWatch {
+    /// Writes the rows an observation of `account_id` moves it through and holds it. At or below the held identity the
+    /// observation is older than what the mirror already observed, by an earlier tick or by the routing loop's event,
+    /// and writes nothing.
+    fn observe(
+        &mut self,
+        ledger: &Ledger,
+        account_id: String,
+        observed: Observed,
+        cause: StateCause,
+        detail: Option<&str>,
+        at: i64,
+    ) {
+        let held = self.states.get(&account_id).copied();
+        if held.is_some_and(|held| !observed.newer_than(&held)) {
+            return;
+        }
+        let to = observed.state;
+        match held {
+            Some(held) if held.incarnation == observed.incarnation && held.state == to => {}
+            Some(held) if held.incarnation == observed.incarnation => {
+                record_transition(ledger, &account_id, held.state, to, cause, detail, at)
+            }
+            // The held holder is gone and another took its id before the mirror saw the gap.
+            Some(held) => {
+                record_deletion(ledger, &account_id, held.state, at);
+                if to == AccountState::ReauthRequired {
+                    record_transition(
+                        ledger,
+                        &account_id,
+                        AccountState::Unpaired,
+                        AccountState::ReauthRequired,
+                        cause,
+                        detail,
+                        at,
+                    );
+                }
+            }
+            // A holder the mirror never saw: the registry's own row says it was created. One born marked records its
+            // move from `unpaired`, as the row born paired below does, so its history opens the same way.
+            None if to == AccountState::ReauthRequired => record_transition(
+                ledger,
+                &account_id,
+                AccountState::Unpaired,
+                AccountState::ReauthRequired,
+                cause,
+                detail,
+                at,
+            ),
+            // A row born paired skipped `unpaired`: the transition a pairing on an existing row records is recorded for
+            // it too, so the account's history opens the same way.
+            None if to == AccountState::Ready && cause == StateCause::Paired => record_transition(
+                ledger,
+                &account_id,
+                AccountState::Unpaired,
+                AccountState::Ready,
+                cause,
+                detail,
+                at,
+            ),
+            None => {}
+        }
+        self.states.insert(account_id, observed);
+    }
+}
+
 fn record_transition(
     ledger: &Ledger,
     account_id: &str,
@@ -778,11 +863,7 @@ impl MirrorBaseline {
                 .map(|rows| {
                     rows.into_iter()
                         .map(|a| {
-                            let observed = Observed {
-                                state: a.state,
-                                incarnation: a.incarnation,
-                                revision: a.revision,
-                            };
+                            let observed = Observed::from(&a);
                             (a.id, observed)
                         })
                         .collect()
@@ -807,11 +888,12 @@ pub fn spawn_event_mirror(
     let MirrorBaseline {
         mut last_change,
         mut last_resolved,
-        mut states,
+        states,
     } = baseline.unwrap_or_else(|| MirrorBaseline::read(&store));
-    // A deleted holder's incarnation, so an event about it that arrives after the tick wrote its last row is dropped
-    // rather than read as a holder the mirror never saw.
-    let mut gone: HashMap<String, u64> = HashMap::new();
+    let mut watch = AccountWatch {
+        states,
+        gone: HashMap::new(),
+    };
     // Read before this run's writer lands anything, so it names the previous run's newest row.
     let down_since = match db.read_blocking(|conn| Ok(newest_row_at(conn)?)) {
         Ok(down_since) => down_since,
@@ -838,32 +920,10 @@ pub fn spawn_event_mirror(
                         ledger.record(Record::CacheMap(CacheMapWrite { request_id, seq, attempt, entries, at }));
                     }
                     Ok(RouterEvent::AccountStateChanged { account_id, to, incarnation, revision, cause, detail, at }) => {
-                        let observed = Observed { state: to, incarnation, revision };
-                        let held = states.get(&account_id).copied();
-                        let about_gone = gone.get(&account_id).is_some_and(|&buried| incarnation <= buried);
-                        // At or below the held identity, the event is older than what the mirror already observed.
-                        if !about_gone && held.is_none_or(|held| observed.newer_than(&held)) {
-                            match held {
-                                Some(held) if held.incarnation == incarnation && held.state == to => {}
-                                Some(held) if held.incarnation == incarnation => {
-                                    record_transition(&ledger, &account_id, held.state, to, cause, detail.as_deref(), at)
-                                }
-                                // The held holder is gone and another took its id before a tick saw the gap.
-                                Some(held) => {
-                                    record_deletion(&ledger, &account_id, held.state, at);
-                                    if to == AccountState::ReauthRequired {
-                                        record_transition(&ledger, &account_id, AccountState::Unpaired, AccountState::ReauthRequired, cause, detail.as_deref(), at);
-                                    }
-                                }
-                                // A holder the mirror never saw: the registry's own row says it was created. One born
-                                // marked records its move from `unpaired`, as a row born paired does, so its history
-                                // opens the same way.
-                                None if to == AccountState::ReauthRequired => {
-                                    record_transition(&ledger, &account_id, AccountState::Unpaired, AccountState::ReauthRequired, cause, detail.as_deref(), at)
-                                }
-                                None => {}
-                            }
-                            states.insert(account_id, observed);
+                        let about_gone = watch.gone.get(&account_id).is_some_and(|&buried| incarnation <= buried);
+                        if !about_gone {
+                            let observed = Observed { state: to, incarnation, revision };
+                            watch.observe(&ledger, account_id, observed, cause, detail.as_deref(), at);
                         }
                     }
                     Ok(event) => {
@@ -925,50 +985,16 @@ pub fn spawn_event_mirror(
                         let now = clock();
                         let carried: HashSet<String> = accounts.iter().map(|account| account.id.clone()).collect();
                         for account in accounts {
-                            let observed = Observed {
-                                state: account.state,
-                                incarnation: account.incarnation,
-                                revision: account.revision,
-                            };
-                            let held = states.get(&account.id).copied();
-                            // At or below the held identity, the row was observed already, by an earlier tick or by
-                            // the routing loop's event.
-                            if held.is_some_and(|held| !observed.newer_than(&held)) {
-                                continue;
-                            }
-                            match held {
-                                Some(held) if held.incarnation == account.incarnation && held.state == account.state => {}
-                                Some(held) if held.incarnation == account.incarnation => {
-                                    record_transition(&ledger, &account.id, held.state, account.state, account.state_cause, None, now)
-                                }
-                                // The held holder is gone and another took its id between two ticks.
-                                Some(held) => {
-                                    record_deletion(&ledger, &account.id, held.state, now);
-                                    if account.state == AccountState::ReauthRequired {
-                                        record_transition(&ledger, &account.id, AccountState::Unpaired, AccountState::ReauthRequired, account.state_cause, None, now);
-                                    }
-                                }
-                                // A holder the mirror never saw: the registry's own row says it was created. One born
-                                // marked records its move from `unpaired`, as the row born paired below does.
-                                None if account.state == AccountState::ReauthRequired => {
-                                    record_transition(&ledger, &account.id, AccountState::Unpaired, AccountState::ReauthRequired, account.state_cause, None, now)
-                                }
-                                // A row born paired skipped `unpaired`: the transition a pairing on an existing row records is
-                                // recorded for it too, so the account's history opens the same way.
-                                None if account.state == AccountState::Ready && account.state_cause == StateCause::Paired => {
-                                    record_transition(&ledger, &account.id, AccountState::Unpaired, AccountState::Ready, account.state_cause, None, now)
-                                }
-                                None => {}
-                            }
-                            states.insert(account.id, observed);
+                            let observed = Observed::from(&account);
+                            watch.observe(&ledger, account.id, observed, account.state_cause, None, now);
                         }
                         // A held account the rows no longer carry was deleted: its last row, and the id forgotten so a
                         // replacement under it is a holder the mirror never saw.
-                        states.retain(|id, held| {
+                        watch.states.retain(|id, held| {
                             let kept = carried.contains(id);
                             if !kept {
                                 record_deletion(&ledger, id, held.state, now);
-                                gone.insert(id.clone(), held.incarnation);
+                                watch.gone.insert(id.clone(), held.incarnation);
                             }
                             kept
                         });
