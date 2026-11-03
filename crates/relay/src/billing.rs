@@ -26,12 +26,9 @@ pub const FIELD_ORDER: [&str; 13] = [
 pub struct Restore<'a> {
     pub prompt_id: Option<&'a str>,
     pub prev_req: Option<&'a str>,
-    pub restore_cch: bool,
     /// Items the account has refused on a previous attempt; each is left out of the line even when the field
     /// it names is otherwise absent and restorable.
     pub skip: Vec<Injected>,
-    /// `system` is an array, as the request's one parse read it.
-    pub system_is_array: bool,
 }
 
 /// Fills every absent field the restoration names on the attribution line at `system[0]`. A body whose first
@@ -42,9 +39,6 @@ pub fn restore_billing_line(
     body: &mut Vec<u8>,
     restore: &Restore<'_>,
 ) -> Result<Vec<Injected>, RelayError> {
-    if !restore.system_is_array {
-        return Ok(Vec::new());
-    }
     match phoebis_cch::string_member_span(body, &["system", "0", "text"]) {
         Some((start, end)) if body[start..end].starts_with(BILLING_BLOCK) => {
             patch_line(body, start, end, restore)
@@ -166,7 +160,7 @@ pub fn is_entrypoint_token(candidate: &str) -> bool {
 /// otherwise absent and restorable.
 fn candidates(restore: &Restore<'_>) -> Vec<(&'static str, String, Injected)> {
     let mut out = Vec::new();
-    if restore.restore_cch && !restore.skip.contains(&Injected::Cch) {
+    if !restore.skip.contains(&Injected::Cch) {
         out.push(("cch", "cch=00000".to_string(), Injected::Cch));
     }
     if let Some(id) = restore.prev_req {
@@ -401,9 +395,7 @@ mod tests {
         let restore = Restore {
             prompt_id: Some("11111111-1111-4111-8111-111111111111"),
             prev_req: Some("req_1"),
-            restore_cch: true,
             skip: Vec::new(),
-            system_is_array: true,
         };
         let injected = restore_billing_line(&mut body, &restore).unwrap();
         assert_eq!(
@@ -427,9 +419,7 @@ mod tests {
         let restore = Restore {
             prompt_id: None,
             prev_req: Some("req_other"),
-            restore_cch: false,
-            skip: Vec::new(),
-            system_is_array: true,
+            skip: vec![Injected::Cch],
         };
         restore_billing_line(&mut body, &restore).unwrap();
         assert_eq!(
@@ -442,11 +432,7 @@ mod tests {
     fn a_body_whose_system_is_a_string_is_left_alone() {
         let mut body = br#"{"model":"m","system":"be helpful","messages":[]}"#.to_vec();
         let before = body.clone();
-        let restore = Restore {
-            system_is_array: false,
-            ..full_restore()
-        };
-        let injected = restore_billing_line(&mut body, &restore).unwrap();
+        let injected = restore_billing_line(&mut body, &full_restore()).unwrap();
         assert!(injected.is_empty());
         assert_eq!(body, before);
     }
@@ -455,9 +441,7 @@ mod tests {
         Restore {
             prompt_id: Some("11111111-1111-4111-8111-111111111111"),
             prev_req: None,
-            restore_cch: true,
             skip: Vec::new(),
-            system_is_array: true,
         }
     }
 
@@ -488,9 +472,8 @@ mod tests {
         let plain_first_block =
             br#"{"model":"m","system":[{"type":"text","text":"be helpful"}],"messages":[]}"#
                 .to_vec();
-        // With the flag set, as the facts read this body: the scanner reads the first `system`, the string, and
-        // cannot descend into it as an array, so every lookup that would locate a field returns nothing rather
-        // than a guess.
+        // The scanner reads the first `system`, the string, and cannot descend into it as an array, so every
+        // lookup that would locate a field returns nothing rather than a guess.
         let duplicate_keys =
             br#"{"model":"m","system":"be helpful","messages":[],"system":[]}"#.to_vec();
         for body in [empty, plain_first_block, duplicate_keys] {
@@ -513,9 +496,7 @@ mod tests {
         let restore = Restore {
             prompt_id: None,
             prev_req: Some("req_1"),
-            restore_cch: false,
-            skip: Vec::new(),
-            system_is_array: true,
+            skip: vec![Injected::Cch],
         };
         let injected = restore_billing_line(&mut body, &restore).unwrap();
         assert_eq!(injected, vec![Injected::PrevReq]);

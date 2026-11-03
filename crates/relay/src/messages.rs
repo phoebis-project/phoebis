@@ -1064,9 +1064,7 @@ fn restore_with<'a>(
             .prev_req
             .then_some(previous.request_id.as_deref())
             .flatten(),
-        restore_cch: true,
         skip: skip.iter().copied().collect(),
-        system_is_array: r.system_is_array,
     })
 }
 
@@ -1956,7 +1954,6 @@ impl Relay {
                     prompt_units: facts.prompt_units.clone(),
                     prompt_id: hints.prompt_id.clone(),
                     prev_req,
-                    system_is_array: facts.system_is_array,
                 })
             }
             _ => None,
@@ -5246,9 +5243,8 @@ impl From<Failure> for LocalRefusal {
 }
 
 /// The restoration facts computed once at admission: the client version the wire already named, the
-/// version-suffix code units, the prompt id the client's header names, and whether `system` is an array. The
-/// previous request id is not here because it is per-account, looked up in the failover loop against the account
-/// each attempt actually tries.
+/// version-suffix code units, and the prompt id the client's header names. The previous request id is not here
+/// because it is per-account, looked up in the failover loop against the account each attempt actually tries.
 struct RestoreContext {
     cli_version: String,
     prompt_units: Vec<[u16; 3]>,
@@ -5256,7 +5252,6 @@ struct RestoreContext {
     /// `cc_prev_req` is filled on this request's class (the conversation classes and the conversation-shaped
     /// forks), read once at admission.
     prev_req: bool,
-    system_is_array: bool,
 }
 
 /// What the same-account leg reads about the request it is part of: fixed at admission and shared by every
