@@ -598,7 +598,7 @@ fn each_member<'a>(
 }
 
 /// A `system` value: when it is an array whose first element is an object, `member` is handed each of that object's
-/// members as `each_member` hands them; every other element, and a `system` of another shape, is skipped whole.
+/// members as `each_member` hands them. Every other element, and a `system` of another shape, is skipped whole.
 fn each_first_block_member<'a>(
     s: &mut Scanner<'a>,
     member: impl FnMut(&mut Scanner<'a>, &[u8]) -> Result<(), CchError>,
