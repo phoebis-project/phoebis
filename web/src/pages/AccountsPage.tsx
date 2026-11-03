@@ -1081,6 +1081,14 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
   // offers Disconnect in Confirm's place.
   const [sealed, setSealed] = useState(false);
   const now = useNow(1_000);
+  const restart = (next: PairingSession | null) => {
+    setSession(next);
+    setStep(1);
+    setCallback('');
+    setError(null);
+    setPreview(null);
+    setSealed(false);
+  };
 
   // The start by value, so the placeholder the page rebuilds for the closed dialog every render restarts nothing. An
   // opening, or a new start while open, resets the steps in the render that brings it.
@@ -1089,14 +1097,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
   const [openedFor, setOpenedFor] = useState<string | null>(null);
   if (openedFor !== opening) {
     setOpenedFor(opening);
-    if (opening !== null) {
-      setSession('session' in start ? start.session : null);
-      setStep(1);
-      setCallback('');
-      setError(null);
-      setPreview(null);
-      setSealed(false);
-    }
+    if (opening !== null) restart('session' in start ? start.session : null);
   }
   // The start effect's run while the dialog stays open, which the Disconnect's fresh start reads as its close guard.
   const live = useRef({ alive: false });
@@ -1183,11 +1184,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
         void api.cancelPairing(s.id).catch(() => undefined);
         return;
       }
-      setSession(s);
-      setStep(1);
-      setCallback('');
-      setPreview(null);
-      setSealed(false);
+      restart(s);
     } catch (e) {
       if (run.alive) setError(messageOf(e));
     } finally {
@@ -1204,34 +1201,24 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
       width={600}
       unsaved={callback.trim() !== '' || preview !== null}
       footer={
-        step === 1 ? (
-          <>
-            <Button variant="ghost" onClick={dismiss}>
-              Cancel
-            </Button>
+        <>
+          <Button variant="ghost" onClick={dismiss}>
+            Cancel
+          </Button>
+          {step === 1 ? (
             <Button variant="primary" disabled={!session || !callback.trim() || busy || expired} onClick={submit}>
               {busy ? 'Checking…' : 'Submit'}
             </Button>
-          </>
-        ) : sealed ? (
-          <>
-            <Button variant="ghost" onClick={dismiss}>
-              Cancel
-            </Button>
+          ) : sealed ? (
             <Button variant="danger" disabled={busy} onClick={disconnect}>
               Disconnect
             </Button>
-          </>
-        ) : (
-          <>
-            <Button variant="ghost" onClick={dismiss}>
-              Cancel
-            </Button>
+          ) : (
             <Button variant="primary" disabled={busy} onClick={confirm}>
               {busy ? 'Saving…' : 'Confirm'}
             </Button>
-          </>
-        )
+          )}
+        </>
       }
     >
       <ol className="steps" aria-label="Pairing steps">
