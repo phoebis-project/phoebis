@@ -27,6 +27,26 @@ pub struct PinBurn {
     pub write_5m: f64,
 }
 
+/// Where a shedding round's move or a failover's landing took a pin from, and when: written whole, and cleared whole
+/// by every other move.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShedStamp {
+    pub from: String,
+    pub at: i64,
+    /// Why the stamp was written: `round` for a shedding round's move, the failover's reason word (`cooldown`,
+    /// `fast_lane`, `mark`) for a failover's landing. Null on a row stamped before the column, which reads as shed.
+    pub reason: Option<String>,
+}
+
+/// The round's mark: when it was made, the account it was made on and the window whose trigger made it. It stands
+/// while `on` is the pin's account, and nothing but a move, a release or a heal clears it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinMark {
+    pub at: i64,
+    pub on: String,
+    pub window: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PinRow {
     pub key_id: String,
@@ -64,11 +84,7 @@ pub struct PinRow {
     /// The cache TTL in force at the last refresh, as the relay resolved it (the policy's rewrite, else the
     /// client's own marker), so warmth is judged here without the relay's policy type; 5 minutes until reported.
     pub cache_ttl_ms: i64,
-    pub shed_from: Option<String>,
-    pub shed_at: Option<i64>,
-    /// Why the stamp was written: `round` for a shedding round's move, the failover's reason word (`cooldown`,
-    /// `fast_lane`, `mark`) for a failover's landing. Null on a row stamped before the column, which reads as shed.
-    pub shed_reason: Option<String>,
+    pub shed: Option<ShedStamp>,
     pub static_hash: Option<String>,
     pub tail_hash: Option<String>,
     /// The lane of the request that created the pin, stamped again by each request that refreshed or colded it;
@@ -77,11 +93,7 @@ pub struct PinRow {
     /// The entrypoint of the request that placed the pin, stamped again by each client renewal. `""` for none and on
     /// a pin written before pins carried one, which adopts the next request's, and the base regime prices `""`.
     pub entrypoint: String,
-    /// The round's mark: when it was made, the account it was made on and the window whose trigger made it. It
-    /// stands while `marked_on` is the pin's account, and nothing but a move, a release or a heal clears it.
-    pub marked_at: Option<i64>,
-    pub marked_on: Option<String>,
-    pub marked_window: Option<String>,
+    pub mark: Option<PinMark>,
     /// Only auxiliary requests have used the pin since its placement: written true at such a placement, cleared by
     /// the first refreshing turn that renews the pin, so a restart reads the flag rather than deriving it.
     pub auxiliary_only: bool,
@@ -366,12 +378,11 @@ impl Store {
                     key_generation: r.get(8)?, incarnation: r.get::<_, i64>(9)? as u64,
                     burn_at: r.get(10)?, last_input_tokens: r.get::<_, i64>(11)? as u64, last_classifier: r.get(43)?,
                     last_refresh_at: r.get(12)?, cache_ttl_ms: r.get(13)?,
-                    shed_from: r.get(14)?, shed_at: r.get(15)?, static_hash: r.get(16)?, tail_hash: r.get(17)?,
+                    shed: shed_from(r, 14, 15, 44)?, static_hash: r.get(16)?, tail_hash: r.get(17)?,
                     lane: r.get(18)?, burn: burn_from(r, 19)?, burn_banded: burn_from(r, 24)?,
                     burn_fast: burn_from(r, 29)?, burn_unmetered: burn_from(r, 34)?,
-                    marked_at: r.get(39)?, marked_on: r.get(40)?, marked_window: r.get(41)?,
+                    mark: mark_from(r, 39)?,
                     entrypoint: r.get(42)?,
-                    shed_reason: r.get(44)?,
                     auxiliary_only: r.get(45)?, effort: r.get(46)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
@@ -766,6 +777,33 @@ fn burn_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<PinBurn> {
     })
 }
 
+/// The shed stamp of a row whose `from` and `at` columns are both set: every write sets or clears the two together.
+fn shed_from(
+    r: &rusqlite::Row<'_>,
+    from: usize,
+    at: usize,
+    reason: usize,
+) -> rusqlite::Result<Option<ShedStamp>> {
+    Ok(match (r.get(from)?, r.get(at)?) {
+        (Some(from), Some(at)) => Some(ShedStamp {
+            from,
+            at,
+            reason: r.get(reason)?,
+        }),
+        _ => None,
+    })
+}
+
+/// The mark of a row whose three mark columns, from `first` on, are all set: every write sets or clears them together.
+fn mark_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<Option<PinMark>> {
+    Ok(
+        match (r.get(first)?, r.get(first + 1)?, r.get(first + 2)?) {
+            (Some(at), Some(on), Some(window)) => Some(PinMark { at, on, window }),
+            _ => None,
+        },
+    )
+}
+
 fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
     conn.execute(
         &format!(
@@ -811,8 +849,8 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
             pin.last_input_tokens as i64,
             pin.last_refresh_at,
             pin.cache_ttl_ms,
-            pin.shed_from,
-            pin.shed_at,
+            pin.shed.as_ref().map(|shed| &shed.from),
+            pin.shed.as_ref().map(|shed| shed.at),
             pin.static_hash,
             pin.tail_hash,
             pin.lane,
@@ -836,12 +874,12 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
             pin.burn_unmetered.output,
             pin.burn_unmetered.write_1h,
             pin.burn_unmetered.write_5m,
-            pin.marked_at,
-            pin.marked_on,
-            pin.marked_window,
+            pin.mark.as_ref().map(|mark| mark.at),
+            pin.mark.as_ref().map(|mark| &mark.on),
+            pin.mark.as_ref().map(|mark| &mark.window),
             pin.entrypoint,
             pin.last_classifier,
-            pin.shed_reason,
+            pin.shed.as_ref().and_then(|shed| shed.reason.as_ref()),
             pin.auxiliary_only,
             pin.effort
         ],

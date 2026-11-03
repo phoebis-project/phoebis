@@ -17,8 +17,8 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, CooldownScope,
-    FirstSeenRow, MemberWrite, ModelRule, OveragePolicy, OverageRow, PinBurn, PinKey, PinRow,
-    PoolRow, RoutingLoad, RulesMode, Shedding, StateCause, StorageKey, Store, Strategy,
+    FirstSeenRow, MemberWrite, ModelRule, OveragePolicy, OverageRow, PinBurn, PinKey, PinMark,
+    PinRow, PoolRow, RoutingLoad, RulesMode, Shedding, StateCause, StorageKey, Store, Strategy,
     SubscriptionRow, WindowRow, WindowSetRow,
 };
 
@@ -8730,16 +8730,12 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         last_classifier: false,
         last_refresh_at: AT - HOUR / 2,
         cache_ttl_ms: 300_000,
-        shed_from: None,
-        shed_at: None,
-        shed_reason: None,
+        shed: None,
         static_hash: None,
         tail_hash: None,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         entrypoint: String::new(),
-        marked_at: None,
-        marked_on: None,
-        marked_window: None,
+        mark: None,
         auxiliary_only: false,
         effort: String::new(),
     }
@@ -8748,9 +8744,11 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
 /// `pin` as a round at `at` on the 5-hour window left it: marked on the account it sits on.
 fn marked(pin: PinRow, at: i64) -> PinRow {
     PinRow {
-        marked_at: Some(at),
-        marked_on: Some(pin.account_id.clone()),
-        marked_window: Some(FIVE_HOUR.into()),
+        mark: Some(PinMark {
+            at,
+            on: pin.account_id.clone(),
+            window: FIVE_HOUR.into(),
+        }),
         ..pin
     }
 }
@@ -9579,8 +9577,12 @@ async fn the_load_counts_name_the_standing_marks_and_the_stale_round_rows() {
     for pin in [
         marked(stored_pin(&store, "s1", "a", 1, 0.0), AT - 60_000),
         PinRow {
-            marked_on: Some("z".into()),
-            ..marked(stored_pin(&store, "s2", "a", 2, 0.0), AT - 60_000)
+            mark: Some(PinMark {
+                at: AT - 60_000,
+                on: "z".into(),
+                window: FIVE_HOUR.into(),
+            }),
+            ..stored_pin(&store, "s2", "a", 2, 0.0)
         },
         stored_pin(&store, "s3", "a", 3, 0.0),
     ] {

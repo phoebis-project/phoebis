@@ -15,10 +15,10 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
-    CooldownRow, CooldownScope, Failover, FirstSeenRow, OveragePolicy, PinBurn, PinKey, PinRow,
-    PoolMember, PoolRow, RegistryLoad, ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement,
-    ShedRoundRow, Shedding, SlowDown, StateCause, Strategy, SubagentPlacement, SubscriptionTerm,
-    WarmSessions,
+    CooldownRow, CooldownScope, Failover, FirstSeenRow, OveragePolicy, PinBurn, PinKey, PinMark,
+    PinRow, PoolMember, PoolRow, RegistryLoad, ReturnToPlan, RoutingLoad, RulesMode,
+    SessionPlacement, ShedRoundRow, Shedding, SlowDown, StateCause, Strategy, SubagentPlacement,
+    SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -1506,7 +1506,7 @@ fn a_round_with_no_fitting_destination_marks_nothing_and_records_no_runway() {
         )) && !d
             .writes
             .iter()
-            .any(|w| matches!(w, StateWrite::UpsertPin(row) if row.marked_at.is_some())),
+            .any(|w| matches!(w, StateWrite::UpsertPin(row) if row.mark.is_some())),
         "the round's time is written so the dwell holds, and no pin carries a mark: {:?}",
         d.writes
     );
@@ -8290,16 +8290,12 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         last_classifier: false,
         last_refresh_at: 0,
         cache_ttl_ms: 300_000,
-        shed_from: None,
-        shed_at: None,
-        shed_reason: None,
+        shed: None,
         static_hash: None,
         tail_hash: None,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         entrypoint: String::new(),
-        marked_at: None,
-        marked_on: None,
-        marked_window: None,
+        mark: None,
         auxiliary_only: false,
         effort: String::new(),
     };
@@ -11490,16 +11486,12 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
         last_classifier: false,
         last_refresh_at: now - 1_000,
         cache_ttl_ms: 300_000,
-        shed_from: None,
-        shed_at: None,
-        shed_reason: None,
+        shed: None,
         static_hash: None,
         tail_hash: None,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         entrypoint: String::new(),
-        marked_at: None,
-        marked_on: None,
-        marked_window: None,
+        mark: None,
         auxiliary_only: false,
         effort: String::new(),
     }
@@ -13350,7 +13342,7 @@ fn a_marked_pin_on_a_cooled_account_is_released_with_cooldown_rather_than_shed()
         "the round still ran, since the cooldown is the model's alone"
     );
     assert!(
-        !marked(&st, "s1") && pinned(&st, "s1").marked_at.is_none(),
+        !marked(&st, "s1") && pinned(&st, "s1").mark.is_none(),
         "the mark left with the released pin, and the fresh row on b carries none"
     );
 
@@ -13874,7 +13866,7 @@ fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place(
         ("a".into(), None),
         "a still projects over the ceiling and its round still stands, but the move consumed s1's mark"
     );
-    assert!(pinned(&st, "s1").marked_at.is_none());
+    assert!(pinned(&st, "s1").mark.is_none());
     assert_eq!(st.last_shed("p", "a"), Some(T), "no new round ran on a");
 }
 
@@ -13920,9 +13912,9 @@ fn a_round_that_ran_pushes_its_write_and_one_inside_the_dwell_pushes_none() {
             StateWrite::UpsertPin(row)
                 if row.session_id == "s1"
                     && row.epoch == 4
-                    && row.marked_at == Some(T)
-                    && row.marked_on.as_deref() == Some("a")
-                    && row.marked_window.as_deref() == Some("five_hour")
+                    && row.mark.as_ref().map(|m| m.at) == Some(T)
+                    && row.mark.as_ref().map(|m| m.on.as_str()) == Some("a")
+                    && row.mark.as_ref().map(|m| m.window.as_str()) == Some("five_hour")
         )
     };
     let at = |found: &dyn Fn(&StateWrite) -> bool| decided.writes.iter().position(found);
@@ -13937,7 +13929,7 @@ fn a_round_that_ran_pushes_its_write_and_one_inside_the_dwell_pushes_none() {
     assert!(
         !decided.writes.iter().any(|w| matches!(
             w,
-            StateWrite::UpsertPin(row) if row.session_id == "s0" && row.marked_at.is_some()
+            StateWrite::UpsertPin(row) if row.session_id == "s0" && row.mark.is_some()
         )),
         "the unmarked pin's row is not written by the round"
     );
@@ -13960,17 +13952,21 @@ fn from_load_restores_each_pools_round_time_and_the_marks_from_the_pin_rows() {
     let st = RoutingState::from_load(RoutingLoad {
         pins: vec![
             PinRow {
-                marked_at: Some(T - 60_000),
-                marked_on: Some("a".into()),
-                marked_window: Some(FIVE_HOUR.into()),
+                mark: Some(PinMark {
+                    at: T - 60_000,
+                    on: "a".into(),
+                    window: FIVE_HOUR.into(),
+                }),
                 ..seeded_pin("s1", "a", T)
             },
             seeded_pin("s2", "a", T),
             // A mark made on another account travels on no row the engine writes, and stands on none it loads.
             PinRow {
-                marked_at: Some(T - 60_000),
-                marked_on: Some("b".into()),
-                marked_window: Some(FIVE_HOUR.into()),
+                mark: Some(PinMark {
+                    at: T - 60_000,
+                    on: "b".into(),
+                    window: FIVE_HOUR.into(),
+                }),
                 ..seeded_pin("s3", "a", T)
             },
         ],
@@ -14048,7 +14044,7 @@ fn a_pin_that_fails_over_off_its_account_leaves_its_mark_with_the_row() {
         "the session fails over off the cooled a"
     );
     assert!(
-        pinned(&st, "s1").marked_at.is_none(),
+        pinned(&st, "s1").mark.is_none(),
         "a fresh row carries no mark"
     );
     fail_over(&mut st, "b", T + HOUR);
@@ -14356,7 +14352,10 @@ fn a_shed_pin_never_returns_to_the_account_that_shed_it_within_the_dwell_even_wh
         );
         let moved = pinned(&st, session);
         assert_eq!(
-            (moved.shed_from.as_deref(), moved.shed_at),
+            (
+                moved.shed.as_ref().map(|s| s.from.as_str()),
+                moved.shed.as_ref().map(|s| s.at)
+            ),
             (Some("a"), Some(now)),
             "{session}: the moved pin remembers where it was shed from"
         );
@@ -15361,7 +15360,7 @@ fn a_model_week_over_its_ceiling_fires_a_round_that_marks_a_fable_pin_and_leaves
     assert!(!st.shed_marked(&fable("f2")));
     assert_eq!(
         st.pin(&fable("f1"))
-            .and_then(|p| p.marked_window.as_deref()),
+            .and_then(|p| p.mark.as_ref().map(|m| m.window.as_str())),
         Some("seven_day_fable"),
         "the mark names the Fable week"
     );
@@ -19255,7 +19254,10 @@ fn a_failover_landing_remembers_its_source_for_the_rounds_dwell() {
     );
     let landed_pin = pinned(&st, "s1");
     assert_eq!(
-        (landed_pin.shed_from.as_deref(), landed_pin.shed_at),
+        (
+            landed_pin.shed.as_ref().map(|s| s.from.as_str()),
+            landed_pin.shed.as_ref().map(|s| s.at)
+        ),
         (Some("a"), Some(T)),
         "the landing remembers the account it left"
     );
@@ -19303,9 +19305,9 @@ fn a_rounds_move_stamps_round_and_a_failovers_landing_stamps_its_word_on_the_row
     let moved = pinned(&st, "p4");
     assert_eq!(
         (
-            moved.shed_from.as_deref(),
-            moved.shed_at,
-            moved.shed_reason.as_deref()
+            moved.shed.as_ref().map(|s| s.from.as_str()),
+            moved.shed.as_ref().map(|s| s.at),
+            moved.shed.as_ref().and_then(|s| s.reason.as_deref())
         ),
         (Some("a"), Some(T), Some("round")),
         "the round's move writes its word with the pair"
@@ -19341,9 +19343,9 @@ fn a_rounds_move_stamps_round_and_a_failovers_landing_stamps_its_word_on_the_row
     let landed_pin = pinned(&st, "s1");
     assert_eq!(
         (
-            landed_pin.shed_from.as_deref(),
-            landed_pin.shed_at,
-            landed_pin.shed_reason.as_deref()
+            landed_pin.shed.as_ref().map(|s| s.from.as_str()),
+            landed_pin.shed.as_ref().map(|s| s.at),
+            landed_pin.shed.as_ref().and_then(|s| s.reason.as_deref())
         ),
         (Some("a"), Some(T), Some("cooldown")),
         "the landing writes the invalidation's word with the pair"
@@ -20696,9 +20698,9 @@ fn a_five_hour_round_fires_on_the_projection_over_the_ceiling_and_marks_until_th
         .iter()
         .filter_map(|w| match w {
             StateWrite::UpsertPin(row)
-                if row.marked_at == Some(T)
-                    && row.marked_on.as_deref() == Some("a")
-                    && row.marked_window.as_deref() == Some("five_hour") =>
+                if row.mark.as_ref().map(|m| m.at) == Some(T)
+                    && row.mark.as_ref().map(|m| m.on.as_str()) == Some("a")
+                    && row.mark.as_ref().map(|m| m.window.as_str()) == Some("five_hour") =>
             {
                 Some(row.session_id.as_str())
             }
@@ -20894,9 +20896,11 @@ fn a_standing_mark_counts_as_removed_and_is_skipped_standing() {
     // before it marks anything else.
     let mut st = rounding(vec![
         PinRow {
-            marked_at: Some(T - 1_000_000),
-            marked_on: Some("a".into()),
-            marked_window: Some(FIVE_HOUR.into()),
+            mark: Some(PinMark {
+                at: T - 1_000_000,
+                on: "a".into(),
+                window: FIVE_HOUR.into(),
+            }),
             ..burning("s1", "a", 16.0, false, T)
         },
         burning("s2", "a", 14.0, false, T),
@@ -20938,7 +20942,7 @@ fn a_standing_mark_counts_as_removed_and_is_skipped_standing() {
     );
     assert!(marked(&st, "s1") && marked(&st, "s2") && !marked(&st, "s3"));
     assert_eq!(
-        pinned(&st, "s1").marked_at,
+        pinned(&st, "s1").mark.as_ref().map(|m| m.at),
         Some(T - 1_000_000),
         "the standing mark keeps its own time"
     );
@@ -20949,9 +20953,11 @@ fn a_standing_mark_counts_as_removed_and_is_skipped_standing() {
         burning("s1", "a", 16.0, false, T),
         burning("s2", "a", 14.0, false, T),
         PinRow {
-            marked_at: Some(T - 1_000_000),
-            marked_on: Some("a".into()),
-            marked_window: Some(FIVE_HOUR.into()),
+            mark: Some(PinMark {
+                at: T - 1_000_000,
+                on: "a".into(),
+                window: FIVE_HOUR.into(),
+            }),
             ..burning("s3", "a", 12.0, false, T)
         },
     ]);
@@ -21007,9 +21013,11 @@ fn a_pool_with_load_shedding_off_runs_no_round_releases_its_marks_and_still_move
         let marked_at = T - 300_000;
         let mut st = rounding(vec![
             PinRow {
-                marked_at: Some(marked_at),
-                marked_on: Some("a".into()),
-                marked_window: Some(FIVE_HOUR.into()),
+                mark: Some(PinMark {
+                    at: marked_at,
+                    on: "a".into(),
+                    window: FIVE_HOUR.into(),
+                }),
                 ..burning("s1", "a", 4.0, false, T)
             },
             burning("s0", "a", 1.0, false, T),
@@ -21044,9 +21052,7 @@ fn a_pool_with_load_shedding_off_runs_no_round_releases_its_marks_and_still_move
                 w,
                 StateWrite::UpsertPin(row)
                     if row.session_id == "s1"
-                        && row.marked_at.is_none()
-                        && row.marked_on.is_none()
-                        && row.marked_window.is_none()
+                        && row.mark.is_none()
             )),
             "{reading}: the cleared row is written: {:?}",
             d.writes
@@ -21082,9 +21088,11 @@ fn a_mark_holds_past_the_dwell_heals_when_the_projection_reads_under_the_ceiling
         let mut st = RoutingState::from_load(RoutingLoad {
             pins: vec![
                 PinRow {
-                    marked_at: Some(marked_at),
-                    marked_on: Some("a".into()),
-                    marked_window: Some(FIVE_HOUR.into()),
+                    mark: Some(PinMark {
+                        at: marked_at,
+                        on: "a".into(),
+                        window: FIVE_HOUR.into(),
+                    }),
                     last_used_at: marked_at,
                     ..burning("s1", "a", 4.0, false, marked_at)
                 },
@@ -21169,9 +21177,7 @@ fn a_mark_holds_past_the_dwell_heals_when_the_projection_reads_under_the_ceiling
             w,
             StateWrite::UpsertPin(row)
                 if row.session_id == "s1"
-                    && row.marked_at.is_none()
-                    && row.marked_on.is_none()
-                    && row.marked_window.is_none()
+                    && row.mark.is_none()
         )),
         "the cleared row is written: {:?}",
         d.writes
@@ -21189,7 +21195,7 @@ fn a_mark_holds_past_the_dwell_heals_when_the_projection_reads_under_the_ceiling
     assert!(d.record.pin.as_ref().is_some_and(|pin| pin.marked));
     assert_eq!(d.record.outcome.mark_cleared, None);
     assert_eq!(
-        pinned(&st, "s1").marked_at,
+        pinned(&st, "s1").mark.as_ref().map(|m| m.at),
         Some(marked_at),
         "the mark stands until a destination fits"
     );
@@ -21208,9 +21214,11 @@ fn a_mark_on_the_week_heals_when_the_seven_day_projection_reads_under_the_ceilin
         let mut st = RoutingState::from_load(RoutingLoad {
             pins: vec![
                 PinRow {
-                    marked_at: Some(marked_at),
-                    marked_on: Some("a".into()),
-                    marked_window: Some(SEVEN_DAY.into()),
+                    mark: Some(PinMark {
+                        at: marked_at,
+                        on: "a".into(),
+                        window: SEVEN_DAY.into(),
+                    }),
                     last_used_at: marked_at,
                     ..burning("s1", "a", burn, false, T)
                 },
@@ -21269,7 +21277,7 @@ fn a_mark_on_the_week_heals_when_the_seven_day_projection_reads_under_the_ceilin
     assert!(d.record.pin.as_ref().is_some_and(|pin| pin.marked));
     assert_eq!(d.record.outcome.mark_cleared, None);
     assert_eq!(
-        pinned(&st, "s1").marked_at,
+        pinned(&st, "s1").mark.as_ref().map(|m| m.at),
         Some(marked_at),
         "a projection at the ceiling heals nothing"
     );
@@ -25307,9 +25315,11 @@ fn marked_s1(s1_burn: f64, s0_burn: f64, five_hour: f64) -> RoutingState {
     let mut st = RoutingState::from_load(RoutingLoad {
         pins: vec![
             PinRow {
-                marked_at: Some(marked_at),
-                marked_on: Some("a".into()),
-                marked_window: Some(FIVE_HOUR.into()),
+                mark: Some(PinMark {
+                    at: marked_at,
+                    on: "a".into(),
+                    window: FIVE_HOUR.into(),
+                }),
                 last_used_at: marked_at,
                 ..burning("s1", "a", s1_burn, false, T)
             },

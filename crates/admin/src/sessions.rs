@@ -409,7 +409,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 "cache_ttl_ms": p.cache_ttl_ms,
                 "speed": standing.speed,
                 "cycle_ms": standing.cycle_ms,
-                "last_input_tokens": p.last_input_tokens, "effort": standing.effort, "last_refresh_at": p.last_refresh_at, "shed_from": p.shed_from, "shed_reason": p.shed_reason,
+                "last_input_tokens": p.last_input_tokens, "effort": standing.effort, "last_refresh_at": p.last_refresh_at,
+                "shed_from": p.shed.as_ref().map(|shed| &shed.from),
+                "shed_reason": p.shed.as_ref().and_then(|shed| shed.reason.as_ref()),
             }),
         );
     }

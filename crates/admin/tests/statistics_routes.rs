@@ -6,7 +6,7 @@ use common::{delete, get, json, login, post, wait_json};
 use fake_upstream::{stays_for, wait_for};
 use phoebis_bus::Delivery;
 use phoebis_ledger::{AttemptRecord, EventRecord, ParkedRecord, Record, RequestRecord};
-use phoebis_store::{AccountKind, AccountRow, AccountState, StateCause};
+use phoebis_store::{AccountKind, AccountRow, AccountState, ShedStamp, StateCause};
 
 const HOUR: i64 = 3_600_000;
 
@@ -1491,16 +1491,12 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
                 last_classifier: false,
                 last_refresh_at: 0,
                 cache_ttl_ms: 300_000,
-                shed_from: None,
-                shed_at: None,
-                shed_reason: None,
+                shed: None,
                 static_hash: None,
                 tail_hash: None,
                 lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
                 entrypoint: String::new(),
-                marked_at: None,
-                marked_on: None,
-                marked_window: None,
+                mark: None,
                 auxiliary_only: false,
                 effort: String::new(),
             })
@@ -1591,16 +1587,12 @@ async fn the_sessions_route_prices_from_the_snapshots_tier_so_a_failed_store_tie
             last_classifier: false,
             last_refresh_at: 0,
             cache_ttl_ms: 300_000,
-            shed_from: None,
-            shed_at: None,
-            shed_reason: None,
+            shed: None,
             static_hash: None,
             tail_hash: None,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
             entrypoint: String::new(),
-            marked_at: None,
-            marked_on: None,
-            marked_window: None,
+            mark: None,
             auxiliary_only: false,
             effort: String::new(),
         })
@@ -5656,16 +5648,16 @@ async fn the_sessions_route_and_a_decision_record_name_why_the_pin_was_stamped()
             last_classifier: false,
             last_refresh_at: now - 5,
             cache_ttl_ms: 300_000,
-            shed_from: Some("business".into()),
-            shed_at: Some(now - 60_000),
-            shed_reason: Some("cooldown".into()),
+            shed: Some(ShedStamp {
+                from: "business".into(),
+                at: now - 60_000,
+                reason: Some("cooldown".into()),
+            }),
             static_hash: None,
             tail_hash: None,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
             entrypoint: String::new(),
-            marked_at: None,
-            marked_on: None,
-            marked_window: None,
+            mark: None,
             auxiliary_only: false,
             effort: String::new(),
         })

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use phoebis_store::{
     AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CooldownScope, CreditsRow,
-    FirstSeenRow, OverageRow, PinBurn, PinKey, PinRow, PoolMember, PoolRow, RekeyWrite,
+    FirstSeenRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow, RekeyWrite,
     ResolutionRow, RoutingLoad, StateCause, WindowRow, WindowSetRow,
 };
 use tokio::sync::Notify;
@@ -1260,10 +1260,12 @@ impl Drop for AccountTicket {
     }
 }
 
-/// Whether the pin's mark stands: `marked_at` set and `marked_on` its current account. A row carrying a mark made on
-/// another account was moved by a write that kept the members, and that mark no longer stands.
+/// Whether the pin's mark stands: made on its current account. A row carrying a mark made on another account was
+/// moved by a write that kept the members, and that mark no longer stands.
 pub(crate) fn mark_holds(pin: &PinRow) -> bool {
-    pin.marked_at.is_some() && pin.marked_on.as_deref() == Some(pin.account_id.as_str())
+    pin.mark
+        .as_ref()
+        .is_some_and(|mark| mark.on == pin.account_id)
 }
 
 /// The loaded rounds by pool and account: each row's time, what the dwell between rounds reads.
@@ -3291,18 +3293,18 @@ impl RoutingState {
     /// as marked for the write.
     pub(crate) fn mark_pin(&mut self, key: &PinKey, at: i64, window: &str) -> Option<PinRow> {
         let pin = self.pins.get_mut(key)?;
-        pin.marked_at = Some(at);
-        pin.marked_on = Some(pin.account_id.clone());
-        pin.marked_window = Some(window.to_string());
+        pin.mark = Some(PinMark {
+            at,
+            on: pin.account_id.clone(),
+            window: window.to_string(),
+        });
         Some(pin.clone())
     }
 
     /// Clears the mark of the pin under the key and answers the row as cleared for the write.
     pub(crate) fn clear_mark(&mut self, key: &PinKey) -> Option<PinRow> {
         let pin = self.pins.get_mut(key)?;
-        pin.marked_at = None;
-        pin.marked_on = None;
-        pin.marked_window = None;
+        pin.mark = None;
         Some(pin.clone())
     }
 
@@ -4047,16 +4049,12 @@ mod tests {
             last_classifier: false,
             last_refresh_at: 0,
             cache_ttl_ms: 300_000,
-            shed_from: None,
-            shed_at: None,
-            shed_reason: None,
+            shed: None,
             static_hash: None,
             tail_hash: None,
             lane: crate::lane_key("m", "standard", "none", "-"),
             entrypoint: String::new(),
-            marked_at: None,
-            marked_on: None,
-            marked_window: None,
+            mark: None,
             auxiliary_only: false,
             effort: String::new(),
         };

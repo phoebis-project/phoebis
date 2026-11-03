@@ -2533,9 +2533,7 @@ fn cache_map_written(report: &AffinityReport, rows: &[AffinityRow]) -> RouterEve
 /// The `mark_cleared` of a pin that left its account without a move, when its mark stood: a release, an expiry, a
 /// fail-over's invalidation or a rekey's merge the row lost. `None` for an unmarked pin.
 fn released_mark(row: &PinRow, at: i64) -> Option<RouterEvent> {
-    if !mark_holds(row) {
-        return None;
-    }
+    let mark = row.mark.as_ref().filter(|_| mark_holds(row))?;
     Some(RouterEvent::MarkCleared {
         account_id: row.account_id.clone(),
         key_id: row.key_id.clone(),
@@ -2543,9 +2541,9 @@ fn released_mark(row: &PinRow, at: i64) -> Option<RouterEvent> {
         agent_id: row.agent_id.clone(),
         model: row.model.clone(),
         reason: "released",
-        marked_at: row.marked_at?,
-        marked_on: row.marked_on.clone()?,
-        marked_window: row.marked_window.clone().unwrap_or_default(),
+        marked_at: mark.at,
+        marked_on: mark.on.clone(),
+        marked_window: mark.window.clone(),
         projection: None,
         stretch_ms: None,
         threshold_ms: None,
@@ -5772,16 +5770,12 @@ mod tests {
             last_classifier: false,
             last_refresh_at: 0,
             cache_ttl_ms: 300_000,
-            shed_from: None,
-            shed_at: None,
-            shed_reason: None,
+            shed: None,
             static_hash: None,
             tail_hash: None,
             lane: crate::lane_key("m", "standard", "none", "-"),
             entrypoint: String::new(),
-            marked_at: None,
-            marked_on: None,
-            marked_window: None,
+            mark: None,
             auxiliary_only: false,
             effort: String::new(),
         };
@@ -6201,16 +6195,12 @@ mod tests {
                 last_classifier: false,
                 last_refresh_at: T,
                 cache_ttl_ms: 300_000,
-                shed_from: None,
-                shed_at: None,
-                shed_reason: None,
+                shed: None,
                 static_hash: None,
                 tail_hash: None,
                 lane: crate::lane_key(model, "standard", "none", "-"),
                 entrypoint: String::new(),
-                marked_at: None,
-                marked_on: None,
-                marked_window: None,
+                mark: None,
                 auxiliary_only: false,
                 effort: String::new(),
             }],

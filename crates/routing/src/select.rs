@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityMode, BudgetPeriod, CooldownRow, CooldownScope,
-    OveragePolicy, PinBurn, PinKey, PinRow, PoolMember, PoolRow, ReturnToPlan, SessionPlacement,
-    Strategy, SubagentPlacement, WarmSessions,
+    OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow, ReturnToPlan,
+    SessionPlacement, ShedStamp, Strategy, SubagentPlacement, WarmSessions,
 };
 use rand::{Rng, RngExt};
 
@@ -1437,12 +1437,10 @@ fn run(
                 };
                 if let Some((reason, heal)) = cleared_as {
                     if let Some(cleared) = state.clear_mark(&key) {
-                        rec.mark_cleared = Some(mark_cleared_of(
-                            &current,
-                            reason,
-                            heal.as_ref(),
-                            request.now,
-                        ));
+                        rec.mark_cleared = current
+                            .mark
+                            .as_ref()
+                            .map(|mark| mark_cleared_of(mark, reason, heal.as_ref()));
                         writes.push(StateWrite::UpsertPin(cleared.clone()));
                         current = cleared;
                         marked = false;
@@ -1748,7 +1746,10 @@ fn run(
                 state.remove_pin(&current.key());
                 writes.push(StateWrite::DeletePin(current.key()));
                 if mark_holds(&current) {
-                    rec.mark_cleared = Some(mark_cleared_of(&current, "moved", None, request.now));
+                    rec.mark_cleared = current
+                        .mark
+                        .as_ref()
+                        .map(|mark| mark_cleared_of(mark, "moved", None));
                 }
                 moving = Some(current.clone());
                 moved_off = true;
@@ -1846,8 +1847,10 @@ fn run(
                     writes.push(StateWrite::DeletePin(current.key()));
                     // The mark leaves with the row the move takes off the account it was made on.
                     if mark_holds(&current) {
-                        rec.mark_cleared =
-                            Some(mark_cleared_of(&current, "moved", None, request.now));
+                        rec.mark_cleared = current
+                            .mark
+                            .as_ref()
+                            .map(|mark| mark_cleared_of(mark, "moved", None));
                     }
                     if reason == MigrateReason::Shed {
                         shed_from = Some(current.account_id.clone());
@@ -2500,18 +2503,17 @@ fn fresh_pin(
         last_refresh_at: request.now,
         cache_ttl_ms: 300_000,
         // A shed move and a failover's landing remember the source for the dwell, so no round sends the session
-        // straight back, and the word the status page and the record name the stamp by. Every other move clears all
-        // three.
-        shed_at: shed.is_some().then_some(request.now),
-        shed_reason: shed.as_ref().map(|(_, reason)| reason.clone()),
-        shed_from: shed.map(|(from, _)| from),
+        // straight back, and the word the status page and the record name the stamp by. Every other move clears it.
+        shed: shed.map(|(from, reason)| ShedStamp {
+            from,
+            at: request.now,
+            reason: Some(reason),
+        }),
         static_hash: None,
         tail_hash: None,
         lane: request.lane.clone(),
         entrypoint: request.entrypoint.clone().unwrap_or_default(),
-        marked_at: None,
-        marked_on: None,
-        marked_window: None,
+        mark: None,
         auxiliary_only: placed_auxiliary_only(request),
         effort: request.effort.clone().unwrap_or_default(),
     };
@@ -4068,8 +4070,10 @@ fn move_of<'a>(
         eligible,
         window,
         &|c| {
-            !(current.shed_from.as_deref() == Some(c.account_id.as_str())
-                && current.shed_at.is_some_and(|at| now - at < dwell_ms))
+            !current
+                .shed
+                .as_ref()
+                .is_some_and(|shed| shed.from == c.account_id && now - shed.at < dwell_ms)
         },
         true,
         rec,
@@ -4651,7 +4655,7 @@ fn healed(
     pin: &PinRow,
     now: i64,
 ) -> Option<Healed> {
-    let window = pin.marked_window.as_deref()?;
+    let window = pin.mark.as_ref()?.window.as_str();
     let tier = snapshot.priced_tier(&pin.account_id).unwrap_or_default();
     if window == FIVE_HOUR && slow_down(pool) {
         let read = slow_down_of(state, snapshot, pool, &pin.account_id, tier, now)?;
@@ -4682,18 +4686,17 @@ fn healed(
     })
 }
 
-/// The facts of the mark `row` carries, as the decision clears it for `reason`, with what the heal read on `healed`.
+/// The facts of `mark`, as the decision clears it for `reason`, with what the heal read on `healed`.
 fn mark_cleared_of(
-    row: &PinRow,
+    mark: &PinMark,
     reason: &'static str,
     heal: Option<&Healed>,
-    now: i64,
 ) -> MarkClearedFacts {
     MarkClearedFacts {
         reason,
-        marked_at: row.marked_at.unwrap_or(now),
-        marked_on: row.marked_on.clone().unwrap_or_default(),
-        marked_window: row.marked_window.clone().unwrap_or_default(),
+        marked_at: mark.at,
+        marked_on: mark.on.clone(),
+        marked_window: mark.window.clone(),
         projection: heal.map(|heal| heal.projection),
         stretch_ms: heal.and_then(|heal| heal.stretch_ms),
         threshold_ms: heal.and_then(|heal| heal.threshold_ms),
@@ -4747,8 +4750,9 @@ fn destination_of(
         .copied()
         .filter(|c| c.account_id != pin.account_id)
         .filter(|c| {
-            !(pin.shed_from.as_deref() == Some(c.account_id.as_str())
-                && pin.shed_at.is_some_and(|at| now - at < dwell_ms))
+            !pin.shed
+                .as_ref()
+                .is_some_and(|shed| shed.from == c.account_id && now - shed.at < dwell_ms)
         })
         .filter(|c| {
             window == SEVEN_DAY || holds_allowance(state, snapshot, &c.account_id, window, now)
@@ -6528,24 +6532,25 @@ fn pin_facts(
         idle_ms: row.map(|p| now - p.last_used_at),
         refresh_age_ms: row.map(|p| now - p.last_refresh_at),
         lane: row.map(|p| p.lane.clone()),
-        shed: row.and_then(|p| {
-            let (from, at) = p.shed_from.clone().zip(p.shed_at)?;
-            Some(PinShed {
-                from,
-                at,
-                reason: p
-                    .shed_reason
-                    .clone()
-                    .unwrap_or_else(|| SHED_ROUND.to_string()),
-            })
+        shed: row.and_then(|p| p.shed.as_ref()).map(|shed| PinShed {
+            from: shed.from.clone(),
+            at: shed.at,
+            reason: shed
+                .reason
+                .clone()
+                .unwrap_or_else(|| SHED_ROUND.to_string()),
         }),
         marked,
         warmth: None,
         warmth_cause: None,
         released: Vec::new(),
-        marked_at: row.and_then(|p| p.marked_at),
-        marked_on: row.and_then(|p| p.marked_on.clone()),
-        marked_window: row.and_then(|p| p.marked_window.clone()),
+        marked_at: row.and_then(|p| p.mark.as_ref()).map(|mark| mark.at),
+        marked_on: row
+            .and_then(|p| p.mark.as_ref())
+            .map(|mark| mark.on.clone()),
+        marked_window: row
+            .and_then(|p| p.mark.as_ref())
+            .map(|mark| mark.window.clone()),
         cycle_ms: pace
             .and_then(|p| p.cycle_ms)
             .map(|cycle| cycle.round() as i64),

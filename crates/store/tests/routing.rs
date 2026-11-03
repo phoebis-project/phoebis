@@ -1,9 +1,9 @@
 use phoebis_routing::lane_key;
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, ApiKeyRow, CooldownRow,
-    CooldownScope, CreditsRow, FirstSeenRow, OverageRow, PinBurn, PinKey, PinRow, PoolRow,
-    RekeyWrite, ResolutionRow, RulesMode, ShedRoundRow, StateCause, StorageKey, Store, WindowRow,
-    WindowSetRow,
+    CooldownScope, CreditsRow, FirstSeenRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolRow,
+    RekeyWrite, ResolutionRow, RulesMode, ShedRoundRow, ShedStamp, StateCause, StorageKey, Store,
+    WindowRow, WindowSetRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -32,16 +32,12 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         last_classifier: false,
         last_refresh_at: 1,
         cache_ttl_ms: 300_000,
-        shed_from: None,
-        shed_at: None,
-        shed_reason: None,
+        shed: None,
         static_hash: None,
         tail_hash: None,
         lane: lane_key(model, "standard", "none", "-"),
         entrypoint: String::new(),
-        marked_at: None,
-        marked_on: None,
-        marked_window: None,
+        mark: None,
         auxiliary_only: false,
         effort: String::new(),
     }
@@ -206,9 +202,11 @@ fn pins_are_upserted_deleted_and_dropped_with_their_account() {
         last_input_tokens: 4_000,
         last_refresh_at: 3,
         cache_ttl_ms: 3_600_000,
-        shed_from: Some("c".into()),
-        shed_at: Some(4),
-        shed_reason: None,
+        shed: Some(ShedStamp {
+            from: "c".into(),
+            at: 4,
+            reason: None,
+        }),
         static_hash: Some("static-hash".into()),
         tail_hash: Some("tail-hash".into()),
         ..pin("k", "s", "claude-sonnet-5", "a")
@@ -235,8 +233,8 @@ fn pins_are_upserted_deleted_and_dropped_with_their_account() {
             row.last_input_tokens,
             row.last_refresh_at,
             row.cache_ttl_ms,
-            row.shed_from.as_deref(),
-            row.shed_at,
+            row.shed.as_ref().map(|shed| shed.from.as_str()),
+            row.shed.as_ref().map(|shed| shed.at),
             row.static_hash.as_deref(),
             row.tail_hash.as_deref(),
         ),
@@ -686,9 +684,11 @@ fn a_pins_shed_reason_survives_a_reopen_and_a_rounds_move_stamps_its_own() {
     let path = dir.path().join("router.sqlite");
     let storage_key = StorageKey::generate();
     let landed = PinRow {
-        shed_from: Some("b".into()),
-        shed_at: Some(4),
-        shed_reason: Some("cooldown".into()),
+        shed: Some(ShedStamp {
+            from: "b".into(),
+            at: 4,
+            reason: Some("cooldown".into()),
+        }),
         ..pin("k", "s", "claude-opus-5-5", "a")
     };
     {
@@ -703,7 +703,7 @@ fn a_pins_shed_reason_survives_a_reopen_and_a_rounds_move_stamps_its_own() {
             .unwrap()
             .pins
             .into_iter()
-            .map(|p| (p.session_id, p.shed_reason))
+            .map(|p| (p.session_id, p.shed.and_then(|shed| shed.reason)))
             .collect::<Vec<_>>()
     };
     assert_eq!(
@@ -714,8 +714,11 @@ fn a_pins_shed_reason_survives_a_reopen_and_a_rounds_move_stamps_its_own() {
     Store::open(&path, &storage_key)
         .unwrap()
         .upsert_pin(&PinRow {
-            shed_at: Some(5),
-            shed_reason: Some("round".into()),
+            shed: Some(ShedStamp {
+                from: "b".into(),
+                at: 5,
+                reason: Some("round".into()),
+            }),
             ..landed
         })
         .unwrap();
@@ -1552,9 +1555,11 @@ fn a_round_replaces_the_pools_row_on_the_account_and_loads_back() {
 fn a_pins_mark_round_trips_leaves_with_the_pin_and_the_round_row_stays() {
     let store = store_with(&["a", "b"]);
     let marked = PinRow {
-        marked_at: Some(900),
-        marked_on: Some("a".into()),
-        marked_window: Some("five_hour".into()),
+        mark: Some(PinMark {
+            at: 900,
+            on: "a".into(),
+            window: "five_hour".into(),
+        }),
         ..pin("k", "s1", "claude-sonnet-5", "a")
     };
     store.upsert_pin(&marked).unwrap();
@@ -1574,28 +1579,21 @@ fn a_pins_mark_round_trips_leaves_with_the_pin_and_the_round_row_stays() {
         })
         .unwrap();
     assert_eq!(
-        store.load_routing().unwrap().pins[0].marked_at,
+        store.load_routing().unwrap().pins[0]
+            .mark
+            .as_ref()
+            .map(|mark| mark.at),
         Some(900),
         "a write that carries the mark keeps it"
     );
     store
         .upsert_pin(&PinRow {
-            marked_at: None,
-            marked_on: None,
-            marked_window: None,
+            mark: None,
             ..marked.clone()
         })
         .unwrap();
     let cleared = store.load_routing().unwrap().pins;
-    assert_eq!(
-        (
-            &cleared[0].marked_at,
-            &cleared[0].marked_on,
-            &cleared[0].marked_window
-        ),
-        (&None, &None, &None),
-        "a write without the mark clears it"
-    );
+    assert_eq!(cleared[0].mark, None, "a write without the mark clears it");
     assert!(store.delete_pin(&shed_key("s1")).unwrap());
     assert_eq!(
         loaded_rounds(&store),
