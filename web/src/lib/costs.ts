@@ -178,7 +178,8 @@ export const bandFactor = (costs: SubscriptionCosts, window: string, at: number)
   return inside === null ? null : factorOf(costs, window, inside);
 };
 
-/** Per million tokens of each type, the share of the tier's window out of band; null for an unpriced model or tier. */
+/** Per million tokens of each type, the share of the tier's window out of band, or null for an unpriced model or
+ *  tier. */
 export const ratesOf = (costs: SubscriptionCosts, window: string, tier: string, model: string): Record<TokenType, number> | null => {
   const w = pricedWindow(costs, window);
   const capacity = w === null ? null : tierCapacity(costs, tier, w.priced);
@@ -189,7 +190,7 @@ export const ratesOf = (costs: SubscriptionCosts, window: string, tier: string, 
   return { cacheRead: per('cacheRead'), cacheWrite1h: per('cacheWrite1h'), cacheWrite5m: per('cacheWrite5m'), input: per('input'), output: per('output') };
 };
 
-/** The share of the tier's own window `usage` spends for a request completing inside the band or outside it; null
+/** The share of the tier's own window `usage` spends for a request completing inside the band or outside it, or null
  *  where unpriced. */
 export const shareIn = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, inside: boolean): number | null => {
   const rates = ratesOf(costs, window, tier, model);
