@@ -24,16 +24,14 @@ export function sseFrames(text: string): SseFrame[] | null {
   const frames: SseFrame[] = [];
   let event: string | null = null;
   let data: string[] = [];
-  let hasData = false;
   let sawField = false;
   const close = () => {
-    if (event !== null || hasData) {
+    if (event !== null || data.length > 0) {
       const joined = data.join('\n');
       frames.push({ data: joined, event, json: parsed(joined) });
     }
     event = null;
     data = [];
-    hasData = false;
   };
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
@@ -45,15 +43,11 @@ export function sseFrames(text: string): SseFrame[] | null {
     if (!SSE_LINE.test(line)) {
       if (!last || !sawField) return null;
       data.push(line);
-      hasData = true;
       continue;
     }
     sawField = true;
     if (line.startsWith('event:')) event = afterPrefix(line, 6);
-    else if (line.startsWith('data:')) {
-      data.push(afterPrefix(line, 5));
-      hasData = true;
-    }
+    else if (line.startsWith('data:')) data.push(afterPrefix(line, 5));
   }
   close();
   return frames.length === 0 ? null : frames;
