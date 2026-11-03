@@ -819,11 +819,7 @@ const HOLD_POISONED: &str = "a test hold's mutex poisoned by a prior panic";
 fn park_on(slot: &Mutex<Option<Arc<HoldGate>>>) {
     let armed = slot.lock().expect(HOLD_POISONED).take();
     if let Some(gate) = armed {
-        gate.parked.store(true, Ordering::SeqCst);
-        let mut released = gate.released.lock().expect(HOLD_POISONED);
-        while !*released {
-            released = gate.opened.wait(released).expect(HOLD_POISONED);
-        }
+        gate.park();
     }
 }
 
@@ -832,9 +828,12 @@ fn park_on(slot: &Mutex<Option<Arc<HoldGate>>>) {
 #[doc(hidden)]
 pub struct RoutingWriteHold(Arc<HoldGate>);
 
+/// The park-until-released seam under every test hold: the held call parks on it until the test opens it. Public
+/// under the feature so another crate's test seam parks on the same gate.
 #[cfg(any(test, feature = "debug-hooks"))]
+#[doc(hidden)]
 #[derive(Default)]
-struct HoldGate {
+pub struct HoldGate {
     parked: AtomicBool,
     released: Mutex<bool>,
     opened: Condvar,
@@ -844,7 +843,7 @@ struct HoldGate {
 impl RoutingWriteHold {
     /// Whether a `write_routing` waits on the hold; a test polls it before it queues what should land behind.
     pub fn is_parked(&self) -> bool {
-        self.0.parked.load(Ordering::SeqCst)
+        self.0.is_parked()
     }
 
     pub fn release(self) {
@@ -870,7 +869,7 @@ pub struct CredentialReadHold(Arc<HoldGate>);
 impl CredentialReadHold {
     /// Whether a credential read waits on the hold.
     pub fn is_parked(&self) -> bool {
-        self.0.parked.load(Ordering::SeqCst)
+        self.0.is_parked()
     }
 
     pub fn release(self) {
@@ -896,7 +895,7 @@ pub struct FencedWriteHold(Arc<HoldGate>);
 impl FencedWriteHold {
     /// Whether an edit waits on the hold.
     pub fn is_parked(&self) -> bool {
-        self.0.parked.load(Ordering::SeqCst)
+        self.0.is_parked()
     }
 
     pub fn release(self) {
@@ -921,7 +920,7 @@ pub struct RegistryLoadHold(Arc<HoldGate>);
 impl RegistryLoadHold {
     /// Whether a registry load waits on the hold.
     pub fn is_parked(&self) -> bool {
-        self.0.parked.load(Ordering::SeqCst)
+        self.0.is_parked()
     }
 
     pub fn release(self) {
@@ -939,7 +938,21 @@ impl Drop for RegistryLoadHold {
 
 #[cfg(any(test, feature = "debug-hooks"))]
 impl HoldGate {
-    fn open(&self) {
+    /// Marks the gate parked and blocks the calling thread until `open`.
+    pub fn park(&self) {
+        self.parked.store(true, Ordering::SeqCst);
+        let mut released = self.released.lock().expect(HOLD_POISONED);
+        while !*released {
+            released = self.opened.wait(released).expect(HOLD_POISONED);
+        }
+    }
+
+    /// Whether a call waits on the gate, which a test polls before it queues what should land behind.
+    pub fn is_parked(&self) -> bool {
+        self.parked.load(Ordering::SeqCst)
+    }
+
+    pub fn open(&self) {
         *self.released.lock().expect(HOLD_POISONED) = true;
         self.opened.notify_all();
     }
