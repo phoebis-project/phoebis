@@ -64,6 +64,18 @@ impl PinRef {
     }
 }
 
+/// The latest reset among the windows whose utilization reads full, each window given as its utilization and its
+/// reset: under `never` an account stays out until every full window has reset, not until the first one has.
+pub fn latest_full_reset(
+    windows: impl IntoIterator<Item = (Option<f64>, Option<i64>)>,
+) -> Option<i64> {
+    windows
+        .into_iter()
+        .filter(|(utilization, _)| utilization.is_some_and(|u| u >= 1.0))
+        .filter_map(|(_, reset)| reset)
+        .max()
+}
+
 /// The pin's entrypoint as the pricers take it: `None` for a pin that carries none.
 pub fn entrypoint_of(pin: &PinRow) -> Option<&str> {
     Some(pin.entrypoint.as_str()).filter(|entrypoint| !entrypoint.is_empty())
@@ -2256,7 +2268,7 @@ impl RoutingState {
     }
 
     /// When the account counts as cooled under `never`: the latest reset among its exhausted shared windows (the
-    /// evidence's `reset` is built that way on both paths), else `fallback_ms` (the bootstrap's
+    /// evidence's `reset`, which both paths build through `latest_full_reset`), else `fallback_ms` (the bootstrap's
     /// `cooldown_fallback_seconds`) past the observation and then re-checked, because a permanent skip would
     /// need an operator to notice.
     pub fn overage_deadline(&self, account_id: &str, fallback_ms: i64) -> Option<i64> {

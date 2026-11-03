@@ -27,10 +27,10 @@ use phoebis_cch::Stamp;
 use phoebis_guardrails::{evaluate_all, Evaluation, HeaderLookup, Lookup, RequestFacts};
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
-    cohort_hold, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold, ConversationLookup,
-    EvidenceSource, Exhaustion, HoldFacts, KeyPermit, KeyRefusal, LaneFacts, OverageEvidence,
-    PinRef, PredecessorQuery, Presented, Refusal, RefusalFacts, RefusedRequest, Report,
-    RequestFlags, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
+    cohort_hold, latest_full_reset, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold,
+    ConversationLookup, EvidenceSource, Exhaustion, HoldFacts, KeyPermit, KeyRefusal, LaneFacts,
+    OverageEvidence, PinRef, PredecessorQuery, Presented, Refusal, RefusalFacts, RefusedRequest,
+    Report, RequestFlags, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
     SelectionTrace, BUDGET_WINDOW, MAIN_AGENT,
 };
 use phoebis_store::{
@@ -4318,17 +4318,12 @@ impl Relay {
             None => return,
         };
         // The provider's overage reset when it sends one, else the latest reset among the shared windows that
-        // read full: the account stays out under `never` until every full window has reset.
-        let full = |u: Option<f64>| u.is_some_and(|u| u >= 1.0);
+        // read full.
         let reset = unified.overage_reset.or_else(|| {
-            [
-                (full(unified.five_hour.utilization), unified.five_hour.reset),
-                (full(unified.seven_day.utilization), unified.seven_day.reset),
-            ]
-            .into_iter()
-            .filter(|(f, _)| *f)
-            .filter_map(|(_, r)| r)
-            .max()
+            latest_full_reset([
+                (unified.five_hour.utilization, unified.five_hour.reset),
+                (unified.seven_day.utilization, unified.seven_day.reset),
+            ])
         });
         self.router
             .report(Report::Overage {

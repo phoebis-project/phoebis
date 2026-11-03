@@ -30,11 +30,11 @@ use crate::select::{
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
-    entrypoint_of, is_plan_window, mark_holds, plan_windows, round_in_dwell, shed_dwell_ms,
-    slow_down_hold_ms, spend_reset_estimate, AccountTicket, BurnUnit, CreditsState, EvidenceSource,
-    InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, Recorded, RoutingState,
-    SharePricer, SlowDownEdge, SpendWindow, StateWrite, UtilizationSample, WindowReading,
-    WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    entrypoint_of, is_plan_window, latest_full_reset, mark_holds, plan_windows, round_in_dwell,
+    shed_dwell_ms, slow_down_hold_ms, spend_reset_estimate, AccountTicket, BurnUnit, CreditsState,
+    EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, Recorded,
+    RoutingState, SharePricer, SlowDownEdge, SpendWindow, StateWrite, UtilizationSample,
+    WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::{
     model_week, resolve, term, window_length_ms, Candidate, KeyRefusal, Presented, RegistrySnapshot,
@@ -5369,14 +5369,13 @@ pub fn sample_from_usage(
         (five, seven) => {
             let enabled = snapshot.extra_usage.as_ref().is_some_and(|e| e.is_enabled);
             let full = five.unwrap_or(0.0) >= 1.0 || seven.unwrap_or(0.0) >= 1.0;
-            // The latest reset among the exhausted windows: under `never` the account stays out until every full
-            // window has reset, not until the first one has.
-            let reset = [FIVE_HOUR, SEVEN_DAY]
-                .into_iter()
-                .filter_map(|name| sample.reading(name))
-                .filter(|r| r.utilization >= 1.0)
-                .filter_map(|r| r.reset)
-                .max();
+            let reset = latest_full_reset([FIVE_HOUR, SEVEN_DAY].map(|name| {
+                let reading = sample.reading(name);
+                (
+                    reading.as_ref().map(|r| r.utilization),
+                    reading.and_then(|r| r.reset),
+                )
+            }));
             Some(OverageEvidence {
                 in_use: enabled && full,
                 since: None,

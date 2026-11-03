@@ -44,14 +44,14 @@ pub use select::{
 pub use snapshot::{paid_source, KeyRefusal, Presented, RegistrySnapshot};
 pub use state::{
     budget_deadline, burn_average_ms, burn_decayed, ceiling, cooldown_holds, entrypoint_of,
-    is_plan_window, load_shedding, return_to_plan_dwell_ms, shed_cap, shed_dwell_ms, slow_down,
-    slow_down_hold_ms, slow_down_stretch_ms, spend_reading_reset, spend_reset_estimate, warm,
-    AccountTicket, BandSegment, BurnUnit, CreditsState, EvidenceSource, HeadMark, InFlight,
-    KeyPermit, LongContextRates, MemberSpend, OverageEvidence, PinPace, PinRef, PinUsage, Purged,
-    RateTable, Rates, Reservation, RoutingState, SharePricer, SlowDownEdge, SlowDownState,
-    SpendResetSource, SpendWindow, StateWrite, UtilizationSample, WindowReading, WindowSource,
-    BUCKET_LIFE_MS, BUCKET_TTL_MS, CYCLE_GAPS, DAY_MS, DEFAULT_WINDOW_CEILING, FAST_INPUT,
-    FAST_OUTPUT, FIVE_HOUR, HOUR_MS, INPUT_TOKENS_BUCKET, IN_FLIGHT_RECLAIM_MS,
+    is_plan_window, latest_full_reset, load_shedding, return_to_plan_dwell_ms, shed_cap,
+    shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms, spend_reading_reset,
+    spend_reset_estimate, warm, AccountTicket, BandSegment, BurnUnit, CreditsState, EvidenceSource,
+    HeadMark, InFlight, KeyPermit, LongContextRates, MemberSpend, OverageEvidence, PinPace, PinRef,
+    PinUsage, Purged, RateTable, Rates, Reservation, RoutingState, SharePricer, SlowDownEdge,
+    SlowDownState, SpendResetSource, SpendWindow, StateWrite, UtilizationSample, WindowReading,
+    WindowSource, BUCKET_LIFE_MS, BUCKET_TTL_MS, CYCLE_GAPS, DAY_MS, DEFAULT_WINDOW_CEILING,
+    FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, HOUR_MS, INPUT_TOKENS_BUCKET, IN_FLIGHT_RECLAIM_MS,
     MAX_BUCKETS_PER_ACCOUNT, OUTPUT_TOKENS_BUCKET, REQUESTS_BUCKET, SEVEN_DAY, SEVEN_DAY_FABLE,
     WEEK_MS,
 };
