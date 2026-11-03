@@ -148,9 +148,9 @@ pub fn climb(
     // client's quota probe has one message every probe of the key shares.
     if !is_auxiliary(request_class) {
         if let Some(m) = ask(message_boundaries) {
-            if session_id != m.root && m.depth.is_some_and(|d| d >= 2) {
+            if session_id != m.root && m.depth >= 2 {
                 identity.forked_from = Some(m.root);
-                identity.fork_depth = m.depth;
+                identity.fork_depth = Some(m.depth);
             }
         }
     }
@@ -830,7 +830,7 @@ mod tests {
         }
     }
 
-    fn matched(root: &str, depth: Option<u32>) -> ConversationMatch {
+    fn matched(root: &str, depth: u32) -> ConversationMatch {
         ConversationMatch {
             root: root.into(),
             depth,
@@ -883,7 +883,7 @@ mod tests {
         let mut identity = identity_of(Some("s1"));
         let k = key();
         let mut map = HashMap::new();
-        map.insert("b3", ("k", matched("s1", Some(3))));
+        map.insert("b3", ("k", matched("s1", 3)));
         climb(
             &mut identity,
             &k,
@@ -900,7 +900,7 @@ mod tests {
         let mut identity = identity_of(Some("s1"));
         let k = key();
         let mut map = HashMap::new();
-        map.insert("b1", ("k", matched("s0", Some(1))));
+        map.insert("b1", ("k", matched("s0", 1)));
         climb(&mut identity, &k, &["b1".into()], None, &Stub(map));
         assert_eq!(identity.session_id.as_deref(), Some("s1"));
         assert_eq!(identity.forked_from, None);
@@ -912,7 +912,7 @@ mod tests {
         let mut identity = identity_of(Some("s1"));
         let k = key();
         let mut map = HashMap::new();
-        map.insert("b2", ("k", matched("s0", Some(2))));
+        map.insert("b2", ("k", matched("s0", 2)));
         climb(
             &mut identity,
             &k,
@@ -941,7 +941,7 @@ mod tests {
         assert_eq!(identity.fork_depth, None);
 
         let mut map = HashMap::new();
-        map.insert("b3", ("k", matched("s0", Some(3))));
+        map.insert("b3", ("k", matched("s0", 3)));
         let mut identity = identity_of(Some("s1"));
         climb(&mut identity, &k, &boundaries, Some("main"), &Stub(map));
         assert_eq!(identity.forked_from.as_deref(), Some("s0"));

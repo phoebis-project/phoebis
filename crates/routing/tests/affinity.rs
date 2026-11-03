@@ -99,7 +99,7 @@ fn query<'a>(key_id: &'a str, message_boundaries: &'a [String]) -> ConversationQ
 fn match_at(m: Option<ConversationMatch>, root: &str, depth: u32) {
     let m = m.expect("a match at this depth");
     assert_eq!(m.root, root);
-    assert_eq!(m.depth, Some(depth));
+    assert_eq!(m.depth, depth);
 }
 
 #[test]

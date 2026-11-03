@@ -143,7 +143,7 @@ pub struct PredecessorQuery<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConversationMatch {
     pub root: String,
-    pub depth: Option<u32>,
+    pub depth: u32,
 }
 
 /// What the relay asks of the map: its conversation climb asks `conversation`, and the leg's body build asks
@@ -532,7 +532,7 @@ impl ConversationLookup for AffinityMap {
         let (depth, entry) = self.deepest(query.canonical_model, query.message_boundaries, owns)?;
         Some(ConversationMatch {
             root: entry.root.clone(),
-            depth: Some(depth),
+            depth,
         })
     }
 
@@ -775,7 +775,7 @@ mod tests {
         let found = map
             .conversation(&query)
             .expect("b1's shallower entry is still owned");
-        assert_eq!(found.depth, Some(1));
+        assert_eq!(found.depth, 1);
     }
 
     #[test]
