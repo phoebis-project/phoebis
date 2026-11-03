@@ -920,16 +920,11 @@ async fn wait_on_clock(
     stopped: &mut watch::Receiver<bool>,
 ) -> Wait {
     let deadline = clock() + delay.as_millis() as i64;
-    loop {
-        let now = clock();
-        if now >= deadline {
-            return Wait::Elapsed;
-        }
-        let slice = CLOCK_TICK.min(Duration::from_millis((deadline - now) as u64));
-        tokio::select! {
-            _ = tokio::time::sleep(slice) => {}
-            _ = stop_requested(stopped) => return Wait::Stopped,
-        }
+    // The deadline polled first, so one already passed answers `Elapsed` ahead of a stop already set.
+    tokio::select! {
+        biased;
+        () = sleep_until(Some(deadline), clock) => Wait::Elapsed,
+        () = stop_requested(stopped) => Wait::Stopped,
     }
 }
 
