@@ -50,9 +50,6 @@ export const isoOrNull = (ms: unknown): string | null => (typeof ms === 'number'
 const isoOr = (ms: unknown, fallback: string): string => isoOrNull(ms) ?? fallback;
 const epoch = '1970-01-01T00:00:00.000Z';
 
-/** The UI's id for a window key, as `windowKeyId` folds it. */
-export const windowId = (id: string): WindowId | null => windowKeyId(id);
-
 /** The known windows in the order the pages draw them, then every other id in the order it was first seen. */
 function inDrawnOrder<T>(byId: Map<WindowId, T>): T[] {
   const known: readonly WindowId[] = WINDOW_ORDER;
@@ -60,7 +57,7 @@ function inDrawnOrder<T>(byId: Map<WindowId, T>): T[] {
 }
 
 function decodeWindow(w: Rec): RateLimitWindow | null {
-  const id = windowId(str(w.id));
+  const id = windowKeyId(str(w.id));
   if (id === null) return null;
   return {
     burn: numOrNull(w.burn), demand: numOrNull(w.demand), horizon: isoOrNull(w.horizon), id, label: WINDOW_LABEL[id] ?? id, lead: numOrNull(w.lead), observedAt: isoOr(w.observed_at, epoch), periodHours: WINDOW_HOURS[id] ?? hoursOfKey(id),
@@ -171,7 +168,7 @@ export function decodeSubscription(profile: Rec | null, sub: Rec | null): Subscr
 export function decodeAccount(v: unknown): Account {
   const a = rec(v);
   const cooldowns = list(a.cooldowns).map(rec);
-  const decodedCooldowns = cooldowns.map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowId(str(c.window)) }));
+  const decodedCooldowns = cooldowns.map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowKeyId(str(c.window)) }));
   const windows = drawnOrder(list(a.windows).map(rec).map(decodeWindow).filter((w): w is RateLimitWindow => w !== null));
   const profile = orNull(a.profile, (r) => r);
   const sub = orNull(a.subscription, (r) => r);
@@ -240,7 +237,7 @@ export function decodePairingConfirmed(v: unknown): PairingConfirmed {
 
 /** The history's samples keep the ledger's stored key, which spells a head's 7-day Fable window
  *  `seven_day_overage_included`, so the history alone reads that key as the Fable series. */
-const historyWindowId = (id: string): WindowId | null => (id === 'seven_day_overage_included' ? '7d_fable' : windowId(id));
+const historyWindowId = (id: string): WindowId | null => (id === 'seven_day_overage_included' ? '7d_fable' : windowKeyId(id));
 
 export function decodeQuotaHistory(v: unknown): QuotaHistory[] {
   const q = rec(v);
@@ -461,8 +458,7 @@ export function decodePool(v: unknown): Pool {
 }
 
 const outcomeOf = (v: unknown): AttemptOutcome => oneOf(ATTEMPT_OUTCOME_VALUES, v) ?? 'upstream_error';
-const missReason = (v: unknown): CacheMissReason | null => strOrNull(v);
-const attemptWindows = (v: unknown) => list(v).map(rec).flatMap((w) => { const id = windowId(str(w.id)); return id === null ? [] : [{ id, resetsAt: isoOrNull(w.resets_at), utilization: numOrNull(w.utilization) }]; });
+const attemptWindows = (v: unknown) => list(v).map(rec).flatMap((w) => { const id = windowKeyId(str(w.id)); return id === null ? [] : [{ id, resetsAt: isoOrNull(w.resets_at), utilization: numOrNull(w.utilization) }]; });
 const usageOf = (v: unknown) => { const u = rec(v); return { cacheRead: num(u.cache_read), cacheWrite1h: num(u.cache_write_1h), cacheWrite5m: num(u.cache_write_5m), input: num(u.input), output: num(u.output), thinking: num(u.thinking), webFetch: num(u.web_fetch), webSearch: num(u.web_search) }; };
 const phasesOf = (v: unknown, at: string): RequestPhases => { const p = rec(v); return { finishedAt: isoOrNull(p.finished_at), firstContentAt: isoOrNull(p.first_content_at), headAt: isoOrNull(p.head_at), receivedAt: isoOr(p.received_at, at), selectedAt: isoOrNull(p.selected_at), streamEndAt: isoOrNull(p.stream_end_at), writtenAt: isoOrNull(p.written_at) }; };
 const shapeOf = (v: unknown): RequestShape => { const s = rec(v); return { contextEdits: strings(s.context_edits), effort: strOrNull(s.effort), maxTokens: numOrNull(s.max_tokens), messageCount: num(s.message_count), requestedServiceTier: strOrNull(s.requested_service_tier), requestedSpeed: strOrNull(s.requested_speed), systemBlocks: num(s.system_blocks), temperature: numOrNull(s.temperature), thinkingBudget: numOrNull(s.thinking_budget), thinkingType: strOrNull(s.thinking_type), toolCount: num(s.tool_count) }; };
@@ -498,7 +494,7 @@ export function decodeRequest(v: unknown): RequestLog {
   const r = rec(v);
   return {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), agentType: strOrNull(r.agent_type), at: isoOr(r.at, epoch),
-    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: accountKind(a.account_kind), cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: boolOrNull(a.overage_in_use), response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), usageBased: bool(a.usage_based), windows: attemptWindows(a.windows) })),
+    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: accountKind(a.account_kind), cacheMissReason: strOrNull(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: boolOrNull(a.overage_in_use), response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), usageBased: bool(a.usage_based), windows: attemptWindows(a.windows) })),
     autoMode: oneOf(AUTO_MODE_VALUES, r.auto_mode) ?? null,
     canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), classifier: r.classifier === 'client' ? 'client' : null, client: strOrNull(r.client), clientContract: strOrNull(r.client_contract), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted),
     costEquivalent: numOrNull(r.cost_equivalent),

@@ -353,7 +353,7 @@ test("a quota history reads the head's stored Fable key as the one 7-day Fable s
 test('the window key helper names the three known windows and keeps any other key as its own window', () => {
   const keys = ['five_hour', '5h', 'seven_day', '7d', 'seven_day_fable', '7d_oi', 'fable', 'seven_day_overage_included', 'seven_day_opus'];
   assert.deepEqual(
-    keys.map(d.windowId),
+    keys.map(d.windowKeyId),
     ['5h', '5h', '7d', '7d', '7d_fable', '7d_fable', '7d_fable', 'seven_day_overage_included', 'seven_day_opus'],
     'the route answers the 7-day Fable window under seven_day_fable alone, so the overage-included key is a window of its own',
   );
