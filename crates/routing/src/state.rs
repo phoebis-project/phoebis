@@ -1126,8 +1126,52 @@ pub fn return_to_plan_dwell_ms(pool: &PoolRow) -> i64 {
 #[derive(Default)]
 struct InFlightTable {
     next_id: u64,
-    keys: HashMap<String, HashMap<u64, i64>>,
-    accounts: HashMap<String, HashMap<u64, i64>>,
+    keys: Slots,
+    accounts: Slots,
+}
+
+/// The slots taken per owner, a key or an account: each slot's id with the instant it was taken.
+#[derive(Default)]
+struct Slots(HashMap<String, HashMap<u64, i64>>);
+
+impl Slots {
+    fn take(&mut self, owner: &str, id: u64, now: i64) {
+        self.0.entry(owner.to_string()).or_default().insert(id, now);
+    }
+
+    fn count(&self, owner: &str) -> u32 {
+        self.0.get(owner).map(HashMap::len).unwrap_or(0) as u32
+    }
+
+    fn holds(&self, owner: &str, id: u64) -> bool {
+        self.0
+            .get(owner)
+            .is_some_and(|slots| slots.contains_key(&id))
+    }
+
+    /// Answers whether the slot was still taken. An owner leaves with its last slot.
+    fn release(&mut self, owner: &str, id: u64) -> bool {
+        let Some(slots) = self.0.get_mut(owner) else {
+            return false;
+        };
+        let released = slots.remove(&id).is_some();
+        if slots.is_empty() {
+            self.0.remove(owner);
+        }
+        released
+    }
+
+    /// Drops the slots older than `IN_FLIGHT_RECLAIM_MS`, answering how many.
+    fn reclaim(&mut self, now: i64) -> usize {
+        let mut reclaimed = 0;
+        for slots in self.0.values_mut() {
+            let before = slots.len();
+            slots.retain(|_, taken_at| now - *taken_at <= IN_FLIGHT_RECLAIM_MS);
+            reclaimed += before - slots.len();
+        }
+        self.0.retain(|_, slots| !slots.is_empty());
+        reclaimed
+    }
 }
 
 /// The table and the notifier a freed account slot wakes, shared by the handle, the task and every guard.
@@ -1157,11 +1201,7 @@ impl InFlight {
         let mut table = self.0.table();
         let id = table.next_id;
         table.next_id += 1;
-        table
-            .keys
-            .entry(key_id.to_string())
-            .or_default()
-            .insert(id, now);
+        table.keys.take(key_id, id, now);
         KeyPermit {
             shared: self.0.clone(),
             key_id: key_id.to_string(),
@@ -1173,11 +1213,7 @@ impl InFlight {
         let mut table = self.0.table();
         let id = table.next_id;
         table.next_id += 1;
-        table
-            .accounts
-            .entry(account_id.to_string())
-            .or_default()
-            .insert(id, now);
+        table.accounts.take(account_id, id, now);
         AccountTicket {
             shared: self.0.clone(),
             account_id: account_id.to_string(),
@@ -1186,31 +1222,17 @@ impl InFlight {
     }
 
     pub fn account(&self, account_id: &str) -> u32 {
-        self.0
-            .table()
-            .accounts
-            .get(account_id)
-            .map(HashMap::len)
-            .unwrap_or(0) as u32
+        self.0.table().accounts.count(account_id)
     }
 
     /// Whether the ticket `id` still counts on `account_id`: false once its guard dropped or the hour's reclaim
     /// took it.
     pub fn holds(&self, account_id: &str, id: u64) -> bool {
-        self.0
-            .table()
-            .accounts
-            .get(account_id)
-            .is_some_and(|slots| slots.contains_key(&id))
+        self.0.table().accounts.holds(account_id, id)
     }
 
     pub fn key(&self, key_id: &str) -> u32 {
-        self.0
-            .table()
-            .keys
-            .get(key_id)
-            .map(HashMap::len)
-            .unwrap_or(0) as u32
+        self.0.table().keys.count(key_id)
     }
 
     /// Drops permits and tickets older than `IN_FLIGHT_RECLAIM_MS` (one hour): a guard whose drop never
@@ -1218,20 +1240,7 @@ impl InFlight {
     pub fn expire(&self, now: i64) -> usize {
         let reclaimed = {
             let mut table = self.0.table();
-            let mut reclaimed = 0;
-            for slots in table.keys.values_mut() {
-                let before = slots.len();
-                slots.retain(|_, taken_at| now - *taken_at <= IN_FLIGHT_RECLAIM_MS);
-                reclaimed += before - slots.len();
-            }
-            table.keys.retain(|_, slots| !slots.is_empty());
-            for slots in table.accounts.values_mut() {
-                let before = slots.len();
-                slots.retain(|_, taken_at| now - *taken_at <= IN_FLIGHT_RECLAIM_MS);
-                reclaimed += before - slots.len();
-            }
-            table.accounts.retain(|_, slots| !slots.is_empty());
-            reclaimed
+            table.keys.reclaim(now) + table.accounts.reclaim(now)
         };
         if reclaimed > 0 {
             self.0.freed.notify_waiters();
@@ -1268,13 +1277,7 @@ pub struct KeyPermit {
 
 impl Drop for KeyPermit {
     fn drop(&mut self) {
-        let mut table = self.shared.table();
-        if let Some(slots) = table.keys.get_mut(&self.key_id) {
-            slots.remove(&self.id);
-            if slots.is_empty() {
-                table.keys.remove(&self.key_id);
-            }
-        }
+        self.shared.table().keys.release(&self.key_id, self.id);
     }
 }
 
@@ -1294,17 +1297,11 @@ impl AccountTicket {
 
 impl Drop for AccountTicket {
     fn drop(&mut self) {
-        let released = {
-            let mut table = self.shared.table();
-            let Some(slots) = table.accounts.get_mut(&self.account_id) else {
-                return;
-            };
-            let released = slots.remove(&self.id).is_some();
-            if slots.is_empty() {
-                table.accounts.remove(&self.account_id);
-            }
-            released
-        };
+        let released = self
+            .shared
+            .table()
+            .accounts
+            .release(&self.account_id, self.id);
         if released {
             self.shared.freed.notify_waiters();
         }
