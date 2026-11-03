@@ -768,7 +768,12 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
         Ok(input) => input,
         Err(response) => return response,
     };
-    match (&input.guardrail, &input.conditions) {
+    /// The definition the test evaluates: a saved guardrail's id or an unsaved list.
+    enum Definition {
+        Saved(String),
+        Unsaved(Vec<ConditionView>),
+    }
+    let definition = match (input.guardrail, input.conditions) {
         (Some(_), Some(_)) => {
             return failure(
                 StatusCode::BAD_REQUEST,
@@ -781,8 +786,9 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
                 "guardrail or conditions is required",
             )
         }
-        _ => {}
-    }
+        (Some(id), None) => Definition::Saved(id),
+        (None, Some(views)) => Definition::Unsaved(views),
+    };
     let (side, subject_id) = match (input.pool_id, input.key_id) {
         (Some(_), Some(_)) => {
             return failure(StatusCode::BAD_REQUEST, "pool_id and key_id are exclusive")
@@ -795,13 +801,13 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
     if !(1..=500).contains(&limit) {
         return failure(StatusCode::BAD_REQUEST, "limit is 1 to 500");
     }
-    let (id, conditions) = match &input.guardrail {
-        Some(id) => match state.store.guardrail(id) {
+    let (id, conditions) = match definition {
+        Definition::Saved(id) => match state.store.guardrail(&id) {
             Ok(Some(row)) => (row.id, row.conditions),
             Ok(None) => return failure(StatusCode::NOT_FOUND, "no such guardrail"),
             Err(error) => return store_failure(error),
         },
-        None => match validate_conditions(input.conditions.as_deref().unwrap_or_default()) {
+        Definition::Unsaved(views) => match validate_conditions(&views) {
             Ok(conditions) => ("test".to_string(), conditions),
             Err(refusal) => return refusal,
         },
