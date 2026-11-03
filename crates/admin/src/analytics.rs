@@ -1008,8 +1008,6 @@ pub(crate) async fn burn(
                 seven_day_share: p.seven_day_share,
                 model_week_share: p.model_week_share,
                 equivalent: p.equivalent,
-                // The figure's latch, never the shares' `five_hour_unpriced`, `seven_day_unpriced` and
-                // `model_week_unpriced`, which latch only where the read prices shares.
                 unpriced: p.unpriced,
                 cached_tokens: p.cached_tokens,
                 tokens: p.tokens,

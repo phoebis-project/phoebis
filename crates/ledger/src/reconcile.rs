@@ -14,7 +14,7 @@ use rusqlite::{params, params_from_iter, Connection, Row, Transaction};
 use crate::plan::{entrypoint_of_client, funding_of, Funding, PlanTables};
 use crate::price::RowKey;
 use crate::pricing::{prompt_tokens, PriceRevisions, Speed};
-use crate::query::{price_usage, BurnPoint};
+use crate::query::{price_usage, BurnSums};
 use crate::record::SampleSource;
 use crate::rollup::UNATTRIBUTED;
 use crate::LedgerError;
@@ -595,8 +595,9 @@ fn predicted(
             write_1h,
             output,
         };
-        let mut point = BurnPoint::default();
-        price_usage(&mut point, prices, tables, key, usage, true);
+        let mut sums = BurnSums::default();
+        price_usage(&mut sums, prices, tables, key, usage, true);
+        let point = sums.point();
         let priced = match window {
             FIVE_HOUR => point.five_hour_share,
             SEVEN_DAY => point.seven_day_share,

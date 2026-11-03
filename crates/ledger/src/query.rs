@@ -4312,14 +4312,6 @@ pub struct BurnPoint {
     /// The model week's share beside the two shared windows, where the 5-hour and 7-day shares are answered. `None`
     /// where no row of the bucket is on a model with a week of its own, and latched as the shared windows are.
     pub model_week_share: Option<f64>,
-    /// A row of the bucket a known tier could not price on the window, so its share reads `None` whatever the other
-    /// rows priced: a partial sum would read as the bucket's share. Never on the wire.
-    #[serde(skip)]
-    pub five_hour_unpriced: bool,
-    #[serde(skip)]
-    pub seven_day_unpriced: bool,
-    #[serde(skip)]
-    pub model_week_unpriced: bool,
     /// Every token of the bucket's rows, all five types, whatever the tables priced: zero for an idle bucket, so a
     /// reader tells an idle bucket from one whose traffic no table priced.
     pub tokens: u64,
@@ -4334,23 +4326,69 @@ pub struct BurnPoint {
     pub unpriced: bool,
 }
 
-/// One row's figure added to a window of a burn point: `None` latches the window, whichever row came first, so a
-/// partial sum never reads as the bucket's figure.
-fn latch_add(value: &mut Option<f64>, unpriced: &mut bool, figure: Option<f64>) {
-    match figure {
-        Some(figure) if !*unpriced => *value.get_or_insert(0.0) += figure,
-        Some(_) => {}
-        None => {
-            *unpriced = true;
-            *value = None;
+/// One figure of a burn bucket summed row by row: `Idle` until a row adds to it, and `Unpriced` once a row it should
+/// price priced nothing, whichever row came first, so a partial sum never reads as the bucket's figure.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum Latch {
+    #[default]
+    Idle,
+    Sum(f64),
+    Unpriced,
+}
+
+impl Latch {
+    fn add(&mut self, figure: Option<f64>) {
+        *self = match (*self, figure) {
+            (Latch::Unpriced, _) | (_, None) => Latch::Unpriced,
+            (Latch::Idle, Some(figure)) => Latch::Sum(figure),
+            (Latch::Sum(sum), Some(figure)) => Latch::Sum(sum + figure),
+        };
+    }
+
+    /// A zero on a figure no row of the bucket has latched.
+    fn zero(&mut self) {
+        if *self == Latch::Idle {
+            *self = Latch::Sum(0.0);
+        }
+    }
+
+    fn figure(self) -> Option<f64> {
+        match self {
+            Latch::Sum(sum) => Some(sum),
+            Latch::Idle | Latch::Unpriced => None,
         }
     }
 }
 
-/// A zero on a window no row of the bucket has latched.
-fn latch_zero(value: &mut Option<f64>, unpriced: bool) {
-    if !unpriced {
-        value.get_or_insert(0.0);
+/// A burn bucket's figures as its rows are priced in, read out as its `BurnPoint` once they are all in.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BurnSums {
+    at: i64,
+    cached_tokens: u64,
+    five_hour_share: Latch,
+    seven_day_share: Latch,
+    model_week_share: Latch,
+    tokens: u64,
+    uncached_tokens: u64,
+    usd: f64,
+    equivalent: Latch,
+}
+
+impl BurnSums {
+    /// The point, its `unpriced` the figure's latch.
+    pub(crate) fn point(self) -> BurnPoint {
+        BurnPoint {
+            at: self.at,
+            cached_tokens: self.cached_tokens,
+            five_hour_share: self.five_hour_share.figure(),
+            seven_day_share: self.seven_day_share.figure(),
+            model_week_share: self.model_week_share.figure(),
+            tokens: self.tokens,
+            uncached_tokens: self.uncached_tokens,
+            usd: self.usd,
+            equivalent: self.equivalent.figure(),
+            unpriced: self.equivalent == Latch::Unpriced,
+        }
     }
 }
 
@@ -4358,15 +4396,15 @@ fn latch_zero(value: &mut Option<f64>, unpriced: bool) {
 /// or recreated account moves no dollar into a share. One `price_row` call answers every figure: the row's read-time
 /// dollars for a billed row, and for a plan row the Pro-week figure against the anchor row in force at the key's `now`,
 /// and, where `shares` holds and the row recorded a tier, the shares of that tier's windows (each banded at the key's
-/// `band_at`, else its `at`). A plan row with no tier recorded prices no share and still its figure. A fast row and one in overage add
-/// their dollars and a zero share where the tables size the tier: fast mode spends usage credits and overage is billed
-/// in dollars, neither draws a plan window, and the zero still tells a reader the account is priced in its window
-/// unit. Every billed row adds a zero figure, so a bucket with tokens and no plan row reads 0 there and only an idle
+/// `band_at`, else its `at`). A plan row with no tier recorded prices no share and still its figure. A fast row and
+/// one in overage add their dollars and a zero share where the tables size the tier: fast mode spends usage credits
+/// and overage is billed in dollars, neither draws a plan window, and the zero still tells a reader the account is
+/// priced in its window unit. Every billed row adds a zero figure, so a bucket with tokens and no plan row reads 0 there and only an idle
 /// bucket reads `None`. A bucket holding a row the table cannot price answers `None` on that window and in the figure,
 /// whichever row came first, and a row with no token has nothing to price and leaves every figure as the other rows
 /// set it.
 pub(crate) fn price_usage(
-    point: &mut BurnPoint,
+    point: &mut BurnSums,
     prices: &PriceRevisions,
     tables: &PlanTables,
     key: RowKey<'_>,
@@ -4398,29 +4436,13 @@ pub(crate) fn price_usage(
                             .as_ref()
                             .and_then(|shares| shares.get(window).copied().flatten())
                     };
-                    latch_add(
-                        &mut point.five_hour_share,
-                        &mut point.five_hour_unpriced,
-                        share(FIVE_HOUR),
-                    );
-                    latch_add(
-                        &mut point.seven_day_share,
-                        &mut point.seven_day_unpriced,
-                        share(SEVEN_DAY),
-                    );
+                    point.five_hour_share.add(share(FIVE_HOUR));
+                    point.seven_day_share.add(share(SEVEN_DAY));
                     if let Some(week) = week {
-                        latch_add(
-                            &mut point.model_week_share,
-                            &mut point.model_week_unpriced,
-                            share(week),
-                        );
+                        point.model_week_share.add(share(week));
                     }
                 }
-                latch_add(
-                    &mut point.equivalent,
-                    &mut point.unpriced,
-                    priced.equivalent,
-                );
+                point.equivalent.add(priced.equivalent);
             }
             funding => {
                 // Ahead of the model's weights: a dollar-billed row prices in dollars whatever the model weighs it
@@ -4432,16 +4454,16 @@ pub(crate) fn price_usage(
                             .is_some()
                     };
                     if sized(FIVE_HOUR) {
-                        latch_zero(&mut point.five_hour_share, point.five_hour_unpriced);
+                        point.five_hour_share.zero();
                     }
                     if sized(SEVEN_DAY) {
-                        latch_zero(&mut point.seven_day_share, point.seven_day_unpriced);
+                        point.seven_day_share.zero();
                     }
                     if week.is_some_and(sized) {
-                        latch_zero(&mut point.model_week_share, point.model_week_unpriced);
+                        point.model_week_share.zero();
                     }
                 }
-                latch_zero(&mut point.equivalent, point.unpriced);
+                point.equivalent.zero();
             }
         }
     }
@@ -4486,11 +4508,11 @@ pub fn burn_series_over(
     now: i64,
 ) -> Result<Vec<BurnPoint>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
-    let mut points = empty_burn_points(first, last, filter.bucket_seconds);
+    let mut sums = empty_burn_sums(first, last, filter.bucket_seconds);
     let shares = names_one_account(&filter.accounts);
     for row in rows.iter().filter(|r| burn_scope_holds(filter, r)) {
         price_burn_row(
-            &mut points,
+            &mut sums,
             first,
             filter.bucket_seconds,
             row,
@@ -4500,16 +4522,16 @@ pub fn burn_series_over(
             now,
         );
     }
-    Ok(points)
+    Ok(sums.into_iter().map(BurnSums::point).collect())
 }
 
 /// Every bucket of `[first, last)`, empty. Ceiling, not floor: `last` is only rounded up to the hour (`hour_ceil`),
 /// so a 6-hour or daily bucket can leave a trailing partial bucket, which is a point of its own.
-fn empty_burn_points(first: i64, last: i64, bucket_seconds: i64) -> Vec<BurnPoint> {
+fn empty_burn_sums(first: i64, last: i64, bucket_seconds: i64) -> Vec<BurnSums> {
     bucket_starts(first, last, bucket_seconds)
-        .map(|at| BurnPoint {
+        .map(|at| BurnSums {
             at: at * 1_000,
-            ..BurnPoint::default()
+            ..BurnSums::default()
         })
         .collect()
 }
@@ -4524,7 +4546,7 @@ fn burn_scope_holds(filter: &SeriesFilter, r: &RollupRow) -> bool {
 /// One rollup row priced into the bucket it falls in, nothing for a row before the first bucket's edge.
 #[allow(clippy::too_many_arguments)]
 fn price_burn_row(
-    points: &mut [BurnPoint],
+    points: &mut [BurnSums],
     first: i64,
     bucket_seconds: i64,
     row: &RollupRow,
@@ -4585,14 +4607,14 @@ pub async fn burn_groups_paged(
         ..RollupSelect::default()
     };
     // Each group's points, and whether a row of the range itself joined it.
-    let mut groups: BTreeMap<String, (Vec<BurnPoint>, bool)> = BTreeMap::new();
+    let mut groups: BTreeMap<String, (Vec<BurnSums>, bool)> = BTreeMap::new();
     read_rollups_paged(db, &select, first, last, |row| {
         if !burn_scope_holds(filter, row) {
             return;
         }
         let (points, held) = groups
             .entry(grouping.group_of(row))
-            .or_insert_with(|| (empty_burn_points(first, last, filter.bucket_seconds), false));
+            .or_insert_with(|| (empty_burn_sums(first, last, filter.bucket_seconds), false));
         *held |= row.hour >= from_hour && row.hour < last;
         price_burn_row(
             points,
@@ -4609,7 +4631,7 @@ pub async fn burn_groups_paged(
     Ok(groups
         .into_iter()
         .filter(|(_, (_, held))| *held)
-        .map(|(group, (points, _))| (group, points))
+        .map(|(group, (sums, _))| (group, sums.into_iter().map(BurnSums::point).collect()))
         .collect())
 }
 
@@ -4964,12 +4986,12 @@ pub fn session_burn_series(
     if sessions.is_empty() {
         return Ok(Vec::new());
     }
-    let mut by_session: HashMap<String, Vec<BurnPoint>> = sessions
+    let mut by_session: HashMap<String, Vec<BurnSums>> = sessions
         .iter()
         .map(|id| {
             (
                 id.clone(),
-                empty_burn_points(first, last, filter.bucket_seconds),
+                empty_burn_sums(first, last, filter.bucket_seconds),
             )
         })
         .collect();
@@ -5017,7 +5039,7 @@ pub fn session_burn_series(
         .into_iter()
         .map(|id| {
             let series = by_session.remove(&id).unwrap_or_default();
-            (id, series)
+            (id, series.into_iter().map(BurnSums::point).collect())
         })
         .collect())
 }
