@@ -19,6 +19,7 @@ import { tierOrder, weekReadingOf } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, readEnd, shownCount, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtDatedTime, fmtTime, plural, upperFirst } from '@/lib/format';
+import { sameMembers } from '@/lib/forms';
 import { toggled, useAsync, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { ALL_KINDS, byOf, catalogModel, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref, movedFrom, registryTarget, words } from '@/lib/routingLog';
 
@@ -35,9 +36,6 @@ const KIND_OPTIONS: Option[] = [
 ];
 const KIND_PRESET_ROWS = { kinds: KIND_PRESETS };
 
-// Compared by the set's size, since a list that repeats one kind and leaves another out is as long as every kind.
-const sameSet = (a: readonly string[], b: readonly string[]) => new Set(a).size === b.length && a.every((x) => b.includes(x));
-
 const Dash = () => <span className="muted">-</span>;
 
 /** Every entity a row names is a link to the view of its kind. */
@@ -50,7 +48,7 @@ const EntityLink = ({ children, id, kind, mono = false }: { children?: ReactNode
 export function RoutingLogPage() {
   const { address, filters, update: rawUpdate } = useQueryFilters(ROUTING_LOG_CODEC);
   // A set equal to every kind writes no key, since an absent `kinds` reads every kind.
-  const update = (patch: Partial<LogFilters>) => rawUpdate(patch.kinds !== undefined && sameSet(patch.kinds, ALL_KINDS) ? { ...patch, kinds: [] } : patch);
+  const update = (patch: Partial<LogFilters>) => rawUpdate(patch.kinds !== undefined && sameMembers(patch.kinds, ALL_KINDS) ? { ...patch, kinds: [] } : patch);
   const navigate = useNavigate();
   const keys = useAsync(() => api.listKeys(), []);
   const pools = useAsync(() => api.listPools(), []);
@@ -118,7 +116,7 @@ export function RoutingLogPage() {
 
   const now = clock.now();
   // An address that lists every kind is every kind, which draws no chip and every row of the Kinds list checked.
-  const barFilters = useMemo(() => (sameSet(filters.kinds, ALL_KINDS) ? { ...filters, kinds: [] } : filters), [filters]);
+  const barFilters = useMemo(() => (sameMembers(filters.kinds, ALL_KINDS) ? { ...filters, kinds: [] } : filters), [filters]);
   const counts = log.data?.counts ?? null;
   // The request chip keeps its id form and carries the route's counts for the request in its title.
   const dimensions = useMemo(

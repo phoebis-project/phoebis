@@ -318,6 +318,12 @@ export const guardrailIdsOf = (refs: readonly Pick<GuardrailRef, 'id' | 'positio
 export const guardrailsChange = (list: readonly string[], opened: readonly string[]): { guardrails?: string[] } =>
   list.length === opened.length && list.every((id, i) => id === opened[i]) ? {} : { guardrails: [...list] };
 
+/**
+ * Whether `a` holds exactly the members of `b`, a list without repeats, in any order. Compared by the set's size, since
+ * a list that repeats one member and leaves another out is as long as `b`.
+ */
+export const sameMembers = (a: readonly string[], b: readonly string[]): boolean => new Set(a).size === b.length && a.every((x) => b.includes(x));
+
 /** The dialog's starting fields: the stored key's, or a new key's in `poolId`. */
 export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
   return {

@@ -13,7 +13,7 @@ import { poolKeysHref, requestHref } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtInt, messageOf, noun } from '@/lib/format';
-import { derivedId, refusalsView, sameValues, saveStatus } from '@/lib/forms';
+import { derivedId, refusalsView, sameMembers, sameValues, saveStatus } from '@/lib/forms';
 import { guardrailRefusals, presetBadges, verdictWords } from '@/lib/guardrails';
 import { useAsync } from '@/lib/hooks';
 
@@ -318,8 +318,6 @@ function formOf(existing: Guardrail | null, source: Guardrail | undefined): Guar
   };
 }
 
-const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
-
 /** A pool or key picker: the button reads the count and opens the filter bar's list, as Add filter opens its own. */
 function Picker({ empty, label, many, one, onChange, options, value }: { empty: string; label: string; many: string; one: string; onChange: (next: string[]) => void; options: Option[]; value: string[] }) {
   const boxId = useId();
@@ -430,8 +428,8 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
         // nothing and leaves an attachment made meanwhile from the subject's side in place.
         const input: Partial<GuardrailInput> & { preset?: never } = {
           ...fields,
-          ...(sameSet(form.pools, opened.pools) ? {} : { pools: form.pools }),
-          ...(sameSet(form.keys, opened.keys) ? {} : { keys: form.keys }),
+          ...(sameMembers(form.pools, opened.pools) ? {} : { pools: form.pools }),
+          ...(sameMembers(form.keys, opened.keys) ? {} : { keys: form.keys }),
           ...(presetVersion === null ? {} : { presetVersion }),
         };
         saved = await api.updateGuardrail(existing.id, input, existing.revision);
