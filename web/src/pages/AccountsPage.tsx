@@ -22,7 +22,7 @@ import { FREE_NOTE, allowanceFigure, allowanceSpan, allowanceSubtitle, allowance
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
-import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
+import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative, pct } from '@/lib/format';
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { latestPerWindow, meterGroups, meterWindowWord } from '@/lib/meter';
@@ -982,9 +982,9 @@ function TrendChart({ history, loading, hasFable }: { hasFable: boolean; history
                 <ChartTooltip
                   title={fmtAbsolute(new Date(p.at).toISOString())}
                   rows={[
-                    { color: ink.series[0], label: '5-hour used', value: `${p.u5.toFixed(0)}%` },
-                    { color: ink.series[1], label: '7-day used', value: p.u7 === null ? 'no sample yet' : `${p.u7.toFixed(0)}%` },
-                    ...(hasFable ? [{ color: ink.series[2], label: 'Fable 7-day used', value: p.uf === null ? 'no sample yet' : `${p.uf.toFixed(0)}%` }] : []),
+                    { color: ink.series[0], label: '5-hour used', value: pct(p.u5) },
+                    { color: ink.series[1], label: '7-day used', value: p.u7 === null ? 'no sample yet' : pct(p.u7) },
+                    ...(hasFable ? [{ color: ink.series[2], label: 'Fable 7-day used', value: p.uf === null ? 'no sample yet' : pct(p.uf) }] : []),
                   ]}
                 />
               );

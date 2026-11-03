@@ -130,7 +130,7 @@ export function remainingTimeShare(w: RateLimitWindow): number | null {
 export function paceWords(w: RateLimitWindow, now: number, end: number | null): string | null {
   if (w.resetsAt === null || w.lead === null) return null;
   const lead = w.lead;
-  const words = Math.abs(lead) < 0.01 ? 'on pace' : `${Math.round(Math.abs(lead) * 100)}% ${lead > 0 ? 'ahead of' : 'behind'} pace`;
+  const words = Math.abs(lead) < 0.01 ? 'on pace' : `${fmtPct(Math.abs(lead))} ${lead > 0 ? 'ahead of' : 'behind'} pace`;
   return `${words}${toEndWords(paceEnd(w.resetsAt, end), now)}`;
 }
 

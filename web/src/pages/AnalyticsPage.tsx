@@ -864,8 +864,8 @@ export function AnalyticsPage() {
                 <Tooltip
                   cursor={{ stroke: ink.axis }}
                   content={timeTip<Bucket & { cachedShare: number | null; hitRatio: number | null }>((p) => [
-                    { color: ink.series[0], label: 'cache hit ratio', value: p.hitRatio === null ? '-' : `${p.hitRatio.toFixed(0)}%` },
-                    { color: ink.series[2], label: 'cached share of input', value: p.cachedShare === null ? '-' : `${p.cachedShare.toFixed(0)}%` },
+                    { color: ink.series[0], label: 'cache hit ratio', value: pct(p.hitRatio) },
+                    { color: ink.series[2], label: 'cached share of input', value: pct(p.cachedShare) },
                   ])}
                 />
                 <Line type="monotone" dataKey="hitRatio" stroke={ink.series[0]} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
@@ -2705,7 +2705,7 @@ function AccountsSection({
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
           <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
-          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, value: p[a] === null || p[a] === undefined ? '-' : `${(p[a] as number).toFixed(0)}%` })))} />
+          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, value: pct(p[a]) })))} />
           {accounts.map((a) => (
             <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, slotOf(a))} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
           ))}
