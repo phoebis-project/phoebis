@@ -11,7 +11,6 @@ use crate::{CacheTtl, DriftKind, RelayError};
 #[derive(Debug)]
 pub struct BodyEdits {
     pub account_uuid_replaced: bool,
-    pub attribution_stripped: bool,
     pub model_replaced: bool,
     pub cch_restamped: bool,
     pub restored: Vec<Injected>,
@@ -326,7 +325,6 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         };
     Ok(BodyEdits {
         account_uuid_replaced,
-        attribution_stripped: false,
         model_replaced,
         cch_restamped,
         restored,
