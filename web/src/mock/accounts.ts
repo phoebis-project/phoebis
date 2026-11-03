@@ -518,6 +518,21 @@ export function sharedWindowsOf(accountId: string): ('five_hour' | 'seven_day')[
 }
 
 /** The poll block the route answers on a row: none for an API-key account, which the poll never reads. */
+/**
+ * A snapshot whose polls failed since its last clean read, whose windows still answer. A declaration, since the
+ * account list above reads the snapshots while the module loads.
+ */
+function failedSinceClean(accountId: string, cleanAgo: number, lastAttemptAt: string, lastError: string): QuotaSnapshot {
+  return {
+    ...QUOTA_SNAPSHOT_SAMPLE,
+    accountId,
+    error: null,
+    fetchedAt: ago(cleanAgo),
+    heldUntil: null,
+    poll: { backoffSince: null, lastAttemptAt, lastCleanAt: ago(cleanAgo), lastError, lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
+  };
+}
+
 export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapshot | null {
   if (a.kind === 'api_key') return null;
   // The polls stop with the credential, so the snapshot keeps the reading from before the disconnect and no poll.
@@ -526,41 +541,14 @@ export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapsh
   // The polls after the last clean read failed on the endpoint's 503 until the slot whose acquisition ran the refresh
   // the provider refused, and the poll asks a lapsed account nothing, so that attempt stands as the last, under the
   // words the usage service records for a failed acquisition, while the windows of the last clean read still answer.
-  if (a.id === 'legacy') {
-    return {
-      ...QUOTA_SNAPSHOT_SAMPLE,
-      accountId: a.id,
-      error: null,
-      fetchedAt: ago(LEGACY_CLEAN_AGO),
-      heldUntil: null,
-      poll: { backoffSince: null, lastAttemptAt: iso(LEGACY_LAPSED_AT), lastCleanAt: ago(LEGACY_CLEAN_AGO), lastError: 'acquire: account has to be paired again', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
-    };
-  }
+  if (a.id === 'legacy') return failedSinceClean(a.id, LEGACY_CLEAN_AGO, iso(LEGACY_LAPSED_AT), 'acquire: account has to be paired again');
   // The poll sends an account whose plan ended no usage request, so it has asked sunset nothing since the flag: the
   // read that set it stands as the last attempt, under the words the usage service records for the pause, while the
   // snapshot keeps the reading of the last clean poll before the end.
-  if (a.id === 'sunset') {
-    return {
-      ...QUOTA_SNAPSHOT_SAMPLE,
-      accountId: a.id,
-      error: null,
-      fetchedAt: ago(SUNSET_LAST_POLL_AGO),
-      heldUntil: null,
-      poll: { backoffSince: null, lastAttemptAt: ago(SUNSET_FLAGGED_AGO), lastCleanAt: ago(SUNSET_LAST_POLL_AGO), lastError: 'plan ended', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
-    };
-  }
+  if (a.id === 'sunset') return failedSinceClean(a.id, SUNSET_LAST_POLL_AGO, ago(SUNSET_FLAGGED_AGO), 'plan ended');
   // A 503 is a passing fault, neither a 429 nor a 401, so the poll holds nothing back and asks again at its next slot,
   // while the windows of the last clean read still answer.
-  if (a.id === 'reserve') {
-    return {
-      ...QUOTA_SNAPSHOT_SAMPLE,
-      accountId: a.id,
-      error: null,
-      fetchedAt: ago(RESERVE_CLEAN_AGO),
-      heldUntil: null,
-      poll: { backoffSince: null, lastAttemptAt: ago(RESERVE_POLLED_AGO), lastCleanAt: ago(RESERVE_CLEAN_AGO), lastError: 'usage request rejected with status 503', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
-    };
-  }
+  if (a.id === 'reserve') return failedSinceClean(a.id, RESERVE_CLEAN_AGO, ago(RESERVE_POLLED_AGO), 'usage request rejected with status 503');
   // Past thirty minutes of 429s, so the poll_backoff condition holds for this one.
   if (a.id === 'secondary') {
     const nextAttemptAt = ahead(4 * MINUTE);
