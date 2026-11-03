@@ -3,14 +3,9 @@
 
 use serde_json::Value;
 
-/// The keepalive's reading; the relay takes `BodyFacts::portable` off the parse it already ran.
-pub fn is_portable(body: &[u8]) -> bool {
-    // Fails open: an unparseable body is refused by the upstream anyway, and a request the scanner cannot
-    // read carries no account-bound reference it could prove.
-    phoebis_guardrails::parse_body(body).is_none_or(|root| portable_of(&root))
-}
-
-pub(crate) fn portable_of(root: &Value) -> bool {
+/// Whether the parsed body can move between accounts. The relay's `BodyFacts::portable` and the keepalive's recipe
+/// check each read it off the parse they already ran.
+pub fn portable_of(root: &Value) -> bool {
     let Some(object) = root.as_object() else {
         return true;
     };
@@ -45,7 +40,12 @@ fn references_account_state(value: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_portable;
+    use super::portable_of;
+
+    /// The body as the relay's facts read it: through the lenient parse, a body no reader parses read as portable.
+    fn is_portable(body: &[u8]) -> bool {
+        phoebis_guardrails::parse_body(body).is_none_or(|root| portable_of(&root))
+    }
 
     #[test]
     fn account_scoped_references_make_a_request_non_portable() {

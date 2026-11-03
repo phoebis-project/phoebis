@@ -59,7 +59,7 @@ pub use messages::{
     new_request_id, router, Accounting, AccountingSource, Limits, Probe, ReadinessSource, Relay,
     RelayOutcome, ServedUnder, ShutdownMark, MEMORY_FLUSH_INTERVAL,
 };
-pub use portability::is_portable;
+pub use portability::portable_of;
 pub use ratelimit::{
     head_sample, retry_after, upstream_date, Bucket, BucketHeaders, UnifiedHeaders, FAST_INPUT,
     FAST_OUTPUT,
