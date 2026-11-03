@@ -64,20 +64,23 @@ pub trait MemoryStore: Send + Sync {
 impl MemoryStore for Store {
     fn load(&self, key: &MemoryKey) -> Result<Option<MemoryRecord>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        conn.query_row(
+        let mut stmt = conn.prepare_cached(
             "SELECT record_version, payload, last_seen FROM session_memory \
              WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND agent_id = ?4",
-            params![key.key_id, key.key_generation, key.session_id, key.agent_id],
-            |r| {
-                Ok(MemoryRecord {
-                    record_version: r.get(0)?,
-                    payload: r.get(1)?,
-                    last_seen: r.get(2)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(StoreError::from)
+        )?;
+        let record = stmt
+            .query_row(
+                params![key.key_id, key.key_generation, key.session_id, key.agent_id],
+                |r| {
+                    Ok(MemoryRecord {
+                        record_version: r.get(0)?,
+                        payload: r.get(1)?,
+                        last_seen: r.get(2)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(record)
     }
 
     fn save(&self, records: &[(MemoryKey, MemoryRecord)]) -> Result<(), StoreError> {
