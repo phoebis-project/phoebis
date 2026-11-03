@@ -1,5 +1,6 @@
-export const MINUTE = 60_000;
-export const HOUR = 60 * MINUTE;
+import { HOUR, MINUTE } from '@/lib/time';
+
+export { HOUR, MINUTE };
 export const DAY = 24 * HOUR;
 
 // Anchored once at load so every relative label counts down from the same instant.
