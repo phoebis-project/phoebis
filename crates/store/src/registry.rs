@@ -740,7 +740,10 @@ impl Store {
                 .query_map([], |r| r.get(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             terms: tx
-                .prepare(&format!("{} ORDER BY id", crate::accounts::TERM_SELECT))?
+                .prepare(&format!(
+                    "SELECT {} FROM accounts ORDER BY id",
+                    crate::accounts::TERM_COLUMNS
+                ))?
                 .query_map([], crate::accounts::row_to_term)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         };

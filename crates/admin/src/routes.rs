@@ -1992,6 +1992,8 @@ pub(crate) fn account(state: &AdminState, id: &str) -> Result<AccountRow, Respon
 pub(crate) struct AccountContext {
     pub cooldowns: Vec<CooldownRow>,
     pub day: BTreeMap<String, phoebis_ledger::Totals>,
+    /// Each account's profile, subscription and term, read once; a row created since reads its own.
+    pub extras: BTreeMap<String, phoebis_store::AccountExtras>,
     pub extra: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
     /// The newest polled extra-usage row per account, the one that carries the amounts a later head row lacks.
     pub extra_polled: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
@@ -2189,6 +2191,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     AccountContext {
         cooldowns: state.router.cooldowns().await.unwrap_or_default(),
         day,
+        extras: state.store.account_extras().unwrap_or_default(),
         extra,
         extra_polled,
         extra_share,
@@ -2620,44 +2623,50 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             )
         })
         .and_then(|attempt| attempt.resolved_at.map(|at| (at, attempt.detail.clone())));
-    let profile = state
-        .store
-        .profile_json(&row.id)
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .map(|p| AccountProfile {
-            billing_type: p["organization"]["billing_type"].clone(),
-            display_name: p["account"]["display_name"].clone(),
-            has_extra_usage_enabled: p["organization"]["has_extra_usage_enabled"].clone(),
-            organization_name: p["organization"]["name"].clone(),
-            organization_type: p["organization"]["organization_type"].clone(),
-            plan_display_name: p["organization"]["plan_display_name"].clone(),
-            rate_limit_tier: p["organization"]["rate_limit_tier"].clone(),
-        });
+    let extras = ctx.extras.get(&row.id);
+    let profile = match extras {
+        Some(extras) => extras.profile_json.clone(),
+        None => state.store.profile_json(&row.id).ok().flatten(),
+    }
+    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+    .map(|p| AccountProfile {
+        billing_type: p["organization"]["billing_type"].clone(),
+        display_name: p["account"]["display_name"].clone(),
+        has_extra_usage_enabled: p["organization"]["has_extra_usage_enabled"].clone(),
+        organization_name: p["organization"]["name"].clone(),
+        organization_type: p["organization"]["organization_type"].clone(),
+        plan_display_name: p["organization"]["plan_display_name"].clone(),
+        rate_limit_tier: p["organization"]["rate_limit_tier"].clone(),
+    });
     // The stored flag and end read through this alone, with no profile join, so a canceled account answers
     // them even before it ever pairs.
-    let term = state
-        .store
-        .subscription_term(&row.id)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    let term = match extras {
+        Some(extras) => extras.term.clone(),
+        None => state
+            .store
+            .subscription_term(&row.id)
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+    };
     let now = (state.clock)();
     let end = phoebis_routing::term::end_of(&term, now);
     // Null until the account has paired and a profile document exists, unless the operator has canceled it:
     // a canceled, unpaired OAuth row still has an end to report, so the flag joins `profile.is_some()` here.
     let subscription = (row.kind == AccountKind::Oauth && (profile.is_some() || term.canceled))
-        .then(|| match state.store.subscription(&row.id) {
-            Ok(subscription) => subscription.unwrap_or_default(),
-            Err(error) => {
-                tracing::warn!(
-                    account = %row.id,
-                    %error,
-                    "the account's tier could not be read, so the view answers as if no subscription were stored"
-                );
-                Default::default()
-            }
+        .then(|| match extras {
+            Some(extras) => extras.subscription.clone(),
+            None => match state.store.subscription(&row.id) {
+                Ok(subscription) => subscription.unwrap_or_default(),
+                Err(error) => {
+                    tracing::warn!(
+                        account = %row.id,
+                        %error,
+                        "the account's tier could not be read, so the view answers as if no subscription were stored"
+                    );
+                    Default::default()
+                }
+            },
         })
         .map(|s| AccountSubscription {
             plan: term.plan.clone(),

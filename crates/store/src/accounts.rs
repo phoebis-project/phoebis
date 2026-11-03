@@ -1,5 +1,7 @@
 //! Account registry: rows, lifecycle state, and the lifecycle-generation bump that disconnects a slot.
 
+use std::collections::BTreeMap;
+
 use rusqlite::{params, OptionalExtension, Row};
 
 use crate::registry::{organization_type_of, plan_of, usage_based_of, SubscriptionTerm};
@@ -554,6 +556,34 @@ impl Store {
         subscription_term_in(&conn, id)
     }
 
+    /// Every account's profile document, subscription row and term by account id, in one statement, so a list of
+    /// accounts reads them once where `profile_json`, `subscription` and `subscription_term` read one row each.
+    pub fn account_extras(&self) -> Result<BTreeMap<String, AccountExtras>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {TERM_COLUMNS}, subscription_plan FROM accounts"
+        ))?;
+        let extras = stmt
+            .query_map([], |row| {
+                let term = row_to_term(row)?;
+                Ok((
+                    term.account_id.clone(),
+                    AccountExtras {
+                        profile_json: row.get(7)?,
+                        subscription: SubscriptionRow {
+                            plan: row.get(9)?,
+                            tier: row.get(5)?,
+                            since: row.get(1)?,
+                            trial_ends_at: row.get(2)?,
+                        },
+                        term,
+                    },
+                ))
+            })?
+            .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
+        Ok(extras)
+    }
+
     /// Flags the account's plan as ended at `at` unless a flag already stands, and answers whether this write set it.
     /// Bumps `revision` so the next reload publishes it, as the operator's end does.
     pub fn set_plan_ended(&self, id: &str, at: i64) -> Result<bool, StoreError> {
@@ -600,7 +630,7 @@ pub(crate) fn subscription_term_in(
     id: &str,
 ) -> Result<Option<SubscriptionTerm>, StoreError> {
     conn.query_row(
-        &format!("{TERM_SELECT} WHERE id = ?1"),
+        &format!("SELECT {TERM_COLUMNS} FROM accounts WHERE id = ?1"),
         params![id],
         row_to_term,
     )
@@ -608,9 +638,10 @@ pub(crate) fn subscription_term_in(
     .map_err(StoreError::from)
 }
 
-// The columns `row_to_term` reads, in its order.
-pub(crate) const TERM_SELECT: &str = "SELECT id, subscription_since, trial_ends_at, canceled, \
-     subscription_ends_at, subscription_tier, kind, profile_json, plan_ended_at FROM accounts";
+// The columns `row_to_term` reads, in its order. `account_extras` reads the subscription row's plan after them.
+pub(crate) const TERM_COLUMNS: &str =
+    "id, subscription_since, trial_ends_at, canceled, subscription_ends_at, \
+     subscription_tier, kind, profile_json, plan_ended_at";
 
 pub(crate) fn row_to_term(row: &Row<'_>) -> rusqlite::Result<SubscriptionTerm> {
     let tier: Option<String> = row.get(5)?;
@@ -648,6 +679,15 @@ impl SubscriptionTerm {
             _ => None,
         }
     }
+}
+
+/// What `Store::account_extras` answers for one account: what `profile_json`, `subscription` and `subscription_term`
+/// answer for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountExtras {
+    pub profile_json: Option<String>,
+    pub subscription: SubscriptionRow,
+    pub term: SubscriptionTerm,
 }
 
 /// What the profile document says about the subscription, stored beside the raw document; each field `None`
