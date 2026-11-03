@@ -1147,12 +1147,11 @@ impl Inner {
     // A failed bookkeeping write must not mask why the refresh failed: the class is what the caller acts
     // on, and the next refresh derives the same state again from the store.
     fn resolve(&self, attempt: u64, incarnation: u64, outcome: AttemptOutcome) {
-        let (label, detail) = match &outcome {
-            AttemptOutcome::Committed => ("committed", None),
-            AttemptOutcome::Failed(detail) => ("failed", Some(detail.as_str())),
-            AttemptOutcome::Uncertain(detail) => ("uncertain", Some(detail.as_str())),
-        };
-        tracing::debug!(outcome = label, detail, "refresh attempt resolved");
+        tracing::debug!(
+            outcome = outcome.word(),
+            detail = outcome.detail(),
+            "refresh attempt resolved"
+        );
         let _ = self
             .store
             .resolve_refresh_attempt(attempt, incarnation, outcome);

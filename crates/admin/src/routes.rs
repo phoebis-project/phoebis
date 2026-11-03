@@ -30,7 +30,7 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, CooldownRow, Identity,
-    NewBundle, PoolMember, StateCause, StoreError,
+    NewBundle, PoolMember, Settled, StateCause, StoreError,
 };
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
@@ -2614,8 +2614,8 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         .as_ref()
         .filter(|attempt| {
             matches!(
-                attempt.outcome.as_deref(),
-                Some("failed") | Some("uncertain")
+                attempt.settled(),
+                Some(Settled::Failed | Settled::Superseded | Settled::Uncertain)
             )
         })
         .and_then(|attempt| attempt.resolved_at.map(|at| (at, attempt.detail.clone())));

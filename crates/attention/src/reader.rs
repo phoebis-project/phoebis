@@ -11,7 +11,7 @@ use phoebis_ledger::{polled, ParkedSummary, RoutingCondition, UnpricedModel};
 use phoebis_oauth::UsageService;
 use phoebis_routing::{shed_cap, RegistrySnapshot, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, PoolRow, ResolvedAttempt, Store, StoreError,
+    AccountKind, AccountRow, AccountState, PoolRow, ResolvedAttempt, Settled, Store, StoreError,
 };
 use serde_json::json;
 
@@ -621,7 +621,10 @@ pub(crate) fn conditions(
             let run: Vec<&ResolvedAttempt> = attempts
                 .iter()
                 .take_while(|a| {
-                    a.outcome != "committed" && a.detail.as_deref() != Some("superseded")
+                    !matches!(
+                        a.settled(),
+                        Settled::Committed | Settled::Paired | Settled::Superseded
+                    )
                 })
                 .collect();
             // One failure is a token endpoint having a bad moment; two in a row is a credential that is not coming

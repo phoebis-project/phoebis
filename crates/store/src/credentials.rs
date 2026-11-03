@@ -110,6 +110,49 @@ pub enum AttemptOutcome {
     Uncertain(String),
 }
 
+impl AttemptOutcome {
+    /// The stored outcome word.
+    pub fn word(&self) -> &'static str {
+        match self {
+            AttemptOutcome::Committed => "committed",
+            AttemptOutcome::Failed(_) => "failed",
+            AttemptOutcome::Uncertain(_) => "uncertain",
+        }
+    }
+
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            AttemptOutcome::Committed => None,
+            AttemptOutcome::Failed(detail) | AttemptOutcome::Uncertain(detail) => Some(detail),
+        }
+    }
+}
+
+// The details a settlement writes beside its outcome word as markers, which `settled` reads back: a pairing's own
+// committed row, and an open attempt a commit closed because the bundle it waited on was replaced.
+const PAIRING_DETAIL: &str = "pairing";
+const SUPERSEDED_DETAIL: &str = "superseded";
+
+/// How a settled attempt ended, its outcome word and its detail's marker decoded once for every reader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Settled {
+    Committed,
+    Failed,
+    Paired,
+    Superseded,
+    Uncertain,
+}
+
+fn settled(outcome: &str, detail: Option<&str>) -> Settled {
+    match (outcome, detail) {
+        ("committed", Some(PAIRING_DETAIL)) => Settled::Paired,
+        ("committed", _) => Settled::Committed,
+        (_, Some(SUPERSEDED_DETAIL)) => Settled::Superseded,
+        ("uncertain", _) => Settled::Uncertain,
+        _ => Settled::Failed,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PendingAttempt {
     pub id: u64,
@@ -138,13 +181,15 @@ impl ResolvedAttempt {
     /// wrote, a refresh's the one it was opened against, which its commit moved one past. `None` for an attempt that
     /// committed nothing.
     pub fn committed_generation(&self) -> Option<u64> {
-        (self.outcome == "committed").then(|| {
-            if self.detail.as_deref() == Some("pairing") {
-                self.credential_generation
-            } else {
-                self.credential_generation + 1
-            }
-        })
+        match self.settled() {
+            Settled::Paired => Some(self.credential_generation),
+            Settled::Committed => Some(self.credential_generation + 1),
+            Settled::Failed | Settled::Superseded | Settled::Uncertain => None,
+        }
+    }
+
+    pub fn settled(&self) -> Settled {
+        settled(&self.outcome, self.detail.as_deref())
     }
 }
 
@@ -153,6 +198,15 @@ pub struct LastAttempt {
     pub resolved_at: Option<i64>,
     pub outcome: Option<String>,
     pub detail: Option<String>,
+}
+
+impl LastAttempt {
+    /// `None` for an attempt still in flight.
+    pub fn settled(&self) -> Option<Settled> {
+        self.outcome
+            .as_deref()
+            .map(|outcome| settled(outcome, self.detail.as_deref()))
+    }
 }
 
 // (generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes, lifecycle_generation)
@@ -204,8 +258,10 @@ pub(crate) fn record_pairing_attempt(
     at: i64,
 ) -> Result<(), StoreError> {
     tx.execute(
-        "INSERT INTO refresh_attempts (account_id, incarnation, lifecycle_generation, credential_generation, \
-         started_at, resolved_at, outcome, detail) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 'committed', 'pairing')",
+        &format!(
+            "INSERT INTO refresh_attempts (account_id, incarnation, lifecycle_generation, credential_generation, \
+             started_at, resolved_at, outcome, detail) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 'committed', '{PAIRING_DETAIL}')"
+        ),
         params![
             account_id,
             incarnation as i64,
@@ -536,7 +592,7 @@ impl Store {
         // quarantine the account at the next start.
         tx.execute(
             &format!(
-                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = 'superseded' \
+                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = '{SUPERSEDED_DETAIL}' \
                  WHERE account_id = ?1 AND id IS NOT ?3 AND ({PENDING_WHERE})"
             ),
             params![account_id, now, attempt_id.map(|id| id as i64)],
@@ -765,11 +821,7 @@ impl Store {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = self.now_ms();
-        let (label, detail) = match outcome {
-            AttemptOutcome::Committed => ("committed", None),
-            AttemptOutcome::Failed(detail) => ("failed", Some(detail)),
-            AttemptOutcome::Uncertain(detail) => ("uncertain", Some(detail)),
-        };
+        let (label, detail) = (outcome.word(), outcome.detail());
         let account_id: Option<String> = tx
             .query_row(
                 "SELECT account_id FROM refresh_attempts WHERE id = ?1",

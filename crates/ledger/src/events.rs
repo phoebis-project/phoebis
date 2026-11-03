@@ -9,7 +9,7 @@ use std::time::Duration;
 use phoebis_oauth::{BackoffEdge, Clock, PollFault};
 use phoebis_relay::CatalogChange;
 use phoebis_routing::{CreditsState, RouterEvent, RouterHandle};
-use phoebis_store::{AccountState, ResolvedAttempt, StateCause, Store};
+use phoebis_store::{AccountState, ResolvedAttempt, Settled, StateCause, Store};
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -887,10 +887,10 @@ pub fn spawn_event_mirror(
                     if let Ok(attempts) = store.refresh_attempts_resolved_after(last_resolved.0, last_resolved.1, MIRROR_BATCH) {
                         for attempt in attempts {
                             last_resolved = (attempt.resolved_at, attempt.id);
-                            let kind = match attempt.outcome.as_str() {
-                                "committed" => "refresh_succeeded",
-                                "uncertain" => "refresh_uncertain",
-                                _ => "refresh_failed",
+                            let kind = match attempt.settled() {
+                                Settled::Committed | Settled::Paired => "refresh_succeeded",
+                                Settled::Uncertain => "refresh_uncertain",
+                                Settled::Failed | Settled::Superseded => "refresh_failed",
                             };
                             let detail = refresh_detail(&store, &attempt, &mut credential_read_failing).to_string();
                             ledger.record(Record::Event(EventRecord {

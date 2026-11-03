@@ -80,7 +80,7 @@ pub use accounts::{
 pub use backup::{snapshot, BackupError, Snapshot, RETRY_PAUSE};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, CredentialMetadata, LastAttempt, NewBundle, PendingAttempt,
-    ResolvedAttempt, Secret,
+    ResolvedAttempt, Secret, Settled,
 };
 pub use keepalive::{
     keepalive_aad, IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow,
