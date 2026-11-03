@@ -377,7 +377,7 @@ export function PoolsPage() {
         <Tile label="Accounts in pools" value={totals ? fmtInt(totals.accounts) : null} />
         <Tile label="Keys" value={totals && totals.keys !== null ? fmtInt(totals.keys) : keysRead === 'failed' ? <span className="muted">n/a</span> : null} />
         <Tile label="Requests, 24h" value={totals ? fmtInt(totals.requests) : null} />
-        <Tile label="Cost, 24h" value={dayTile?.value ?? null} title={dayTile?.title} error={dayTile?.value === null ? reading.error : null} unpriced={reading.unpriced} />
+        <Tile label="Cost, 24h" value={dayTile?.value ?? null} title={dayTile?.title} failure={dayTile?.value === null ? reading.failure : null} />
       </div>
       {/* A failed read leaves the cards on the last answer's items, or none before the first. This line says so. */}
       {attention.error !== null && <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />}
@@ -611,12 +611,12 @@ function PoolCost({ pool, reading }: { pool: Pool; reading: WeekReading }) {
   if (sides.equivalent === undefined && sides.billed === undefined) return dash('No request in the last 24 hours');
   const { scale, week } = reading;
   if (scale === null)
-    return reading.error === null ? (
+    return reading.failure === null ? (
       <dd className="num">
         <Skeleton width={72} height={12} />
       </dd>
     ) : (
-      dash(reading.error)
+      dash(reading.failure.text)
     );
   const full = [...(sides.equivalent === undefined ? [] : [equivalentOrDash(sides.equivalent, week, scale)]), ...(sides.billed === undefined ? [] : [`${fmtUsd(sides.billed)} billed`])];
   const native = nativeFiguresOf(sides, week, scale);

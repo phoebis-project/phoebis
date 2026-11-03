@@ -102,9 +102,9 @@ test("the chosen week's scale is the anchor tier's 7-day capacity over the chose
 test("a loaded table that sizes no week for the chosen tier reads unpriced, and with no table the reading waits or carries the read's failure", () => {
   // Max 5x's week unsized while Pro's stays, so the Max week has no scale over a table that did load.
   const maxless = { ...costs, capacity: { ...costs.capacity, default_claude_max_5x: { fiveHour: 25, sevenDay: null } } };
-  assert.deepEqual(d.weekReadingOf(maxless, null, 'max'), { error: 'Unpriced: the cost model holds no 7-day capacity for the Max week', scale: null, unpriced: true, week: 'max' }, 'a loaded table never reads pending');
-  assert.deepEqual(d.weekReadingOf(null, null, 'max'), { error: null, scale: null, unpriced: false, week: 'max' }, 'the read still out');
-  assert.deepEqual(d.weekReadingOf(null, 'HTTP 503', 'max'), { error: 'HTTP 503', scale: null, unpriced: false, week: 'max' }, "the read's failure");
+  assert.deepEqual(d.weekReadingOf(maxless, null, 'max'), { failure: { text: 'Unpriced: the cost model holds no 7-day capacity for the Max week', unpriced: true }, scale: null, week: 'max' }, 'a loaded table never reads pending');
+  assert.deepEqual(d.weekReadingOf(null, null, 'max'), { failure: null, scale: null, week: 'max' }, 'the read still out');
+  assert.deepEqual(d.weekReadingOf(null, 'HTTP 503', 'max'), { failure: { text: 'HTTP 503', unpriced: false }, scale: null, week: 'max' }, "the read's failure");
 });
 
 test("a tier's capacity is read as stored, then with the default_ prefix taken off or put on", () => {

@@ -314,15 +314,16 @@ const UNIT_META: Record<DollarPosition, string> = { all: 'all requests', equival
 const UNIT_TILE_LABEL: Record<DollarPosition, string> = { all: 'Estimated cost', equivalent: 'Dollar equivalent', usd: 'Billed dollars' };
 
 /** The chosen week a page's figures read in, and `scale` its factor over the Pro-week figure, null while the cost model
- *  is out or where it sizes no week for the chosen tier. `error` is the settings read's failure while the scale is out,
- *  or the unpriced sentence where the cost model loaded without that week, which a figure draws in its skeleton's
- *  place. `unpriced` tells the second apart, so a tile's note under the dash names it. */
+ *  is out or where it sizes no week for the chosen tier. `failure` is the settings read's failure while the scale is
+ *  out, or the unpriced sentence where the cost model loaded without that week, which a figure draws in its skeleton's
+ *  place. Its `unpriced` tells the second apart, which no retry clears, so a surface names it unpriced. */
 export interface WeekReading {
-  error: string | null;
+  failure: { text: string; unpriced: boolean } | null;
   scale: number | null;
-  unpriced: boolean;
   week: WeekPosition;
 }
+/** A failed surface's head: "Unpriced: x" for the week reading's unpriced sentence, "Could not load x" for the rest. */
+export const failureHead = (failure: { unpriced: boolean }, what: string): string => (failure.unpriced ? `Unpriced: ${what}` : `Could not load ${what}`);
 /**
  * A Pro-week figure in the chosen week, `scale` its factor (`weekScale`), or a dash where the figure is null or the
  * side has no rows, as a dollar figure's `usdOrDash`. A dash reads unpriced and nothing else: a surface whose scale is

@@ -222,14 +222,17 @@ export const weekScale = (costs: SubscriptionCosts | null, week: WeekPosition): 
 /** The dash's hover and the fleet's note where the chosen week's tier has no 7-day capacity to read a figure in. */
 export const weekUnpricedTitle = (week: WeekPosition): string => `Unpriced: the cost model holds no 7-day capacity for the ${planLabel(WEEK_TIER[week])} week`;
 
+/** A read's failure as a surface draws it, which a retry may clear, so it never reads unpriced. */
+export const failed = (e: string | null): WeekReading['failure'] => (e === null ? null : { text: e, unpriced: false });
+
 /** A page's week reading from its settings read: `error` is that read's failure. A table that loaded and sizes no week
  *  for the chosen tier will not size one on a later read either, so its figures draw the unpriced dash, not the
  *  skeleton that waits for the table. */
 export const weekReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => {
   const scale = weekScale(costs, week);
-  if (scale !== null) return { error: null, scale, unpriced: false, week };
-  if (costs === null) return { error, scale, unpriced: false, week };
-  return { error: weekUnpricedTitle(week), scale, unpriced: true, week };
+  if (scale !== null) return { failure: null, scale, week };
+  if (costs === null) return { failure: failed(error), scale, week };
+  return { failure: { text: weekUnpricedTitle(week), unpriced: true }, scale, week };
 };
 
 /** The account tiers a model week applies to: the cost model sizes the Fable week for every tier, and Pro has no

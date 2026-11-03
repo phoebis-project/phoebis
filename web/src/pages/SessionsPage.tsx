@@ -14,6 +14,7 @@ import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useDescription } from '@/components/ui/primitives';
 import { ANALYTICS_CODEC, REQUESTS_CODEC, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
 import { clock } from '@/lib/clock';
+import { failed } from '@/lib/costs';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel } from '@/lib/format';
 import { CAUSE_HINT, CAUSE_LABEL, contextCell, firstFailedRead, isFinished, isReleasedLine, orderLines, orderRows, pinTtlMs, releasedCount, requestsRange, sessionLines, type SessionLine, type TileRead, WARNING_CAUSES } from '@/lib/keepalive';
@@ -281,7 +282,7 @@ export function SessionsPage() {
   // The Sessions and Agents figures count the rows, which the sessions, the recipes and the keys build, so each of
   // those reads can end their placeholder with its error. The other tiles read the overview alone.
   const countReads = [readOf('tiles', overview), readOf('sessions', sessions), readOf('recipes', recipes), readOf('keys', keys)];
-  const failed = firstFailedRead(countReads);
+  const firstFailed = firstFailedRead(countReads);
   // The card's own reads in the notice's order, so with the overview answered and two of them failed, the card and the
   // notice name the same one.
   const cardFailed = firstFailedRead([readOf('sessions', sessions), readOf('recipes', recipes), readOf('keys', keys)]);
@@ -384,7 +385,7 @@ export function SessionsPage() {
       </div>
 
       <div className="stat-grid stat-grid--caps">
-        <Tile label="Sessions" value={o && rows ? <span className="nowrap">{`${fmtInt(rows.length)} of ${fmtInt(o.limits.sessions.max)}`}</span> : null} note={sessionsNote} title={hiddenTitle} error={failed?.error ?? null} />
+        <Tile label="Sessions" value={o && rows ? <span className="nowrap">{`${fmtInt(rows.length)} of ${fmtInt(o.limits.sessions.max)}`}</span> : null} note={sessionsNote} title={hiddenTitle} failure={failed(firstFailed?.error ?? null)} />
         {/* The sessions and the recipes are two reads that land apart, so the figure can trail the hidden lines by a
             read, which is accepted. Only a line the recipes list carries comes off, so a record that never drew a line
             is never subtracted. */}
@@ -402,13 +403,13 @@ export function SessionsPage() {
           }
           note={lifecycle ? `${fmtInt(lifecycle.busy)} busy, ${fmtInt(lifecycle.idle)} idle, ${fmtInt(lifecycle.parked)} parked` : null}
           title={hiddenTitle}
-          error={failed?.error ?? null}
+          failure={failed(firstFailed?.error ?? null)}
         />
         <Tile
           label="Retained"
           value={o ? <span className="nowrap">{`${fmtMiB(o.limits.retainedBytes.count)} of ${fmtMiB(o.limits.retainedBytes.max)}`}</span> : null}
           note="prompts kept for probes"
-          error={overviewError}
+          failure={failed(overviewError)}
         />
         <ProbeTile overview={o} error={overviewError} />
         {/* The count is router-wide, so a warm tone means at least one pool is paying for probes that did not land. */}
@@ -417,20 +418,20 @@ export function SessionsPage() {
           value={o ? fmtInt(o.expiredBetweenTurns24h) : null}
           note="misses cache warming exists to prevent"
           tone={o && o.expiredBetweenTurns24h > 0 && warmingSomewhere ? 'warning' : undefined}
-          error={overviewError}
+          failure={failed(overviewError)}
         />
         <Tile
           label="Bus gaps"
           value={o ? fmtInt(o.busGaps) : null}
           note="times the keepalive engine missed bus events"
           tone={o && o.busGaps > 0 ? 'warning' : undefined}
-          error={overviewError}
+          failure={failed(overviewError)}
         />
       </div>
-      {failed !== null && (
+      {firstFailed !== null && (
         <p className="sessions__notice" role="status">
-          Could not load the {failed.name}: {failed.error}{' '}
-          <Button size="sm" onClick={reloadOf[failed.name]}>
+          Could not load the {firstFailed.name}: {firstFailed.error}{' '}
+          <Button size="sm" onClick={reloadOf[firstFailed.name]}>
             Try again
           </Button>
         </p>
@@ -1012,7 +1013,7 @@ function ProbeTile({ error, overview: o }: { error: string | null; overview: Kee
     <Tile
       label="Cache probes, 24h"
       value={o ? fmtInt(total) : null}
-      error={error}
+      failure={failed(error)}
       note={
         o ? (
           <>

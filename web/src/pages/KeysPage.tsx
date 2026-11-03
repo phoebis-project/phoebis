@@ -103,9 +103,9 @@ export const keyRankOf = (unit: UnitPosition, lifetime: FundedSum): number | nul
   return unit === 'native' ? lifetime.equivalent : dollarsUnder(unit, lifetime);
 };
 
-/** A key's figure while the scale is out: the skeleton, or the reading's error as a dash titled with it. */
-function PendingFigure({ error }: { error: string | null }) {
-  return error === null ? <Skeleton width={72} height={12} /> : <span title={error}>-</span>;
+/** A key's figure while the scale is out: the skeleton, or the reading's failure as a dash titled with it. */
+function PendingFigure({ failure }: { failure: WeekReading['failure'] }) {
+  return failure === null ? <Skeleton width={72} height={12} /> : <span title={failure.text}>-</span>;
 }
 
 /** A key row's 7-day figure under its tokens. */
@@ -113,7 +113,7 @@ function WeekLine({ reading, unit, usage }: { reading: WeekReading; unit: UnitPo
   const figure = keyFigureOf(unit, usage, 'No request in the last 7 days', reading);
   return (
     <span className="sub" title={figure?.title}>
-      {figure === null ? <PendingFigure error={reading.error} /> : figure.text}
+      {figure === null ? <PendingFigure failure={reading.failure} /> : figure.text}
     </span>
   );
 }
@@ -297,7 +297,7 @@ export function KeysPage() {
         <Tile label="Keys" value={totals ? fmtInt(totals.keys) : null} />
         <Tile label="Active" value={totals ? fmtInt(totals.active) : null} />
         <Tile label="Lifetime requests" value={totals ? fmtCompact(totals.requests) : null} />
-        <Tile label="Lifetime cost" value={lifetimeTile?.value ?? null} title={lifetimeTile?.title} error={lifetimeTile?.value === null ? reading.error : null} unpriced={reading.unpriced} />
+        <Tile label="Lifetime cost" value={lifetimeTile?.value ?? null} title={lifetimeTile?.title} failure={lifetimeTile?.value === null ? reading.failure : null} />
       </div>
 
       <div className="keys-layout">
@@ -317,7 +317,7 @@ export function KeysPage() {
                           {k.name} <span className="muted mono">{k.prefix}…</span>
                         </span>
                         <span className="num">
-                          {figure === null ? <PendingFigure error={reading.error} /> : <span title={figure.title}>{figure.text}</span>} <span className="muted">{fmtCompact(k.lifetime.requests)} {k.lifetime.requests === 1 ? 'request' : 'requests'}</span>
+                          {figure === null ? <PendingFigure failure={reading.failure} /> : <span title={figure.title}>{figure.text}</span>} <span className="muted">{fmtCompact(k.lifetime.requests)} {k.lifetime.requests === 1 ? 'request' : 'requests'}</span>
                         </span>
                       </div>
                       <div className="hbars__track">

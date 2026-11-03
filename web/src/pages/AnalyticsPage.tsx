@@ -19,11 +19,11 @@ import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceColumnWord, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, type AllowanceFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, hintPlan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, shareHint, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, hintPlan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, shareHint, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
-import { weekReadingOf, weekScale } from '@/lib/costs';
+import { failed, weekReadingOf, weekScale } from '@/lib/costs';
 import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, readEnd, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
@@ -572,7 +572,7 @@ export function AnalyticsPage() {
   const burnAccount = filters.accountId.length === 1 ? filters.accountId[0] : null;
   // The plan chart sizes its lines by tier where each group holds one account's rows.
   const burnSizes = pageBy === 'account' || burnAccount !== null;
-  const burnReading: WeekReading = burnSizes && sized === null ? { error: costSettings.error, scale: null, unpriced: false, week } : reading;
+  const burnReading: WeekReading = burnSizes && sized === null ? { failure: failed(costSettings.error), scale: null, week } : reading;
 
   const groupSlot = useMemo(() => {
     // Slots follow the range's whole key list so a filter never repaints the survivors, and an account's slot is the
@@ -603,8 +603,7 @@ export function AnalyticsPage() {
   // reading's error in its place, never a Pro-week figure under another week's label.
   const weekWait = unit === 'native' && scale === null;
   const figureLoading = costLoading || weekWait;
-  const figureError = costError ?? (weekWait ? reading.error : null);
-  const figureUnpriced = costError === null && weekWait && reading.unpriced;
+  const figureFailure = failed(costError) ?? (weekWait ? reading.failure : null);
   const warmingError = sessionId === null ? (warmingSeries.error ?? billedWarmingSeries.error) : null;
   const modelError = byModel.error ?? byModelFunded.error;
   const poolError = sessionId === null ? (byPool.error ?? fundedByPool.error) : null;
@@ -882,8 +881,7 @@ export function AnalyticsPage() {
                   : `USD per bucket spent writing the cache and reading it back, ${UNIT_SPLIT[unit === 'native' ? 'usd' : dollars]}`
               }
               loading={cacheEquivalent ? figureLoading : costLoading}
-              error={cacheEquivalent ? figureError : costError}
-              unpriced={cacheEquivalent && figureUnpriced}
+              failure={cacheEquivalent ? figureFailure : failed(costError)}
               legend={
                 cacheScale !== null
                   ? [
@@ -939,8 +937,7 @@ export function AnalyticsPage() {
             <CacheByModel
               groups={byModel.stale ? [] : (byModel.data ?? [])}
               funded={fundedModels}
-              error={modelError ?? (weekWait ? reading.error : null)}
-              unpriced={modelError === null && weekWait && reading.unpriced}
+              failure={failed(modelError) ?? (weekWait ? reading.failure : null)}
               loading={byModel.data === null || byModel.stale || (funded && (byModelFunded.data === null || byModelFunded.stale)) || weekWait}
               reading={reading}
               unit={unit}
@@ -958,31 +955,31 @@ export function AnalyticsPage() {
       )}
 
       {tab === 'cost' && (
-        <Section id="cost" shown={shown} title="Cost" meta={figureLoading || figureError !== null || costHead === null ? undefined : costHead.meta} metaTitle={costHead?.unpriced ? UNPRICED_TITLE : undefined}>
+        <Section id="cost" shown={shown} title="Cost" meta={figureLoading || figureFailure !== null || costHead === null ? undefined : costHead.meta} metaTitle={costHead?.unpriced ? UNPRICED_TITLE : undefined}>
           <div className="tiles-row">
-            <Tile label={costHead?.tile.label ?? 'Cost'} value={figureLoading || costHead === null ? null : figuresValue(costHead.tile.figures)} note={costHead?.tile.note ?? NATIVE_SUBSET} title={costHead?.unpriced ? UNPRICED_TITLE : unit === 'native' ? (tileHint ?? undefined) : undefined} error={figureError} unpriced={figureUnpriced} />
+            <Tile label={costHead?.tile.label ?? 'Cost'} value={figureLoading || costHead === null ? null : figuresValue(costHead.tile.figures)} note={costHead?.tile.note ?? NATIVE_SUBSET} title={costHead?.unpriced ? UNPRICED_TITLE : unit === 'native' ? (tileHint ?? undefined) : undefined} failure={figureFailure} />
             {unit === 'native' ? (
               <>
-                <Tile label="Cost per request" value={figureLoading || nativeRatios === null ? null : figuresValue(nativeRatios.perRequest.figures)} note={nativeRatios === null ? null : nativeRatios.perRequest.note} error={figureError} unpriced={figureUnpriced} />
-                <Tile label="Cost per 1k output tokens" value={figureLoading || nativeRatios === null ? null : figuresValue(nativeRatios.perThousand.figures)} note={nativeRatios === null ? null : nativeRatios.perThousand.note} error={figureError} unpriced={figureUnpriced} />
+                <Tile label="Cost per request" value={figureLoading || nativeRatios === null ? null : figuresValue(nativeRatios.perRequest.figures)} note={nativeRatios === null ? null : nativeRatios.perRequest.note} failure={figureFailure} />
+                <Tile label="Cost per 1k output tokens" value={figureLoading || nativeRatios === null ? null : figuresValue(nativeRatios.perThousand.figures)} note={nativeRatios === null ? null : nativeRatios.perThousand.note} failure={figureFailure} />
               </>
             ) : (
               <>
-                <Tile label="Cost per request" value={costLoading ? null : fmtUsd(costTotals.requests ? costTotals.costUsd / costTotals.requests : 0)} note={`${fmtInt(costTotals.requests)} requests`} error={costError} />
-                <Tile label="Cost per 1k output tokens" value={costLoading ? null : fmtUsd(costTotals.tokens.output ? (costTotals.costUsd / costTotals.tokens.output) * 1000 : 0)} note={`${fmtCompact(costTotals.tokens.output)} output tokens`} error={costError} />
+                <Tile label="Cost per request" value={costLoading ? null : fmtUsd(costTotals.requests ? costTotals.costUsd / costTotals.requests : 0)} note={`${fmtInt(costTotals.requests)} requests`} failure={failed(costError)} />
+                <Tile label="Cost per 1k output tokens" value={costLoading ? null : fmtUsd(costTotals.tokens.output ? (costTotals.costUsd / costTotals.tokens.output) * 1000 : 0)} note={`${fmtCompact(costTotals.tokens.output)} output tokens`} failure={failed(costError)} />
               </>
             )}
             <Tile label="Fast mode spend" value={speedError !== null ? '-' : speedLoading ? null : fmtUsd(fastSpend)} note="usage credits, at the fast cells" />
           </div>
           <div className="grid-2">
-            <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={figureLoading} error={figureError} unpriced={figureUnpriced} axis={axis} reading={reading} unit={unit} />
+            <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={figureLoading} failure={figureFailure} axis={axis} reading={reading} unit={unit} />
             {/* Native draws a ring per funding, each in its own unit. */}
             <Card title="Cost split" subtitle={unit === 'native' ? NATIVE_SPLIT_NOTE : `By token kind, in dollars at the API price list, ${UNIT_SPLIT[dollars]}`}>
               {/* The request summary carries one total and no split, so a session view has nothing to draw here. */}
               {sessionId !== null ? (
                 <p className="muted">{SESSION_COST_NOTE}</p>
-              ) : figureError !== null ? (
-                <ErrorState title={figureUnpriced ? 'Unpriced: cost split' : 'Could not load cost split'} body={figureError} />
+              ) : figureFailure !== null ? (
+                <ErrorState title={failureHead(figureFailure, 'cost split')} body={figureFailure.text} />
               ) : figureLoading ? (
                 <Skeleton height={148} />
               ) : unit === 'native' ? (
@@ -999,8 +996,7 @@ export function AnalyticsPage() {
               className="native-cost-table"
               title={`Cost by ${groupLabel.toLowerCase()}`}
               subtitle={`Totals for the selected range and filters, ${NATIVE_SUBSET}`}
-              error={figureError}
-              unpriced={figureUnpriced}
+              failure={figureFailure}
               loading={figureLoading}
               groupLabel={groupLabel}
               columns={NATIVE_COLUMNS}
@@ -1011,7 +1007,7 @@ export function AnalyticsPage() {
             <BreakdownTable
               title={`Cost by ${groupLabel.toLowerCase()}`}
               subtitle={`Totals for the selected range and filters, ${costHead?.subset ?? ''}`}
-              error={costError}
+              failure={failed(costError)}
               loading={costLoading}
               groupLabel={groupLabel}
               columns={['Requests', 'Cost', 'Input', 'Cache read', 'Cache write', 'Output', 'Per request', 'Per 1k output']}
@@ -1037,9 +1033,9 @@ export function AnalyticsPage() {
       {tab === 'cache-warming' && (
         <Section id="cache-warming" shown={shown} title="Cache warming" meta={sessionId === null ? 'Probe rows are always counted here, whatever the toggle above says' : SESSION_SOURCE_NOTE}>
           <div className="tiles-row">
-            <Tile label="Probe cost" value={probeTile.value} note={probeTile.note} error={figureError} unpriced={figureUnpriced} />
-            <Tile label="Saved by probes" value={savingTile.value} note={savingTile.note} error={figureError} unpriced={figureUnpriced} />
-            <Tile label="Net saving" value={netTile.value} note={netTile.note} tone={netTile.critical ? 'critical' : undefined} error={figureError} unpriced={figureUnpriced} />
+            <Tile label="Probe cost" value={probeTile.value} note={probeTile.note} failure={figureFailure} />
+            <Tile label="Saved by probes" value={savingTile.value} note={savingTile.note} failure={figureFailure} />
+            <Tile label="Net saving" value={netTile.value} note={netTile.note} tone={netTile.critical ? 'critical' : undefined} failure={figureFailure} />
             <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : keptWarmNote(keptWarm)} />
           </div>
           <div className="grid-2 warming-grid">
@@ -1057,8 +1053,8 @@ export function AnalyticsPage() {
             </ChartCard>
 
             <Card title="Wasted probes" subtitle={`${WASTED_PROBE_BLURB} ${WASTED_PROBE_UNIT[unit]}`}>
-              {figureError !== null ? (
-                <ErrorState title={figureUnpriced ? 'Unpriced: wasted probes' : 'Could not load wasted probes'} body={figureError} />
+              {figureFailure !== null ? (
+                <ErrorState title={failureHead(figureFailure, 'wasted probes')} body={figureFailure.text} />
               ) : figureLoading ? (
                 <Skeleton height={190} />
               ) : probesUnmeasured ? (
@@ -1071,13 +1067,12 @@ export function AnalyticsPage() {
             <SavingChart
               axis={axis}
               billed={billedWarmingPoints}
-              error={warmingError ?? (weekWait ? reading.error : null)}
+              failure={failed(warmingError) ?? (weekWait ? reading.failure : null)}
               loading={(sessionId === null ? warmingLoading : loading) || weekWait}
               points={sessionId === null ? warmingPoints : points}
               reading={reading}
               session={sessionId !== null}
               unit={unit}
-              unpriced={warmingError === null && weekWait && reading.unpriced}
             />
 
             <ChartCard title="Kept-warm requests" subtitle="Requests whose cache read followed a probe" loading={loading} legend={[{ color: ink.series[0], label: 'Kept-warm requests', value: keptWarm === null ? '-' : fmtInt(keptWarm.requests) }]}>
@@ -1103,8 +1098,7 @@ export function AnalyticsPage() {
           <KeepaliveByPool
             groups={poolGroups}
             funded={fundedPools}
-            error={poolError ?? (weekWait ? reading.error : null)}
-            unpriced={poolError === null && weekWait && reading.unpriced}
+            failure={failed(poolError) ?? (weekWait ? reading.failure : null)}
             loading={(sessionId === null ? byPool.data === null || byPool.stale || (poolFunding !== undefined && (fundedByPool.data === null || fundedByPool.stale)) : loading) || weekWait}
             reading={reading}
             unit={unit}
@@ -1284,33 +1278,31 @@ function ChartCard({
   loading,
   children,
   empty,
-  error = null,
+  failure = null,
   footer,
   legend,
   height = 220,
   actions,
-  unpriced = false,
 }: {
   /** Drawn in the card's header beside the title: a control the chart reads. */
   actions?: ReactNode;
   children: ReactNode;
   /** Drawn in place of the chart, legend and all, when the answer holds nothing the chart could draw. */
   empty?: ReactNode;
-  /** A card reading a route of its own draws that route's failure in place of the chart. */
-  error?: string | null;
+  /** A card reading a route of its own draws that route's failure in place of the chart, headed unpriced where it is
+   *  the week reading's unpriced sentence, which no retry clears. */
+  failure?: WeekReading['failure'];
   footer?: ReactNode;
   height?: number;
   legend?: { color: string; dashed?: boolean; hollow?: boolean; label: string; shape?: 'line' | 'rect'; title?: string; value?: ReactNode }[];
   loading: boolean;
   subtitle?: ReactNode;
   title: string;
-  /** `error` is the week reading's unpriced sentence, which no retry clears, so the state heads it unpriced. */
-  unpriced?: boolean;
 }) {
   return (
     <Card title={title} subtitle={subtitle} actions={actions}>
-      {error !== null ? (
-        <ErrorState title={unpriced ? `Unpriced: ${title.toLowerCase()}` : `Could not load ${title.toLowerCase()}`} body={error} />
+      {failure !== null ? (
+        <ErrorState title={failureHead(failure, title.toLowerCase())} body={failure.text} />
       ) : loading ? (
         <Skeleton height={height} />
       ) : empty ? (
@@ -1342,22 +1334,20 @@ function BreakdownTable({
   columns,
   rows,
   className = '',
-  error = null,
+  failure = null,
   loading = false,
   subtitle = 'Totals for the selected range and filters',
-  unpriced = false,
 }: {
   className?: string;
   columns: ReactNode[];
-  error?: string | null;
+  /** Headed unpriced where it is the week reading's unpriced sentence, which no retry clears. */
+  failure?: WeekReading['failure'];
   groupLabel: string;
   loading?: boolean;
   /** A row's `title` is its label cell's hover text, the label itself where none is given. */
   rows: { cells: ReactNode[]; key: string; label: string; title?: string }[];
   subtitle?: string;
   title: string;
-  /** `error` is the week reading's unpriced sentence, which no retry clears, so the state heads it unpriced. */
-  unpriced?: boolean;
 }) {
   return (
     <Card title={title} subtitle={subtitle} padded={false} className={className ? `card--table ${className}` : 'card--table'}>
@@ -1376,7 +1366,7 @@ function BreakdownTable({
           <tbody>
             {/* A table that reads a second answer beside its rows' own, a dollar side's cells say, draws that answer's
                 failure in place of the rows, so no cell stands without the figure it was read for. */}
-            {error === null &&
+            {failure === null &&
               rows.map((r) => (
                 <tr key={r.key}>
                   <td className="mono col-fill" title={r.title ?? r.label}>
@@ -1389,10 +1379,10 @@ function BreakdownTable({
                   ))}
                 </tr>
               ))}
-            {(error !== null || rows.length === 0) && (
+            {(failure !== null || rows.length === 0) && (
               <tr>
-                <td colSpan={columns.length + 1} className={error ? '' : 'muted'}>
-                  {error ? <ErrorState title={unpriced ? `Unpriced: ${title.toLowerCase()}` : 'Could not load this breakdown'} body={error} /> : loading ? <Skeleton height={22} /> : 'No rows.'}
+                <td colSpan={columns.length + 1} className={failure ? '' : 'muted'}>
+                  {failure ? <ErrorState title={failure.unpriced ? `Unpriced: ${title.toLowerCase()}` : 'Could not load this breakdown'} body={failure.text} /> : loading ? <Skeleton height={22} /> : 'No rows.'}
                 </td>
               </tr>
             )}
@@ -1596,7 +1586,7 @@ const chartEquivalent = (s: ReturnType<typeof probeSidesOf>, week: WeekPosition,
  * as the cache cost card does. A session view's fold carries no credit, so `session` draws no bar and dashes the
  * legend.
  */
-function SavingChart({ axis, billed, error, loading, points, reading, session, unit, unpriced }: { axis: TimeAxis; billed: AnalyticsPoint[] | null; error: string | null; loading: boolean; points: AnalyticsPoint[]; reading: WeekReading; session: boolean; unit: UnitPosition; unpriced: boolean }) {
+function SavingChart({ axis, billed, failure, loading, points, reading, session, unit }: { axis: TimeAxis; billed: AnalyticsPoint[] | null; failure: WeekReading['failure']; loading: boolean; points: AnalyticsPoint[]; reading: WeekReading; session: boolean; unit: UnitPosition }) {
   const ink = useChartInk();
   const buckets = useMemo(() => bucketsOf(points), [points]);
   const billedBuckets = useMemo(() => (billed === null ? null : bucketsOf(billed)), [billed]);
@@ -1610,7 +1600,7 @@ function SavingChart({ axis, billed, error, loading, points, reading, session, u
   const subtitle = "Per bucket, the gross saving against the probes' cost";
   // The figures wait on the scale, so the card draws its skeleton while it is out.
   const { scale: weekFactor, week } = reading;
-  if (equivalents && weekFactor === null) return <ChartCard title={title} subtitle={subtitle} loading error={error} unpriced={unpriced}>{null}</ChartCard>;
+  if (equivalents && weekFactor === null) return <ChartCard title={title} subtitle={subtitle} loading failure={failure}>{null}</ChartCard>;
   // The dollar figures read no scale, and under the equivalents the return above leaves one.
   const factor = weekFactor ?? 1;
   const drawn = native && !equivalents ? (billedBuckets ?? []) : buckets;
@@ -1641,8 +1631,7 @@ function SavingChart({ axis, billed, error, loading, points, reading, session, u
       title={title}
       subtitle={subtitle}
       loading={loading}
-      error={error}
-      unpriced={unpriced}
+      failure={failure}
       legend={[
         { color: ink.series[1], label: 'Saved by probes', value: figures.gross },
         { color: ink.series[3], label: 'Probe cost', value: figures.cost },
@@ -1759,7 +1748,7 @@ function Histogram({ h, format, p99 }: { format: (v: number) => string; h: numbe
  * cell, and a dollar side reads its own read by model (`funded`, by key). The cells sum every account a model ran on,
  * so they carry no hint, and the table reads no rows while the scale is out, which its loading draws.
  */
-function CacheByModel({ error, funded, groups, loading, reading, unit, unpriced }: { error: string | null; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; reading: WeekReading; unit: UnitPosition; unpriced: boolean }) {
+function CacheByModel({ failure, funded, groups, loading, reading, unit }: { failure: WeekReading['failure']; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; reading: WeekReading; unit: UnitPosition }) {
   // A request refused before it resolved a model reads no cache, so the group without a model has no row here.
   const rows = useMemo(() => groups.filter((g) => g.key !== '').sort((a, b) => b.tokens.cacheRead - a.tokens.cacheRead), [groups]);
   const subtitle = unit === 'native' ? `Totals for the selected range and filters, ${NATIVE_SUBSET}` : `Totals for the selected range and filters, ${UNIT_SUBSET[dollarsOf(unit)]}`;
@@ -1782,8 +1771,7 @@ function CacheByModel({ error, funded, groups, loading, reading, unit, unpriced 
     <BreakdownTable
       title="Cache by model"
       subtitle={subtitle}
-      error={error}
-      unpriced={unpriced}
+      failure={failure}
       loading={loading}
       groupLabel="Model"
       columns={['Reads', 'Writes 5m', 'Writes 1h', 'Hit ratio', 'Cached share', 'Read cost', 'Write cost']}
@@ -1806,7 +1794,7 @@ function CacheByModel({ error, funded, groups, loading, reading, unit, unpriced 
  * the chosen week with its billed side's dollars (`funded`, the billed read by pool), and a dollar side reads its own
  * read by pool. The other columns read every row, and the table reads no rows while the scale is out.
  */
-function KeepaliveByPool({ error, funded, groups, loading, reading, unit, unpriced }: { error: string | null; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; reading: WeekReading; unit: UnitPosition; unpriced: boolean }) {
+function KeepaliveByPool({ failure, funded, groups, loading, reading, unit }: { failure: WeekReading['failure']; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; reading: WeekReading; unit: UnitPosition }) {
   const rows = useMemo(() => [...groups].sort((a, b) => (b.keptWarm === null ? 0 : keptWarmTokens(b.keptWarm)) - (a.keptWarm === null ? 0 : keptWarmTokens(a.keptWarm))), [groups]);
   const { scale: weekFactor, week } = reading;
   const probeCost = (g: AnalyticsGroup, factor: number): ReactNode => {
@@ -1828,8 +1816,7 @@ function KeepaliveByPool({ error, funded, groups, loading, reading, unit, unpric
   return (
     <BreakdownTable
       title="Cache warming by pool"
-      error={error}
-      unpriced={unpriced}
+      failure={failure}
       loading={loading}
       groupLabel="Pool"
       columns={['Probes OK', 'Held', 'Skipped', 'Failed', 'Kept-warm requests', 'Kept-warm tokens', 'Probe cost', 'Saved']}
@@ -1959,7 +1946,7 @@ function stackOf(points: AnalyticsPoint[], value: (g: AnalyticsGroup) => number 
  * Native stacks the plan rows' Pro-week figure per bucket, its axis and tooltip in the chosen week, and draws the billed
  * rows' dollars on a card of their own. A group sums every account it holds, so the chart carries no hint.
  */
-function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, reading, unit, unpriced }: { axis: TimeAxis; error: string | null; groupBy: GroupBy; groupSlot: (key: string) => string; loading: boolean; points: AnalyticsPoint[]; reading: WeekReading; unit: UnitPosition; unpriced: boolean }) {
+function CostByGroup({ axis, failure, points, groupBy, groupSlot, loading, reading, unit }: { axis: TimeAxis; failure: WeekReading['failure']; groupBy: GroupBy; groupSlot: (key: string) => string; loading: boolean; points: AnalyticsPoint[]; reading: WeekReading; unit: UnitPosition }) {
   const ink = useChartInk();
   const stack = useMemo(() => (unit === 'native' ? stackOf(points, (g) => g.costEquivalent, true, (g) => g.costEquivalent === null) : stackOf(points, (g) => g.costUsd)), [points, unit]);
   const billed = useMemo(() => (unit === 'native' ? stackOf(points, (g) => g.billedUsd, true) : null), [points, unit]);
@@ -1969,7 +1956,7 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, reading
   const title = `Cost by ${GROUP_LABEL[groupBy].toLowerCase()}`;
   const areas = (s: Stack) => s.keys.map((k) => <Area key={k} type="monotone" dataKey={k} stackId="a" stroke={color(k)} strokeWidth={1.5} fill={color(k)} fillOpacity={0.35} dot={false} isAnimationActive={false} />);
   const dollarCard = (s: Stack, cardTitle: string, subtitle: string) => (
-    <ChartCard title={cardTitle} subtitle={subtitle} loading={loading} error={error} unpriced={unpriced} legend={s.keys.map((k) => ({ color: color(k), label: s.labels.get(k) ?? k }))}>
+    <ChartCard title={cardTitle} subtitle={subtitle} loading={loading} failure={failure} legend={s.keys.map((k) => ({ color: color(k), label: s.labels.get(k) ?? k }))}>
       <AreaChart data={s.data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
         <CartesianGrid vertical={false} stroke={ink.grid} />
         <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
@@ -1983,7 +1970,7 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, reading
     const billedDrawn = billed !== null && billed.keys.length > 0;
     // A range with no plan row leaves the plan card out while the billed card draws, as the tiles leave out a side
     // with no rows. With neither side the card stays, so an empty range still reads as one.
-    const planDrawn = loading || error !== null || keys.length > 0 || !billedDrawn;
+    const planDrawn = loading || failure !== null || keys.length > 0 || !billedDrawn;
     const subtitle = 'Share of the chosen week per bucket, stacked, the subscription requests';
     const note = unpricedNote(stack.unpriced.labels, stack.unpriced.buckets);
     const { scale: weekFactor, week } = reading;
@@ -2004,8 +1991,7 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, reading
               )
             }
             loading={loading || weekFactor === null}
-            error={error}
-            unpriced={unpriced}
+            failure={failure}
             legend={keys.map((k) => ({ color: color(k), label: label(k) }))}
           >
             {weekFactor !== null && (
@@ -2064,7 +2050,7 @@ function SpeedCard({ axis, points, error, loading }: { axis: TimeAxis; error: st
     <ChartCard
       title="Requests by speed"
       subtitle="Standard and fast per bucket, stacked"
-      error={error}
+      failure={failed(error)}
       loading={loading}
       legend={SPEED_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(data.reduce((n, d) => n + d[s.key], 0)) }))}
     >
@@ -2105,7 +2091,7 @@ function RewritesCard({ answer, axis, error, loading, unfiltered }: { answer: Re
     <ChartCard
       title="Migration rewrites"
       subtitle={`Cache-write tokens the first request after a move wrote, per bucket${unfiltered ? UNFILTERED_NOTE : ''}`}
-      error={error}
+      failure={failed(error)}
       loading={loading}
       legend={[{ color: ink.series[1], label: 'Rewrite tokens', value: fmtCompact(total) }]}
       footer={
@@ -2399,7 +2385,7 @@ function BurnCharts({
         key={PLAN_TITLE}
         title={PLAN_TITLE}
         subtitle={subtitle}
-        error={error}
+        failure={failed(error)}
         loading={loading}
         empty={
           empty ??
@@ -2443,7 +2429,7 @@ function BurnCharts({
       {/* The figure waits on the chosen week's scale, so the card draws its skeleton while the cost model is out and its
           failure in its place. */}
       {weekFactor === null ? (
-        <ChartCard title={PLAN_TITLE} subtitle={subtitle} error={error ?? reading.error} unpriced={error === null && reading.unpriced} loading>
+        <ChartCard title={PLAN_TITLE} subtitle={subtitle} failure={failed(error) ?? reading.failure} loading>
           {null}
         </ChartCard>
       ) : (
@@ -2452,7 +2438,7 @@ function BurnCharts({
       <ChartCard
         title="Spend per minute"
         subtitle={`${byAccount ? SPEND_NOTE : `${SPEND_NOTE} when grouped by account`}${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}${partial ? `. ${PARTIAL_NOTE}` : ''}`}
-        error={error}
+        failure={failed(error)}
         loading={loading}
         empty={empty ?? (spent.length === 0 ? 'No account spent dollars in this range.' : undefined)}
         legend={spent.map(({ l }) => ({ color: colorOf(l), label: spendNameOf(l), shape: 'line' as const, title: titleOf(l), value: fmtUsd(l.usdPerMinute) }))}
@@ -2727,7 +2713,7 @@ function AccountsSection({
         className="accounts-range"
         title="Accounts in range"
         subtitle={`Totals for the selected range and accounts${otherFilters ? '. The key, pool, model, client and session filters and the probes toggle do not apply here' : ''}`}
-        error={error}
+        failure={failed(error)}
         loading={loading}
         groupLabel="Account"
         columns={['Peak 5h', 'Peak 7d', 'Peak 7d, extra usage', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']}

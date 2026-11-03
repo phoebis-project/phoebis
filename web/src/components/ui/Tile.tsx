@@ -1,22 +1,21 @@
 import type { ReactNode } from 'react';
-import type { CostFigure } from '@/lib/analytics';
+import type { CostFigure, WeekReading } from '@/lib/analytics';
 import { Skeleton } from './primitives';
 
 /**
- * A compact stat tile. A null value or a null note draws a placeholder; an absent note draws no line; a failed read
- * draws a dash with its message in the tile's title. A text note draws in the note's type; any other node draws as it
+ * A compact stat tile. A null value or a null note draws a placeholder, an absent note draws no line, and a failure
+ * draws a dash with its text in the tile's title. A text note draws in the note's type, and any other node draws as it
  * is, so a tile can carry markup of its own, such as a bar or a list, in its own type. `title` is the tile's hover
- * text, such as the unpriced title where a plan row priced nothing, and a failed read's message takes its place.
- * `unpriced` marks an `error` that is a week reading's unpriced sentence, which no retry clears, so the note under the
- * dash says unpriced, not could not load.
+ * text, such as the unpriced title where a plan row priced nothing, and a failure's text takes its place. A failure
+ * that is a week reading's unpriced sentence, which no retry clears, notes the dash unpriced, not could not load.
  */
-export function Tile({ error, label, note, title, tone, unpriced = false, value }: { error?: string | null; label: string; note?: ReactNode | null; title?: string; tone?: 'critical' | 'warning'; unpriced?: boolean; value: ReactNode }) {
+export function Tile({ failure = null, label, note, title, tone, value }: { failure?: WeekReading['failure']; label: string; note?: ReactNode | null; title?: string; tone?: 'critical' | 'warning'; value: ReactNode }) {
   return (
-    <div className="stat stat--compact" title={error ?? title}>
+    <div className="stat stat--compact" title={failure?.text ?? title}>
       <span className="stat__label">{label}</span>
-      <span className={`stat__value ${tone ? `is-${tone}` : ''}`}>{error ? '-' : (value ?? <Skeleton width={60} height={22} />)}</span>
-      {error ? (
-        <span className="stat__note">{unpriced ? 'unpriced' : 'could not load'}</span>
+      <span className={`stat__value ${tone ? `is-${tone}` : ''}`}>{failure ? '-' : (value ?? <Skeleton width={60} height={22} />)}</span>
+      {failure ? (
+        <span className="stat__note">{failure.unpriced ? 'unpriced' : 'could not load'}</span>
       ) : note === undefined ? null : note === null ? (
         <span className="stat__note">
           <Skeleton width={90} />

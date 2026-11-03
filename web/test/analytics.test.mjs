@@ -898,3 +898,9 @@ test('without an empty key the color slots follow the named keys in their order'
 test('an empty key between two named keys takes no slot of theirs, wherever the fallback path lists it', () => {
   assert.equal(d.slotIndex(['a', '', 'b'], 'b'), 1);
 });
+
+test("a failed surface heads the week reading's unpriced sentence unpriced and any other failure could not load", () => {
+  const unpriced = { text: 'Unpriced: the cost model holds no 7-day capacity for the Max week', unpriced: true };
+  assert.equal(d.failureHead(unpriced, 'cost split'), 'Unpriced: cost split', 'no retry clears an unpriced week');
+  assert.equal(d.failureHead({ text: 'HTTP 503', unpriced: false }, 'cost split'), 'Could not load cost split');
+});

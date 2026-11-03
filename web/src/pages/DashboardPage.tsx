@@ -56,11 +56,11 @@ interface CostTile {
  * reading of a day, over the billed rows' dollars, a side with no rows left out, and an empty day reads its zero in
  * each unit. A day a plan row priced nothing on reads the dash under `UNPRICED_TITLE`, its note a dash too while no
  * request was billed, and its spark leaves an unpriced hour a gap. The figure waits on the scale, so native draws the
- * skeleton while the cost model is out, and the reading's error as a dash titled with it, noted unpriced where the
+ * skeleton while the cost model is out, and the reading's failure as a dash titled with it, noted unpriced where the
  * cost model sizes no chosen week. The dollar positions read their dollars.
  */
 function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading): CostTile {
-  const { error, scale, week } = reading;
+  const { failure, scale, week } = reading;
   if (unit === 'all') return { note: `${fmtUsd(o.cost24h / 24)} per hour`, spark: o.hourly.map((h) => h.cost), value: fmtUsd(o.cost24h) };
   if (unit === 'usd') return { note: `${fmtUsd(o.billed24h / 24)} per hour`, spark: o.hourly.map((h) => h.billed), value: fmtUsd(o.billed24h) };
   if (unit === 'equivalent') return { note: 'at the API price list, the subscription requests', spark: o.hourly.map((h) => h.cost - h.billed), value: fmtUsd(o.cost24h - o.billed24h) };
@@ -70,7 +70,7 @@ function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading): Cost
   // In percent: the spark's scale floors at one, a dollar an hour on the dollar positions, and a floor of a whole
   // week an hour would flatten the day. An unpriced hour is no idle one, so it draws as a gap.
   const spark = (factor: number) => (plan || !billed ? o.hourly.map((h) => (h.equivalent === null ? null : h.equivalent * factor * 100)) : o.hourly.map((h) => h.billed));
-  if (scale === null) return error === null ? { note: null, spark: spark(1), value: null } : { note: reading.unpriced ? 'unpriced' : 'could not load', spark: spark(1), title: error, value: '-' };
+  if (scale === null) return failure === null ? { note: null, spark: spark(1), value: null } : { note: failure.unpriced ? 'unpriced' : 'could not load', spark: spark(1), title: failure.text, value: '-' };
   const { figures, unpriced } = nativeFiguresOf({ billed: billed ? o.billed24h : undefined, equivalent: plan ? day : undefined }, week, scale);
   return {
     note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash(day === null ? null : day / 24, week, scale)} per hour`,
@@ -187,7 +187,7 @@ export function DashboardPage() {
 
       <div className="dash-bottom">
         <Card title="Recent requests" subtitle="Last 10 across every pool" actions={<Link to="/requests">All requests</Link>} padded={false} className="card--table">
-          <RecentTable rows={requests.data?.requests ?? null} error={requests.error} settings={settings.data} settingsError={reading.error} accounts={accounts.data} scale={reading.scale} />
+          <RecentTable rows={requests.data?.requests ?? null} error={requests.error} settings={settings.data} settingsError={reading.failure?.text ?? null} accounts={accounts.data} scale={reading.scale} />
         </Card>
         <Card title="Sessions" subtitle="Sticky pins and cache-warming agents" actions={<Link to="/sessions">Open</Link>}>
           {failedFirst(overview) || failedFirst(sessions) ? (

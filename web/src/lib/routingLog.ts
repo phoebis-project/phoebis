@@ -1781,7 +1781,7 @@ const rewriteCell = (rewrite: number | null, window: string | null, unit: string
   if (rewrite === null) return plain('-');
   const word = window === null ? null : windowLabelOf(window);
   if (unit !== 'pro_week') return plain(word === null ? fmtShare(rewrite) : `${fmtShare(rewrite)} of 20x ${word}`);
-  if (week.scale === null) return week.error === null ? plain('-') : { ...plain('-'), title: week.error };
+  if (week.scale === null) return week.failure === null ? plain('-') : { ...plain('-'), title: week.failure.text };
   const cell = plain(weekShort(rewrite * week.scale, week.week));
   return word === null ? cell : { ...cell, title: `compared on the ${word} window` };
 };

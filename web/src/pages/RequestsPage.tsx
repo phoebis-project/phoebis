@@ -17,7 +17,7 @@ import type { Option } from '@/components/ui/OptionList';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, Select, Skeleton } from '@/components/ui/primitives';
 import { addressWindow, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
-import { shareHint, shareHintLines } from '@/lib/analytics';
+import { shareHint, shareHintLines, type WeekReading } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
 import { bodyLines, bodyText, findHits } from '@/lib/bodies';
 import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
@@ -139,14 +139,13 @@ const routingLogHref = (r: RequestLog, now: number) => {
 };
 
 /** The figure's context a request's cost reads: the accounts read and the cost model the hint is composed from, and the
- *  chosen week with its scale and `error`, as `weekReadingOf` reads them, which a figure waiting on the scale draws as
- *  a dash titled with the error. */
+ *  chosen week with its scale and `failure`, as `weekReadingOf` reads them, which a figure waiting on the scale draws
+ *  as a dash titled with the failure. */
 interface CostContext {
   accounts: Account[] | null;
   costs: SubscriptionCosts | null;
-  error: string | null;
+  failure: WeekReading['failure'];
   scale: number | null;
-  unpriced: boolean;
   week: WeekPosition;
 }
 
@@ -159,17 +158,17 @@ function requestCost(request: RequestLog, unit: UnitPosition, context: CostConte
 
 /**
  * The Cost cell: the position's main line over its second, the hint and the dollar equivalent on the title, the
- * skeleton while the scale is out, and a dash titled with the context's error where it carries one.
+ * skeleton while the scale is out, and a dash titled with the context's failure where it carries one.
  */
 function CostCell({ context, request, unit }: { context: CostContext; request: RequestLog; unit: UnitPosition }) {
   const cell = costCellOf(requestCost(request, unit, context).unit, context.week, context.scale);
   if (cell === null)
-    return context.error === null ? (
+    return context.failure === null ? (
       <td className="right num col-fit requests__cost">
         <Skeleton width={72} />
       </td>
     ) : (
-      <td className="right num col-fit requests__cost" title={context.error}>
+      <td className="right num col-fit requests__cost" title={context.failure.text}>
         -
       </td>
     );
@@ -195,13 +194,13 @@ function HeldBadge({ held }: { held: CohortHold }) {
  * The drawer's cost value: the figure in the chosen week as one chip with the dollar equivalent muted after it, the
  * dollars, the dollar equivalent with `equivalent` muted after it, or the dash of a position that reads nothing for the
  * request. The figure waits on the scale, so it draws its skeleton while the cost model is out and a dash where the
- * context carries an error.
+ * context carries a failure.
  */
 function costRowValue(unit: CostUnit, context: CostContext) {
-  const { error, scale, week } = context;
+  const { failure, scale, week } = context;
   switch (unit.kind) {
     case 'equivalent':
-      if (scale === null) return error === null ? <Skeleton width={120} /> : <b>-</b>;
+      if (scale === null) return failure === null ? <Skeleton width={120} /> : <b>-</b>;
       return (
         <span className="usage-table__end">
           <Chips chips={[{ value: fmtWeek(unit.figure * scale, week) }]} />
@@ -224,7 +223,7 @@ function costRowValue(unit: CostUnit, context: CostContext) {
 }
 
 /**
- * The drawer's Estimated cost row under one title: the context's error where the figure waits on it, why a
+ * The drawer's Estimated cost row under one title: the context's failure where the figure waits on it, why a
  * dollar figure, a dash or a free call's figure stands where it does, the hint, the serving account's tier as the
  * attempt stored it, and the price list and the cost model in force at the request's instant while the settings are at
  * hand. A title on an element inside the cell would hide the row's own wherever the figure is hovered. The hint's
@@ -233,7 +232,7 @@ function costRowValue(unit: CostUnit, context: CostContext) {
  */
 function CostRows({ context, request: r, settings, unit }: { context: CostContext; request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
   const { hint, unit: cost } = requestCost(r, unit, context);
-  const failed = cost.kind === 'equivalent' && context.scale === null ? context.error : null;
+  const failed = cost.kind === 'equivalent' && context.scale === null ? (context.failure?.text ?? null) : null;
   const why = (cost.kind === 'equivalent' || cost.kind === 'equivalent_dollars') && cost.reason !== null ? FREE_SHARE_TITLE : cost.kind === 'dollars' ? `Billed in dollars: ${FUNDING_WORD[cost.funding]}` : cost.kind === 'unpriced' ? NO_SHARE_TITLE : cost.kind === 'dash' ? cost.title : null;
   const shown = cost.kind === 'equivalent' || cost.kind === 'equivalent_dollars' ? cost.hint : null;
   const title = [failed, why, shown, r.tier === null ? null : `Account tier ${r.tier}`, revisionsTitle(settings, r.at)].filter((part) => part !== null).join('. ');
