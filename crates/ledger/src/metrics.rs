@@ -48,7 +48,8 @@ impl Default for Series {
 #[derive(Default)]
 struct Registry {
     counters: BTreeMap<&'static str, BTreeMap<Labels, f64>>,
-    gauges: BTreeMap<&'static str, BTreeMap<Labels, f64>>,
+    /// `phoebis_account_ratelimit_utilization` by account and window, in the order its labels render.
+    utilization: BTreeMap<(String, String), f64>,
     /// The shared windows each account's newest clean poll carried, which bound what a head may set.
     polled_windows: BTreeMap<String, BTreeSet<&'static str>>,
     ttfb: BTreeMap<String, Series>,
@@ -79,18 +80,6 @@ impl Metrics {
             .or_default()
             .entry(labels)
             .or_default() += by;
-    }
-
-    fn set(&self, name: &'static str, labels: Labels, value: f64) {
-        let mut inner = self.inner.lock().expect(LOCK_POISONED);
-        inner.gauges.entry(name).or_default().insert(labels, value);
-    }
-
-    fn remove(&self, name: &'static str, labels: Labels) {
-        let mut inner = self.inner.lock().expect(LOCK_POISONED);
-        if let Some(series) = inner.gauges.get_mut(name) {
-            series.remove(&labels);
-        }
     }
 
     pub fn observe_request(
@@ -181,14 +170,11 @@ impl Metrics {
                 if !poll && self.poll_lacks(&q.account_id, &q.window) {
                     continue;
                 }
-                self.set(
-                    "phoebis_account_ratelimit_utilization",
-                    vec![
-                        ("account", q.account_id.clone()),
-                        ("window", q.window.clone()),
-                    ],
-                    u,
-                );
+                self.inner
+                    .lock()
+                    .expect(LOCK_POISONED)
+                    .utilization
+                    .insert((q.account_id.clone(), q.window.clone()), u);
                 carried.entry(&q.account_id).or_default().insert(&q.window);
             }
         }
@@ -212,10 +198,11 @@ impl Metrics {
                 .insert(account.to_string(), shared);
             for window in [FIVE_HOUR, SEVEN_DAY] {
                 if !windows.contains(window) {
-                    self.remove(
-                        "phoebis_account_ratelimit_utilization",
-                        vec![("account", account.to_string()), ("window", window.into())],
-                    );
+                    self.inner
+                        .lock()
+                        .expect(LOCK_POISONED)
+                        .utilization
+                        .remove(&(account.to_string(), window.to_string()));
                 }
             }
         }
@@ -365,23 +352,18 @@ impl Metrics {
                     }
                 }
                 "phoebis_account_ratelimit_utilization" => {
-                    if let Some(series) = inner.gauges.get(name) {
-                        for (labels, value) in series {
-                            // A deleted account's last reading would otherwise scrape forever; the registry is
-                            // the list of accounts that exist.
-                            let live = labels
-                                .iter()
-                                .find(|(k, _)| *k == "account")
-                                .is_some_and(|(_, v)| gauges.live_accounts.contains(v));
-                            if !live {
-                                continue;
-                            }
-                            out.push_str(&format!(
-                                "{name}{} {}\n",
-                                render_labels(labels),
-                                render_value(*value)
-                            ));
+                    for ((account, window), value) in &inner.utilization {
+                        // A deleted account's last reading would otherwise scrape forever; the registry is
+                        // the list of accounts that exist.
+                        if !gauges.live_accounts.contains(account) {
+                            continue;
                         }
+                        out.push_str(&format!(
+                            "{name}{{account=\"{}\",window=\"{}\"}} {}\n",
+                            escape(account),
+                            escape(window),
+                            render_value(*value)
+                        ));
                     }
                 }
                 "phoebis_keepalive_agents" => {
