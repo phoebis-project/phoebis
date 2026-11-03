@@ -275,11 +275,9 @@ pub async fn run_until(
         LedgerConfig {
             retention_days: config.stats.retention_days,
             rollup_retention_days: config.stats.rollup_retention_days,
-            purge_interval: Duration::from_secs(3_600),
-            event_poll: Duration::from_secs(5),
-            expire_interval: Duration::from_secs(60),
             start_version: Some(env!("CARGO_PKG_VERSION").into()),
             mirror_baseline: Some(mirror_baseline),
+            ..LedgerConfig::default()
         },
     );
     // The first purge announces the downtime's clock resets and wind-downs: held until here, its rows reach the

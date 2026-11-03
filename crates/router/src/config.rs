@@ -657,11 +657,11 @@ fn default_refresh_concurrency() -> usize {
 }
 
 fn default_retention_days() -> u32 {
-    365
+    phoebis_ledger::LedgerConfig::default().retention_days
 }
 
 fn default_rollup_retention_days() -> u32 {
-    365
+    phoebis_ledger::LedgerConfig::default().rollup_retention_days
 }
 
 fn default_session_expiry() -> u64 {
