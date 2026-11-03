@@ -28,6 +28,8 @@ pub enum CchError {
 
 pub struct CchLocation {
     pub digits_start: usize,
+    /// The span of the billing line's JSON string, quotes included, so a reader of the line needs no second walk.
+    pub line: (usize, usize),
 }
 
 /// Finds the five digits after `cch=` inside the top-level `system[0].text`, when that text is a billing header.
@@ -51,6 +53,7 @@ pub fn find_cch(body: &[u8]) -> Option<CchLocation> {
         {
             return Some(CchLocation {
                 digits_start: start + digits,
+                line: (start, end),
             });
         }
         from += rel + 4;
@@ -73,9 +76,9 @@ pub fn carries_only_the_placeholder(body: &[u8]) -> bool {
     // Beside a second `cch=`, which `find_cch` may have skipped or not reached, the placeholder vouches for
     // nothing: the line claims a hash. Counted over the decoded line, so a field spelled with an escape counts as
     // the server reads it, and a line that does not decode is not taken for the placeholder.
-    string_member_span(body, &["system", "0", "text"])
-        .and_then(|(start, end)| serde_json::from_slice::<String>(&body[start..end]).ok())
-        .is_some_and(|line| line.matches("cch=").count() == 1)
+    let (start, end) = location.line;
+    serde_json::from_slice::<String>(&body[start..end])
+        .is_ok_and(|line| line.matches("cch=").count() == 1)
 }
 
 /// The array and object walk every span helper needs before reading its own terminal value; kept in one place
