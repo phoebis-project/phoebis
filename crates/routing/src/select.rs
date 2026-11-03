@@ -3867,17 +3867,12 @@ fn move_of<'a>(
         else {
             continue;
         };
-        // The reading's reset as every reader of a plan window takes it: a passed weekly reset rolled forward, and a
-        // 5-hour window past its reset naming none until the next sample.
-        let reset = state
-            .predicted(source, window, now)
-            .and_then(|reading| reading.reset);
         state.note_projection(
             &pool.id,
             source,
             window,
             projection.at_horizon > ceiling(pool, window),
-            reset,
+            projection.reset,
             now,
         );
     }
