@@ -29,6 +29,7 @@ import { effectiveInterval, readEnd, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
+import { readWindows } from '@/lib/quota';
 import { REFUSED_TITLE } from '@/lib/requests';
 import { CLIENT_PATTERNS_PLAIN, linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { words } from '@/lib/routingLog';
@@ -392,7 +393,7 @@ export function AnalyticsPage() {
       ? null
       : registry.data
           .filter((a) => filters.accountId.length === 0 || filters.accountId.includes(a.id))
-          .flatMap((a) => [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])])
+          .flatMap(readWindows)
           .filter((w) => w.periodHours === WINDOW_HOURS['7d'])
           .map((w) => w.resetsAt ?? '')
           .join(',');

@@ -26,7 +26,7 @@ import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, f
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useLatest, useNow, useQueryFilters } from '@/lib/hooks';
 import { latestPerWindow, meterGroups } from '@/lib/meter';
-import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, planEndedSentence, planWordLabel, slowedOf } from '@/lib/quota';
+import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, planEndedSentence, planWordLabel, readWindows, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { speedHover } from '@/lib/selection';
 import { joinTrend } from '@/lib/trend';
@@ -100,7 +100,7 @@ export function AccountsPage() {
   const [awaiting, setAwaiting] = useState<string | null>(null);
   if (awaiting !== null && accounts.data !== null && created?.id !== awaiting) {
     const row = accounts.data.find((a) => a.id === awaiting);
-    if (row === undefined || row.windows.length > 0 || row.fableWindow !== null) setAwaiting(null);
+    if (row === undefined || readWindows(row).length > 0) setAwaiting(null);
   }
   // With auto reload off nothing else reads the row again, so the page reads the list on its own while the reading is in
   // flight. A read that falls due under a dialog, an editor or a menu is skipped, as the auto reload holds there, and the
@@ -273,7 +273,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
   // weekly window past its reset, never at the list's cadence. The route ends the week at the term's end, which moves
   // with a saved or cleared end and with the plan-ended flag while the windows keep their resets, so those read again
   // too. A trial end needs none, since the route lists it once the flag follows it.
-  const weeklyResetsAt = [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])]
+  const weeklyResetsAt = readWindows(account)
     .filter((w) => w.periodHours === WINDOW_HOURS['7d'])
     .map((w) => w.resetsAt ?? '')
     .join(',');
@@ -671,7 +671,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
         </Card>
 
         <Card title="Usage" subtitle="Remaining share of each window" className="card--fill">
-          {!account.usageBased && account.windows.length === 0 && !account.fableWindow ? (
+          {!account.usageBased && readWindows(account).length === 0 ? (
             awaitingReading ? (
               <p className="muted">The first quota reading is in flight.</p>
             ) : account.planEndedAt !== null ? (

@@ -1,6 +1,6 @@
 import type { Account, AccountSlowDown, RateLimitWindow, Spend } from '@/api/types';
 import { fmtAbsolute, fmtMinor, fmtPct, fmtRelative } from '@/lib/format';
-import { hasSpendReading, isExpired, isSubscription, meterTone, planEndedSentence, projectionParts, remainingOf, slowedOf, spendResetTitle } from '@/lib/quota';
+import { hasSpendReading, isExpired, isSubscription, meterTone, planEndedSentence, projectionParts, remainingOf, slowedOf, spendResetTitle, windowOf } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 import { WINDOW_LABEL, WINDOW_ORDER } from '@/lib/windows';
 import { Meter } from './primitives';
@@ -115,8 +115,8 @@ export function WindowTriple({ account, now, compact = false, others = false }: 
       </div>
     );
   }
-  const w5 = account.windows.find((w) => w.id === '5h');
-  const w7 = account.windows.find((w) => w.id === '7d');
+  const w5 = windowOf(account, '5h');
+  const w7 = windowOf(account, '7d');
   const known: readonly string[] = WINDOW_ORDER;
   const rest = others ? account.windows.filter((w) => !known.includes(w.id)) : [];
   // An API-key account carries no quota window by nature, so only a subscription account's empty triple waits on a

@@ -2,7 +2,7 @@ import type { Account, SubscriptionCosts } from '@/api/types';
 import { tierCapacity } from '@/lib/costs';
 import { has } from '@/lib/counts';
 import { fmtPct } from '@/lib/format';
-import { isExpired, isQuotaListed, planLabel, pricedTier, remainingOf, windowOf } from '@/lib/quota';
+import { isExpired, isQuotaListed, planLabel, pricedTier, readWindows, remainingOf, windowOf } from '@/lib/quota';
 import { WEEK_SHORT, WEEK_TIER, type WeekPosition } from '@/lib/unit';
 
 /** The window a Dashboard ring pools: the 7-day window, or the Fable week, which the decoder holds as `fableWindow`. */
@@ -54,7 +54,7 @@ export function ringFigures(accounts: Account[], windowId: RingWindow, costs: Su
       continue;
     }
     if (w === null) {
-      leftOut.push({ id: a.id, label: a.label, reason: a.windows.length === 0 && a.fableWindow === null ? 'not read yet' : ABSENT[windowId] });
+      leftOut.push({ id: a.id, label: a.label, reason: readWindows(a).length === 0 ? 'not read yet' : ABSENT[windowId] });
       continue;
     }
     if (priced === null) {

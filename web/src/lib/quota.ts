@@ -83,6 +83,9 @@ export const remainingOf = (w: RateLimitWindow) => Math.max(0, Math.min(1, 1 - w
 /** An account's window by its id, the Fable week from `fableWindow`, which the decoder files apart from `windows`. */
 export const windowOf = (account: Account, id: WindowId): RateLimitWindow | null => (id === '7d_fable' ? account.fableWindow : (account.windows.find((w) => w.id === id) ?? null));
 
+/** Every window an account's poll read, the Fable week from `fableWindow` among them. */
+export const readWindows = (account: Account): RateLimitWindow[] => (account.fableWindow === null ? account.windows : [...account.windows, account.fableWindow]);
+
 /** A window whose reset has passed with no reading since: the card and the timeline agree on this one test. */
 export const isExpired = (w: RateLimitWindow, now: number) => w.resetsAt !== null && Date.parse(w.resetsAt) < now;
 
