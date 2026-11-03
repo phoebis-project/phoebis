@@ -2183,11 +2183,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     // only the request counts reach the answer, and integer sums add exactly in any split.
     let week = crate::lifetime::lifetime_of(six_days, &day);
     let lifetime = crate::lifetime::lifetime_of(old, &week);
-    let members = state
-        .store
-        .load_registry()
-        .map(|l| l.members)
-        .unwrap_or_default();
+    let members = state.store.all_pool_members().unwrap_or_default();
     AccountContext {
         cooldowns: state.router.cooldowns().await.unwrap_or_default(),
         day,

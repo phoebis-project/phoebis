@@ -705,10 +705,7 @@ impl Store {
             guardrail_attachments: all_guardrail_attachments(&tx)?,
             guardrails: all_guardrails(&tx)?,
             keys: all_keys(&tx)?,
-            members: tx
-                .prepare("SELECT pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd FROM pool_members ORDER BY pool_id, account_id")?
-                .query_map([], row_to_member)?
-                .collect::<rusqlite::Result<Vec<_>>>()?,
+            members: all_members(&tx)?,
             pools: all_pools(&tx)?,
             retired_secrets: tx
                 .prepare(
@@ -754,6 +751,12 @@ impl Store {
     pub fn pools(&self) -> Result<Vec<PoolRow>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         all_pools(&conn)
+    }
+
+    /// Every pool's members, the list `load_registry` reads, for a caller that needs no other part of the load.
+    pub fn all_pool_members(&self) -> Result<Vec<PoolMember>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        all_members(&conn)
     }
 
     pub fn pool(&self, id: &str) -> Result<Option<PoolRow>, StoreError> {
@@ -1957,6 +1960,16 @@ fn all_guardrail_attachments(
             position: r.get(3)?,
         })
     })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(StoreError::from)
+}
+
+fn all_members(conn: &rusqlite::Connection) -> Result<Vec<PoolMember>, StoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd FROM pool_members \
+         ORDER BY pool_id, account_id",
+    )?;
+    let rows = stmt.query_map([], row_to_member)?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(StoreError::from)
 }
