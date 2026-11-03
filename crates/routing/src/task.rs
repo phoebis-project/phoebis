@@ -4913,7 +4913,7 @@ impl Task {
 
     /// Every stored plan reading whose reset the clock has passed with no newer sample, announced once.
     fn clock_resets(&mut self, now: i64, restored: bool) {
-        let passed: Vec<(String, String, WindowReading)> = self
+        let passed: Vec<(String, String, WindowReading, i64)> = self
             .state
             .samples()
             .into_iter()
@@ -4921,16 +4921,14 @@ impl Task {
                 sample
                     .windows
                     .into_iter()
-                    .filter(|(window, reading)| {
-                        is_plan_window(window) && reading.reset.is_some_and(|reset| reset <= now)
+                    .filter_map(move |(window, reading)| {
+                        let reset_at = reading.reset.filter(|reset| *reset <= now)?;
+                        is_plan_window(&window)
+                            .then(|| (account_id.clone(), window, reading, reset_at))
                     })
-                    .map(move |(window, reading)| (account_id.clone(), window, reading))
             })
             .collect();
-        for (account_id, window, reading) in passed {
-            let Some(reset_at) = reading.reset else {
-                continue;
-            };
+        for (account_id, window, reading, reset_at) in passed {
             if self.announce_reset(&account_id, &window, reset_at) {
                 self.emit(RouterEvent::WindowReset {
                     account_id,
