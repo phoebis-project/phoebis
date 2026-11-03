@@ -5456,14 +5456,6 @@ pub(crate) fn failover_reports(
     reports
 }
 
-/// The sink reports the room left in the call it refused; the caller's own bound is the number worth telling.
-fn at_buffered_bound(error: TransportError) -> TransportError {
-    match error {
-        TransportError::TooLarge(_) => TransportError::TooLarge(MAX_BUFFERED_BODY),
-        other => other,
-    }
-}
-
 /// Decoded in pieces under the same bound as the inspection copy, so a small compressed rejection cannot
 /// expand without limit in memory.
 fn decode_all(decoder: &mut dyn Decoder, raw: &[u8]) -> Result<Bytes, TransportError> {
@@ -5472,13 +5464,13 @@ fn decode_all(decoder: &mut dyn Decoder, raw: &[u8]) -> Result<Bytes, TransportE
         out.extend(
             decoder
                 .feed_bounded(piece, MAX_BUFFERED_BODY - out.len())
-                .map_err(at_buffered_bound)?,
+                .map_err(|e| e.at_bound(MAX_BUFFERED_BODY))?,
         );
     }
     out.extend(
         decoder
             .finish_bounded(MAX_BUFFERED_BODY - out.len())
-            .map_err(at_buffered_bound)?,
+            .map_err(|e| e.at_bound(MAX_BUFFERED_BODY))?,
     );
     Ok(Bytes::from(out))
 }

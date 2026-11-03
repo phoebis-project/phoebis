@@ -17,7 +17,6 @@ use phoebis_transport::decode::{decoder, encoding};
 use phoebis_transport::pool::{Pool, PoolKey};
 use phoebis_transport::request::{write_request, RawRequest};
 use phoebis_transport::response::{framing, read_head, BodyReader};
-use phoebis_transport::TransportError;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -63,14 +62,6 @@ const MISMATCHED_POISONED: &str = "catalog mismatched-triple set poisoned by a p
 const LISTINGS_POISONED: &str = "catalog previous-listing map poisoned by a prior panic";
 const ON_CHANGE_POISONED: &str = "catalog change hook poisoned by a prior panic";
 const WARMTH_POISONED: &str = "catalog warmth poisoned by a prior panic";
-
-/// The sink reports the room left in the call it refused; the caller's own bound is the number worth telling.
-fn at_models_bound(error: TransportError) -> TransportError {
-    match error {
-        TransportError::TooLarge(_) => TransportError::TooLarge(MAX_BODY),
-        other => other,
-    }
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum DiscoveryError {
@@ -927,14 +918,14 @@ async fn exchange<C: AsyncRead + AsyncWrite + Unpin>(
         out.extend(
             decoder
                 .feed_bounded(&chunk, MAX_BODY - out.len())
-                .map_err(at_models_bound)
+                .map_err(|e| e.at_bound(MAX_BODY))
                 .map_err(|e| DiscoveryError::Malformed(e.to_string()))?,
         );
     }
     out.extend(
         decoder
             .finish_bounded(MAX_BODY - out.len())
-            .map_err(at_models_bound)
+            .map_err(|e| e.at_bound(MAX_BODY))
             .map_err(|e| DiscoveryError::Malformed(e.to_string()))?,
     );
     Ok((head.status, out, reusable))

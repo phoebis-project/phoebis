@@ -112,20 +112,14 @@ impl ControlClient {
             body.extend_from_slice(&chunk);
         }
         let mut d = decoder(encoding(&head)?);
-        let mut out = d.feed_bounded(&body, MAX_BODY).map_err(at_body_bound)?;
+        let mut out = d
+            .feed_bounded(&body, MAX_BODY)
+            .map_err(|e| e.at_bound(MAX_BODY))?;
         out.extend(
             d.finish_bounded(MAX_BODY - out.len())
-                .map_err(at_body_bound)?,
+                .map_err(|e| e.at_bound(MAX_BODY))?,
         );
         Ok((head, Bytes::from(out)))
-    }
-}
-
-/// The sink reports the room left in the call it refused; the caller's own bound is the number worth telling.
-fn at_body_bound(error: TransportError) -> TransportError {
-    match error {
-        TransportError::TooLarge(_) => TransportError::TooLarge(MAX_BODY),
-        other => other,
     }
 }
 
