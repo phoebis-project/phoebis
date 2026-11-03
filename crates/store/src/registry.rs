@@ -1095,7 +1095,8 @@ impl Store {
             params![row.id],
             |r| r.get(0),
         )?;
-        let now = previous.map_or(self.now_ms(), |p| self.now_ms().max(p + 1));
+        let now = self.now_ms();
+        let now = previous.map_or(now, |p| stamp_past(now, p));
         let incarnation = crate::accounts::next_incarnation_in(&tx, "api_key_tombstones", &row.id)?;
         tx.execute(
             "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, auto_mode_server, created_at, updated_at, rotated_at, last_used_at, retired_secret_last_used_at, incarnation) \
