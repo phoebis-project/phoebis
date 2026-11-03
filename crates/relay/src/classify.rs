@@ -1,7 +1,10 @@
 //! The cooldown classification table, partitioned by account kind, applied to every upstream head before any
 //! byte reaches the caller.
 
-use phoebis_routing::{FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MODEL_REJECTED_REASON};
+use phoebis_routing::{
+    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MODEL_REJECTED_REASON, RATE_LIMIT_REASON,
+    RETRY_AFTER_WINDOW,
+};
 use phoebis_store::{AccountKind, AccountState, StateCause};
 use phoebis_transport::response::ResponseHead;
 use serde_json::Value;
@@ -227,7 +230,7 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
                 Scope::Model,
                 ctx.now.saturating_add(PERMISSION_MS),
                 "permission",
-                "retry_after",
+                RETRY_AFTER_WINDOW,
             )),
             mark: None,
         };
@@ -244,7 +247,12 @@ fn oauth_cooldown(
         let deadline = reset
             .or_else(|| retry_after(head, ctx.now).map(|d| ctx.now.saturating_add(d)))
             .unwrap_or(ctx.now.saturating_add(ctx.fallback_ms));
-        Cooldown::new(scope, deadline, "rate_limit", exhaustion_window(unified))
+        Cooldown::new(
+            scope,
+            deadline,
+            RATE_LIMIT_REASON,
+            exhaustion_window(unified),
+        )
     };
     if let Some(u) = unified {
         if shared_window_rejected(u, ctx.canonical_model) {
@@ -320,7 +328,7 @@ fn fast_cooldown(
         .max();
     let (until, window) = match (fast_reset, retry_after(head, ctx.now)) {
         (Some(reset), _) => (reset, "fast"),
-        (None, Some(delay)) => (ctx.now.saturating_add(delay), "retry_after"),
+        (None, Some(delay)) => (ctx.now.saturating_add(delay), RETRY_AFTER_WINDOW),
         (None, None) => (ctx.now.saturating_add(FAST_RATE_LIMIT_FALLBACK_MS), "fast"),
     };
     Cooldown::new(Scope::Fast, until, FAST_RATE_LIMIT_REASON, window)
@@ -373,14 +381,14 @@ fn api_key_cooldown(head: &ResponseHead, ctx: &HeadContext<'_>) -> Cooldown {
     Cooldown::new(
         scope,
         ctx.now.saturating_add(delay),
-        "rate_limit",
-        "retry_after",
+        RATE_LIMIT_REASON,
+        RETRY_AFTER_WINDOW,
     )
 }
 
 pub fn exhaustion_window(unified: Option<&UnifiedHeaders>) -> String {
     let Some(u) = unified else {
-        return "retry_after".into();
+        return RETRY_AFTER_WINDOW.into();
     };
     if let Some(claim) = &u.representative_claim {
         return claim.clone();
@@ -391,7 +399,7 @@ pub fn exhaustion_window(unified: Option<&UnifiedHeaders>) -> String {
     if u.seven_day_status == Some(WindowStatus::Rejected) {
         return phoebis_routing::SEVEN_DAY.into();
     }
-    "retry_after".into()
+    RETRY_AFTER_WINDOW.into()
 }
 
 /// The value of a `"key": "value"` member, scanned textually in a body a JSON parse could not complete: the

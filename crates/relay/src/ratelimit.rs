@@ -4,7 +4,8 @@
 use std::str::FromStr;
 
 use phoebis_routing::{
-    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, INPUT_TOKENS_BUCKET,
+    OUTPUT_TOKENS_BUCKET, REQUESTS_BUCKET, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 pub use phoebis_routing::{FAST_INPUT, FAST_OUTPUT};
 use phoebis_store::AccountKind;
@@ -281,9 +282,9 @@ pub fn head_sample(
         AccountKind::ApiKey => {
             if let Some(buckets) = BucketHeaders::parse(head) {
                 for (prefix, bucket) in [
-                    ("itpm", buckets.input_tokens),
-                    ("otpm", buckets.output_tokens),
-                    ("rpm", buckets.requests),
+                    (INPUT_TOKENS_BUCKET, buckets.input_tokens),
+                    (OUTPUT_TOKENS_BUCKET, buckets.output_tokens),
+                    (REQUESTS_BUCKET, buckets.requests),
                 ] {
                     if let Some(b) = bucket {
                         sample = sample.with(

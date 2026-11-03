@@ -529,6 +529,14 @@ pub const FAST_RATE_LIMIT_REASON: &str = "fast_rate_limit";
 /// selector names it, the relay stamps and claims it, the keepalive reads it.
 pub const BUDGET_WINDOW: &str = "budget";
 
+/// The reason an upstream rate limit cools an account or a model under, the one reason a usage reading may lift
+/// early.
+pub const RATE_LIMIT_REASON: &str = "rate_limit";
+
+/// The window of a cooldown only a `Retry-After` timed. It names no plan window, so no reading lifts it early, and
+/// the relay may wait it out in place.
+pub const RETRY_AFTER_WINDOW: &str = "retry_after";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Exhaustion {
     /// No candidate is eligible, and every cooldown in the way is a rejection of the request's model.

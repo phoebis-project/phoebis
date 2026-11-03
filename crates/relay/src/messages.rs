@@ -3975,7 +3975,7 @@ impl Relay {
         if !ctx.portable
             || mark.is_some()
             || !ctx.can_retry_in_place
-            || cooldown.window != "retry_after"
+            || cooldown.window != phoebis_routing::RETRY_AFTER_WINDOW
             || retry_after(head, now).is_none()
         {
             return None;

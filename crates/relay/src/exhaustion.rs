@@ -3,7 +3,7 @@
 //! to another pool mid-flight, and the two 429s of a fast request no upstream's fast lane can take.
 
 use axum::response::Response;
-use phoebis_routing::{Exhaustion, BUDGET_WINDOW};
+use phoebis_routing::{Exhaustion, BUDGET_WINDOW, RETRY_AFTER_WINDOW};
 
 use crate::anthropic_error;
 use crate::errors::{exhaustion_status_code, MODEL_REJECTED};
@@ -35,7 +35,7 @@ pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) 
             // suits a usage-based seat's wait that can run to the month's end. A probe's "budget" window is the
             // selector's word to the keepalive, never a claim of its own, so the caller sees the same overage
             // claim a request at a budget-refused pool gets.
-            let claim = if window == "retry_after" {
+            let claim = if window == RETRY_AFTER_WINDOW {
                 "five_hour"
             } else if window == BUDGET_WINDOW {
                 "overage"

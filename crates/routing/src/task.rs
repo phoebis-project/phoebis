@@ -27,6 +27,7 @@ use crate::record::{
 use crate::select::{
     decide, pace_of, passes_reset, projection_of, projections_of, release_reasons, routed_agent,
     BurnRead, Decided, FailedOver, MigrateReason, Refusal, SelectRequest, SelectResult,
+    RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
@@ -3851,9 +3852,9 @@ impl Task {
                     .filter(|row| observed_at > row.set_at)
                     .filter(|row| match row.scope {
                         CooldownScope::FastCredits => true,
-                        CooldownScope::Model(_) => row.reason == "rate_limit",
+                        CooldownScope::Model(_) => row.reason == RATE_LIMIT_REASON,
                         CooldownScope::Account => {
-                            row.reason == "rate_limit" && is_plan_window(&row.window)
+                            row.reason == RATE_LIMIT_REASON && is_plan_window(&row.window)
                         }
                         CooldownScope::Fast => false,
                     })

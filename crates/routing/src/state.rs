@@ -15,7 +15,10 @@ use tokio::time::Instant;
 
 use crate::affinity::{AffinityMap, PurgedEntry};
 use crate::listing::{row_for, snapshot_date};
-use crate::select::{affinity_ttl_ms, seconds_ms, Banded, SlowDownRead, SLOW_DOWN_WAIT_MS};
+use crate::select::{
+    affinity_ttl_ms, seconds_ms, Banded, SlowDownRead, RATE_LIMIT_REASON, RETRY_AFTER_WINDOW,
+    SLOW_DOWN_WAIT_MS,
+};
 use crate::task::BurnRates;
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::RegistrySnapshot;
@@ -286,9 +289,22 @@ pub struct WindowReading {
 pub const FAST_INPUT: &str = "fast_input";
 pub const FAST_OUTPUT: &str = "fast_output";
 
+/// The prefix of an api_key account's input-token bucket, named `itpm:<canonical model>` per model.
+pub const INPUT_TOKENS_BUCKET: &str = "itpm";
+/// The prefix of an api_key account's output-token bucket, named `otpm:<canonical model>` per model.
+pub const OUTPUT_TOKENS_BUCKET: &str = "otpm";
+/// The prefix of an api_key account's request bucket, named `rpm:<canonical model>` per model.
+pub const REQUESTS_BUCKET: &str = "rpm";
+
 /// An api_key bucket, one per canonical model under each prefix.
 fn is_model_bucket(window: &str) -> bool {
-    window.starts_with("rpm:") || window.starts_with("itpm:") || window.starts_with("otpm:")
+    [INPUT_TOKENS_BUCKET, OUTPUT_TOKENS_BUCKET, REQUESTS_BUCKET]
+        .iter()
+        .any(|prefix| {
+            window
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with(':'))
+        })
 }
 
 /// A window `BUCKET_TTL_MS` and `MAX_BUCKETS_PER_ACCOUNT` bound: an api_key bucket or one of the fast lane's two,
@@ -1766,7 +1782,7 @@ impl RoutingState {
         let recovered = |row: &CooldownRow| {
             // A deadline the upstream handed out names no window, whatever the row's scope, so a reading is a
             // guess about which window the rejection was for.
-            if row.window == "retry_after" {
+            if row.window == RETRY_AFTER_WINDOW {
                 return false;
             }
             // A model row recovers on the model's own week: its window keeps the upstream's claim, which the
@@ -1790,7 +1806,7 @@ impl RoutingState {
             .values()
             .filter(|row| {
                 row.account_id == account_id
-                    && row.reason == "rate_limit"
+                    && row.reason == RATE_LIMIT_REASON
                     && row.until > now
                     && sample.observed_at > row.set_at
                     && recovered(row)
