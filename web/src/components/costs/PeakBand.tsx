@@ -2,18 +2,15 @@ import { Fragment, useMemo } from 'react';
 import type { SubscriptionCosts } from '@/api/types';
 import { useFormatVersion } from '@/app/settings';
 import { Card } from '@/components/ui/primitives';
-import { bandCaption, bandNow, bandSentence, bandWeek, nextLocalChange, regimeNames, regimeWord, zoneCity } from '@/lib/costs';
-import { fmtShortTime, getTimeFormat } from '@/lib/format';
-
-/** The browser's zone, the one every time the console shows reads in. */
-export const viewingZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+import { bandCaption, bandNow, bandSentence, bandWeek, hhmm, nextLocalChange, regimeNames, regimeWord, zoneCity } from '@/lib/costs';
+import { fmtShortTime, getTimeFormat, viewingZone } from '@/lib/format';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
 /** A minute of the day on the console's 12-hour or 24-hour clock. */
 export const minuteClock = (minutes: number): string => {
   // The band's end at the day's last minute reads 24:00, which no formatter prints.
-  if (getTimeFormat() === '24h') return `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
+  if (getTimeFormat() === '24h') return hhmm(minutes);
   return new Date(Date.UTC(2000, 0, 1, 0, minutes)).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h12', minute: '2-digit', timeZone: 'UTC' });
 };
 

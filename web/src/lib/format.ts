@@ -10,6 +10,8 @@ export const setTimeFormat = (f: TimeFormat) => {
   timeFormat = f;
 };
 export const getTimeFormat = () => timeFormat;
+/** The browser's zone, the one every time the console shows reads in. */
+export const viewingZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 // `hour12: false` prints the first hour of a day as 24 in en-US (`24:05`, which reads as the day before); the h23
 // cycle prints it as 00.
 const hourCycle = () => (timeFormat === '12h' ? 'h12' : 'h23');

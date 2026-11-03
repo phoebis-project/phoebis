@@ -2,7 +2,7 @@ import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/
 import { AFFINITY_MODE_VALUES, iso, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
 import { slug } from '@/api/http';
 import type { Account, ApiKey, GuardrailRef, ModelRule, ModelRulesMode, Pool, PoolKeepalive, PoolWarning } from '@/api/types';
-import { fmtInt, toLocalInput } from './format';
+import { fmtInt, toLocalInput, viewingZone } from './format';
 import { checkPattern } from './patterns';
 
 export type NumericKeepaliveKey = { [K in keyof PoolKeepalive]-?: PoolKeepalive[K] extends number | null ? K : never }[keyof PoolKeepalive];
@@ -408,7 +408,7 @@ export function subscriptionEndFormOf(
 }
 
 /** The viewer's zone as the end editor names it beside its label, `Ends (Europe/Berlin)`. */
-export const endZoneLabel = (zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'): string => `Ends (${zone})`;
+export const endZoneLabel = (zone = viewingZone()): string => `Ends (${zone})`;
 
 /**
  * Ticking leaves the field as it stands, since the end is the date the provider's billing page shows and nothing the
