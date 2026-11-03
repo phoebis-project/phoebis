@@ -331,9 +331,31 @@ const unpricedStory = (): boolean => {
     return false;
   }
 };
-/** The rollups the analytics routes fold: none for a fresh installation, the unpriced request's beside the story's
- *  under its switch. */
-const ledgerRollups = () => (emptyStore() ? [] : unpricedStory() ? [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS] : ALL_ROLLUPS);
+/**
+ * The ledger's read sets as the routes fold them: the story's, the unpriced request's rows beside the story's under
+ * its switch, and an empty form of each for a fresh installation, so a route that reads its rows here answers that
+ * switch with no test of its own.
+ */
+const ledger = () => {
+  const empty = emptyStore();
+  const unpriced = !empty && unpricedStory();
+  return {
+    accountRollups: empty ? [] : ACCOUNT_ROLLUPS,
+    attention: empty ? [] : ATTENTION,
+    catalog: empty ? [] : CATALOG,
+    dayRows: empty ? [] : unpriced ? [...DAY_ROWS, UNPRICED_REQUEST] : DAY_ROWS,
+    decisionOf: (requestId: string, seq: number): DecisionRecord | null => (empty ? null : getDecision(requestId, seq)),
+    keepalive: empty ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW,
+    keepalive30d: empty ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW_30D,
+    quotaHistory: empty ? [] : QUOTA_HISTORY,
+    reconciliations: empty ? [] : RECONCILIATIONS,
+    recipes: empty ? [] : RECIPES,
+    requestById: empty ? new Map<string, RequestLog>() : requestById,
+    requests: empty ? [] : REQUESTS,
+    rollups: empty ? [] : unpriced ? [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS] : ALL_ROLLUPS,
+    weeklyResets: empty ? [] : WEEKLY_RESETS,
+  };
+};
 /**
  * The key the unpriced request lands on, its lifetime and its week read null under the switch, since the request
  * prices nothing and falls inside the week. The keys' fold runs once at load, so the null lands at the read, and the
@@ -548,6 +570,12 @@ export class MockApi implements Api {
     return Array.from({ length: n }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[this.secretRng.int(0, 35)]).join('');
   }
 
+  /** The registry's lists as the routes read them, or none for a fresh installation. */
+  private registry() {
+    const empty = emptyStore();
+    return { accounts: empty ? [] : this.accounts, guardrails: empty ? [] : this.guardrails, keys: empty ? [] : this.keys, pools: empty ? [] : this.pools, sessions: empty ? [] : this.sessions };
+  }
+
   /**
    * The pool as the route answers it, with its keys listed from the key registry at the time of the read, and its
    * warnings the route's checks on the saved settings and the largest cohort among the pinned sessions under its keys.
@@ -723,11 +751,10 @@ export class MockApi implements Api {
   }
 
   analyticsBudgets() {
-    if (emptyStore()) return latency([]);
     // Read off the members as they stand, so a budget set on the Pools form shows here; one row per budgeted
     // period, and the route orders by pool, then account, then the day ahead of the month, which the stable sort
     // keeps from the order each member's rows are built in.
-    const members = this.pools.flatMap((p) =>
+    const members = this.registry().pools.flatMap((p) =>
       p.members.flatMap((m) =>
         (
           [
@@ -745,7 +772,7 @@ export class MockApi implements Api {
   }
 
   analyticsPlacements(query: Pick<AnalyticsQuery, 'from' | 'keyIds' | 'poolIds' | 'to'>) {
-    return latency(placementsOf(emptyStore() ? [] : REQUESTS, query));
+    return latency(placementsOf(ledger().requests, query));
   }
 
   async cancelPairing(pairingId: string) {
@@ -1004,11 +1031,11 @@ export class MockApi implements Api {
   }
 
   getAnalyticsBreakdown(query: AnalyticsQuery) {
-    return latency(breakdownOf(ledgerRollups(), query));
+    return latency(breakdownOf(ledger().rollups, query));
   }
 
   getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup, filters?: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'>) {
-    return latency(burnOf(ledgerRollups(), range, groupBy, filters));
+    return latency(burnOf(ledger().rollups, range, groupBy, filters));
   }
 
   /**
@@ -1020,7 +1047,7 @@ export class MockApi implements Api {
     const from = range === '24h' ? NOW - DAY : Date.parse(range.from);
     const to = range === '24h' ? NOW : Date.parse(range.to);
     const counts = new Map<string, { blocked: number; blockedBytes: number; observed: number }>();
-    for (const r of emptyStore() ? [] : REQUESTS) {
+    for (const r of ledger().requests) {
       const at = Date.parse(r.at);
       if (at < from || at > to) continue;
       for (const m of r.guardrails) {
@@ -1039,33 +1066,34 @@ export class MockApi implements Api {
   }
 
   getAnalyticsReconciliations(filters?: Pick<AnalyticsQuery, 'accountIds'>) {
-    return latency(reconciliationsOf(emptyStore() ? [] : RECONCILIATIONS, filters));
+    return latency(reconciliationsOf(ledger().reconciliations, filters));
   }
 
   getAnalyticsRefusalCategories(query: AnalyticsQuery) {
-    return latency(refusalCategoriesOf(emptyStore() ? [] : REQUESTS, query));
+    return latency(refusalCategoriesOf(ledger().requests, query));
   }
 
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>) {
-    return latency(rewritesOf(emptyStore() ? [] : ACCOUNT_ROLLUPS, emptyStore() ? [] : REQUESTS, range));
+    const { accountRollups, requests } = ledger();
+    return latency(rewritesOf(accountRollups, requests, range));
   }
 
   getAnalyticsSeries(query: AnalyticsQuery) {
-    return latency(seriesOf(ledgerRollups(), query));
+    return latency(seriesOf(ledger().rollups, query));
   }
 
   /** The story's weekly resets, or none for a fresh installation, whose registry holds no account to end a term on. */
   getAnalyticsUnusedAllowance(span: Pick<AnalyticsQuery, 'from' | 'to'>, filters?: Pick<AnalyticsQuery, 'accountIds'>) {
-    const empty = emptyStore();
-    return latency(unusedAllowanceOf(empty ? [] : WEEKLY_RESETS, empty ? [] : this.accounts, QUOTA_HISTORY, span, filters));
+    const { quotaHistory, weeklyResets } = ledger();
+    return latency(unusedAllowanceOf(weeklyResets, this.registry().accounts, quotaHistory, span, filters));
   }
 
   /**
    * The story's conditions, or none for a fresh installation, the parked records' items gone once a replay landed them.
    */
   getAttention() {
-    if (emptyStore()) return latency([]);
-    return latency(this.parkedLanded ? ATTENTION.filter((i) => i.kind !== 'ledger_record_parked') : ATTENTION);
+    const { attention } = ledger();
+    return latency(this.parkedLanded ? attention.filter((i) => i.kind !== 'ledger_record_parked') : attention);
   }
 
   async getCapturedBodies(requestId: string) {
@@ -1074,14 +1102,15 @@ export class MockApi implements Api {
   }
 
   getGuardrail(id: string): Promise<Guardrail> {
-    const row = emptyStore() ? undefined : this.guardrails.find((g) => g.id === id);
+    const row = this.registry().guardrails.find((g) => g.id === id);
     if (!row) return Promise.reject(new ApiError(404, 'guardrail not found', null));
     return latency(this.guardrailView(row));
   }
 
   getKeepaliveOverview(q: { range?: OverviewRange } = {}) {
     if (q.range !== undefined && q.range !== '7d' && q.range !== '30d') return Promise.reject(new ApiError(400, 'range is 7d or 30d', null));
-    return latency(emptyStore() ? EMPTY_KEEPALIVE_OVERVIEW : q.range === '30d' ? KEEPALIVE_OVERVIEW_30D : KEEPALIVE_OVERVIEW);
+    const { keepalive, keepalive30d } = ledger();
+    return latency(q.range === '30d' ? keepalive30d : keepalive);
   }
 
   /** Every live model-scoped cooldown across the accounts, folded to the shape the key models route answers. */
@@ -1113,9 +1142,8 @@ export class MockApi implements Api {
   }
 
   getOverview() {
-    const empty = emptyStore();
     // The route answers its 24 hourly buckets over an empty ledger too, at zero, so each spark draws a flat line.
-    const last24h = empty ? [] : unpricedStory() ? [...DAY_ROWS, UNPRICED_REQUEST] : DAY_ROWS;
+    const last24h = ledger().dayRows;
     const hourlyMap = new Map<string, Overview['hourly'][number]>();
     for (let i = 23; i >= 0; i -= 1) {
       const startMs = Math.floor((NOW - i * 3_600_000) / 3_600_000) * 3_600_000;
@@ -1156,7 +1184,7 @@ export class MockApi implements Api {
     const day = requestSidesOf(last24h);
     return latency({
       // Counted off the pools, so the dashboard and the Pools view cannot disagree on the router's pins.
-      activePins: empty ? 0 : this.pools.reduce((n, p) => n + poolPins(p, this.keys), 0),
+      activePins: this.registry().pools.reduce((n, p) => n + poolPins(p, this.keys), 0),
       billed24h: day.billedUsd,
       cost24h: cost,
       equivalent24h: day.equivalent,
@@ -1172,15 +1200,15 @@ export class MockApi implements Api {
   }
 
   getQuotaHistory(accountId: string) {
-    return latency(emptyStore() ? [] : QUOTA_HISTORY.filter((h) => h.accountId === accountId));
+    return latency(ledger().quotaHistory.filter((h) => h.accountId === accountId));
   }
 
   getDecision(requestId: string, seq: number): Promise<DecisionRecord | null> {
-    return latency(emptyStore() ? null : getDecision(requestId, seq));
+    return latency(ledger().decisionOf(requestId, seq));
   }
 
   getRequest(id: string): Promise<RequestDetail | null> {
-    const request = emptyStore() ? undefined : requestById.get(id);
+    const request = ledger().requestById.get(id);
     const events = REQUEST_EVENTS.get(id) ?? [];
     const cuts = cutEventsOf(id);
     return latency(request ? { events: cuts.length === 0 ? events : [...events, ...cuts].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)), request, streamCut: streamCutOf(id) } : null);
@@ -1196,20 +1224,19 @@ export class MockApi implements Api {
   }
 
   listAccountRollups(from: string, to: string) {
-    if (emptyStore()) return latency([]);
     // As the route reads a range: from the hour holding the start up to the hour ceiling of the end, exclusive.
     const fromHour = Math.floor(Date.parse(from) / HOUR) * HOUR;
     const toCeiling = Math.ceil(Date.parse(to) / HOUR) * HOUR;
-    return latency(ACCOUNT_ROLLUPS.filter((r) => Date.parse(r.hour) >= fromHour && Date.parse(r.hour) < toCeiling));
+    return latency(ledger().accountRollups.filter((r) => Date.parse(r.hour) >= fromHour && Date.parse(r.hour) < toCeiling));
   }
 
   listAccounts() {
     this.landFirstPolls();
-    return latency(emptyStore() ? [] : this.accounts.map((a) => this.withPool(a)));
+    return latency(this.registry().accounts.map((a) => this.withPool(a)));
   }
 
   listCatalog() {
-    return latency(emptyStore() ? [] : CATALOG);
+    return latency(ledger().catalog);
   }
 
   async listCatalogOf(accountIds: string[]): Promise<CatalogModel[]> {
@@ -1232,19 +1259,19 @@ export class MockApi implements Api {
   }
 
   listGuardrails() {
-    return latency(emptyStore() ? [] : [...this.guardrails].sort((a, b) => a.id.localeCompare(b.id)).map((g) => this.guardrailView(g)));
+    return latency([...this.registry().guardrails].sort((a, b) => a.id.localeCompare(b.id)).map((g) => this.guardrailView(g)));
   }
 
   listKeepaliveRecipes() {
-    return latency(emptyStore() ? [] : RECIPES);
+    return latency(ledger().recipes);
   }
 
   listKeys() {
-    return latency(emptyStore() ? [] : this.keys.map((k) => this.keyView(unpricedKey(k))));
+    return latency(this.registry().keys.map((k) => this.keyView(unpricedKey(k))));
   }
 
   listPools() {
-    return latency(emptyStore() ? [] : this.pools.map((p) => this.poolView(p)));
+    return latency(this.registry().pools.map((p) => this.poolView(p)));
   }
 
   listRequests(query: RequestQuery = {}): Promise<RequestPage> {
@@ -1278,7 +1305,7 @@ export class MockApi implements Api {
 
   listSessions() {
     if (sessionsFail()) return Promise.reject(new ApiError(503, 'store busy', null));
-    return latency(emptyStore() ? [] : sessionsListedAt(NOW, this.sessions, this.settings.sessions.nonCompanionIdleSeconds));
+    return latency(sessionsListedAt(NOW, this.registry().sessions, this.settings.sessions.nonCompanionIdleSeconds));
   }
 
   login(secret: string, stayLoggedIn = false): Promise<SessionInfo> {
@@ -1320,7 +1347,7 @@ export class MockApi implements Api {
   /** The first replay lands the story's parked count to zero, and a later one finds nothing to land. */
   async replayParked() {
     if (heldWriter()) return Promise.reject(new ApiError(503, 'the ledger writer is held, try again', null));
-    const parked = emptyStore() || this.parkedLanded ? [] : ATTENTION.filter((i) => i.kind === 'ledger_record_parked');
+    const parked = this.parkedLanded ? [] : ledger().attention.filter((i) => i.kind === 'ledger_record_parked');
     if (parked.length > 0) this.parkedLanded = true;
     return latency({ landed: parked.reduce((n, i) => n + (typeof i.detail.count === 'number' ? i.detail.count : 0), 0), remaining: 0 }, 250);
   }
