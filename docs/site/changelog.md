@@ -365,7 +365,9 @@ scroll position. The embedded console builds on Node 26 or later, which the buil
 seat prices under its tier word where the cost table holds it, and the log says when it does not
 ([Pairing](pairing.md#account-states)). A plan-ended account answers the plan and the tier its last profile named, its
 earlier readings keeping the plan they were priced under ([Pairing](pairing.md#account-states)). `POST /admin/keys` and
-the key edit refuse an unknown member with `400` as the pool routes do ([API reference](api-reference.md)). The
+the key edit refuse an unknown member with `400` as the pool routes do ([API reference](api-reference.md)). A pool or
+key edit, or a guardrail create or edit, that would also take a list past 64 guardrails answers its stale stamp, its
+missing id or its refused member before the bound ([Pools](routing.md#pools), [Keys](routing.md#keys)). The
 Dashboard's account cards and the Accounts list keep a slot for a window the account's poll does not carry, "none" muted
 in the share's place with the window's words on hover, "no 5-hour window" on an approved Ultra account, the Quota cards
 keep the window's row with the same words muted, and an account whose poll has read no window reads "not read" on the

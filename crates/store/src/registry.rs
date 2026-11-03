@@ -1,6 +1,8 @@
 //! Registry rows: pools, their members, the router's own API keys, the served models of each account, and the
 //! change log every write appends to.
 
+use std::collections::BTreeSet;
+
 use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode};
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, OptionalExtension, Transaction};
@@ -901,17 +903,7 @@ impl Store {
             .optional()?
             .ok_or_else(|| StoreError::PoolNotFound(row.id.clone()))?;
         let held = match guardrails {
-            Some(ids) => {
-                let keys = pool_key_ids(&tx, &row.id)?
-                    .into_iter()
-                    .map(|key_id| {
-                        let own = subject_guardrails(&tx, SubjectKind::Key, &key_id)?;
-                        Ok((key_id, own))
-                    })
-                    .collect::<Result<Vec<_>, StoreError>>()?;
-                check_guardrail_bound(&row.id, ids, &keys)?;
-                subject_guardrails(&tx, SubjectKind::Pool, &row.id)?
-            }
+            Some(_) => subject_guardrails(&tx, SubjectKind::Pool, &row.id)?,
             None => Vec::new(),
         };
         let mut pairs = pool_pairs(&before, row);
@@ -953,6 +945,7 @@ impl Store {
         }
         if let Some(ids) = guardrails {
             set_subject_guardrails_in(&tx, &AttachmentSubject::Pool(row.id.clone()), ids, at)?;
+            check_guardrail_bounds(&tx, &BTreeSet::from([row.id.clone()]))?;
         }
         tx.commit()?;
         Ok(at)
@@ -1133,10 +1126,6 @@ impl Store {
             .optional()?
             .ok_or_else(|| StoreError::KeyNotFound(row.id.clone()))?;
         let held = subject_guardrails(&tx, SubjectKind::Key, &row.id)?;
-        // The pool the row names, the new one on a move, so a key moving into a pool cannot run more than the bound.
-        let pool_list = subject_guardrails(&tx, SubjectKind::Pool, &row.pool_id)?;
-        let own = guardrails.map_or_else(|| held.clone(), <[String]>::to_vec);
-        check_guardrail_bound(&row.pool_id, &pool_list, &[(row.id.clone(), own)])?;
         let at = stamp_past(self.now_ms(), expected_updated_at);
         let updated = tx.execute(
             "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, auto_mode_server = ?12, updated_at = ?13 WHERE id = ?1 AND updated_at = ?14 AND incarnation = ?15",
@@ -1173,6 +1162,8 @@ impl Store {
         if let Some(ids) = guardrails {
             set_subject_guardrails_in(&tx, &AttachmentSubject::Key(row.id.clone()), ids, at)?;
         }
+        // The pool the row names, the new one on a move, so a key moving into a pool cannot run more than the bound.
+        check_guardrail_bounds(&tx, &BTreeSet::from([row.pool_id.clone()]))?;
         tx.commit()?;
         Ok(at)
     }
@@ -1524,7 +1515,6 @@ impl Store {
     ) -> Result<GuardrailRow, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        check_guardrail_side_bound(&tx, &row.id, Some(pools), Some(keys))?;
         let now = self.now_ms();
         let incarnation =
             crate::accounts::next_incarnation_in(&tx, "guardrail_tombstones", &row.id)?;
@@ -1547,6 +1537,7 @@ impl Store {
         )?;
         set_guardrail_subjects_in(&tx, &row.id, SubjectKind::Pool, pools, now)?;
         set_guardrail_subjects_in(&tx, &row.id, SubjectKind::Key, keys, now)?;
+        check_guardrail_bounds(&tx, &bound_pools(&tx, Some(pools), Some(keys))?)?;
         // Read back rather than taken from the caller, so the lists sit in the order the update logs them.
         let diff = guardrail_diff(
             row,
@@ -1576,7 +1567,6 @@ impl Store {
     ) -> Result<i64, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        check_guardrail_side_bound(&tx, &row.id, pools, keys)?;
         let before = tx
             .query_row(
                 &format!("{GUARDRAIL_SELECT} WHERE id = ?1"),
@@ -1618,6 +1608,7 @@ impl Store {
         if let Some(keys) = keys {
             set_guardrail_subjects_in(&tx, &row.id, SubjectKind::Key, keys, at)?;
         }
+        check_guardrail_bounds(&tx, &bound_pools(&tx, pools, keys)?)?;
         let after = guardrail_fields(
             row,
             &guardrail_subjects(&tx, &row.id, SubjectKind::Pool)?,
@@ -1773,22 +1764,15 @@ fn pool_key_ids(tx: &Transaction<'_>, pool_id: &str) -> Result<Vec<String>, Stor
         .map_err(StoreError::from)
 }
 
-/// The bound of a write from the guardrail's side, over the lists as the write would leave them: each pool it names
-/// takes the guardrail at the end of its list and each key it names in its own, and every key of a named pool and
-/// every named key is counted against its pool's list. `None` leaves that kind's lists as they stand.
-fn check_guardrail_side_bound(
+/// The pools a write from the guardrail's side reaches: each pool it names and the pool of each key it names.
+fn bound_pools(
     tx: &Transaction<'_>,
-    guardrail_id: &str,
     pools: Option<&[String]>,
     keys: Option<&[String]>,
-) -> Result<(), StoreError> {
-    let named = |list: Option<&[String]>, id: &str| {
-        list.is_some_and(|list| list.iter().any(|named| named == id))
-    };
-    let mut affected: std::collections::BTreeSet<String> =
-        pools.unwrap_or_default().iter().cloned().collect();
+) -> Result<BTreeSet<String>, StoreError> {
+    let mut reached: BTreeSet<String> = pools.unwrap_or_default().iter().cloned().collect();
     for key_id in keys.unwrap_or_default() {
-        // A key that does not exist adds no pool here, and the subject write refuses it by name.
+        // A key that does not exist adds no pool here, and the subject write has refused it by name.
         let pool_id: Option<String> = tx
             .query_row(
                 "SELECT pool_id FROM api_keys WHERE id = ?1",
@@ -1796,44 +1780,33 @@ fn check_guardrail_side_bound(
                 |r| r.get(0),
             )
             .optional()?;
-        affected.extend(pool_id);
+        reached.extend(pool_id);
     }
-    for pool_id in &affected {
-        let pool_named = named(pools, pool_id);
-        let mut pool_list = subject_guardrails(tx, SubjectKind::Pool, pool_id)?;
-        if pools.is_some() {
-            place(&mut pool_list, guardrail_id, pool_named);
-        }
-        let mut key_lists = Vec::new();
-        for key_id in pool_key_ids(tx, pool_id)? {
-            let key_named = named(keys, &key_id);
-            if !pool_named && !key_named {
-                continue;
-            }
-            let mut own = subject_guardrails(tx, SubjectKind::Key, &key_id)?;
-            if keys.is_some() {
-                place(&mut own, guardrail_id, key_named);
-            }
-            key_lists.push((key_id, own));
-        }
-        check_guardrail_bound(pool_id, &pool_list, &key_lists)?;
+    Ok(reached)
+}
+
+/// The bound over the lists a write leaves, read after its subject writes and before its commit, so it counts the
+/// lists the transaction commits and a stale stamp, a missing id or a refused member answers before it. A refusal
+/// drops the transaction uncommitted, so it leaves nothing behind.
+fn check_guardrail_bounds(
+    tx: &Transaction<'_>,
+    pools: &BTreeSet<String>,
+) -> Result<(), StoreError> {
+    for pool_id in pools {
+        let pool_list = subject_guardrails(tx, SubjectKind::Pool, pool_id)?;
+        let keys = pool_key_ids(tx, pool_id)?
+            .into_iter()
+            .map(|key_id| {
+                let own = subject_guardrails(tx, SubjectKind::Key, &key_id)?;
+                Ok((key_id, own))
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        check_guardrail_bound(pool_id, &pool_list, &keys)?;
     }
     Ok(())
 }
 
-/// A subject's list after a write from the guardrail's side: the guardrail appended when newly attached, dropped when
-/// detached, a held place kept.
-fn place(list: &mut Vec<String>, guardrail_id: &str, attached: bool) {
-    let held = list.iter().any(|id| id == guardrail_id);
-    if attached && !held {
-        list.push(guardrail_id.to_string());
-    } else if !attached && held {
-        list.retain(|id| id != guardrail_id);
-    }
-}
-
-/// The bound over the lists as the write would leave them, read inside the transaction before any row changes:
-/// `pool_list` is the pool's own list, `keys` each key of the pool with its own list (a key moving in among them).
+/// The bound over one pool's lists: `pool_list` is the pool's own list, `keys` each key of the pool with its own list.
 /// Answers `PoolGuardrailBound` for the pool, then `KeyGuardrailBound` for the first key whose union is over the bound.
 /// The count runs under the same lock and transaction as the rows it guards, so two writes cannot each read 63 and
 /// commit 65 together.

@@ -4143,6 +4143,35 @@ fn a_subject_write_naming_an_unknown_guardrail_writes_nothing() {
 }
 
 #[test]
+fn a_key_edit_with_a_stale_stamp_that_also_crosses_the_bound_answers_stale() {
+    let store = guarded_store();
+    let sixty_five: Vec<String> = (1..=65).map(|n| format!("g{n:02}")).collect();
+    for id in &sixty_five {
+        store
+            .insert_guardrail(&guardrail(id, None), &[], &[], "test")
+            .unwrap();
+    }
+    let main = store.pool("main").unwrap().unwrap();
+    store
+        .update_pool_with_members_and_guardrails(
+            &main,
+            main.updated_at,
+            None,
+            Some(&sixty_five[..64]),
+            "test",
+        )
+        .unwrap();
+    let k1 = store.api_key("k1").unwrap().unwrap();
+    let refused = store.update_api_key_with_guardrails(
+        &k1,
+        k1.updated_at - 1,
+        Some(&sixty_five[64..]),
+        "test",
+    );
+    assert!(matches!(refused, Err(StoreError::Stale)), "{refused:?}");
+}
+
+#[test]
 fn the_bound_is_checked_inside_the_write_on_a_key_a_pool_and_a_pool_move() {
     let store = guarded_store();
     store.insert_pool(&pool("empty"), "test").unwrap();
