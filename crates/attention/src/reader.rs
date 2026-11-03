@@ -7,7 +7,11 @@
 use std::collections::{HashMap, HashSet};
 
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
-use phoebis_ledger::{polled, ParkedSummary, RoutingCondition, UnpricedModel};
+use phoebis_ledger::{
+    polled, ParkedSummary, RoutingCondition, UnpricedModel, CEILING_SETTING,
+    DESTINATION_SPENT_KIND, METER_DRIFT_KIND, SHED_NO_RUNWAY_KIND, SLOWED_LONG_KIND, SLOW_SETTINGS,
+    WALL_REACHED_KIND, WALL_SETTINGS,
+};
 use phoebis_oauth::UsageService;
 use phoebis_routing::{shed_cap, RegistrySnapshot, RouterHandle};
 use phoebis_store::{
@@ -94,11 +98,11 @@ impl Kind {
             Kind::LedgerRecordParked => "ledger_record_parked",
             Kind::PollBackoff => "poll_backoff",
             Kind::ModelUnpriced => "model_unpriced",
-            Kind::MeterDrift => "meter_drift",
-            Kind::WallReached => "wall_reached",
-            Kind::DestinationSpent => "destination_spent",
-            Kind::ShedNoRunway => "shed_no_runway",
-            Kind::SlowedLong => "slowed_long",
+            Kind::MeterDrift => METER_DRIFT_KIND,
+            Kind::WallReached => WALL_REACHED_KIND,
+            Kind::DestinationSpent => DESTINATION_SPENT_KIND,
+            Kind::ShedNoRunway => SHED_NO_RUNWAY_KIND,
+            Kind::SlowedLong => SLOWED_LONG_KIND,
         }
     }
 }
@@ -345,8 +349,8 @@ fn evict_drift(drift: &mut HashMap<String, Drift>) {
     }
 }
 
-/// A condition about a pool or one of the router's own components: a pool's belongs to its card and opens it, a
-/// component's belongs to no pool and opens nothing.
+/// A condition about a pool, one of the router's own components or a model: a pool's belongs to its card and opens
+/// it, every other subject's belongs to no pool and opens nothing.
 fn condition_for(
     kind: Kind,
     subject: Subject,
@@ -381,6 +385,48 @@ fn since_of(
         seen.insert(entry.clone());
         *state.state_since.entry(entry).or_insert(now)
     })
+}
+
+/// Each live subject as `(id, label, true)`, then each id the rows name that none of them has, labeled by its id and
+/// marked gone, so a deleted subject keeps its condition until its row goes.
+fn with_orphans<'a>(
+    live: impl IntoIterator<Item = (String, String)>,
+    named: impl IntoIterator<Item = &'a str>,
+) -> Vec<(String, String, bool)> {
+    let mut subjects: Vec<(String, String, bool)> = live
+        .into_iter()
+        .map(|(id, label)| (id, label, true))
+        .collect();
+    for id in named {
+        if !subjects.iter().any(|(known, _, _)| known == id) {
+            subjects.push((id.to_string(), id.to_string(), false));
+        }
+    }
+    subjects
+}
+
+/// A condition whose subject the registry no longer holds belongs to no card and opens nothing.
+fn detached(mut condition: Condition, live: bool) -> Condition {
+    if !live {
+        condition.link = None;
+        condition.pools.clear();
+    }
+    condition
+}
+
+fn account_pools(snapshot: &RegistrySnapshot, account_id: &str) -> Vec<String> {
+    let mut pools: Vec<String> = snapshot
+        .pools()
+        .filter(|p| {
+            snapshot
+                .members(&p.id)
+                .iter()
+                .any(|m| m.account_id == account_id)
+        })
+        .map(|p| p.id.clone())
+        .collect();
+    pools.sort();
+    pools
 }
 
 /// Each OAuth account's newest settled refresh attempts, read from the store rather than kept here, so a run of
@@ -433,18 +479,13 @@ pub(crate) fn conditions(
     state.exhausted.retain(|id, _| snapshot.pool(id).is_some());
     for pool in snapshot.pools() {
         let held = state.exhausted.get(&pool.id);
-        out.push(Condition {
-            kind: Kind::PoolExhausted,
-            subject: Subject::pool(pool),
-            holds: held.is_some(),
-            since: held.map(|e| e.since),
-            pools: vec![pool.id.clone()],
-            link: Some(Link {
-                page: "pools",
-                id: pool.id.clone(),
-            }),
-            detail: json!({ "key": held.and_then(|e| e.key.clone()), "pool": pool.id }),
-        });
+        out.push(condition_for(
+            Kind::PoolExhausted,
+            Subject::pool(pool),
+            held.is_some(),
+            held.map(|e| e.since),
+            json!({ "key": held.and_then(|e| e.key.clone()), "pool": pool.id }),
+        ));
     }
     let mut seen = HashSet::new();
     // The two writers are the process's own components and a subject of their own, so the dashboard never reads a
@@ -502,20 +543,17 @@ pub(crate) fn conditions(
         // The snapshot's pools, then the pools the parked rows name that the snapshot no longer holds: a pool deleted
         // under a parked record keeps the condition, labeled by its id and opening nothing, until the next start or
         // a replay lands the row.
-        let mut pools: Vec<(String, String, bool)> = snapshot
-            .pools()
-            .map(|pool| (pool.id.clone(), pool.label.clone(), true))
-            .collect();
-        for id in parked.iter().filter_map(|p| p.pool_id.as_deref()) {
-            if snapshot.pool(id).is_none() && !pools.iter().any(|(known, _, _)| known == id) {
-                pools.push((id.to_string(), id.to_string(), false));
-            }
-        }
+        let pools = with_orphans(
+            snapshot
+                .pools()
+                .map(|pool| (pool.id.clone(), pool.label.clone())),
+            parked.iter().filter_map(|p| p.pool_id.as_deref()),
+        );
         for (pool_id, label, live) in pools {
             let row = parked
                 .iter()
                 .find(|p| p.pool_id.as_deref() == Some(pool_id.as_str()));
-            let mut condition = condition_for(
+            let condition = condition_for(
                 Kind::LedgerRecordParked,
                 Subject {
                     kind: SubjectKind::Pool,
@@ -530,11 +568,7 @@ pub(crate) fn conditions(
                     "pool": pool_id,
                 }),
             );
-            if !live {
-                condition.link = None;
-                condition.pools.clear();
-            }
-            out.push(condition);
+            out.push(detached(condition, live));
         }
         if let Some(row) = parked.iter().find(|p| p.pool_id.is_none()) {
             out.push(condition_for(
@@ -566,17 +600,7 @@ pub(crate) fn conditions(
         });
     }
     for account in accounts {
-        let mut pools: Vec<String> = snapshot
-            .pools()
-            .filter(|p| {
-                snapshot
-                    .members(&p.id)
-                    .iter()
-                    .any(|m| m.account_id == account.id)
-            })
-            .map(|p| p.id.clone())
-            .collect();
-        pools.sort();
+        let pools = account_pools(&snapshot, &account.id);
         let condition =
             |kind: Kind, holds: bool, since: Option<i64>, detail: serde_json::Value| Condition {
                 kind,
@@ -599,11 +623,7 @@ pub(crate) fn conditions(
         }
         for (kind, held_state) in states {
             let holds = account.state == held_state;
-            let since = holds.then(|| {
-                let entry = (kind, account.id.clone());
-                seen.insert(entry.clone());
-                *state.state_since.entry(entry).or_insert(now)
-            });
+            let since = since_of(state, &mut seen, kind, &account.id, holds, now);
             out.push(condition(
                 kind,
                 holds,
@@ -664,18 +684,16 @@ pub(crate) fn conditions(
     }
     // A model belongs to no pool card. A model a revision weighted keeps its entry, so its series reads 0.
     for entry in unpriced {
-        out.push(Condition {
-            kind: Kind::ModelUnpriced,
-            subject: Subject::model(&entry.model),
-            holds: entry.since.is_some(),
-            since: entry.since,
-            pools: Vec::new(),
-            link: None,
-            detail: json!({
+        out.push(condition_for(
+            Kind::ModelUnpriced,
+            Subject::model(&entry.model),
+            entry.since.is_some(),
+            entry.since,
+            json!({
                 "model": entry.model,
                 "requests": entry.requests,
             }),
-        });
+        ));
     }
     if let Some(rows) = routing {
         out.extend(routing_conditions(&snapshot, accounts, rows));
@@ -729,21 +747,17 @@ fn routing_conditions(
         detail
     };
     let mut out = Vec::new();
-    let mut pools: Vec<(String, String, bool)> = snapshot
-        .pools()
-        .map(|pool| (pool.id.clone(), pool.label.clone(), true))
-        .collect();
-    for r in rows
-        .iter()
-        .filter(|r| r.kind == Kind::ShedNoRunway.as_str())
-    {
-        if !pools.iter().any(|(id, _, _)| *id == r.subject_id) {
-            pools.push((r.subject_id.clone(), r.subject_id.clone(), false));
-        }
-    }
+    let pools = with_orphans(
+        snapshot
+            .pools()
+            .map(|pool| (pool.id.clone(), pool.label.clone())),
+        rows.iter()
+            .filter(|r| r.kind == Kind::ShedNoRunway.as_str())
+            .map(|r| r.subject_id.as_str()),
+    );
     for (pool_id, label, live) in pools {
         let held = row(Kind::ShedNoRunway, &pool_id);
-        let mut condition = condition_for(
+        let condition = condition_for(
             Kind::ShedNoRunway,
             Subject {
                 kind: SubjectKind::Pool,
@@ -754,76 +768,61 @@ fn routing_conditions(
             held.map(|r| r.since),
             detail_of(
                 held,
-                json!({ "accounts": [], "rounds": 0, "setting": ["window_ceiling"] }),
+                json!({ "accounts": [], "rounds": 0, "setting": CEILING_SETTING }),
             ),
         );
-        if !live {
-            condition.link = None;
-            condition.pools.clear();
-        }
-        out.push(condition);
+        out.push(detached(condition, live));
     }
-    let mut subjects: Vec<(String, String, bool)> = accounts
-        .iter()
-        .filter(|a| a.kind == AccountKind::Oauth)
-        .map(|a| (a.id.clone(), a.label.clone(), true))
-        .collect();
-    for r in rows.iter().filter(|r| {
-        r.kind == Kind::MeterDrift.as_str()
-            || r.kind == Kind::WallReached.as_str()
-            || r.kind == Kind::DestinationSpent.as_str()
-            || r.kind == Kind::SlowedLong.as_str()
-    }) {
-        if !subjects.iter().any(|(id, _, _)| *id == r.subject_id) {
-            subjects.push((r.subject_id.clone(), r.subject_id.clone(), false));
-        }
-    }
-    for (account_id, label, live) in subjects {
-        let mut pools: Vec<String> = snapshot
-            .pools()
-            .filter(|p| {
-                snapshot
-                    .members(&p.id)
+    let account_kinds = [
+        (
+            Kind::MeterDrift,
+            json!({ "effective": null, "source": null, "windows": [] }),
+        ),
+        (
+            Kind::WallReached,
+            json!({
+                "early_ms": null,
+                "projection_error": null,
+                "setting": WALL_SETTINGS,
+                "walls": 0,
+                "windows": [],
+            }),
+        ),
+        (
+            Kind::DestinationSpent,
+            json!({ "fits": {}, "moves": 0, "setting": CEILING_SETTING, "windows": [] }),
+        ),
+        (
+            Kind::SlowedLong,
+            json!({
+                "bar_ms": null,
+                "factor_min": null,
+                "open": false,
+                "setting": SLOW_SETTINGS,
+                "slowed_ms": 0,
+                "spans": 0,
+            }),
+        ),
+    ];
+    let subjects = with_orphans(
+        accounts
+            .iter()
+            .filter(|a| a.kind == AccountKind::Oauth)
+            .map(|a| (a.id.clone(), a.label.clone())),
+        rows.iter()
+            .filter(|r| {
+                account_kinds
                     .iter()
-                    .any(|m| m.account_id == account_id)
+                    .any(|(kind, _)| r.kind == kind.as_str())
             })
-            .map(|p| p.id.clone())
-            .collect();
-        pools.sort();
-        for (kind, cleared) in [
-            (
-                Kind::MeterDrift,
-                json!({ "effective": null, "source": null, "windows": [] }),
-            ),
-            (
-                Kind::WallReached,
-                json!({
-                    "early_ms": null,
-                    "projection_error": null,
-                    "setting": ["shed_cap", "window_ceiling"],
-                    "walls": 0,
-                    "windows": [],
-                }),
-            ),
-            (
-                Kind::DestinationSpent,
-                json!({ "fits": {}, "moves": 0, "setting": ["window_ceiling"], "windows": [] }),
-            ),
-            (
-                Kind::SlowedLong,
-                json!({
-                    "bar_ms": null,
-                    "factor_min": null,
-                    "open": false,
-                    "setting": ["slow_down_stretch_seconds"],
-                    "slowed_ms": 0,
-                    "spans": 0,
-                }),
-            ),
-        ] {
-            let held = row(kind, &account_id);
-            out.push(Condition {
-                kind,
+            .map(|r| r.subject_id.as_str()),
+    );
+    for (account_id, label, live) in subjects {
+        let pools = account_pools(snapshot, &account_id);
+        for (kind, cleared) in &account_kinds {
+            let held = row(*kind, &account_id);
+            let condition = Condition {
+                kind: *kind,
                 subject: Subject {
                     kind: SubjectKind::Account,
                     id: account_id.clone(),
@@ -831,13 +830,14 @@ fn routing_conditions(
                 },
                 holds: held.is_some(),
                 since: held.map(|r| r.since),
-                pools: if live { pools.clone() } else { Vec::new() },
-                link: live.then(|| Link {
+                pools: pools.clone(),
+                link: Some(Link {
                     page: "accounts",
                     id: account_id.clone(),
                 }),
-                detail: detail_of(held, cleared),
-            });
+                detail: detail_of(held, cleared.clone()),
+            };
+            out.push(detached(condition, live));
         }
     }
     out

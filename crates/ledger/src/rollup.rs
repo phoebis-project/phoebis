@@ -1203,10 +1203,18 @@ const SPENT_AFTER_MOVE_MS: i64 = 3_600_000;
 
 const FIVE_HOURS_MS: i64 = 5 * 3_600_000;
 
-/// The settings each condition names, the ones an operator reads the condition against.
-const CEILING_SETTING: &[&str] = &["window_ceiling"];
-const WALL_SETTINGS: &[&str] = &["shed_cap", "window_ceiling"];
-const SLOW_SETTINGS: &[&str] = &["slow_down_stretch_seconds"];
+/// The settings each condition names, the ones an operator reads the condition against. The attention reader fills
+/// a cleared condition's `setting` from the same lists.
+pub const CEILING_SETTING: &[&str] = &["window_ceiling"];
+pub const WALL_SETTINGS: &[&str] = &["shed_cap", "window_ceiling"];
+pub const SLOW_SETTINGS: &[&str] = &["slow_down_stretch_seconds"];
+
+/// The kind words the fold writes, which the attention reader matches its own kinds against.
+pub const DESTINATION_SPENT_KIND: &str = "destination_spent";
+pub const METER_DRIFT_KIND: &str = "meter_drift";
+pub const SHED_NO_RUNWAY_KIND: &str = "shed_no_runway";
+pub const SLOWED_LONG_KIND: &str = "slowed_long";
+pub const WALL_REACHED_KIND: &str = "wall_reached";
 
 /// How many stretch thresholds of slow-down in the trailing day raise `slowed_long`. The slow-down holds an account
 /// while its demand runs ahead of its window, and the threshold is how long the pool lets it hold before a round moves
@@ -1324,7 +1332,7 @@ pub fn fold_routing_conditions(
     }
     for (pool, (since, count, accounts)) in rounds {
         held.insert(
-            ("shed_no_runway", "pool", pool.to_string()),
+            (SHED_NO_RUNWAY_KIND, "pool", pool.to_string()),
             Held {
                 pool_id: Some(pool.to_string()),
                 since,
@@ -1395,7 +1403,7 @@ pub fn fold_routing_conditions(
     }
     for (account, (since, count, fits, windows)) in moves {
         held.insert(
-            ("destination_spent", "account", account.to_string()),
+            (DESTINATION_SPENT_KIND, "account", account.to_string()),
             Held {
                 pool_id: None,
                 since,
@@ -1437,7 +1445,7 @@ pub fn fold_routing_conditions(
             .filter(|round| round["trigger"] != "slow_down")
             .and_then(|round| round["projection"].as_f64());
         held.insert(
-            ("wall_reached", "account", account.to_string()),
+            (WALL_REACHED_KIND, "account", account.to_string()),
             Held {
                 pool_id: None,
                 since,
@@ -1548,7 +1556,7 @@ pub fn fold_routing_conditions(
             continue;
         }
         held.insert(
-            ("slowed_long", "account", account),
+            (SLOWED_LONG_KIND, "account", account),
             Held {
                 pool_id: Some(newest.pool.clone()),
                 since: oldest,
@@ -1590,7 +1598,7 @@ pub fn fold_routing_conditions(
             })
             .collect();
         held.insert(
-            ("meter_drift", "account", account),
+            (METER_DRIFT_KIND, "account", account),
             Held {
                 pool_id: None,
                 since,
