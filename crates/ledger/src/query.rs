@@ -215,13 +215,18 @@ pub(crate) fn bind_all<T: Clone + Into<rusqlite::types::Value>>(
         .join(", ")
 }
 
+/// `values` as the quoted literals of a SQL list, for an `IN` over a set the code names.
+fn sql_list(values: &[&str]) -> String {
+    values
+        .iter()
+        .map(|v| format!("'{v}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// `column` folded as `fold_effort` folds a request's effort, in SQL.
 pub(crate) fn effort_fold_sql(column: &str) -> String {
-    let levels = EFFORTS
-        .iter()
-        .map(|l| format!("'{l}'"))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let levels = sql_list(EFFORTS);
     format!("CASE WHEN {column} IS NULL THEN '{NO_EFFORT}' WHEN {column} IN ({levels}) THEN {column} ELSE '{OTHER_DIMENSION}' END")
 }
 
@@ -998,8 +1003,8 @@ pub const DECISION_KINDS: &[&str] = &["exhausted", "held", "moved", "placed", "r
 /// The pseudo-kind that names a probe's decision of any kind in `kinds`.
 pub const PROBE_KIND: &str = "probe";
 
-/// The decision kinds that sent the request upstream, and so have an attempt that answered for them: the same three
-/// as `COMPLETING_ATTEMPT` names.
+/// The decision kinds that sent the request upstream, and so have an attempt that answered for them: the kinds
+/// `completing_attempt` reads.
 const DISPATCHING_KINDS: &[&str] = &["moved", "placed", "renewed"];
 
 #[derive(Clone, Debug, Default)]
@@ -1157,7 +1162,12 @@ pub struct RoutingLogPage {
 /// retry reads the pass that answered. A successor on the same attempt (a credential failure fails over before the
 /// wire counter advances) leaves the decision no attempt of its own, and the account match keeps a successor whose
 /// decision never reached the ledger from lending its answer.
-const COMPLETING_ATTEMPT: &str = "CASE WHEN d.kind IN ('placed', 'renewed', 'moved') THEN (SELECT MAX(x.attempt) FROM attempts x WHERE x.request_id = d.request_id AND x.account_id = d.account_id AND x.attempt >= d.attempt AND x.attempt < COALESCE((SELECT MIN(n.attempt) FROM decisions n WHERE n.request_id = d.request_id AND n.seq > d.seq), 9223372036854775807)) END";
+fn completing_attempt() -> String {
+    format!(
+        "CASE WHEN d.kind IN ({}) THEN (SELECT MAX(x.attempt) FROM attempts x WHERE x.request_id = d.request_id AND x.account_id = d.account_id AND x.attempt >= d.attempt AND x.attempt < COALESCE((SELECT MIN(n.attempt) FROM decisions n WHERE n.request_id = d.request_id AND n.seq > d.seq), 9223372036854775807)) END",
+        sql_list(DISPATCHING_KINDS)
+    )
+}
 
 /// The completing attempt's columns the log reads, every field `None` where none joined.
 struct Answered {
@@ -1417,10 +1427,11 @@ pub(crate) fn decision_rows_statement(
          d.agent_id, d.model, d.account_id, d.from_account_id, d.summary, r.attempts, a.upstream_status, \
          a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens \
          FROM decisions d LEFT JOIN requests r ON r.id = d.request_id \
-         LEFT JOIN attempts a ON a.request_id = d.request_id AND a.attempt = ({COMPLETING_ATTEMPT}) \
+         LEFT JOIN attempts a ON a.request_id = d.request_id AND a.attempt = ({completing}) \
          WHERE {} ORDER BY d.at DESC, d.request_id DESC, d.seq DESC LIMIT ?{}",
         statement.sql(),
-        statement.args.len()
+        statement.args.len(),
+        completing = completing_attempt(),
     );
     (sql, statement.args)
 }
@@ -1547,8 +1558,9 @@ pub fn decision_record(
                 "SELECT d.kind, d.account_id, d.summary, d.record, d.cache_map, r.held, a.upstream_status, \
                  a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, a.finished_at \
                  FROM decisions d LEFT JOIN requests r ON r.id = d.request_id \
-                 LEFT JOIN attempts a ON a.request_id = d.request_id AND a.attempt = ({COMPLETING_ATTEMPT}) \
-                 WHERE d.request_id = ?1 AND d.seq = ?2"
+                 LEFT JOIN attempts a ON a.request_id = d.request_id AND a.attempt = ({completing}) \
+                 WHERE d.request_id = ?1 AND d.seq = ?2",
+                completing = completing_attempt(),
             ),
             params![request_id, seq],
             |r| {
@@ -3691,11 +3703,7 @@ pub(crate) fn session_identities_statement(
         .collect();
     // The client's quota probe is an `inference` row ahead of the session's first main request and names no
     // fork, so the marker is read off the first refreshing or unclassed request, as the router records it.
-    let refreshing = REFRESHING_CLASSES
-        .iter()
-        .map(|class| format!("'{class}'"))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let refreshing = sql_list(REFRESHING_CLASSES);
     let sql = format!(
         "WITH named(key_id, key_generation, session_id) AS (VALUES {}), \
          marked AS ( \
