@@ -582,6 +582,7 @@ pub fn remove_top_level_member(body: &mut Vec<u8>, key: &str) -> Option<(usize, 
 }
 
 /// The offset of the first `needle` in `hay`.
+/// Panics on an empty `needle`, since `slice::windows` takes no window of size zero.
 pub fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
