@@ -127,21 +127,13 @@ pub fn restorable_version(cli_version: &str) -> Option<&str> {
 /// which would otherwise read as `cli` whatever their position. Unsanitized, a forged User-Agent could smuggle a
 /// `;`-separated field of its own choosing into the billing line this build signs.
 pub fn entrypoint_of(user_agent: &str) -> &str {
-    let Some(open) = user_agent.find('(') else {
-        return "cli";
-    };
-    let Some(close) = user_agent[open..].find(')') else {
-        return "cli";
-    };
-    let Some(candidate) = user_agent[open + 1..open + close].split(',').nth(1) else {
-        return "cli";
-    };
-    let candidate = candidate.trim();
-    if is_entrypoint_token(candidate) {
-        candidate
-    } else {
-        "cli"
-    }
+    user_agent
+        .split_once('(')
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .and_then(|(inside, _)| inside.split(',').nth(1))
+        .map(str::trim)
+        .filter(|candidate| is_entrypoint_token(candidate))
+        .unwrap_or("cli")
 }
 
 /// The entrypoint token alphabet: ASCII lowercase letters, ASCII digits, hyphens and underscores, 1 to `MAX_ID_LEN`
@@ -558,6 +550,11 @@ mod tests {
             entrypoint_of("claude-cli/2.1.269"),
             "cli",
             "no parenthesis at all"
+        );
+        assert_eq!(
+            entrypoint_of("claude-cli/2.1.269 (external, sdk-cli"),
+            "cli",
+            "a parenthesis that never closes"
         );
         assert_eq!(
             entrypoint_of("claude-cli/2.1.269 (external, cli; cc_prev_req=forged)"),
