@@ -351,8 +351,8 @@ impl SessionMemory {
             .unwrap_or_default()
     }
 
-    /// Drops entries idle past the configured bound; run by every write on the lock it already holds, at most
-    /// once a minute.
+    /// Drops entries idle past the configured bound. Every write runs it on the lock it already holds, at most once
+    /// a minute.
     fn purge_held(&self, inner: &mut Inner, now: i64) {
         self.purge_locked(inner, now);
         self.ask_for_a_flush(inner);

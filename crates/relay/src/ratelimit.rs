@@ -251,7 +251,7 @@ fn rfc3339_millis(value: &str) -> Option<i64> {
 
 /// The selection sample a head implies: the unified windows for an OAuth account, the buckets under `rpm:`,
 /// `itpm:`, `otpm:` plus the canonical model for an api_key account, and for either kind the fast lane's two
-/// buckets under `FAST_INPUT` and `FAST_OUTPUT`; `None` when the head carries none of them. `unified` is the
+/// buckets under `FAST_INPUT` and `FAST_OUTPUT`, or `None` when the head carries none of them. `unified` is the
 /// head's own unified headers, parsed once by the caller.
 pub fn head_sample(
     head: &ResponseHead,
