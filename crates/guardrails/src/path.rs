@@ -20,9 +20,9 @@ pub struct BodyPath {
 pub enum PathError {
     #[error("path is empty")]
     Empty,
-    #[error("path is longer than 256 characters")]
+    #[error("path is longer than {max} characters", max = PATH_MAX_CHARS)]
     TooLong,
-    #[error("path holds more than 32 segments")]
+    #[error("path holds more than {max} segments", max = PATH_MAX_SEGMENTS)]
     TooManySegments,
     #[error("path starts with an index")]
     StartsWithIndex,

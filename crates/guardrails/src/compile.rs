@@ -8,7 +8,7 @@ pub const COMPILED_SIZE_LIMIT: usize = 1 << 20;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CompileError {
-    #[error("conditions holds 1 to 16 entries")]
+    #[error("conditions holds 1 to {max} entries", max = MAX_CONDITIONS)]
     Count,
     #[error("conditions[{index}]: {reason}")]
     Condition { index: usize, reason: String },
