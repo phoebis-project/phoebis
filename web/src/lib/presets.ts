@@ -29,25 +29,16 @@ export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFli
 // A share the store kept as a REAL can read back a rounding off the literal it was saved from.
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
 
+/** The first preset of the table whose values `same` accepts, else custom. */
+const presetOf = <K extends string, V>(presets: Record<K, V>, same: (v: V) => boolean): K | 'custom' => (Object.keys(presets) as K[]).find((name) => same(presets[name])) ?? 'custom';
+
 export function sheddingPresetOf(p: Pick<Pool, 'burnAverageSeconds' | 'shedCap' | 'shedDwellSeconds'>): SheddingPreset {
-  const names = Object.keys(SHEDDING_PRESETS) as Exclude<SheddingPreset, 'custom'>[];
-  return (
-    names.find((name) => {
-      const v = SHEDDING_PRESETS[name];
-      return v.burnAverageSeconds === p.burnAverageSeconds && near(v.shedCap, p.shedCap) && v.shedDwellSeconds === p.shedDwellSeconds;
-    }) ?? 'custom'
-  );
+  return presetOf(SHEDDING_PRESETS, (v) => v.burnAverageSeconds === p.burnAverageSeconds && near(v.shedCap, p.shedCap) && v.shedDwellSeconds === p.shedDwellSeconds);
 }
 
 /** Both values must match a preset. Balanced and conservative differ in the retry-in-place bound alone. */
 export function failoverPresetOf(p: Pick<Pool, 'inFlightCap' | 'retryInPlaceSeconds'>): FailoverPreset {
-  const names = Object.keys(FAILOVER_PRESETS) as Exclude<FailoverPreset, 'custom'>[];
-  return (
-    names.find((name) => {
-      const v = FAILOVER_PRESETS[name];
-      return v.inFlightCap === p.inFlightCap && v.retryInPlaceSeconds === p.retryInPlaceSeconds;
-    }) ?? 'custom'
-  );
+  return presetOf(FAILOVER_PRESETS, (v) => v.inFlightCap === p.inFlightCap && v.retryInPlaceSeconds === p.retryInPlaceSeconds);
 }
 
 /**
