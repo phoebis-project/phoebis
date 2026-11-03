@@ -204,6 +204,18 @@ pub struct TypeOverride {
     pub output: Option<f64>,
 }
 
+impl TypeMultiplier {
+    fn named(&self) -> [(&'static str, f64); 5] {
+        [
+            ("cache_read", self.cache_read),
+            ("cache_write_1h", self.cache_write_1h),
+            ("cache_write_5m", self.cache_write_5m),
+            ("input", self.input),
+            ("output", self.output),
+        ]
+    }
+}
+
 impl TypeOverride {
     fn named(&self) -> [(&'static str, Option<f64>); 5] {
         [
@@ -457,14 +469,7 @@ impl SubscriptionCosts {
                 )?;
             }
         }
-        let m = &self.type_multiplier;
-        for (name, multiplier) in [
-            ("cache_read", m.cache_read),
-            ("cache_write_1h", m.cache_write_1h),
-            ("cache_write_5m", m.cache_write_5m),
-            ("input", m.input),
-            ("output", m.output),
-        ] {
+        for (name, multiplier) in self.type_multiplier.named() {
             multiplier_rule(&format!("type_multiplier.{name}"), multiplier)?;
         }
         for (model, weight) in &self.model_weight {
@@ -628,22 +633,23 @@ impl SubscriptionCosts {
             })
     }
 
-    /// `overrides[model].type_multiplier` over the shared `type_multiplier`, in the order cache read, 1-hour write,
-    /// 5-minute write, input, output.
-    fn multipliers(&self, canonical_model: &str) -> [f64; 5] {
+    /// `overrides[model].type_multiplier` over the shared `type_multiplier`, type by type.
+    fn multipliers(&self, canonical_model: &str) -> TypeMultiplier {
         let shared = &self.type_multiplier;
         let own = self
             .override_of(canonical_model)
             .and_then(|row| row.type_multiplier.as_ref());
-        let pick =
-            |base: f64, read: fn(&TypeOverride) -> Option<f64>| own.and_then(read).unwrap_or(base);
-        [
-            pick(shared.cache_read, |t| t.cache_read),
-            pick(shared.cache_write_1h, |t| t.cache_write_1h),
-            pick(shared.cache_write_5m, |t| t.cache_write_5m),
-            pick(shared.input, |t| t.input),
-            pick(shared.output, |t| t.output),
-        ]
+        TypeMultiplier {
+            cache_read: own.and_then(|t| t.cache_read).unwrap_or(shared.cache_read),
+            cache_write_1h: own
+                .and_then(|t| t.cache_write_1h)
+                .unwrap_or(shared.cache_write_1h),
+            cache_write_5m: own
+                .and_then(|t| t.cache_write_5m)
+                .unwrap_or(shared.cache_write_5m),
+            input: own.and_then(|t| t.input).unwrap_or(shared.input),
+            output: own.and_then(|t| t.output).unwrap_or(shared.output),
+        }
     }
 
     /// The regime's factor on `priced` where one lists the entrypoint, else the base, 1 outside the band.
@@ -674,13 +680,13 @@ impl SubscriptionCosts {
     /// or capacity. `None` where the model has no weight on the window.
     fn weighted_units(&self, window: &str, canonical_model: &str, usage: PinUsage) -> Option<f64> {
         let weight = self.weight(canonical_model, window)?;
-        let [cache_read, write_1h, write_5m, input, output] = self.multipliers(canonical_model);
+        let m = self.multipliers(canonical_model);
         Some(
-            usage.input as f64 * weight * input
-                + usage.cache_read as f64 * weight * cache_read
-                + usage.write_5m as f64 * weight * write_5m
-                + usage.write_1h as f64 * weight * write_1h
-                + usage.output as f64 * weight * output,
+            usage.input as f64 * weight * m.input
+                + usage.cache_read as f64 * weight * m.cache_read
+                + usage.write_5m as f64 * weight * m.cache_write_5m
+                + usage.write_1h as f64 * weight * m.cache_write_1h
+                + usage.output as f64 * weight * m.output,
         )
     }
 
@@ -734,12 +740,12 @@ impl SubscriptionCosts {
         let (priced, divisor) = self.priced_window(window)?;
         let weight = self.weight(canonical_model, window)?;
         let capacity = self.capacity_of(entrypoint, tier)?.on(priced)?;
-        let [cache_read, write_1h, write_5m, input, output] = self.multipliers(canonical_model);
-        let units = burn.input * weight * input
-            + burn.cache_read * weight * cache_read
-            + burn.write_5m * weight * write_5m
-            + burn.write_1h * weight * write_1h
-            + burn.output * weight * output;
+        let m = self.multipliers(canonical_model);
+        let units = burn.input * weight * m.input
+            + burn.cache_read * weight * m.cache_read
+            + burn.write_5m * weight * m.cache_write_5m
+            + burn.write_1h * weight * m.cache_write_1h
+            + burn.output * weight * m.output;
         Some(units / capacity / self.factor_at(priced, entrypoint, at) / divisor)
     }
 
@@ -829,14 +835,14 @@ impl SubscriptionCosts {
             .keys()
             .chain(self.model_tier.keys())
             .collect();
-        let rates_at = |weight: f64, [cache_read, write_1h, write_5m, input, output]: [f64; 5]| {
+        let rates_at = |weight: f64, m: TypeMultiplier| {
             let rate = |multiplier: f64| Some(weight * multiplier / capacity / divisor);
             Rates {
-                input: rate(input),
-                cache_read: rate(cache_read),
-                write_5m: rate(write_5m),
-                write_1h: rate(write_1h),
-                output: rate(output),
+                input: rate(m.input),
+                cache_read: rate(m.cache_read),
+                write_5m: rate(m.cache_write_5m),
+                write_1h: rate(m.cache_write_1h),
+                output: rate(m.output),
             }
         };
         // A listed model without a weight keeps a row of no rates, so `rates_for` reads it before `fallback` and the
