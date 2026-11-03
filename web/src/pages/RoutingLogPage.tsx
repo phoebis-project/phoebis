@@ -5,6 +5,7 @@ import { iso } from '@/api/decode';
 import type { DecisionKind, FactEntity, RoutingLogQuery, RoutingLogRow } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useFollow } from '@/app/useFollow';
+import { ChipView } from '@/components/ChipView';
 import { DecisionCard } from '@/components/DecisionCard';
 import { EventDetail } from '@/components/EventDetail';
 import { FilterBar } from '@/components/FilterBar';
@@ -386,10 +387,7 @@ function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now
         )}
       </td>
       <td className="routing-log__by">
-        <span className="chip routing-log__chip" title={by.title ?? by.value} aria-describedby={described && !described.sibling ? described.id : undefined}>
-          {by.label && <span className="chip__label">{by.label}</span>}
-          {by.value}
-        </span>
+        <ChipView chip={{ ...by, title: by.title ?? by.value }} className="routing-log__chip" describedBy={described && !described.sibling ? described.id : undefined} />
       </td>
       <td className="routing-log__fact">
         {facts.length === 0 ? (
