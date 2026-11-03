@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, type PoolInput } from '@/api';
@@ -646,13 +646,7 @@ function PoolCard({
   pool: Pool;
   reading: WeekReading;
 }) {
-  const ink = useChartInk();
   const standingId = useId();
-  const data = pool.traffic24h.map((b, i, all) => {
-    const window = all.slice(Math.max(0, i - 2), i + 1);
-    return { at: Date.parse(b.at), requests: b.requests, tokens: b.tokens, average: window.reduce((s, x) => s + x.requests, 0) / window.length };
-  });
-  const tokens24h = pool.traffic24h.reduce((s, b) => s + b.tokens, 0);
   const warnedAt = pool.warnings.length === 0 ? null : warningGroup(pool.warnings[0]);
   const tiers = selectionOrder(pool, accounts ?? [], now);
   const grouped = kindOrdered(pool);
@@ -812,42 +806,7 @@ function PoolCard({
         </table>
       </div>
 
-      <div className="pool__chart">
-        <div className="pool__chart-head">
-          <span className="secondary">Traffic, 24h</span>
-          <span className="num">
-            <b>{fmtCompact(tokens24h)}</b> tokens, <b>{fmtInt(pool.requests24h)}</b> requests
-          </span>
-        </div>
-        {pool.requests24h === 0 ? (
-          <div className="empty" style={{ padding: 30 }}>
-            No traffic in the last 24h
-          </div>
-        ) : (
-          <ResponsiveContainer width="100%" height={170}>
-            <ComposedChart data={data} margin={{ top: 6, right: 4, bottom: 0, left: 4 }} barCategoryGap={2}>
-              <XAxis dataKey="at" tickFormatter={(v: number) => fmtHourTick(v)} tickLine={false} axisLine={{ stroke: ink.axis }} interval={5} minTickGap={24} />
-              <YAxis width={32} tickLine={false} axisLine={false} tick={{ fill: ink.ink2, fontSize: 11 }} allowDecimals={false} />
-              <Tooltip
-                cursor={{ fill: ink.grid, opacity: 0.6 }}
-                content={timeTip<(typeof data)[number]>((p) => [
-                  { color: ink.series[0], label: 'requests', value: fmtInt(p.requests) },
-                  { color: ink.ink2, label: '3-hour average', value: p.average.toFixed(1) },
-                  { label: 'tokens', value: fmtCompact(p.tokens) },
-                ])}
-              />
-              <Bar dataKey="requests" fill={ink.series[0]} radius={[3, 3, 0, 0]} maxBarSize={14} isAnimationActive={false} />
-              <Line type="monotone" dataKey="average" stroke={ink.ink2} strokeWidth={2} dot={false} isAnimationActive={false} />
-            </ComposedChart>
-          </ResponsiveContainer>
-        )}
-        <Legend
-          items={[
-            { color: ink.series[0], label: 'Requests per hour' },
-            { color: ink.ink2, label: '3-hour average', shape: 'line' },
-          ]}
-        />
-      </div>
+      <PoolTraffic requests24h={pool.requests24h} traffic={pool.traffic24h} />
 
       <dl className="pool__stats">
         <div>
@@ -889,6 +848,57 @@ function PoolCard({
     </Card>
   );
 }
+
+/**
+ * A pool card's 24-hour traffic. Memoized, since the Pools page's polls and clock re-render every card while the traffic
+ * changes with the pools read alone, and recharts would redraw the bars and the line from it each time.
+ */
+const PoolTraffic = memo(function PoolTraffic({ requests24h, traffic }: { requests24h: number; traffic: Pool['traffic24h'] }) {
+  const ink = useChartInk();
+  const data = traffic.map((b, i, all) => {
+    const window = all.slice(Math.max(0, i - 2), i + 1);
+    return { at: Date.parse(b.at), requests: b.requests, tokens: b.tokens, average: window.reduce((s, x) => s + x.requests, 0) / window.length };
+  });
+  const tokens24h = traffic.reduce((s, b) => s + b.tokens, 0);
+  return (
+    <div className="pool__chart">
+      <div className="pool__chart-head">
+        <span className="secondary">Traffic, 24h</span>
+        <span className="num">
+          <b>{fmtCompact(tokens24h)}</b> tokens, <b>{fmtInt(requests24h)}</b> requests
+        </span>
+      </div>
+      {requests24h === 0 ? (
+        <div className="empty" style={{ padding: 30 }}>
+          No traffic in the last 24h
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height={170}>
+          <ComposedChart data={data} margin={{ top: 6, right: 4, bottom: 0, left: 4 }} barCategoryGap={2}>
+            <XAxis dataKey="at" tickFormatter={(v: number) => fmtHourTick(v)} tickLine={false} axisLine={{ stroke: ink.axis }} interval={5} minTickGap={24} />
+            <YAxis width={32} tickLine={false} axisLine={false} tick={{ fill: ink.ink2, fontSize: 11 }} allowDecimals={false} />
+            <Tooltip
+              cursor={{ fill: ink.grid, opacity: 0.6 }}
+              content={timeTip<(typeof data)[number]>((p) => [
+                { color: ink.series[0], label: 'requests', value: fmtInt(p.requests) },
+                { color: ink.ink2, label: '3-hour average', value: p.average.toFixed(1) },
+                { label: 'tokens', value: fmtCompact(p.tokens) },
+              ])}
+            />
+            <Bar dataKey="requests" fill={ink.series[0]} radius={[3, 3, 0, 0]} maxBarSize={14} isAnimationActive={false} />
+            <Line type="monotone" dataKey="average" stroke={ink.ink2} strokeWidth={2} dot={false} isAnimationActive={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      )}
+      <Legend
+        items={[
+          { color: ink.series[0], label: 'Requests per hour' },
+          { color: ink.ink2, label: '3-hour average', shape: 'line' },
+        ]}
+      />
+    </div>
+  );
+});
 
 /** The pool's idle-age counters: of the idle windows that reached each age, how many the next request continued. */
 function ReturnRate({ buckets, error, loading, onRange, range }: ReturnRateProps) {
