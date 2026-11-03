@@ -1709,6 +1709,8 @@ async fn land_acknowledging(
         // The cache-map writes that found no decision, counted once the transaction commits: an orphan in a batch
         // that rolls back is tried again with it.
         let mut orphans = Vec::new();
+        // Made at the transaction's first decision and kept for the rest, rather than a context per decision.
+        let mut compressor: Option<zstd::bulk::Compressor> = None;
         let result = db.write(|conn| {
             let tx = begin_write(conn)?;
             for record in &records[range] {
@@ -1746,9 +1748,13 @@ async fn land_acknowledging(
                         let summary = serde_json::to_string(&row.summary)?;
                         // Compressed here, inside the batch on the blocking thread, so the request path and the
                         // broadcast carry the typed record and no frame. The default level folds this JSON four
-                        // to six times. The one-shot call writes the content size into the frame's header, which
+                        // to six times. The bulk compressor writes the content size into the frame's header, which
                         // a reader checks against its bound before it decodes.
-                        let frame = zstd::bulk::compress(&serde_json::to_vec(&row.record)?, 0)?;
+                        let compressor = match &mut compressor {
+                            Some(compressor) => compressor,
+                            None => compressor.insert(zstd::bulk::Compressor::new(0)?),
+                        };
+                        let frame = compressor.compress(&serde_json::to_vec(&row.record)?)?;
                         insert_decision_in(&tx, row, &summary, &frame)?;
                     }
                     Record::CacheMap(write) => {
