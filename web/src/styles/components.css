@@ -1216,41 +1216,30 @@ textarea.input {
   border-top: 1px solid var(--hairline);
 }
 
-/* Grouped dialog: a two-level rail beside one group at a time; the fixed height keeps the frame still between
-   groups. */
-.dialog--grouped {
-  width: min(var(--dialog-w, 1040px), calc(100vw - 32px));
-  height: min(800px, calc(100vh - 48px));
-}
-
-/* The child combinator keeps a dialog opened from inside a group on its own capped height, so its body scrolls under a
-   footer that stays in view. */
-.dialog--grouped > .dialog__inner {
-  height: 100%;
-  max-height: none;
-}
-
-/* The cost reference takes the grouped dialogs' fixed height, so the frame stays still between its tabs. */
-.dialog--costs {
-  height: min(800px, calc(100vh - 48px));
-}
-
-.dialog--costs > .dialog__inner {
-  height: 100%;
-  max-height: none;
-}
-
-/* The wide body dialog takes the grouped dialogs' fixed height. Its body grows so the footer stays at the dialog's
-   foot, and the text fills the body and scrolls inside it rather than the dialog. */
+/* One fixed height for the grouped dialogs, the cost reference and the wide body dialog keeps each frame still between
+   its groups or tabs. */
+.dialog--costs,
+.dialog--grouped,
 .dialog--wide {
   height: min(800px, calc(100vh - 48px));
 }
 
+/* Grouped dialog: a two-level rail beside one group at a time. */
+.dialog--grouped {
+  width: min(var(--dialog-w, 1040px), calc(100vw - 32px));
+}
+
+/* The child combinator keeps a dialog opened from inside a group on its own capped height, so its body scrolls under a
+   footer that stays in view. */
+.dialog--costs > .dialog__inner,
+.dialog--grouped > .dialog__inner,
 .dialog--wide > .dialog__inner {
   height: 100%;
   max-height: none;
 }
 
+/* The wide body dialog's body grows so the footer stays at the dialog's foot, and the text fills the body and scrolls
+   inside it rather than the dialog. */
 .dialog--wide .dialog__body {
   flex: 1 1 auto;
   min-height: 0;
