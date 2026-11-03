@@ -120,7 +120,12 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
             None => windows.push(window),
         }
     }
-    let pins = state.router.pins().await.map(|p| p.len()).unwrap_or(0);
+    let pins = state
+        .router
+        .pins_by_pool()
+        .await
+        .map(|by_pool| by_pool.iter().map(|(_, n)| *n as usize).sum())
+        .unwrap_or(0);
     Json(Dashboard {
         requests_24h: board.requests_24h,
         tokens_24h: board.tokens_24h,
