@@ -133,7 +133,10 @@ const NOT_FORWARDED: &[&str] = &[
 /// never reads as the key holder's own: the unified family and the API-key bucket family under the first
 /// prefix, the fast-token family under the second. A rate limit keeps them, a 429 or a 200 whose first event is a
 /// `rate_limit_error`, so the client's continue arms on the reset the upstream named.
-const RATE_LIMIT_FAMILY_PREFIXES: [&str; 2] = ["anthropic-ratelimit-", "anthropic-fast-"];
+const RATE_LIMIT_FAMILY_PREFIXES: [&str; 2] = [
+    crate::ratelimit::BUCKET_PREFIX,
+    crate::ratelimit::FAST_PREFIX,
+];
 
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {

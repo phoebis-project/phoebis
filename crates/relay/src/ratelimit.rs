@@ -11,8 +11,8 @@ use phoebis_store::AccountKind;
 use phoebis_transport::response::ResponseHead;
 
 const PREFIX: &str = "anthropic-ratelimit-unified-";
-const BUCKET_PREFIX: &str = "anthropic-ratelimit-";
-const FAST_PREFIX: &str = "anthropic-fast-";
+pub(crate) const BUCKET_PREFIX: &str = "anthropic-ratelimit-";
+pub(crate) const FAST_PREFIX: &str = "anthropic-fast-";
 
 /// A unified window's status word, read by exact match on the trimmed value: a word in another case reads as
 /// `Other`.
