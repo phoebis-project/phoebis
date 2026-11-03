@@ -5,6 +5,7 @@ use axum::http::HeaderMap;
 use phoebis_bus::RequestShape;
 use serde_json::Value;
 
+use crate::cache_ttl::CacheTtl;
 use crate::chains::Chains;
 use crate::credit::{digest_of, CreditDigest};
 
@@ -200,8 +201,8 @@ impl BodyFacts {
 /// A marker without a `ttl` is the upstream's five-minute default; `1h` is the one other value it takes.
 pub(crate) fn marker_ttl_ms(marker: &Value) -> i64 {
     match marker.get("ttl").and_then(Value::as_str) {
-        Some("1h") => 3_600_000,
-        _ => 300_000,
+        Some("1h") => CacheTtl::OneHour.ms(),
+        _ => CacheTtl::FiveMinutes.ms(),
     }
 }
 

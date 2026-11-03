@@ -1089,14 +1089,11 @@ fn latches(trace: &Trace) -> bool {
 }
 
 /// The TTL a renewal names when neither a rewrite nor a marker of the client's own says one.
-const DEFAULT_CACHE_TTL_MS: i64 = 300_000;
+const DEFAULT_CACHE_TTL_MS: i64 = CacheTtl::FiveMinutes.ms();
 
 /// The wire value a coupled TTL dispatches as, for the bus and the outcome; `None` when the body went as sent.
 fn cache_ttl_ms(ttl: Option<CacheTtl>) -> Option<i64> {
-    ttl.map(|t| match t {
-        CacheTtl::FiveMinutes => 300_000,
-        CacheTtl::OneHour => 3_600_000,
-    })
+    ttl.map(CacheTtl::ms)
 }
 
 /// Whether the account pays for a cache write, which selects the cache TTL policy's metered set: an api_key account,

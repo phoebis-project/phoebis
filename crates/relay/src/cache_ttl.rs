@@ -19,6 +19,14 @@ impl CacheTtl {
             CacheTtl::OneHour => "1h",
         }
     }
+
+    /// The TTL in milliseconds.
+    pub const fn ms(self) -> i64 {
+        match self {
+            CacheTtl::FiveMinutes => 300_000,
+            CacheTtl::OneHour => 3_600_000,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]

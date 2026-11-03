@@ -478,7 +478,9 @@ pub fn uniform_ttl(body: &[u8]) -> Option<i64> {
 fn span_ttl_ms(body: &[u8], (start, end): (usize, usize)) -> i64 {
     serde_json::from_slice::<serde_json::Value>(&body[start..end])
         .ok()
-        .map_or(300_000, |marker| crate::facts::marker_ttl_ms(&marker))
+        .map_or(CacheTtl::FiveMinutes.ms(), |marker| {
+            crate::facts::marker_ttl_ms(&marker)
+        })
 }
 
 /// Before `stream` when the body has one, so the member lands where the measured client puts it; a body
