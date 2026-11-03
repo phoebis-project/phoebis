@@ -30,7 +30,7 @@ import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, pollQuery, r
 import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
-import { costCellOf, costHeaderTitle, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, requestHintArgs, revisionsTitle } from '@/lib/requests';
+import { compareRequests, costCellOf, costHeaderTitle, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, requestHintArgs, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
 import { plainOutputOf } from '@/lib/tokenBar';
@@ -280,8 +280,6 @@ function keyOptions(keys: ApiKey[] | null, selected: string[]): Option[] {
   return [...keys.map((k) => ({ label: k.name, value: k.id })), ...earlier];
 }
 
-/** The route's order, which a poll's merge keeps: newest first, and the higher id first at one instant. */
-const newestFirst = (a: RequestLog, b: RequestLog) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
 /** The route answers its rows as `requests`, and the poll reads a list's as `rows`. */
 const listed = (page: RequestPage) => ({ landedThrough: page.landedThrough, nextCursor: page.nextCursor, rows: page.requests });
 
@@ -341,7 +339,7 @@ export function RequestsPage() {
   // waits for either to close.
   const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed } = useFollow<RequestLog>({
     address,
-    compare: newestFirst,
+    compare: compareRequests,
     error: requests.error,
     fixedEnd: custom,
     identity: (r) => r.id,

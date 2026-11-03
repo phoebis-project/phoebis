@@ -16,6 +16,7 @@ import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { isFastScope } from '@/lib/quota';
+import { compareRequests } from '@/lib/requests';
 import { ACCOUNTS, QUOTA_HISTORY, usageOf } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, unusedAllowanceOf } from './analytics';
 import { ATTENTION } from './attention';
@@ -1267,7 +1268,7 @@ export class MockApi implements Api {
     const now = mockClock.now();
     const written = REQUESTS.filter((r) => landedAt(r) <= now);
     const since = query.landedAfter;
-    const matched = written.filter((r) => matchesQuery(r, query, live) && (since === undefined || landedAt(r) > since)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    const matched = written.filter((r) => matchesQuery(r, query, live) && (since === undefined || landedAt(r) > since)).sort(compareRequests);
     const newest = matched.reduce((stamp, r) => Math.max(stamp, landedAt(r)), since ?? 0);
     const landedThrough = query.to && !query.fixedEnd ? Math.min(newest, Date.parse(query.to)) : newest;
     const after = query.cursor ? matched.filter((r) => isAfterCursor(r, query.cursor!)) : matched;
@@ -1404,7 +1405,7 @@ export class MockApi implements Api {
     if (input.keyId !== undefined && !this.keys.some((k) => k.id === input.keyId)) throw new ApiError(404, 'no such key', null);
     const since = NOW - windowHours * HOUR;
     const rows = REQUESTS.filter((r) => r.kind !== 'probe' && r.capturedBodies && Date.parse(r.at) >= since && (input.poolId !== undefined ? r.poolId === input.poolId : r.keyId === input.keyId))
-      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+      .sort(compareRequests)
       .slice(0, limit);
     const requests = rows.map((r) => ({ ...dryRunVerdict(conditions, r, GUARDRAIL_STORY_IDS.has(r.id)), id: r.id, receivedAt: r.at }));
     const count = (verdict: string) => requests.filter((r) => r.verdict === verdict).length;

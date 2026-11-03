@@ -7,6 +7,9 @@ import { fmtUsd, fmtWeek, weekShort } from '@/lib/format';
 import { ageWord } from '@/lib/routingLog';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
 
+/** The route's order, newest first and the higher id first at one instant, which a poll's merge and the mock keep. */
+export const compareRequests = (a: RequestLog, b: RequestLog) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+
 /** The words under a dollar figure for who paid: the funding of a request billed in dollars. */
 export const FUNDING_WORD: Record<Exclude<Funding, 'plan'>, string> = { api_key: 'API key', fast: 'fast mode', overage: 'overage', usage_based: 'usage-based' };
 export const NO_SHARE_TITLE = 'The cost model prices no share for this request';
