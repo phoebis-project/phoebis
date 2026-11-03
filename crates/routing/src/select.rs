@@ -1547,12 +1547,18 @@ fn run(
     // renewal reads the row as every read other than a placement's own does.
     let placing_own = own_key.as_ref().filter(|_| pin.is_none());
     for candidate in &request.candidates {
+        let blocking = state.blocking_cooldown(
+            &candidate.account_id,
+            &request.canonical_model,
+            request.now,
+            request.fast,
+        );
         let found = obstacle(
             state,
             snapshot,
             pool,
-            candidate,
-            &request.canonical_model,
+            &candidate.account_id,
+            blocking,
             &request.attempted,
             request.now,
             request.fallback_ms,
@@ -1565,6 +1571,7 @@ fn run(
             request,
             candidate,
             window,
+            blocking,
             found.as_ref(),
             placing_own,
         ));
@@ -1610,7 +1617,7 @@ fn run(
         let mut facts = Vec::new();
         if let Some(current) = pin.as_ref() {
             let pinned = obstacles.iter().find(|(id, _)| id == &current.account_id);
-            let tried = request.attempted.iter().any(|a| a == &current.account_id);
+            let tried = request.attempted.contains(&current.account_id);
             if let Some((_, o)) = pinned {
                 facts.push(Fact::text("obstacle", obstacle_name(o)));
             }
@@ -1706,15 +1713,7 @@ fn run(
             "exhausted",
             vec![account_fact(&current.account_id)],
         );
-        let exhaustion = fenced(
-            state,
-            snapshot,
-            pool,
-            request,
-            &current.account_id,
-            current.incarnation,
-            rec,
-        );
+        let exhaustion = fenced(state, snapshot, pool, request, &current.account_id, rec);
         return (SelectResult::Exhausted(exhaustion), writes);
     }
     // Step 4: the moves, for a portable request with a live pin. A pin on an account past its saved end never
@@ -2539,20 +2538,20 @@ fn fenced(
     pool: &PoolRow,
     request: &SelectRequest,
     account_id: &str,
-    incarnation: u64,
     rec: &mut Recorder,
 ) -> Exhaustion {
+    let blocking = state.blocking_cooldown(
+        account_id,
+        &request.canonical_model,
+        request.now,
+        request.fast,
+    );
     let own = obstacle(
         state,
         snapshot,
         pool,
-        &Candidate {
-            account_id: account_id.to_string(),
-            incarnation,
-            priority: 0,
-            upstream_model: String::new(),
-        },
-        &request.canonical_model,
+        account_id,
+        blocking,
         &[],
         request.now,
         request.fallback_ms,
@@ -5248,22 +5247,23 @@ fn pin_key_facts(key: &PinKey) -> PinKeyFacts {
     }
 }
 
+// The request's fields come one by one, so a caller that holds no request can judge an account as well.
 #[allow(clippy::too_many_arguments)]
 fn obstacle(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
-    candidate: &Candidate,
-    model: &str,
+    account_id: &str,
+    blocking: Option<&CooldownRow>,
     attempted: &[String],
     now: i64,
     fallback_ms: i64,
     fast: bool,
 ) -> Option<Obstacle> {
-    let tried = attempted.iter().any(|a| a == &candidate.account_id);
+    let tried = attempted.iter().any(|a| a == account_id);
     // A candidate the registry no longer holds was deleted after admission; it is nobody's to select, and a
     // cooldown row it left behind must not date an exhaustion no wait can clear.
-    let Some(account) = snapshot.account(&candidate.account_id) else {
+    let Some(account) = snapshot.account(account_id) else {
         return Some(Obstacle::Operator);
     };
     if !account.enabled {
@@ -5272,14 +5272,14 @@ fn obstacle(
     // A funding mark is tried again on its own clock, one request at a time, since an API-key balance has no signal
     // the poll could read.
     if account.state == AccountState::FundingRequired {
-        if !state.funding_retry_admits(&candidate.account_id, now) {
+        if !state.funding_retry_admits(account_id, now) {
             return Some(Obstacle::Operator);
         }
     } else if account.state != AccountState::Ready {
         return Some(Obstacle::Operator);
     }
     if snapshot
-        .term(&candidate.account_id)
+        .term(account_id)
         .is_some_and(|term| term::ended(term, now))
     {
         return Some(Obstacle::Ended);
@@ -5289,7 +5289,6 @@ fn obstacle(
         until: row.until,
         window: row.window.clone(),
     };
-    let blocking = state.blocking_cooldown(&candidate.account_id, model, now, fast);
     // A fast rate limit dates the fast lane alone: where the account's credits (their row or the poll's state) or
     // its budget block the request too, that blocker answers, since the fast reset would pass with the request
     // still refused.
@@ -5299,25 +5298,22 @@ fn obstacle(
     }
     if fast {
         if let Some(row) = state
-            .cooldowns_of(&candidate.account_id, now)
+            .cooldowns_of(account_id, now)
             .find(|row| row.scope == CooldownScope::FastCredits)
         {
             return Some(cooldown(row));
         }
-        if let Some(reason) =
-            state.credits_blocked(snapshot, &candidate.account_id, account.incarnation, now)
+        if let Some(reason) = state.credits_blocked(snapshot, account_id, account.incarnation, now)
         {
             return Some(Obstacle::Credits {
                 reason: reason.into(),
             });
         }
     }
-    if budget_unknown(state, snapshot, &pool.id, &candidate.account_id) {
+    if budget_unknown(state, snapshot, &pool.id, account_id) {
         return Some(Obstacle::BudgetUnknown);
     }
-    if let Some((period, until)) =
-        budget_exhausted(state, snapshot, &pool.id, &candidate.account_id, now)
-    {
+    if let Some((period, until)) = budget_exhausted(state, snapshot, &pool.id, account_id, now) {
         // A period that ends inside the fast window would answer a retry the fast lane still refuses.
         return Some(Obstacle::Budget {
             until: fast_limited.map_or(until, |row| until.max(row.until)),
@@ -5329,7 +5325,7 @@ fn obstacle(
     }
     // The spend funds every model and the fast lane alike, so a seat at its cap is out of the set for any request,
     // a live pin's renewal included, until the window resets.
-    if let Some(reset) = spend_spent(state, snapshot, &candidate.account_id, now) {
+    if let Some(reset) = spend_spent(state, snapshot, account_id, now) {
         return Some(Obstacle::Spent {
             until: reset,
             window: "spend".into(),
@@ -5338,7 +5334,7 @@ fn obstacle(
     // Plan overage is a plan window's state, which a fast request does not draw.
     if !fast && pool.overage_policy == OveragePolicy::Never {
         if let Some(deadline) = state
-            .overage_deadline(&candidate.account_id, fallback_ms)
+            .overage_deadline(account_id, fallback_ms)
             .filter(|d| *d > now)
         {
             return Some(Obstacle::Overage { until: deadline });
@@ -6026,15 +6022,8 @@ pub(crate) fn pace_of(
             burn: 0.0,
         };
     }
-    let end = snapshot
-        .term(&candidate.account_id)
-        .and_then(|term| term::end_of(term, now));
-    let deadline = match (reset, end) {
-        (Some(r), Some(e)) => Some(r.min(e)),
-        (Some(r), None) => Some(r),
-        (None, Some(e)) => Some(e),
-        (None, None) => None,
-    };
+    let end = account_end(snapshot, &candidate.account_id, now);
+    let deadline = reset.into_iter().chain(end).min();
     let hours = deadline
         .map(|d| ((d - now) as f64 / 3_600_000.0).max(1.0 / 60.0))
         .unwrap_or(WEEK_HOURS);
@@ -6655,6 +6644,7 @@ fn candidate_facts(
     request: &SelectRequest,
     candidate: &Candidate,
     window: &str,
+    blocking: Option<&CooldownRow>,
     obstacle: Option<&Obstacle>,
     own: Option<&PinKey>,
 ) -> CandidateFacts {
@@ -6769,7 +6759,6 @@ fn candidate_facts(
                 .collect()
         })
         .unwrap_or_default();
-    let blocking = state.blocking_cooldown(id, &request.canonical_model, now, request.fast);
     let mut cooldowns: Vec<CooldownFacts> = state
         .cooldowns_of(id, now)
         .map(|row| CooldownFacts {
