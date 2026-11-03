@@ -670,23 +670,31 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
   const nowPct = now >= span.startMs && now < span.endMs ? ((now - span.startMs) / width) * 100 : null;
   const stamp = (at: number) => (mode === 'session' ? fmtShortTime(at) : `${fmtDayShort(at)} ${fmtShortTime(at)}`);
 
-  const cells = Array.from({ length: span.cells }, (_, i) => {
-    const at = span.startMs + i * span.cellMs;
-    const d = new Date(at);
-    const dayStart = d.getHours() === 0;
-    const head = mode === 'weekly' ? d.toLocaleDateString('en-US', { weekday: 'short' }) : dayStart ? fmtDayShort(at) : '';
-    const day = d.toLocaleDateString('en-US', { day: 'numeric' });
-    const time = fmtShortTime(at);
-    return {
-      at,
-      head,
-      shortHead: mode === 'weekly' ? head.charAt(0) : dayStart ? day : '',
-      shortSub: mode === 'weekly' ? day : fmtShortHour(at),
-      sub: mode === 'weekly' ? fmtDayShort(at) : time,
-      today: new Date(at).setHours(0, 0, 0, 0) === new Date(now).setHours(0, 0, 0, 0),
-      weekend: [0, 6].includes(d.getDay()),
-    };
-  });
+  // Each cell formats three or four labels, and the page re-renders on every accounts poll and clock tick, so the cells
+  // rebuild only when the span, the zoom, the time format or the day moves. The span is a fresh object each render.
+  const todayStart = new Date(now).setHours(0, 0, 0, 0);
+  const cells = useMemo(
+    () =>
+      Array.from({ length: span.cells }, (_, i) => {
+        const at = span.startMs + i * span.cellMs;
+        const d = new Date(at);
+        const dayStart = d.getHours() === 0;
+        const head = mode === 'weekly' ? d.toLocaleDateString('en-US', { weekday: 'short' }) : dayStart ? fmtDayShort(at) : '';
+        const day = d.toLocaleDateString('en-US', { day: 'numeric' });
+        const time = fmtShortTime(at);
+        return {
+          at,
+          head,
+          shortHead: mode === 'weekly' ? head.charAt(0) : dayStart ? day : '',
+          shortSub: mode === 'weekly' ? day : fmtShortHour(at),
+          sub: mode === 'weekly' ? fmtDayShort(at) : time,
+          today: new Date(at).setHours(0, 0, 0, 0) === todayStart,
+          weekend: [0, 6].includes(d.getDay()),
+        };
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the formatters read the time format the cycle names
+    [cycle, mode, span.cellMs, span.cells, span.startMs, todayStart],
+  );
 
   // A cell narrower than its full label prints its short pair with the full words on its title. A Weekly cell's labels
   // carry no hour, so that zoom reads the 24-hour figure under either setting.
