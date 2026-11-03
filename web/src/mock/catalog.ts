@@ -52,6 +52,10 @@ export function priceFor(model: string, at: string | number): ModelPrice | null 
   return models.find((p) => p.model === model) ?? models.find((p) => p.model === undatedModel(model)) ?? null;
 }
 
+/** A request's prompt as the ledger sizes it and a pin's last turn counts it: its uncached input, cache reads and cache
+ *  writes together. */
+export const promptOf = (u: Pick<Usage, 'cacheRead' | 'cacheWrite1h' | 'cacheWrite5m' | 'input'>): number => u.input + u.cacheRead + u.cacheWrite5m + u.cacheWrite1h;
+
 /**
  * The cells an answer prices at, as the ledger selects them: the fast cells for a fast answer on a row that has
  * them, else the long-context cells when the prompt (uncached input, cache reads and cache writes together) is
@@ -61,6 +65,5 @@ export function cellsFor(model: string, usage: Pick<Usage, 'cacheRead' | 'cacheW
   const row = priceFor(model, at);
   if (row === null) return null;
   if (fast && row.fast) return row.fast;
-  const prompt = usage.input + usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h;
-  return row.longContext && prompt > row.longContext.over ? row.longContext : row;
+  return row.longContext && promptOf(usage) > row.longContext.over ? row.longContext : row;
 }

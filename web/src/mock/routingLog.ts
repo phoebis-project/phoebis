@@ -7,6 +7,7 @@ import { placementHit } from '@/lib/format';
 import { endOf } from '@/lib/quota';
 import { compareRows } from '@/lib/routingLog';
 import { ACCOUNTS, LEDGER_WINDOW, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN, accountById, isPaidSource, kindTier } from './accounts';
+import { promptOf } from './catalog';
 import { GUARDRAILS } from './guardrails';
 import { earliest, leadOf, paceHours } from './lead';
 import { SESSIONS } from './operations';
@@ -51,7 +52,7 @@ export const proWeekRewriteOf = (tokens: number, model: string): number | null =
  * estimate of its own and reads the usage the request reported, so a request that ended with no usage, which the
  * router books at its body's estimate, books and later expires a zero share here.
  */
-const bodyTokensOf = (r: RequestLog) => r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h;
+const bodyTokensOf = (r: RequestLog) => promptOf(r.usage);
 /**
  * A fresh session's burn per hour: the pool's warm pins' median as the story's hour reads it. The drawn day's
  * decisions read no burn at all, so they book the rewrite alone.

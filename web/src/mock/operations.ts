@@ -2,7 +2,7 @@ import type { AgentContext, BurnUnit, CompanionState, KeepaliveOverview, Keepali
 import { anchorTier, tierCapacity, weightOf, type CostWindow } from '@/lib/costs';
 import { lastActivity, pinTtlMs } from '@/lib/keepalive';
 import { accountById, sharedWindowsOf } from './accounts';
-import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE } from './catalog';
+import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById } from './pools';
 import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID, WORKSHOP_SESSION_ID } from './requests';
@@ -325,8 +325,6 @@ const datedLines = (createdAt: string | null, session: string, lines: readonly O
     return { ...line, createdAt: first ?? (createdAt === null ? null : iso(Date.parse(createdAt) + place * MINUTE)) };
   });
 };
-/** A request's prompt as the route counts a pin's last turn: its uncached input, cache reads and cache writes. */
-const promptOf = (r: { usage: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; input: number } }) => r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h;
 
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // An entry past the story's session ids draws one the ledger never saw. The draw runs where the spec writes its id
@@ -619,7 +617,7 @@ SLOWED_PINS.forEach((pin, k) => {
   const main = rows.filter((r) => r.agentId === 'main');
   const last = main[0];
   const lastAttempt = last.attempts[last.attempts.length - 1];
-  const lastInputTokens = promptOf(last);
+  const lastInputTokens = promptOf(last.usage);
   const effort = effortAt(k);
   const createdAt = main[main.length - 1].at;
   // Each agent's pin reads its own newest turn, which wrote the hour's cache.
@@ -631,7 +629,7 @@ SLOWED_PINS.forEach((pin, k) => {
       agentId,
       cacheTtlMs: HOUR,
       effort: agentId === 'main' ? effort : effortAt(k + j),
-      lastInputTokens: promptOf(newest),
+      lastInputTokens: promptOf(newest.usage),
       lastUsedAt: newest.attempts[newest.attempts.length - 1].startedAt,
       model,
     });
@@ -695,7 +693,7 @@ const FLEET_PINS = [...new Set(fleetRows.map((r) => r.canonicalModel))]
 if (FLEET_PINS.length > 0) {
   const last = FLEET_PINS[0];
   const lastAttempt = last.attempts[last.attempts.length - 1];
-  const lastInputTokens = promptOf(last);
+  const lastInputTokens = promptOf(last.usage);
   const keyGeneration = Date.parse(keyById.get('fleet')!.createdAt);
   const seen = ledgered.get(activityOf('fleet', keyGeneration, FLEET_SESSION_ID)) ?? null;
   // The session is first seen at the oldest turn of its last unbroken run: a turn that came once the pin before it had
@@ -708,7 +706,7 @@ if (FLEET_PINS.length > 0) {
   // One line per standing pin, each read off its model's last turn as the row reads the newest one.
   const lines = FLEET_PINS.map((pin, j) => {
     const attempt = pin.attempts[pin.attempts.length - 1];
-    return pinLine({ accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), lastInputTokens: promptOf(pin), lastUsedAt: attempt.startedAt, model: pin.canonicalModel });
+    return pinLine({ accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, model: pin.canonicalModel });
   });
   SESSIONS.push({
     ...SESSION_SAMPLE,
@@ -765,7 +763,7 @@ const WORKSHOP_BURN = 0.0021;
   const keyGeneration = Date.parse(keyById.get('bench')!.createdAt);
   const seen = ledgered.get(activityOf('bench', keyGeneration, WORKSHOP_SESSION_ID)) ?? null;
   const createdAt = workshopRows[workshopRows.length - 1].at;
-  const line = pinLine({ accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), lastInputTokens: promptOf(WORKSHOP_PIN), lastUsedAt: lastAttempt.startedAt, model: WORKSHOP_PIN.canonicalModel });
+  const line = pinLine({ accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, model: WORKSHOP_PIN.canonicalModel });
   SESSIONS.push({
     ...SESSION_SAMPLE,
     accountId: 'workshop',
@@ -790,7 +788,7 @@ const WORKSHOP_BURN = 0.0021;
     keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
     keyGeneration,
     keyId: 'bench',
-    lastInputTokens: promptOf(WORKSHOP_PIN),
+    lastInputTokens: promptOf(WORKSHOP_PIN.usage),
     lastRefreshAt: lastAttempt.startedAt,
     lastRequestAt: seen?.last ?? null,
     lastUsedAt: lastAttempt.startedAt,

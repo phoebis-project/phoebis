@@ -14,7 +14,7 @@ import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { endOf } from '@/lib/quota';
 import { ACCOUNTS, LEDGER_WINDOW, QUOTA_HISTORY, accountById, isPaidSource, kindTier, sharedWindowsOf } from './accounts';
 import type { HourlyRollup } from './analytics';
-import { cellsFor } from './catalog';
+import { cellsFor, promptOf } from './catalog';
 import { earliest, leadOf, paceHours } from './lead';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
@@ -2311,7 +2311,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         tier: accountTier(accountId),
         histograms: histogramsOf(served),
         keptWarm: { requests: keptHere.length, tokens1h: keptHere.reduce((s, r) => s + keptOf(r).tokens1h, 0), tokens5m: keptHere.reduce((s, r) => s + keptOf(r).tokens5m, 0) },
-        savingUsd: keptHere.reduce((s, r) => s + savingUsdOf(r.model, keptOf(r), r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h, r.attempts[r.attempts.length - 1]?.response.speed === 'fast', r.at), 0),
+        savingUsd: keptHere.reduce((s, r) => s + savingUsdOf(r.model, keptOf(r), promptOf(r.usage), r.attempts[r.attempts.length - 1]?.response.speed === 'fast', r.at), 0),
         probes: probes ?? { ok: 0, failed: 0, held: 0, skipped: 0 },
         probeMigrated,
         probeCostUsd,
@@ -2464,7 +2464,7 @@ function historicalRollups(): HourlyRollup[] {
         },
         keptWarm: { requests: keptRequests, ...keptSplit },
         // A synthesized hour's kept requests carry its mean prompt, which selects the cells their saving prices at.
-        savingUsd: savingUsdOf(model, keptSplit, ok === 0 ? 0 : (usage.input + usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h) / ok, fast, t),
+        savingUsd: savingUsdOf(model, keptSplit, ok === 0 ? 0 : promptOf(usage) / ok, fast, t),
         probes: { ok: 0, failed: 0, held: 0, skipped: 0 },
         probeMigrated: 0,
         probeCostUsd: 0,
