@@ -71,6 +71,8 @@ pub struct Expired {
 
 pub(crate) struct InFlight {
     pub observed: RequestObserved,
+    /// The caller's `User-Agent`, read off the observation's headers before they are released.
+    pub user_agent: Option<String>,
     pub attempts: Vec<AttemptRecord>,
     /// The response text assembled from chunks while the request's key captures bodies.
     pub response_body: Option<Vec<u8>>,
@@ -176,6 +178,13 @@ impl Assembler {
                 if !capturing {
                     observed.body = Bytes::new();
                 }
+                // The user agent is the one header the row reads and the assembler reads none of the other
+                // three, so an entry waiting on its completion holds none of them.
+                let user_agent = user_agent_of(&observed.headers);
+                observed.boundaries = Vec::new();
+                observed.headers = Vec::new();
+                observed.owner_id = None;
+                observed.static_hash = None;
                 let seq = self.next_seq;
                 self.next_seq += 1;
                 let mut records = Vec::new();
@@ -198,6 +207,7 @@ impl Assembler {
                     observed.request_id.clone(),
                     InFlight {
                         observed,
+                        user_agent,
                         attempts: Vec::new(),
                         response_body,
                         response_len_seen: 0,
@@ -430,6 +440,7 @@ fn terminal_outcome(complete: &RequestComplete) -> Option<&'static str> {
 fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> {
     let InFlight {
         observed,
+        user_agent,
         mut attempts,
         response_body,
         response_len_seen,
@@ -649,7 +660,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
                     .as_ref()
                     .is_some_and(|body| (body.len() as u64) < b.response_len_seen)
         }),
-        user_agent: user_agent_of(&observed.headers),
+        user_agent,
         effort: observed.shape.effort.clone(),
         thinking_type: observed.shape.thinking_type.clone(),
         thinking_budget: observed.shape.thinking_budget,
