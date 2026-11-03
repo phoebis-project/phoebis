@@ -329,6 +329,22 @@ mod tests {
     }
 
     #[test]
+    fn data_lines_join_with_a_line_break_and_an_empty_first_line_adds_none() {
+        let data = |raw: &[u8]| {
+            let mut p = SseParser::new(1024);
+            p.feed(raw).unwrap();
+            p.next_event().unwrap().data.to_vec()
+        };
+        assert_eq!(data(b"data: a\ndata: b\n\n"), b"a\nb");
+        assert_eq!(data(b"data:\ndata: b\n\n"), b"b");
+        assert_eq!(
+            data(b"data: a\ndata:\n\n"),
+            b"a\n",
+            "an empty line after a first one still adds its break"
+        );
+    }
+
+    #[test]
     fn the_buffer_is_bounded_without_a_boundary() {
         let mut p = SseParser::new(16);
         assert!(p.feed(b"data: 0123456789").is_ok());
