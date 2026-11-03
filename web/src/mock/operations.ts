@@ -1084,10 +1084,9 @@ for (const r of RECIPES) {
   if (poolId === undefined || (r.agentState === 'released' && !pinKept(r, poolId))) continue;
   pinOn(r.accountId, `${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`);
 }
-for (const pin of SLOWED_PINS) for (const a of pin.agents) pinOn('studio', `notebook|${pin.sessionId}|${a.agentId}|${a.model}`);
-for (const last of FLEET_PINS) pinOn(last.attempts[last.attempts.length - 1].accountId, `fleet|${FLEET_SESSION_ID}|main|${last.canonicalModel}`);
-pinOn('workshop', `bench|${WORKSHOP_SESSION_ID}|main|${WORKSHOP_PIN.canonicalModel}`);
-for (const row of WRITTEN_SESSIONS) for (const line of row.agentContexts) pinOn(line.accountId, `${row.keyId}|${row.sessionId}|${line.agentId}|${line.model}`);
+// Every listed line is a pin. The recipe loop above stays for the released agents the router still holds, which draw
+// no line.
+for (const s of SESSIONS) for (const line of s.agentContexts) pinOn(line.accountId, `${s.keyId}|${s.sessionId}|${line.agentId}|${line.model}`);
 // Main's auxiliary pin draws no line, but the router holds it, so the pools count it as they count every pin.
 pinOn('overflow', `laptop|${AUXILIARY_ONLY_SESSION_ID}|main|${HAIKU}`);
 const underKeys = (pins: Iterable<string>, keyIds: ReadonlySet<string>) => [...pins].filter((pin) => keyIds.has(pin.slice(0, pin.indexOf('|'))));
