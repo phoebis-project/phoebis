@@ -1780,7 +1780,6 @@ struct Task {
     /// The reset last announced per account and window, by a sample or by the clock, so one passing reset is
     /// announced once whichever saw it first.
     reset_announced: HashMap<(String, String), i64>,
-    revision: u64,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     /// The reset each account and window's wall was announced for, `None` where the reading named no reset, as a
     /// 5-hour window open past its reset does, beside the instant of the announcement, or of the reset's passing for a
@@ -1946,7 +1945,6 @@ pub fn spawn(
         reload_waiters: Vec::new(),
         reports,
         reset_announced: HashMap::new(),
-        revision: 1,
         snapshot,
         spent_announced,
         state,
@@ -4488,16 +4486,15 @@ impl Task {
         digest_key: [u8; 32],
         loaded_at: i64,
     ) {
-        self.revision += 1;
-        let next = Arc::new(
-            RegistrySnapshot::from_load(load, digest_key, loaded_at, self.revision)
-                .with_guardrails(guardrails),
-        );
         let previous = self
             .snapshot
             .read()
             .expect("snapshot lock poisoned")
             .clone();
+        let next = Arc::new(
+            RegistrySnapshot::from_load(load, digest_key, loaded_at, previous.revision + 1)
+                .with_guardrails(guardrails),
+        );
         // A pause is not a reason to cancel: `enabled` governs routing and probes only, and an admitted request
         // finishes on its account. A disconnect or a deletion takes the credential away, so its streams end,
         // and so do those of a holder deleted and created again under its id since the previous snapshot.
