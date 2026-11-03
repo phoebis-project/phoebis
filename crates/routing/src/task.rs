@@ -3874,13 +3874,8 @@ impl Task {
             } => {
                 pin.model = self.state.canonical(&pin.model).to_string();
                 let key = pin.key();
-                if let Some(current) = self.state.pin(&key).cloned() {
-                    // A request of the standing row reached its stream's end: a mark is set at a placement and a
-                    // placement takes a new epoch, so a renewal of the same epoch belongs to the marked row, and
-                    // clearing early only shortens a hold. The backstop for a `Head` the closed mailbox refused.
-                    if current.epoch == pin.epoch {
-                        self.state.clear_head_mark_of(&key);
-                    }
+                if let Some(current) = self.state.pin(&key) {
+                    let same_epoch = current.epoch == pin.epoch;
                     // A probe's renewal is the refresh of the cache it read, which is another cache once the session
                     // changed lanes while it was in flight. A client's renewal folds its own burn whatever lane
                     // the pin moved to since, so it is not held to the lane.
@@ -3897,11 +3892,41 @@ impl Task {
                             "a probe renewal from a lane the pin has left leaves the pin"
                         );
                     }
-                    if current.epoch == pin.epoch && !left_lane {
-                        let mut renewed = PinRow {
-                            last_used_at: now,
-                            ..current
-                        };
+                    // Read before the row is borrowed to change it, since both read the snapshot or the row. Every
+                    // copy folds whatever the account's kind and nothing is priced here: the reader prices the copies
+                    // its funding selects on the account the pin sits on when it reads, so leaving overage or moving
+                    // between tiers needs no reset.
+                    let fold = usage
+                        .filter(|_| same_epoch && !left_lane && origin != "keepalive")
+                        .map(|usage| {
+                            let window_ms = self.burn_window_ms(&pin.key_id);
+                            // The meter charges a request inside the peak band more, by its own regime's factor, so
+                            // the banded copy weighs it by the band of the row's regime at the renewal, the row's
+                            // entrypoint as the renewal leaves it. Dollars cost the same at every hour.
+                            let entrypoint = if origin == "client" {
+                                &pin.entrypoint
+                            } else {
+                                &current.entrypoint
+                            };
+                            let band = self.config.band.at(
+                                FIVE_HOUR,
+                                Some(entrypoint.as_str())
+                                    .filter(|entrypoint| !entrypoint.is_empty()),
+                                now,
+                            );
+                            (usage, window_ms, band)
+                        });
+                    // A request of the standing row reached its stream's end: a mark is set at a placement and a
+                    // placement takes a new epoch, so a renewal of the same epoch belongs to the marked row, and
+                    // clearing early only shortens a hold. The backstop for a `Head` the closed mailbox refused.
+                    if same_epoch {
+                        self.state.clear_head_mark_of(&key);
+                    }
+                    let renewed = (same_epoch && !left_lane)
+                        .then(|| self.state.pin_mut(&key))
+                        .flatten();
+                    if let Some(renewed) = renewed {
+                        renewed.last_used_at = now;
                         renewed.cache_ttl_ms = cache_ttl_ms;
                         // A probe replays another request's headers and body, so the row keeps its entrypoint and its
                         // effort as it keeps its lane.
@@ -3919,15 +3944,7 @@ impl Task {
                             // renewal is the refresh it wrote. Its usage is the keepalive's cost, never the
                             // session's burn.
                             renewed.last_refresh_at = now;
-                        } else if let Some(usage) = usage {
-                            // Every copy folds whatever the account's kind and nothing is priced here: the
-                            // reader prices the copies its funding selects on the account the pin sits on when it
-                            // reads, so leaving overage or moving between tiers needs no reset.
-                            let window_ms = self.burn_window_ms(&pin.key_id);
-                            // The meter charges a request inside the peak band more, by its own regime's factor, so
-                            // the banded copy weighs it by the band of the row's regime at the renewal. Dollars cost
-                            // the same at every hour.
-                            let band = self.config.band.at(FIVE_HOUR, entrypoint_of(&renewed), now);
+                        } else if let Some((usage, window_ms, band)) = fold {
                             let at = renewed.burn_at;
                             let prompt = usage.prompt_tokens();
                             // Every copy decays from the same `burn_at`, so a copy this renewal adds nothing to
@@ -3964,12 +3981,12 @@ impl Task {
                             renewed.last_input_tokens = prompt;
                             renewed.last_classifier = classifier;
                         }
-                        self.state.put_pin(renewed.clone());
+                        let row = renewed.clone();
                         self.state.mark_renewed(&key);
                         if turn_ended {
                             self.state.note_turn_end(&key);
                         }
-                        self.write(vec![StateWrite::UpsertPin(renewed)]);
+                        self.write(vec![StateWrite::UpsertPin(row)]);
                     }
                 }
             }

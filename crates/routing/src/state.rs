@@ -1617,6 +1617,12 @@ impl RoutingState {
         self.pins.get(&*self.canonical_key(key))
     }
 
+    /// The held pin to change in place, found as `pin` finds it: a change that keeps the epoch, as a renewal's.
+    pub(crate) fn pin_mut(&mut self, key: &PinKey) -> Option<&mut PinRow> {
+        let key = self.canonical_key(key);
+        self.pins.get_mut(&*key)
+    }
+
     /// A fresh pin under a key another pin held (a release that lands the session elsewhere) takes the old one off
     /// its account with its mark and starts unrenewed. A renewal keeps the epoch and the renewal. Either way the row
     /// carries the mark and the auxiliary-only flag as the caller stamped them. A fresh pin on another account than the
