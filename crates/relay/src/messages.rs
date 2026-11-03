@@ -3040,7 +3040,7 @@ impl Relay {
                         None,
                         None,
                         admitted.client_version.clone(),
-                        Some("upstream_unreachable"),
+                        Some(UPSTREAM_UNREACHABLE.code),
                         pin_epoch,
                         None,
                         cache_ttl_ms(ttl),
