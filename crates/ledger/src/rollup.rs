@@ -1208,7 +1208,7 @@ pub const SLOW_SETTINGS: &[&str] = &["slow_down_stretch_seconds"];
 // The kind words the fold writes, which the attention reader matches its own kinds against.
 /// The kind the fold writes for an account that read a window spent within the hour after a move landed on it.
 pub const DESTINATION_SPENT_KIND: &str = "destination_spent";
-/// The kind the fold writes for an account whose newest reconciled window's rise reads off the share the router priced.
+/// The kind the fold writes for an account where the newest reconciled window of any kind reads off its priced share.
 pub const METER_DRIFT_KIND: &str = "meter_drift";
 /// The kind the fold writes for a pool whose shedding round marked nothing for want of a destination with runway.
 pub const SHED_NO_RUNWAY_KIND: &str = "shed_no_runway";
