@@ -4382,10 +4382,10 @@ impl BurnSums {
 /// `band_at`, else its `at`). A plan row with no tier recorded prices no share and still its figure. A fast row and
 /// one in overage add their dollars and a zero share where the tables size the tier: fast mode spends usage credits
 /// and overage is billed in dollars, neither draws a plan window, and the zero still tells a reader the account is
-/// priced in its window unit. Every billed row adds a zero figure, so a bucket with tokens and no plan row reads 0 there and only an idle
-/// bucket reads `None`. A bucket holding a row the table cannot price answers `None` on that window and in the figure,
-/// whichever row came first, and a row with no token has nothing to price and leaves every figure as the other rows
-/// set it.
+/// priced in its window unit. Every billed row adds a zero figure, so a bucket with tokens and no plan row reads 0
+/// there and only an idle bucket reads `None`. A bucket holding a row the table cannot price answers `None` on that
+/// window and in the figure, whichever row came first, and a row with no token has nothing to price and leaves every
+/// figure as the other rows set it.
 pub(crate) fn price_usage(
     point: &mut BurnSums,
     prices: &PriceRevisions,
