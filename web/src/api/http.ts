@@ -281,7 +281,7 @@ export class HttpApi implements Api {
     }
     if (answer.status === 401) return null;
     if (answer.text === null) throw new ApiError(answer.status, `GET /admin/session answered ${answer.status}`, null);
-    // Parsed after the catch, as `call` parses, so a body that is not a session raises its own error, never no answer.
+    // Parsed after the catch, as `call` parses, so a body that is not JSON raises its own error, never no answer.
     const r = JSON.parse(answer.text) as { persistent?: boolean; session_id: string };
     return { persistent: r.persistent === true, sessionId: r.session_id };
   };
