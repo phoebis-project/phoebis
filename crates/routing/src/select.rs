@@ -1,5 +1,6 @@
 //! One selection: the spec's seven steps over the snapshot and the routing state.
 
+use std::cell::OnceCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -5488,37 +5489,33 @@ fn candidate_in<'a>(set: &[&'a Candidate], account_id: &str) -> Option<&'a Candi
 /// What keeps placement off an affinity entry, `None` for one it may land on: `lane` (written on another lane than
 /// the request's), then what `account_refusal` answers at the request's instant.
 fn entry_refusal(
-    state: &RoutingState,
     snapshot: &RegistrySnapshot,
     request: &SelectRequest,
-    allowed: &[&Candidate],
-    window: &str,
     entry: &AffinityEntry,
+    admitted: &dyn Fn(&str) -> bool,
 ) -> Option<&'static str> {
     if same_lane(&entry.lane, &request.lane) {
-        account_refusal(state, snapshot, allowed, window, request.now, entry)
+        account_refusal(snapshot, request.now, entry, admitted)
     } else {
         Some("lane")
     }
 }
 
 /// What keeps placement off an affinity entry's account, `None` for one it may land on: `expired` (not live),
-/// `incarnation` (another holder of the id wrote it), `not_admitted` (the account admits no fresh placement).
-/// Shared by every rung. Rung 4 adds its own blocker on top.
+/// `incarnation` (another holder of the id wrote it), `not_admitted` (the account admits no fresh placement, which
+/// `admitted` answers as `admits` does). Shared by every rung. Rung 4 adds its own blocker on top.
 fn account_refusal(
-    state: &RoutingState,
     snapshot: &RegistrySnapshot,
-    allowed: &[&Candidate],
-    window: &str,
     now: i64,
     entry: &AffinityEntry,
+    admitted: &dyn Fn(&str) -> bool,
 ) -> Option<&'static str> {
     if !entry.live(now) {
         Some("expired")
     } else if snapshot.account(&entry.account_id).map(|a| a.incarnation) != Some(entry.incarnation)
     {
         Some("incarnation")
-    } else if !admits(state, snapshot, allowed, window, &entry.account_id, now) {
+    } else if !admitted(&entry.account_id) {
         Some("not_admitted")
     } else {
         None
@@ -5684,9 +5681,19 @@ fn placement_of<'a>(
         return None;
     }
     let now = request.now;
+    // One verdict per allowed account across the walks, since `state` stays borrowed immutably for the whole
+    // placement and an account's allowance and its rung 4 blocker read the same at every entry of it.
+    let index_of = |account_id: &str| allowed.iter().position(|c| c.account_id == account_id);
+    let admitted_at: Vec<OnceCell<bool>> = allowed.iter().map(|_| OnceCell::new()).collect();
+    let admitted = |account_id: &str| {
+        index_of(account_id).is_some_and(|i| {
+            *admitted_at[i]
+                .get_or_init(|| holds_allowance(state, snapshot, account_id, window, now))
+        })
+    };
 
     let content = affinity.walk(&request.canonical_model, &request.boundaries, |e| {
-        entry_refusal(state, snapshot, request, allowed, window, e)
+        entry_refusal(snapshot, request, e, &admitted)
     });
     record_lookups(rec, &content, now, true);
     let matched = content.matched.map(|i| &content.visited[i]);
@@ -5801,19 +5808,24 @@ fn placement_of<'a>(
         Some(_) => Vec::new(),
         None => fresh_prior(state, snapshot, pool, now),
     };
+    let blocked_at: Vec<OnceCell<Option<&'static str>>> =
+        allowed.iter().map(|_| OnceCell::new()).collect();
     let walk = affinity.walk(&request.canonical_model, &request.static_boundaries, |e| {
-        entry_refusal(state, snapshot, request, allowed, window, e)
+        entry_refusal(snapshot, request, e, &admitted)
             .or_else(|| (!size_gate(e)).then_some("size_gate"))
             .or_else(|| {
-                blocked(
-                    state,
-                    snapshot,
-                    pool,
-                    request,
-                    Figures::of(moving, &prior),
-                    &e.account_id,
-                    own,
-                )
+                let judge = || {
+                    blocked(
+                        state,
+                        snapshot,
+                        pool,
+                        request,
+                        Figures::of(moving, &prior),
+                        &e.account_id,
+                        own,
+                    )
+                };
+                index_of(&e.account_id).map_or_else(judge, |i| *blocked_at[i].get_or_init(judge))
             })
     });
     record_lookups(rec, &walk, now, false);
@@ -5932,7 +5944,10 @@ fn subagent_cohort<'a>(
     let (_, entry) =
         affinity.deepest(&request.canonical_model, &request.static_boundaries, |e| {
             e.prefix_tokens > 0
-                && entry_refusal(state, snapshot, request, allowed, window, e).is_none()
+                && entry_refusal(snapshot, request, e, &|id| {
+                    admits(state, snapshot, allowed, window, id, request.now)
+                })
+                .is_none()
         })?;
     let found = candidate_in(allowed, &entry.account_id);
     if found.is_some() {
