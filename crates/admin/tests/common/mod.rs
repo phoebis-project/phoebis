@@ -60,17 +60,7 @@ pub const FIXTURE_BUILD_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567
 
 /// The first instant of the UTC calendar month after the one `NOW` falls in, where a monthly budget's period ends.
 pub fn month_end() -> i64 {
-    let first = jiff::Timestamp::from_millisecond(NOW)
-        .expect("the rig's clock is a timestamp")
-        .to_zoned(jiff::tz::TimeZone::UTC)
-        .date()
-        .first_of_month();
-    first
-        .checked_add(jiff::Span::new().months(1))
-        .and_then(|next| next.to_zoned(jiff::tz::TimeZone::UTC))
-        .expect("the next month's first midnight exists in UTC")
-        .timestamp()
-        .as_millisecond()
+    phoebis_relay::next_month_start(NOW)
 }
 
 const BODY_CAPTURE_MAX_HOURS: u32 = 72;
