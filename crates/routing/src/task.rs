@@ -2897,38 +2897,16 @@ impl Task {
                 if request.revision < snapshot.revision {
                     // The registry moved after admission: the key, the pool and the candidates are re-derived from what
                     // is current, and a request the current registry would refuse is refused.
-                    let now = (self.clock)();
-                    let key = match snapshot.authenticate_id(&request.key_id, now) {
-                        Ok(key) => key,
-                        Err(refusal) => {
-                            self.refuse(&request, &snapshot, Refusal::Key(refusal), reply);
-                            return;
+                    match rederived(&snapshot, &request, (self.clock)()) {
+                        Ok(candidates) => {
+                            request.candidates = candidates;
+                            request.revision = snapshot.revision;
                         }
-                    };
-                    // The id is reusable, so the lifetime is the identity: a key created again under the id
-                    // since admission is another key, and the request is refused as a refused id is.
-                    if key.created_at != request.key_generation {
-                        self.refuse(
-                            &request,
-                            &snapshot,
-                            Refusal::Key(KeyRefusal::Replaced),
-                            reply,
-                        );
-                        return;
-                    }
-                    match resolve(
-                        &snapshot,
-                        key,
-                        &request.canonical_model,
-                        &request.folded_model,
-                    ) {
-                        Ok(candidates) => request.candidates = candidates,
                         Err(refusal) => {
-                            self.refuse(&request, &snapshot, Refusal::Resolve(refusal), reply);
+                            self.refuse(&request, &snapshot, refusal, reply);
                             return;
                         }
                     }
-                    request.revision = snapshot.revision;
                 }
                 // The client's classifier call is routed as the agent of the turn it judges (`routed_agent`), so the
                 // pin the facts and the events below read is that agent's.
@@ -5284,6 +5262,29 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             StateWrite::UpsertWindowSet(row),
         ),
     }
+}
+
+/// The candidates the current registry gives a request admitted under an earlier one, or the refusal it answers.
+fn rederived(
+    snapshot: &RegistrySnapshot,
+    request: &SelectRequest,
+    now: i64,
+) -> Result<Vec<Candidate>, Refusal> {
+    let key = snapshot
+        .authenticate_id(&request.key_id, now)
+        .map_err(Refusal::Key)?;
+    // The id is reusable, so the lifetime is the identity: a key created again under the id since admission is
+    // another key, and the request is refused as a refused id is.
+    if key.created_at != request.key_generation {
+        return Err(Refusal::Key(KeyRefusal::Replaced));
+    }
+    resolve(
+        snapshot,
+        key,
+        &request.canonical_model,
+        &request.folded_model,
+    )
+    .map_err(Refusal::Resolve)
 }
 
 /// The snapshot's account under the id while it is still the holder a report was formed about, `None` once the
