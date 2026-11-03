@@ -10191,6 +10191,32 @@ const editGuardrail = async (page, name) => {
 }
 await readsAgain('/guardrails', 'listGuardrails', 5_000);
 {
+  // The dialog's pickers alone draw the pools and the keys, so the page reads them once per visit and again after a
+  // write, a dialog close and Refresh, never at the interval.
+  const name = '/guardrails two periods pass and no pools or keys read goes out, and a dialog close reads both again';
+  const page = await mount('/guardrails', { now: CLOCK_ORIGIN });
+  const pools = countCalls('listPools');
+  const keys = countCalls('listKeys');
+  const reads = () => ({ keys: keys.calls.length, pools: pools.calls.length });
+  tick(5_000);
+  await page.settle();
+  tick(5_000);
+  await page.settle();
+  const periods = reads();
+  const dlg = await editGuardrail(page, 'Subagent status summary');
+  buttonIn(dlg, 'Cancel')?.click();
+  await page.settle();
+  const closed = reads();
+  pools.restore();
+  keys.restore();
+  page.unmount();
+  results.push({
+    name,
+    ok: dlg !== null && JSON.stringify(periods) === JSON.stringify({ keys: 0, pools: 0 }) && JSON.stringify(closed) === JSON.stringify({ keys: 1, pools: 1 }),
+    missing: [dlg === null ? 'no dialog' : 'a dialog', JSON.stringify(periods), JSON.stringify(closed)],
+  });
+}
+{
   const page = await mount('/guardrails');
   await page.settle(400);
   const dlg = await editGuardrail(page, 'Subagent status summary');
@@ -22843,6 +22869,54 @@ const CARD_VIEWS = [
       JSON.stringify(closed) === JSON.stringify({ open: 0, reads: 1, title: 'Auto reload every 5 s' }) &&
       ticked === 1,
     missing: [JSON.stringify(confirm), JSON.stringify(closed), `${ticked} reads at the tick after the cancel`],
+  });
+}
+{
+  // The dialog alone draws the sessions and the keepalive overview, so neither is read while it is closed: each opening
+  // of a saved pool reads both once, and a key write from it reads both again. A stub answers the revoke and leaves the
+  // story alone, so the keys the later checks read stay as they are.
+  const name = '/pools two periods pass with the dialog closed and no sessions or overview read goes out, the opening reads each once, and a key write while it is open reads both again';
+  const page = await mount('/pools', { now: CLOCK_ORIGIN });
+  const sessions = countCalls('listSessions');
+  const overview = countCalls('getKeepaliveOverview');
+  const reads = () => ({ overview: overview.calls.length, sessions: sessions.calls.length });
+  tick(5_000);
+  await page.settle();
+  tick(5_000);
+  await page.settle();
+  const closed = reads();
+  [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await page.settle(300);
+  const opened = reads();
+  const dlg = openDialogs(page).pop();
+  const { revokeKey } = api;
+  api.revokeKey = async () => undefined;
+  let revoked = false;
+  for (const row of dlg?.querySelectorAll('.keys-table tbody tr') ?? []) {
+    row.querySelector('.menu__trigger')?.click();
+    await page.settle(120);
+    const item = [...row.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Revoke');
+    if (item === undefined) {
+      row.querySelector('.menu__trigger')?.click();
+      await page.settle(120);
+      continue;
+    }
+    item.click();
+    await page.settle(200);
+    buttonIn(openDialogs(page).pop(), 'Revoke')?.click();
+    await page.settle(600);
+    revoked = true;
+    break;
+  }
+  api.revokeKey = revokeKey;
+  const written = reads();
+  sessions.restore();
+  overview.restore();
+  page.unmount();
+  results.push({
+    name,
+    ok: revoked && JSON.stringify(closed) === JSON.stringify({ overview: 0, sessions: 0 }) && JSON.stringify(opened) === JSON.stringify({ overview: 1, sessions: 1 }) && JSON.stringify(written) === JSON.stringify({ overview: 2, sessions: 2 }),
+    missing: [revoked ? 'a key revoked' : 'no key to revoke', JSON.stringify(closed), JSON.stringify(opened), JSON.stringify(written)],
   });
 }
 {

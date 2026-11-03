@@ -410,11 +410,13 @@ account](pairing.md).
 The view opens on its bar, "Create pool" with the split Refresh button and the count `{n} pools` at the right edge, then
 "A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per session, and fail over
 when a member hits a rate limit." on a line of its own, then the tiles Pools, Accounts in pools, Keys, "Requests, 24h"
-and "Cost, 24h". Auto reload starts at 5 s and waits while the pool dialog or the Delete pool confirm is open. "Cost,
-24h" and each card's Cost 24h read in the top bar's unit: under Native the day's subscription traffic as its figure in
-the chosen week over its billed dollars, a side with no traffic left out and the subscription side a dash with the
-Dashboard's hover where a request of the day priced nothing. A pool sums its members' accounts, so its figure carries no
-hint. Every field's meaning is on [Pools, keys and routing](routing.md#pools).
+and "Cost, 24h". Auto reload starts at 5 s and waits while the pool dialog or the Delete pool confirm is open. The
+sessions and the keepalive overview the pool dialog draws are read when it opens on a saved pool and again after a key
+write from it, never at the interval. "Cost, 24h" and each card's Cost 24h read in the top bar's unit: under Native the
+day's subscription traffic as its figure in the chosen week over its billed dollars, a side with no traffic left out and
+the subscription side a dash with the Dashboard's hover where a request of the day priced nothing. A pool sums its
+members' accounts, so its figure carries no hint. Every field's meaning is on [Pools, keys and
+routing](routing.md#pools).
 
 Each card carries the pool's name, its status badge (active, degraded, disabled or exhausted), its keys as a link ("No
 keys yet", "1 key", `{n} keys`, or "Keys unavailable" when the keys read failed), an edit button and "Delete". A strip
@@ -657,17 +659,18 @@ preset", one row per preset the build ships, three rows in the order of their id
 Subagent status summary), then at the right edge the split Refresh button and the count `{n} guardrails` (`1 guardrail`
 for one). Under it one sentence: "A guardrail checks each request against its conditions before any account is selected.
 Observe records the matches, enforce refuses them with a 403." Auto reload starts at 5 s and waits while a dialog or a
-row's menu is open. The columns are Name (the description muted beneath), Mode (a badge `observe` or `enforce`), Enabled
-(`on`, or `off` muted), "Applies to" (`{n} pools, {m} keys`, `1 pool, 0 keys` in the singular, the names on hover,
-`nowhere` muted when none), "Matches, 24h" (`{observed} observed` over `{blocked} blocked` from the last day's counts, a
-dash while unread) and Preset (the preset's name with `v{n}`, a `customized` badge where the conditions left the stamped
-version, an `update available` badge where the build ships a newer one, a dash without a stamp), and each row ends in
-its menu: Edit, Duplicate, Enable or Disable, "Switch to enforce" or "Switch to observe", and Delete. Duplicate opens
-the dialog in create mode with the source's fields, the name `{name} copy`, no attachment and the preset stamp kept, so
-the copy does not run twice on the source's keys and still says where it came from. Delete asks `Delete guardrail
-{name}`: "Removes the guardrail from every pool and key it is attached to. Requests it matched keep its id in the log."
-Before the first guardrail the table reads "No guardrails yet" with "Create guardrail". What a guardrail is, the presets
-and the conditions are on [Guardrails](guardrails.md).
+row's menu is open. The pools and keys the dialog's pickers list are read once per visit and again after a write, a
+dialog close and Refresh, never at the interval. The columns are Name (the description muted beneath), Mode (a badge
+`observe` or `enforce`), Enabled (`on`, or `off` muted), "Applies to" (`{n} pools, {m} keys`, `1 pool, 0 keys` in the
+singular, the names on hover, `nowhere` muted when none), "Matches, 24h" (`{observed} observed` over `{blocked} blocked`
+from the last day's counts, a dash while unread) and Preset (the preset's name with `v{n}`, a `customized` badge where
+the conditions left the stamped version, an `update available` badge where the build ships a newer one, a dash without a
+stamp), and each row ends in its menu: Edit, Duplicate, Enable or Disable, "Switch to enforce" or "Switch to observe",
+and Delete. Duplicate opens the dialog in create mode with the source's fields, the name `{name} copy`, no attachment
+and the preset stamp kept, so the copy does not run twice on the source's keys and still says where it came from. Delete
+asks `Delete guardrail {name}`: "Removes the guardrail from every pool and key it is attached to. Requests it matched
+keep its id in the log." Before the first guardrail the table reads "No guardrails yet" with "Create guardrail". What a
+guardrail is, the presets and the conditions are on [Guardrails](guardrails.md).
 
 The guardrail dialog, "Create guardrail" or `Edit guardrail {name}`, is grouped like the pool dialog, with the rail
 "Guardrail settings", the groups Identity, Conditions, "Applies to" and Test, the status line "Every group saves

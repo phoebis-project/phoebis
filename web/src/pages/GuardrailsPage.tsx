@@ -112,8 +112,10 @@ export function GuardrailsPage(): JSX.Element {
   const pauseCause: PauseCause | null = dialog !== null || deleting !== null ? 'dialog' : openMenus.size > 0 || barOpen ? 'menu' : null;
   const guardrails = useAsync(() => api.listGuardrails(), [], { paused, refreshMs: intervalMs });
   const counts = useAsync(() => api.getAnalyticsGuardrails('24h'), [], { paused, refreshMs: intervalMs });
-  const pools = useAsync(() => api.listPools(), [], { paused, refreshMs: intervalMs });
-  const keys = useAsync(() => api.listKeys(), [], { paused, refreshMs: intervalMs });
+  // The dialog's pickers alone draw the pools and the keys, so they read once per visit and again after a write, a
+  // dialog close and Refresh, never at the interval.
+  const pools = useAsync(() => api.listPools(), []);
+  const keys = useAsync(() => api.listKeys(), []);
   const presets = useAsync(() => api.listGuardrailPresets(), []);
   const presetList = useMemo(() => presets.data ?? [], [presets.data]);
   const list = guardrails.data;

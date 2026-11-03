@@ -250,9 +250,15 @@ export function PoolsPage() {
   // Feeds the cache TTL per-model override picker's options alone, so it is read once per visit rather than on every
   // auto reload, and Refresh reads it again.
   const catalog = useAsync(() => api.listCatalog(), []);
-  const sessions = useAsync(() => api.listSessions(), [], reread);
+  // The dialog alone draws the sessions and the keepalive overview, so each opening of a saved pool reads them once,
+  // the overview again on a range pick, and both again after a key write and on Refresh, never at the interval.
+  const openedPool = dialog?.pool?.id ?? null;
+  const sessions = useAsync(() => (openedPool === null ? Promise.resolve(null) : api.listSessions()), [openedPool]);
   // The dialog's return rate over the range the dialog picks, each answer carrying the range it was read for.
-  const overview = useAsync(() => api.getKeepaliveOverview({ range: returnRange }).then((read) => ({ overview: read, range: returnRange })), [returnRange], reread);
+  const overview = useAsync(
+    () => (openedPool === null ? Promise.resolve(null) : api.getKeepaliveOverview({ range: returnRange }).then((read) => ({ overview: read, range: returnRange }))),
+    [openedPool, returnRange],
+  );
   const answer = overview.data?.range === returnRange ? overview.data.overview : null;
   const attention = useAttention();
   const now = useNow();
@@ -423,6 +429,8 @@ export function PoolsPage() {
         onKeysChanged={() => {
           keys.reload();
           pools.reload();
+          sessions.reload();
+          overview.reload();
         }}
       />
       <ConfirmDialog

@@ -413,7 +413,10 @@ no answer, as a view's read does, so a router that never answers it brings the c
 ([The shell](console.md#the-shell)). The Accounts view reads the settings once per visit, whichever account opens, and
 the allowance card's Try again reads them again ([Accounts](console.md#accounts)). The Analytics view reads the account
 list with the window: when a new bucket moves a preset's end, on Refresh and Try again, and at each interval under a
-custom range whose end has not passed ([Analytics](console.md#analytics)).
+custom range whose end has not passed ([Analytics](console.md#analytics)). The Pools view reads the sessions and the
+keepalive overview its pool dialog draws when the dialog opens on a saved pool and again after a key write from it, and
+the Guardrails view reads the pools and keys its dialog lists once per visit and again after a write, a dialog close and
+Refresh, neither at the interval ([Pools](console.md#pools), [Guardrails](console.md#guardrails)).
 
 Every finished request lands in the ledger as one row for the client request, one per attempt and one per routing
 decision, folded into the hourly rollup the analytics read ([Statistics](statistics.md#the-ledger)). Each attempt
