@@ -1734,6 +1734,7 @@ impl Relay {
             &self.router,
         );
         let auxiliary = crate::identity::is_auxiliary(request_class.as_deref());
+        let turn = matches!(request_class.as_deref(), Some("main" | "subagent"));
         crate::facts::note_entrypoint_disagreement(
             &trace.request_id,
             identity.entrypoint.as_deref(),
@@ -2099,6 +2100,7 @@ impl Relay {
             retry_in_place: Duration::from_secs(failover.retry_in_place_seconds),
             target: &target,
             trace: &trace,
+            turn,
             wait_bound: deadline
                 .unwrap_or(received_at + self.limits.head_timeout.as_millis() as i64),
         };
@@ -3022,6 +3024,7 @@ impl Relay {
                 ticket,
                 tier_ttls: tier_ttls(&edited),
                 trace: admitted.trace,
+                turn: admitted.turn,
                 uniform_ttl_ms: uniform_ttl(&edited),
             };
             let request = RawRequest {
@@ -3893,6 +3896,7 @@ impl Relay {
                 .unwrap_or(DEFAULT_CACHE_TTL_MS),
             fresh: ctx.fresh_pin,
             classifier: ctx.classifier,
+            turn: ctx.turn,
             renews: ctx.trace.kind != Kind::CountTokens,
             generations: (
                 ctx.account.incarnation,
@@ -4968,6 +4972,8 @@ struct Responding<'a> {
     /// `tier_ttls` of the body as this pass sends it upstream, after the TTL rewrite.
     tier_ttls: (Option<i64>, Option<i64>),
     trace: &'a Trace,
+    /// `Admitted::turn`, carried to the renewal.
+    turn: bool,
     /// `uniform_ttl` of the same body.
     uniform_ttl_ms: Option<i64>,
 }
@@ -5349,6 +5355,9 @@ struct Admitted<'a> {
     retry_in_place: Duration,
     target: &'a str,
     trace: &'a Trace,
+    /// The request's class is a turn's, `main` or `subagent`, read once at admission and carried to every leg's
+    /// renewal: a client stream's end under it is the turn's end the router notes for the classifier call that follows.
+    turn: bool,
     /// The bound a reset wait and the slow-down and rewrite holds sleep under: `deadline` where the head timeout leaves
     /// one, else the head timeout itself, so a short head timeout bounds the waits that would otherwise outlast it.
     wait_bound: i64,

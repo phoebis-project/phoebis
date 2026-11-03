@@ -261,10 +261,11 @@ requests of the session: they carry its id, on the client's Sonnet default. A re
 ([Auto mode behind the router](relay.md#auto-mode-behind-the-router)) is routed as a call of the agent whose turn ended
 last in the session, the main agent's or a subagent's, under that agent's own pin on the Sonnet default, and lands on
 that turn's account ahead of the moves and the strategy while the account is eligible and holds allowance, because the
-upstream charges a classifier call that lands on another account than the turn it judges. Where that account cannot
-serve the call, or the session's turn runs on the Sonnet default itself and shares the pin, the call is placed and moved
-like any request. A marked call takes no share of a plan window on a subscription account and the normal price of its
-model in the account's overage and on an API-key account ([Plan meter](statistics.md#plan-meter)).
+upstream charges a classifier call that lands on another account than the turn it judges. A turn here is a stream of
+the class `main` or `subagent`: the end of an auxiliary call, the subagent summary fork among them, names no turn. Where
+that account cannot serve the call, or the session's turn runs on the Sonnet default itself and shares the pin, the call
+is placed and moved like any request. A marked call takes no share of a plan window on a subscription account and the
+normal price of its model in the account's overage and on an API-key account ([Plan meter](statistics.md#plan-meter)).
 A body whose `safeguards` member the router cannot cut under an off setting (spelled with an escape, or carried twice)
 is refused `400` with the error code `body_shape` before anything reaches the upstream. The mechanism is on [Auto mode
 behind the router](relay.md#auto-mode-behind-the-router).

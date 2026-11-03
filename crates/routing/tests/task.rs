@@ -6939,6 +6939,7 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
             cache_ttl_ms: 300_000,
             fast: false,
             classifier: false,
+            turn: false,
         })
         .await;
     let pin = handle.pins().await.unwrap().remove(0);
@@ -6991,6 +6992,7 @@ fn renewal(
         cache_ttl_ms,
         fast: false,
         classifier: false,
+        turn: true,
     }
 }
 
@@ -7147,6 +7149,7 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
             cache_ttl_ms: 3_600_000,
             fast: false,
             classifier: false,
+            turn: true,
         })
         .await;
     let pins = handle.pins().await.unwrap();
@@ -7252,6 +7255,7 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
             cache_ttl_ms: 300_000,
             fast: true,
             classifier: false,
+            turn: true,
         })
         .await;
     handle
@@ -7548,6 +7552,7 @@ fn classifier_renewal(pin: PinRef, now: i64, input: u64) -> Report {
         cache_ttl_ms: 300_000,
         fast: false,
         classifier: true,
+        turn: false,
     }
 }
 
@@ -7663,6 +7668,7 @@ fn speed_renewal(pin: PinRef, now: i64, fast: bool, input: u64) -> Report {
         cache_ttl_ms: 300_000,
         fast,
         classifier: false,
+        turn: true,
     }
 }
 
@@ -14761,6 +14767,7 @@ async fn a_client_renewal_writes_the_effort_its_pin_names_to_the_row_and_a_probe
         cache_ttl_ms: 300_000,
         fast: false,
         classifier: false,
+        turn: true,
     };
     let stored = || async { handle.pins().await.unwrap().remove(0).effort };
     assert_eq!(stored().await, "high", "the placement stamped the word");
@@ -15190,5 +15197,165 @@ async fn a_classifier_call_follows_the_turn_that_ended_last_rather_than_the_requ
         pins.iter()
             .any(|p| p.agent_id == "x" && p.model == "claude-sonnet-5" && p.account_id == "b"),
         "the call is held under x's own Sonnet 5 pin on b: {pins:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_auxiliary_calls_end_on_another_agents_turn_pin_does_not_redirect_the_classifier_call() {
+    let store = seeded(&["a", "b", "c"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let opus = "claude-opus-5-5";
+    handle
+        .select(agent_turn(
+            &handle,
+            "s1",
+            "main",
+            "main",
+            opus,
+            &["b", "c"],
+            1_000,
+        ))
+        .await
+        .unwrap();
+    let x = handle
+        .select(agent_turn(
+            &handle,
+            "s1",
+            "x",
+            "subagent",
+            opus,
+            &["a", "c"],
+            2_000,
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(x.result, SelectResult::Selected(ref s) if s.account.id == "b"));
+    let y = handle
+        .select(agent_turn(
+            &handle,
+            "s1",
+            "y",
+            "subagent",
+            opus,
+            &["a", "b"],
+            2_500,
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(y.result, SelectResult::Selected(ref s) if s.account.id == "c"));
+    let usage = || PinUsage {
+        input: 10,
+        cache_read: 0,
+        write_5m: 0,
+        write_1h: 0,
+        output: 5,
+    };
+    // x's turn ends on b, then y's summary fork, an auxiliary call on y's own turn pin, ends on c.
+    handle
+        .report(renewal(selected_pin(x), 3_000, usage(), "client", 300_000))
+        .await;
+    handle
+        .report(Report::PinRenewed {
+            pin: selected_pin(y),
+            now: 3_010,
+            usage: Some(usage()),
+            origin: "client",
+            cache_ttl_ms: 300_000,
+            fast: false,
+            classifier: false,
+            turn: false,
+        })
+        .await;
+    let call = SelectRequest {
+        classifier: true,
+        request_class: Some("auxiliary".into()),
+        ..request(&handle, Some("s1"), 3_020)
+    };
+    let answer = handle.select(call).await.unwrap();
+    assert!(
+        matches!(answer.result, SelectResult::Selected(ref s) if s.account.id == "b"),
+        "the call follows x's turn, not the fork that ended on y's pin: {:?}",
+        answer.result
+    );
+}
+
+#[tokio::test]
+async fn a_probes_renewal_of_another_agents_turn_pin_does_not_redirect_the_classifier_call() {
+    let store = seeded(&["a", "b", "c"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let opus = "claude-opus-5-5";
+    handle
+        .select(agent_turn(
+            &handle,
+            "s1",
+            "main",
+            "main",
+            opus,
+            &["b", "c"],
+            1_000,
+        ))
+        .await
+        .unwrap();
+    let x = handle
+        .select(agent_turn(
+            &handle,
+            "s1",
+            "x",
+            "subagent",
+            opus,
+            &["a", "c"],
+            2_000,
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(x.result, SelectResult::Selected(ref s) if s.account.id == "b"));
+    let y = handle
+        .select(agent_turn(
+            &handle,
+            "s1",
+            "y",
+            "subagent",
+            opus,
+            &["a", "b"],
+            2_500,
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(y.result, SelectResult::Selected(ref s) if s.account.id == "c"));
+    let usage = || PinUsage {
+        input: 10,
+        cache_read: 0,
+        write_5m: 0,
+        write_1h: 0,
+        output: 5,
+    };
+    // x's turn ends on b, then a keepalive probe, which replays y's turn and its class, renews y's idle pin on c.
+    handle
+        .report(renewal(selected_pin(x), 3_000, usage(), "client", 300_000))
+        .await;
+    handle
+        .report(Report::PinRenewed {
+            pin: selected_pin(y),
+            now: 3_010,
+            usage: Some(usage()),
+            origin: "keepalive",
+            cache_ttl_ms: 300_000,
+            fast: false,
+            classifier: false,
+            turn: true,
+        })
+        .await;
+    let call = SelectRequest {
+        classifier: true,
+        request_class: Some("auxiliary".into()),
+        ..request(&handle, Some("s1"), 3_020)
+    };
+    let answer = handle.select(call).await.unwrap();
+    assert!(
+        matches!(answer.result, SelectResult::Selected(ref s) if s.account.id == "b"),
+        "the call follows x's turn, not the probe that renewed y's pin: {:?}",
+        answer.result
     );
 }

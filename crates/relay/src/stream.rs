@@ -178,6 +178,8 @@ pub(crate) struct Renewal {
     pub fresh: bool,
     /// The request is the client's own classifier call, so the renewal enters the unmetered copy.
     pub classifier: bool,
+    /// The request's class is a turn's, `main` or `subagent`, so its stream's end is the turn's end the router notes.
+    pub turn: bool,
     /// False for a token count: it writes no cache, so its answer renews nothing, though a client error on a
     /// pin it created still releases that pin.
     pub renews: bool,
@@ -230,6 +232,7 @@ impl Renewal {
                 cache_ttl_ms: self.cache_ttl_ms,
                 fast,
                 classifier: self.classifier,
+                turn: self.turn,
             },
         );
     }

@@ -620,6 +620,10 @@ pub enum Report {
         /// The request is the client's own classifier call, which charges no plan window and enters the pin's
         /// unmetered copy alone.
         classifier: bool,
+        /// The request's class is a turn's, `main` or `subagent`: its stream's end is the end of the agent's turn,
+        /// which `latest_turn_pin` answers. False for a compaction and every auxiliary call, the classifier's among
+        /// them. A probe that replays such a request carries it too, so the task reads it beside `origin`.
+        turn: bool,
     },
     Sample {
         account_id: String,
@@ -4059,6 +4063,7 @@ impl Task {
                 cache_ttl_ms,
                 fast,
                 classifier,
+                turn,
             } => {
                 pin.model = self.state.canonical(&pin.model).to_string();
                 let key = PinKey {
@@ -4102,13 +4107,11 @@ impl Task {
                             renewed.entrypoint = pin.entrypoint.clone();
                             renewed.effort = pin.effort.clone().unwrap_or_default();
                         }
-                        // A client stream's end with its usage is a turn's end, which a classifier call that follows
-                        // judges: `latest_turn_pin` reads it ahead of the pins' stamps. A probe, a classifier call, an
-                        // answer without usage and a pin only auxiliary calls use end no turn.
-                        let turn_ended = origin == "client"
-                            && !classifier
-                            && usage.is_some()
-                            && !renewed.auxiliary_only;
+                        // A turn's stream end with its usage is the turn's end a classifier call that follows judges:
+                        // `latest_turn_pin` reads it ahead of the pins' stamps. A probe (which replays a turn's class),
+                        // an auxiliary call on the agent's turn pin (the subagent summary fork among them), a
+                        // compaction and an answer without usage end no turn.
+                        let turn_ended = origin == "client" && turn && usage.is_some();
                         if origin == "keepalive" {
                             // A probe's selection judged nothing, since it replays another request's facts; the
                             // renewal is the refresh it wrote. Its usage is the keepalive's cost, never the
