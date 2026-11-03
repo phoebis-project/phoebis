@@ -140,6 +140,16 @@ const KEPT_HEADERS: Record<string, (r: RequestLog) => string | null> = {
   'x-claude-code-request-class': (r) => r.requestClass,
 };
 
+/** The fact each subject reads off the captured row itself. The record keeps the table total over the subjects. */
+const FACT_OF: Record<Exclude<Condition['subject'], 'body' | 'header' | 'message'>, (r: RequestLog) => string | null> = {
+  agent_type: (r) => r.agentType,
+  client: (r) => r.client ?? 'other',
+  kind: (r) => r.kind,
+  model: (r) => r.canonicalModel,
+  request_class: (r) => r.requestClass,
+  user_agent: (r) => r.userAgent,
+};
+
 /** A pattern searched unanchored, as the route searches. The dialect's leading `(?i)` reads as the flag it sets. */
 function searches(pattern: string, text: string): boolean {
   const insensitive = pattern.startsWith('(?i)');
@@ -176,36 +186,8 @@ export function dryRunVerdict(conditions: Condition[], r: RequestLog, matched: b
   const order = conditions.map((c, i) => ({ c, i })).sort((a, b) => RANK[a.c.subject] - RANK[b.c.subject]);
   let unknown: number | null = null;
   for (const { c, i } of order) {
-    let ok: boolean | null = false;
-    switch (c.subject) {
-      case 'agent_type':
-        ok = holds(c, r.agentType);
-        break;
-      case 'body':
-      case 'message':
-        ok = matched;
-        break;
-      case 'client':
-        ok = holds(c, r.client ?? 'other');
-        break;
-      case 'header': {
-        const read = KEPT_HEADERS[(c.name ?? '').toLowerCase()];
-        ok = read === undefined ? null : holds(c, read(r));
-        break;
-      }
-      case 'kind':
-        ok = holds(c, r.kind);
-        break;
-      case 'model':
-        ok = holds(c, r.canonicalModel);
-        break;
-      case 'request_class':
-        ok = holds(c, r.requestClass);
-        break;
-      case 'user_agent':
-        ok = holds(c, r.userAgent);
-        break;
-    }
+    const read = c.subject === 'header' ? KEPT_HEADERS[(c.name ?? '').toLowerCase()] : undefined;
+    const ok = c.subject === 'body' || c.subject === 'message' ? matched : c.subject === 'header' ? (read === undefined ? null : holds(c, read(r))) : holds(c, FACT_OF[c.subject](r));
     if (ok === false) return { condition: i, verdict: 'unmatched' };
     if (ok === null && unknown === null) unknown = i;
   }
