@@ -23,7 +23,12 @@ fn term_end(term: &SubscriptionTerm, now: i64) -> Option<i64> {
 /// Whether a fresh session should place on the account only as a last resort: inside `wind_down_minutes` of its
 /// end, canceled or trial alike.
 pub fn winding_down(term: &SubscriptionTerm, now: i64, wind_down_minutes: u32) -> bool {
-    end_of(term, now).is_some_and(|end| now >= end - i64::from(wind_down_minutes) * 60_000)
+    end_of(term, now).is_some_and(|end| now >= wind_down_start(end, wind_down_minutes))
+}
+
+/// The instant the wind-down before `end` starts, `wind_down_minutes` ahead of it.
+pub fn wind_down_start(end: i64, wind_down_minutes: u32) -> i64 {
+    end - i64::from(wind_down_minutes) * 60_000
 }
 
 /// Canceled and the stored end passed, or flagged plan ended at or before `now`: the account is the obstacle

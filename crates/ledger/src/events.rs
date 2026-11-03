@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use phoebis_oauth::{BackoffEdge, Clock, PollFault};
 use phoebis_relay::CatalogChange;
-use phoebis_routing::{CreditsState, RouterEvent, RouterHandle};
+use phoebis_routing::{term, CreditsState, RouterEvent, RouterHandle};
 use phoebis_store::{AccountRow, AccountState, ResolvedAttempt, Settled, StateCause, Store};
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
@@ -827,7 +827,7 @@ fn announced_before(event: &RouterEvent, down_since: Option<i64>) -> bool {
             ends_at,
             wind_down_minutes,
             ..
-        } => ends_at - i64::from(*wind_down_minutes) * 60_000 < down_since,
+        } => term::wind_down_start(*ends_at, *wind_down_minutes) < down_since,
         _ => false,
     }
 }
