@@ -130,7 +130,7 @@ export function KeysPage() {
   const pageRef = useRef<HTMLDivElement>(null);
   const landed = useRef<string | null>(null);
   const { address, filters } = useQueryFilters(KEYS_CODEC);
-  const status = filters.status as 'all' | KeyStatus;
+  const status = filters.status;
   // The dialog's one-shot `edit` and `group` wait in the address until the key list loads, so a filter written before
   // then carries them through. Written at once, as the hook writes.
   const update = (patch: Partial<KeysAddress>) => {

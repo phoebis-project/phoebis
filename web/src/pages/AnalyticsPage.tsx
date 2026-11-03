@@ -231,7 +231,7 @@ export function AnalyticsPage() {
   // Every filter lives in the address, so a link or a reload lands on the same view.
   const { address, filters: a, update: rawUpdate } = useQueryFilters(ANALYTICS_CODEC);
   // Every section but the Burn reads the default grouping under the Burn's own session grouping.
-  const pageBy = a.by as BurnGroup;
+  const pageBy = a.by;
   const groupBy: GroupBy = pageBy === 'session' ? 'key' : pageBy;
   const clientGroups = a.groups;
   const includeProbes = a.probes;

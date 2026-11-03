@@ -1,5 +1,5 @@
 import { iso, REQUEST_KIND_VALUES } from '@/api/decode';
-import type { BurnGroup, KeyStatus, RequestKind } from '@/api/types';
+import type { Account, BurnGroup, KeyStatus, RequestKind } from '@/api/types';
 import { clock } from './clock';
 import { ACCOUNT_STATUSES } from './quota';
 import { DAY, HOUR } from './time';
@@ -62,11 +62,11 @@ export const sortSpecs = (keys: readonly SortKey[], defaultKey: string): { sort:
 });
 
 /** The direction an address means: its `dir` where it names one, else the sort key's own default. */
-export const sortDirOf = (keys: readonly SortKey[], address: { dir: string; sort: string }): SortDir =>
-  address.dir === 'asc' || address.dir === 'desc' ? address.dir : (keys.find((k) => k.id === address.sort)?.defaultDir ?? 'asc');
+export const sortDirOf = (keys: readonly SortKey[], address: { dir: '' | SortDir; sort: string }): SortDir =>
+  address.dir !== '' ? address.dir : (keys.find((k) => k.id === address.sort)?.defaultDir ?? 'asc');
 
 /** The address fields of a pick: `dir` empty where it is the key's own default, so the address omits it. */
-export const sortAddressOf = (keys: readonly SortKey[], next: { dir: SortDir; sort: string }): { dir: string; sort: string } => ({
+export const sortAddressOf = (keys: readonly SortKey[], next: { dir: SortDir; sort: string }): { dir: '' | SortDir; sort: string } => ({
   dir: next.dir === keys.find((k) => k.id === next.sort)?.defaultDir ? '' : next.dir,
   sort: next.sort,
 });
@@ -240,7 +240,7 @@ export const requestsHref = (address: RequestsAddress): string => `/requests?${R
 export interface AnalyticsAddress {
   accounts: string[];
   /** The group-by, the Burn section's own `session` among its values. */
-  by: string;
+  by: BurnGroup;
   /** The client patterns, any of which a request's client matches. */
   clients: string[];
   /** The user agent groups, one pattern per line. */
@@ -319,7 +319,7 @@ export const METER_CODEC = codecOf<MeterAddress>({ accounts: list('accounts') })
 export interface KeysAddress {
   pools: string[];
   search: string;
-  status: string;
+  status: 'all' | KeyStatus;
 }
 
 const KEY_STATUSES: readonly ('all' | KeyStatus)[] = ['all', 'active', 'disabled', 'expired', 'revoked'];
@@ -332,12 +332,12 @@ export const KEYS_CODEC = codecOf<KeysAddress>({
 
 export interface AccountsAddress {
   /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
-  dir: string;
+  dir: '' | SortDir;
   search: string;
   /** The list's order: `name` the default, `reset` the soonest reset, `usage` the most used, `status`. */
   sort: string;
   /** `all` the default, else an account status. */
-  status: string;
+  status: 'all' | Account['status'];
 }
 
 export const ACCOUNT_SORT_KEYS: readonly SortKey[] = [
@@ -362,7 +362,7 @@ export interface SessionsAddress {
   /** Companion only: the rows whose companion reports or went silent. */
   companion: boolean;
   /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
-  dir: string;
+  dir: '' | SortDir;
   /** Show finished sessions. */
   finished: boolean;
   /** Show released agents on a live session. */
