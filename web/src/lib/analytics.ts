@@ -334,6 +334,8 @@ export interface WeekReading {
  * still out draws its skeleton and calls this with none.
  */
 export const equivalentOrDash = (v: number | null | undefined, week: WeekPosition, scale: number): string => (v === null || v === undefined ? '-' : fmtWeek(v * scale, week));
+/** Parts of a title as sentences, an absent part left out. */
+export const sentences = (parts: (string | null)[]): string => parts.filter((part): part is string => part !== null && part !== '').join('. ');
 /**
  * A native table cell, short enough that the table's columns fit its card: the figure in the chosen week's short form
  * ("0.0244% Ultra week") and for a cell that sums both fundings the billed dollars under it. `undefined` leaves out a
@@ -348,7 +350,7 @@ export function nativeCellOf(equivalent: number | null | undefined, billed: numb
   if (sides.length === 0) return { main: '-', sub: '', title: '' };
   const [main, second] = sides;
   const reading = sides.flatMap((s) => (s.full === null ? [] : [s.full])).join(', ');
-  return { main: main.short, sub: second === undefined ? '' : (second.full ?? second.short), title: [hint, reading].filter((part) => part !== null && part !== '').join('. ') };
+  return { main: main.short, sub: second === undefined ? '' : (second.full ?? second.short), title: sentences([hint, reading]) };
 }
 /**
  * The two sides of a sum over both fundings: the plan rows' Pro-week figure and the billed rows' dollars, in

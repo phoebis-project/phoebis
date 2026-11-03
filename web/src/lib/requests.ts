@@ -1,6 +1,6 @@
 import { effectiveLabel } from '@/api/decode';
 import type { Account, CohortHold, RequestLog, Settings, SubscriptionCosts } from '@/api/types';
-import { heldSpan, hintPlan } from '@/lib/analytics';
+import { heldSpan, hintPlan, sentences } from '@/lib/analytics';
 import { type Funding, fundingOf, inBand, nativeOf, revisionAt } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { servingAttempt } from '@/lib/dimensions';
@@ -92,9 +92,6 @@ export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costEquivalent' | '
   if (unit === 'usd') return { kind: 'dash', title: NOTHING_BILLED_TITLE, usd };
   return r.costEquivalent === null ? { kind: 'unpriced', usd } : { figure: r.costEquivalent, hint, kind: 'equivalent_dollars', reason, usd };
 }
-
-/** Parts of a title as sentences, an absent part left out. */
-const sentences = (parts: (string | null)[]): string => parts.filter((part): part is string => part !== null && part !== '').join('. ');
 
 /**
  * A dollar equivalent unit's title: the hint, then the figure in the chosen week and the dollars. The figure waits on
