@@ -591,7 +591,6 @@ async fn writer(
     revision_poll.tick().await;
     // Drops the writer has not yet reported: the channel's, read from the counter each round, and its own.
     let mut reported: u64 = 0;
-    let mut member_revision = router.snapshot().revision;
     let mut spends = Spends {
         db: db.clone(),
         pricing: pricing.clone(),
@@ -602,6 +601,7 @@ async fn writer(
         metrics: metrics.clone(),
         clock: clock.clone(),
         event_poll: config.event_poll,
+        revision: router.snapshot().revision,
         budgets: Budgets::default(),
         pending: Vec::new(),
     };
@@ -656,7 +656,6 @@ async fn writer(
                     if let Some(landed) = start_landed.take() {
                         let _ = landed.send(());
                     }
-                    member_revision = router.snapshot().revision;
                     spend_due = spends.refresh(spend_due, &[]).await;
                 }
             }
@@ -664,9 +663,7 @@ async fn writer(
         }
         // Checked on every round, whatever woke it: a member's budget or period edited under the writer,
         // with no flush of its own, still recomputes without waiting on the next request or period boundary.
-        let revision = router.snapshot().revision;
-        if revision != member_revision {
-            member_revision = revision;
+        if router.snapshot().revision != spends.revision {
             spend_due = spends.refresh(spend_due, &[]).await;
         }
         let first = tokio::select! {
@@ -710,7 +707,6 @@ async fn writer(
                         // table before the caller hears the counts, so a selection after a replay that crossed a
                         // budget is refused. The budget rows it crosses wait for the next batch or flush, as the
                         // start's own do, so a replay on the writer's first turn lands none ahead of the start row.
-                        member_revision = router.snapshot().revision;
                         spend_due = spends.read(spend_due, &[]).await;
                         let remaining = db
                             .writer_read(WriterRead::ParkedCount, crate::query::parked_count)
@@ -773,7 +769,6 @@ async fn writer(
             // A degraded ledger reads the spend after any batch that lands, since that read is what clears it.
             Landed::Written => {
                 if !priced.is_empty() || stats.degraded.load(Ordering::Relaxed) {
-                    member_revision = router.snapshot().revision;
                     spend_due = spends.refresh(spend_due, &priced).await;
                 }
             }
@@ -1446,6 +1441,9 @@ struct Spends {
     metrics: Arc<Metrics>,
     clock: Clock,
     event_poll: Duration,
+    /// The registry revision the last read priced its members under, which the writer compares the router's against
+    /// to recompute after a budget or period edited under it.
+    revision: u64,
     budgets: Budgets,
     pending: Vec<EventRecord>,
 }
@@ -1479,10 +1477,13 @@ impl Spends {
     async fn read(&mut self, current: Option<i64>, priced: &[PricedAttempt]) -> Option<i64> {
         let now = (self.clock)();
         let degraded = self.stats.degraded.load(Ordering::Relaxed);
+        let snapshot = self.router.snapshot();
+        self.revision = snapshot.revision;
         let spend = refresh_member_spends(
             &self.db,
             &self.pricing,
             &self.router,
+            &snapshot,
             now,
             current,
             self.event_poll,
@@ -1491,7 +1492,7 @@ impl Spends {
         )
         .await;
         if let Some(rows) = spend.rows {
-            let edges = self.budgets.edges(&self.router.snapshot(), rows, now);
+            let edges = self.budgets.edges(&snapshot, rows, now);
             self.pending.extend(edges);
         }
         if spend.refreshed {
@@ -1562,13 +1563,14 @@ async fn refresh_member_spends(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
     router: &RouterHandle,
+    snapshot: &RegistrySnapshot,
     now: i64,
     current: Option<i64>,
     event_poll: Duration,
     degraded: bool,
     priced: &[PricedAttempt],
 ) -> SpendRefresh {
-    let members = budgeted_members(&router.snapshot());
+    let members = budgeted_members(snapshot);
     if members.is_empty() {
         return SpendRefresh {
             due: None,
@@ -2141,9 +2143,18 @@ mod tests {
         let pricing = Arc::new(Pricing::new(PriceRevisions::shipped()));
         let event_poll = Duration::from_secs(5);
 
-        let first =
-            refresh_member_spends(&db, &pricing, &router, 1_000, None, event_poll, false, &[])
-                .await;
+        let first = refresh_member_spends(
+            &db,
+            &pricing,
+            &router,
+            &router.snapshot(),
+            1_000,
+            None,
+            event_poll,
+            false,
+            &[],
+        )
+        .await;
         assert!(first.due.is_some(), "a working read arms the boundary tick");
         assert!(
             first.refreshed,
@@ -2160,6 +2171,7 @@ mod tests {
             &db,
             &pricing,
             &router,
+            &router.snapshot(),
             2_000,
             first.due,
             event_poll,
@@ -2198,6 +2210,7 @@ mod tests {
             &db,
             &pricing,
             &router,
+            &router.snapshot(),
             now,
             past_due,
             event_poll,
@@ -2276,6 +2289,7 @@ mod tests {
             metrics: Arc::new(Metrics::new()),
             clock: Arc::new(move || clock.load(Ordering::SeqCst)),
             event_poll: Duration::from_secs(5),
+            revision: 0,
             budgets: Budgets::default(),
             pending: Vec::new(),
         };
