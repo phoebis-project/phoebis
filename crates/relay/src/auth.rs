@@ -15,8 +15,6 @@ pub enum AuthError {
     Malformed,
     #[error("no credential header was presented")]
     Missing,
-    #[error("the presented key is not in the registry")]
-    Unknown,
 }
 
 /// Exactly one credential header, in either shape. The lookup itself belongs to the registry snapshot, so a

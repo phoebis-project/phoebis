@@ -155,14 +155,13 @@ pub(crate) fn accounts_at_cap(retry_after_seconds: u64) -> Failure {
     }
 }
 
-/// A rejected caller credential is always a `401`: telling the caller which of the four ways it failed would
+/// A rejected caller credential is always a `401`: telling the caller which of the three ways it failed would
 /// help an attacker enumerate. The answer also tells the client not to resend the request.
 pub(crate) fn auth_failure(error: &AuthError) -> Failure {
     let (code, message) = match error {
         AuthError::Ambiguous => ("auth_ambiguous", "present exactly one key"),
         AuthError::Malformed => ("auth_malformed", "the key header is malformed"),
         AuthError::Missing => ("auth_missing", "a key is required"),
-        AuthError::Unknown => ("auth_unknown", "the presented key is not valid"),
     };
     Failure {
         status: StatusCode::UNAUTHORIZED,
@@ -170,7 +169,7 @@ pub(crate) fn auth_failure(error: &AuthError) -> Failure {
         code,
         message: Cow::Borrowed(message),
         retry_after: None,
-        // None of the four heals between resends, and the client's query loop stops at the first refusal it is
+        // None of the three heals between resends, and the client's query loop stops at the first refusal it is
         // told not to resend.
         no_retry: true,
     }
@@ -838,7 +837,6 @@ mod tests {
             auth_failure(&AuthError::Ambiguous),
             auth_failure(&AuthError::Malformed),
             auth_failure(&AuthError::Missing),
-            auth_failure(&AuthError::Unknown),
             key_refusal(&KeyRefusal::Unknown),
         ] {
             assert!(credential.no_retry, "{}", credential.code);
