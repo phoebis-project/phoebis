@@ -658,20 +658,12 @@ pub async fn harness_with_catalog(
     accounts: &[TestAccount],
     pool: PoolSpec,
 ) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
-    build(
-        store,
+    harness_with_catalog_and_head_timeout(
         up,
+        catalog_up,
         accounts,
         pool,
-        default_limits(),
-        None,
-        false,
-        None,
-        Some(catalog_up),
-        RouterConfig::default(),
-        None,
-        None,
+        default_limits().head_timeout,
     )
     .await
 }
