@@ -2,7 +2,7 @@ import { Fragment, useMemo } from 'react';
 import type { SubscriptionCosts } from '@/api/types';
 import { useFormatVersion } from '@/app/settings';
 import { Card } from '@/components/ui/primitives';
-import { bandCaption, bandNow, bandSentence, bandWeek, hhmm, nextLocalChange, regimeNames, regimeWord, zoneCity } from '@/lib/costs';
+import { bandCaption, bandNow, bandSentence, bandWeek, hhmm, nextLocalChange, partsIn, regimeNames, regimeWord, zoneCity } from '@/lib/costs';
 import { fmtPct, fmtShortTime, getTimeFormat, viewingZone } from '@/lib/format';
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -61,10 +61,7 @@ export function PeakBand({ costs, now }: { costs: SubscriptionCosts; now: number
       change: nextLocalChange(costs, now, zone, minuteClock),
     };
   }, [costs, now, zone, version]);
-  const nowMinute = useMemo(() => {
-    const parts = new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', minute: 'numeric', timeZone: zone }).formatToParts(now);
-    return Number(parts.find((p) => p.type === 'hour')?.value) * 60 + Number(parts.find((p) => p.type === 'minute')?.value);
-  }, [now, zone]);
+  const nowMinute = useMemo(() => partsIn(now, zone).minute, [now, zone]);
   const { fiveHour } = costs.peak.capacityFactor;
   // The band and its factors are the base regime's. A regime that holds a window differently adds its own row.
   const factors = [

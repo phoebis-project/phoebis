@@ -138,7 +138,7 @@ const formatterFor = (zone: string): Intl.DateTimeFormat => {
   return f;
 };
 /** The local date, weekday and minute of the day of `at` in `zone`; throws for a zone the browser does not know. */
-const partsIn = (at: number, zone: string): { date: string; minute: number; weekday: string } => {
+export const partsIn = (at: number, zone: string): { date: string; minute: number; weekday: string } => {
   const p: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {};
   for (const part of formatterFor(zone).formatToParts(at)) p[part.type] = part.value;
   return { date: `${p.year}-${p.month}-${p.day}`, minute: Number(p.hour) * 60 + Number(p.minute), weekday: p.weekday ?? '' };
