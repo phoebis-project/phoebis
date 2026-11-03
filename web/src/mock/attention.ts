@@ -3,7 +3,7 @@ import { MIN_RISE, ratioOff } from '@/lib/analytics';
 import { tokensTotal, undatedModel } from '@/lib/format';
 import { ACCOUNTS, accountById } from './accounts';
 import { RECONCILIATIONS } from './analytics';
-import { KEYS, POOLS } from './pools';
+import { KEYS, POOLS, poolById } from './pools';
 import { REQUESTS, planPaid } from './requests';
 import { ROUTING_EVENTS } from './routingLog';
 import { ATTENTION_ITEM_SAMPLE, TABLES } from './samples';
@@ -92,7 +92,7 @@ function spentDestination(accountId: string): Pick<AttentionItem, 'detail' | 'si
 function roundsWithoutRunway(poolId: string): Pick<AttentionItem, 'detail' | 'since'> | null {
   const rounds = lastDay('shedding_round').filter((e) => e.poolId === poolId && e.detail.outcome === 'nothing_to_mark' && e.detail.reason === 'no_runway');
   if (rounds.length === 0) return null;
-  const ceiling = POOLS.find((p) => p.id === poolId)?.windowCeiling ?? null;
+  const ceiling = poolById.get(poolId)?.windowCeiling ?? null;
   return { detail: { accounts: sorted(rounds.map((e) => e.accountId)), rounds: rounds.length, setting: ['window_ceiling'], setting_values: { window_ceiling: ceiling } }, since: rounds[0].at };
 }
 
@@ -153,7 +153,7 @@ export function slowedLongOf(rows: readonly SpanRow[], accountId: string, now: n
   const newest = spans.reduce((a, b) => (b.since > a.since ? b : a));
   const barMs = Math.max(SLOWED_LONG_STRETCHES * (newest.thresholdMs ?? 0), SLOWED_LONG_FLOOR_MS);
   if (slowedMs <= barMs) return null;
-  const stretch = POOLS.find((p) => p.id === newest.pool)?.slowDownStretchSeconds;
+  const stretch = poolById.get(newest.pool)?.slowDownStretchSeconds;
   return {
     detail: {
       bar_ms: barMs,

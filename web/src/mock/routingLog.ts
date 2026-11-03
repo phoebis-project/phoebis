@@ -6,7 +6,7 @@ import { shareIn, weightOf } from '@/lib/costs';
 import { placementHit } from '@/lib/format';
 import { endOf } from '@/lib/quota';
 import { compareRows } from '@/lib/routingLog';
-import { ACCOUNTS, LEDGER_WINDOW, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN, isPaidSource, kindTier } from './accounts';
+import { ACCOUNTS, LEDGER_WINDOW, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN, accountById, isPaidSource, kindTier } from './accounts';
 import { GUARDRAILS } from './guardrails';
 import { earliest, leadOf, paceHours } from './lead';
 import { SESSIONS } from './operations';
@@ -73,7 +73,6 @@ const hashOf = (boundary: string): string => {
   return hash;
 };
 
-const accountOf = new Map(ACCOUNTS.map((a) => [a.id, a]));
 /** A static boundary is the client's own prefix, which every session of a main conversation or a subagent shares. */
 const staticBoundary = (agentId: string | null, depth: number) => `static|claude-code-${agentId === 'main' ? 'main' : 'subagent'}|${depth}`;
 const fact = (key: string, value: unknown, unit: string | null = null, accountId: string | null = null): WalkFact => ({ accountId, key, unit, value });
@@ -392,8 +391,8 @@ interface SlowRead {
   stretchMs: number;
 }
 
-const studioSlowed = accountOf.get('studio')?.slowDown ?? null;
-const studioDemand = accountOf.get('studio')?.windows.find((w) => w.id === '5h')?.demand ?? 0;
+const studioSlowed = accountById.get('studio')?.slowDown ?? null;
+const studioDemand = accountById.get('studio')?.windows.find((w) => w.id === '5h')?.demand ?? 0;
 /** The safety wait, the router's `SLOW_DOWN_WAIT_MS`: the stretch reads over the threshold this long before a round. */
 const SLOW_DOWN_WAIT_MS = 120_000;
 
@@ -476,7 +475,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
   const fast = r.shape.requestedSpeed === 'fast';
   const at = spec.at;
   return pool.members.map((m) => {
-    const a = accountOf.get(m.accountId)!;
+    const a = accountById.get(m.accountId)!;
     const overage = inOverageAt(a.id, at);
     const windows: RecordCandidate['windows'] = {};
     const entry = a.kind === 'oauth' ? slowReadAt(a.id, pool, at) : null;
@@ -693,7 +692,7 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   const dwellMs = pool.returnToPlanDwellSeconds * 1_000;
   const windows = drawnWindows(r.canonicalModel);
   const holdsAllowance = (c: RecordCandidate) => c.kind === 'api_key' || windows.every((w) => (c.windows[w]?.utilization ?? 0) < 1);
-  const allowanceKnown = (c: RecordCandidate) => isPaidSource(accountOf.get(c.accountId)!) || windows.every((w) => c.windows[w] !== undefined);
+  const allowanceKnown = (c: RecordCandidate) => isPaidSource(accountById.get(c.accountId)!) || windows.every((w) => c.windows[w] !== undefined);
   const siblings = candidates.filter((c) => c.obstacle === null && c.accountId !== source?.accountId);
   const lines: WalkStep[] = [];
   const no = (i: number, facts: WalkFact[]) => lines.push(step(`move:${RULES[i]}`, 'no', facts));
@@ -934,7 +933,7 @@ const tierKey = (t: [number, number, number]) => t.join('/');
 function pickOf(candidates: RecordCandidate[], kept: RecordCandidate[], chosen: string | null, strategy: string, source: string | undefined): { runnerUp: Score | null; score: Score | null; tierSize: number } {
   const winner = candidates.find((c) => c.accountId === chosen);
   if (!winner) return { runnerUp: null, score: null, tierSize: 0 };
-  const unit = (c: RecordCandidate) => (isPaidSource(accountOf.get(c.accountId)!) ? 'percent' : 'percent_per_hour');
+  const unit = (c: RecordCandidate) => (isPaidSource(accountById.get(c.accountId)!) ? 'percent' : 'percent_per_hour');
   const scoreOf = (c: RecordCandidate) => c.pace?.score ?? 0;
   const rest = kept.filter((c) => c !== winner && c.accountId !== source && tierKey(c.tier) === tierKey(winner.tier)).sort((x, y) => scoreOf(y) - scoreOf(x));
   winner.rank = 1;
@@ -1102,7 +1101,7 @@ function cycleStands(spec: Spec, accountId: string, pool: PoolSeed): boolean {
  */
 function reservationOf(spec: Spec, chosen: RecordCandidate | undefined): { reservation: NonNullable<RecordOutcome['reservation']>; step: WalkStep } | null {
   const r = spec.request;
-  const account = chosen === undefined ? undefined : accountOf.get(chosen.accountId);
+  const account = chosen === undefined ? undefined : accountById.get(chosen.accountId);
   if ((spec.kind !== 'placed' && spec.kind !== 'moved') || chosen === undefined || account === undefined || isPaidSource(account) || r.kind !== 'inference' || r.shape.requestedSpeed === 'fast' || r.classifier !== null) return null;
   const id = chosen.accountId;
   const rewrite = rewriteOf(spec.kind === 'moved' ? (spec.pinFigures?.tokens ?? bodyTokensOf(r)) : bodyTokensOf(r), r.canonicalModel);
@@ -1258,7 +1257,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
       tierSize = ranked.tierSize;
       const tier = member(spec.accountId)?.tier ?? [0, 0, 0];
       // A burn fact follows each score, the burn the spare rate took off.
-      const scores = candidates.filter((c) => c.score !== null).flatMap((c) => [fact('score', c.score, isPaidSource(accountOf.get(c.accountId)!) ? 'percent' : 'percent_per_hour', c.accountId), fact('burn', c.pace?.burn ?? 0, 'percent_per_hour', c.accountId)]);
+      const scores = candidates.filter((c) => c.score !== null).flatMap((c) => [fact('score', c.score, isPaidSource(accountById.get(c.accountId)!) ? 'percent' : 'percent_per_hour', c.accountId), fact('burn', c.pace?.burn ?? 0, 'percent_per_hour', c.accountId)]);
       // The strategy's ties are the ranked tier's best scores under Pace and the whole tier under Priority. The runway
       // breaks them for a move whose gate answered the fitting order and for a failover by its fitting members' reads,
       // and round robin's cursor picks alone.
@@ -1601,7 +1600,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
     const spent = (id: string) => r.canonicalModel.includes('fable') && spentForFable((w) => oauthWindows(id, answeredAt, () => OLDER_FACTOR).find((x) => LEDGER_WINDOW[x.id] === w)?.utilization);
     // A spent Fable member stays servable where the pool allows overage and the credits the record reads are unblocked.
     const funded = (id: string) => pool !== undefined && fundedBy(pool, fast ? creditsAt(id, answeredAt) : null);
-    const servable = pool === undefined ? [] : pool.members.map((m) => m.accountId).filter((id) => obstacleOf(accountOf.get(id)!, pool, answeredAt, r.canonicalModel, fast, []) === null && (!spent(id) || funded(id)));
+    const servable = pool === undefined ? [] : pool.members.map((m) => m.accountId).filter((id) => obstacleOf(accountById.get(id)!, pool, answeredAt, r.canonicalModel, fast, []) === null && (!spent(id) || funded(id)));
     const passedOver = [...new Set([...attempted, ...waitedOn, ...servable])];
     // The builder names the exhaustion off the members' obstacles, which a block among them dates or explains.
     specs.push({ ...base, accountId: null, at: answeredAt, attempt, attempted: passedOver, fact: [summaryFact('held', bound, 'ms'), summaryFact('answer', 429, 'count')], holds: [...holds], inFlight: allAtCap(), kind: 'exhausted', pin: noPin, seq: seq + waitedOn.length });
@@ -1640,7 +1639,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
     const prefix: Spec['prefix'] = {};
     const rung = s?.placement ?? null;
     if (rung && rung.rung !== 'with_main') {
-      const ttl = pool ? ttlOf(pool, accountOf.get(a.accountId)?.kind ?? 'oauth', r.agentId !== 'main', r.canonicalModel) : FIVE_MINUTES;
+      const ttl = pool ? ttlOf(pool, accountById.get(a.accountId)?.kind ?? 'oauth', r.agentId !== 'main', r.canonicalModel) : FIVE_MINUTES;
       const boundary = rung.rung === 'static' ? staticBoundary(r.agentId, rung.depth) : `message|${r.sessionId ?? r.id}|${rung.depth}`;
       const found = entry(boundary, { at: start, depth: rung.depth, prefixTokens: rung.prefixTokens, ttlMs: ttl, writtenAt: start - 2 * MINUTE });
       prefix[a.accountId] = rung.rung === 'static' ? { static: found, staticMatch: found } : { content: found, contentMatch: found };
@@ -1789,7 +1788,7 @@ function storySpecs(): Spec[] {
   const tieAt = t(8, 16, 21);
   const spareOf = (id: string): number => {
     const week = oauthWindows(id, tieAt, () => OLDER_FACTOR).find((w) => w.id === '7d');
-    const end = endOf(accountOf.get(id)!, tieAt);
+    const end = endOf(accountById.get(id)!, tieAt);
     return Math.max(0, 1 - (week?.utilization ?? 0)) / paceHours(earliest(week?.resetsAt ? Date.parse(week.resetsAt) : null, end), tieAt);
   };
   const TIE_SCORE = 0.006;
@@ -2362,7 +2361,7 @@ const POLL_INTERVAL_MS = 5 * MINUTE;
  * the refresh the provider refused, and the poll asks an account it has to pair again nothing, so none follows.
  */
 function legacyPolls(): EventSeed[] {
-  const clean = accountOf.get('legacy')?.usage?.poll?.lastCleanAt;
+  const clean = accountById.get('legacy')?.usage?.poll?.lastCleanAt;
   if (!clean) return [];
   const slots: number[] = [];
   for (let at = Date.parse(clean) + POLL_INTERVAL_MS; at < LEGACY_LAPSED_AT; at += POLL_INTERVAL_MS) slots.push(at);
@@ -2374,7 +2373,7 @@ function legacyPolls(): EventSeed[] {
  * endpoint answered 503 each time, up to and including its last attempt.
  */
 function reservePolls(): EventSeed[] {
-  const poll = accountOf.get('reserve')?.usage?.poll;
+  const poll = accountById.get('reserve')?.usage?.poll;
   if (!poll?.lastCleanAt || !poll.lastAttemptAt) return [];
   const slots: number[] = [];
   for (let at = Date.parse(poll.lastCleanAt) + POLL_INTERVAL_MS; at <= Date.parse(poll.lastAttemptAt); at += POLL_INTERVAL_MS) slots.push(at);
@@ -2424,7 +2423,7 @@ type ReadingPair = Pick<AllowanceReset, 'plan' | 'tier'>;
 
 /** The account's pair as its subscription reads now, the one a reading taken under it stores. */
 const currentPair = (accountId: string): ReadingPair => {
-  const subscription = accountOf.get(accountId)?.subscription;
+  const subscription = accountById.get(accountId)?.subscription;
   return { plan: subscription?.plan ?? null, tier: subscription?.rateLimitTier ?? null };
 };
 
@@ -2455,7 +2454,7 @@ function weeklyResets(accountId: string, window: string, resetsAtMs: number, sha
 }
 
 const resetOf = (accountId: string, window: '7d' | '7d_fable'): number => {
-  const a = accountOf.get(accountId);
+  const a = accountById.get(accountId);
   return Date.parse((window === '7d_fable' ? a?.fableWindow : a?.windows.find((w) => w.id === window))?.resetsAt ?? '');
 };
 
@@ -2464,8 +2463,8 @@ const resetOf = (accountId: string, window: '7d' | '7d_fable'): number => {
  * fourth weeks ran under Pro on both its windows. Sunset was a Pro login until its plan ended, so its weeks before
  * the end ran under Pro, whatever plan the profile read found after it.
  */
-const STUDIO_BEFORE_UPGRADE: EarlierPair = { pair: PRO_READING, through: Date.parse(accountOf.get('studio')?.subscription?.since ?? '') };
-const SUNSET_BEFORE_END: EarlierPair = { pair: PRO_READING, through: Date.parse(accountOf.get('sunset')?.subscription?.endsAt ?? '') };
+const STUDIO_BEFORE_UPGRADE: EarlierPair = { pair: PRO_READING, through: Date.parse(accountById.get('studio')?.subscription?.since ?? '') };
+const SUNSET_BEFORE_END: EarlierPair = { pair: PRO_READING, through: Date.parse(accountById.get('sunset')?.subscription?.endsAt ?? '') };
 
 /**
  * The story's weekly resets, the routing log's rows the unused allowance route answers from: each weekly window of the
@@ -2530,7 +2529,7 @@ function buildEvents(): RoutingEvent[] {
   // Legacy's 5-hour window, spent at a poll and read back under its limit under the same reset by its last clean poll,
   // the reading its account still answers, so no reading at the limit follows the clear. Its history carries both
   // readings, and the clock announced the reset that passed after the last clean poll, as no poll read it again.
-  const legacy = accountOf.get('legacy')?.windows.find((w) => w.id === '5h');
+  const legacy = accountById.get('legacy')?.windows.find((w) => w.id === '5h');
   if (legacy?.resetsAt && legacy.utilization !== null && legacy.utilization < 1) {
     const reset = Date.parse(legacy.resetsAt);
     const read = { reset, source: 'poll', source_request_id: null, window: 'five_hour' };
@@ -2542,7 +2541,7 @@ function buildEvents(): RoutingEvent[] {
   }
   // Studio's wall after the round its stretch fired at 14:05: a poll read the 5-hour window at its limit, and the
   // reading the account answers now reads it under again before the reset.
-  const studio = accountOf.get('studio')?.windows.find((w) => w.id === '5h');
+  const studio = accountById.get('studio')?.windows.find((w) => w.id === '5h');
   if (studio?.resetsAt && studio.utilization !== null && studio.utilization < 1) {
     const read = { reset: Date.parse(studio.resetsAt), source: 'poll', source_request_id: null, window: 'five_hour' };
     seeds.push(
@@ -2595,16 +2594,16 @@ function buildEvents(): RoutingEvent[] {
     if (record) seed.detail.cause = cause ? { reason: cause.reason, scope: cause.scope, window: cause.window } : null;
   }
 
-  const primary = accountOf.get('primary')!;
+  const primary = accountById.get('primary')!;
   const primaryAccess = primary.credential.accessTokenExpiresAt === null ? null : Date.parse(primary.credential.accessTokenExpiresAt);
   const primaryRefresh = primary.credential.refreshTokenExpiresAt === null ? null : Date.parse(primary.credential.refreshTokenExpiresAt);
   const fiveHourReset = Date.parse(primary.windows.find((w) => w.id === '5h')?.resetsAt ?? '') - 5 * HOUR;
   const oldestCooldown = COOLDOWNS.filter((c) => c.scope === 'account' && c.until < STORY_HOUR_FROM && c.until > NOW - DAY).sort((a, b) => a.until - b.until)[0];
   const gap = REQUESTS.filter((r) => r.responseTruncated && Date.parse(r.at) < STORY_HOUR_FROM)[0];
-  const secondary = accountOf.get('secondary')!;
+  const secondary = accountById.get('secondary')!;
   const endsAt = Date.parse(secondary.subscription?.endsAt ?? '');
   const pool = poolById.get('all')!;
-  const annex = accountOf.get('annex')!;
+  const annex = accountById.get('annex')!;
   const beforeReset = oauthWindows('primary', fiveHourReset - 1, () => OLDER_FACTOR).find((w) => w.id === '5h')?.utilization ?? null;
   const undecodable = requestById.get('req_5e3c8a41-d27')!;
   const cutAttempt = undecodable.attempts[undecodable.attempts.length - 1];
@@ -2694,13 +2693,13 @@ function buildEvents(): RoutingEvent[] {
     // Drawn at the instant it fires: the subscription's end less the pool's wind-down, which is still ahead.
     { accountId: 'secondary', at: iso(endsAt - pool.windDownMinutes * MINUTE), detail: { end_source: 'canceled', ends_at: endsAt, wind_down_minutes: pool.windDownMinutes }, kind: 'wind_down_started', poolId: 'all' },
     ...planRows(primary),
-    ...planEndedRow(accountOf.get('sunset')!),
-    ...planEndedClose(accountOf.get('sunset')!),
+    ...planEndedRow(accountById.get('sunset')!),
+    ...planEndedClose(accountById.get('sunset')!),
   );
   if (oldestCooldown) seeds.push({ accountId: oldestCooldown.accountId, at: iso(oldestCooldown.until), detail: { cause: 'expired', scope: oldestCooldown.scope }, kind: 'cooldown_cleared' });
   if (gap) seeds.push({ accountId: null, at: iso(Date.parse(gap.at) + (gap.durationMs ?? 0)), detail: { reason: 'chunk_skipped', request_id: gap.id }, kind: 'ledger_gap', requestId: gap.id });
   // The story's access tokens run eight hours from their refresh.
-  const studioRefresh = accountOf.get('studio')?.credential.refreshTokenExpiresAt ?? null;
+  const studioRefresh = accountById.get('studio')?.credential.refreshTokenExpiresAt ?? null;
   seeds.push({ accountId: 'studio', at: iso(LATE_EVENT_AT), detail: { access_expires_at: LATE_EVENT_AT + 8 * HOUR, refresh_expires_at: studioRefresh === null ? null : Date.parse(studioRefresh), until: LATE_EVENT_AT + 8 * HOUR }, kind: 'refresh_succeeded' });
   return seeds
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.kind.localeCompare(b.kind))

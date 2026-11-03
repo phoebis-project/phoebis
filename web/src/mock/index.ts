@@ -18,7 +18,7 @@ import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { MODEL_SCOPE_PREFIX, accountCooldown, accountStatusOf } from '@/lib/quota';
 import { compareRequests } from '@/lib/requests';
-import { ACCOUNTS, QUOTA_HISTORY, usageOf } from './accounts';
+import { ACCOUNTS, QUOTA_HISTORY, accountById, usageOf } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, unusedAllowanceOf } from './analytics';
 import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
@@ -72,7 +72,7 @@ const FIRST_POLL_MS = 2_000;
  * The windows a paired account's first poll reads: the shape the story gives primary's plan windows, each stamped at
  * the read that lands it, as the router stamps a reading when it reads it, so none predates the confirm.
  */
-const FIRST_READING = ACCOUNTS.find((a) => a.id === 'primary')?.windows ?? [];
+const FIRST_READING = accountById.get('primary')?.windows ?? [];
 
 // The routes' own wording, so a page draws the text the router would have sent.
 const ACCOUNT_TAKEN = 'an account with this id exists';

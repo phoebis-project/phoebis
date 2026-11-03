@@ -12,7 +12,7 @@ import { earlierHolderLabel, placementHit } from '@/lib/format';
 import { emptyHistogram, mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import { endOf } from '@/lib/quota';
-import { ACCOUNTS, LEDGER_WINDOW, sharedWindowsOf } from './accounts';
+import { ACCOUNTS, LEDGER_WINDOW, accountById, sharedWindowsOf } from './accounts';
 import { earliest } from './lead';
 import { keyById } from './pools';
 import { requestsIn, sumOf, sumSplit, tokensIn } from './requests';
@@ -136,8 +136,6 @@ function selectsKey(selector: string, r: Pick<HourlyRollup, 'keyGeneration' | 'k
   return live !== undefined && r.keyId === selector && Date.parse(live.createdAt) === r.keyGeneration;
 }
 
-const KIND_OF = new Map(ACCOUNTS.map((a) => [a.id, a.kind]));
-const TIER_OF = new Map(ACCOUNTS.map((a) => [a.id, a.subscription?.rateLimitTier]));
 
 /**
  * Whether a row falls on the side the funding filter keeps, as the route reads it off the row's own funding: `plan` is
@@ -293,8 +291,8 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const counted = includeProbes ? rows : rows.filter((r) => r.kind !== 'probe');
   const probeRows = rows.filter((r) => r.kind === 'probe');
   const account = shareAccountOf(key, groupBy, accountIds);
-  const tier = account === null ? undefined : TIER_OF.get(account);
-  const costShares = account !== null && KIND_OF.get(account) === 'oauth' && tier !== undefined ? costSharesOf(counted) : null;
+  const tier = account === null ? undefined : accountById.get(account)?.subscription?.rateLimitTier;
+  const costShares = account !== null && accountById.get(account)?.kind === 'oauth' && tier !== undefined ? costSharesOf(counted) : null;
   const countedPlan = planRows(counted);
   const billed = counted.filter((r) => r.funding !== 'plan');
 
@@ -501,20 +499,18 @@ const burnGroupOf = (groupBy: BurnGroup, named: string[]): ((r: HourlyRollup) =>
 
 export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, filters: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'> = {}): { bucketSeconds: number; points: BurnPoint[] } {
   const { bucketMs, starts } = bucketsOf(range);
-  const kinds = new Map(ACCOUNTS.map((a) => [a.id, a.kind]));
-  const tiers = new Map(ACCOUNTS.map((a) => [a.id, a.subscription?.rateLimitTier]));
   // A usage-based seat is a paid source, so its burn reads in dollars as an API key's does.
   const usageBased = new Set(ACCOUNTS.filter((a) => a.usageBased).map((a) => a.id));
   const first = starts[0] ?? 0;
   const end = (starts[starts.length - 1] ?? 0) + bucketMs;
   const accounts = filters.accountIds ?? [];
   // The route prices a row by its account's kind and skips a row whose account left the registry.
-  const kept = rows.filter((r) => Date.parse(r.hour) >= first && Date.parse(r.hour) < end && kinds.has(r.accountId) && (accounts.length === 0 || accounts.includes(r.accountId)));
+  const kept = rows.filter((r) => Date.parse(r.hour) >= first && Date.parse(r.hour) < end && accountById.has(r.accountId) && (accounts.length === 0 || accounts.includes(r.accountId)));
   const groupOf = burnGroupOf(groupBy, filters.userAgentGroups ?? []);
   const sums = new Map<string, Map<number, BurnSum>>();
   for (const r of kept) {
     const at = Math.floor((Date.parse(r.hour) - first) / bucketMs) * bucketMs + first;
-    const oauth = kinds.get(r.accountId) === 'oauth';
+    const oauth = accountById.get(r.accountId)?.kind === 'oauth';
     // A fast answer spends usage credits and an overage row the account's overage, each in dollars on either kind
     // and off every plan window: on a tier the cost model sizes they read as a zero share, so the account is still a
     // priced one.
@@ -533,7 +529,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     // no weight for never nulls a priced bucket.
     if (tokens === 0) continue;
     const week = modelWeeks(TABLES, r.model)[0];
-    const tier = oauth ? tiers.get(r.accountId) : undefined;
+    const tier = oauth ? accountById.get(r.accountId)?.subscription?.rateLimitTier : undefined;
     if (billed) {
       // Every billed row adds a zero figure, so a bucket with tokens and no plan row reads 0 and only an idle one null.
       // The zero share rests on the tier alone, as the route reads a dollar-billed row, and an API key account has no
@@ -564,7 +560,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     starts.map((at): BurnPoint => {
       const s = sums.get(group)?.get(at) ?? emptyBurn();
       const account = accountOf(group);
-      const kind = account === null ? undefined : kinds.get(account);
+      const kind = account === null ? undefined : accountById.get(account)?.kind;
       const share = (list: (number | null)[]) => (account === null ? null : bucketShare(list));
       // The route answers no 5-hour share where the account's window set lacks the window, a billed row's zero
       // included.

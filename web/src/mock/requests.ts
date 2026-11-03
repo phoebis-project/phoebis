@@ -32,7 +32,7 @@ const phaseRng = createRng(3_571);
 const STREAM_TAIL = 30;
 /** The registry's kind of an account the story names. A wrong id fails the mock build rather than reading a default. */
 const kindOf = (accountId: string): AccountKind => {
-  const kind = ACCOUNTS.find((x) => x.id === accountId)?.kind;
+  const kind = accountById.get(accountId)?.kind;
   if (kind === undefined) throw new Error(`the story names an account the registry lacks: ${accountId}`);
   return kind;
 };
@@ -158,7 +158,7 @@ const walkBack = (w: RateLimitWindow, atMs: number, olderFactor: () => number): 
 };
 
 export const oauthWindows = (accountId: string, atMs: number, olderFactor: () => number = () => rng.float(0.4, 1.1)): AttemptWindow[] => {
-  const account = ACCOUNTS.find((a) => a.id === accountId);
+  const account = accountById.get(accountId);
   if (!account || account.kind !== 'oauth') return [];
   // The drawn day's ids are pinned by the checks and the site's screenshots, so a story edit that moves a request
   // between windows keeps the stream's number of draws. The drawn day was seeded while secondary's 5-hour window opened
@@ -1014,7 +1014,7 @@ function storyRow(seed: StorySeed): RequestLog {
   const stopless = cut || seed.outcome === 'incomplete';
   const attempts = seed.attempts.map((a, index): Attempt => {
     const windows = oauthWindows(a.accountId, a.at, () => SERVED_FACTOR);
-    const oauth = ACCOUNTS.find((x) => x.id === a.accountId)?.kind === 'oauth';
+    const oauth = accountById.get(a.accountId)?.kind === 'oauth';
     const usageBased = usageBasedOf(a.accountId);
     // A headless cut read no head, so it carries none of an answer's facts, whatever status its seed's attempt names.
     const answer = a.status === 200 && !seed.headless;
@@ -1566,7 +1566,7 @@ export const OVERAGE_FROM = ((): number => {
   const after = REQUESTS.flatMap((r) => r.attempts).map((a) => (a.accountId === 'nightly' ? Date.parse(a.startedAt) : Number.NaN)).filter((at) => at >= NIGHTLY_CAP_RAISED);
   return after.length ? Math.min(...after) : NIGHTLY_CAP_RAISED + MINUTE;
 })();
-const nightly = ACCOUNTS.find((a) => a.id === 'nightly');
+const nightly = accountById.get('nightly');
 if (nightly?.overage) nightly.overage.since = iso(OVERAGE_FROM);
 // The attempt literals run before the instant exists, so nightly's heads from it on read their overage flag here.
 for (const a of REQUESTS.flatMap((r) => r.attempts)) if (a.accountId === 'nightly' && Date.parse(a.startedAt) >= OVERAGE_FROM) a.overageInUse = true;
