@@ -281,7 +281,7 @@ function equivalentsOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[]):
  * The account a group's shares price under: the group's own under the account grouping, else the one account the
  * query names, as the route's gate reads it, since shares of different accounts' windows do not add. Null otherwise.
  */
-const shareAccountOf = (key: string, groupBy: AnalyticsGroupBy, accountIds: string[] | undefined): string | null => (groupBy === 'account' ? key : accountIds?.length === 1 ? accountIds[0] : null);
+const shareAccountOf = (key: string, groupBy: AnalyticsGroupBy | BurnGroup, accountIds: string[] | undefined): string | null => (groupBy === 'account' ? key : accountIds?.length === 1 ? accountIds[0] : null);
 
 /**
  * Two sums per group, the way the route splits them: the request side, which a probe row joins only when probes
@@ -557,11 +557,10 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
   if (groupBy === 'session') groups = [...groups].sort((a, b) => tokensOf(b) - tokensOf(a)).slice(0, BURN_SESSIONS).sort();
   // The route answers the shares and the unit where each group holds one account's rows: the account grouping, or a
   // filter naming exactly one account.
-  const accountOf = (group: string) => (groupBy === 'account' ? group : accounts.length === 1 ? accounts[0] : null);
   const points = groups.flatMap((group) =>
     starts.map((at): BurnPoint => {
       const s = sums.get(group)?.get(at) ?? emptyBurn();
-      const account = accountOf(group);
+      const account = shareAccountOf(group, groupBy, filters.accountIds);
       const kind = account === null ? undefined : accountById.get(account)?.kind;
       const share = (list: (number | null)[]) => (account === null ? null : bucketShare(list));
       // The route answers no 5-hour share where the account's window set lacks the window, a billed row's zero
