@@ -580,6 +580,11 @@ async fn publish(state: &AdminState, id: &str, status: StatusCode) -> Response {
     if let Err(refusal) = reload_or_refuse(state).await {
         return refusal;
     }
+    read_back(state, id, status)
+}
+
+/// The guardrail as the registry holds it, with its attachments, answered under `status`.
+fn read_back(state: &AdminState, id: &str, status: StatusCode) -> Response {
     let load = match state.store.load_registry() {
         Ok(load) => load,
         Err(error) => return store_failure(error),
@@ -985,14 +990,7 @@ impl Side {
     ),
 )]
 pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
-    let load = match state.store.load_registry() {
-        Ok(load) => load,
-        Err(error) => return store_failure(error),
-    };
-    match load.guardrails.iter().find(|row| row.id == id) {
-        Some(row) => Json(guardrail_json(row, &AttachmentIndex::from_load(&load))).into_response(),
-        None => failure(StatusCode::NOT_FOUND, "guardrail not found"),
-    }
+    read_back(&state, &id, StatusCode::OK)
 }
 
 /// Edit a guardrail.
