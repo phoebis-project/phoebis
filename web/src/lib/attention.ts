@@ -1,5 +1,6 @@
 import type { AttentionItem, AttentionKind } from '@/api/types';
 import { METER_CODEC } from './address';
+import { lookup } from './counts';
 import { fmtAbsolute, fmtRelative, instant as clockInstant } from './format';
 import { WINDOW_WORD, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
 import { speedWord } from './selection';
@@ -184,7 +185,7 @@ const names = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is s
 /** The spent windows as the record names them, `5h`, `7d` or `Fable`, a key the console does not know as sent. */
 const windowsOf = (v: unknown): string => {
   const list = names(v);
-  return list.length === 0 ? '' : ` the ${words(list.map((w) => WINDOW_WORD[w] ?? w))} ${list.length === 1 ? 'window' : 'windows'}`;
+  return list.length === 0 ? '' : ` the ${words(list.map((w) => lookup(WINDOW_WORD, w) ?? w))} ${list.length === 1 ? 'window' : 'windows'}`;
 };
 
 /**
@@ -254,7 +255,7 @@ function driftWords(item: AttentionItem, now: number): string {
   const ratios = windows.map((w, i) => {
     const word = text(w.window) ?? '';
     const ratio = `${ratioWord(count(w.ratio))}x`;
-    return i === 0 ? `${WINDOW_WORD[word] ?? word} charged ${ratio} the table` : `${WINDOW_WORD[word] ?? word} ${ratio}`;
+    return i === 0 ? `${lookup(WINDOW_WORD, word) ?? word} charged ${ratio} the table` : `${lookup(WINDOW_WORD, word) ?? word} ${ratio}`;
   });
   return [...ratios, `since ${clockInstant(Date.parse(item.since), now)}`].join(', ');
 }

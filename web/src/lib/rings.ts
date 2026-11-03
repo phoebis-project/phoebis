@@ -1,5 +1,6 @@
 import type { Account, SubscriptionCosts } from '@/api/types';
 import { tierCapacity } from '@/lib/costs';
+import { has } from '@/lib/counts';
 import { fmtPct } from '@/lib/format';
 import { isExpired, isQuotaListed, planLabel, pricedTier, remainingOf, windowOf } from '@/lib/quota';
 import { WEEK_SHORT, WEEK_TIER, type WeekPosition } from '@/lib/unit';
@@ -37,7 +38,7 @@ export function ringFigures(accounts: Account[], windowId: RingWindow, costs: Su
   const chosenCapacity = tierCapacity(costs, chosen, 'seven_day');
   // The cost model sizes the Fable week as one factor of every tier's 7-day window, so the factor cancels in the ratio
   // and the Fable ring weighs by the 7-day capacities, where the model sizes the week at all.
-  const sized = windowId === '7d' || Object.prototype.hasOwnProperty.call(costs.modelWindows, 'seven_day_fable');
+  const sized = windowId === '7d' || has(costs.modelWindows, 'seven_day_fable');
   const rows: RingRow[] = [];
   const leftOut: RingLeftOut[] = [];
   let carried = false;

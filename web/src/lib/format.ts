@@ -1,4 +1,5 @@
 import type { Placement } from '@/api/types';
+import { lookup } from '@/lib/counts';
 import { WEEK_LABEL, type WeekPosition } from '@/lib/unit';
 import { type ByWindow, WINDOW_LABEL, windowKeyId } from '@/lib/windows';
 
@@ -64,13 +65,13 @@ export const pct = (v: number | null | undefined, signed = false) => {
 /** A share of a window as a percent to three significant digits, trailing zeros dropped: 8.41%, 0.219%, 12.5%. */
 export const fmtShare = (ratio: number) => `${Number((ratio * 100).toPrecision(3))}%`;
 /** A share with its window named ("0.42% of 5-hour", "0.12% of 7-day Fable"), a window the pages do not know under its key. */
-export const shareLabel = (windowKey: string, share: number): string => `${fmtShare(share)} of ${WINDOW_LABEL[windowKeyId(windowKey) ?? ''] ?? windowKey}`;
+export const shareLabel = (windowKey: string, share: number): string => `${fmtShare(share)} of ${lookup(WINDOW_LABEL, windowKeyId(windowKey) ?? '') ?? windowKey}`;
 const WINDOW_SHORT: ByWindow<string> = { '5h': '5h', '7d': '7d', '7d_fable': '7-day Fable' };
 /**
  * A share with its window's short word ("0.42% 5h", "0.12% 7d", "0.12% 7-day Fable"), for a cell too narrow for the
  * full form. A window the pages do not know reads under its key, and `shareLabel` stays the full form.
  */
-export const shareShort = (windowKey: string, share: number): string => `${fmtShare(share)} ${WINDOW_SHORT[windowKeyId(windowKey) ?? ''] ?? windowKey}`;
+export const shareShort = (windowKey: string, share: number): string => `${fmtShare(share)} ${lookup(WINDOW_SHORT, windowKeyId(windowKey) ?? '') ?? windowKey}`;
 export const WEEK_WORD: Record<WeekPosition, string> = { max: 'a Max week', pro: 'a Pro week', ultra: 'an Ultra week' };
 /** "0.11% of an Ultra week", "1.11% of a Pro week", zero "0%". */
 export const fmtWeek = (share: number, week: WeekPosition): string => (share === 0 ? '0%' : `${fmtShare(share)} of ${WEEK_WORD[week]}`);

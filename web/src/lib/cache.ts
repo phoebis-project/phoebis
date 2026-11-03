@@ -1,4 +1,5 @@
 import type { CacheMissReason, WastedProbeReason } from '@/api/types';
+import { lookup } from '@/lib/counts';
 
 /**
  * Reading order for the panels: the no-divergence answer, the diagnosed divergences, the two non-answers, then the
@@ -18,12 +19,8 @@ export const CACHE_MISS_LABEL: Record<CacheMissReason, string> = {
   unavailable: 'Unavailable',
 };
 
-// The route passes any name the beta sent, so a lookup by that name sees own keys only: `__proto__` or
-// `constructor` would otherwise answer a member every object inherits. The lib target predates `Object.hasOwn`.
-const hasOwn = (o: object, key: string) => Object.prototype.hasOwnProperty.call(o, key);
-
 /** A reason the console has no label for reads under the name the beta gave it. */
-export const missLabel = (reason: CacheMissReason): string => (hasOwn(CACHE_MISS_LABEL, reason) ? CACHE_MISS_LABEL[reason] : reason);
+export const missLabel = (reason: CacheMissReason): string => lookup(CACHE_MISS_LABEL, reason) ?? reason;
 
 /**
  * The misses-by-reason table's header words, one per reason so ten columns fit beside the group column. The
@@ -42,9 +39,9 @@ export const CACHE_MISS_SHORT: Record<CacheMissReason, string> = {
 };
 
 /** A reason the console has no word for reads under the name the beta gave it. */
-export const missShort = (reason: CacheMissReason): string => (hasOwn(CACHE_MISS_SHORT, reason) ? CACHE_MISS_SHORT[reason] : reason);
+export const missShort = (reason: CacheMissReason): string => lookup(CACHE_MISS_SHORT, reason) ?? reason;
 
-export const missCount = (reasons: Record<CacheMissReason, number>, reason: CacheMissReason): number => (hasOwn(reasons, reason) ? reasons[reason] : 0);
+export const missCount = (reasons: Record<CacheMissReason, number>, reason: CacheMissReason): number => lookup(reasons, reason) ?? 0;
 
 /** The columns a breakdown draws: the known reasons in reading order, then every other name the groups carry, alphabetically. */
 export function missReasonOrder(groups: readonly { cacheMissReasons: Record<CacheMissReason, number> }[]): CacheMissReason[] {

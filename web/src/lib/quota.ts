@@ -1,9 +1,7 @@
 import type { Account, AccountSlowDown, ExtraUsage, PLAN_WORDS, PlanWord, PollOutcome, QuotaPoll, RateLimitWindow, Spend, SubscriptionCosts, WindowId } from '@/api/types';
 import { tierRow } from '@/lib/costs';
+import { lookup } from '@/lib/counts';
 import { fmtAbsolute, fmtPct, fmtRelative, instant } from '@/lib/format';
-
-// A local copy, since `lib/analytics` reads `pricedTier` from this module and the two would import each other.
-const own = (map: object, key: string): boolean => Object.prototype.hasOwnProperty.call(map, key);
 
 export type MeterTone = 'good' | 'low' | 'warn';
 
@@ -30,7 +28,7 @@ const TIER_LABEL: Readonly<Record<string, string>> = {
  * the tier alone.
  */
 export function planLabel(tier: string): string {
-  return own(TIER_LABEL, tier) ? TIER_LABEL[tier] : tier;
+  return lookup(TIER_LABEL, tier) ?? tier;
 }
 
 /**
@@ -50,7 +48,7 @@ export const PLAN_WORD_LABEL: Readonly<Record<string, string>> = {
 } satisfies Record<(typeof PLAN_WORDS)[number], string>;
 
 /** A resolved plan word's label, a word the table lacks shown as sent. */
-export const planWordLabel = (word: PlanWord): string => (own(PLAN_WORD_LABEL, word) ? PLAN_WORD_LABEL[word] : word);
+export const planWordLabel = (word: PlanWord): string => lookup(PLAN_WORD_LABEL, word) ?? word;
 
 /** The plan words the router's `priced_tier` answers the stored tier for, the cost table deciding whether it holds
  *  that tier. */

@@ -1,5 +1,6 @@
 import type { Attempt, ModelTiers, SubscriptionCosts, TypeMultiplier } from '@/api/types';
 import type { WeekReading } from '@/lib/analytics';
+import { has, lookup } from '@/lib/counts';
 import { undatedModel } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 import { WEEK_TIER, type WeekPosition } from '@/lib/unit';
@@ -16,17 +17,13 @@ export interface Usage { cacheRead: number; cacheWrite1h: number; cacheWrite5m: 
 
 const TOKEN_TYPES: TokenType[] = ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'input', 'output'];
 
-// A local copy rather than `lib/analytics`'s, which reads `tierCapacity` from this module: the two would import each
-// other.
-const own = (map: object, key: string): boolean => Object.prototype.hasOwnProperty.call(map, key);
-
 export const anchorTier = (costs: SubscriptionCosts): string => costs.unit.tier;
 
 /** The tier's capacity row as stored, then with `default_` taken off or put on; undefined for a tier the
  *  model lacks. */
 export const tierRow = (costs: SubscriptionCosts, tier: string): SubscriptionCosts['capacity'][string] | undefined => {
   const bare = tier.startsWith('default_') ? tier.slice('default_'.length) : null;
-  const key = [tier, bare, `default_${tier}`].find((k): k is string => k !== null && own(costs.capacity, k));
+  const key = [tier, bare, `default_${tier}`].find((k): k is string => k !== null && has(costs.capacity, k));
   return key === undefined ? undefined : costs.capacity[key];
 };
 
@@ -35,7 +32,7 @@ export const tierCapacity = (costs: SubscriptionCosts, tier: string, window: Cos
 /** The shared window `window` prices on and the model-week divisor, as the ledger reads it; null for no plan window. */
 export const pricedWindow = (costs: SubscriptionCosts, window: string): { divisor: number; priced: CostWindow } | null => {
   if (window === 'five_hour' || window === 'seven_day') return { divisor: 1, priced: window };
-  if (own(costs.modelWindows, window)) {
+  if (has(costs.modelWindows, window)) {
     const row = costs.modelWindows[window];
     return row.of === 'seven_day' ? { divisor: row.capacityFactor, priced: 'seven_day' } : null;
   }
@@ -57,13 +54,13 @@ const BASE_CLIENTS = 'Claude Code CLI headless mode, the Agent SDK, Claude in Sl
 const listWords = (words: string[]): string => (words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
 
 /** The headline word of a regime, the raw key for one the map lacks, and "Headless" for the base (null). */
-export const regimeWord = (name: string | null): string => (name === null ? BASE_WORD : own(REGIME_WORD, name) ? REGIME_WORD[name] : name);
+export const regimeWord = (name: string | null): string => (name === null ? BASE_WORD : (lookup(REGIME_WORD, name) ?? name));
 
 /** The clients a regime prices: its entrypoints' client names in alphabetical order, each named once, a token the map
  *  lacks read raw. The base's fixed list for null. The order compares letters, so a raw lowercase token sorts among
  *  the capitalized names rather than after them all. */
 export const regimeClients = (costs: SubscriptionCosts, name: string | null): string =>
-  name === null ? BASE_CLIENTS : [...new Set((costs.regimes[name]?.entrypoints ?? []).map((t) => (own(CLIENT_NAME, t) ? CLIENT_NAME[t] : t)))].sort((a, b) => a.localeCompare(b, 'en')).join(', ');
+  name === null ? BASE_CLIENTS : [...new Set((costs.regimes[name]?.entrypoints ?? []).map((t) => (lookup(CLIENT_NAME, t) ?? t)))].sort((a, b) => a.localeCompare(b, 'en')).join(', ');
 
 /** "Interactive (Claude Code CLI, Claude Desktop, Claude VSCode)": a headline row's and the caption's text. */
 export const regimeTitle = (costs: SubscriptionCosts, name: string | null): string => `${regimeWord(name)} (${regimeClients(costs, name)})`;
@@ -85,7 +82,7 @@ export const regimeOf = (costs: SubscriptionCosts, entrypoint: string | null): s
 /** The model as the named regime prices it: its capacity rows over the base's, a tier it does not name keeping the
  *  base row, and its band factors in place of the base's. The base itself for null or an unknown name. */
 export const withRegime = (costs: SubscriptionCosts, name: string | null): SubscriptionCosts => {
-  if (name === null || !own(costs.regimes, name)) return costs;
+  if (name === null || !has(costs.regimes, name)) return costs;
   const regime = costs.regimes[name];
   return { ...costs, capacity: { ...costs.capacity, ...regime.capacity }, peak: { ...costs.peak, capacityFactor: regime.peakCapacityFactor } };
 };
@@ -94,14 +91,14 @@ export const withRegime = (costs: SubscriptionCosts, name: string | null): Subsc
 export const underRegime = (costs: SubscriptionCosts, entrypoint: string | null): SubscriptionCosts => withRegime(costs, regimeOf(costs, entrypoint));
 
 /** The model's row key: its id as sent, else its undated name, since the price rows carry dated ids. */
-const keyOf = (costs: SubscriptionCosts, model: string): string | null => (own(costs.modelWeight, model) ? model : own(costs.modelWeight, undatedModel(model)) ? undatedModel(model) : null);
+const keyOf = (costs: SubscriptionCosts, model: string): string | null => (has(costs.modelWeight, model) ? model : has(costs.modelWeight, undatedModel(model)) ? undatedModel(model) : null);
 
 /** The model's own weight on `window`: its override on the window, else its row's weight, else null. */
 export const weightOf = (costs: SubscriptionCosts, model: string, window: string): number | null => {
   const key = keyOf(costs, model);
   if (key === null) return null;
   const byWindow = costs.overrides[key]?.weightByWindow;
-  return byWindow !== undefined && own(byWindow, window) ? byWindow[window] : costs.modelWeight[key];
+  return lookup(byWindow ?? {}, window) ?? costs.modelWeight[key];
 };
 
 /** The model's tier: its `model_tier` entry, else its undated id's, else the id's segment after `claude-` when
@@ -109,8 +106,8 @@ export const weightOf = (costs: SubscriptionCosts, model: string, window: string
  *  star-exports beside this module. */
 export const modelTierOf = (costs: ModelTiers, model: string): string | null => {
   const undated = undatedModel(model);
-  if (own(costs.modelTier, model)) return costs.modelTier[model];
-  if (own(costs.modelTier, undated)) return costs.modelTier[undated];
+  if (has(costs.modelTier, model)) return costs.modelTier[model];
+  if (has(costs.modelTier, undated)) return costs.modelTier[undated];
   const named = undated.startsWith('claude-') ? undated.slice('claude-'.length).split('-')[0] : '';
   return costs.tierOrder.includes(named) ? named : null;
 };

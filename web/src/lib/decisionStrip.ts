@@ -1,5 +1,5 @@
 import type { DecisionKind, DecisionRecord, WalkStep } from '@/api/types';
-import { own } from '@/lib/analytics';
+import { has, lookup } from '@/lib/counts';
 import { candidateCells, DECISION_KIND_LABEL, DECISION_KIND_TONE, formatFact, PLACE_WORD, STEP_NAME, strategyWord, tierOf, verdictTone, verdictWord, words } from '@/lib/routingLog';
 import type { Chip, VerdictTone } from '@/lib/routingLog';
 
@@ -79,10 +79,10 @@ export const PARTITION_WORD: Record<'fell_through' | 'held' | 'off', string> = {
  * under Rungs, "spent" under Moves). The popover's head is the station's `head`.
  */
 export function stationWord(stepId: string): string {
-  if (!own(STEP_NAME, stepId)) return stepId;
+  if (!has(STEP_NAME, stepId)) return stepId;
   const name = STEP_NAME[stepId];
   // A step both tables hold sits in one group in each, and the cool reading in none.
-  const kind = own(STATION_KINDS, stepId) ? STATION_KINDS[stepId] : own(LEGACY_STATION_KINDS, stepId) ? LEGACY_STATION_KINDS[stepId] : null;
+  const kind = lookup(STATION_KINDS, stepId) ?? lookup(LEGACY_STATION_KINDS, stepId) ?? null;
   const group = kind?.group ?? null;
   // The engine writes all five rules and all three rungs, so they always stand under their bracket, while the one
   // Partitions station of a continuation or a pinned line stands alone.
@@ -155,7 +155,7 @@ const HELD_FOR: Record<string, TerminusKind> = { reset: 'held_reset', rewrite: '
  */
 const terminusOf = (outcome: DecisionRecord['outcome']): TerminusKind => {
   const reason = outcome.kind === 'held' ? outcome.hold?.reason : undefined;
-  return reason !== undefined && own(HELD_FOR, reason) ? HELD_FOR[reason] : TERMINUS_OF[outcome.kind];
+  return reason !== undefined && has(HELD_FOR, reason) ? HELD_FOR[reason] : TERMINUS_OF[outcome.kind];
 };
 const CHOSEN_VERDICTS = new Set(['chosen', 'held_on', 'renewed']);
 const MAX_LEAVES = 8;
@@ -219,7 +219,7 @@ function secondOf(s: WalkStep, now: number): string[] {
     case 'hold': {
       const place = factOf(s, 'place');
       const bound = factOf(s, 'bound_ms');
-      return [...(typeof place === 'string' ? [own(PLACE_WORD, place) ? PLACE_WORD[place] : words(place)] : []), ...(typeof bound === 'number' ? [`bound ${formatFact(bound, 'ms', now)}`] : [])];
+      return [...(typeof place === 'string' ? [lookup(PLACE_WORD, place) ?? words(place)] : []), ...(typeof bound === 'number' ? [`bound ${formatFact(bound, 'ms', now)}`] : [])];
     }
     case 'exhausted': {
       const kind = factOf(s, 'kind');
@@ -235,7 +235,7 @@ function partitionBadge(s: WalkStep | null, key: string): { badge: string; tone:
   if (value === undefined) return { badge: 'not recorded', tone: 'neutral', verdict: null };
   if (typeof value === 'number') return { badge: `${value} out`, tone: value === 0 ? 'good' : 'warning', verdict: String(value) };
   const word = String(value);
-  return { badge: own(PARTITION_WORD, word) ? PARTITION_WORD[word as keyof typeof PARTITION_WORD] : words(word), tone: verdictTone(word, 'partitions'), verdict: word };
+  return { badge: lookup(PARTITION_WORD, word) ?? words(word), tone: verdictTone(word, 'partitions'), verdict: word };
 }
 
 /** A station with the walk's verdict it reads its state by: the step's own, the Move station's badge word. */
@@ -278,7 +278,7 @@ function draftsOf(walk: WalkStep[], entries: Entry[], shape: StripShape, now: nu
       }
       continue;
     }
-    const known = own(maps.kinds, step);
+    const known = has(maps.kinds, step);
     // A step the walk records twice keeps one id per station.
     const id = seen.has(step) ? `${step}#${index}` : step;
     seen.add(id);
@@ -309,7 +309,7 @@ function branchOf(walk: WalkStep[], drafts: Draft[], shape: StripShape, kind: De
     const cap = walk.find((s, i) => i > firedAt && s.step === 'cap_filter');
     const raw = kind === 'moved' ? 'moved' : (cap?.verdict ?? walk[firedAt].verdict);
     const move: Station = {
-      ...blank('move', fired, null, kinds[fired] ?? UNKNOWN_KIND, own(kinds, fired)),
+      ...blank('move', fired, null, kinds[fired] ?? UNKNOWN_KIND, has(kinds, fired)),
       badge: verdictWord(raw),
       group: null,
       head: 'Move',

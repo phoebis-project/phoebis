@@ -1,6 +1,7 @@
 import type { Api } from '@/api/client';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, HeldPoint, PinMigrationReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
 import { MODEL_WEEK_TIERS, tierCapacity, type CostWindow } from '@/lib/costs';
+import { has, lookup } from '@/lib/counts';
 import { earlierHolderLabel, fmtCompact, fmtInt, fmtPct, fmtShare, fmtUsd, fmtWeek, weekShort } from '@/lib/format';
 import { planLabel, pricedTier } from '@/lib/quota';
 import { ageWord } from '@/lib/time';
@@ -24,13 +25,8 @@ export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
 export const RULE_MOVE_REASONS: readonly PinMigrationReason[] = ['drain', 'overage', 'return_to_plan', 'shed', 'spent'];
 /** The moves an answer forced on a session, which the pool card's move tile names apart from its count. */
 export const FAILOVER_MOVE_REASONS: readonly PinMigrationReason[] = ['cooldown', 'fast_lane', 'mark'];
-/**
- * Whether a label map holds the name as its own key. The names are the router's data, and one could name a member
- * every object inherits.
- */
-export const own = (map: object, key: string): boolean => Object.prototype.hasOwnProperty.call(map, key);
 /** A reason the console has no label for reads as the router sent it. */
-export const moveLabel = (reason: string): string => (own(PIN_MIGRATION_LABEL, reason) ? PIN_MIGRATION_LABEL[reason as PinMigrationReason] : reason);
+export const moveLabel = (reason: string): string => lookup(PIN_MIGRATION_LABEL, reason) ?? reason;
 
 /** The held bars: one per bucket with its milliseconds and request count, and the range's sum for the legend. */
 export function heldBars(answer: RewritesAnswer): { bars: HeldPoint[]; totalMs: number; totalRequests: number } {
@@ -224,11 +220,11 @@ export const HINT_WINDOW: Readonly<Record<string, string>> = { five_hour: 'the 5
  */
 export function shareHintLines(plan: string, shares: Record<string, number | null> | null, tier: string | null, inBand: boolean | null): string[] {
   if (shares === null) return [];
-  const weeks = Object.keys(shares).filter((key) => !SHARED_WINDOWS.includes(key) && tier !== null && (own(MODEL_WEEK_TIERS, key) ? MODEL_WEEK_TIERS[key].includes(tier) : false));
+  const weeks = Object.keys(shares).filter((key) => !SHARED_WINDOWS.includes(key) && tier !== null && (has(MODEL_WEEK_TIERS, key) ? MODEL_WEEK_TIERS[key].includes(tier) : false));
   const lines = [...SHARED_WINDOWS, ...weeks].flatMap((key) => {
-    const share = own(shares, key) ? shares[key] : null;
+    const share = lookup(shares, key) ?? null;
     if (share === null) return [];
-    const words = `${fmtShare(share)} of ${own(HINT_WINDOW, key) ? HINT_WINDOW[key] : key}`;
+    const words = `${fmtShare(share)} of ${lookup(HINT_WINDOW, key) ?? key}`;
     return [key === 'five_hour' && inBand === true ? `${words} (in the band)` : words];
   });
   return lines.length === 0 ? [] : [plan, ...lines];
@@ -260,10 +256,10 @@ export function oneAccountShares<T>(groups: AnalyticsGroup[], read: (g: Analytic
   const out: Record<string, T> = {};
   const left = new Set<string>();
   for (const { map, required: carries } of maps) {
-    if (carries) for (const window of SHARED_WINDOWS) if (!own(map, window)) left.add(window);
+    if (carries) for (const window of SHARED_WINDOWS) if (!has(map, window)) left.add(window);
     for (const [window, v] of Object.entries(map)) {
       if (v === null) left.add(window);
-      else out[window] = own(out, window) ? add(out[window], v) : v;
+      else out[window] = has(out, window) ? add(out[window], v) : v;
     }
   }
   for (const window of left) delete out[window];
@@ -644,7 +640,7 @@ export function niceAxisTop(top: number, ticks = 5): number {
 /** A placement rung as the request drawer words its placed phrase. */
 export const PLACEMENT_RUNG_LABEL: Record<Placement['rung'], string> = { content: 'by its messages', static: 'by its static prefix', with_main: 'with the main conversation' };
 /** A rung the console has no label for reads as the router sent it. */
-export const placementRungLabel = (rung: string): string => (own(PLACEMENT_RUNG_LABEL, rung) ? PLACEMENT_RUNG_LABEL[rung as Placement['rung']] : rung);
+export const placementRungLabel = (rung: string): string => lookup(PLACEMENT_RUNG_LABEL, rung) ?? rung;
 
 /**
  * A placements row's figures in column order: placements, hits, hit share, tokens read, tokens promised. A rung

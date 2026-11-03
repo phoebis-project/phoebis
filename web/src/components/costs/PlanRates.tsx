@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { ModelPrice, SubscriptionCosts } from '@/api/types';
 import { Segmented } from '@/components/ui/primitives';
 import { anchorTier, bandNow, MODEL_WEEK_TIERS, modelWeeks, regimeNames, regimeTitle, regimeWord, shareIn, tierCapacity, tierGroups, unreachableBand, weightedWindows, weightOf, withRegime, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
+import { lookup } from '@/lib/counts';
 import { fmtShare, undatedModel, upperFirst } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 import { nowLine } from './PeakBand';
@@ -118,7 +119,7 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
   const weightCell = (model: string) => {
     const windows = weightedWindows(costs, model);
     // A null shared weight under window weights has no one figure to scale, so the cell names each window's own.
-    if (Object.prototype.hasOwnProperty.call(costs.modelWeight, model) && costs.modelWeight[model] === null && windows.length > 0) {
+    if (lookup(costs.modelWeight, model) === null && windows.length > 0) {
       const named = windows.map((w) => `${weightOf(costs, model, w)} on the ${windowLabel(w)}`).join(', ');
       return (
         <td>

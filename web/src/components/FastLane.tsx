@@ -1,11 +1,11 @@
 import type { Account, FastLaneReading } from '@/api/types';
-import { own } from '@/lib/analytics';
+import { lookup } from '@/lib/counts';
 import { fmtAbsolute, fmtPct, fmtRelative } from '@/lib/format';
 import { isFastScope } from '@/lib/quota';
 
 /** A fast cooldown's reason as its chip words it; a reason added later reads as the router sent it. */
 const FAST_REASON_LABEL: Record<string, string> = { fast_credits: 'credits unavailable', fast_rate_limit: 'rate limited' };
-const reasonLabel = (reason: string) => (own(FAST_REASON_LABEL, reason) ? FAST_REASON_LABEL[reason] : reason);
+const reasonLabel = (reason: string) => lookup(FAST_REASON_LABEL, reason) ?? reason;
 
 /** The later of the two resets: a fast request draws on both buckets, so that is when both have refilled. */
 function laterReset(readings: (FastLaneReading | null)[]): string | null {

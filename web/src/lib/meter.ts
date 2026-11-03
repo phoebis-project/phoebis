@@ -1,5 +1,6 @@
 import type { Reconciliation } from '@/api/types';
 import { MIN_RISE, RATIO_HIGH, RATIO_LOW, ratioOff } from './analytics';
+import { lookup } from './counts';
 import { WINDOW_LABEL, WINDOW_ORDER, windowKeyId } from './windows';
 
 export const METER_HINT =
@@ -14,7 +15,7 @@ const SPAN_MS = 30 * DAY_MS;
 export function meterWindowWord(window: string): string {
   const id = windowKeyId(window);
   if (id === '7d_fable') return 'Fable';
-  return WINDOW_LABEL[id ?? ''] ?? window;
+  return lookup(WINDOW_LABEL, id ?? '') ?? window;
 }
 
 /** The windows' order: the 5-hour window, the 7-day one, the known model week, then any other key by its spelling. */

@@ -1,5 +1,5 @@
 import type { DecisionRecord, DecisionSummary, PrefixEntry, WalkFact, WalkStep } from '@/api/types';
-import { own } from '@/lib/analytics';
+import { has, lookup } from '@/lib/counts';
 import { LEGACY_PARTITION_FACTS, PARTITION_FACTS, type Leaf, type Renderer, type Station, type StripAnchor, type StripModel, type Terminus } from '@/lib/decisionStrip';
 import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
 import type { BadgeTone } from '@/lib/quota';
@@ -115,7 +115,7 @@ const groups = (renderer: Renderer, list: PlanGroup[], unplaced: PopoverPlan['un
  */
 function rowsOf(f: WalkFact, record: DecisionRecord, at: number, unplaced: PopoverPlan['unplaced']): PlanRow[] {
   const chips = factChips(f, record, at);
-  const label = own(ROW_LABEL, f.key) ? ROW_LABEL[f.key] : keyWord(f.key);
+  const label = lookup(ROW_LABEL, f.key) ?? keyWord(f.key);
   if (chips.length === 0) {
     if (Array.isArray(f.value)) return [{ chips: [plain('none', label)], label }];
     unplaced.push({ key: f.key, reason: NO_CHIP });
@@ -149,7 +149,7 @@ function listOf(s: Station, step: WalkStep, record: DecisionRecord, row: Decisio
     return rowsOf(fact, record, at, unplaced).map((r) => (f.key === marked ? { ...r, marked: true } : r));
   };
   const groupsOf = record.version < 2 ? LEGACY_GROUPS_OF : GROUPS_OF;
-  const list: PlanGroup[] = (own(groupsOf, step.step) ? groupsOf[step.step] : []).map((g) => ({ label: g.label, rows: g.keys.flatMap((k) => step.facts.filter((f) => f.key === k).flatMap(rowsFor)) }));
+  const list: PlanGroup[] = (lookup(groupsOf, step.step) ?? []).map((g) => ({ label: g.label, rows: g.keys.flatMap((k) => step.facts.filter((f) => f.key === k).flatMap(rowsFor)) }));
   list.push({ label: null, rows: step.facts.filter((f) => !placed.has(f)).flatMap(rowsFor) });
   return groups('list', list, unplaced);
 }
@@ -248,7 +248,7 @@ function holdOf(step: WalkStep, record: DecisionRecord, at: number): Pick<Popove
   const take = taker(step, placed);
   const rows: PlanRow[] = take('place').map((f) => {
     const place = String(f.value);
-    return { chips: [plain(own(PLACE_WORD, place) ? PLACE_WORD[place] : words(place), keyWord(f.key))], label: keyWord(f.key) };
+    return { chips: [plain(lookup(PLACE_WORD, place) ?? words(place), keyWord(f.key))], label: keyWord(f.key) };
   });
   for (const f of take('account_id')) {
     rows.push(...rowsOf(f, record, at, unplaced));
@@ -362,10 +362,10 @@ function leafPlan(leaf: Leaf, model: StripModel, record: DecisionRecord, now: nu
     ...(entry === null ? [] : [{ label: 'prefix', mono: true, title: hashTitle(entry), value: shortHash(entry.hash) }]),
   ];
   // The console's three windows in their order, then any other the account reports, a key's worst bucket among them.
-  const keys = [...Object.keys(WINDOW_WORD).filter((k) => own(member.windows, k)), ...Object.keys(member.windows).filter((k) => !own(WINDOW_WORD, k))];
+  const keys = [...Object.keys(WINDOW_WORD).filter((k) => has(member.windows, k)), ...Object.keys(member.windows).filter((k) => !has(WINDOW_WORD, k))];
   const windows: WindowRow[] = keys.map((k) => {
     const w = member.windows[k];
-    return { age: ageWord(w.ageMs), left: fmtPct(1 - w.utilization), reset: w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), source: w.source, used: fmtPct(w.utilization), window: own(WINDOW_WORD, k) ? WINDOW_WORD[k] : keyWord(k) };
+    return { age: ageWord(w.ageMs), left: fmtPct(1 - w.utilization), reset: w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), source: w.source, used: fmtPct(w.utilization), window: lookup(WINDOW_WORD, k) ?? keyWord(k) };
   });
   const title = out && cells.verdict.chip !== null ? cells.verdict.chip : plain(cells.verdict.badge);
   return { block: { chips, kind: 'candidate', windows }, head: { account: cells.account, badge: null, chip: title, second: [], tone: leaf.tone, word: member.accountId }, renderer: 'candidate', unplaced: [] };

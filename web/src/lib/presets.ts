@@ -1,4 +1,5 @@
 import type { Account, MemberEligibility, Pool, RateLimitWindow, Session } from '@/api/types';
+import { lookup } from './counts';
 import { fmtDuration, instant } from './format';
 import { endOf, minuteSpan, windowOf } from './quota';
 import { speedWord } from './selection';
@@ -98,7 +99,7 @@ const TRIGGER_ORDER: ShedWindow[] = ['5h', '7d', '7d_fable'];
 const PREVIEW_WINDOW: Record<ShedWindow, string> = { '5h': '5h', '7d': '7d', '7d_fable': '7-day Fable' };
 /** A session's `burnWindow` as the window the trigger reads, a key it does not know as none. */
 const BURN_WINDOW: Readonly<Record<string, ShedWindow>> = { five_hour: '5h', seven_day: '7d', seven_day_fable: '7d_fable' };
-const burnWindowOf = (key: string | null): ShedWindow | null => (key !== null && Object.prototype.hasOwnProperty.call(BURN_WINDOW, key) ? BURN_WINDOW[key] : null);
+const burnWindowOf = (key: string | null): ShedWindow | null => (key === null ? null : (lookup(BURN_WINDOW, key) ?? null));
 
 const readingOf = (account: Account, id: ShedWindow): RateLimitWindow | null => (id === '7d_fable' ? account.fableWindow : windowOf(account, id));
 /**

@@ -1,8 +1,9 @@
 import { iso, PIN_RELEASE_REASON_VALUES } from '@/api/decode';
 import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { ROUTING_LOG_CODEC, type RangeValue } from './address';
-import { moveLabel, own, type WeekReading } from './analytics';
+import { moveLabel, type WeekReading } from './analytics';
 import { compareByModelTier } from './costs';
+import { has, lookup } from './counts';
 import type { ChipText } from './filterBar';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, shortModel, weekShort } from './format';
 import { PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL } from './quota';
@@ -198,7 +199,7 @@ export const KIND_PRESETS: readonly KindPreset[] = [
 export const ALL_KINDS: readonly string[] = [...Object.keys(DECISION_KIND_LABEL), 'probe', ...Object.keys(EVENT_KIND_LABEL)];
 
 /** A kind's word: "probe decisions" for the pseudo-kind, else its label. */
-export const kindWord = (kind: string): string => (kind === 'probe' ? 'probe decisions' : (DECISION_KIND_LABEL[kind as DecisionKind] ?? EVENT_KIND_LABEL[kind] ?? kind));
+export const kindWord = (kind: string): string => (kind === 'probe' ? 'probe decisions' : (lookup(DECISION_KIND_LABEL, kind) ?? lookup(EVENT_KIND_LABEL, kind) ?? kind));
 
 /** The words a Kinds chip prints before it counts the rest. */
 const KINDS_LISTED = 3;
@@ -233,7 +234,7 @@ const EVENT_TONE: Record<string, 'critical' | 'serious' | 'warning'> = {
 
 /** An event reads neutral unless it reports trouble. */
 export function eventTone(kind: string): 'critical' | 'neutral' | 'serious' | 'warning' {
-  return own(EVENT_TONE, kind) ? EVENT_TONE[kind] : 'neutral';
+  return lookup(EVENT_TONE, kind) ?? 'neutral';
 }
 
 /** The record's walk steps in the console's words, keyed by the step the engine names. */
@@ -286,7 +287,7 @@ export function verdictTone(verdict: string, stepId?: string): VerdictTone {
 }
 
 export const words = (name: string) => name.replace(/_/g, ' ');
-const wordOf = (map: Record<string, string>, name: string) => (own(map, name) ? map[name] : words(name));
+const wordOf = (map: Record<string, string>, name: string) => lookup(map, name) ?? words(name);
 
 const msOf = (value: number | string) => (typeof value === 'number' ? value : Date.parse(value));
 
@@ -388,7 +389,7 @@ function decisionBy(row: DecisionSummary): Chip {
     case 'refusal':
       if (value === 'client') return { value: row.refusal?.code === 'contract' ? 'client contract' : 'client drift' };
       if (value === 'guardrail') return { value: 'guardrail blocked' };
-      return { value: row.refusal && own(KEY_REFUSAL_WORD, row.refusal.code) ? KEY_REFUSAL_WORD[row.refusal.code] : `${words(value)} refused` };
+      return { value: row.refusal && has(KEY_REFUSAL_WORD, row.refusal.code) ? KEY_REFUSAL_WORD[row.refusal.code] : `${words(value)} refused` };
     case 'rule':
       return { value: `${words(value)} rule` };
     case 'rung':
@@ -434,7 +435,7 @@ const FIELD_LABEL: Record<string, string> = {
   shed_share: 'shed cap (then shed_share)',
   source_dwell_seconds: 'shed dwell seconds (then source_dwell_seconds)',
 };
-const fieldLabel = (field: string) => FIELD_LABEL[field] ?? words(field);
+const fieldLabel = (field: string) => lookup(FIELD_LABEL, field) ?? words(field);
 
 const registryBy = (kind: string) => {
   const at = kind.indexOf('_');
@@ -468,7 +469,7 @@ function cooldownBy(e: RoutingEvent): string {
   const reason = str(d.reason) ?? '';
   const window = str(d.window) ?? '';
   if (reason !== 'rate_limit') return words(reason);
-  if (own(WINDOW_WORD, window)) return `429 on ${WINDOW_WORD[window]}`;
+  if (has(WINDOW_WORD, window)) return `429 on ${WINDOW_WORD[window]}`;
   return window === 'retry_after' ? '429 retry-after' : '429';
 }
 
@@ -699,7 +700,7 @@ const SPEED_KEYS = new Set(['factor', 'factor_min', 'speed']);
 function decisionFacts(row: DecisionSummary, now: number): FactPair[] {
   const value = (f: DecisionSummary['fact'][number]) => (SPEED_KEYS.has(f.key) && typeof f.value === 'number' ? speedWord(f.value) : formatFact(f.value, f.unit, now));
   // A key the console has no label for is dropped rather than drawn under a guessed one.
-  return row.fact.flatMap((f) => (own(LABELS, f.key) && !repeatsAt(row, f.unit, f.value) ? [{ entity: f.entity, label: LABELS[f.key as FactKey], value: value(f) }] : []));
+  return row.fact.flatMap((f) => (has(LABELS, f.key) && !repeatsAt(row, f.unit, f.value) ? [{ entity: f.entity, label: LABELS[f.key as FactKey], value: value(f) }] : []));
 }
 
 /**
@@ -818,7 +819,7 @@ export const OBSTACLE_HINT: Record<string, string> = {
   subscription_ended: 'its subscription ended',
   winding_down: 'winding down toward its subscription end',
 };
-const hintOf = (name: string) => (own(OBSTACLE_HINT, name) ? OBSTACLE_HINT[name] : undefined);
+const hintOf = (name: string) => lookup(OBSTACLE_HINT, name);
 
 /** How a rung placed the request, the hover of the card's rung chip. */
 export const PLACED: Record<Placement['rung'], (depth: number) => string> = {
@@ -1080,7 +1081,7 @@ function clientVersionOf(row: DecisionSummary | undefined): string | null {
  *  for. */
 function refusalChips(refusal: { code: string; kind: string; reason: string }, version: string | null): Chip[] {
   if (refusal.kind === 'guardrail') return [plain('guardrail blocked'), plain(refusal.reason, 'guardrail')];
-  if (refusal.kind !== 'client') return [plain(own(KEY_REFUSAL_WORD, refusal.code) ? KEY_REFUSAL_WORD[refusal.code] : refusal.reason)];
+  if (refusal.kind !== 'client') return [plain(lookup(KEY_REFUSAL_WORD, refusal.code) ?? refusal.reason)];
   if (refusal.code === 'contract') return [plain(words(refusal.reason), 'contract')];
   return [plain(words(refusal.reason || 'client'), 'drift'), ...(version ? [plain(version, 'client')] : [])];
 }
@@ -1141,7 +1142,7 @@ export const RUNG_OF: Record<string, 'content' | 'static' | 'with_main'> = { 'ru
  * a member's gate refused. A placement beside the main conversation names no entry.
  */
 export function rungEntry(s: WalkStep, record: DecisionRecord): PrefixEntry | null | undefined {
-  const rung = own(RUNG_OF, s.step) ? RUNG_OF[s.step] : undefined;
+  const rung = lookup(RUNG_OF, s.step);
   if (rung === undefined) return undefined;
   if (rung === 'with_main' || s.verdict === 'not_run') return null;
   if (s.verdict === 'match') {
@@ -1183,7 +1184,7 @@ export function walkLines(record: DecisionRecord, row?: DecisionSummary): WalkLi
           ? ['moves', 'rungs', 'partitions'].map((p) => plain(p))
           : s.facts.flatMap((f) => factChips(f, record, at));
     const entry = rungEntry(s, record);
-    lines.push({ chips, ...(entry === undefined ? {} : { hash: entry }), number: lines.length + 1, step: STEP_NAME[s.step] ?? words(s.step), verdict: s.verdict });
+    lines.push({ chips, ...(entry === undefined ? {} : { hash: entry }), number: lines.length + 1, step: lookup(STEP_NAME, s.step) ?? words(s.step), verdict: s.verdict });
   }
   return lines;
 }
@@ -1216,7 +1217,7 @@ const ttlWord = (ttlMs: number) => (ttlMs >= HOUR ? '1h' : '5 min');
 
 /** A share of each plan window in the console's order, `5h 10.4%`, then any other window under its key. */
 function shareChips(shares: Record<string, unknown>): Chip[] {
-  const keys = [...WINDOWS.filter((w) => own(shares, w)), ...Object.keys(shares).filter((w) => !WINDOWS.includes(w))];
+  const keys = [...WINDOWS.filter((w) => has(shares, w)), ...Object.keys(shares).filter((w) => !WINDOWS.includes(w))];
   return keys.flatMap((w) => {
     const v = num(shares[w]);
     return v === null ? [] : [plain(fmtShare(v), wordOf(WINDOW_WORD, w))];
@@ -1283,7 +1284,7 @@ const PARTITION_WORD: Record<string, string> = { above_ceiling: 'above the ceili
  * The plan beneath a member's account: `Ultra`, `Free`, `API key`. The record's resolved word reads through the label
  * table, and an older record's tier word through `planLabel`.
  */
-const planWord = (c: RecordCandidate) => (c.kind === 'api_key' ? 'API key' : c.planTier === null ? 'OAuth' : own(PLAN_WORD_LABEL, c.planTier) ? PLAN_WORD_LABEL[c.planTier] : planLabel(c.planTier));
+const planWord = (c: RecordCandidate) => (c.kind === 'api_key' ? 'API key' : c.planTier === null ? 'OAuth' : (lookup(PLAN_WORD_LABEL, c.planTier) ?? planLabel(c.planTier)));
 
 /** The member's prefix entry: the match on the rung the outcome names, else the deepest entry a gate refused. */
 function prefixEntryOf(c: RecordCandidate, record: DecisionRecord): PrefixEntry | null {
@@ -1299,7 +1300,7 @@ function cooledWords(reason: string | null, window: string | null): string {
   const r = reason ?? '';
   if (r === 'model_rejected' || window === 'model_rejection') return 'model 404';
   if (r === 'fast_rate_limit' || window === 'fast') return 'fast lane 429';
-  if (r === 'rate_limit') return window !== null && own(WINDOW_WORD, window) ? `429 on ${WINDOW_WORD[window]}` : '429';
+  if (r === 'rate_limit') return window !== null && has(WINDOW_WORD, window) ? `429 on ${WINDOW_WORD[window]}` : '429';
   return words(r || 'cooldown');
 }
 
@@ -1331,7 +1332,7 @@ const MEMBER_STATE_WORD: Record<string, string> = { deleted: 'deleted', disconne
  */
 function operatorWords(c: RecordCandidate): { title: string | undefined; value: string } {
   if (!c.enabled && c.state !== 'deleted') return { title: hintOf('operator'), value: 'held by hand' };
-  const title = c.state === 'deleted' ? 'the account left the registry' : own(STATE_EFFECT, c.state) ? STATE_EFFECT[c.state] : hintOf('operator');
+  const title = c.state === 'deleted' ? 'the account left the registry' : (lookup(STATE_EFFECT, c.state) ?? hintOf('operator'));
   return { title, value: wordOf(MEMBER_STATE_WORD, c.state) };
 }
 
@@ -1352,7 +1353,7 @@ function obstacleWords(c: RecordCandidate, now: number): string {
     case 'spent':
       return `${o.window !== null ? wordOf(WINDOW_WORD, o.window) : 'window'} spent`;
     default:
-      return own(PARTITION_WORD, o.name) ? PARTITION_WORD[o.name] : wordOf(OBSTACLE_WORD, o.name);
+      return lookup(PARTITION_WORD, o.name) ?? wordOf(OBSTACLE_WORD, o.name);
   }
 }
 
@@ -1366,14 +1367,14 @@ function verdictChipOf(c: RecordCandidate, now: number): { chip: Chip | null; to
   if (c.partition !== null) return untoned({ title: hintOf(c.partition), value: wordOf(PARTITION_WORD, c.partition) });
   // The cap held the request on its member whatever that member's fit, so the cap explains the hold.
   if (c.verdict === 'held_on' && c.inFlight >= c.inFlightCap) return untoned(plain('at its cap'));
-  if (c.fit !== null && own(FIT_CHIP, c.fit)) return { chip: plain(FIT_CHIP[c.fit].word), tone: FIT_CHIP[c.fit].tone };
+  if (c.fit !== null && has(FIT_CHIP, c.fit)) return { chip: plain(FIT_CHIP[c.fit].word), tone: FIT_CHIP[c.fit].tone };
   return untoned(placementChipOf(c));
 }
 
 function placementChipOf(c: RecordCandidate): Chip | null {
   if (c.verdict === 'destination') return plain('not placed');
   if (c.verdict === 'source') {
-    const spent = WINDOWS.find((w) => own(c.windows, w) && c.windows[w].utilization >= 1);
+    const spent = WINDOWS.find((w) => has(c.windows, w) && c.windows[w].utilization >= 1);
     return spent === undefined ? null : plain(`${WINDOW_WORD[spent]} spent`);
   }
   return null;
@@ -1394,7 +1395,7 @@ const isSpendSeat = (c: RecordCandidate): boolean => c.kind === 'oauth' && c.pac
  * A seat whose record carries the spend entry: the cells draw the reading the entry holds, while the title and the
  * header read the source's shape.
  */
-const hasSpendEntry = (c: RecordCandidate): boolean => c.kind === 'oauth' && own(c.windows, 'spend');
+const hasSpendEntry = (c: RecordCandidate): boolean => c.kind === 'oauth' && has(c.windows, 'spend');
 
 /**
  * The Pace column's header: the window the score read of the first subscription candidate that is no spend seat and
@@ -1431,7 +1432,7 @@ function paceTitle(c: RecordCandidate, record: DecisionRecord, now: number): str
   if (isSpendSeat(c)) return `${fmtPct(p.remaining)} of its allowance left. Scored by the remaining share alone, with no division by hours.`;
   // A pace built by hand without the key names no window, as a null one does.
   const id = p.window ?? null;
-  const share = id === null ? 'its window' : own(PACE_WINDOW_PHRASE, id) ? PACE_WINDOW_PHRASE[id] : `the ${words(id)} window`;
+  const share = id === null ? 'its window' : (lookup(PACE_WINDOW_PHRASE, id) ?? `the ${words(id)} window`);
   // Whole hours would read a deadline under half an hour away as "0 h".
   const over = p.hours === null ? '' : ` over ${p.hours < 1 ? `${Math.round(p.hours * 60)} min` : `${Math.round(p.hours)} h`}`;
   // The deadline is the earlier of the two, so one equal to the reset is the reset whatever the end reads.
@@ -1452,7 +1453,7 @@ function projectionLines(c: RecordCandidate, record: DecisionRecord, now: number
   if (c.fit === null) return ['-'];
   const at = Date.parse(record.request.at);
   const lines = WINDOWS.flatMap((name) => {
-    const w = own(c.windows, name) ? c.windows[name] : undefined;
+    const w = lookup(c.windows, name);
     if (w === undefined || w.projection === null) return [];
     const horizon = w.horizon === null ? null : Date.parse(w.horizon);
     const when = horizon === null ? '' : w.reset !== null && Date.parse(w.reset) === horizon ? ` at ${formatFact(horizon, 'time', now)}` : ` in ${span(horizon - at)}`;
@@ -1466,7 +1467,7 @@ function projectionLines(c: RecordCandidate, record: DecisionRecord, now: number
  * the burn and the speed the account is held to, which the projection does not show.
  */
 function projectionTitle(c: RecordCandidate, now: number): string | null {
-  const demand = own(c.windows, 'five_hour') ? (c.windows.five_hour.demand ?? null) : null;
+  const demand = has(c.windows, 'five_hour') ? (c.windows.five_hour.demand ?? null) : null;
   const burn = num(c.burn.five_hour);
   if (demand === null || burn === null || demand === burn) return null;
   return `demand ${formatFact(demand, 'percent_per_hour', now)} over burn ${formatFact(burn, 'percent_per_hour', now)}${c.factor === null ? '' : ` at ${speedWord(c.factor)}`}`;
@@ -1491,11 +1492,11 @@ export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: 
   const spend = hasSpendEntry(c);
   const windows =
     c.kind === 'api_key'
-      ? [[own(c.windows, 'worst_bucket') ? `worst bucket ${fmtPct(c.windows.worst_bucket.utilization)}` : 'not reported']]
+      ? [[has(c.windows, 'worst_bucket') ? `worst bucket ${fmtPct(c.windows.worst_bucket.utilization)}` : 'not reported']]
       : spend
         ? [spendLines(c.windows.spend, now)]
         : WINDOWS.map((name) => {
-            if (!own(c.windows, name)) return ['not reported'];
+            if (!has(c.windows, name)) return ['not reported'];
             const w = c.windows[name];
             return [fmtPct(w.utilization), w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), `${w.source} ${ageWord(w.ageMs)}`];
           });
@@ -1524,7 +1525,7 @@ const VERDICT_ORDER: Record<string, number> = { chosen: 0, renewed: 1, held_on: 
  * priority and then by account id.
  */
 export function rankCandidates(candidates: RecordCandidate[]): RecordCandidate[] {
-  const group = (c: RecordCandidate) => VERDICT_ORDER[c.verdict] ?? 8;
+  const group = (c: RecordCandidate) => lookup(VERDICT_ORDER, c.verdict) ?? 8;
   const rank = (c: RecordCandidate) => (c.verdict === 'ranked' ? (c.rank ?? Number.POSITIVE_INFINITY) : 0);
   return [...candidates].sort((a, b) => group(a) - group(b) || rank(a) - rank(b) || a.priority - b.priority || a.accountId.localeCompare(b.accountId));
 }
@@ -1698,7 +1699,7 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
     const x = o.exhaustion;
     rows.push({
       chips: [
-        plain(String(ranOut ? 429 : own(EXHAUSTION_STATUS, x.kind) ? EXHAUSTION_STATUS[x.kind] : 503), 'status'),
+        plain(String(ranOut ? 429 : (lookup(EXHAUSTION_STATUS, x.kind) ?? 503)), 'status'),
         ...(x.window !== null ? [plain(wordOf(WINDOW_WORD, x.window), 'window')] : []),
         ...(x.reason !== null ? [plain(wordOf(CREDITS_WORD, x.reason), 'cause')] : []),
         plain(x.deadline === null ? 'none' : formatFact(x.deadline, 'time', at), x.deadline === null ? 'retry' : 'retry after'),
@@ -1772,7 +1773,7 @@ const REWRITE_WINDOW_WORD: Record<string, string> = { five_hour: '5-hour', seven
  */
 const rewriteCell = (rewrite: number | null, window: string | null, unit: string | null, week: WeekReading): Chip => {
   if (rewrite === null) return plain('-');
-  const word = window === null ? null : own(REWRITE_WINDOW_WORD, window) ? REWRITE_WINDOW_WORD[window] : window;
+  const word = window === null ? null : (lookup(REWRITE_WINDOW_WORD, window) ?? window);
   if (unit !== 'pro_week') return plain(word === null ? fmtShare(rewrite) : `${fmtShare(rewrite)} of 20x ${word}`);
   if (week.scale === null) return week.error === null ? plain('-') : { ...plain('-'), title: week.error };
   const cell = plain(weekShort(rewrite * week.scale, week.week));
@@ -1874,7 +1875,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
     }
     case 'ledger_gap':
       add('Reason', text(d.reason));
-      add('Meaning', str(d.reason) !== null && own(GAP_MEANING, str(d.reason) ?? '') ? plain(GAP_MEANING[str(d.reason) ?? '']) : null);
+      add('Meaning', str(d.reason) !== null && has(GAP_MEANING, str(d.reason) ?? '') ? plain(GAP_MEANING[str(d.reason) ?? '']) : null);
       if (str(d.reason)?.startsWith('chunk')) add('Effect', plain('the captured response is stored truncated'));
       add('Request', request);
       break;

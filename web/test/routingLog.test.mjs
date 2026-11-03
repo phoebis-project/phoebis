@@ -326,7 +326,7 @@ test("every walk key the router writes reads words of its own, the pick's ties a
   // The account a fact names is its chip, a rung's hash is drawn from the candidate table, and a score or a standing
   // names itself.
   const drawnOtherwise = new Set(['account_id', 'hash', 'score', 'standing']);
-  assert.deepEqual([...written].sort().filter((key) => !drawnOtherwise.has(key) && !d.own(d.WALK_KEY, key)), []);
+  assert.deepEqual([...written].sort().filter((key) => !drawnOtherwise.has(key) && !Object.hasOwn(d.WALK_KEY, key)), []);
 });
 
 test("the walk-key read reaches a key written in a module's own directory", () => {
@@ -417,6 +417,11 @@ test("the log's address keeps a kind this build does not know, so the route's re
   const filters = d.ROUTING_LOG_CODEC.fromParams(new URLSearchParams('kinds=placed,budget_refilled&accounts=primary'));
   assert.deepEqual([filters.kinds, filters.accounts], [['placed', 'budget_refilled'], ['primary']]);
   assert.equal(d.ROUTING_LOG_CODEC.toParams(filters).get('kinds'), 'placed,budget_refilled');
+});
+
+test('a kind named after an Object.prototype member reads the fallback word', () => {
+  const filters = d.ROUTING_LOG_CODEC.fromParams(new URLSearchParams('kinds=constructor'));
+  assert.deepEqual(d.kindsChipText(filters.kinds), { text: 'kinds: constructor', title: 'constructor', values: 'constructor' });
 });
 
 test('this minute is the clock minute that holds the moment, its last millisecond the end, never past now', () => {

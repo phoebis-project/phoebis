@@ -1,6 +1,7 @@
 import type { AllowanceAccount, AllowanceReset, AllowanceWindow, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
-import { HINT_WINDOW, own } from '@/lib/analytics';
+import { HINT_WINDOW } from '@/lib/analytics';
 import { anchorTier, pricedWindow, tierCapacity, weekScale, weekUnpricedTitle } from '@/lib/costs';
+import { lookup } from '@/lib/counts';
 import { fmtAbsolute, fmtShare, fmtShortTime, weekShort } from '@/lib/format';
 import { pricedTier } from '@/lib/quota';
 import type { WeekPosition } from '@/lib/unit';
@@ -114,7 +115,7 @@ export function weeklyKeys(accounts: AllowanceAccount[]): string[] {
 }
 
 /** A window's word in the card's column heads: "7-day", "Fable", a model week the console does not know by its key. */
-export const allowanceColumnWord = (window: string): string => (window === 'seven_day_fable' ? 'Fable' : (WINDOW_LABEL[windowKeyId(window) ?? ''] ?? window));
+export const allowanceColumnWord = (window: string): string => (window === 'seven_day_fable' ? 'Fable' : (lookup(WINDOW_LABEL, windowKeyId(window) ?? '') ?? window));
 
 /** The block's own words for where a reading came from, since the routing log's `window reset` panel names none. */
 const SOURCE_WORD = new Map([
@@ -128,7 +129,7 @@ export const resetHover = (reset: AllowanceReset): string => `${fmtAbsolute(rese
 
 /** A reset's own share for the week's hover, in the hint's words: "Ultra: 39% of the 7-day window left", "Max: 12% of
  *  the Fable week left", a week the console does not know under its key. */
-export const ownShareHover = (plan: string, window: string, shareLeft: number): string => `${plan}: ${fmtShare(shareLeft)} of ${own(HINT_WINDOW, window) ? HINT_WINDOW[window] : window} left`;
+export const ownShareHover = (plan: string, window: string, shareLeft: number): string => `${plan}: ${fmtShare(shareLeft)} of ${lookup(HINT_WINDOW, window) ?? window} left`;
 
 /** A reset's day, "Sep 12": a week's reset lies days back, so the day is always written. */
 export const resetDate = (isoTime: string): string => new Date(isoTime).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
