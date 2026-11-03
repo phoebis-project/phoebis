@@ -398,6 +398,34 @@ async fn a_bad_limit_with_no_key_answers_the_authentication_refusal_first() {
     assert_eq!(should_retry(&resp), Some("false"));
 }
 
+/// The key check marks its own refusals, so the cases take the two refusals only the handlers mark.
+#[tokio::test]
+async fn every_models_answer_is_marked_no_store_its_refusals_included() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(catalog_rows()).await;
+    let h = harness_with_catalog(&up, catalog_up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+
+    for (path, status) in [
+        ("/v1/models?limit=0", axum::http::StatusCode::BAD_REQUEST),
+        ("/v1/models/claude-nope", axum::http::StatusCode::NOT_FOUND),
+    ] {
+        let resp = h
+            .app
+            .clone()
+            .oneshot(models_request(KEY, path))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), status, "{path}");
+        assert_eq!(
+            resp.headers()
+                .get("cache-control")
+                .map(|value| value.to_str().unwrap()),
+            Some("no-store"),
+            "{path}"
+        );
+    }
+}
+
 /// The listing reads the key alone, so a caller outside Claude Code that holds a key reads the list the client
 /// reads.
 #[tokio::test]
