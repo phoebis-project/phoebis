@@ -255,7 +255,7 @@ const INJECTED_READ_FAILURE: &str = "injected ledger read failure";
 
 impl LedgerDb {
     pub fn open(path: &Path) -> Result<LedgerDb, LedgerError> {
-        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        use std::os::unix::fs::DirBuilderExt;
         let dir = match path.parent() {
             Some(parent) if !parent.as_os_str().is_empty() => parent,
             _ => Path::new("."),
@@ -265,13 +265,8 @@ impl LedgerDb {
             .mode(0o700)
             .create(dir)?;
         if !path.exists() {
-            // Captured bodies are prompts; the file is created under 0600 before SQLite can apply the umask.
-            std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .write(true)
-                .mode(0o600)
-                .open(path)?;
+            // Captured bodies are prompts, so the file is private from its creation.
+            phoebis_store::permissions::create_private_if_missing(path, 0o600)?;
         }
         let mut writer = Connection::open(path)?;
         writer.busy_timeout(BUSY_TIMEOUT)?;

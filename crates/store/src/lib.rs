@@ -405,8 +405,6 @@ impl Store {
     /// Opens (creating if needed) the on-disk registry at `db_path`: the directory holding it at mode 0700,
     /// the process lock beside it, then the database file at mode 0600.
     pub fn open(db_path: &Path, key: &StorageKey) -> Result<Store, StoreError> {
-        use std::os::unix::fs::OpenOptionsExt;
-
         let dir = permissions::data_dir_of(db_path);
         let dir_existed = dir.exists();
         permissions::create_private_dir(dir)?;
@@ -418,14 +416,8 @@ impl Store {
         let process_lock = lock::acquire(dir)?;
 
         if !db_path.exists() {
-            // SQLite creates new database files honoring the process umask; create it ourselves first
-            // so credentials never sit in a file readable by other local users, even briefly.
-            std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .write(true)
-                .mode(0o600)
-                .open(db_path)?;
+            // The file holds credentials, so it is private from its creation.
+            permissions::create_private_if_missing(db_path, 0o600)?;
         } else {
             for warning in permissions::check_private_file(db_path, 0o600) {
                 tracing::warn!("{warning}");
