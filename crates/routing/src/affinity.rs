@@ -156,13 +156,10 @@ pub trait ConversationLookup {
     fn predecessor(&self, query: &PredecessorQuery<'_>) -> Option<String>;
 }
 
-/// A boundary under the model it was reported for: an entry's place in the map.
-type EntryKey = (String, String);
-
-fn row_of(model: &str, hash: &str, entry: &AffinityEntry) -> AffinityRow {
+fn row_of(model: &str, hash: String, entry: &AffinityEntry) -> AffinityRow {
     AffinityRow {
         model: model.to_string(),
-        hash: hash.to_string(),
+        hash,
         chain: entry.chain,
         account_id: entry.account_id.clone(),
         incarnation: entry.incarnation,
@@ -183,8 +180,9 @@ pub struct AffinityMap {
     /// The model, then the boundary: a lookup borrows both keys, so a selection walking a long conversation's
     /// boundaries allocates nothing per boundary. No inner map is left empty.
     entries: HashMap<String, HashMap<String, AffinityEntry>>,
-    /// Keys refreshed in place since the last drain, not yet persisted.
-    dirty: HashSet<EntryKey>,
+    /// The boundaries refreshed in place since the last drain, not yet persisted, keyed as `entries` is, so a refresh
+    /// of a boundary already dirty allocates nothing.
+    dirty: HashMap<String, HashSet<String>>,
     /// A folded spelling to the dated id it resolved to, as `RoutingState::canonical` keeps it, so a report or
     /// a lookup keys on the dated id once it is known, whichever spelling the caller names. An entry already
     /// written under the old spelling is not rekeyed; it ages out through the purge.
@@ -393,21 +391,27 @@ impl AffinityMap {
         }
         self.entries.retain(|_, hashes| !hashes.is_empty());
         for purged in &gone {
-            self.dirty
-                .remove(&(purged.model.clone(), purged.hash.clone()));
+            if let Some(hashes) = self.dirty.get_mut(&purged.model) {
+                hashes.remove(&purged.hash);
+            }
         }
         gone
     }
 
     /// The refreshed rows not yet persisted, cleared.
     pub fn drain(&mut self) -> Vec<AffinityRow> {
-        std::mem::take(&mut self.dirty)
-            .into_iter()
-            .filter_map(|(model, hash)| {
-                let entry = self.entries.get(&model)?.get(&hash)?;
-                Some(row_of(&model, &hash, entry))
-            })
-            .collect()
+        let mut rows = Vec::new();
+        for (model, hashes) in std::mem::take(&mut self.dirty) {
+            let Some(entries) = self.entries.get(&model) else {
+                continue;
+            };
+            for hash in hashes {
+                if let Some(entry) = entries.get(&hash) {
+                    rows.push(row_of(&model, hash, entry));
+                }
+            }
+        }
+        rows
     }
 
     pub fn len(&self) -> usize {
@@ -478,7 +482,14 @@ impl AffinityMap {
                 // One entry holds one lane: a conversation that switched lanes forgets the earlier lane's cache here,
                 // which a lane change reads as cold anyway.
                 entry.lane.clone_from(&report.lane);
-                self.dirty.insert((model.to_string(), hash.to_string()));
+                if let Some(hashes) = self.dirty.get_mut(model) {
+                    if !hashes.contains(hash) {
+                        hashes.insert(hash.to_string());
+                    }
+                } else {
+                    self.dirty
+                        .insert(model.to_string(), HashSet::from([hash.to_string()]));
+                }
                 return None;
             }
             // A writer of the same key and generation keeps the root the boundary was first recorded under, even
@@ -507,10 +518,14 @@ impl AffinityMap {
             lane: report.lane.clone(),
             depth,
         };
-        let row = row_of(model, hash, &entry);
-        let key: EntryKey = (model.to_string(), hash.to_string());
-        self.dirty.remove(&key);
-        self.entries.entry(key.0).or_default().insert(key.1, entry);
+        let row = row_of(model, hash.to_string(), &entry);
+        if let Some(hashes) = self.dirty.get_mut(model) {
+            hashes.remove(hash);
+        }
+        self.entries
+            .entry(model.to_string())
+            .or_default()
+            .insert(hash.to_string(), entry);
         Some(row)
     }
 }
