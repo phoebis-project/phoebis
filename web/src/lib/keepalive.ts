@@ -146,19 +146,14 @@ export const MAIN_AGENT = 'main';
  * `released` closes the recipe lines wherever a released record is still listed. */
 const STATE_ORDER: Record<KeepaliveState, number> = { busy: 0, idle: 1, parked: 2, released: 3, unknown: 2 };
 
-/** Newest last request first, an agent without one last. */
-function byLastRequest(a: Pick<KeepaliveRecipe, 'lastRequestAt'>, b: Pick<KeepaliveRecipe, 'lastRequestAt'>): number {
-  if (a.lastRequestAt === null || b.lastRequestAt === null) return a.lastRequestAt === b.lastRequestAt ? 0 : a.lastRequestAt === null ? 1 : -1;
-  return Date.parse(b.lastRequestAt) - Date.parse(a.lastRequestAt);
-}
-
 /**
  * Two instants newest first under `desc` and oldest first under `asc`, an instant missing last under either, so the
  * direction flips the dated entries alone.
  */
 const byInstant = (a: string | null, b: string | null, dir: SortDir): number => {
-  const order = byLastRequest({ lastRequestAt: a }, { lastRequestAt: b });
-  return a === null || b === null || dir === 'desc' ? order : -order;
+  if (a === null || b === null) return a === b ? 0 : a === null ? 1 : -1;
+  const order = Date.parse(b) - Date.parse(a);
+  return dir === 'desc' ? order : -order;
 };
 
 /** The later of a session's own last use and its last ledgered request, the `activity` key's value. */
@@ -179,7 +174,7 @@ const lineGroup = (line: SessionLine): number => (line.agentId === MAIN_AGENT ? 
 /**
  * The lines under the rows' key: main first, then the lifecycle groups of the recipe lines (`STATE_ORDER`), then the
  * pin-only lines, and inside a group by the line's own `createdAt` under `created` (a line without one last) or by
- * `byLastRequest` under `activity` (a pin-only line by its pin's last use), the direction applied inside the groups,
+ * `byInstant` under `activity` (a pin-only line by its pin's last use), the direction applied inside the groups,
  * ties by agent id and then by model.
  */
 export function orderLines(lines: readonly SessionLine[], sort: string, dir: SortDir): SessionLine[] {
