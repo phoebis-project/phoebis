@@ -2602,22 +2602,14 @@ fn in_pool_without<'a>(
 /// The 5-hour horizon is the earlier of the reading's reset (`now + FIVE_HOUR_MS` for a reading past its reset with
 /// none, since the window opens with the next request and runs five hours) and the account's end, the weekly horizon
 /// the earliest of `now + FIVE_HOUR_MS`, the reset and the end. An end at or before `now` makes the horizon `now`.
-pub(crate) fn horizon_of(
-    snapshot: &RegistrySnapshot,
-    account_id: &str,
-    window: &str,
-    reading: &WindowReading,
-    now: i64,
-) -> i64 {
+pub(crate) fn horizon_of(window: &str, reading: &WindowReading, end: Option<i64>, now: i64) -> i64 {
     let length = now.saturating_add(FIVE_HOUR_MS);
     let horizon = match reading.reset {
         Some(reset) if window == FIVE_HOUR => reset,
         Some(reset) => reset.min(length),
         None => length,
     };
-    account_end(snapshot, account_id, now)
-        .map_or(horizon, |end| horizon.min(end))
-        .max(now)
+    end.map_or(horizon, |end| horizon.min(end)).max(now)
 }
 
 /// Whether a runway of `runway_ms` from `now` reaches past `reset`: such a runway is displayed as unbounded.
@@ -2668,6 +2660,7 @@ pub(crate) fn projections_of(
     // The readings and horizons first, so the band's segments are cut over each window's own horizon. A window with
     // no burn projects its prediction.
     let mut projections = BTreeMap::new();
+    let end = account_end(snapshot, account_id, now);
     for window in all_plan_windows() {
         let Some(reading) = state.predicted(account_id, window, now) else {
             continue;
@@ -2677,7 +2670,7 @@ pub(crate) fn projections_of(
             Projection {
                 predicted: reading.utilization,
                 burn: burn.get(window).copied().unwrap_or(0.0),
-                horizon: horizon_of(snapshot, account_id, window, &reading, now),
+                horizon: horizon_of(window, &reading, end, now),
                 at_horizon: reading.utilization,
                 banded: Banded::default(),
                 reset: reading.reset,
@@ -2914,7 +2907,12 @@ pub(crate) fn slow_down_of(
     }
     let reading = state.predicted(account_id, FIVE_HOUR, now)?;
     let utilization = reading.utilization;
-    let horizon = horizon_of(snapshot, account_id, FIVE_HOUR, &reading, now);
+    let horizon = horizon_of(
+        FIVE_HOUR,
+        &reading,
+        account_end(snapshot, account_id, now),
+        now,
+    );
     let speed = state.slow_down_speed(pool, account_id, now);
     let demand = state
         .demand_shares(
@@ -3355,19 +3353,6 @@ fn account_end(snapshot: &RegistrySnapshot, account_id: &str, now: i64) -> Optio
     snapshot
         .term(account_id)
         .and_then(|term| term::end_of(term, now))
-}
-
-/// The share of `window` that has elapsed at `now` toward the earlier of the reading's reset and the account's
-/// end, 0 for a reading that names no reset.
-fn elapsed_share(
-    snapshot: &RegistrySnapshot,
-    account_id: &str,
-    reading: &WindowReading,
-    window: &str,
-    now: i64,
-) -> f64 {
-    let end = account_end(snapshot, account_id, now);
-    elapsed_share_at(window, reading.reset, end, now)
 }
 
 /// The share of `window` that has elapsed at `at`, from the window's start (its reset `reset_at` less a week for a
@@ -6660,12 +6645,12 @@ fn candidate_facts(
                 .map(|(window, share)| (window, share * 3_600.0))
                 .collect();
         }
+        let end = account_end(snapshot, id, now);
         for name in all_plan_windows() {
             if let Some(reading) = state.predicted(id, name, now) {
                 // The shared windows alone carry a lead. A model week's reading names none.
-                let ahead = (name == FIVE_HOUR || name == SEVEN_DAY).then(|| {
-                    reading.utilization - elapsed_share(snapshot, id, &reading, name, now)
-                });
+                let ahead = (name == FIVE_HOUR || name == SEVEN_DAY)
+                    .then(|| reading.utilization - elapsed_share_at(name, reading.reset, end, now));
                 let mut facts = window_facts(
                     &reading,
                     ahead,
