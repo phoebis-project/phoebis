@@ -22,7 +22,7 @@ import { weekReadingOf } from '@/lib/costs';
 import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd, messageOf, noun, plural } from '@/lib/format';
-import { guardrailsChange, KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, sameValues, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
+import { guardrailsChange, KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, refusalsView, sameValues, saveStatus, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { scrollToElement } from '@/lib/scroll';
 import type { UnitPosition } from '@/lib/unit';
@@ -630,11 +630,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
   const effectiveHours = captureMode === 'inherit' ? poolHours : captureMode === 'off' ? 0 : Number(captureHours);
   const suggestions = useCatalogSuggestions(pool?.members.map((m) => m.accountId) ?? [], open);
   const refusals = keyRefusals({ captureHours, captureMode, modelRules, name, poolId }, { identity: { existingIds, isNew: existing === null }, maxHours });
-  const refusedFields = new Set(refusals.map((r) => r.field));
-  const refusedGroups = new Set<KeyGroup>(refusals.map((r) => r.group));
-  const invalid = (field: string) => (refusedFields.has(field) ? true : undefined);
-  const refusalOf = (field: string) => refusals.find((r) => r.field === field)?.text ?? null;
-  const first = refusals[0] ?? null;
+  const { first, invalid, refusalOf, refusedGroups } = refusalsView(refusals);
   const rulesRefusal = refusalOf('Model rules');
   const processed = useAsync(() => (open && existing ? api.getKeyModels(existing.id) : Promise.resolve(null)), [open, existing?.id]);
   // Once per opening of a saved key, since a create takes no attachment and offers nothing to attach.
@@ -906,6 +902,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     ),
   };
   const groups: DialogGroup[] = KEY_GROUPS.map((id) => ({ body: bodies[id], id, label: KEY_GROUP_LABEL[id], refused: refusedGroups.has(id) }));
+  const save = saveStatus({ error, first, stale, subject: existing ? `the key ${existing.name}` : null });
 
   return (
     <GroupedDialog
@@ -918,11 +915,9 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
       chosen={chosen}
       initialGroup={initialGroup}
       onChoose={(id) => setChosen(id as KeyGroup)}
-      // The line always explains the current hold: a row that moved under the dialog first, since only Reload clears
-      // it, then a refusal of the form's own, which beats a server message left from before the edit.
-      status={stale && existing ? `Save is held: the key ${existing.name} changed since you opened it. Reload to edit the current version.` : first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
-      hold={stale ? null : (first?.group ?? null)}
-      held={first !== null || error !== null || stale !== null}
+      status={save.status}
+      hold={save.hold}
+      held={save.held}
       notice={
         stale && (
           <Refusal>

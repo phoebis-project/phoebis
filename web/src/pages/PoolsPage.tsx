@@ -27,7 +27,7 @@ import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, dollarsUnder, moveLabel, nati
 import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
 import { fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
-import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, poolRefusals, sameValues, type PoolGroup } from '@/lib/forms';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, poolRefusals, refusalsView, sameValues, saveStatus, type PoolGroup } from '@/lib/forms';
 import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -1331,11 +1331,7 @@ export function PoolDialog({
     capture: { maxHours: captureMaxHours, on: form.capture, typed: form.captureHours },
     identity: { isNew: pool === null, poolIds: new Set(pools.map((p) => p.id)) },
   });
-  const refusedFields = new Set(refusals.map((r) => r.field));
-  const refusedGroups = new Set<PoolGroup>(refusals.map((r) => r.group));
-  const invalid = (field: string) => (refusedFields.has(field) ? true : undefined);
-  const refusalOf = (field: string) => refusals.find((r) => r.field === field)?.text ?? null;
-  const first = refusals[0] ?? null;
+  const { first, invalid, refusalOf, refusedFields, refusedGroups } = refusalsView(refusals);
   const valid = first === null;
 
   const orderIndex = new Map(memberOrder.map((id, i) => [id, i]));
@@ -2373,6 +2369,7 @@ export function PoolDialog({
   };
   const warnings = pool?.warnings ?? [];
   const groups: DialogGroup[] = POOL_GROUPS.map((id) => ({ ...POOL_RAIL[id], body: bodies[id], expertOnly: EXPERT_ONLY.has(id), id, mark: pool ? undefined : CREATE_MARKS[id], refused: refusedGroups.has(id) }));
+  const save = saveStatus({ error, first, stale, subject: pool ? 'the pool' : null });
 
   return (
     <>
@@ -2388,11 +2385,9 @@ export function PoolDialog({
         chosen={chosen}
         initialGroup={initialGroup}
         onChoose={(id) => setChosen(id as PoolGroup)}
-        // The line always explains the current hold: a row that moved under the dialog first, since only Reload clears
-        // it, then a refusal of the form's own, which beats a server message left from before the edit.
-        status={stale ? 'Save is held: the pool changed since you opened it. Reload to edit the current version.' : first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
-        hold={stale ? null : (first?.group ?? null)}
-        held={first !== null || error !== null || stale !== null}
+        status={save.status}
+        hold={save.hold}
+        held={save.held}
         // The stale save's callout first, since only Reload clears it, then the saved pool's warnings, which a new pool
         // has none of until the route computes them.
         notice={

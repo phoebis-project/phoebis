@@ -13,7 +13,7 @@ import { KEYS_CODEC, requestHref } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtInt, messageOf, noun } from '@/lib/format';
-import { derivedId, sameValues } from '@/lib/forms';
+import { derivedId, refusalsView, sameValues, saveStatus } from '@/lib/forms';
 import { guardrailRefusals, presetBadges, verdictWords } from '@/lib/guardrails';
 import { useAsync } from '@/lib/hooks';
 
@@ -411,9 +411,7 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
   const name = form.name.trim();
   const draftId = existing ? existing.id : derivedId(name).id;
   const refusals = guardrailRefusals({ conditions: form.conditions, description: form.description, id: draftId, name }, existingIds, existing !== null);
-  const first = refusals[0] ?? null;
-  const refusedFields = new Set(refusals.map((r) => r.field));
-  const invalid = (field: string) => (refusedFields.has(field) ? true : undefined);
+  const { first, invalid, refusedGroups } = refusalsView(refusals);
   const rowRefusals = new Map<number, string>();
   for (const r of refusals) if (r.field.startsWith('Condition ')) rowRefusals.set(Number(r.field.slice('Condition '.length)) - 1, r.text);
   if (rowRefusal && !rowRefusals.has(rowRefusal.index)) rowRefusals.set(rowRefusal.index, rowRefusal.text);
@@ -666,10 +664,10 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
       </div>
     ),
   };
-  const refusedGroups = new Set<string>(refusals.map((r) => r.group));
   if (rowRefusal) refusedGroups.add('conditions');
   const groups: DialogGroup[] = GROUPS.map((id) => ({ body: bodies[id], id, label: GROUP_LABEL[id], refused: refusedGroups.has(id) }));
   const unsaved = presetVersion !== null || !sameValues(form, opened);
+  const save = saveStatus({ error, first, stale, subject: existing ? `the guardrail ${existing.name}` : null });
 
   return (
     <GroupedDialog
@@ -681,11 +679,9 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
       groups={groups}
       chosen={chosen}
       onChoose={(id) => setChosen(id as GuardrailGroup)}
-      // A row that moved under the dialog first, since only Reload clears it, then a refusal of the form's own, which
-      // beats a server message left from before the edit.
-      status={stale && existing ? `Save is held: the guardrail ${existing.name} changed since you opened it. Reload to edit the current version.` : first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
-      hold={stale ? null : (first?.group ?? (rowRefusal ? 'conditions' : null))}
-      held={first !== null || error !== null || stale !== null}
+      status={save.status}
+      hold={save.hold ?? (rowRefusal && !stale ? 'conditions' : null)}
+      held={save.held}
       notice={
         stale && (
           <Refusal>

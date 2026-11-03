@@ -398,6 +398,33 @@ export function keyRefusals(form: Pick<KeyForm, 'captureHours' | 'captureMode' |
   return out;
 }
 
+/** A grouped dialog's refusals as its controls read them: the first, a field's mark and text, and the refused groups. */
+export function refusalsView<R extends { field: string; group: string; text: string }>(
+  refusals: readonly R[],
+): { first: R | null; invalid: (field: string) => true | undefined; refusalOf: (field: string) => string | null; refusedFields: ReadonlySet<string>; refusedGroups: Set<string> } {
+  const refusedFields = new Set(refusals.map((r) => r.field));
+  return {
+    first: refusals[0] ?? null,
+    invalid: (field) => (refusedFields.has(field) ? true : undefined),
+    refusalOf: (field) => refusals.find((r) => r.field === field)?.text ?? null,
+    refusedFields,
+    refusedGroups: new Set<string>(refusals.map((r) => r.group)),
+  };
+}
+
+/**
+ * A grouped dialog's status line, the group its Save holds on, and whether it holds. A row that moved under the dialog
+ * comes first, since only Reload clears it, then a refusal of the form's own, which beats a server message left from
+ * before the edit. `subject` names the row in the stale sentence, and a create passes null, which skips it.
+ */
+export function saveStatus<G extends string>({ error, first, stale, subject }: { error: string | null; first: { group: G; text: string } | null; stale: string | null; subject: string | null }): { held: boolean; hold: G | null; status: string } {
+  return {
+    held: first !== null || error !== null || stale !== null,
+    hold: stale ? null : (first?.group ?? null),
+    status: stale && subject ? `Save is held: ${subject} changed since you opened it. Reload to edit the current version.` : first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.'),
+  };
+}
+
 /** The identity card's subscription end as the operator leaves it; `endsAt` is a `datetime-local` value, empty for none. */
 export interface SubscriptionEndForm {
   canceled: boolean;
