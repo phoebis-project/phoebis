@@ -27,11 +27,10 @@ const LOCK_POISONED: &str = "metrics registry poisoned by a prior panic";
 
 type Labels = Vec<(&'static str, String)>;
 
-/// One model's TTFB series: the 64 finite buckets, the observations past the last edge, the sum in seconds,
-/// and the count. The overflow is kept apart so `+Inf` can carry what no finite bound answers for.
+/// One model's TTFB series: the 64 finite buckets, the observations past the last edge, and the sum in seconds.
+/// The overflow is kept apart so `+Inf` can carry what no finite bound answers for.
 struct Series {
     buckets: [u64; BUCKET_COUNT],
-    count: u64,
     overflow: u64,
     sum: f64,
 }
@@ -40,7 +39,6 @@ impl Default for Series {
     fn default() -> Series {
         Series {
             buckets: [0; BUCKET_COUNT],
-            count: 0,
             overflow: 0,
             sum: 0.0,
         }
@@ -168,7 +166,6 @@ impl Metrics {
                     entry.buckets[bucket_index(value)] += 1;
                 }
                 entry.sum += value / 1_000.0;
-                entry.count += 1;
             }
         }
     }
@@ -444,11 +441,11 @@ impl Metrics {
                                 render_value(edges[i + 1] / 1_000.0)
                             ));
                         }
+                        let total = cumulative + series.overflow;
                         // The only bound an observation past the last edge is under.
                         out.push_str(&format!(
-                            "phoebis_upstream_ttfb_seconds_bucket{{model=\"{}\",le=\"+Inf\"}} {}\n",
+                            "phoebis_upstream_ttfb_seconds_bucket{{model=\"{}\",le=\"+Inf\"}} {total}\n",
                             escape(model),
-                            cumulative + series.overflow
                         ));
                         out.push_str(&format!(
                             "phoebis_upstream_ttfb_seconds_sum{{model=\"{}\"}} {}\n",
@@ -456,9 +453,8 @@ impl Metrics {
                             render_value(series.sum)
                         ));
                         out.push_str(&format!(
-                            "phoebis_upstream_ttfb_seconds_count{{model=\"{}\"}} {}\n",
+                            "phoebis_upstream_ttfb_seconds_count{{model=\"{}\"}} {total}\n",
                             escape(model),
-                            series.count
                         ));
                     }
                 }
