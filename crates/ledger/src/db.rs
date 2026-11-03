@@ -1154,11 +1154,7 @@ pub(crate) fn row_to_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptR
 
 /// The store's rule: a file a newer build wrote is refused before the schema or a migration runs over it. Then
 /// `SCHEMA`, the baseline at version 1, and the steps above the stored version.
-fn prepare(
-    conn: &mut Connection,
-    path: &Path,
-    migrations: &[(u32, &str)],
-) -> Result<(), LedgerError> {
+fn prepare(conn: &mut Connection, path: &Path, steps: &[(u32, &str)]) -> Result<(), LedgerError> {
     let current = read_version(conn)?;
     let supported = latest_version();
     if current > supported {
@@ -1168,12 +1164,7 @@ fn prepare(
             supported,
         });
     }
-    Ok(migrations::apply(
-        conn,
-        schema::SCHEMA,
-        current,
-        migrations,
-    )?)
+    Ok(migrations::apply(conn, schema::SCHEMA, current, steps)?)
 }
 
 fn latest_version() -> u32 {

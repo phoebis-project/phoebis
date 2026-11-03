@@ -1211,11 +1211,7 @@ fn open_canary(key: &StorageKey, value: &str) -> Result<Vec<u8>, StoreError> {
 }
 
 /// Runs `SCHEMA`, the baseline at version 1, then the steps above the stored `schema_version`.
-fn prepare(
-    conn: &mut Connection,
-    on_disk: bool,
-    migrations: &[(u32, &str)],
-) -> Result<(), StoreError> {
+fn prepare(conn: &mut Connection, on_disk: bool, steps: &[(u32, &str)]) -> Result<(), StoreError> {
     conn.busy_timeout(BUSY_TIMEOUT)?;
     conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
     // A per-connection setting, never written to the database file, so it costs nothing to set before the
@@ -1232,12 +1228,7 @@ fn prepare(
         // cooldown clear or session release again.
         conn.pragma_update(None, "synchronous", "FULL")?;
     }
-    Ok(migrations::apply(
-        conn,
-        schema::SCHEMA,
-        current,
-        migrations,
-    )?)
+    Ok(migrations::apply(conn, schema::SCHEMA, current, steps)?)
 }
 
 /// The refusal `prepare` makes before it writes anything, answering the stored version.
