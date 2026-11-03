@@ -6531,8 +6531,13 @@ async fn a_seats_poll_reads_the_share_from_extra_usage_utilization_and_not_from_
     usage_based_seat(&store, "a");
     let now = Arc::new(AtomicI64::new(OCT_10));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    let (windows, fable_window, extra_usage, spend, raw_keys) =
-        phoebis_oauth::parse_usage(UNEQUAL_SEAT_USAGE).unwrap();
+    let phoebis_oauth::ParsedUsage {
+        windows,
+        fable_window,
+        extra_usage,
+        spend,
+        raw_keys,
+    } = phoebis_oauth::parse_usage(UNEQUAL_SEAT_USAGE).unwrap();
     let snapshot = UsageSnapshot {
         account_id: "a".into(),
         identity_generation: 1,

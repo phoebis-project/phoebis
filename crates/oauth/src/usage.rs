@@ -240,19 +240,7 @@ pub enum PollIssue {
 /// the body's `spend` object where it carries the spent amount with its currency and exponent, else from the
 /// extra-usage amounts where they carry the used credits, a currency and `decimal_places`, and is none
 /// otherwise.
-#[allow(clippy::type_complexity)]
-pub fn parse_usage(
-    body: &[u8],
-) -> Result<
-    (
-        Vec<UsageWindow>,
-        Option<UsageWindow>,
-        Option<ExtraUsage>,
-        Option<SpendReading>,
-        Vec<String>,
-    ),
-    OauthError,
-> {
+pub fn parse_usage(body: &[u8]) -> Result<ParsedUsage, OauthError> {
     let root: Value = serde_json::from_slice(body).map_err(usage_json)?;
     let map = root
         .as_object()
@@ -290,7 +278,13 @@ pub fn parse_usage(
         }
     };
 
-    Ok((windows, fable_window, extra_usage, spend, raw_keys))
+    Ok(ParsedUsage {
+        windows,
+        fable_window,
+        extra_usage,
+        spend,
+        raw_keys,
+    })
 }
 
 fn usage_json(error: serde_json::Error) -> OauthError {
@@ -356,12 +350,13 @@ fn fable_from_limits(limits: &Value) -> Option<UsageWindow> {
     })
 }
 
-struct ParsedUsage {
-    windows: Vec<UsageWindow>,
-    fable_window: Option<UsageWindow>,
-    extra_usage: Option<ExtraUsage>,
-    spend: Option<SpendReading>,
-    raw_keys: Vec<String>,
+#[derive(Debug)]
+pub struct ParsedUsage {
+    pub windows: Vec<UsageWindow>,
+    pub fable_window: Option<UsageWindow>,
+    pub extra_usage: Option<ExtraUsage>,
+    pub spend: Option<SpendReading>,
+    pub raw_keys: Vec<String>,
 }
 
 /// Why a fetch did not produce a usable payload. Kept apart from `UsageError`, which surfaces only when the
@@ -970,15 +965,7 @@ impl Inner {
         if head.status != 200 {
             return Err(usage_refusal(head.status, &body));
         }
-        let (windows, fable_window, extra_usage, spend, raw_keys) =
-            parse_usage(&body).map_err(|error| FetchFailure::Message(format!("parse: {error}")))?;
-        Ok(ParsedUsage {
-            windows,
-            fable_window,
-            extra_usage,
-            spend,
-            raw_keys,
-        })
+        parse_usage(&body).map_err(|error| FetchFailure::Message(format!("parse: {error}")))
     }
 
     /// A result whose identity moved between the fetch's start and its completion belongs to a holder that has

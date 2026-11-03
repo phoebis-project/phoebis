@@ -2865,8 +2865,13 @@ fn the_lead_over_pace_reads_the_steeper_pace_to_an_end_inside_the_window() {
 
 /// A poll of `body` for the seat at `fetched_at`, as the usage service hands it to the sampler.
 fn seat_poll(body: &[u8], fetched_at: i64) -> phoebis_oauth::UsageSnapshot {
-    let (windows, fable_window, extra_usage, spend, raw_keys) =
-        phoebis_oauth::parse_usage(body).unwrap();
+    let phoebis_oauth::ParsedUsage {
+        windows,
+        fable_window,
+        extra_usage,
+        spend,
+        raw_keys,
+    } = phoebis_oauth::parse_usage(body).unwrap();
     phoebis_oauth::UsageSnapshot {
         account_id: "seat".into(),
         identity_generation: 1,

@@ -1,13 +1,18 @@
 mod common;
 
-use phoebis_oauth::{parse_usage, SpendReading};
+use phoebis_oauth::{parse_usage, ParsedUsage, SpendReading};
 use phoebis_profile::fixtures::{control_response, ControlFixture};
 
 #[test]
 #[allow(clippy::bool_assert_comparison)]
 fn the_synthetic_usage_body_parses_into_windows() {
-    let (windows, fable, extra, spend, raw) =
-        parse_usage(control_response(ControlFixture::Usage)).unwrap();
+    let ParsedUsage {
+        windows,
+        fable_window: fable,
+        extra_usage: extra,
+        spend,
+        raw_keys: raw,
+    } = parse_usage(control_response(ControlFixture::Usage)).unwrap();
     let five = windows.iter().find(|w| w.key == "five_hour").unwrap();
     assert_eq!(five.utilization, Some(12.5));
     assert!(five.resets_at.is_some());
@@ -23,7 +28,13 @@ fn the_synthetic_usage_body_parses_into_windows() {
 #[test]
 fn the_fable_window_comes_from_limits_regardless_of_the_named_key() {
     let body = br#"{"five_hour":{"utilization":0.1,"resets_at":"2026-09-13T15:00:00+00:00"},"cinder_cove":{"utilization":0.9,"resets_at":null},"limits":[{"kind":"weekly_scoped","group":"weekly","percent":42,"resets_at":"2026-09-18T00:00:00+00:00","scope":{"model":{"display_name":"Fable"}}}],"extra_usage":{"is_enabled":true,"monthly_limit":5000,"used_credits":1234,"utilization":0.2468,"currency":"USD"}}"#;
-    let (windows, fable, extra, spend, _) = parse_usage(body).unwrap();
+    let ParsedUsage {
+        windows,
+        fable_window: fable,
+        extra_usage: extra,
+        spend,
+        ..
+    } = parse_usage(body).unwrap();
     let f = fable.unwrap();
     assert_eq!(f.utilization, Some(42.0));
     assert!(
@@ -54,8 +65,13 @@ fn the_fable_window_comes_from_limits_regardless_of_the_named_key() {
 
 #[test]
 fn the_seat_fixture_parses_into_no_window_and_a_spend_reading() {
-    let (windows, fable, extra, spend, raw) =
-        parse_usage(include_bytes!("fixtures/usage_based_seat.json")).unwrap();
+    let ParsedUsage {
+        windows,
+        fable_window: fable,
+        extra_usage: extra,
+        spend,
+        raw_keys: raw,
+    } = parse_usage(include_bytes!("fixtures/usage_based_seat.json")).unwrap();
     assert!(windows.is_empty(), "every window key is null");
     assert!(fable.is_none(), "limits is empty and the aliases are null");
     let extra = extra.expect("the body carries extra usage");
@@ -85,7 +101,7 @@ fn a_null_spend_limit_reads_as_no_limit() {
     let body = br#"{"spend":{"used":{"amount_minor":4200,"currency":"USD","exponent":2},"limit":null,"percent":null}}"#;
     let spend = parse_usage(body)
         .unwrap()
-        .3
+        .spend
         .expect("the spend object gives a reading");
     assert_eq!(spend.used_minor, 4_200);
     assert_eq!(spend.limit_minor, None, "the seat spends without a cap");
@@ -96,7 +112,7 @@ fn a_null_spend_limit_reads_as_no_limit() {
 fn a_body_without_a_spend_object_builds_the_reading_from_the_extra_usage_amounts() {
     let body = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":50000,"used_credits":12500,"utilization":25.0,"currency":"EUR","decimal_places":2}}"#;
     assert_eq!(
-        parse_usage(body).unwrap().3,
+        parse_usage(body).unwrap().spend,
         Some(SpendReading {
             used_minor: 12_500,
             limit_minor: Some(50_000),
@@ -127,7 +143,7 @@ fn a_spend_object_without_a_currency_or_a_whole_exponent_falls_back_to_the_extra
     ] {
         let body = format!(r#"{{"spend":{{"used":{used},"percent":8}},{extra}}}"#);
         assert_eq!(
-            parse_usage(body.as_bytes()).unwrap().3,
+            parse_usage(body.as_bytes()).unwrap().spend,
             fallback,
             "a spend object whose used is {used} reads as no spend object"
         );
@@ -139,7 +155,7 @@ fn extra_usage_amounts_with_a_fraction_part_round_to_the_nearest_minor_unit() {
     let body = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":2499.4,"used_credits":102500.6,"utilization":41.0,"currency":"USD"}}"#;
     let extra = parse_usage(body)
         .expect("an amount with a fraction part parses")
-        .2
+        .extra_usage
         .expect("the body carries extra usage");
     assert_eq!(extra.used_credits, Some(102_501));
     assert_eq!(extra.monthly_limit, Some(2_499));
@@ -158,9 +174,9 @@ fn a_parse_failure_carries_serdes_message_after_the_colon() {
 #[test]
 fn a_null_alias_key_without_limits_yields_no_fable_window() {
     let parsed = parse_usage(br#"{"five_hour":null,"cinder_cove":null}"#).unwrap();
-    assert!(parsed.0.is_empty(), "a null key is no window");
+    assert!(parsed.windows.is_empty(), "a null key is no window");
     assert!(
-        parsed.1.is_none(),
+        parsed.fable_window.is_none(),
         "the alias fallback finds nothing to take"
     );
 }
