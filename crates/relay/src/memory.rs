@@ -481,32 +481,21 @@ impl SessionMemory {
     /// save has no business in the overlay. Nothing else is removed here; `acknowledge` does that once the
     /// save has landed.
     pub fn snapshot_dirty(&self, now: i64) -> Vec<(MemoryKey, MemoryRecord, u64)> {
-        let mut inner = self.inner.lock().unwrap();
-        let expired_pending: Vec<MemoryKey> = inner
+        let mut guard = self.inner.lock().unwrap();
+        let inner = &mut *guard;
+        let before = inner.pending.len();
+        inner
             .pending
-            .iter()
-            .filter(|(_, (record, _))| expired(record.last_seen, now, self.retention_ms))
-            .map(|(key, _)| key.clone())
-            .collect();
-        for key in expired_pending {
-            inner.pending.remove(&key);
-            inner.expired_unsaved += 1;
-        }
-        let expired_dirty: Vec<MemoryKey> = inner
-            .dirty
-            .keys()
-            .filter(|key| {
-                inner
-                    .entries
-                    .get(*key)
-                    .is_some_and(|entry| expired(entry.last_seen, now, self.retention_ms))
-            })
-            .cloned()
-            .collect();
-        for key in expired_dirty {
-            inner.dirty.remove(&key);
-            inner.expired_unsaved += 1;
-        }
+            .retain(|_, (record, _)| !expired(record.last_seen, now, self.retention_ms));
+        inner.expired_unsaved += (before - inner.pending.len()) as u64;
+        let entries = &inner.entries;
+        let before = inner.dirty.len();
+        inner.dirty.retain(|key, _| {
+            !entries
+                .get(key)
+                .is_some_and(|entry| expired(entry.last_seen, now, self.retention_ms))
+        });
+        inner.expired_unsaved += (before - inner.dirty.len()) as u64;
         let mut out: Vec<(MemoryKey, MemoryRecord, u64)> = inner
             .pending
             .iter()
