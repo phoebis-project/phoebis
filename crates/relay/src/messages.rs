@@ -62,10 +62,10 @@ use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
 use crate::errors::{
     accounts_at_cap, auth_failure, body_budget_exhausted, key_body_reads, key_refusal,
     relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELED, METHOD_NOT_ALLOWED,
-    MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_CUT,
-    UPSTREAM_STALLED, UPSTREAM_UNDECODABLE, UPSTREAM_UNREACHABLE,
+    MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_CUT, UPSTREAM_STALLED,
+    UPSTREAM_UNDECODABLE, UPSTREAM_UNREACHABLE,
 };
-use crate::exhaustion::{exhaustion_response, pool_moved_response};
+use crate::exhaustion::{exhaustion_code, exhaustion_response, pool_moved_response};
 use crate::facts::{BodyFacts, ClientHints};
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
@@ -2481,24 +2481,8 @@ impl Relay {
                 let failure = accounts_at_cap(admitted.retry_in_place.as_secs());
                 (failure.code, failure.response(admitted.request_id))
             }
-            Exhaustion::ModelRejected => (
-                MODEL_REJECTED.code,
-                exhaustion_response(exhaustion, now, admitted.request_id),
-            ),
-            Exhaustion::Timed { .. } => (
-                "accounts_exhausted",
-                exhaustion_response(exhaustion, now, admitted.request_id),
-            ),
-            Exhaustion::Untimed | Exhaustion::Pinned { .. } => (
-                "accounts_unavailable",
-                exhaustion_response(exhaustion, now, admitted.request_id),
-            ),
-            Exhaustion::FastLane { .. } => (
-                "fast_lane_exhausted",
-                exhaustion_response(exhaustion, now, admitted.request_id),
-            ),
-            Exhaustion::FastCredits { .. } => (
-                "fast_credits_unavailable",
+            _ => (
+                exhaustion_code(exhaustion),
                 exhaustion_response(exhaustion, now, admitted.request_id),
             ),
         };
@@ -2531,7 +2515,7 @@ impl Relay {
         // one, and a pinned member's other standings keep their own reasons.
         if admitted.trace.kind == Kind::Probe
             && auth_marked
-            && code == "accounts_unavailable"
+            && code == exhaustion_code(&Exhaustion::Untimed)
             && outcome
                 .obstacle
                 .is_none_or(|obstacle| obstacle == "attempted")
@@ -2598,7 +2582,7 @@ impl Relay {
                 None,
                 None,
                 admitted.client_version.clone(),
-                Some("accounts_unavailable"),
+                Some(exhaustion_code(&Exhaustion::Untimed)),
                 None,
                 None,
                 None,
@@ -3826,7 +3810,7 @@ impl Relay {
             release.send((self.clock)(), head.status, None, false, &mut waiting);
         }
         ctx.ending(EXHAUSTED);
-        outcome.error_code = Some("accounts_unavailable".to_string());
+        outcome.error_code = Some(exhaustion_code(&Exhaustion::Untimed).to_string());
         // A probe bound to its account never reaches the selector's exhaustion, so its own answer names the mark.
         if ctx.trace.kind == Kind::Probe && ctx.auth_marked {
             outcome.obstacle = Some(REAUTH_OBSTACLE);

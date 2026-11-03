@@ -12,12 +12,13 @@ use crate::errors::{exhaustion_status_code, MODEL_REJECTED};
 pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) -> Response {
     // A pool at its cap is answered by `accounts_at_cap`, so no exhaustion here is read at the cap.
     let status = exhaustion_status_code(exhaustion, false);
+    let code = exhaustion_code(exhaustion);
     match exhaustion {
         Exhaustion::ModelRejected => MODEL_REJECTED.response(request_id),
         Exhaustion::Untimed | Exhaustion::Pinned { .. } => anthropic_error(
             status,
             "api_error",
-            "accounts_unavailable",
+            code,
             "no account in this pool can serve requests",
             request_id,
         ),
@@ -25,7 +26,7 @@ pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) 
             let mut response = anthropic_error(
                 status,
                 "rate_limit_error",
-                "accounts_exhausted",
+                code,
                 "every account in this pool is rate limited",
                 request_id,
             );
@@ -62,7 +63,7 @@ pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) 
             let mut response = anthropic_error(
                 status,
                 "rate_limit_error",
-                "fast_lane_exhausted",
+                code,
                 "every account in this pool is at its fast limit",
                 request_id,
             );
@@ -76,7 +77,7 @@ pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) 
             let mut response = anthropic_error(
                 status,
                 "rate_limit_error",
-                "fast_credits_unavailable",
+                code,
                 "no account in this pool can draw usage credits for fast mode",
                 request_id,
             );
@@ -88,6 +89,18 @@ pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) 
             }
             response
         }
+    }
+}
+
+/// The adapter code an exhaustion is answered with, read by the answer's header and the request's outcome alike, so
+/// the two cannot disagree.
+pub(crate) fn exhaustion_code(exhaustion: &Exhaustion) -> &'static str {
+    match exhaustion {
+        Exhaustion::ModelRejected => MODEL_REJECTED.code,
+        Exhaustion::Untimed | Exhaustion::Pinned { .. } => "accounts_unavailable",
+        Exhaustion::Timed { .. } => "accounts_exhausted",
+        Exhaustion::FastLane { .. } => "fast_lane_exhausted",
+        Exhaustion::FastCredits { .. } => "fast_credits_unavailable",
     }
 }
 
