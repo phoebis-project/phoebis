@@ -11,7 +11,6 @@ import { WINDOW_LABEL, windowKeyId, windowRank } from '@/lib/windows';
 /** The weeks the Accounts block and the Analytics card read: the latest reset and the three before it. */
 export const ALLOWANCE_WEEKS = 4;
 
-
 /** The span the block and the card read: 29 days behind now to now, 28 days and a day of slack so the fourth weekly
  *  reset is never cut by the hour of the week or by a clock-walk reading up to a poll interval old. */
 export function allowanceSpan(now: number): { from: string; to: string } {
@@ -176,7 +175,6 @@ export function allowanceRows(answer: UnusedAllowanceAnswer, costs: Subscription
       byteOrder(a.accountId, b.accountId),
   );
 }
-
 
 /** The two fleet figures: the priced accounts' figures in the chosen week added, with the unpriced accounts named, and
  *  where the week's `scale` is null, every figure a dash, the note naming the week the cost model does not size. */

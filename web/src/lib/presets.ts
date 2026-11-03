@@ -72,7 +72,6 @@ function burnDecayed(burn: number, burnAt: string | null, now: number, windowMs:
   return burn * Math.exp(-Math.max(now - Date.parse(burnAt), 0) / Math.max(windowMs, 1));
 }
 
-
 /**
  * The 5-hour window's start: the reset less five hours while the reset is ahead, the reset itself once it has passed
  * with no new one, null with no reset.
