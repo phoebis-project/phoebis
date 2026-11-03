@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 use jiff::civil::Weekday;
 use jiff::tz::{TimeZone, TimeZoneDatabase};
 use jiff::Timestamp;
-use phoebis_routing::{window_for, BandSegment, PinUsage, RateTable, Rates, FIVE_HOUR, SEVEN_DAY};
+use phoebis_routing::{model_week, BandSegment, PinUsage, RateTable, Rates, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::{AccountKind, PinBurn};
 
 use crate::pricing::{Revisions, Speed};
@@ -1317,14 +1317,14 @@ impl Funding {
 }
 
 /// The shares of an account's own windows one usage charges, keyed by the ledger's window ids in the order
-/// `five_hour`, `seven_day`, then the model week `window_for(canonical_model)` names when it is one. Every window
+/// `five_hour`, `seven_day`, then the model week `model_week(canonical_model)` names when it is one. Every window
 /// the model applies to is a key: `Some(share)` where the tier and the model price it, `None` where the tier has no
 /// capacity or the model no weight on it, so a reader tells a window that does not apply (absent) from one it
 /// could not price (`None`), and a model week is never nulled by a model that has none.
 pub type WindowShares = IndexMap<&'static str, Option<f64>>;
 
 /// `share_at` under the account tier and the regime `entrypoint` names on the two shared windows and on
-/// `window_for(canonical_model)` where that is a model week, `None` inside the map on a window the model has no
+/// `model_week(canonical_model)` where the model has one, `None` inside the map on a window the model has no
 /// weight for. `at` selects the cost revision (the request's receipt, what the dollars and the rollup select on) and
 /// `band_at` the peak band inside that revision (the completion where a reader has one, else `at`). The revision never
 /// reads `band_at`.
@@ -1397,10 +1397,9 @@ fn zero_windows(
     tier: &str,
     canonical_model: &str,
 ) -> WindowShares {
-    let week = window_for(canonical_model);
     [FIVE_HOUR, SEVEN_DAY]
         .into_iter()
-        .chain((week != SEVEN_DAY).then_some(week))
+        .chain(model_week(canonical_model))
         .filter(|window| {
             costs
                 .priced_window(window)
@@ -1417,15 +1416,14 @@ pub fn entrypoint_of_client(client: &str) -> Option<&str> {
     client.strip_prefix("claude-code/")
 }
 
-/// `share` on the two shared windows and on `window_for(canonical_model)` where that is a model week.
+/// `share` on the two shared windows and on `model_week(canonical_model)` where the model has one.
 fn priced_windows(
     canonical_model: &str,
     share: impl Fn(&'static str) -> Option<f64>,
 ) -> WindowShares {
-    let week = window_for(canonical_model);
     [FIVE_HOUR, SEVEN_DAY]
         .into_iter()
-        .chain((week != SEVEN_DAY).then_some(week))
+        .chain(model_week(canonical_model))
         .map(|window| (window, share(window)))
         .collect()
 }

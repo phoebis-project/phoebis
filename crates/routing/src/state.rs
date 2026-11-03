@@ -20,7 +20,7 @@ use crate::select::{
     SLOW_DOWN_WAIT_MS,
 };
 use crate::task::BurnRates;
-use crate::windows::{window_for, MODEL_WINDOWS};
+use crate::windows::{model_week, window_for, MODEL_WINDOWS};
 use crate::RegistrySnapshot;
 
 /// How long an api_key bucket read without its reset header stands: the buckets refill within a minute, so a
@@ -236,10 +236,9 @@ pub fn is_plan_window(window: &str) -> bool {
 
 /// The plan windows a model's requests draw: both shared windows, and the model's own week where it has one.
 pub(crate) fn plan_windows(canonical_model: &str) -> impl Iterator<Item = &'static str> {
-    let own = window_for(canonical_model);
     [FIVE_HOUR, SEVEN_DAY]
         .into_iter()
-        .chain((own != SEVEN_DAY).then_some(own))
+        .chain(model_week(canonical_model))
 }
 
 /// Every plan window an account can hold a reading of, in the trigger's order: both shared windows, then each model

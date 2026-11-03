@@ -352,10 +352,9 @@ fn shared_healthy(window: &UnifiedWindow) -> bool {
 /// row knows, is read before the status fallback and is no model evidence: the account cools, the safe direction
 /// while the claim vocabulary is not yet measured live, and a foreign week never borrows the fallback.
 fn model_only(u: &UnifiedHeaders, canonical_model: &str) -> bool {
-    let own = phoebis_routing::window_for(canonical_model);
-    if own == phoebis_routing::SEVEN_DAY {
+    let Some(own) = phoebis_routing::model_week(canonical_model) else {
         return false;
-    }
+    };
     let shared_fine = shared_healthy(&u.five_hour) && shared_healthy(&u.seven_day);
     if !shared_fine {
         return false;

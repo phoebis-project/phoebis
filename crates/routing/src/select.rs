@@ -959,16 +959,20 @@ fn holds_allowance(
     if snapshot.usage_based(account_id) {
         return true;
     }
-    let spent = |name: &str| {
-        state
+    allowance_windows(window).all(|name| {
+        !state
             .predicted(account_id, name, now)
             .is_some_and(|r| r.utilization >= 1.0)
-    };
-    if window != SEVEN_DAY {
-        !spent(window) && !spent(FIVE_HOUR) && !spent(SEVEN_DAY)
-    } else {
-        !spent(FIVE_HOUR) && !spent(SEVEN_DAY)
-    }
+    })
+}
+
+/// The plan windows `holds_allowance` reads for a request judged in `window`: the model's own week where `window` is
+/// one, then both shared windows.
+fn allowance_windows(window: &str) -> impl Iterator<Item = &str> {
+    (window != SEVEN_DAY)
+        .then_some(window)
+        .into_iter()
+        .chain([FIVE_HOUR, SEVEN_DAY])
 }
 
 /// The spent windows `holds_allowance` reads for `window`, each with its reset, `None` for one that names none, and
@@ -982,8 +986,7 @@ fn spent_windows<'a>(
     now: i64,
 ) -> Vec<(Option<i64>, &'a str)> {
     let usage_based = snapshot.usage_based(account_id);
-    [window, FIVE_HOUR, SEVEN_DAY]
-        .into_iter()
+    allowance_windows(window)
         .filter(|_| !usage_based)
         .filter_map(|name| {
             state
@@ -3377,11 +3380,7 @@ fn allowance_known(
     // A shared window the account's newest clean poll lacked has no reading to wait for.
     let shared = |name: &str| !state.has_window(account_id, name) || known(name);
     paid_source(snapshot, account_id)
-        || if window != SEVEN_DAY {
-            known(window) && shared(FIVE_HOUR) && shared(SEVEN_DAY)
-        } else {
-            shared(FIVE_HOUR) && shared(SEVEN_DAY)
-        }
+        || ((window == SEVEN_DAY || known(window)) && shared(FIVE_HOUR) && shared(SEVEN_DAY))
 }
 
 /// What step 4's rules answered: the pin stays, moves to one of a set under a reason with the fit reads the strategy's

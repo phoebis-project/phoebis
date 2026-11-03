@@ -25,13 +25,18 @@ pub fn account_window_id(key: &str) -> &str {
     }
 }
 
-/// The first row whose family the folded id contains, else the shared weekly window.
-pub fn window_for(canonical_model: &str) -> &'static str {
+/// The week of its own of the first row whose family the folded id contains, `None` for a model that draws the shared
+/// week alone.
+pub fn model_week(canonical_model: &str) -> Option<&'static str> {
     MODEL_WINDOWS
         .iter()
         .find(|(family, _)| canonical_model.contains(family))
         .map(|(_, window)| *window)
-        .unwrap_or(SEVEN_DAY)
+}
+
+/// The model's own week, else the shared weekly window.
+pub fn window_for(canonical_model: &str) -> &'static str {
+    model_week(canonical_model).unwrap_or(SEVEN_DAY)
 }
 
 /// How long `window` runs: five hours for the 5-hour window and a week for any other name, so a wall's cycle in

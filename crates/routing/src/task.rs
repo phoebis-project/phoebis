@@ -38,7 +38,7 @@ use crate::state::{
     FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::{
-    resolve, term, window_for, window_length_ms, Candidate, KeyRefusal, Presented, RegistrySnapshot,
+    model_week, resolve, term, window_length_ms, Candidate, KeyRefusal, Presented, RegistrySnapshot,
 };
 
 /// The router loop's command queue size, which `/admin/system` reports. A report that finds the queue full waits for a
@@ -4372,7 +4372,6 @@ impl Task {
                         at,
                     )
                 };
-                let own = window_for(&canonical_model);
                 // A 5-hour window the account's set lacks takes no charge, so `predicted_spent` announces no wall
                 // on it.
                 let mut shares = Vec::new();
@@ -4380,7 +4379,7 @@ impl Task {
                     shares.push((FIVE_HOUR, price(FIVE_HOUR)));
                 }
                 shares.push((SEVEN_DAY, price(SEVEN_DAY)));
-                if own != SEVEN_DAY {
+                if let Some(own) = model_week(&canonical_model) {
                     // A model week the table does not measure is priced as the 7-day share once, until the cost
                     // table measures it; the share pricer says which.
                     if !self.config.share.measured(own) {

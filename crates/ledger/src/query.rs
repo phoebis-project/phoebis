@@ -8,7 +8,7 @@ use indexmap::IndexMap;
 use phoebis_bus::{Classifier, Kind};
 use phoebis_relay::EFFORT_LEVELS;
 use phoebis_routing::{
-    window_for, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS, REFRESHING_CLASSES, SEVEN_DAY,
+    model_week, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS, REFRESHING_CLASSES, SEVEN_DAY,
 };
 use phoebis_store::{canonical_id, AccountKind, BudgetPeriod};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
@@ -4385,7 +4385,7 @@ pub(crate) fn price_usage(
     };
     let tokens = tokens_of(usage);
     let priced = price_row(prices, tables, &key, usage);
-    let week = Some(window_for(key.model)).filter(|week| *week != SEVEN_DAY);
+    let week = model_week(key.model);
     point.usd += match key.funding {
         Funding::Plan => 0.0,
         _ => priced.usd.as_ref().map_or(0.0, CostSplit::total),
