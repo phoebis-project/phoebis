@@ -69,6 +69,11 @@ button:disabled {
   outline-offset: 2px;
 }
 
+/* A class that sets `display` outranks the attribute's own rule, so the attribute wins only with `!important`. */
+[hidden] {
+  display: none !important;
+}
+
 code,
 .mono {
   font-family: var(--font-mono);

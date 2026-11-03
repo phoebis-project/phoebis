@@ -1418,11 +1418,6 @@ textarea.input {
   container-type: inline-size;
 }
 
-/* An author display beats the hidden attribute's UA rule, so the hidden groups say so again here. */
-.dialog-group[hidden] {
-  display: none;
-}
-
 .dialog-group__title {
   font-size: var(--body-size);
   font-weight: 600;
@@ -1751,11 +1746,6 @@ textarea.input {
   flex: none;
 }
 
-/* An author display beats the hidden attribute's UA rule, so a badge the fold hides says so again here. */
-.attention-line__item[hidden] {
-  display: none;
-}
-
 /*
  * The fold's look on the chip line: a neutral badge with a dashed border. A badge draws no border, so the button's own
  * would widen it, and this one takes a pixel of the padding to keep the 22 px row.
@@ -1765,11 +1755,6 @@ textarea.input {
   padding: 1px 7px;
   border: 1px dashed var(--hairline);
   font-variant-numeric: tabular-nums;
-}
-
-/* The badge's display beats the hidden attribute's UA rule, so the fold badge drawn for the measure says so again. */
-.attention-line__more[hidden] {
-  display: none;
 }
 
 /*

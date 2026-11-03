@@ -750,6 +750,7 @@ async function attentionLineNarrow(theme) {
     await settle();
     const again = await read();
     measurements.push(`${theme} / attention line at ${width} px ${JSON.stringify(narrow)}`);
+    await hiddenNodes(theme, `/ at ${width} px`);
     if (JSON.stringify(again) !== JSON.stringify(narrow)) say(`changes between two reads, ${JSON.stringify(narrow)} then ${JSON.stringify(again)}`);
     if (!narrow?.more || !narrow.pill || !narrow.lead) {
       say(`draws ${JSON.stringify(narrow)}, not the lead, the fold badge and the Replay button`);
@@ -3161,6 +3162,7 @@ async function poolDialogWalk(theme, mode) {
       await tableColumns(theme, `pools ${mode} dialog`, '.members-table', ['Account']);
       await memberInputs();
       await cutReaders(theme, `/pools ${mode} dialog`);
+      await hiddenNodes(theme, `/pools ${mode} dialog`);
     }
     if (group === 'Keys') await tableColumns(theme, `pools ${mode} dialog`, '.keys-table', ['Key']);
     if (group === 'Cache TTL' && expert) {
@@ -6957,7 +6959,7 @@ const MIDNIGHT = (origin) => {
  * and top. On the NARROW_VIEWS at 950 by 800 the bar and its row run no wider than their boxes and the right edge, and
  * the count where the view draws one, end inside the window. At 400 by 800, at rest on every view, the bar and its row
  * run no wider than their boxes and the Refresh button, and the count where the view draws one, end inside the window.
- * Records to `measurements`.
+ * There with the view's chips, a chip the line folds draws no box. Records to `measurements`.
  */
 async function barRow(theme, view) {
   const say = (what) => failures.push(`${theme} ${view} bar: ${what}`);
@@ -7040,7 +7042,10 @@ async function barRow(theme, view) {
         const got = await read();
         measurements.push(`${theme} ${view} bar row at ${width} by ${height} ${label} ${JSON.stringify(got)}`);
         check(`${width} by ${height} ${label}`, got, chipped);
-        if (chipped) await cutReaders(theme, `${view} at ${width} by ${height} ${label}`);
+        if (chipped) {
+          await cutReaders(theme, `${view} at ${width} by ${height} ${label}`);
+          await hiddenNodes(theme, `${view} at ${width} by ${height} ${label}`);
+        }
         if (label === 'at rest' && ROW_BOUND[view] !== undefined && got !== null && got.width >= ROW_BOUND[view]) say(`${width} by ${height} at rest: the row's slots take ${got.width} px, not under ${ROW_BOUND[view]}`);
       }
     }
@@ -7096,6 +7101,14 @@ async function barRow(theme, view) {
       // Analytics alone draws its bar without a count.
       if (phone.count === null && view !== '/analytics') say('400 by 800: the bar draws no count');
       if (phone.count !== null && phone.count > phone.window) say(`400 by 800: the count ends at ${phone.count} px, past the ${phone.window} px window`);
+    }
+    // The 400 px chip line has room for fewer chips, and a chip it folds stays in it under `hidden`.
+    if (BAR_CHIPS[view]) {
+      await page.goto(`${base}${view}${BAR_CHIPS[view]}`);
+      await booted();
+      await advance(LOAD_MS);
+      await page.waitForSelector('.filter-bar', { timeout: 15_000 }).catch(() => {});
+      await hiddenNodes(theme, `${view} at 400 by 800 with its chips`);
     }
   } finally {
     await page.setViewportSize({ height: 800, width: 1280 });
@@ -10831,6 +10844,20 @@ async function cutReaders(theme, where) {
 }
 
 /**
+ * Every node the page holds under the `hidden` attribute draws no box at `where`, so a class whose `display` outranks
+ * the attribute's rule cannot draw a hidden group, panel, chip or badge. The hidden nodes read go to the measurements.
+ */
+async function hiddenNodes(theme, where) {
+  const read = await page.evaluate(() => {
+    const name = (el) => `${el.tagName.toLowerCase()}${[...el.classList].map((c) => `.${c}`).join('')}`;
+    const nodes = [...document.querySelectorAll('[hidden]')];
+    return { boxed: nodes.filter((el) => el.getClientRects().length > 0).map(name), names: [...new Set(nodes.map(name))] };
+  });
+  measurements.push(`${theme} ${where} hidden nodes ${JSON.stringify(read.names)}`);
+  for (const node of new Set(read.boxed)) failures.push(`${theme} ${where}: a hidden ${node} draws a box`);
+}
+
+/**
  * An expanded session's detail row takes its parent's tone: under the first row, a plain one, it reads plain, and under
  * the second, a striped one, it reads --stripe. Each row opens from its chevron, is read with the pointer away, since
  * a hovered row paints itself --surface-2, and shuts again.
@@ -11215,6 +11242,7 @@ async function costReference(theme) {
       await dialog.getByRole('tab', { name: label, exact: true }).click();
       await settle();
       await measure(where, slug, size);
+      await hiddenNodes(theme, `/sessions ${where}`);
       // Both the mock's cost model and the shipped one name the interactive regime, which Plan rates opens on.
       if (slug === 'plan-rates') {
         const regime = (await dialog.locator('.cost-ref__panel:not([hidden]) [aria-label="Regime"] button[aria-pressed="true"]').allTextContents()).map((t) => t.trim());
@@ -12446,6 +12474,7 @@ try {
       // After the view's own measures, so the Routing log's first decision is open and its row reads over the stripes.
       await tableStripes(theme, view.path);
       await cutReaders(theme, view.path);
+      await hiddenNodes(theme, view.path);
       // A full-page capture paints the fixed header and sidebar at the window's scroll offset, over the content, and
       // the checks above can leave the page scrolled (`keyDialogGeometry`'s click on the revoked row's menu trigger
       // scrolls that row into view).

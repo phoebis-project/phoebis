@@ -130,11 +130,6 @@
   overflow: hidden;
 }
 
-/* An author display beats the hidden attribute's UA rule, so a chip the fold hides says so again here. */
-.chip--filter[hidden] {
-  display: none;
-}
-
 .chip--filter .chip__body {
   display: inline-flex;
   gap: 4px;
@@ -4023,10 +4018,6 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-}
-
-.cost-ref__panel[hidden] {
-  display: none;
 }
 
 .dialog--costs .dialog__foot {
