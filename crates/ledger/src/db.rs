@@ -227,15 +227,8 @@ const INJECTED_READ_FAILURE: &str = "injected ledger read failure";
 
 impl LedgerDb {
     pub fn open(path: &Path) -> Result<LedgerDb, LedgerError> {
-        use std::os::unix::fs::DirBuilderExt;
-        let dir = match path.parent() {
-            Some(parent) if !parent.as_os_str().is_empty() => parent,
-            _ => Path::new("."),
-        };
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)?;
+        let dir = phoebis_store::permissions::data_dir_of(path);
+        phoebis_store::permissions::create_private_dir(dir)?;
         if !path.exists() {
             // Captured bodies are prompts, so the file is private from its creation.
             phoebis_store::permissions::create_private_if_missing(path, 0o600)?;
