@@ -1,4 +1,4 @@
-import { createContext, forwardRef, Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type FocusEvent, type HTMLAttributes, type InputHTMLAttributes, type KeyboardEvent, type ReactNode, type RefObject, type SelectHTMLAttributes } from 'react';
+import { createContext, forwardRef, Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type FocusEvent, type HTMLAttributes, type InputHTMLAttributes, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject, type SelectHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useRouteError } from 'react-router-dom';
 import type { ToastItem } from '@/app/session';
@@ -507,7 +507,28 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
     el.addEventListener('cancel', onCancel);
     return () => el.removeEventListener('cancel', onCancel);
   }, [latest, request]);
-  return { asking, keep, ref, request };
+  const onBackdrop = (e: ReactMouseEvent<HTMLDialogElement>) => {
+    if (e.target === ref.current) request();
+  };
+  const question = asking && <ConfirmDialog open onClose={keep} onConfirm={onClose} title="Discard changes?" body="This dialog has changes that are not saved." cancelLabel="Keep editing" confirmLabel="Discard" danger initialFocus="cancel" />;
+  return { onBackdrop, question, ref };
+}
+
+/** A dialog's head: its title, a subtitle where one is given, and the close button. */
+function DialogHead({ onClose, subtitle, title, titleId }: { onClose: () => void; subtitle?: ReactNode; title: ReactNode; titleId: string }) {
+  return (
+    <header className="dialog__head">
+      <div>
+        <h2 id={titleId} className="dialog__title">
+          {title}
+        </h2>
+        {subtitle && <p className="dialog__subtitle">{subtitle}</p>}
+      </div>
+      <button type="button" className="dialog__close" onClick={onClose} aria-label="Close">
+        <IconX size={16} />
+      </button>
+    </header>
+  );
 }
 
 /** A titled element in a dialog describes through the dialog's own node, which no list item or cell of it holds. */
@@ -520,7 +541,7 @@ function DialogInner({ children }: { children: ReactNode }) {
 }
 
 export function Dialog({ open, onClose, title, subtitle, children, footer, width = 560, className, unsaved = false }: { children: ReactNode; className?: string; footer?: ReactNode; onClose: () => void; open: boolean; subtitle?: ReactNode; title: ReactNode; unsaved?: boolean; width?: number }) {
-  const { asking, keep, ref, request } = useModalDialog(open, onClose, unsaved);
+  const { onBackdrop, question, ref } = useModalDialog(open, onClose, unsaved);
   const titleId = useId();
   // The question is a sibling, mounted only while asked: inside the element it would be read by every check that
   // reads the dialog's text, and its clicks would bubble into the dialog's own handler.
@@ -531,27 +552,15 @@ export function Dialog({ open, onClose, title, subtitle, children, footer, width
         className={className ? `dialog ${className}` : 'dialog'}
         aria-labelledby={titleId}
         style={{ width: `min(${width}px, calc(100vw - 32px))` }}
-        onClick={(e) => {
-          if (e.target === ref.current) request();
-        }}
+        onClick={onBackdrop}
       >
         <DialogInner>
-          <header className="dialog__head">
-            <div>
-              <h2 id={titleId} className="dialog__title">
-                {title}
-              </h2>
-              {subtitle && <p className="dialog__subtitle">{subtitle}</p>}
-            </div>
-            <button type="button" className="dialog__close" onClick={onClose} aria-label="Close">
-              <IconX size={16} />
-            </button>
-          </header>
+          <DialogHead onClose={onClose} subtitle={subtitle} title={title} titleId={titleId} />
           <div className="dialog__body">{children}</div>
           {footer && <footer className="dialog__foot">{footer}</footer>}
         </DialogInner>
       </dialog>
-      {asking && <ConfirmDialog open onClose={keep} onConfirm={onClose} title="Discard changes?" body="This dialog has changes that are not saved." cancelLabel="Keep editing" confirmLabel="Discard" danger initialFocus="cancel" />}
+      {question}
     </>
   );
 }
@@ -727,7 +736,7 @@ export function GroupedDialog({
   unsaved?: boolean;
   width?: number;
 }) {
-  const { asking, keep, ref, request } = useModalDialog(open, onClose, unsaved);
+  const { onBackdrop, question, ref } = useModalDialog(open, onClose, unsaved);
   const titleId = useId();
   const bodyRef = useRef<HTMLDivElement>(null);
   const sections = useRef(new Map<string, HTMLElement>());
@@ -832,21 +841,10 @@ export function GroupedDialog({
         className="dialog dialog--grouped"
         aria-labelledby={titleId}
         style={{ '--dialog-w': `${width}px` } as CSSProperties}
-        onClick={(e) => {
-          if (e.target === ref.current) request();
-        }}
+        onClick={onBackdrop}
       >
         <DialogInner>
-          <header className="dialog__head">
-            <div>
-              <h2 id={titleId} className="dialog__title">
-                {title}
-              </h2>
-            </div>
-            <button type="button" className="dialog__close" onClick={onClose} aria-label="Close">
-              <IconX size={16} />
-            </button>
-          </header>
+          <DialogHead onClose={onClose} title={title} titleId={titleId} />
           <div className="dialog__rail-split">
             <nav className={`dialog-rail ${flat ? 'dialog-rail--flat' : ''}`} aria-label={railLabel}>
               {runs.map((run, i) => {
@@ -907,7 +905,7 @@ export function GroupedDialog({
           </footer>
         </DialogInner>
       </dialog>
-      {asking && <ConfirmDialog open onClose={keep} onConfirm={onClose} title="Discard changes?" body="This dialog has changes that are not saved." cancelLabel="Keep editing" confirmLabel="Discard" danger initialFocus="cancel" />}
+      {question}
     </GroupChoice.Provider>
   );
 }
