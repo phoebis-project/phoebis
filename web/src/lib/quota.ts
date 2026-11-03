@@ -2,6 +2,7 @@ import type { Account, AccountSlowDown, Cooldown, ExtraUsage, PLAN_WORDS, PlanWo
 import { tierRow } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { fmtAbsolute, fmtPct, fmtRelative, instant } from '@/lib/format';
+import { HOUR, MINUTE, span } from '@/lib/time';
 
 export type MeterTone = 'good' | 'low' | 'warn';
 
@@ -94,9 +95,6 @@ export function slowedOf(account: Account, now: number): AccountSlowDown | null 
   return slowDown !== null && slowDown.factor < 1 && w5 !== null && !isExpired(w5, now) ? slowDown : null;
 }
 
-const HOUR = 3_600_000;
-const MINUTE = 60_000;
-
 /**
  * The end the router's pace reads (`term::end_of`): the saved end while the account is canceled, else a trial end
  * still ahead.
@@ -141,10 +139,7 @@ export function paceWords(w: RateLimitWindow, now: number, end: number | null): 
  */
 export function minuteSpan(ms: number): string {
   const minutes = ms > 0 ? Math.max(1, Math.round(ms / MINUTE)) : 0;
-  const pair = (major: number, majorUnit: string, minor: number, minorUnit: string) => (minor > 0 ? `${major} ${majorUnit} ${minor} ${minorUnit}` : `${major} ${majorUnit}`);
-  if (minutes < 60) return `${minutes} min`;
-  if (minutes < 24 * 60) return pair(Math.floor(minutes / 60), 'h', minutes % 60, 'min');
-  return pair(Math.floor(minutes / (24 * 60)), 'd', Math.floor((minutes % (24 * 60)) / 60), 'h');
+  return minutes === 0 ? '0 min' : span(minutes * MINUTE);
 }
 
 /**
