@@ -484,7 +484,12 @@ impl RollupRow {
 
 pub(crate) fn add_counts(into: &mut BTreeMap<String, u64>, from: &BTreeMap<String, u64>) {
     for (k, v) in from {
-        *into.entry(k.clone()).or_default() += v;
+        match into.get_mut(k) {
+            Some(n) => *n += v,
+            None => {
+                into.insert(k.clone(), *v);
+            }
+        }
     }
 }
 

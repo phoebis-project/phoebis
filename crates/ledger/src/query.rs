@@ -2161,7 +2161,7 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         .get("expired_between_turns")
         .copied()
         .unwrap_or(0);
-    let mut reasons = sum.cache_miss_reasons.clone();
+    let mut reasons = sum.cache_miss_reasons;
     reasons.remove("expired_between_turns");
     GroupRow {
         key: key.into(),
@@ -2193,9 +2193,9 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         },
         cost: cost_split_json(&dollars.usd),
         cost_usd: dollars.usd.total(),
-        errors: sum.errors.clone(),
+        errors: sum.errors,
         refused: sum.refusals.values().sum(),
-        refusals: sum.refusals.clone(),
+        refusals: sum.refusals,
         cache_miss_reasons: reasons,
         histograms: Histograms {
             duration_ms: sum.duration_hist.buckets(),
@@ -2235,7 +2235,7 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         probe_cost_usd: dollars.probe_usd,
         wasted_probes: probes.wasted_probes,
         wasted_probe_usd: dollars.wasted_usd,
-        wasted_probe_reasons: probes.wasted_probe_reasons.clone(),
+        wasted_probe_reasons: probes.wasted_probe_reasons,
         cost_shares,
         plan_requests: Some(plan.requests),
         plan_output_tokens: Some(plan.output_tokens),
@@ -2628,7 +2628,7 @@ impl GroupSums {
             probes_counted,
         } = *read;
         let key = group_of(row, group_by, live, agent_groups);
-        let entry = self.0.entry(key.clone()).or_insert_with(|| GroupSum {
+        let entry = self.0.entry(key).or_insert_with(|| GroupSum {
             sum: RollupRow::default(),
             probes: RollupRow::default(),
             dollars: GroupDollars::default(),
