@@ -63,8 +63,11 @@ export const pct = (v: number | null | undefined, signed = false) => {
   const n = Math.round(v);
   return `${signed && n > 0 ? '+' : ''}${n === 0 ? 0 : n}%`;
 };
+/** Three figures at most, trailing zeros dropped: 12, 17.1, 8.57. The cost views print their multiples and shares side
+ *  by side, so they round alike through this one rule. */
+export const figure = (n: number) => String(Number(n.toPrecision(3)));
 /** A share of a window as a percent to three significant digits, trailing zeros dropped: 8.41%, 0.219%, 12.5%. */
-export const fmtShare = (ratio: number) => `${Number((ratio * 100).toPrecision(3))}%`;
+export const fmtShare = (ratio: number) => `${figure(ratio * 100)}%`;
 /** A share with its window named ("0.42% of 5-hour", "0.12% of 7-day Fable"), a window the pages do not know under its key. */
 export const shareLabel = (windowKey: string, share: number): string => `${fmtShare(share)} of ${windowLabelOf(windowKey)}`;
 /** A share as a whole percent with the space before the sign, as the pool card's badge writes it. */

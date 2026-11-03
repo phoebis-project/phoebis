@@ -2,16 +2,13 @@ import { useState } from 'react';
 import type { SubscriptionCosts } from '@/api/types';
 import { Card, Segmented } from '@/components/ui/primitives';
 import { anchorTier, fullWindowsAWeek, regimeNames, regimeTitle, regimeWord, smallestTier, tierCapacity, withRegime, type CostWindow } from '@/lib/costs';
-import { fmtInt, fmtShare } from '@/lib/format';
+import { figure, fmtInt, fmtShare } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 
 const WINDOWS: { factor: 'fiveHour' | 'sevenDay'; key: CostWindow; short: string }[] = [
   { factor: 'fiveHour', key: 'five_hour', short: '5-hour' },
   { factor: 'sevenDay', key: 'seven_day', short: '7-day' },
 ];
-
-/** Three figures at most, trailing zeros dropped: 12, 17.1, 8.57. */
-const figure = (n: number) => String(Number(n.toPrecision(3)));
 
 /** The band control both tabs share: the peak band's state a figure is read in, outside the band until switched.
  *  `unreachable` disables the state no instant reaches, under its title. */

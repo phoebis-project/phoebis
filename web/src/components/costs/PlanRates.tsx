@@ -3,7 +3,7 @@ import type { ModelPrice, SubscriptionCosts } from '@/api/types';
 import { Input, Segmented } from '@/components/ui/primitives';
 import { anchorTier, bandNow, MODEL_WEEK_TIERS, modelWeeks, regimeNames, regimeTitle, regimeWord, shareIn, tierCapacity, tierGroups, unreachableBand, weightedWindows, weightOf, withRegime, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
-import { fmtShare, undatedModel, upperFirst } from '@/lib/format';
+import { figure, fmtShare, undatedModel, upperFirst } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 import { nowLine } from './PeakBand';
 import { BandSwitch } from './WindowsByTier';
@@ -140,7 +140,7 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
         </td>
       );
     }
-    const multiple = `${Number((weight / base).toPrecision(3))}x`;
+    const multiple = `${figure(weight / base)}x`;
     return (
       <td>
         <div className="cost-ref__weight" title={`${model}: ${multiple} the share of ${lightest} per token of the same type on the 5-hour window`}>

@@ -3,7 +3,7 @@ import type { SubscriptionCosts } from '@/api/types';
 import { useFormatVersion } from '@/app/settings';
 import { Card } from '@/components/ui/primitives';
 import { bandCaption, bandNow, bandSentence, bandWeek, hhmm, nextLocalChange, partsIn, regimeNames, regimeWord, zoneCity } from '@/lib/costs';
-import { fmtPct, fmtShortTime, getTimeFormat, viewingZone } from '@/lib/format';
+import { figure, fmtPct, fmtShortTime, getTimeFormat, viewingZone } from '@/lib/format';
 import { MINUTE } from '@/lib/time';
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -33,7 +33,7 @@ export const nowLine = (costs: SubscriptionCosts, now: number): string => {
 };
 
 /** "1.43x": what a share costs at a capacity factor. */
-const shareCost = (factor: number) => `${Number((1 / factor).toPrecision(3))}x`;
+const shareCost = (factor: number) => `${figure(1 / factor)}x`;
 const factorText = (factor: number) => (factor === 1 ? `no band, holds ${fmtPct(factor)}` : `holds ${fmtPct(factor)}, a share costs ${shareCost(factor)}`);
 
 const FACTOR_WINDOWS: { key: 'fiveHour' | 'sevenDay'; label: string }[] = [
