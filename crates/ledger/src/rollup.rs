@@ -828,9 +828,7 @@ pub fn fold_request(
         }
     }
     for delta in deltas_of(request, attempts, prices) {
-        let mut row = read_rollup(tx, &delta)?.unwrap_or_else(|| empty_row(&delta));
-        row.add(&delta);
-        write_rollup(tx, &row)?;
+        fold_delta(tx, &delta)?;
     }
     for a in attempts {
         if reads_utilization(a) {
@@ -902,6 +900,13 @@ pub(crate) fn empty_row(delta: &RollupRow) -> RollupRow {
         &delta.tier,
         &delta.classifier,
     )
+}
+
+/// Adds `delta` to its row, the row started from the key where none stands.
+pub(crate) fn fold_delta(tx: &Transaction<'_>, delta: &RollupRow) -> Result<(), LedgerError> {
+    let mut row = read_rollup(tx, delta)?.unwrap_or_else(|| empty_row(delta));
+    row.add(delta);
+    write_rollup(tx, &row)
 }
 
 /// Takes a delta that was added before back out of its row. A row left holding nothing of any request or probe

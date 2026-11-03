@@ -29,7 +29,7 @@ use crate::pricing::{
     effective_instant, LongContext, ModelPrice, ModelRow, PriceRevisions, PriceTable,
 };
 use crate::record::{AttemptRecord, RequestRecord};
-use crate::rollup::{deltas_of, empty_row, read_rollup, unfold, write_rollup, RollupRow};
+use crate::rollup::{deltas_of, fold_delta, read_rollup, unfold, RollupRow};
 use crate::LedgerError;
 
 /// The `meta` key holding the mark: `{"since": <ms>, "revisions": [{"effective": "<date>", "bands": {"<model>":
@@ -186,9 +186,7 @@ fn pass(
                     unfold(&tx, delta)?;
                 }
                 for delta in &now {
-                    let mut row = read_rollup(&tx, delta)?.unwrap_or_else(|| empty_row(delta));
-                    row.add(delta);
-                    write_rollup(&tx, &row)?;
+                    fold_delta(&tx, delta)?;
                 }
                 moved += 1;
             }
