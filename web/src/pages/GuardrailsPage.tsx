@@ -150,7 +150,7 @@ export function GuardrailsPage(): JSX.Element {
   );
   const body = !list
     ? guardrails.error
-      ? row(<ErrorState title="Could not load the guardrails" body={guardrails.error} action={<Button size="sm" onClick={guardrails.reload}>Try again</Button>} />)
+      ? row(<ErrorState title="Could not load the guardrails" body={guardrails.error} retry={guardrails.reload} />)
       : [0, 1].map((i) => row(<Skeleton />, i))
     : list.length === 0
       ? row(

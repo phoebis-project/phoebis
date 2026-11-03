@@ -317,7 +317,7 @@ export function KeysPage() {
                     ? (
                         <tr>
                           <td colSpan={8}>
-                            <ErrorState title="Could not load the keys" body={keys.error} action={<Button size="sm" onClick={keys.reload}>Try again</Button>} />
+                            <ErrorState title="Could not load the keys" body={keys.error} retry={keys.reload} />
                           </td>
                         </tr>
                       )

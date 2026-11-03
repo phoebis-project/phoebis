@@ -6,7 +6,7 @@ import { ChipView, Chips, chipValue, rowValue } from '@/components/ChipView';
 import { DecisionStrip } from '@/components/DecisionStrip';
 import { EntryChips } from '@/components/EntryChips';
 import { Badge, Button, CopyButton, ErrorState, KeyValue, useHostedDescription } from '@/components/ui/primitives';
-import { useAsync } from '@/lib/hooks';
+import { failedFirst, useAsync } from '@/lib/hooks';
 import {
   aroundRequest,
   aroundSubject,
@@ -67,7 +67,7 @@ function PaceCell({ title, value }: { title: string | null; value: string }) {
 export function DecisionCard({ now, onWiden, row }: { now: number; onWiden: (link: LogLink) => void; row: DecisionSummary }) {
   const answer = JSON.stringify([row.status, row.attemptCount, row.cache]);
   const loaded = useAsync(() => api.getDecision(row.requestId, row.seq), [row.requestId, row.seq, answer]);
-  if (loaded.data === null && loaded.error !== null) {
+  if (failedFirst(loaded)) {
     return (
       <div className="decision-card">
         <ErrorState title="Could not load the record" body={loaded.error} action={<Button onClick={loaded.reload}>Try again</Button>} />

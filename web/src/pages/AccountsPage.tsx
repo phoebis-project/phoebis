@@ -152,7 +152,7 @@ export function AccountsPage() {
             ? accounts.error
               ? (
                   <li>
-                    <ErrorState title="Could not load the accounts" body={accounts.error} action={<Button size="sm" onClick={accounts.reload}>Try again</Button>} />
+                    <ErrorState title="Could not load the accounts" body={accounts.error} retry={accounts.reload} />
                   </li>
                 )
               : [0, 1, 2].map((i) => (
@@ -793,15 +793,7 @@ function AllowanceCard({ answer, costs, error, holder, onRetry, week }: { answer
   return (
     <Card title="Allowance left at reset" subtitle={ALLOWANCE_SUBTITLE}>
       {error !== null ? (
-        <ErrorState
-          title="Could not load the weekly resets"
-          body={error}
-          action={
-            <Button size="sm" onClick={onRetry}>
-              Try again
-            </Button>
-          }
-        />
+        <ErrorState title="Could not load the weekly resets" body={error} retry={onRetry} />
       ) : answer === undefined || costs === null ? (
         <Skeleton height={120} />
       ) : answer === null ? (
@@ -832,15 +824,7 @@ function DriftCard({ accountId, answer, error, onRetry }: { accountId: string; a
   return (
     <Card title="Meter drift" subtitle={DRIFT_SUBTITLE} actions={<Link to={`/meter?${METER_CODEC.toParams({ accounts: [accountId] })}`}>Meter</Link>}>
       {error !== null ? (
-        <ErrorState
-          title="Could not load the meter reconciliation"
-          body={error}
-          action={
-            <Button size="sm" onClick={onRetry}>
-              Try again
-            </Button>
-          }
-        />
+        <ErrorState title="Could not load the meter reconciliation" body={error} retry={onRetry} />
       ) : rows === null ? (
         <Skeleton height={60} />
       ) : rows.length === 0 ? (

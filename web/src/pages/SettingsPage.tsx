@@ -2,7 +2,7 @@ import { api } from '@/api';
 import { effectiveLabel } from '@/api/decode';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { IconMonitor, IconMoon, IconSun } from '@/components/ui/icons';
-import { Badge, Button, Card, CopyButton, ErrorState, KeyValue, Segmented, Select, Skeleton } from '@/components/ui/primitives';
+import { Badge, Card, CopyButton, ErrorState, KeyValue, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { UnitLegend, WeekSwitch } from '@/components/ui/UnitControls';
 import { revisionAt } from '@/lib/costs';
 import { fmtDuration, type TimeFormat } from '@/lib/format';
@@ -154,7 +154,7 @@ export function SettingsPage() {
             </p>
           </>
         ) : settings.error ? (
-          <ErrorState title="Could not load the settings" body={settings.error} action={<Button size="sm" onClick={settings.reload}>Try again</Button>} />
+          <ErrorState title="Could not load the settings" body={settings.error} retry={settings.reload} />
         ) : (
           <Skeleton height={60} />
         )}

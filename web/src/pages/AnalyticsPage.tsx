@@ -13,7 +13,7 @@ import { Legend, timeTip, type TooltipRow } from '@/components/charts/Tooltip';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import type { Option } from '@/components/ui/OptionList';
 import { figuresValue, Tile } from '@/components/ui/Tile';
-import { Badge, Button, Card, ErrorState, Meter, Segmented, Skeleton } from '@/components/ui/primitives';
+import { Badge, Card, ErrorState, Meter, Segmented, Skeleton } from '@/components/ui/primitives';
 import { FilterBar } from '@/components/FilterBar';
 import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
@@ -654,15 +654,7 @@ export function AnalyticsPage() {
       <SectionBar sections={SECTIONS} shown={tab} onChoose={chooseTab} offset={filtersHeight} />
 
       {failure !== null && (
-        <ErrorState
-          title="Could not load the analytics for these filters"
-          body={failure}
-          action={
-            <Button size="sm" onClick={retry}>
-              Try again
-            </Button>
-          }
-        />
+        <ErrorState title="Could not load the analytics for these filters" body={failure} retry={retry} />
       )}
       {empty && <div className="empty">No traffic in this range.</div>}
 
@@ -696,15 +688,7 @@ export function AnalyticsPage() {
                 answer is stale, so no figure stands under links for filters it was not read for. */}
             <Card title="Refusals by category" subtitle={`Answers the upstream refused in range, by category, each a request that succeeded${refusalsNote(sessionId !== null)}`}>
               {refusalCategories.error !== null ? (
-                <ErrorState
-                  title="Could not load refusals by category"
-                  body={refusalCategories.error}
-                  action={
-                    <Button size="sm" onClick={refusalCategories.reload}>
-                      Try again
-                    </Button>
-                  }
-                />
+                <ErrorState title="Could not load refusals by category" body={refusalCategories.error} retry={refusalCategories.reload} />
               ) : refusalCategories.data === null || refusalCategories.stale ? (
                 <Skeleton height={90} />
               ) : (

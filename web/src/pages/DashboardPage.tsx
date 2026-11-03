@@ -10,7 +10,7 @@ import { useChartInk } from '@/components/charts/useChartInk';
 import { statusTone } from '@/components/ui/AttemptTrail';
 import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
-import { Badge, Button, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
+import { Badge, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { figuresValue } from '@/components/ui/Tile';
@@ -18,7 +18,7 @@ import { accountHref, requestHref } from '@/lib/address';
 import { dollarsUnder, equivalentOrDash, nativeFiguresOf, nativeSidesOf, shareHint, UNPRICED_TITLE, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { weekReadingOf } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
-import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
+import { failedFirst, refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, accountCooldown, slowedOf } from '@/lib/quota';
 import { REFUSED_TITLE, costHeaderTitle, costUnitOf, glanceCellOf, requestHintArgs, revisionsTitle } from '@/lib/requests';
 import { ringFigures, ringLine, ringRowTitle, type RingFigures, type RingLeftOut, type RingRow, type RingWindow } from '@/lib/rings';
@@ -29,7 +29,6 @@ import type { UnitPosition, WeekPosition } from '@/lib/unit';
  * A read whose first answer failed holds no data, so its card would wait on a placeholder forever; a refresh that fails
  * with data held keeps the card drawn.
  */
-const failedFirst = (read: Loaded<unknown>) => read.data === null && read.error !== null;
 
 /**
  * The as-of line over the page's reads, each named as its card's error names it: the figures are as old as the oldest
@@ -88,10 +87,6 @@ function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading): Cost
   };
 }
 
-function ReadFailed({ title, error, retry }: { error: string | null; retry: () => void; title: string }) {
-  return <ErrorState title={title} body={error} action={<Button size="sm" onClick={retry}>Try again</Button>} />;
-}
-
 export function DashboardPage() {
   const { unit, week } = useAppSettings();
   const overview = useAsync(() => api.getOverview(), [], { refreshMs: 30_000 });
@@ -109,9 +104,9 @@ export function DashboardPage() {
   const reading = weekReadingOf(costs, settings.error, week);
   const costTile = o ? costTileOf(unit, o, reading) : null;
   const ringFailure = failedFirst(accounts) ? (
-    <ReadFailed title="Could not load the accounts" error={accounts.error} retry={accounts.reload} />
+    <ErrorState title="Could not load the accounts" body={accounts.error} retry={accounts.reload} />
   ) : failedFirst(settings) ? (
-    <ReadFailed title="Could not load the settings" error={settings.error} retry={settings.reload} />
+    <ErrorState title="Could not load the settings" body={settings.error} retry={settings.reload} />
   ) : null;
   const asOf = asOfLine(
     [
@@ -132,7 +127,7 @@ export function DashboardPage() {
     <div className="stack">
       <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />
       {failedFirst(overview) ? (
-        <ReadFailed title="Could not load the 24-hour figures" error={overview.error} retry={overview.reload} />
+        <ErrorState title="Could not load the 24-hour figures" body={overview.error} retry={overview.reload} />
       ) : (
         <div className="stat-grid stat-grid--day">
           <StatTile label="Requests, 24h" value={o ? fmtInt(o.requests24h) : null} note={o ? `${(o.requests24h / 24).toFixed(1)} per hour` : null} spark={hourly.map((h) => h.requests)} title="Requests the router asked an account for. The refused requests are in the Refused tile." color={ink.series[0]} />
@@ -177,7 +172,7 @@ export function DashboardPage() {
         <h2 className="section-title">Accounts</h2>
         {failedFirst(accounts) ? (
           // One state across the section: inside the auto-fill grid it would take a single column.
-          <ReadFailed title="Could not load the accounts" error={accounts.error} retry={accounts.reload} />
+          <ErrorState title="Could not load the accounts" body={accounts.error} retry={accounts.reload} />
         ) : (
           <div className="account-strip">
             {accounts.data
@@ -199,7 +194,7 @@ export function DashboardPage() {
         </Card>
         <Card title="Sessions" subtitle="Sticky pins and cache-warming agents" actions={<Link to="/sessions">Open</Link>}>
           {failedFirst(overview) || failedFirst(sessions) ? (
-            <ReadFailed title="Could not load the sessions" error={failedFirst(overview) ? overview.error : sessions.error} retry={retrySessions} />
+            <ErrorState title="Could not load the sessions" body={failedFirst(overview) ? overview.error : sessions.error} retry={retrySessions} />
           ) : (
             <SessionsSummary activePins={o?.activePins ?? null} sessions={sessions.data} />
           )}

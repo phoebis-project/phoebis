@@ -18,7 +18,7 @@ import { failed } from '@/lib/costs';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, keyGenerationOf, keyLifetime, messageOf, shortId, shortModel } from '@/lib/format';
 import { CAUSE_HINT, CAUSE_LABEL, contextCell, firstFailedRead, isFinished, isReleasedLine, orderLines, orderRows, pinTtlMs, releasedCount, requestsRange, sessionLines, type SessionLine, type TileRead, WARNING_CAUSES } from '@/lib/keepalive';
-import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
+import { failedFirst, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { ageWord, aroundSubject, logHref } from '@/lib/routingLog';
 import { memberSpeed } from '@/lib/selection';
@@ -256,7 +256,7 @@ export function SessionsPage() {
   const sessionData = sessions.data;
   const recipeData = recipes.data;
   const expireAfterSeconds = settings.data?.sessions.expireAfterSeconds ?? null;
-  const poolsFailed = pools.data === null && pools.error !== null;
+  const poolsFailed = failedFirst(pools);
   // The router forgets a session once it has been idle for the expiry, so this list has to as well.
   const listed = useMemo(
     () =>
@@ -436,7 +436,7 @@ export function SessionsPage() {
           </Button>
         </p>
       )}
-      {accounts.data === null && accounts.error !== null && (
+      {failedFirst(accounts) && (
         <p className="sessions__notice" role="status">
           Could not load the accounts: {accounts.error}{' '}
           <Button size="sm" onClick={accounts.reload}>
@@ -463,18 +463,11 @@ export function SessionsPage() {
             <ErrorState
               title="Could not load the sessions"
               body={cardFailed.error}
-              action={
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    sessions.reload();
-                    keys.reload();
-                    recipes.reload();
-                  }}
-                >
-                  Try again
-                </Button>
-              }
+              retry={() => {
+                sessions.reload();
+                keys.reload();
+                recipes.reload();
+              }}
             />
           </div>
         ) : rows === null ? (

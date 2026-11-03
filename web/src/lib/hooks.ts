@@ -21,6 +21,9 @@ export interface Loaded<T> {
   stale: boolean;
 }
 
+/** A read that failed before it ever answered, so the view has nothing to draw but the failure. */
+export const failedFirst = (read: Pick<Loaded<unknown>, 'data' | 'error'>): boolean => read.data === null && read.error !== null;
+
 export interface AsyncOptions {
   /**
    * Re-run `load` every `refreshMs` while the document is visible and `paused` is false. A refresh keeps `data` drawn,

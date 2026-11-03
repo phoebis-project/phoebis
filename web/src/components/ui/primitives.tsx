@@ -216,14 +216,21 @@ export function EmptyState({ title, body, action }: { action?: ReactNode; body?:
 
 /**
  * The failed twin of `EmptyState`, in the same box so a list swaps one for the other without the page moving.
- * The body carries the reason the call gave; the route it came from is in the shell's toast.
+ * The body carries the reason the call gave; the route it came from is in the shell's toast. `retry` draws the small
+ * Try again button in the action's place.
  */
-export function ErrorState({ title = 'Could not load', body, action }: { action?: ReactNode; body?: ReactNode; title?: string }) {
+export function ErrorState({ title = 'Could not load', body, action, retry }: { action?: ReactNode; body?: ReactNode; retry?: () => void; title?: string }) {
   return (
     <div className="empty empty--error" role="alert">
       <p className="empty__title">{title}</p>
       {body && <p className="empty__body">{body}</p>}
-      {action}
+      {retry ? (
+        <Button size="sm" onClick={retry}>
+          Try again
+        </Button>
+      ) : (
+        action
+      )}
     </div>
   );
 }

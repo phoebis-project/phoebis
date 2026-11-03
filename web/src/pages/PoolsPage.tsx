@@ -28,7 +28,7 @@ import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
 import { fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, messageOf, shortModel } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
-import { refreshAttention, useAsync, useAttention, useLatest, useNow } from '@/lib/hooks';
+import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { minuteSpan, windowOf } from '@/lib/quota';
@@ -392,7 +392,7 @@ export function PoolsPage() {
               />
             ))
           : pools.error
-            ? <ErrorState title="Could not load the pools" body={pools.error} action={<Button size="sm" onClick={pools.reload}>Try again</Button>} />
+            ? <ErrorState title="Could not load the pools" body={pools.error} retry={pools.reload} />
             : [0, 1].map((i) => <Skeleton key={i} height={360} />)}
       </div>
       <PoolDialog
@@ -407,7 +407,7 @@ export function PoolsPage() {
           }
         }}
         accounts={accounts.data ?? []}
-        accountsFailed={accounts.data === null && accounts.error !== null ? accounts.error : null}
+        accountsFailed={failedFirst(accounts) ? accounts.error : null}
         accountsLoaded={accounts.data !== null || accounts.error !== null}
         onRetryAccounts={accounts.reload}
         keys={keys.data ?? []}
@@ -1476,15 +1476,7 @@ export function PoolDialog({
           A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an API-key member&apos;s whole spend counts, a subscription member&apos;s metered spend alone (overage and fast answers). Set one, both, or neither.
         </p>
         {accountsFailed !== null ? (
-          <ErrorState
-            title="The account list did not load"
-            body={accountsFailed}
-            action={
-              <Button size="sm" onClick={onRetryAccounts}>
-                Try again
-              </Button>
-            }
-          />
+          <ErrorState title="The account list did not load" body={accountsFailed} retry={onRetryAccounts} />
         ) : (
           <div className="table-wrap">
             <table className="table members-table table--plain">
