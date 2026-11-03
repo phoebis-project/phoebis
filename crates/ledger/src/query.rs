@@ -26,7 +26,7 @@ use crate::plan::{
     CostRevisions, Funding, PlanTables,
 };
 use crate::price::{price_row, Priced, RowKey};
-use crate::pricing::{effective_instant, prompt_tokens, Band, PriceRevisions, Speed};
+use crate::pricing::{effective_instant, Band, PriceRevisions, Speed};
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
 };
@@ -4334,43 +4334,6 @@ pub struct BurnPoint {
     pub unpriced: bool,
 }
 
-/// The columns `burn_series` and `session_burn_series` price into a `BurnPoint`: a rollup row and a session
-/// attempt carry the same five token counts and the keys their price reads under different names.
-pub(crate) struct UsageRow<'a> {
-    pub(crate) canonical_model: &'a str,
-    /// The row's `client` label, whose entrypoint names the regime the row prices under: a rollup row's key word, a
-    /// session attempt's request's, `UNATTRIBUTED` where the request carries none.
-    pub(crate) client: &'a str,
-    pub(crate) input_tokens: u64,
-    pub(crate) cache_read_tokens: u64,
-    pub(crate) cache_write_5m_tokens: u64,
-    pub(crate) cache_write_1h_tokens: u64,
-    pub(crate) output_tokens: u64,
-    /// Milliseconds, the instant the band is read at: the row's own hour for a rollup row, which folds by the
-    /// request's hour and keeps no completion, and the completion for an attempt, where the meter charges it. Per
-    /// row, since a bucket spanning a band edge cannot say which side a charge fell on.
-    pub(crate) at: i64,
-    /// Milliseconds, the instant that names the revisions the row prices at: the row's own hour for a rollup row and
-    /// the request's `received_at` for a session attempt.
-    pub(crate) received_at: i64,
-    /// Who paid for the row: a rollup row's key word, an attempt's four facts. Never the rollup's speed, which
-    /// also files a request that asked for fast mode and was served without it.
-    pub(crate) funding: Funding,
-    /// The cells the row's dollars price at: a rollup row's key words, an attempt's reported speed and its own
-    /// prompt's band.
-    pub(crate) speed: Speed,
-    pub(crate) band: Band,
-    /// A rollup row's own word, or a session attempt's request's `kind`. A burn filter that asks for probes reads
-    /// probe rows, which price a model the revision lacks at its dearest listed cells.
-    pub(crate) kind: &'a str,
-    /// The account tier the row recorded at its landing, `None` for `UNATTRIBUTED` and a session attempt without
-    /// one: the tier its shares read.
-    pub(crate) tier: Option<&'a str>,
-    /// The row is the client's own classifier call, which prices at no plan share: a rollup row's key word, a session
-    /// attempt's request's standing.
-    pub(crate) classifier: bool,
-}
-
 /// One row's figure added to a window of a burn point: `None` latches the window, whichever row came first, so a
 /// partial sum never reads as the bucket's figure.
 fn latch_add(value: &mut Option<f64>, unpriced: &mut bool, figure: Option<f64>) {
@@ -4393,9 +4356,9 @@ fn latch_zero(value: &mut Option<f64>, unpriced: bool) {
 
 /// The row's funding decides its unit, so the kind the registry holds for the account now has no say and a deleted
 /// or recreated account moves no dollar into a share. One `price_row` call answers every figure: the row's read-time
-/// dollars for a billed row, and for a plan row the Pro-week figure against the anchor row in force at `now`, and,
-/// where `shares` holds and the row recorded a tier, the shares of that tier's windows (each banded at the row's own
-/// instant). A plan row with no tier recorded prices no share and still its figure. A fast row and one in overage add
+/// dollars for a billed row, and for a plan row the Pro-week figure against the anchor row in force at the key's `now`,
+/// and, where `shares` holds and the row recorded a tier, the shares of that tier's windows (each banded at the key's
+/// `band_at`, else its `at`). A plan row with no tier recorded prices no share and still its figure. A fast row and one in overage add
 /// their dollars and a zero share where the tables size the tier: fast mode spends usage credits and overage is billed
 /// in dollars, neither draws a plan window, and the zero still tells a reader the account is priced in its window
 /// unit. Every billed row adds a zero figure, so a bucket with tokens and no plan row reads 0 there and only an idle
@@ -4406,44 +4369,27 @@ pub(crate) fn price_usage(
     point: &mut BurnPoint,
     prices: &PriceRevisions,
     tables: &PlanTables,
-    row: &UsageRow,
+    key: RowKey<'_>,
+    usage: PinUsage,
     shares: bool,
-    now: i64,
 ) {
-    let tier = row.tier.filter(|_| shares);
-    let usage = PinUsage {
-        input: row.input_tokens,
-        cache_read: row.cache_read_tokens,
-        write_5m: row.cache_write_5m_tokens,
-        write_1h: row.cache_write_1h_tokens,
-        output: row.output_tokens,
+    let key = RowKey {
+        tier: key.tier.filter(|_| shares),
+        ..key
     };
     let tokens = tokens_of(usage);
-    let key = RowKey {
-        model: row.canonical_model,
-        speed: row.speed,
-        band: row.band,
-        funding: row.funding,
-        kind: row.kind,
-        tier,
-        entrypoint: entrypoint_of_client(row.client),
-        classifier: row.classifier,
-        at: row.received_at,
-        band_at: Some(row.at),
-        now,
-    };
     let priced = price_row(prices, tables, &key, usage);
-    let week = Some(window_for(row.canonical_model)).filter(|week| *week != SEVEN_DAY);
-    point.usd += match row.funding {
+    let week = Some(window_for(key.model)).filter(|week| *week != SEVEN_DAY);
+    point.usd += match key.funding {
         Funding::Plan => 0.0,
         _ => priced.usd.as_ref().map_or(0.0, CostSplit::total),
     };
     // A failed request books a row with no token, and the cost model refuses a model it has no weight for before it
     // reads the usage: such a row would null a priced hour for a charge of nothing.
     if tokens > 0 {
-        match row.funding {
+        match key.funding {
             Funding::Plan => {
-                if tier.is_some() {
+                if key.tier.is_some() {
                     // A tier the cost revision does not size answers no map, and every window it would share reads
                     // unpriced.
                     let share = |window: &str| {
@@ -4479,11 +4425,10 @@ pub(crate) fn price_usage(
             funding => {
                 // Ahead of the model's weights: a dollar-billed row prices in dollars whatever the model weighs it
                 // at, so the zero share rests on the tier alone. An api_key account has no window to share.
-                if let Some(tier) = tier.filter(|_| funding != Funding::ApiKey) {
-                    let entrypoint = entrypoint_of_client(row.client);
+                if let Some(tier) = key.tier.filter(|_| funding != Funding::ApiKey) {
                     let sized = |window: &str| {
                         tables
-                            .tier_factor(tier, window, entrypoint, row.received_at)
+                            .tier_factor(tier, window, key.entrypoint, key.at)
                             .is_some()
                     };
                     if sized(FIVE_HOUR) {
@@ -4500,9 +4445,9 @@ pub(crate) fn price_usage(
             }
         }
     }
-    point.cached_tokens += row.cache_read_tokens;
+    point.cached_tokens += usage.cache_read;
     point.tokens += tokens;
-    point.uncached_tokens += row.input_tokens;
+    point.uncached_tokens += usage.input;
 }
 
 /// The rollup rows `burn_series` prices for `filter`: every hour of its bucket range, whatever its scopes, so one
@@ -4591,30 +4536,14 @@ fn price_burn_row(
     let Some(point) = bucket_slot(points, first, bucket_seconds, row.hour) else {
         return;
     };
-    let key = row_key(row, now);
+    // The rollup keeps no completion, so the key's `band_at` is `None` and the band reads at the row's hour.
     price_usage(
         point,
         prices,
         tables,
-        &UsageRow {
-            canonical_model: &row.canonical_model,
-            client: &row.client,
-            input_tokens: row.input_tokens,
-            cache_read_tokens: row.cache_read_tokens,
-            cache_write_5m_tokens: row.cache_write_5m_tokens,
-            cache_write_1h_tokens: row.cache_write_1h_tokens,
-            output_tokens: row.output_tokens,
-            at: row.hour * 1_000,
-            received_at: row.hour * 1_000,
-            funding: key.funding,
-            speed: key.speed,
-            band: key.band,
-            kind: key.kind,
-            tier: key.tier,
-            classifier: key.classifier,
-        },
+        row_key(row, now),
+        row.usage(),
         shares,
-        now,
     );
 }
 
@@ -4918,11 +4847,7 @@ struct SessionAttempt {
     /// it; the band that prices it is read here.
     completed_at: i64,
     canonical_model: String,
-    input_tokens: u64,
-    cache_read_tokens: u64,
-    cache_write_5m_tokens: u64,
-    cache_write_1h_tokens: u64,
-    output_tokens: u64,
+    usage: PinUsage,
     /// Milliseconds, `requests.received_at`: the instant that names the revisions the attempt's dollars and shares
     /// read and the threshold its band reads.
     received_at: i64,
@@ -4992,11 +4917,13 @@ fn read_session_attempts(
             at: row.get(2)?,
             completed_at: row.get(3)?,
             canonical_model: row.get(4)?,
-            input_tokens: tokens(row.get(5)?),
-            cache_read_tokens: tokens(row.get(6)?),
-            cache_write_5m_tokens: tokens(row.get(7)?),
-            cache_write_1h_tokens: tokens(row.get(8)?),
-            output_tokens: tokens(row.get(9)?),
+            usage: PinUsage {
+                input: tokens(row.get(5)?),
+                cache_read: tokens(row.get(6)?),
+                write_5m: tokens(row.get(7)?),
+                write_1h: tokens(row.get(8)?),
+                output: tokens(row.get(9)?),
+            },
             received_at: row.get(10)?,
             speed: row.get(11)?,
             account_kind: row.get(12)?,
@@ -5061,44 +4988,30 @@ pub fn session_burn_series(
         let Some(point) = bucket_slot(series, first, filter.bucket_seconds, bucket_at) else {
             continue;
         };
-        let band = prices.in_force(a.received_at).band_of(
-            &a.canonical_model,
-            prompt_tokens(
-                a.input_tokens,
-                a.cache_read_tokens,
-                a.cache_write_5m_tokens,
-                a.cache_write_1h_tokens,
+        let band = prices
+            .in_force(a.received_at)
+            .band_of(&a.canonical_model, a.usage.prompt_tokens());
+        let speed = Speed::of(a.speed.as_deref());
+        // The attempt's revision is its request's, and its band the completion's, where the meter charges it.
+        let key = RowKey {
+            model: &a.canonical_model,
+            speed,
+            band,
+            funding: funding_of(
+                AccountKind::parse(&a.account_kind),
+                a.usage_based,
+                a.overage_in_use,
+                speed,
             ),
-        );
-        price_usage(
-            point,
-            prices,
-            tables,
-            &UsageRow {
-                canonical_model: &a.canonical_model,
-                client: a.client.as_deref().unwrap_or(UNATTRIBUTED),
-                input_tokens: a.input_tokens,
-                cache_read_tokens: a.cache_read_tokens,
-                cache_write_5m_tokens: a.cache_write_5m_tokens,
-                cache_write_1h_tokens: a.cache_write_1h_tokens,
-                output_tokens: a.output_tokens,
-                at: a.completed_at,
-                received_at: a.received_at,
-                funding: funding_of(
-                    AccountKind::parse(&a.account_kind),
-                    a.usage_based,
-                    a.overage_in_use,
-                    Speed::of(a.speed.as_deref()),
-                ),
-                speed: Speed::of(a.speed.as_deref()),
-                band,
-                kind: &a.kind,
-                tier: a.tier.as_deref(),
-                classifier: a.classifier.as_deref() == Some(Classifier::Client.as_str()),
-            },
-            shares,
+            kind: &a.kind,
+            tier: a.tier.as_deref(),
+            entrypoint: entrypoint_of_client(a.client.as_deref().unwrap_or(UNATTRIBUTED)),
+            classifier: a.classifier.as_deref() == Some(Classifier::Client.as_str()),
+            at: a.received_at,
+            band_at: Some(a.completed_at),
             now,
-        );
+        };
+        price_usage(point, prices, tables, key, a.usage, shares);
     }
     Ok(sessions
         .into_iter()

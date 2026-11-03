@@ -6,14 +6,15 @@
 use std::collections::{BTreeMap, HashMap};
 
 use phoebis_bus::Classifier;
-use phoebis_routing::{window_for, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
+use phoebis_routing::{window_for, PinUsage, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::AccountKind;
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, Row, Transaction};
 
-use crate::plan::{funding_of, Funding, PlanTables};
+use crate::plan::{entrypoint_of_client, funding_of, Funding, PlanTables};
+use crate::price::RowKey;
 use crate::pricing::{prompt_tokens, PriceRevisions, Speed};
-use crate::query::{price_usage, BurnPoint, UsageRow};
+use crate::query::{price_usage, BurnPoint};
 use crate::record::SampleSource;
 use crate::rollup::UNATTRIBUTED;
 use crate::LedgerError;
@@ -572,33 +573,30 @@ fn predicted(
             &a.model,
             prompt_tokens(input, cache_read, write_5m, write_1h),
         );
-        let mut point = BurnPoint::default();
-        price_usage(
-            &mut point,
-            prices,
-            tables,
-            &UsageRow {
-                canonical_model: &a.model,
-                client: a.client.as_deref().unwrap_or(UNATTRIBUTED),
-                input_tokens: input,
-                cache_read_tokens: cache_read,
-                cache_write_5m_tokens: write_5m,
-                cache_write_1h_tokens: write_1h,
-                output_tokens: output,
-                at: a.completed,
-                received_at: a.received_at,
-                funding,
-                speed: Speed::of(a.speed.as_deref()),
-                band,
-                kind: &a.kind,
-                tier: a.tier.as_deref(),
-                classifier,
-            },
-            true,
+        let key = RowKey {
+            model: &a.model,
+            speed: Speed::of(a.speed.as_deref()),
+            band,
+            funding,
+            kind: &a.kind,
+            tier: a.tier.as_deref(),
+            entrypoint: entrypoint_of_client(a.client.as_deref().unwrap_or(UNATTRIBUTED)),
+            classifier,
+            at: a.received_at,
+            band_at: Some(a.completed),
             // The prediction reads the shares alone, which take no anchor row, so the part's end stands in for the
             // read's instant.
-            to,
-        );
+            now: to,
+        };
+        let usage = PinUsage {
+            input,
+            cache_read,
+            write_5m,
+            write_1h,
+            output,
+        };
+        let mut point = BurnPoint::default();
+        price_usage(&mut point, prices, tables, key, usage, true);
         let priced = match window {
             FIVE_HOUR => point.five_hour_share,
             SEVEN_DAY => point.seven_day_share,
