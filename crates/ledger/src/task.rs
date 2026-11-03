@@ -599,7 +599,6 @@ async fn writer(
         pending: Vec::new(),
     };
     // Ahead of the start's spend read, so a parked priced record that lands now is in the first report.
-    let tiers = registry_tiers(&router.snapshot());
     let _ = land_parked(
         &db,
         &pricing,
@@ -607,7 +606,7 @@ async fn writer(
         &unpriced,
         &stats,
         &metrics,
-        &tiers,
+        &router.snapshot(),
         clock(),
         &clock,
     )
@@ -681,7 +680,6 @@ async fn writer(
                     let _ = reply.send(Err(LedgerError::WriterHeld));
                     continue;
                 }
-                let tiers = registry_tiers(&router.snapshot());
                 let replayed = match land_parked(
                     &db,
                     &pricing,
@@ -689,7 +687,7 @@ async fn writer(
                     &unpriced,
                     &stats,
                     &metrics,
-                    &tiers,
+                    &router.snapshot(),
                     now,
                     &clock,
                 )
@@ -744,7 +742,6 @@ async fn writer(
         let priced = priced_attempts(&records);
         records.extend(spends.take_pending());
         let batch = Arc::new(records);
-        let tiers = batch_tiers(&router.snapshot(), &batch);
         match land(
             &db,
             &pricing,
@@ -752,7 +749,7 @@ async fn writer(
             &unpriced,
             &stats,
             &metrics,
-            &tiers,
+            &router.snapshot(),
             &batch,
             0..batch.len(),
             &clock,
@@ -796,7 +793,6 @@ async fn writer(
                     detail: Some(format!(r#"{{"dropped":{}}}"#, dropped - reported)),
                     ..Default::default()
                 })]);
-                let tiers = batch_tiers(&router.snapshot(), &gap);
                 if let Landed::Written = land(
                     &db,
                     &pricing,
@@ -804,7 +800,7 @@ async fn writer(
                     &unpriced,
                     &stats,
                     &metrics,
-                    &tiers,
+                    &router.snapshot(),
                     &gap,
                     0..1,
                     &clock,
@@ -845,15 +841,6 @@ fn batch_tiers(snapshot: &RegistrySnapshot, batch: &[Record]) -> AccountTiers {
                 snapshot.priced_tier(&a.account_id).map(String::from),
             )
         })
-        .collect()
-}
-
-/// The tiers of every account the registry lists, for the parked records, which are read inside the pass, so no
-/// caller knows the accounts they name beforehand.
-fn registry_tiers(snapshot: &RegistrySnapshot) -> AccountTiers {
-    snapshot
-        .accounts()
-        .map(|a| (a.id.clone(), snapshot.priced_tier(&a.id).map(String::from)))
         .collect()
 }
 
@@ -924,7 +911,7 @@ async fn wait_on_clock(
 /// A failed batch is retried in place, then replayed one record at a time. Nothing new is taken from the channel
 /// while this runs, so order holds and admission's mark fires behind the held batch.
 async fn retry_held(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
-    let tiers = batch_tiers(&ctx.router.snapshot(), &held.records);
+    let snapshot = ctx.router.snapshot();
     for delay in BATCH_RETRY_DELAYS {
         if wait_on_clock(delay, ctx.clock, ctx.stopped).await == Wait::Stopped {
             return Retry::Stopped(held);
@@ -937,7 +924,7 @@ async fn retry_held(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
             ctx.unpriced,
             ctx.stats,
             ctx.metrics,
-            &tiers,
+            &snapshot,
             &held.records,
             rest,
             ctx.clock,
@@ -963,7 +950,7 @@ async fn hold(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
 /// One record per transaction. A record the database as a whole refuses is held with everything after it; one
 /// refused on its own row is a poison row, parked when it carries money and dropped with its gap otherwise.
 async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
-    let tiers = batch_tiers(&ctx.router.snapshot(), &held.records);
+    let snapshot = ctx.router.snapshot();
     for index in held.from..held.records.len() {
         let one = index..index + 1;
         let error = match land(
@@ -973,7 +960,7 @@ async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
             ctx.unpriced,
             ctx.stats,
             ctx.metrics,
-            &tiers,
+            &snapshot,
             &held.records,
             one,
             ctx.clock,
@@ -1030,7 +1017,7 @@ async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
                     ctx.unpriced,
                     ctx.stats,
                     ctx.metrics,
-                    &tiers,
+                    &snapshot,
                     &gap,
                     0..1,
                     ctx.clock,
@@ -1119,7 +1106,7 @@ async fn land_parked(
     unpriced: &Unpriced,
     stats: &Arc<LedgerStats>,
     metrics: &Arc<Metrics>,
-    tiers: &AccountTiers,
+    snapshot: &RegistrySnapshot,
     now: i64,
     clock: &Clock,
 ) -> Result<(u64, u64), LedgerError> {
@@ -1153,7 +1140,7 @@ async fn land_parked(
                     unpriced,
                     stats,
                     metrics,
-                    tiers,
+                    snapshot,
                     &batch,
                     0..1,
                     Some(row.id),
@@ -1496,7 +1483,6 @@ impl Spends {
             return;
         }
         let batch: Batch = Arc::new(self.pending.iter().cloned().map(Record::Event).collect());
-        let tiers = batch_tiers(&self.router.snapshot(), &batch);
         let landed = land(
             &self.db,
             &self.pricing,
@@ -1504,7 +1490,7 @@ impl Spends {
             &self.unpriced,
             &self.stats,
             &self.metrics,
-            &tiers,
+            &self.router.snapshot(),
             &batch,
             0..batch.len(),
             &self.clock,
@@ -1679,13 +1665,13 @@ async fn land(
     unpriced: &Unpriced,
     stats: &Arc<LedgerStats>,
     metrics: &Arc<Metrics>,
-    tiers: &AccountTiers,
+    snapshot: &RegistrySnapshot,
     batch: &Batch,
     range: Range<usize>,
     clock: &Clock,
 ) -> Landed {
     land_acknowledging(
-        db, pricing, tables, unpriced, stats, metrics, tiers, batch, range, None, clock,
+        db, pricing, tables, unpriced, stats, metrics, snapshot, batch, range, None, clock,
     )
     .await
 }
@@ -1701,7 +1687,7 @@ async fn land_acknowledging(
     unpriced: &Unpriced,
     stats: &Arc<LedgerStats>,
     metrics: &Arc<Metrics>,
-    tiers: &AccountTiers,
+    snapshot: &RegistrySnapshot,
     batch: &Batch,
     range: Range<usize>,
     parked: Option<i64>,
@@ -1710,7 +1696,7 @@ async fn land_acknowledging(
     let db = db.clone();
     let clock = clock.clone();
     let revisions = pricing.revisions();
-    let tiers = tiers.clone();
+    let tiers = batch_tiers(snapshot, &batch[range.clone()]);
     let records = batch.clone();
     let size = range.len() as u64;
     let landed = range.clone();
