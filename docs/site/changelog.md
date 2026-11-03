@@ -445,7 +445,9 @@ figures on its own connection ([The ledger writer](statistics.md#the-ledger-writ
 statistics from the first start on and refreshes them after each hourly purge ([The ledger
 writer](statistics.md#the-ledger-writer)). The analytics series and burn routes and a pool's traffic route answer `400`
 with the ledger's own words for a range that needs more points than a chart carries, a trailing partial bucket counted
-as one ([API reference](api-reference.md)).
+as one ([API reference](api-reference.md)). A model filter that names a model's `[1m]` spelling selects that model's
+rows on the request log, the analytics reads and the cache placements ([Requests](console.md#requests),
+[Analytics](console.md#analytics)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
 the request arrived. The price table and the subscription cost model are revision lists keyed by effective date, the
