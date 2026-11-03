@@ -295,6 +295,11 @@ const keyFigures = (v: unknown): KeyFigures => {
   return { billedUsd: num(f.billed_usd), cost: num(f.cost_usd), equivalent: numOrNull(f.equivalent), requests: num(f.requests) };
 };
 
+/** A key's status from its stored flags: routing refuses a key that is revoked, expired or switched off, in that order
+ *  of finality. */
+export const keyStatusOf = (revoked: boolean, expiresAt: string | null, enabled: boolean, now: number): ApiKey['status'] =>
+  revoked ? 'revoked' : expiresAt !== null && Date.parse(expiresAt) <= now ? 'expired' : enabled ? 'active' : 'disabled';
+
 export function decodeKey(v: unknown): ApiKey {
   const k = rec(v);
   const expires = isoOrNull(k.expires_at);
@@ -325,8 +330,7 @@ export function decodeKey(v: unknown): ApiKey {
     // than landing over a row it could not vouch for.
     revision: num(k.revision),
     sessionsOnRetiredSecret: num(k.sessions_on_retired_secret),
-    // Routing refuses a key that is revoked, expired or switched off, in that order of finality.
-    status: revoked !== null ? 'revoked' : expires !== null && Date.parse(expires) <= Date.now() ? 'expired' : enabled ? 'active' : 'disabled',
+    status: keyStatusOf(revoked !== null, expires, enabled, Date.now()),
     updatedAt: isoOr(k.updated_at, epoch),
     usage7d: { ...keyFigures(k.usage_7d), tokens: num(rec(k.usage_7d).tokens) },
   };

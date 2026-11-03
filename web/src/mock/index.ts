@@ -1,7 +1,7 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
 import type { GuardrailInput, GuardrailRange, GuardrailTestInput, OverviewRange } from '@/api/client';
 import { AFFINITY_MODE_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeSettings } from '@/api/decode';
-import { GUARDRAIL_MODE_VALUES } from '@/api/decode';
+import { GUARDRAIL_MODE_VALUES, keyStatusOf } from '@/api/decode';
 import { decodeStreamCut } from '@/api/decode';
 import { ApiError, catalogUnion, noteBuild, slug } from '@/api/http';
 import type {
@@ -1509,7 +1509,7 @@ export class MockApi implements Api {
     if (unknown !== undefined) return Promise.reject(new ApiError(404, `guardrail ${unknown} not found`, null));
     const expiresAt = expiry === undefined ? current.expiresAt : expiry;
     // The status is the decoder's fold of the stored flags, so a key switched off or lapsed reads that way at once.
-    const status = current.status === 'revoked' ? 'revoked' : expiresAt !== null && Date.parse(expiresAt) <= Date.now() ? 'expired' : rest.enabled ? 'active' : 'disabled';
+    const status = keyStatusOf(current.status === 'revoked', expiresAt, rest.enabled, Date.now());
     const next: Omit<ApiKey, 'guardrails' | 'poolGuardrails'> = { ...current, ...rest, expiresAt, status, ...restamp(current) };
     this.keys = this.keys.map((k, i) => (i === idx ? next : k));
     if (ownIds !== undefined) this.setSubjectGuardrails('keys', id, ownIds);
