@@ -657,9 +657,9 @@ export function AnalyticsPage() {
         <Section id="traffic" shown={shown} title="Traffic" meta={loading ? undefined : `${fmtInt(totals.requests)} requests, ${pctOrDash(errorRateOf(totals))} errors`}>
           <div className="grid-2 traffic-grid">
             <ChartCard title="Requests by outcome" subtitle="Per bucket, stacked" loading={loading} legend={OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(totals[s.key]) }))}>
-              <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+              <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
                 <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <XAxis {...axis} />
                 <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
                 <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(p[s.key]) })))} />
                 {OUTCOME_SERIES.map((s, i) => (
@@ -692,9 +692,9 @@ export function AnalyticsPage() {
             </Card>
 
             <ChartCard title="Failovers" subtitle="Attempts that moved to another member" loading={loading} legend={[{ color: ink.series[3], label: 'Failovers', shape: 'line', value: fmtInt(totals.failovers) }]}>
-              <LineChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+              <LineChart data={buckets} margin={CHART_MARGIN}>
                 <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <XAxis {...axis} />
                 <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
                 <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Bucket>((p) => [{ color: ink.series[3], label: 'failovers', value: fmtInt(p.failovers) }])} />
                 <Line type="monotone" dataKey="failovers" stroke={ink.series[3]} strokeWidth={2} dot={false} isAnimationActive={false} />
@@ -795,9 +795,9 @@ export function AnalyticsPage() {
         <Section id="cache" shown={shown} title="Cache" meta={loading ? undefined : `${fmtPct(hitRatioOf(totals) ?? 0)} hit ratio, ${fmtInt(totals.expiredBetweenTurns)} expired between turns, ${fmtPct(cachedShareOf(totals) ?? 0)} of input read from cache`}>
           <div className="grid-2">
             <ChartCard title="Tokens" subtitle="Per bucket, stacked by kind" loading={loading} legend={TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(totals.tokens[s.key]) }))}>
-              <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+              <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
                 <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <XAxis {...axis} />
                 <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
                 <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(p.tokens[s.key]) })))} />
                 {TOKEN_SERIES.map((s, i) => (
@@ -815,9 +815,9 @@ export function AnalyticsPage() {
                 { color: ink.series[2], label: 'Cached share of input', shape: 'line', value: fmtPct(cachedShareOf(totals) ?? 0) },
               ]}
             >
-              <LineChart data={buckets.map((b) => ({ ...b, hitRatio: pct100(hitRatioOf(b)), cachedShare: pct100(cachedShareOf(b)) }))} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+              <LineChart data={buckets.map((b) => ({ ...b, hitRatio: pct100(hitRatioOf(b)), cachedShare: pct100(cachedShareOf(b)) }))} margin={CHART_MARGIN}>
                 <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <XAxis {...axis} />
                 <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
                 <Tooltip
                   cursor={{ stroke: ink.axis }}
@@ -854,9 +854,9 @@ export function AnalyticsPage() {
             >
               {/* The bars draw the Pro-week figure, so the axis and the tooltip read it in the chosen week. */}
               {cacheScale !== null ? (
-                <BarChart data={costBuckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
+                <BarChart data={costBuckets} margin={CHART_MARGIN} barCategoryGap={4} barGap={2}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
-                  <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                  <XAxis {...axis} />
                   <YAxis tickFormatter={(v: number) => fmtShare(v * cacheScale)} tickLine={false} axisLine={false} width={60} />
                   <Tooltip
                     cursor={{ fill: ink.grid, opacity: 0.6 }}
@@ -869,9 +869,9 @@ export function AnalyticsPage() {
                   <Bar dataKey="cacheEquivalent.read" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />
                 </BarChart>
               ) : (
-                <BarChart data={costBuckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
+                <BarChart data={costBuckets} margin={CHART_MARGIN} barCategoryGap={4} barGap={2}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
-                  <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                  <XAxis {...axis} />
                   <YAxis {...usdAxis(costBuckets.flatMap((b) => [b[cacheDollars].cacheWrite ?? 0, b[cacheDollars].cacheRead ?? 0]))} tickLine={false} axisLine={false} />
                   <Tooltip
                     cursor={{ fill: ink.grid, opacity: 0.6 }}
@@ -998,9 +998,9 @@ export function AnalyticsPage() {
           </div>
           <div className="grid-2 warming-grid">
             <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" loading={loading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(totals.probes[s.key]) }))}>
-              <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+              <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
                 <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <XAxis {...axis} />
                 <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
                 <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(p.probes[s.key]) })))} />
                 {!probesUnmeasured &&
@@ -1034,9 +1034,9 @@ export function AnalyticsPage() {
             />
 
             <ChartCard title="Kept-warm requests" subtitle="Requests whose cache read followed a probe" loading={loading} legend={[{ color: ink.series[0], label: 'Kept-warm requests', value: keptWarm === null ? '-' : fmtInt(keptWarm.requests) }]}>
-              <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+              <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
                 <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <XAxis {...axis} />
                 <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
                 <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => [{ color: ink.series[0], label: 'kept-warm requests', value: keptWarm === null || p.keptWarm === null ? '-' : fmtInt(p.keptWarm.requests) }])} />
                 {keptWarm !== null && <Bar dataKey="keptWarm.requests" fill={ink.series[0]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
@@ -1044,9 +1044,9 @@ export function AnalyticsPage() {
             </ChartCard>
 
             <ChartCard title="Kept-warm tokens" subtitle="Cache-read tokens on those requests" loading={loading} legend={[{ color: ink.series[2], label: 'Kept-warm tokens', value: keptWarm === null ? '-' : fmtCompact(keptWarmTokens(keptWarm)) }]}>
-              <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+              <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
                 <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <XAxis {...axis} />
                 <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
                 <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => [{ color: ink.series[2], label: 'kept-warm tokens', value: keptWarm === null || p.keptWarm === null ? '-' : fmtCompact(keptWarmTokens(p.keptWarm)) }])} />
                 {keptWarm !== null && <Bar dataKey={(p: Bucket) => (p.keptWarm === null ? null : keptWarmTokens(p.keptWarm))} fill={ink.series[2]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
@@ -1595,9 +1595,9 @@ function SavingChart({ axis, billed, failure, loading, points, reading, session,
         { color: ink.muted, hollow: true, label: 'Net saving', value: negative ? <span className="is-negative">{figures.net}</span> : figures.net },
       ]}
     >
-      <BarChart data={drawn} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
+      <BarChart data={drawn} margin={CHART_MARGIN} barCategoryGap={4} barGap={2}>
         <CartesianGrid vertical={false} stroke={ink.grid} />
-        <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+        <XAxis {...axis} />
         {equivalents ? <YAxis tickFormatter={(v: number) => fmtShare(v * factor)} tickLine={false} axisLine={false} width={60} /> : <YAxis {...usdAxis(drawn.flatMap((b) => [b.savingUsd, b.probeCostUsd]))} tickLine={false} axisLine={false} />}
         <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>(tip)} />
         {!session && <Bar dataKey={gross} fill={ink.series[1]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
@@ -1654,9 +1654,9 @@ function LatencyRow({ axis, metric, series, totals, loading }: { axis: TimeAxis;
         loading={loading}
         legend={PERCENTILES.map((p) => ({ color: ink.ramp[p.rampIndex], label: p.label, shape: 'line', title: PERCENTILE_HINT, value: fmt(overall[p.key]) }))}
       >
-        <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+        <LineChart data={data} margin={CHART_MARGIN}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
-          <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+          <XAxis {...axis} />
           <YAxis tickFormatter={(v: number) => (metric.unit === 'ms' ? fmtMs(v) : v.toFixed(0))} tickLine={false} axisLine={false} width={52} />
           <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<{ at: number } & Pct>((p) => PERCENTILES.map((q) => ({ color: ink.ramp[q.rampIndex], label: q.label, title: PERCENTILE_HINT, value: fmt(p[q.key]) })))} />
           {PERCENTILES.map((p) => (
@@ -1914,9 +1914,9 @@ function CostByGroup({ axis, failure, points, groupBy, groupSlot, loading, readi
   const areas = (s: Stack) => s.keys.map((k) => <Area key={k} type="monotone" dataKey={k} stackId="a" stroke={color(k)} strokeWidth={1.5} fill={color(k)} fillOpacity={0.35} dot={false} isAnimationActive={false} />);
   const dollarCard = (s: Stack, cardTitle: string, subtitle: string) => (
     <ChartCard title={cardTitle} subtitle={subtitle} loading={loading} failure={failure} legend={s.keys.map((k) => ({ color: color(k), label: s.labels.get(k) ?? k }))}>
-      <AreaChart data={s.data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+      <AreaChart data={s.data} margin={CHART_MARGIN}>
         <CartesianGrid vertical={false} stroke={ink.grid} />
-        <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+        <XAxis {...axis} />
         <YAxis {...usdAxis(s.data.map((row) => s.keys.reduce((n, k) => n + (row[k] ?? 0), 0)))} tickLine={false} axisLine={false} />
         <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => s.keys.map((k) => ({ color: color(k), label: s.labels.get(k) ?? k, value: fmtUsd(p[k] ?? 0) })))} />
         {areas(s)}
@@ -1952,9 +1952,9 @@ function CostByGroup({ axis, failure, points, groupBy, groupSlot, loading, readi
             legend={keys.map((k) => ({ color: color(k), label: label(k) }))}
           >
             {weekFactor !== null && (
-              <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+              <AreaChart data={data} margin={CHART_MARGIN}>
                 <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <XAxis {...axis} />
                 <YAxis tickFormatter={(v: number) => fmtShare(v * weekFactor)} tickLine={false} axisLine={false} width={60} />
                 {/* Recharts drops null entries by default, and a bucket whose every group the route priced nothing on
                     would lose its tooltip and its dashes. */}
@@ -1981,17 +1981,19 @@ function refusalsNote(session: boolean): string {
   return session ? '. The session filter does not apply here' : '';
 }
 const BURN_UNFILTERED_NOTE = '. Of the filters above, the Accounts filter and the user agent groups alone apply here';
-type TimeAxis = { height?: number; label?: { fill: string; fontSize: number; position: 'insideBottomRight'; value: string }; tickFormatter: (v: number) => string };
+type TimeAxis = { axisLine: { stroke: string }; dataKey: 'at'; height?: number; label?: { fill: string; fontSize: number; position: 'insideBottomRight'; value: string }; minTickGap: number; tickFormatter: (v: number) => string; tickLine: false };
 /**
  * A time axis over buckets `bucketMs` wide. The 6-hour and daily buckets are UTC multiples, so their ticks print the
  * viewer's date with the local time beside it where the boundary is not local midnight, and the axis names the
  * boundary once; hour ticks stay local, as the tooltips do.
  */
 function timeAxis(bucketMs: number, ink: ChartInk): TimeAxis {
-  if (bucketMs < 6 * HOUR) return { tickFormatter: (v) => fmtHourTick(v) };
+  const look = { axisLine: { stroke: ink.axis }, dataKey: 'at', minTickGap: 40, tickLine: false } as const;
+  if (bucketMs < 6 * HOUR) return { ...look, tickFormatter: (v) => fmtHourTick(v) };
   // The label sits under the last tick, so the axis grows a line taller than its 30 px to keep the two apart.
-  return { height: 40, label: { fill: ink.ink2, fontSize: 11, position: 'insideBottomRight', value: 'days start at 00:00 UTC' }, tickFormatter: (v) => fmtDayTick(v) };
+  return { ...look, height: 40, label: { fill: ink.ink2, fontSize: 11, position: 'insideBottomRight', value: 'days start at 00:00 UTC' }, tickFormatter: (v) => fmtDayTick(v) };
 }
+const CHART_MARGIN = { top: 8, right: 8, bottom: 0, left: 0 };
 
 type SpeedRow = { at: number; fast: number; standard: number };
 const requestsIn = (p: AnalyticsPoint, key: string) => p.groups.find((g) => g.key === key)?.requests ?? 0;
@@ -2011,9 +2013,9 @@ function SpeedCard({ axis, points, error, loading }: { axis: TimeAxis; error: st
       loading={loading}
       legend={SPEED_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(data.reduce((n, d) => n + d[s.key], 0)) }))}
     >
-      <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+      <BarChart data={data} margin={CHART_MARGIN} barCategoryGap={2}>
         <CartesianGrid vertical={false} stroke={ink.grid} />
-        <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+        <XAxis {...axis} />
         <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
         <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<SpeedRow>((p) => SPEED_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(p[s.key]) })))} />
         {SPEED_SERIES.map((s, i) => (
@@ -2091,9 +2093,9 @@ function RewritesCard({ answer, axis, error, loading, unfiltered }: { answer: Re
         </>
       }
     >
-      <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+      <BarChart data={data} margin={CHART_MARGIN} barCategoryGap={2}>
         <CartesianGrid vertical={false} stroke={ink.grid} />
-        <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+        <XAxis {...axis} />
         <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
         <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<{ at: number; rewriteTokens: number }>((p) => [{ color: ink.series[1], label: 'rewrite tokens', value: fmtCompact(p.rewriteTokens) }])} />
         <Bar dataKey="rewriteTokens" fill={ink.series[1]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />
@@ -2129,9 +2131,9 @@ function HeldChart({ answer, axis }: { answer: RewritesAnswer; axis: TimeAxis })
       </ul>
       {held.totalRequests > 0 && (
         <ResponsiveContainer width="100%" height={120}>
-          <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+          <BarChart data={data} margin={CHART_MARGIN} barCategoryGap={2}>
             <CartesianGrid vertical={false} stroke={ink.grid} />
-            <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+            <XAxis {...axis} />
             <YAxis tickFormatter={(v: number) => fmtMs(v)} tickLine={false} axisLine={false} width={44} />
             <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<HeldRow>((p) => [{ color: ink.warning, label: heldHover(p), value: null }])} />
             <Bar dataKey="heldMs" fill={ink.warning} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />
@@ -2349,9 +2351,9 @@ function BurnCharts({
         }
         legend={legend}
       >
-        <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+        <LineChart data={rows} margin={CHART_MARGIN}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
-          <XAxis dataKey="at" type="number" scale="time" domain={['dataMin', 'dataMax']} ticks={rows.map((r) => r.at)} {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+          <XAxis type="number" scale="time" domain={['dataMin', 'dataMax']} ticks={rows.map((r) => r.at)} {...axis} />
           <YAxis tickFormatter={(v: number) => fmtShare(v * factor)} tickLine={false} axisLine={false} width={52} {...scaleTo(scaled.flatMap((r) => planned.map(({ i }) => r.equivalent[i] ?? 0)))} />
           {/* Recharts drops null entries by default, and a bucket whose every figure is null would lose its date, its
               dashes and the unpriced hint. */}
@@ -2393,9 +2395,9 @@ function BurnCharts({
         empty={empty ?? (spent.length === 0 ? 'No account spent dollars in this range.' : undefined)}
         legend={spent.map(({ l }) => ({ color: colorOf(l), label: spendNameOf(l), shape: 'line' as const, title: titleOf(l), value: fmtUsd(l.usdPerMinute) }))}
       >
-        <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+        <LineChart data={rows} margin={CHART_MARGIN}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
-          <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+          <XAxis {...axis} />
           <YAxis {...spentAxis} tickLine={false} axisLine={false} {...spentScale} />
           <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<BurnRow>((r) => spent.map(({ i, l }) => ({ color: colorOf(l), label: spendNameOf(l), title: titleOf(l), value: fmtUsd(r.usd[i]) })))} />
           {spent.map(({ i, l }) => (
@@ -2613,9 +2615,9 @@ function AccountsSection({
         loading={loading}
         legend={accounts.filter((a) => data.some((p) => p[a] !== null && p[a] !== undefined)).map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, shape: 'line' }))}
       >
-        <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+        <LineChart data={data} margin={CHART_MARGIN}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
-          <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+          <XAxis {...axis} />
           <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
           <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, value: pct(p[a]) })))} />
           {accounts.map((a) => (
@@ -2625,9 +2627,9 @@ function AccountsSection({
       </ChartCard>
       <div className="grid-2">
         <ChartCard title="Window usage" subtitle="The window's utilization per bucket, from the quota samples" actions={toggle} loading={loading} legend={legend}>
-          <LineChart data={usage.data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+          <LineChart data={usage.data} margin={CHART_MARGIN}>
             <CartesianGrid vertical={false} stroke={ink.grid} />
-            <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+            <XAxis {...axis} />
             <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
             <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, value: pct(p[a]) })))} />
             {/* The lines leave a null bucket unconnected, so a bucket with no sample reads as a gap rather than a
@@ -2639,9 +2641,9 @@ function AccountsSection({
           </LineChart>
         </ChartCard>
         <ChartCard title="Pace" subtitle="The lead over pace per bucket: above zero ahead, below behind, from the quota samples, before the router's burn projection" actions={toggle} loading={loading} legend={legend}>
-          <LineChart data={pace.data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+          <LineChart data={pace.data} margin={CHART_MARGIN}>
             <CartesianGrid vertical={false} stroke={ink.grid} />
-            <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+            <XAxis {...axis} />
             <YAxis domain={[-paceTop, paceTop]} ticks={[-paceTop, -paceTop / 2, 0, paceTop / 2, paceTop]} tickFormatter={(v: number) => pct(v, true)} tickLine={false} axisLine={false} width={44} />
             <ReferenceLine y={0} stroke={ink.axis} />
             <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.flatMap((a) => [{ color: accountColor(ink, slotOf(a)), label: a, value: pct(p[a], true) }, { label: `Pace score, ${a}`, title: "the remaining share over the hours from the sample's instant to the window's reset", value: scoreOf(p, a) }]))} />
