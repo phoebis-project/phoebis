@@ -118,8 +118,6 @@ impl Waiting {
     }
 }
 
-/// What the body task tells the bus as the body goes by: every decoded piece as a chunk, the SSE phases it
-/// carries, and the completion once the body has ended one way or another.
 /// What the bus copy reads of a body, one of three exclusive ways.
 pub(crate) enum BodyRead {
     /// Parses an event stream for phases. The parser skips an event past its bound and keeps parsing, so an oversized
@@ -133,6 +131,8 @@ pub(crate) enum BodyRead {
     Unread,
 }
 
+/// What the body task tells the bus as the body goes by: every decoded piece as a chunk, the SSE phases it
+/// carries, and the completion once the body has ended one way or another.
 pub(crate) struct Publish {
     pub trace: Trace,
     pub clock: Clock,
