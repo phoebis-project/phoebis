@@ -1,11 +1,10 @@
 import { effectiveLabel } from '@/api/decode';
 import type { Account, CohortHold, RequestLog, Settings, SubscriptionCosts } from '@/api/types';
-import { hintPlan } from '@/lib/analytics';
+import { heldSpan, hintPlan } from '@/lib/analytics';
 import { type Funding, fundingOf, inBand, nativeOf, revisionAt } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { servingAttempt } from '@/lib/dimensions';
 import { fmtUsd, fmtWeek, weekShort } from '@/lib/format';
-import { ageWord } from '@/lib/routingLog';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
 
 /** The route's order, newest first and the higher id first at one instant, which a poll's merge and the mock keep. */
@@ -27,8 +26,6 @@ export const REFUSED_TITLE =
 const WAIT_REASON_WORD: Record<string, string> = { cap: 'for a slot', reset: 'for the reset', rewrite: 'for the rewrite in flight', slow_down: 'for the slow-down' };
 /** Where a hold waited: its cohort's account, else the last one it waited on. */
 const heldOn = (held: CohortHold) => held.cohort ?? held.waitedOn[held.waitedOn.length - 1] ?? 'an account';
-// Whole seconds round a wait under half a second to `0 s`, which would read as no wait at all.
-const waitWord = (ms: number) => ageWord(Math.max(1_000, ms));
 
 /**
  * A held row's badge, `waited 42 s`, and its hover, each wait with its reason in the row's order and the account it
@@ -37,11 +34,11 @@ const waitWord = (ms: number) => ageWord(Math.max(1_000, ms));
  * reason, a reason the console has no words for reads as the router sent it, and a wait under a second reads `1 s`.
  */
 export function heldWords(held: CohortHold): { badge: string; title: string } {
-  const waits = held.waits.map((w) => `${lookup(WAIT_REASON_WORD, w.reason) ?? `for ${w.reason}`} ${waitWord(w.heldMs)}`);
-  const badge = `waited ${waitWord(held.heldMs)}`;
+  const waits = held.waits.map((w) => `${lookup(WAIT_REASON_WORD, w.reason) ?? `for ${w.reason}`} ${heldSpan(w.heldMs)}`);
+  const badge = `waited ${heldSpan(held.heldMs)}`;
   // The router fills the accounts waited on from the same holds in the same order, so each wait names its own.
   if (waits.length > 0 && new Set(held.waitedOn).size > 1) return { badge, title: `waited ${waits.map((w, i) => `${w} on ${held.waitedOn[i] ?? heldOn(held)}`).join(', ')}` };
-  return { badge, title: `waited ${waits.length > 0 ? waits.join(', ') : waitWord(held.heldMs)} on ${heldOn(held)}` };
+  return { badge, title: `waited ${waits.length > 0 ? waits.join(', ') : heldSpan(held.heldMs)} on ${heldOn(held)}` };
 }
 
 /**
