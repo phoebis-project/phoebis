@@ -109,9 +109,62 @@ pub enum BodyMember {
     /// A member the caller's body carries more than once, raw or escaped: one of the top-level members admission
     /// and the body edit act on, `metadata.user_id`, whose first raw spelling the account splice writes, or
     /// `BILLING_LINE_PATH`, whose first spelling alone the drift check reads.
-    Repeated(&'static str),
+    Repeated(RepeatedMember),
     /// A `safeguards` member the decoded top-level key count finds and the raw walk cannot reach.
     Safeguards,
+}
+
+/// The member `BodyMember::Repeated` names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepeatedMember {
+    BillingLine,
+    Metadata,
+    MetadataUserId,
+    Model,
+    Safeguards,
+    Stream,
+    System,
+}
+
+impl RepeatedMember {
+    pub fn path(self) -> &'static str {
+        match self {
+            RepeatedMember::BillingLine => BILLING_LINE_PATH,
+            RepeatedMember::Metadata => "metadata",
+            RepeatedMember::MetadataUserId => "metadata.user_id",
+            RepeatedMember::Model => "model",
+            RepeatedMember::Safeguards => "safeguards",
+            RepeatedMember::Stream => "stream",
+            RepeatedMember::System => "system",
+        }
+    }
+
+    /// The refusal's message, which names the member the way the caller's body spells it.
+    pub(crate) fn message(self) -> &'static str {
+        match self {
+            RepeatedMember::BillingLine => {
+                "the request body carries the member \"system[0].text\" more than once"
+            }
+            RepeatedMember::Metadata => {
+                "the request body carries the top-level member \"metadata\" more than once"
+            }
+            RepeatedMember::MetadataUserId => {
+                "the request body carries the member \"metadata.user_id\" more than once"
+            }
+            RepeatedMember::Model => {
+                "the request body carries the top-level member \"model\" more than once"
+            }
+            RepeatedMember::Safeguards => {
+                "the request body carries the top-level member \"safeguards\" more than once"
+            }
+            RepeatedMember::Stream => {
+                "the request body carries the top-level member \"stream\" more than once"
+            }
+            RepeatedMember::System => {
+                "the request body carries the top-level member \"system\" more than once"
+            }
+        }
+    }
 }
 
 impl BodyMember {
@@ -121,7 +174,7 @@ impl BodyMember {
             BodyMember::CacheControl => "cache_control",
             BodyMember::MetadataUserId => "metadata.user_id",
             BodyMember::Model => "model",
-            BodyMember::Repeated(name) => name,
+            BodyMember::Repeated(member) => member.path(),
             BodyMember::Safeguards => "safeguards",
         }
     }
@@ -137,11 +190,19 @@ impl BodyMember {
             BodyMember::CacheControl => {
                 "request body carries a cache_control marker the router cannot place".into()
             }
-            BodyMember::Repeated(name) if name.contains('.') => {
-                format!("request body carries the member \"{name}\" more than once")
+            BodyMember::Repeated(
+                member @ (RepeatedMember::BillingLine | RepeatedMember::MetadataUserId),
+            ) => {
+                format!(
+                    "request body carries the member \"{}\" more than once",
+                    member.path()
+                )
             }
-            BodyMember::Repeated(name) => {
-                format!("request body carries the top-level member \"{name}\" more than once")
+            BodyMember::Repeated(member) => {
+                format!(
+                    "request body carries the top-level member \"{}\" more than once",
+                    member.path()
+                )
             }
             BodyMember::Safeguards => {
                 "request body carries a safeguards member the router cannot place".into()
@@ -194,7 +255,9 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         // the cut below still walks.
         let spellings = phoebis_cch::top_level_member_count(body, "safeguards")?;
         if spellings > 1 {
-            return Err(RelayError::BodyShape(BodyMember::Repeated("safeguards")));
+            return Err(RelayError::BodyShape(BodyMember::Repeated(
+                RepeatedMember::Safeguards,
+            )));
         }
         let cut = phoebis_cch::remove_top_level_member(body, "safeguards").is_some();
         if spellings == 1 && !cut {
@@ -1362,7 +1425,9 @@ mod tests {
         let mut body = twice;
         assert!(matches!(
             edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)),
-            Err(RelayError::BodyShape(BodyMember::Repeated("safeguards")))
+            Err(RelayError::BodyShape(BodyMember::Repeated(
+                RepeatedMember::Safeguards
+            )))
         ));
 
         let without = fixture_body(BodyFixture::Oauth);

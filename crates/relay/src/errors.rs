@@ -175,23 +175,6 @@ pub(crate) fn auth_failure(error: &AuthError) -> Failure {
     }
 }
 
-/// The spellings `BodyMember::Repeated` names are constants so each member's spelling is written once and tested
-/// once.
-const REPEATED_BILLING_LINE: &str =
-    "the request body carries the member \"system[0].text\" more than once";
-const REPEATED_METADATA: &str =
-    "the request body carries the top-level member \"metadata\" more than once";
-const REPEATED_METADATA_USER_ID: &str =
-    "the request body carries the member \"metadata.user_id\" more than once";
-const REPEATED_MODEL: &str =
-    "the request body carries the top-level member \"model\" more than once";
-const REPEATED_SAFEGUARDS: &str =
-    "the request body carries the top-level member \"safeguards\" more than once";
-const REPEATED_STREAM: &str =
-    "the request body carries the top-level member \"stream\" more than once";
-const REPEATED_SYSTEM: &str =
-    "the request body carries the top-level member \"system\" more than once";
-
 /// The item's own message: what is missing, and the environment line that sends it.
 fn contract_message(item: &str) -> &'static str {
     match item {
@@ -276,18 +259,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
                     "the request body has no metadata.user_id the account can be bound to"
                 }
                 BodyMember::Model => "the request body has no top-level model to resolve",
-                BodyMember::Repeated(name) => match *name {
-                    crate::body::BILLING_LINE_PATH => REPEATED_BILLING_LINE,
-                    "metadata" => REPEATED_METADATA,
-                    "metadata.user_id" => REPEATED_METADATA_USER_ID,
-                    "model" => REPEATED_MODEL,
-                    "safeguards" => REPEATED_SAFEGUARDS,
-                    "stream" => REPEATED_STREAM,
-                    "system" => REPEATED_SYSTEM,
-                    _ => unreachable!(
-                        "BodyMember::Repeated only ever names metadata, metadata.user_id, model, safeguards, stream, system or the billing line"
-                    ),
-                },
+                BodyMember::Repeated(member) => member.message(),
                 BodyMember::Safeguards => {
                     "the request body carries a safeguards member the relay cannot place under this key's auto-mode setting"
                 }
@@ -567,6 +539,7 @@ pub(crate) const UPSTREAM_UNREACHABLE: Failure = Failure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RepeatedMember;
 
     /// A drifted hash and a drifted version suffix are the same error code, but the message names which check
     /// failed, so an operator reads the right one off the response without a log line.
@@ -652,13 +625,13 @@ mod tests {
             BodyMember::CacheControl,
             BodyMember::MetadataUserId,
             BodyMember::Model,
-            BodyMember::Repeated("metadata"),
-            BodyMember::Repeated("metadata.user_id"),
-            BodyMember::Repeated("model"),
-            BodyMember::Repeated("safeguards"),
-            BodyMember::Repeated("stream"),
-            BodyMember::Repeated("system"),
-            BodyMember::Repeated("system[0].text"),
+            BodyMember::Repeated(RepeatedMember::Metadata),
+            BodyMember::Repeated(RepeatedMember::MetadataUserId),
+            BodyMember::Repeated(RepeatedMember::Model),
+            BodyMember::Repeated(RepeatedMember::Safeguards),
+            BodyMember::Repeated(RepeatedMember::Stream),
+            BodyMember::Repeated(RepeatedMember::System),
+            BodyMember::Repeated(RepeatedMember::BillingLine),
             BodyMember::Safeguards,
         ] {
             let failure = relay_failure(&RelayError::BodyShape(member));

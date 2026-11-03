@@ -49,7 +49,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::billing::Restore;
-use crate::body::{tier_ttls, uniform_ttl, AccountUuidEdit, VersionCheck, BILLING_LINE_PATH};
+use crate::body::{tier_ttls, uniform_ttl, AccountUuidEdit, RepeatedMember, VersionCheck};
 use crate::budget::{BodyBudget, BodyReads};
 use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
@@ -1600,26 +1600,38 @@ impl Relay {
         // `metadata.user_id`, the one `metadata` member the relay reads and splices the account into. Refused
         // whole rather than repaired: the caller's body is not edited on its way through. A scan that could not
         // finish proves nothing about the members past where it stopped, so it refuses as well.
-        let repeated = phoebis_cch::repeated_top_level_member(
-            &raw,
-            &["metadata", "model", "stream", "system"],
-        )
-        .and_then(|repeated| match repeated {
-            Some(name) => Ok(Some(name)),
-            None => phoebis_cch::first_system_block_member_count(&raw, "text")
-                .map(|texts| (texts > 1).then_some(BILLING_LINE_PATH)),
-        })
-        .and_then(|repeated| match repeated {
-            Some(name) => Ok(Some(name)),
-            None => phoebis_cch::repeated_member_within(&raw, "metadata", &["user_id"])
-                .map(|repeated| repeated.map(|_| "metadata.user_id")),
-        });
+        let top_level = [
+            RepeatedMember::Metadata,
+            RepeatedMember::Model,
+            RepeatedMember::Stream,
+            RepeatedMember::System,
+        ];
+        let repeated =
+            phoebis_cch::repeated_top_level_member(&raw, &top_level.map(RepeatedMember::path))
+                .map(|repeated| {
+                    repeated.map(|name| {
+                        top_level
+                            .into_iter()
+                            .find(|member| member.path() == name)
+                            .expect("the scanner answers one of the names it was handed")
+                    })
+                })
+                .and_then(|repeated| match repeated {
+                    Some(member) => Ok(Some(member)),
+                    None => phoebis_cch::first_system_block_member_count(&raw, "text")
+                        .map(|texts| (texts > 1).then_some(RepeatedMember::BillingLine)),
+                })
+                .and_then(|repeated| match repeated {
+                    Some(member) => Ok(Some(member)),
+                    None => phoebis_cch::repeated_member_within(&raw, "metadata", &["user_id"])
+                        .map(|repeated| repeated.map(|_| RepeatedMember::MetadataUserId)),
+                });
         let refusal = if behind {
             Some(RelayError::LedgerBehind)
         } else {
             match repeated {
                 Ok(None) => None,
-                Ok(Some(name)) => Some(RelayError::BodyShape(BodyMember::Repeated(name))),
+                Ok(Some(member)) => Some(RelayError::BodyShape(BodyMember::Repeated(member))),
                 Err(phoebis_cch::CchError::TooDeep(_)) => Some(RelayError::BodyTooDeep),
                 Err(error) => Some(RelayError::Cch(error)),
             }
