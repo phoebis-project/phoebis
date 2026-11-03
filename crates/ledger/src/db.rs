@@ -29,9 +29,11 @@ use crate::{schema, LedgerError};
 /// write waits behind one slice at most. The registry waits as long.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The writer connection's cache of prepared statements. One batch runs about two dozen cached statements (a request's
-/// landing, the samples, the events, the decisions, the cache map, the parked rows and the rollup fold), so rusqlite's
-/// default of 16 would evict and recompile some on every batch. 64 holds them all with room, as the registry's does.
+/// The writer connection's cache of prepared statements. One batch runs about twenty cached statements (a request's
+/// landing, the samples, the events, the decisions, the cache map and the rollup fold), so rusqlite's default of 16
+/// would evict and recompile some on every batch. The parked rows' insert and update run apart from a batch, when a
+/// landing fails and when the start or a replay tries the parked rows. 64 holds them all with room, as the registry's
+/// does.
 const STATEMENT_CACHE_CAPACITY: usize = 64;
 
 /// How many read-only connections serve the attention reader, the console, the metrics scrape and `/v1/usage` at
