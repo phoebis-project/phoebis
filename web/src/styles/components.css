@@ -764,6 +764,16 @@ textarea.input {
   transform: translateX(16px);
 }
 
+/* The one surface of the floating boxes: the menu list, the popover and the decision strip's station popover. */
+.menu__list,
+.popover,
+.strip-popover {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+
 /* Every menu sits in a table, and the size is pinned to the table's so a list drawn outside it reads the same. */
 .menu__list {
   position: absolute;
@@ -775,10 +785,6 @@ textarea.input {
   padding: 4px;
   overflow: auto;
   font-size: 13px;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
 }
 
 /* Option lists */
@@ -876,16 +882,12 @@ textarea.input {
   color: var(--critical-ink);
 }
 
-/* The box every filter opener hangs under: the menu list's ground, border, radius and shadow, placed by the component. */
+/* The box every filter opener hangs under, placed by the component. */
 .popover {
   z-index: 30;
   min-width: 220px;
   padding: 4px;
   overflow: auto;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
 }
 
 .popover:focus {

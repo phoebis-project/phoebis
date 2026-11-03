@@ -2761,10 +2761,6 @@
   overflow-y: auto;
   padding: 10px 12px;
   font-size: 13px;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
   transition: none;
   pointer-events: none;
 }
