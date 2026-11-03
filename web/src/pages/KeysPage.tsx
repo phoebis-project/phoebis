@@ -5,6 +5,7 @@ import { slug } from '@/api/http';
 import type { ApiKey, CreatedApiKey, Guardrail, GuardrailRef, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
+import { useAddressEdit } from '@/app/useAddressEdit';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { FilterBar } from '@/components/FilterBar';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
@@ -136,25 +137,7 @@ export function KeysPage() {
   const keys = useAsync(() => api.listKeys(), [], { paused: paused || barOpen, refreshMs: intervalMs });
   const pools = useAsync(() => api.listPools(), [], { paused: paused || barOpen, refreshMs: intervalMs });
 
-  // The address opens the dialog on a named group once the key list has loaded; the entry is then replaced by the
-  // bare route, so closing the dialog, a reload or Back does not open it again.
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const edit = params.get('edit');
-    if (edit === null || !keys.data) return;
-    const group = params.get('group');
-    params.delete('edit');
-    params.delete('group');
-    const search = params.toString();
-    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
-    const key = keys.data.find((k) => k.id === edit);
-    if (!key) {
-      notify(`Key ${edit} not found`);
-      return;
-    }
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- the address's one-shot edit opens the dialog once the key list lands, in the pass that takes it out of the address
-    setDialog({ initialGroup: isKeyGroup(group) ? group : 'key', key });
-  }, [keys.data, location, navigate, notify]);
+  useAddressEdit(keys.data, 'Key', (key, group) => setDialog({ initialGroup: isKeyGroup(group) ? group : 'key', key }));
 
   const poolList = useMemo(() => pools.data ?? [], [pools.data]);
   const poolById = useMemo(() => new Map(poolList.map((p) => [p.id, p])), [poolList]);

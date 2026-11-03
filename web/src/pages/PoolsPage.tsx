@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, type PoolInput } from '@/api';
 import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type OverviewRange, type PoolEngineFields } from '@/api/client';
@@ -10,6 +10,7 @@ import type {
 } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
+import { useAddressEdit } from '@/app/useAddressEdit';
 import { AttentionRows } from '@/components/AttentionRows';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { Legend, timeTip } from '@/components/charts/Tooltip';
@@ -251,30 +252,12 @@ export function PoolsPage() {
   const attention = useAttention();
   const now = useNow();
   const location = useLocation();
-  const navigate = useNavigate();
   const pageRef = useRef<HTMLDivElement>(null);
   const landed = useRef<string | null>(null);
   const { notify } = useSession();
 
-  // The address opens the dialog on a named group once both lists the dialog reads have loaded. The entry is then
-  // replaced by the bare route, so closing the dialog, a reload or Back does not open it again.
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const edit = params.get('edit');
-    if (edit === null || !pools.data || !accounts.data) return;
-    const group = params.get('group');
-    params.delete('edit');
-    params.delete('group');
-    const search = params.toString();
-    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
-    const pool = pools.data.find((p) => p.id === edit);
-    if (!pool) {
-      notify(`Pool ${edit} not found`);
-      return;
-    }
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- the address's one-shot edit opens the dialog once both lists land, in the pass that takes it out of the address
-    setDialog({ initialGroup: isPoolGroup(group) ? group : 'identity', pool });
-  }, [accounts.data, location, navigate, notify, pools.data]);
+  // The dialog reads both lists, so the address's edit waits for the accounts too.
+  useAddressEdit(accounts.data ? pools.data : null, 'Pool', (pool, group) => setDialog({ initialGroup: isPoolGroup(group) ? group : 'identity', pool }));
 
   // `/pools#<pool id>` lands on the card once the pools have drawn it, whenever the list arrives after the mount, and
   // once per arrival: the dialog query's own address rewrites keep the hash and must not scroll the page back. The
