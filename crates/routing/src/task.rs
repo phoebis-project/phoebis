@@ -43,8 +43,8 @@ use crate::{resolve, term, window_for, Candidate, KeyRefusal, Presented, Registr
 /// slot; one the closed queue refuses at shutdown is dropped and counted under its kind.
 pub const COMMANDS: usize = 4_096;
 
-/// The pool a pin of a key the snapshot no longer holds counts under: the ledger's reserved id, which this crate
-/// cannot import, spelled here.
+/// The pool a pin of a key the snapshot no longer holds counts under. The ledger files a key, pool or account a
+/// request never reached under this id too, so the pin's pool label is one the rollup rows use.
 pub const UNATTRIBUTED_POOL: &str = "-";
 
 /// Batches the state writer's channel holds; past it the loop keeps the writes in memory, coalesced by row, so a

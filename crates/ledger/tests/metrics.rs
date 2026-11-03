@@ -615,16 +615,6 @@ async fn the_pin_gauge_reads_the_routing_loops_count_per_pool() {
     up.shutdown().await;
 }
 
-/// The routing crate cannot name the ledger's reserved id, so it spells its own; the two must agree, or a pin of a
-/// deleted key would count under a pool label no rollup row uses.
-#[test]
-fn the_routing_loops_reserved_pool_label_is_the_ledgers_reserved_id() {
-    assert_eq!(
-        phoebis_routing::UNATTRIBUTED_POOL,
-        phoebis_ledger::UNATTRIBUTED
-    );
-}
-
 /// The renderer's family list and its registry cannot drift apart: every family in `FAMILIES` renders its TYPE
 /// line, and every TYPE line rendered is in `FAMILIES`.
 #[test]

@@ -24,7 +24,7 @@ use crate::LedgerError;
 
 /// The reserved id for a key, pool, or account a request never reached, so the failures of an exhausted hour
 /// have a row and the raw-versus-rollup equality holds.
-pub const UNATTRIBUTED: &str = "-";
+pub const UNATTRIBUTED: &str = phoebis_routing::UNATTRIBUTED_POOL;
 
 /// The value a request with no effort files under, neither a per-turn control entry's level nor a top-level
 /// `output_config.effort`.
