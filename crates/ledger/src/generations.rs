@@ -12,8 +12,8 @@ use crate::{LedgerDb, LedgerError};
 pub const GENERATIONS_RECONCILED_KEY: &str = "key_generations_reconciled";
 
 /// How many rows one transaction holds in memory, in the generation pass over a key's generation-0 rollup rows and in
-/// the band refold over the requests: each reads a page, moves it, and reads the next from where it left off, so a year
-/// of hourly rows or requests never sits in one `Vec`.
+/// the request re-folds at start, which page through `refold::page_size`: each reads a page, moves it, and reads the
+/// next from where it left off, so a year of hourly rows or requests never sits in one `Vec`.
 pub(crate) const PAGE: usize = 1_000;
 
 /// One live key as the startup stamp sees it: the id, its `created_at`, and whether its own rows start there.
