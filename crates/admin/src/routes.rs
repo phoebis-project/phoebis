@@ -896,7 +896,7 @@ async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<Stri
         &state.usage,
         &state.tables,
         &state.ledger,
-        Some(&state.router),
+        &state.router,
         &row,
     )
     .await
@@ -1592,7 +1592,7 @@ async fn pairing_confirm(
                             &polled.usage,
                             &polled.tables,
                             &polled.ledger,
-                            Some(&polled.router),
+                            &polled.router,
                             &committed,
                         )
                         .await;

@@ -1103,7 +1103,7 @@ async fn a_poll_whose_refresh_lands_a_reauth_mark_reports_it_to_routing_at_once(
         h.usage.as_ref().unwrap(),
         &PlanTables::shipped(),
         &h.ledger,
-        Some(&h.router),
+        &h.router,
         &row,
     )
     .await
@@ -1925,7 +1925,7 @@ async fn a_usage_transport_failure_writes_poll_failed_with_transport_set_and_no_
         h.usage.as_ref().unwrap(),
         &PlanTables::shipped(),
         &h.ledger,
-        Some(&h.router),
+        &h.router,
         &row,
     )
     .await
@@ -2413,7 +2413,7 @@ async fn a_usage_403_naming_the_refusal_reads_the_profile_in_the_same_poll_and_f
         h.usage.as_ref().unwrap(),
         &PlanTables::shipped(),
         &h.ledger,
-        Some(&h.router),
+        &h.router,
         &row,
     )
     .await
@@ -2448,7 +2448,7 @@ async fn a_usage_403_naming_the_refusal_on_an_account_whose_profile_reports_a_pl
         h.usage.as_ref().unwrap(),
         &PlanTables::shipped(),
         &h.ledger,
-        Some(&h.router),
+        &h.router,
         &row,
     )
     .await
@@ -2538,7 +2538,7 @@ async fn a_run_of_usage_429s_flags_nothing_and_writes_no_poll_failed_row() {
             usage,
             &PlanTables::shipped(),
             &h.ledger,
-            Some(&h.router),
+            &h.router,
             &row,
         )
         .await

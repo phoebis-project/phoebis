@@ -376,7 +376,7 @@ impl QuotaPoll {
     /// interval after the read (`next_slot`), so a late wake reads once and keeps the phase, or, after a 429, the
     /// usage service's next-attempt time, which may come sooner than the cadence; with no slot to wait for, the
     /// scheduler wakes after one interval and re-reads the registry. Every clean snapshot is recorded to the ledger
-    /// and reported to the router as `poll_account` does with a router.
+    /// and reported to the router as `poll_account` reports it.
     ///
     /// Spawned once the startup step is done: that step has just read every account, so an account the first
     /// pass finds is next read an interval after the start, on its phase, or when its hold ends after a 429, and
@@ -454,12 +454,7 @@ impl QuotaPoll {
                         let mut profile_read = false;
                         if !Self::plan_paused(&store, &account.id) {
                             (_, profile_read) = Self::poll_reading(
-                                &store,
-                                &usage,
-                                &tables,
-                                &ledger,
-                                Some(&router),
-                                &account,
+                                &store, &usage, &tables, &ledger, &router, &account,
                             )
                             .await;
                         }
@@ -516,14 +511,13 @@ impl QuotaPoll {
         })
     }
 
-    /// One account's reading through the service's hold, concurrency cap and coalescing: a clean snapshot is
-    /// recorded to the ledger and, when `router` is given, reported to it as `Report::Sample`
-    /// and, when the snapshot carries the evidence, `Report::Overage` and `Report::Credits`, before this returns.
-    /// The service's answer is returned as it came, so a caller that shows it shows what was recorded: a snapshot
-    /// whose `error` is set (the account held, or the read failed) was recorded nowhere, and the service's own
-    /// error is a read that never completed. The scheduler calls it with the router and keeps nothing of the
-    /// answer, and the startup step counts a clean snapshot as reported. A reauth mark the read's acquisition landed
-    /// reaches the router as `Report::AccountState` when `router` is given, as does the mark a usage 401 lands under
+    /// One account's reading through the service's hold, concurrency cap and coalescing: a clean snapshot is recorded
+    /// to the ledger and reported to the router as `Report::Sample` and, when the snapshot carries the evidence,
+    /// `Report::Overage` and `Report::Credits`, before this returns. The service's answer is returned as it came, so a
+    /// caller that shows it shows what was recorded: a snapshot whose `error` is set (the account held, or the read
+    /// failed) was recorded nowhere, and the service's own error is a read that never completed. The scheduler keeps
+    /// nothing of the answer, and the startup step counts a clean snapshot as reported. A reauth mark the read's
+    /// acquisition landed reaches the router as `Report::AccountState`, as does the mark a usage 401 lands under
     /// `auth_failed`, and any other failed answer or transport failure of the read writes a `poll_failed` row, but for
     /// a usage 403 naming the organization's refusal whose profile, read at once, reports no plan, which writes
     /// `plan_ended` instead. The profile is otherwise `refresh_profile`'s.
@@ -532,7 +526,7 @@ impl QuotaPoll {
         usage: &UsageService,
         tables: &PlanTables,
         ledger: &Ledger,
-        router: Option<&RouterHandle>,
+        router: &RouterHandle,
         account: &AccountRow,
     ) -> Result<UsageSnapshot, UsageError> {
         Self::poll_reading(store, usage, tables, ledger, router, account)
@@ -547,7 +541,7 @@ impl QuotaPoll {
         usage: &UsageService,
         tables: &PlanTables,
         ledger: &Ledger,
-        router: Option<&RouterHandle>,
+        router: &RouterHandle,
         account: &AccountRow,
     ) -> (Result<UsageSnapshot, UsageError>, bool) {
         let mut profile_read = false;
@@ -562,9 +556,7 @@ impl QuotaPoll {
             }
             Err(error) => Err(error),
         };
-        if let Some(router) = router {
-            Self::report_landed_mark(usage, router, &account.id).await;
-        }
+        Self::report_landed_mark(usage, router, &account.id).await;
         // A snapshot with an error is a stale one, and a stale sample must not be written under a fresh bucket.
         let answer = match answer {
             Ok(snapshot) if snapshot.error.is_none() => {
@@ -574,37 +566,35 @@ impl QuotaPoll {
                     extra,
                     poll: true,
                 });
-                if let Some(router) = router {
-                    // Reported before the profile refresh, so a stalled profile endpoint holds no sample back
-                    // from selection; both halves go, as the selection's own pull sends them, so the first
-                    // selection sees the overage state too.
-                    let (sample, overage) = sample_from_usage(&snapshot, account.incarnation);
+                // Reported before the profile refresh, so a stalled profile endpoint holds no sample back
+                // from selection; both halves go, as the selection's own pull sends them, so the first
+                // selection sees the overage state too.
+                let (sample, overage) = sample_from_usage(&snapshot, account.incarnation);
+                router
+                    .report(Report::Sample {
+                        account_id: account.id.clone(),
+                        sample,
+                        incarnation: account.incarnation,
+                        source_request_id: None,
+                    })
+                    .await;
+                if let Some(evidence) = overage {
                     router
-                        .report(Report::Sample {
+                        .report(Report::Overage {
                             account_id: account.id.clone(),
-                            sample,
+                            evidence,
                             incarnation: account.incarnation,
-                            source_request_id: None,
                         })
                         .await;
-                    if let Some(evidence) = overage {
-                        router
-                            .report(Report::Overage {
-                                account_id: account.id.clone(),
-                                evidence,
-                                incarnation: account.incarnation,
-                            })
-                            .await;
-                    }
-                    if let Some(state) = credits_from_usage(&snapshot, account.incarnation) {
-                        router
-                            .report(Report::Credits {
-                                account_id: account.id.clone(),
-                                state,
-                                incarnation: account.incarnation,
-                            })
-                            .await;
-                    }
+                }
+                if let Some(state) = credits_from_usage(&snapshot, account.incarnation) {
+                    router
+                        .report(Report::Credits {
+                            account_id: account.id.clone(),
+                            state,
+                            incarnation: account.incarnation,
+                        })
+                        .await;
                 }
                 Ok(snapshot)
             }
@@ -824,7 +814,7 @@ impl QuotaPoll {
         usage: &UsageService,
         tables: &PlanTables,
         ledger: &Ledger,
-        router: Option<&RouterHandle>,
+        router: &RouterHandle,
         account: &AccountRow,
         issue: PollIssue,
     ) -> bool {
@@ -835,32 +825,25 @@ impl QuotaPoll {
             }
             // The organization's refusal is what an ended plan answers, so the profile decides whether it is one.
             PollIssue::PlanRefused { fault, .. } => {
-                let read = match router {
-                    Some(router) => {
-                        Self::read_profile(
-                            store,
-                            usage,
-                            tables,
-                            ledger,
-                            router,
-                            account,
-                            USAGE_403_SOURCE,
-                        )
-                        .await
-                    }
-                    None => ProfileRead::Unread,
-                };
+                let read = Self::read_profile(
+                    store,
+                    usage,
+                    tables,
+                    ledger,
+                    router,
+                    account,
+                    USAGE_403_SOURCE,
+                )
+                .await;
                 if read != ProfileRead::NoPlan {
                     Self::record_fault(usage, ledger, &account.id, &fault);
                 }
-                router.is_some()
+                true
             }
             // The manager's fenced write moved the state before the report reaches the routing, so the transition row
             // the mirror writes names no detail, as a refresh failure's does.
             PollIssue::Unauthorized(refused) => {
-                if let (Some(mark), Some(router)) =
-                    (usage.mark_auth_failed(&account.id, refused), router)
-                {
+                if let Some(mark) = usage.mark_auth_failed(&account.id, refused) {
                     Self::report_mark(router, mark).await;
                 }
                 false
@@ -898,7 +881,7 @@ impl QuotaPoll {
         router.report(Report::from(&mark)).await;
     }
 
-    /// `poll_account` with the router, then `refresh_profile` where the poll did not read the profile, for every
+    /// `poll_account`, then `refresh_profile` where the poll did not read the profile, for every
     /// account `polled` accepts, concurrently. An account counts the moment its snapshot was reported, and what has not
     /// reported by `bound` counts as pending and finishes in the background. An account flagged plan ended reads its
     /// profile alone and counts as paused.
@@ -949,15 +932,9 @@ impl QuotaPoll {
             // Tracked so a fetch still stalled when `ledger.shutdown` runs is aborted with it, rather than
             // outliving the process holding its `Arc<Store>`.
             let handle = tokio::spawn(async move {
-                let (answer, profile_read) = Self::poll_reading(
-                    &store,
-                    &usage,
-                    &tables,
-                    &task_ledger,
-                    Some(&router),
-                    &account,
-                )
-                .await;
+                let (answer, profile_read) =
+                    Self::poll_reading(&store, &usage, &tables, &task_ledger, &router, &account)
+                        .await;
                 let _ = tx.send(matches!(answer, Ok(ref s) if s.error.is_none()));
                 if !profile_read {
                     Self::refresh_profile(&store, &usage, &tables, &task_ledger, &router, &account)
