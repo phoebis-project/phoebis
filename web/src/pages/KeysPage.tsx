@@ -390,7 +390,7 @@ export function KeysPage() {
                         </tr>
                       ))}
                   {keys.data?.length === 0 && (
-                    // A filter that matches no key keeps the table bare; only a registry with no key at all says so.
+                    // A filter that matches no key keeps the table bare. Only a registry with no key at all says so.
                     <tr>
                       <td colSpan={8}>
                         <EmptyState
