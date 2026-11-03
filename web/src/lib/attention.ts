@@ -3,7 +3,7 @@ import type { AttentionItem, AttentionKind } from '@/api/types';
 import { METER_CODEC } from './address';
 import { lookup } from './counts';
 import { fmtAbsolute, fmtRelative, instant as clockInstant } from './format';
-import { WINDOW_WORD, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
+import { WINDOW_WORD, entityHref, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
 import { speedWord } from './selection';
 
 export const ATTENTION_LABEL: Record<AttentionKind, string> = {
@@ -72,6 +72,8 @@ function conditionLog({ kind, link }: LinkedItem): { log: Pick<LogLink, 'account
   return null;
 }
 
+const PAGE_ENTITY = { accounts: 'account', keys: 'key', pools: 'pool' } as const;
+
 /**
  * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start, and a
  * routing condition on its subject's rounds, moves, walls and slow-downs since then. A meter drift opens the Meter view
@@ -88,8 +90,7 @@ export function attentionHref(item: LinkedItem, now: number): string | null {
   const condition = conditionLog(item);
   if (condition !== null) return logHref({ ...condition.log, ...since });
   if (item.kind === 'meter_drift' && link.page === 'accounts') return `/meter?${METER_CODEC.toParams({ accounts: [link.id] })}`;
-  const id = encodeURIComponent(link.id);
-  return link.page === 'accounts' ? `/accounts/${id}` : `/${link.page}#${id}`;
+  return entityHref(PAGE_ENTITY[link.page], link.id);
 }
 
 /**
