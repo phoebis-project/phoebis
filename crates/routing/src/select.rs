@@ -4762,8 +4762,7 @@ fn shed_round(
     let unit = burn_unit(state, snapshot, account_id, now, fallback_ms);
     let in_pool = in_pool(snapshot, pool);
     let average_ms = burn_average_ms(pool);
-    // A window-share round orders by the walk's own figure, which `share_of` fills below, so it lists its pins
-    // unpriced.
+    // A window-share round orders by the walk's own figure, filled in below, so it lists its pins unpriced.
     let mut pins: Vec<(PinRow, Option<f64>)> = match unit {
         BurnUnit::WindowShare => state
             .pins_on(account_id, &in_pool)
@@ -4784,7 +4783,13 @@ fn shed_round(
                 .0
         }
     };
-    let is_current = |p: &PinRow| p.key() == current.key();
+    // A pin compares member by member, since `PinRow::key` clones four strings for every comparison.
+    let is_pin = |p: &PinRow, key: &PinKey| {
+        (&p.key_id, &p.session_id, &p.agent_id, &p.model)
+            == (&key.key_id, &key.session_id, &key.agent_id, &key.model)
+    };
+    let current_key = current.key();
+    let is_current = |p: &PinRow| is_pin(p, &current_key);
     let is_cold = |p: &PinRow| {
         if is_current(p) {
             current_cold
@@ -4830,55 +4835,61 @@ fn shed_round(
         .filter(|speed| trigger.source == "slow_down" && *speed > 0.0)
         .unwrap_or(1.0);
     let horizon = trigger.horizon.max(now.saturating_add(1_000));
-    let shares: HashMap<PinKey, Option<f64>> = pins
-        .iter()
-        .map(|(p, _)| {
+    // A walked pin beside its figures: `burn` the order sorts by, `share` the walk's figure and `prompt` its rewrite's
+    // prompt size.
+    struct RoundPin {
+        row: PinRow,
+        burn: Option<f64>,
+        share: Option<f64>,
+        prompt: f64,
+    }
+    let pins: Vec<RoundPin> = pins
+        .into_iter()
+        .map(|(p, burn)| {
             let share = state
                 .share()
                 .rate(
                     trigger.window,
-                    entrypoint_of(p),
+                    entrypoint_of(&p),
                     tier,
                     &p.model,
                     &p.burn,
                     now,
                 )
                 .map(|rate| {
-                    let segments =
-                        state
-                            .share()
-                            .band_segments(trigger.window, entrypoint_of(p), now, horizon);
+                    let segments = state.share().band_segments(
+                        trigger.window,
+                        entrypoint_of(&p),
+                        now,
+                        horizon,
+                    );
                     Banded::of(burn_decayed(rate, p.burn_at, now, average_ms), &segments)
                         .divided(speed)
                         .increase()
                         / seconds(horizon - now)
                 });
-            (p.key(), share)
+            // Each pin's rewrite cost read off its own request in the round, as `rewrite_write` reads it, so a pin a
+            // classifier call renewed last never ranks by a classifier body. A pin with no prompt size reported yet
+            // ranks as the cheapest rewrite.
+            let prompt = prompt_size(&p, &pin_request(request, &p, is_current(&p))).max(1) as f64;
+            // A window-share round orders its pins by the figure the walk prices, so on a span the band crosses the
+            // record lists the rows in the order of the figures it shows. A `usd` round keeps the dollar burn at
+            // `now`, which counts the fast and classifier usage the account pays for beside the row's copy.
+            let burn = if unit == BurnUnit::WindowShare {
+                share
+            } else {
+                burn
+            };
+            RoundPin {
+                row: p,
+                burn,
+                share,
+                prompt,
+            }
         })
         .collect();
-    let share_of = |p: &PinRow| shares.get(&p.key()).copied().flatten();
-    // Each pin's rewrite cost read off its own request in the round, as `rewrite_write` reads it, so a pin a classifier
-    // call renewed last never ranks by a classifier body.
-    let prompts: HashMap<PinKey, u64> = pins
-        .iter()
-        .map(|(p, _)| {
-            (
-                p.key(),
-                prompt_size(p, &pin_request(request, p, is_current(p))),
-            )
-        })
-        .collect();
-    let prompt_of = |p: &PinRow| prompts.get(&p.key()).copied().unwrap_or_default().max(1) as f64;
-    // A window-share round orders its pins by the figure the walk prices, so on a span the band crosses the record
-    // lists the rows in the order of the figures it shows. A `usd` round keeps the dollar burn at `now`, which counts
-    // the fast and classifier usage the account pays for beside the row's copy.
-    if unit == BurnUnit::WindowShare {
-        for (p, burn) in &mut pins {
-            *burn = share_of(p);
-        }
-    }
     let (mut cold, mut warm_pins): (Vec<_>, Vec<_>) =
-        pins.into_iter().partition(|(p, _)| is_cold(p));
+        pins.into_iter().partition(|p| is_cold(&p.row));
     // A pin whose burn cannot be priced ranks after every priced pin of its group: a guess never orders a shed.
     let priced_first =
         |a: &Option<f64>, b: &Option<f64>, desc: fn(f64, f64) -> Ordering| match (a, b) {
@@ -4887,12 +4898,11 @@ fn shed_round(
             (None, Some(_)) => Ordering::Greater,
             (None, None) => Ordering::Equal,
         };
-    // A pin with no prompt size reported yet ranks as the cheapest rewrite.
-    let per_rewrite = |(p, burn): &(PinRow, Option<f64>)| burn.map(|b| b / prompt_of(p));
-    let by_rewrite = |a: &(PinRow, Option<f64>), b: &(PinRow, Option<f64>)| {
+    let per_rewrite = |p: &RoundPin| p.burn.map(|b| b / p.prompt);
+    let by_rewrite = |a: &RoundPin, b: &RoundPin| {
         priced_first(&per_rewrite(a), &per_rewrite(b), |x, y| y.total_cmp(&x))
     };
-    cold.sort_by(|a, b| priced_first(&a.1, &b.1, |x, y| y.total_cmp(&x)));
+    cold.sort_by(|a, b| priced_first(&a.burn, &b.burn, |x, y| y.total_cmp(&x)));
     warm_pins.sort_by(by_rewrite);
     let cold_count = cold.len();
     let mut ordered = cold;
@@ -4900,19 +4910,18 @@ fn shed_round(
     if pool.shedding.warm_sessions == WarmSessions::Always {
         ordered.sort_by(by_rewrite);
     }
-    let ordered: Vec<PinRow> = ordered.into_iter().map(|(p, _)| p).collect();
     let per_hour = |share: f64| share * 3_600.0;
-    let burn_sum: f64 = ordered.iter().filter_map(share_of).sum();
+    let burn_sum: f64 = ordered.iter().filter_map(|p| p.share).sum();
     let cap = shed_cap(pool);
     let target = trigger.excess.min(cap * burn_sum);
     let dwell_ms = shed_dwell_ms(pool);
     let total = ordered.len();
-    let standing = ordered.iter().filter(|p| mark_holds(p)).count();
+    let standing = ordered.iter().filter(|p| mark_holds(&p.row)).count();
     // A standing mark is a move pending, so its burn counts as removed before the walk marks anything else.
     let mut removed: f64 = ordered
         .iter()
-        .filter(|p| mark_holds(p))
-        .filter_map(share_of)
+        .filter(|p| mark_holds(&p.row))
+        .filter_map(|p| p.share)
         .sum();
     let mut marks: Vec<Mark> = Vec::new();
     let mut planned: Vec<Reservation> = Vec::new();
@@ -4992,7 +5001,8 @@ fn shed_round(
     };
     let mut met = false;
     let mut cheapest: Option<PinKey> = None;
-    for (index, p) in ordered.iter().enumerate() {
+    for (index, walked) in ordered.iter().enumerate() {
+        let p = &walked.row;
         // A covering pin the pick read at an earlier position keeps what its gate found there.
         let mut read = reads.remove(&p.key()).unwrap_or_default();
         if mark_holds(p) {
@@ -5003,7 +5013,7 @@ fn shed_round(
             // The last unmarked pin stays whatever the target still asks, so no round takes all of an account's
             // burn. An indivisible pin may carry the removed burn past the target, and the walk stops there.
             read.skip = Some("last_pin");
-        } else if let Some(burn) = share_of(p) {
+        } else if let Some(burn) = walked.share {
             // The cheapest sufficient pin: a pin is indivisible, and for a rest under one pin's burn the order would
             // mark the pin that sheds the most per token, however far its burn overshoots the rest. Once a pin from
             // this position on covers the rest, the walk marks, among the covering pins the gate finds a destination
@@ -5011,9 +5021,10 @@ fn shed_round(
             let rest = target - removed;
             let mut pick: Option<(f64, &PinRow, f64, Reservation)> = None;
             for (offset, q) in ordered[index..].iter().enumerate() {
-                let Some(covers) = share_of(q).filter(|covers| *covers >= rest) else {
+                let Some(covers) = q.share.filter(|covers| *covers >= rest) else {
                     continue;
                 };
+                let q = &q.row;
                 if mark_holds(q) || past_the_cold(index + offset) {
                     continue;
                 }
@@ -5081,10 +5092,10 @@ fn shed_round(
     };
     // A left-out pin's row carries no share and no read, so its figures follow the partition's word and never what the
     // pricer answers for a model off the window.
-    let pin_facts = |p: &PinRow, left: Option<&'static str>| {
+    let pin_facts = |p: &PinRow, walked: Option<&RoundPin>, left: Option<&'static str>| {
         let read = left.is_none().then(|| reads.get(&p.key())).flatten();
-        let burn = left.is_none().then(|| share_of(p)).flatten().map(per_hour);
-        let mark = marks.iter().find(|mark| mark.key == p.key());
+        let burn = walked.and_then(|w| w.share).map(per_hour);
+        let mark = marks.iter().find(|mark| is_pin(p, &mark.key));
         ShedPinFacts {
             key_id: p.key_id.clone(),
             session_id: p.session_id.clone(),
@@ -5093,7 +5104,7 @@ fn shed_round(
             cold: is_cold(p),
             burn,
             last_input_tokens: p.last_input_tokens,
-            per_rewrite: burn.map(|b| b / prompt_of(p)),
+            per_rewrite: walked.zip(burn).map(|(w, b)| b / w.prompt),
             marked: mark.is_some() || mark_holds(p),
             rewrite: read.and_then(|read| read.rewrite),
             rewrite_window: read.and_then(|read| read.rewrite_window),
@@ -5102,7 +5113,7 @@ fn shed_round(
                 .map(|mark| mark.planned.clone()),
             runway_ms: read.and_then(|read| read.runway_ms),
             skip: left.or_else(|| read.and_then(|read| read.skip)),
-            note: if cheapest.as_ref() == Some(&p.key()) {
+            note: if cheapest.as_ref().is_some_and(|key| is_pin(p, key)) {
                 Some("cheapest")
             } else {
                 is_current(p).then_some("current")
@@ -5111,8 +5122,12 @@ fn shed_round(
     };
     let pins: Vec<ShedPinFacts> = ordered
         .iter()
-        .map(|p| pin_facts(p, None))
-        .chain(left_out.iter().map(|(p, word)| pin_facts(p, Some(*word))))
+        .map(|p| pin_facts(&p.row, Some(p), None))
+        .chain(
+            left_out
+                .iter()
+                .map(|(p, word)| pin_facts(p, None, Some(*word))),
+        )
         .collect();
     let skipped = pins
         .iter()
