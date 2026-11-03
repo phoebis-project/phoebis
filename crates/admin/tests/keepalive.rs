@@ -1993,9 +1993,9 @@ async fn a_deleted_keys_session_is_historical_with_no_companion_and_its_release_
     );
 }
 
-/// The console decodes a recipe's cause against the `RecipeCause` union of its API types, so a word the engine
-/// serializes that the union lacks would read as no cause at all, and a word the union keeps that the engine dropped
-/// is a label nothing can reach.
+/// The console decodes a recipe's cause against the cause array of its API types, the array its `RecipeCause` union
+/// derives from, so a word the engine serializes that the array lacks would read as no cause at all, and a word the
+/// array keeps that the engine dropped is a label nothing can reach.
 #[test]
 fn every_engine_reason_is_a_cause_word_the_console_types_list() {
     use phoebis_keepalive::Reason;
@@ -2003,11 +2003,11 @@ fn every_engine_reason_is_a_cause_word_the_console_types_list() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src/api/types.ts");
     let types = std::fs::read_to_string(&path).unwrap();
     let start = types
-        .find("export type RecipeCause =")
-        .expect("types.ts declares the RecipeCause union");
-    let union = &types[start..];
-    let union = &union[..union.find(';').expect("the union ends with a semicolon")];
-    let listed: BTreeSet<&str> = union.split('\'').skip(1).step_by(2).collect();
+        .find("export const RECIPE_CAUSE_VALUES =")
+        .expect("types.ts declares the cause array");
+    let array = &types[start..];
+    let array = &array[..array.find(']').expect("the array ends with a bracket")];
+    let listed: BTreeSet<&str> = array.split('\'').skip(1).step_by(2).collect();
     let engine: BTreeSet<&str> = Reason::ALL.iter().map(|reason| reason.as_str()).collect();
     assert_eq!(listed, engine);
     for reason in Reason::ALL {

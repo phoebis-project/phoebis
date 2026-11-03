@@ -1,13 +1,13 @@
 import type {
-  Account, AccountCatalog, AccountRollup, AffinityMode, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, CostRevision, CostSplit, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
-  MoveCause, Overview, PairingConfirmed, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, ReturnToPlan, RewritesAnswer,
-  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, Spend, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WarmSessions, WindowId, WindowSample,
+  Account, AccountCatalog, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
+  CohortHold, CostRevision, CostSplit, DecisionKind, DecisionRecord, DecisionSummary, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, MemberBudget, ModelPrice, ModelRule,
+  MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, RewritesAnswer,
+  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WindowId, WindowSample,
 } from './types';
 import type { AgentContext } from './types';
 import type { StreamCut } from './types';
-import type { Condition, ConditionOperator, ConditionSubject, Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailMatch, GuardrailMode, GuardrailPreset, GuardrailPresetState, GuardrailRef, GuardrailTestResult, MessageSelector, TestVerdict } from './types';
-import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES, DIAGNOSTICS_SOURCE_VALUES } from './types';
+import type { Condition, Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailMatch, GuardrailMode, GuardrailPreset, GuardrailPresetState, GuardrailRef, GuardrailTestResult } from './types';
+import { ACCOUNT_KIND_VALUES, AFFINITY_MODE_VALUES, AGENT_STATE_VALUES, ATTEMPT_OUTCOME_VALUES, ATTENTION_KIND_VALUES, ATTENTION_PAGE_VALUES, ATTENTION_SUBJECT_VALUES, AUTO_MODE_VALUES, BUDGET_PERIOD_VALUES, BURN_UNIT_VALUES, BY_KIND_VALUES, CONDITION_OPERATOR_VALUES, CONDITION_SUBJECT_VALUES, DECISION_KIND_VALUES, DIAGNOSTICS_SOURCE_VALUES, ELIGIBILITY_VALUES, FACT_ENTITY_VALUES, FACT_UNIT_VALUES, GUARDRAIL_MODE_VALUES, GUARD_VERDICT_VALUES, MESSAGE_SELECTOR_VALUES, MODEL_RULES_MODE_VALUES, OVERAGE_POLICY_VALUES, PARK_KIND_VALUES, PIN_MIGRATION_REASON_VALUES, PIN_REASON_VALUES, PIN_RELEASE_REASON_VALUES, PLACEMENT_RUNG_VALUES, POLL_OUTCOME_VALUES, POOL_STATUS_VALUES, POOL_STRATEGY_VALUES, RECIPE_CAUSE_VALUES, RECIPE_STATE_VALUES, REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, TEST_VERDICT_VALUES, WARM_SESSIONS_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
 import type { GuardrailInput, GuardrailTestInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
@@ -113,9 +113,44 @@ export function decodeKeyModels(v: unknown): KeyModels {
   };
 }
 
-// The account and attention kinds are defined beside the types they spell; exported here with the decoder's other
-// closed sets.
-export { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES };
+// The closed sets are defined beside the types they spell and exported here for the decoder's importers.
+export {
+  ACCOUNT_KIND_VALUES,
+  AFFINITY_MODE_VALUES,
+  AGENT_STATE_VALUES,
+  ATTEMPT_OUTCOME_VALUES,
+  ATTENTION_KIND_VALUES,
+  ATTENTION_PAGE_VALUES,
+  ATTENTION_SUBJECT_VALUES,
+  BUDGET_PERIOD_VALUES,
+  BURN_UNIT_VALUES,
+  CONDITION_OPERATOR_VALUES,
+  CONDITION_SUBJECT_VALUES,
+  DECISION_KIND_VALUES,
+  ELIGIBILITY_VALUES,
+  GUARDRAIL_MODE_VALUES,
+  GUARD_VERDICT_VALUES,
+  MESSAGE_SELECTOR_VALUES,
+  MODEL_RULES_MODE_VALUES,
+  OVERAGE_POLICY_VALUES,
+  PARK_KIND_VALUES,
+  PIN_MIGRATION_REASON_VALUES,
+  PIN_REASON_VALUES,
+  PIN_RELEASE_REASON_VALUES,
+  PLACEMENT_RUNG_VALUES,
+  POLL_OUTCOME_VALUES,
+  POOL_STATUS_VALUES,
+  POOL_STRATEGY_VALUES,
+  RECIPE_CAUSE_VALUES,
+  RECIPE_STATE_VALUES,
+  REQUEST_KIND_VALUES,
+  REQUEST_OUTCOME_VALUES,
+  RETURN_TO_PLAN_VALUES,
+  SESSION_PLACEMENT_VALUES,
+  SUBAGENT_PLACEMENT_VALUES,
+  TEST_VERDICT_VALUES,
+  WARM_SESSIONS_VALUES,
+};
 
 /** The typed subscription the route's `profile` and `subscription` records fold into; null when both are absent. */
 export function decodeSubscription(profile: Rec | null, sub: Rec | null): Subscription | null {
@@ -229,7 +264,6 @@ export function decodeQuotaHistory(v: unknown): QuotaHistory[] {
   return inDrawnOrder(byId);
 }
 
-export const POLL_OUTCOME_VALUES = ['clean', 'failed', 'rate_limited'] as const;
 
 function decodePoll(v: unknown): QuotaPoll | null {
   if (!v || typeof v !== 'object') return null;
@@ -252,8 +286,6 @@ export function decodeSnapshot(accountId: string, v: unknown): QuotaSnapshot {
   return { accountId, error, fetchedAt: isoOrNull(u.fetched_at), heldUntil: isoOrNull(u.held_until), poll: decodePoll(u.poll), status: error ? 'error' : 'success' };
 }
 
-export const ATTENTION_PAGE_VALUES = ['accounts', 'keys', 'pools'] as const satisfies readonly NonNullable<AttentionItem['link']>['page'][];
-export const ATTENTION_SUBJECT_VALUES = ['account', 'client', 'model', 'pool', 'router'] as const satisfies readonly AttentionItem['subject']['type'][];
 
 export function decodeAttention(v: unknown): AttentionItem {
   const a = rec(v);
@@ -323,17 +355,6 @@ export function decodeKey(v: unknown): ApiKey {
   };
 }
 
-export const AFFINITY_MODE_VALUES = ['always', 'when_cached'] as const satisfies readonly AffinityMode[];
-export const BUDGET_PERIOD_VALUES = ['day', 'month'] as const satisfies readonly BudgetPeriod[];
-export const ELIGIBILITY_VALUES = ['budget', 'budget_unknown', 'cooldown', 'eligible', 'overage', 'spent', 'unavailable'] as const satisfies readonly MemberEligibility[];
-export const SESSION_PLACEMENT_VALUES = ['by_strategy', 'by_warm_prefix'] as const satisfies readonly SessionPlacement[];
-export const SUBAGENT_PLACEMENT_VALUES = ['by_cohort', 'by_strategy', 'with_main'] as const satisfies readonly SubagentPlacement[];
-export const MODEL_RULES_MODE_VALUES = ['extend', 'replace'] as const satisfies readonly ModelRulesMode[];
-export const OVERAGE_POLICY_VALUES = ['allow', 'never', 'prefer_plan'] as const;
-export const POOL_STATUS_VALUES = ['active', 'degraded', 'disabled', 'exhausted'] as const;
-export const RETURN_TO_PLAN_VALUES = ['always', 'never', 'when_cold'] as const satisfies readonly ReturnToPlan[];
-export const WARM_SESSIONS_VALUES = ['always', 'never', 'when_needed'] as const satisfies readonly WarmSessions[];
-export const POOL_STRATEGY_VALUES = ['pace', 'priority', 'round_robin'] as const;
 const ttl = (v: unknown, fallback: CacheTtl): CacheTtl => (v === '1h' || v === '5m' ? v : fallback);
 
 /** Read field by field against `fallback`, so a route that answers a partial rule set never yields an empty TTL. */
@@ -450,9 +471,6 @@ export function decodePool(v: unknown): Pool {
   };
 }
 
-export const ATTEMPT_OUTCOME_VALUES = ['auth_failed', 'canceled', 'rate_limited', 'succeeded', 'transport_error', 'upstream_error'] as const satisfies readonly AttemptOutcome[];
-export const REQUEST_KIND_VALUES = ['count_tokens', 'inference', 'probe'] as const;
-export const REQUEST_OUTCOME_VALUES = ['canceled', 'exhausted', 'failed', 'incomplete', 'rejected', 'succeeded'] as const satisfies readonly RequestOutcome[];
 const outcomeOf = (v: unknown): AttemptOutcome => ATTEMPT_OUTCOME_VALUES.find((o) => o === str(v)) ?? 'upstream_error';
 const missReason = (v: unknown): CacheMissReason | null => strOrNull(v);
 const attemptWindows = (v: unknown) => list(v).map(rec).flatMap((w) => { const id = windowId(str(w.id)); return id === null ? [] : [{ id, resetsAt: isoOrNull(w.resets_at), utilization: numOrNull(w.utilization) }]; });
@@ -461,19 +479,12 @@ const phasesOf = (v: unknown, at: string): RequestPhases => { const p = rec(v); 
 const shapeOf = (v: unknown): RequestShape => { const s = rec(v); return { contextEdits: strings(s.context_edits), effort: strOrNull(s.effort), maxTokens: numOrNull(s.max_tokens), messageCount: num(s.message_count), requestedServiceTier: strOrNull(s.requested_service_tier), requestedSpeed: strOrNull(s.requested_speed), systemBlocks: num(s.system_blocks), temperature: numOrNull(s.temperature), thinkingBudget: numOrNull(s.thinking_budget), thinkingType: strOrNull(s.thinking_type), toolCount: num(s.tool_count) }; };
 const responseOf = (v: unknown): AttemptResponse => { const r = rec(v); return { clearedInputTokens: numOrNull(r.cleared_input_tokens), inferenceGeo: strOrNull(r.inference_geo), refusalCategory: strOrNull(r.refusal_category), refusalRecommendedModel: strOrNull(r.refusal_recommended_model), servedModel: strOrNull(r.served_model), speed: strOrNull(r.speed), stopReason: strOrNull(r.stop_reason), stopSequence: strOrNull(r.stop_sequence) }; };
 
-/** The move reasons a `pin_migrated` event and a trace's `moved` carry. */
-export const PIN_MIGRATION_REASON_VALUES = ['cooldown', 'drain', 'fast_lane', 'mark', 'overage', 'return_to_plan', 'shed', 'spent'] as const satisfies readonly PinMigrationReason[];
-/** The reasons a `pin_expired` event carries; the drawer words any other name as sent. */
-export const PIN_RELEASE_REASON_VALUES = [
-  'attempted', 'budget', 'client_error', 'cooldown', 'deleted', 'disconnected', 'expired', 'fast_credits', 'fast_rate_limit', 'funding_required', 'overage', 'paused', 'reauth_required', 'released', 'spent', 'subscription_ended', 'unpaired', 'unserved',
-] as const satisfies readonly PinReleaseReason[];
 /**
  * The obstacles the router names for a candidate it passed over: the eligibility checks (`attempted`, `budget`,
  * `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`, `subscription_ended`) and the partitions (`at_cap`,
  * `no_fit`, `ranked`, `spent`, `winding_down`). The trace keeps any other name as sent.
  */
 export const SKIP_OBSTACLE_VALUES = ['at_cap', 'attempted', 'budget', 'budget_unknown', 'cooldown', 'credits', 'no_fit', 'operator', 'overage', 'ranked', 'spent', 'subscription_ended', 'winding_down'] as const;
-export const PLACEMENT_RUNG_VALUES = ['content', 'static', 'with_main'] as const satisfies readonly Placement['rung'][];
 const tierOf = (v: unknown): SelectionTrace['tier'] => {
   const t = list(v);
   return t.length === 3 && t.every((x) => numOrNull(x) !== null) ? [num(t[0]), num(t[1]), num(t[2])] : null;
@@ -533,11 +544,6 @@ export function decodeStreamCut(raw: unknown): StreamCut | null {
   return { at: isoOr(c.at, epoch), attempt: num(c.attempt), bytesRelayed: num(c.bytes_relayed), code: str(c.code), text: str(c.text), upstreamRequestId: strOrNull(c.upstream_request_id) };
 }
 
-export const DECISION_KIND_VALUES = ['exhausted', 'held', 'moved', 'placed', 'refused', 'renewed'] as const satisfies readonly DecisionKind[];
-export const PIN_REASON_VALUES = ['not_looked_up', 'pinning_off'] as const satisfies readonly PinReason[];
-const BY_KIND_VALUES = ['exhaustion', 'hold', 'none', 'refusal', 'rule', 'rung', 'strategy'] as const satisfies readonly DecisionBy['kind'][];
-const FACT_UNIT_VALUES = ['count', 'ms', 'percent', 'percent_per_hour', 'text', 'time', 'tokens', 'usd'] as const satisfies readonly FactUnit[];
-const FACT_ENTITY_VALUES = ['account', 'key', 'model', 'pool'] as const satisfies readonly FactEntity['kind'][];
 const decisionKindOf = (v: unknown): DecisionKind | undefined => DECISION_KIND_VALUES.find((k) => k === str(v));
 const orNull = <T,>(v: unknown, read: (r: Rec) => T): T | null => (v === null || typeof v !== 'object' ? null : read(rec(v)));
 const scoreOf = (v: unknown): Score | null => orNull(v, (s) => ({ accountId: str(s.account_id), score: num(s.score), unit: str(s.unit) }));
@@ -881,12 +887,9 @@ export function decodeDashboard(v: unknown): Overview {
 }
 
 const companion = (v: unknown): Session['companion'] => (str(v) === 'reporting' ? 'reporting' : str(v) === 'silent' ? 'silent' : 'none');
-export const AGENT_STATE_VALUES = ['busy', 'idle', 'parked', 'released', 'unknown'] as const satisfies readonly KeepaliveState[];
 const agentState = (v: unknown): KeepaliveState | null => AGENT_STATE_VALUES.find((s) => s === str(v)) ?? null;
-export const GUARD_VERDICT_VALUES = ['auxiliary', 'compaction', 'foreign', 'rearm', 'restart'] as const;
 const guardVerdict = (v: unknown): GuardVerdict | null => GUARD_VERDICT_VALUES.find((x) => x === str(v)) ?? null;
 
-export const BURN_UNIT_VALUES = ['usd', 'window_share'] as const satisfies readonly BurnUnit[];
 const burnUnit = (v: unknown): BurnUnit | null => BURN_UNIT_VALUES.find((u) => u === str(v)) ?? null;
 
 function decodeAgentContext(v: unknown): AgentContext {
@@ -900,11 +903,7 @@ export function decodeSession(v: unknown): Session {
   return { accountId: strOrNull(s.account_id), agentContexts: list(s.agent_contexts).map(decodeAgentContext), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), burnWindow: strOrNull(s.burn_window), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), effort: strOrNull(s.effort), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: typeof s.runway_bounded === 'boolean' ? s.runway_bounded : null, runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), shedReason: strOrNull(s.shed_reason), speed: numOrNull(s.speed) };
 }
 
-/** Every cause word the engine serializes, so the decoder never reads one it sends as none. */
-export const RECIPE_CAUSE_VALUES = ['affinity_too_short', 'agent_released', 'agent_unknown', 'awaiting_cache_evidence', 'awaiting_request', 'awaiting_selection', 'budget', 'bus_gap', 'compacted', 'cooled', 'evicted', 'expired', 'expired_at_restart', 'fixed_thinking', 'forced_tool', 'headers_too_large', 'horizon', 'idle_limit', 'ineligible_credential', 'instance_replaced', 'invalid_cache_control', 'invalid_model', 'invalid_probe_usage', 'invalid_request', 'keepalive_off', 'key_opted_out', 'lease_expired', 'ledger_behind', 'missing_account', 'no_cache_evidence', 'no_probe_cache_evidence', 'opted_out', 'overage', 'owner_mismatch', 'parked_limit', 'partial_cache_coverage', 'paused', 'pool_disabled', 'probe_authentication_error', 'probe_pool_exhausted', 'probe_quota_exhausted', 'probe_retry_limit', 'probe_transport_error', 'probing', 'reauth', 'released', 'repeated_cold_probe', 'request_canceled', 'request_failed', 'request_limit', 'request_rejected', 'request_too_large', 'reset', 'retryable_probe_error', 'scheduled', 'session_ended', 'session_expired', 'slow_probe', 'storage_limit', 'structured_output', 'unexpected_output', 'unsupported_probe', 'unsupported_shape'] as const satisfies readonly RecipeCause[];
 const recipeCause = (v: unknown): RecipeCause | null => RECIPE_CAUSE_VALUES.find((x) => x === str(v)) ?? null;
-export const RECIPE_STATE_VALUES = ['ended', 'held', 'not_retained', 'paused', 'retained'] as const satisfies readonly RecipeState[];
-export const PARK_KIND_VALUES = ['background', 'both', 'scheduled'] as const satisfies readonly ParkKind[];
 export function decodeRecipe(v: unknown): KeepaliveRecipe {
   const r = rec(v);
   return {
@@ -1153,11 +1152,6 @@ export const encodePool = (i: PoolInput) => ({
 // The guardrails' shapes, read as leniently as the rows above: a word outside its set folds to a named default, and
 // the lists read in their `position` order, which a detach can leave with a gap, so a position is never an index.
 
-export const GUARDRAIL_MODE_VALUES = ['enforce', 'observe'] as const satisfies readonly GuardrailMode[];
-export const CONDITION_SUBJECT_VALUES = ['agent_type', 'body', 'client', 'header', 'kind', 'message', 'model', 'request_class', 'user_agent'] as const satisfies readonly ConditionSubject[];
-export const CONDITION_OPERATOR_VALUES = ['absent', 'equals', 'gt', 'lt', 'matches', 'present'] as const satisfies readonly ConditionOperator[];
-export const MESSAGE_SELECTOR_VALUES = ['any', 'any_assistant', 'any_user', 'first_user', 'last', 'last_assistant', 'last_user'] as const satisfies readonly MessageSelector[];
-export const TEST_VERDICT_VALUES = ['indeterminate', 'matched', 'unmatched'] as const satisfies readonly TestVerdict[];
 
 // `observe` is the route's own default for a guardrail created without a mode.
 const guardrailMode = (v: unknown): GuardrailMode => GUARDRAIL_MODE_VALUES.find((m) => m === str(v)) ?? 'observe';

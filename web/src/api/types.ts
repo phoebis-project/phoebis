@@ -232,8 +232,9 @@ export interface ModelRule {
   pattern: string;
 }
 
+export const MODEL_RULES_MODE_VALUES = ['extend', 'replace'] as const;
 /** How a key's own list meets its pool's: `extend` appends the pool's entries after the key's own, `replace` leaves them out. */
-export type ModelRulesMode = 'extend' | 'replace';
+export type ModelRulesMode = (typeof MODEL_RULES_MODE_VALUES)[number];
 
 /** A live model-scoped cooldown on one of a pool's members, attached to the rule entry whose pattern covers it. */
 export interface RuleCooldown {
@@ -273,8 +274,9 @@ export interface QuotaHistory {
 
 export type QuotaFetchStatus = 'error' | 'success';
 
+export const POLL_OUTCOME_VALUES = ['clean', 'failed', 'rate_limited'] as const;
 /** How the usage endpoint answered an account's last attempt. */
-export type PollOutcome = 'clean' | 'failed' | 'rate_limited';
+export type PollOutcome = (typeof POLL_OUTCOME_VALUES)[number];
 
 /** The poll's standing for an OAuth account, kept by the router, and `null` until the poll first asks. */
 export interface QuotaPoll {
@@ -310,6 +312,8 @@ export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_
 /** `unknown` stands for a kind this console does not know, which the route never answers under that name. */
 export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number] | 'unknown';
 
+export const ATTENTION_PAGE_VALUES = ['accounts', 'keys', 'pools'] as const;
+export const ATTENTION_SUBJECT_VALUES = ['account', 'client', 'model', 'pool', 'router'] as const;
 /** One condition that holds now, as `GET /admin/attention` answers it. */
 export interface AttentionItem {
   /** The members the condition's kind carries, passed through as the route sent them. */
@@ -319,7 +323,7 @@ export interface AttentionItem {
    * Where the operator fixes it, null for a drift refusal that carried no key, a router subject, a deleted pool, the
    * unpriced model item and a kind the console does not know.
    */
-  link: { id: string; page: 'accounts' | 'keys' | 'pools' } | null;
+  link: { id: string; page: (typeof ATTENTION_PAGE_VALUES)[number] } | null;
   /** The pools the item belongs to, which a pool card filters the same list by. */
   pools: string[];
   /** The wire's kind where `kind` is `unknown`. Null on a known kind. */
@@ -331,7 +335,7 @@ export interface AttentionItem {
    * router's own components as both: the ledger or the routing state writer, a listener's pair by its key
    * (`proxy.tls`, `admin.tls`), or `-` for a parked record without a pool.
    */
-  subject: { id: string; label: string; type: 'account' | 'client' | 'model' | 'pool' | 'router' };
+  subject: { id: string; label: string; type: (typeof ATTENTION_SUBJECT_VALUES)[number] };
 }
 
 /** What `POST /admin/ledger/parked/replay` landed, and the parked records the ledger still refuses. */
@@ -340,8 +344,10 @@ export interface ReplayOutcome {
   remaining: number;
 }
 
-export type PoolStrategy = 'pace' | 'priority' | 'round_robin';
-export type OveragePolicy = 'allow' | 'never' | 'prefer_plan';
+export const POOL_STRATEGY_VALUES = ['pace', 'priority', 'round_robin'] as const;
+export type PoolStrategy = (typeof POOL_STRATEGY_VALUES)[number];
+export const OVERAGE_POLICY_VALUES = ['allow', 'never', 'prefer_plan'] as const;
+export type OveragePolicy = (typeof OVERAGE_POLICY_VALUES)[number];
 
 /** The lowest and the highest figure a pool's combinations resolve to, equal when every combination agrees. */
 export interface Range {
@@ -395,16 +401,21 @@ export interface TrafficBucket {
   tokens: number;
 }
 
+export const ELIGIBILITY_VALUES = ['budget', 'budget_unknown', 'cooldown', 'eligible', 'overage', 'spent', 'unavailable'] as const;
 /** Why routing would refuse a pool member, or `eligible` when it would not. */
-export type MemberEligibility = 'budget' | 'budget_unknown' | 'cooldown' | 'eligible' | 'overage' | 'spent' | 'unavailable';
+export type MemberEligibility = (typeof ELIGIBILITY_VALUES)[number];
 
+export const AFFINITY_MODE_VALUES = ['always', 'when_cached'] as const;
 /** Whether a session's pin is made for every request, or only for one whose body carries a cache marker. */
-export type AffinityMode = 'always' | 'when_cached';
-export type BudgetPeriod = 'day' | 'month';
+export type AffinityMode = (typeof AFFINITY_MODE_VALUES)[number];
+export const BUDGET_PERIOD_VALUES = ['day', 'month'] as const;
+export type BudgetPeriod = (typeof BUDGET_PERIOD_VALUES)[number];
+export const SESSION_PLACEMENT_VALUES = ['by_strategy', 'by_warm_prefix'] as const;
 /** Where a fresh session with no pin lands: by the strategy, or where its static prefix is warm. */
-export type SessionPlacement = 'by_strategy' | 'by_warm_prefix';
+export type SessionPlacement = (typeof SESSION_PLACEMENT_VALUES)[number];
+export const SUBAGENT_PLACEMENT_VALUES = ['by_cohort', 'by_strategy', 'with_main'] as const;
 /** Where a subagent with no pin of its own lands. */
-export type SubagentPlacement = 'by_cohort' | 'by_strategy' | 'with_main';
+export type SubagentPlacement = (typeof SUBAGENT_PLACEMENT_VALUES)[number];
 
 export interface PoolMember {
   accountId: string;
@@ -442,11 +453,13 @@ export interface PoolKey {
   prefix: string;
 }
 
+export const RETURN_TO_PLAN_VALUES = ['always', 'never', 'when_cold'] as const;
 /** When a session on an API-key member returns to a subscription member: at once when cold and after the dwell when warm, only when cold, or never. */
-export type ReturnToPlan = 'always' | 'never' | 'when_cold';
+export type ReturnToPlan = (typeof RETURN_TO_PLAN_VALUES)[number];
 
+export const WARM_SESSIONS_VALUES = ['always', 'never', 'when_needed'] as const;
 /** Whether a shedding round may mark a warm session: never, only once the cold ones fall short, or by burn alone. */
-export type WarmSessions = 'always' | 'never' | 'when_needed';
+export type WarmSessions = (typeof WARM_SESSIONS_VALUES)[number];
 
 /** One static check that holds on a pool's saved settings. A warning blocks nothing. */
 export interface PoolWarning {
@@ -456,6 +469,7 @@ export interface PoolWarning {
   text: string;
 }
 
+export const POOL_STATUS_VALUES = ['active', 'degraded', 'disabled', 'exhausted'] as const;
 export interface Pool {
   activePins: number;
   affinityMode: AffinityMode;
@@ -527,7 +541,7 @@ export interface Pool {
   /** The time the slow-down may add to a session before a shedding round moves sessions off the member. */
   slowDownStretchSeconds: number;
   /** `active` and `disabled` are set by hand; the rest are observed. */
-  status: 'active' | 'degraded' | 'disabled' | 'exhausted';
+  status: (typeof POOL_STATUS_VALUES)[number];
   strategy: PoolStrategy;
   subagentPlacement: SubagentPlacement;
   traffic24h: TrafficBucket[];
@@ -601,16 +615,19 @@ export interface CreatedApiKey {
  * `stripped` (the `safeguards` member carried under an off setting, which the dispatch drops) whether or not the
  * request reaches an upstream; `body_shape` is a refusal for its body shape before any upstream saw it.
  */
-export type AutoMode = 'body_shape' | 'server' | 'stripped';
-export const AUTO_MODE_VALUES = ['body_shape', 'server', 'stripped'] as const satisfies readonly AutoMode[];
+export type AutoMode = (typeof AUTO_MODE_VALUES)[number];
+export const AUTO_MODE_VALUES = ['body_shape', 'server', 'stripped'] as const;
 /** Who put `diagnostics.previous_message_id` on the body the upstream compared. */
-export type DiagnosticsSource = 'client' | 'router';
-export const DIAGNOSTICS_SOURCE_VALUES = ['client', 'router'] as const satisfies readonly DiagnosticsSource[];
-export type RequestKind = 'count_tokens' | 'inference' | 'probe';
+export type DiagnosticsSource = (typeof DIAGNOSTICS_SOURCE_VALUES)[number];
+export const DIAGNOSTICS_SOURCE_VALUES = ['client', 'router'] as const;
+export const REQUEST_KIND_VALUES = ['count_tokens', 'inference', 'probe'] as const;
+export type RequestKind = (typeof REQUEST_KIND_VALUES)[number];
 export type Transport = 'json' | 'sse';
-export type AttemptOutcome = 'auth_failed' | 'canceled' | 'rate_limited' | 'succeeded' | 'transport_error' | 'upstream_error';
+export const ATTEMPT_OUTCOME_VALUES = ['auth_failed', 'canceled', 'rate_limited', 'succeeded', 'transport_error', 'upstream_error'] as const;
+export type AttemptOutcome = (typeof ATTEMPT_OUTCOME_VALUES)[number];
+export const REQUEST_OUTCOME_VALUES = ['canceled', 'exhausted', 'failed', 'incomplete', 'rejected', 'succeeded'] as const;
 /** How a request ended, in the ledger's own words. */
-export type RequestOutcome = 'canceled' | 'exhausted' | 'failed' | 'incomplete' | 'rejected' | 'succeeded';
+export type RequestOutcome = (typeof REQUEST_OUTCOME_VALUES)[number];
 
 export interface AttemptWindow {
   id: WindowId;
@@ -648,6 +665,7 @@ export interface SkippedCandidate {
   obstacle: string;
 }
 
+export const PLACEMENT_RUNG_VALUES = ['content', 'static', 'with_main'] as const;
 /**
  * Where a fresh placement's account came from: `content` the deepest warm message boundary, `static` the deepest
  * warm static boundary, `with_main` the parent agent's pin or another agent's pin of the session.
@@ -657,7 +675,7 @@ export interface Placement {
   depth: number;
   /** The prefix the entry promised, in tokens, which a hit reads up to; 0 for `with_main`. */
   prefixTokens: number;
-  rung: 'content' | 'static' | 'with_main';
+  rung: (typeof PLACEMENT_RUNG_VALUES)[number];
 }
 
 /** The holds a request waited through before this attempt was placed. */
@@ -857,30 +875,18 @@ export interface CapturedBodies {
   responseTruncated: boolean;
 }
 
+/** The move reasons a `pin_migrated` event and a trace's `moved` carry. */
+export const PIN_MIGRATION_REASON_VALUES = ['cooldown', 'drain', 'fast_lane', 'mark', 'overage', 'return_to_plan', 'shed', 'spent'] as const;
 /** Why the router moved a session's pin: the reason string of a `pin_migrated` event. */
-export type PinMigrationReason = 'cooldown' | 'drain' | 'fast_lane' | 'mark' | 'overage' | 'return_to_plan' | 'shed' | 'spent';
+export type PinMigrationReason = (typeof PIN_MIGRATION_REASON_VALUES)[number];
 
+/** The reasons a `pin_expired` event carries. The drawer words any other name as sent. */
+export const PIN_RELEASE_REASON_VALUES = [
+  'attempted', 'budget', 'client_error', 'cooldown', 'deleted', 'disconnected', 'expired', 'fast_credits', 'fast_rate_limit', 'funding_required', 'overage', 'paused', 'reauth_required', 'released', 'spent', 'subscription_ended', 'unpaired', 'unserved',
+] as const;
 /** Why the router released a session's pin without a move: the `reasons` of a `pin_expired` event, in the
  * order the selection found them. */
-export type PinReleaseReason =
-  | 'attempted'
-  | 'budget'
-  | 'client_error'
-  | 'cooldown'
-  | 'deleted'
-  | 'disconnected'
-  | 'expired'
-  | 'fast_credits'
-  | 'fast_rate_limit'
-  | 'funding_required'
-  | 'overage'
-  | 'paused'
-  | 'reauth_required'
-  | 'released'
-  | 'spent'
-  | 'subscription_ended'
-  | 'unpaired'
-  | 'unserved';
+export type PinReleaseReason = (typeof PIN_RELEASE_REASON_VALUES)[number];
 
 /** One event of a request's window, as `GET /admin/requests/{id}` lists them beside the summary. */
 export interface RequestEvent {
@@ -974,18 +980,22 @@ export interface RequestPage {
   requests: RequestLog[];
 }
 
+export const DECISION_KIND_VALUES = ['exhausted', 'held', 'moved', 'placed', 'refused', 'renewed'] as const;
 /** A decision's kind as the routing log names it. A probe's decision keeps its kind and the row's `probe` marks it. */
-export type DecisionKind = 'exhausted' | 'held' | 'moved' | 'placed' | 'refused' | 'renewed';
+export type DecisionKind = (typeof DECISION_KIND_VALUES)[number];
 
+export const PIN_REASON_VALUES = ['not_looked_up', 'pinning_off'] as const;
 /** Why a record pins nothing. `not_looked_up` is a refusal's, made before the pin lookup whatever session it named. */
-export type PinReason = 'not_looked_up' | 'pinning_off';
+export type PinReason = (typeof PIN_REASON_VALUES)[number];
 
+export const FACT_UNIT_VALUES = ['count', 'ms', 'percent', 'percent_per_hour', 'text', 'time', 'tokens', 'usd'] as const;
 /** How the console draws a fact's value. */
-export type FactUnit = 'count' | 'ms' | 'percent' | 'percent_per_hour' | 'text' | 'time' | 'tokens' | 'usd';
+export type FactUnit = (typeof FACT_UNIT_VALUES)[number];
 
+export const FACT_ENTITY_VALUES = ['account', 'key', 'model', 'pool'] as const;
 export interface FactEntity {
   id: string;
-  kind: 'account' | 'key' | 'model' | 'pool';
+  kind: (typeof FACT_ENTITY_VALUES)[number];
 }
 
 /**
@@ -999,9 +1009,10 @@ export interface SummaryFact {
   value: number | string;
 }
 
+export const BY_KIND_VALUES = ['exhaustion', 'hold', 'none', 'refusal', 'rule', 'rung', 'strategy'] as const;
 /** What decided the row, the By chip: a rule, a rung, the strategy, a hold, an exhaustion, a refusal or none. */
 export interface DecisionBy {
-  kind: 'exhaustion' | 'hold' | 'none' | 'refusal' | 'rule' | 'rung' | 'strategy';
+  kind: (typeof BY_KIND_VALUES)[number];
   tier: [number, number, number] | null;
   value: string;
 }
@@ -1744,17 +1755,20 @@ export interface UnusedAllowanceAnswer {
   to: string;
 }
 
+export const AGENT_STATE_VALUES = ['busy', 'idle', 'parked', 'released', 'unknown'] as const;
 /** The keepalive mod's lifecycle word for an agent. */
-export type KeepaliveState = 'busy' | 'idle' | 'parked' | 'released' | 'unknown';
+export type KeepaliveState = (typeof AGENT_STATE_VALUES)[number];
 
+export const PARK_KIND_VALUES = ['background', 'both', 'scheduled'] as const;
 /** What a parked agent waits on: a background command or a subagent, a scheduled wakeup, or both. */
-export type ParkKind = 'background' | 'both' | 'scheduled';
+export type ParkKind = (typeof PARK_KIND_VALUES)[number];
 
 /** Whether the keepalive mod registered the session and is still reporting. */
 export type CompanionState = 'none' | 'reporting' | 'silent';
 
+export const BURN_UNIT_VALUES = ['usd', 'window_share'] as const;
 /** Which figure a pin's burn reads: the share of the account's own 5-hour window per hour on plan quota, dollars per hour off it. */
-export type BurnUnit = 'usd' | 'window_share';
+export type BurnUnit = (typeof BURN_UNIT_VALUES)[number];
 
 export interface AgentContext {
   /** The pin's account. */
@@ -1857,78 +1871,19 @@ export interface Session {
   speed: number | null;
 }
 
+export const RECIPE_STATE_VALUES = ['ended', 'held', 'not_retained', 'paused', 'retained'] as const;
 /** The Sessions row's one word for an agent's recipe, read off the engine's cause and its pause. */
-export type RecipeState = 'ended' | 'held' | 'not_retained' | 'paused' | 'retained';
+export type RecipeState = (typeof RECIPE_STATE_VALUES)[number];
+/** Every cause word the engine serializes, so the decoder never reads one it sends as none. */
+export const RECIPE_CAUSE_VALUES = ['affinity_too_short', 'agent_released', 'agent_unknown', 'awaiting_cache_evidence', 'awaiting_request', 'awaiting_selection', 'budget', 'bus_gap', 'compacted', 'cooled', 'evicted', 'expired', 'expired_at_restart', 'fixed_thinking', 'forced_tool', 'headers_too_large', 'horizon', 'idle_limit', 'ineligible_credential', 'instance_replaced', 'invalid_cache_control', 'invalid_model', 'invalid_probe_usage', 'invalid_request', 'keepalive_off', 'key_opted_out', 'lease_expired', 'ledger_behind', 'missing_account', 'no_cache_evidence', 'no_probe_cache_evidence', 'opted_out', 'overage', 'owner_mismatch', 'parked_limit', 'partial_cache_coverage', 'paused', 'pool_disabled', 'probe_authentication_error', 'probe_pool_exhausted', 'probe_quota_exhausted', 'probe_retry_limit', 'probe_transport_error', 'probing', 'reauth', 'released', 'repeated_cold_probe', 'request_canceled', 'request_failed', 'request_limit', 'request_rejected', 'request_too_large', 'reset', 'retryable_probe_error', 'scheduled', 'session_ended', 'session_expired', 'slow_probe', 'storage_limit', 'structured_output', 'unexpected_output', 'unsupported_probe', 'unsupported_shape'] as const;
 /** The engine's own reason, every word it serializes. */
-export type RecipeCause =
-  | 'affinity_too_short'
-  | 'agent_released'
-  | 'agent_unknown'
-  | 'awaiting_cache_evidence'
-  | 'awaiting_request'
-  | 'awaiting_selection'
-  | 'budget'
-  | 'bus_gap'
-  | 'compacted'
-  | 'cooled'
-  | 'evicted'
-  | 'expired'
-  | 'expired_at_restart'
-  | 'fixed_thinking'
-  | 'forced_tool'
-  | 'headers_too_large'
-  | 'horizon'
-  | 'idle_limit'
-  | 'ineligible_credential'
-  | 'instance_replaced'
-  | 'invalid_cache_control'
-  | 'invalid_model'
-  | 'invalid_probe_usage'
-  | 'invalid_request'
-  | 'keepalive_off'
-  | 'key_opted_out'
-  | 'lease_expired'
-  | 'ledger_behind'
-  | 'missing_account'
-  | 'no_cache_evidence'
-  | 'no_probe_cache_evidence'
-  | 'opted_out'
-  | 'overage'
-  | 'owner_mismatch'
-  | 'parked_limit'
-  | 'partial_cache_coverage'
-  | 'paused'
-  | 'pool_disabled'
-  | 'probe_authentication_error'
-  | 'probe_pool_exhausted'
-  | 'probe_quota_exhausted'
-  | 'probe_retry_limit'
-  | 'probe_transport_error'
-  | 'probing'
-  | 'reauth'
-  | 'released'
-  | 'repeated_cold_probe'
-  | 'request_canceled'
-  | 'request_failed'
-  | 'request_limit'
-  | 'request_rejected'
-  | 'request_too_large'
-  | 'reset'
-  | 'retryable_probe_error'
-  | 'scheduled'
-  | 'session_ended'
-  | 'session_expired'
-  | 'slow_probe'
-  | 'storage_limit'
-  | 'structured_output'
-  | 'unexpected_output'
-  | 'unsupported_probe'
-  | 'unsupported_shape';
+export type RecipeCause = (typeof RECIPE_CAUSE_VALUES)[number];
 
+export const GUARD_VERDICT_VALUES = ['auxiliary', 'compaction', 'foreign', 'rearm', 'restart'] as const;
 /** What the last request the agent observed did to its recipe: `auxiliary` and `foreign` both left it alone,
  * `rearm` and `restart` both fed it, and `compaction` did neither, since the completed compaction ended the recipe.
  * Never a hold: `cause` names that separately. */
-export type GuardVerdict = 'auxiliary' | 'compaction' | 'foreign' | 'rearm' | 'restart';
+export type GuardVerdict = (typeof GUARD_VERDICT_VALUES)[number];
 
 /** One row per agent that has sent a real request: its recipe's state and cause, its lifecycle and its probes. */
 export interface KeepaliveRecipe {
@@ -2102,11 +2057,15 @@ export interface Overview {
   topRefusalCode: string | null;
 }
 
+export const GUARDRAIL_MODE_VALUES = ['enforce', 'observe'] as const;
 /** Observe records a match on the request, enforce refuses the request with a 403. */
-export type GuardrailMode = 'enforce' | 'observe';
-export type ConditionSubject = 'agent_type' | 'body' | 'client' | 'header' | 'kind' | 'message' | 'model' | 'request_class' | 'user_agent';
-export type ConditionOperator = 'absent' | 'equals' | 'gt' | 'lt' | 'matches' | 'present';
-export type MessageSelector = 'any' | 'any_assistant' | 'any_user' | 'first_user' | 'last' | 'last_assistant' | 'last_user';
+export type GuardrailMode = (typeof GUARDRAIL_MODE_VALUES)[number];
+export const CONDITION_SUBJECT_VALUES = ['agent_type', 'body', 'client', 'header', 'kind', 'message', 'model', 'request_class', 'user_agent'] as const;
+export type ConditionSubject = (typeof CONDITION_SUBJECT_VALUES)[number];
+export const CONDITION_OPERATOR_VALUES = ['absent', 'equals', 'gt', 'lt', 'matches', 'present'] as const;
+export type ConditionOperator = (typeof CONDITION_OPERATOR_VALUES)[number];
+export const MESSAGE_SELECTOR_VALUES = ['any', 'any_assistant', 'any_user', 'first_user', 'last', 'last_assistant', 'last_user'] as const;
+export type MessageSelector = (typeof MESSAGE_SELECTOR_VALUES)[number];
 
 /**
  * One condition as the route spells it, every member a string. `name` is the `header` subject's, `path` the `body`
@@ -2187,7 +2146,8 @@ export interface GuardrailMatch {
   position: number;
 }
 
-export type TestVerdict = 'indeterminate' | 'matched' | 'unmatched';
+export const TEST_VERDICT_VALUES = ['indeterminate', 'matched', 'unmatched'] as const;
+export type TestVerdict = (typeof TEST_VERDICT_VALUES)[number];
 
 /** The dry run's answer over the captured bodies of a pool or a key. */
 export interface GuardrailTestResult {
