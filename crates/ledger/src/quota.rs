@@ -13,7 +13,7 @@ use phoebis_oauth::{
 use phoebis_relay::UnifiedHeaders;
 use phoebis_routing::{
     credits_from_usage, elapsed_share_at, sample_from_usage, Report, RouterHandle, FIVE_HOUR,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    SEVEN_DAY, SEVEN_DAY_FABLE, SEVEN_DAY_OVERAGE_INCLUDED,
 };
 use phoebis_store::{AccountKind, AccountRow, AccountState, Store};
 use tokio::task::JoinSet;
@@ -41,9 +41,6 @@ const WAKE_TOLERANCE: Duration = Duration::from_secs(1);
 /// because the profile endpoint shares the usage endpoint's per-account limit and a profile 429 pauses the account's
 /// usage poll for up to fifteen minutes. A faster cadence waits for a live measure of that limit.
 pub const PROFILE_EVERY_POLLS: u32 = 3;
-
-/// The usage endpoint's key for the week the head reports as `7d_oi`.
-pub(crate) const SEVEN_DAY_OVERAGE_INCLUDED: &str = "seven_day_overage_included";
 
 const OPEN_RUNS_POISONED: &str = "the poll backoff's open-run set poisoned by a prior panic";
 

@@ -105,7 +105,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
         std::collections::BTreeMap::new();
     for q in quota {
         let window = DashboardWindow {
-            id: crate::routes::account_window_id(&q.window).to_string(),
+            id: phoebis_routing::account_window_id(&q.window).to_string(),
             utilization: q.utilization,
             resets_at: q.reset_at,
             bucket: q.bucket * 1_000,

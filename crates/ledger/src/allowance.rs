@@ -3,15 +3,11 @@
 
 use std::collections::BTreeMap;
 
-use phoebis_routing::{SEVEN_DAY, SEVEN_DAY_FABLE};
+use phoebis_routing::{account_window_id, SEVEN_DAY};
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection};
 
 use crate::query::{in_list, WINDOW_RESET};
-// The relay hands the router the head's overage-included week as `seven_day_fable`, so the events name the Fable week
-// where the samples may name this key, and the read folds the two as the account view does (`account_window_id` in the
-// admin routes).
-use crate::quota::SEVEN_DAY_OVERAGE_INCLUDED;
 use crate::LedgerError;
 
 /// One weekly reset an account met in range, or its term's end read as one: what the unused allowance route lists.
@@ -143,11 +139,7 @@ pub fn unused_allowance(
         })?;
         for reading in found {
             let (window, utilization, observed_at) = reading?;
-            let window = if window == SEVEN_DAY_OVERAGE_INCLUDED {
-                SEVEN_DAY_FABLE.to_string()
-            } else {
-                window
-            };
+            let window = account_window_id(&window).to_string();
             match last.get(&window) {
                 Some(&(_, kept)) if kept >= observed_at => {}
                 _ => {

@@ -25,8 +25,9 @@ use phoebis_oauth::{
 };
 use phoebis_relay::DiscoveryError;
 use phoebis_routing::{
-    is_plan_window, AccountProjection, MemberSpend, OverageEvidence, ReloadError, SpendResetSource,
-    SpendWindow, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    account_window_id, is_plan_window, AccountProjection, MemberSpend, OverageEvidence,
+    ReloadError, SpendResetSource, SpendWindow, UtilizationSample, WindowReading, FIVE_HOUR,
+    SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, CooldownRow, Identity,
@@ -2857,21 +2858,6 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         usage,
         usage_based: term.usage_based,
         spend: term.usage_based.then(|| spend_view(ctx, &row.id, now)),
-    }
-}
-
-/// The ledger's and the endpoint's spelling of the overage-included week a head reports as `7d_oi`.
-const OVERAGE_INCLUDED_WEEK: &str = "seven_day_overage_included";
-
-/// The one id the account view and the dashboard answer a window under: the Fable week as `seven_day_fable`, whether
-/// the router holds it under the endpoint's key or a head row stored the overage-included week. The head's
-/// overage-included week is read as the Fable week until a second model week arrives by head, since the upstream's
-/// name is generic.
-pub(crate) fn account_window_id(key: &str) -> &str {
-    if key == FABLE_WINDOW_KEY || key == OVERAGE_INCLUDED_WEEK {
-        SEVEN_DAY_FABLE
-    } else {
-        key
     }
 }
 
