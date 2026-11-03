@@ -19,6 +19,8 @@ import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER, hoursOfKey, windowKeyId, wind
 
 type Rec = Record<string, unknown>;
 export const rec = (v: unknown): Rec => (v && typeof v === 'object' ? (v as Rec) : {});
+const orNull = <T,>(v: unknown, read: (r: Rec) => T): T | null => (v === null || typeof v !== 'object' ? null : read(rec(v)));
+const isMap = (v: unknown): v is Rec => v !== null && typeof v === 'object' && !Array.isArray(v);
 export const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback);
 export const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
@@ -35,9 +37,6 @@ const numberMap = (v: unknown): Record<string, number> => Object.fromEntries(Obj
 /** A map the route keys by data whose value may be null (a window the cost model could not price), each value read
  *  through `numOrNull`, so an unpriced window decodes null rather than zero. */
 const nullableNumberMap = (v: unknown): Record<string, number | null> => Object.fromEntries(Object.entries(rec(v)).map(([k, x]) => [k, numOrNull(x)]));
-/** An object member the route answers null where the cost model priced nothing, read by `entry` where it answered
- *  one. */
-const objectOrNull = <T>(v: unknown, entry: (e: Rec) => T): T | null => (v === null || v === undefined ? null : entry(rec(v)));
 /** Dollars or Pro-week figures by token kind, as the routes split a group's figure. */
 const costSplit = (v: unknown): CostSplit => {
   const c = rec(v);
@@ -76,17 +75,14 @@ function drawnOrder(windows: RateLimitWindow[]): RateLimitWindow[] {
 
 /** A usage-based seat's spend window, null on every other account and on a row from a router without the member. */
 function decodeSpend(v: unknown): Spend | null {
-  if (v === null || v === undefined) return null;
-  const s = rec(v);
-  const amounts = s.amounts === null || s.amounts === undefined ? null : rec(s.amounts);
-  return {
-    amounts: amounts ? { currency: str(amounts.currency, 'USD'), exponent: num(amounts.exponent, 2), limitMinor: numOrNull(amounts.limit_minor), polledAt: isoOr(amounts.polled_at, epoch), usedMinor: num(amounts.used_minor) } : null,
+  return orNull(v, (s) => ({
+    amounts: orNull(s.amounts, (a) => ({ currency: str(a.currency, 'USD'), exponent: num(a.exponent, 2), limitMinor: numOrNull(a.limit_minor), polledAt: isoOr(a.polled_at, epoch), usedMinor: num(a.used_minor) })),
     observedAt: isoOr(s.observed_at, epoch),
     // A source this build does not know names no header's instant, so the reset reads as unconfirmed.
     resetSource: str(s.reset_source) === 'head' ? 'head' : 'estimated',
     resetsAt: isoOrNull(s.resets_at),
     utilization: numOrNull(s.utilization),
-  };
+  }));
 }
 
 /** The account's state and its flags folded onto the one badge the pages show. */
@@ -176,13 +172,8 @@ export function decodeAccount(v: unknown): Account {
   const cooldowns = list(a.cooldowns).map(rec);
   const decodedCooldowns = cooldowns.map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowId(str(c.window)) }));
   const windows = drawnOrder(list(a.windows).map(rec).map(decodeWindow).filter((w): w is RateLimitWindow => w !== null));
-  const fastLane = a.fast_lane === null || a.fast_lane === undefined ? null : rec(a.fast_lane);
-  const extra = a.extra_usage === null || a.extra_usage === undefined ? null : rec(a.extra_usage);
-  const overage = a.overage === null || a.overage === undefined ? null : rec(a.overage);
-  const pool = a.pool === null || a.pool === undefined ? null : rec(a.pool);
-  const profile = a.profile === null || a.profile === undefined ? null : rec(a.profile);
-  const sub = a.subscription === null || a.subscription === undefined ? null : rec(a.subscription);
-  const slowDown = a.slow_down === null || a.slow_down === undefined ? null : rec(a.slow_down);
+  const profile = orNull(a.profile, (r) => r);
+  const sub = orNull(a.subscription, (r) => r);
   const identity = rec(a.identity);
   const credential = rec(a.credential);
   const subscription = decodeSubscription(profile, sub);
@@ -192,37 +183,33 @@ export function decodeAccount(v: unknown): Account {
     credential: { accessTokenExpiresAt: isoOrNull(credential.access_expires_at), lastError: strOrNull(credential.last_error), lastRefreshAt: isoOrNull(credential.last_refresh_at), quarantined: bool(credential.quarantined), refreshTokenExpiresAt: isoOrNull(credential.refresh_expires_at) },
     email: strOrNull(identity.email),
     // Kept when the provider switched extra usage off: the reason it gave exists for exactly that account.
-    extraUsage: extra ? { disabledReason: strOrNull(extra.disabled_reason), enabled: bool(extra.is_enabled), inUse: bool(extra.in_use), monthlyLimitCredits: numOrNull(extra.monthly_limit), usedCredits: numOrNull(extra.used_credits) } : null,
+    extraUsage: orNull(a.extra_usage, (x) => ({ disabledReason: strOrNull(x.disabled_reason), enabled: bool(x.is_enabled), inUse: bool(x.in_use), monthlyLimitCredits: numOrNull(x.monthly_limit), usedCredits: numOrNull(x.used_credits) })),
     fableWindow: windows.find((w) => w.id === '7d_fable') ?? null,
-    fastLane: fastLane ? { input: fastLaneReading(fastLane.input), output: fastLaneReading(fastLane.output) } : null,
+    fastLane: orNull(a.fast_lane, (f) => ({ input: fastLaneReading(f.input), output: fastLaneReading(f.output) })),
     id: str(a.id),
     kind: accountKind(a.kind),
     label: str(a.label),
-    overage: overage ? { inUse: bool(overage.in_use), observedAt: isoOr(overage.observed_at, epoch), reset: isoOrNull(overage.reset), since: isoOrNull(overage.since) } : null,
+    overage: orNull(a.overage, (o) => ({ inUse: bool(o.in_use), observedAt: isoOr(o.observed_at, epoch), reset: isoOrNull(o.reset), since: isoOrNull(o.since) })),
     plan: planName(subscription),
     planEndedAt: isoOrNull(a.plan_ended_at),
-    pool: pool ? { poolId: str(pool.pool_id), priority: num(pool.priority) } : null,
+    pool: orNull(a.pool, (p) => ({ poolId: str(p.pool_id), priority: num(p.priority) })),
     requests: { last24h: num(rec(a.requests).last_24h), last7d: num(rec(a.requests).last_7d), lifetime: num(rec(a.requests).lifetime) },
     // A row whose answer carried none reads 0, which the route refuses as stale, so the editor offers Reload rather
     // than landing over a row it could not vouch for.
     revision: num(a.revision),
     routingEnabled: bool(a.enabled, true),
-    slowDown: slowDown
-      ? { factor: num(slowDown.factor, 1), holdMs: num(slowDown.hold_ms), since: isoOrNull(slowDown.since), speed: num(slowDown.speed, 1), stretchMs: num(slowDown.stretch_ms), thresholdMs: num(slowDown.threshold_ms) }
-      : null,
+    slowDown: orNull(a.slow_down, (s) => ({ factor: num(s.factor, 1), holdMs: num(s.hold_ms), since: isoOrNull(s.since), speed: num(s.speed, 1), stretchMs: num(s.stretch_ms), thresholdMs: num(s.threshold_ms) })),
     spend: decodeSpend(a.spend),
     status: accountStatus(a, decodedCooldowns),
     subscription,
-    usage: a.usage === null || a.usage === undefined ? null : decodeSnapshot(str(a.id), a.usage),
+    usage: orNull(a.usage, (u) => decodeSnapshot(str(a.id), u)),
     usageBased: bool(a.usage_based),
     windows: windows.filter((w) => w.id !== '7d_fable'),
   };
 }
 
 function fastLaneReading(v: unknown): FastLaneReading | null {
-  if (v === null || v === undefined) return null;
-  const r = rec(v);
-  return { observedAt: isoOr(r.observed_at, epoch), resetsAt: isoOrNull(r.resets_at), utilization: num(r.utilization) };
+  return orNull(v, (r) => ({ observedAt: isoOr(r.observed_at, epoch), resetsAt: isoOrNull(r.resets_at), utilization: num(r.utilization) }));
 }
 
 /** The plan's name: the profile's display name where it carries one, since claude.ai names the plan there, else the
@@ -270,9 +257,7 @@ export function decodeQuotaHistory(v: unknown): QuotaHistory[] {
 
 
 function decodePoll(v: unknown): QuotaPoll | null {
-  if (!v || typeof v !== 'object') return null;
-  const p = rec(v);
-  return {
+  return orNull(v, (p) => ({
     backoffSince: isoOrNull(p.backoff_since),
     lastAttemptAt: isoOrNull(p.last_attempt_at),
     lastCleanAt: isoOrNull(p.last_clean_at),
@@ -281,7 +266,7 @@ function decodePoll(v: unknown): QuotaPoll | null {
     lastOutcome: oneOf(POLL_OUTCOME_VALUES, p.last_outcome) ?? 'failed',
     nextAttemptAt: isoOrNull(p.next_attempt_at),
     rateLimitedInARow: num(p.rate_limited_in_a_row),
-  };
+  }));
 }
 
 export function decodeSnapshot(accountId: string, v: unknown): QuotaSnapshot {
@@ -388,7 +373,7 @@ const decodeRange = (v: unknown): Range => {
 
 /** A pool with no member answers null, and so does a row from a router that resolves nothing. */
 export function decodeKeepaliveResolved(v: unknown): Pool['keepaliveResolved'] {
-  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  if (!isMap(v)) return null;
   const r = rec(v);
   return {
     breakEvenSeconds: decodeRange(r.break_even_seconds),
@@ -494,24 +479,19 @@ const tierOf = (v: unknown): SelectionTrace['tier'] => {
   return t.length === 3 && t.every((x) => numOrNull(x) !== null) ? [num(t[0]), num(t[1]), num(t[2])] : null;
 };
 /** A rung the drawer has no words for reads as no placement rather than as a verdict it cannot explain. */
-const placementOf = (v: unknown): Placement | null => {
-  if (v === null || typeof v !== 'object') return null;
-  const p = rec(v);
-  const rung = oneOf(PLACEMENT_RUNG_VALUES, p.rung);
-  return rung === undefined ? null : { depth: num(p.depth), prefixTokens: num(p.prefix_tokens), rung };
-};
+const placementOf = (v: unknown): Placement | null =>
+  orNull(v, (p) => {
+    const rung = oneOf(PLACEMENT_RUNG_VALUES, p.rung);
+    return rung === undefined ? null : { depth: num(p.depth), prefixTokens: num(p.prefix_tokens), rung };
+  });
 /** A row from before the waits were recorded reads none, so its hold says it waited and not for what. */
 const cohortHoldOf = (v: unknown): CohortHold | null =>
-  v === null || typeof v !== 'object'
-    ? null
-    : { cohort: strOrNull(rec(v).cohort), heldMs: num(rec(v).held_ms), waitedOn: strings(rec(v).waited_on), waits: list(rec(v).waits).map(rec).map((w) => ({ heldMs: num(w.held_ms), reason: str(w.reason) })) };
+  orNull(v, (h) => ({ cohort: strOrNull(h.cohort), heldMs: num(h.held_ms), waitedOn: strings(h.waited_on), waits: list(h.waits).map(rec).map((w) => ({ heldMs: num(w.held_ms), reason: str(w.reason) })) }));
 export function decodeSelection(v: unknown): SelectionTrace | null {
-  if (v === null || typeof v !== 'object') return null;
-  const s = rec(v);
-  return {
+  return orNull(v, (s) => ({
     cacheRead: numOrNull(s.cache_read), cohortHold: cohortHoldOf(s.cohort_hold), moved: strOrNull(s.moved), placement: placementOf(s.placement), renewed: bool(s.renewed),
     skipped: list(s.skipped).map(rec).map((k) => ({ accountId: str(k.account_id), obstacle: str(k.obstacle) })), strategy: str(s.strategy), tier: tierOf(s.tier),
-  };
+  }));
 }
 
 export function decodeRequest(v: unknown): RequestLog {
@@ -522,7 +502,7 @@ export function decodeRequest(v: unknown): RequestLog {
     autoMode: oneOf(AUTO_MODE_VALUES, r.auto_mode) ?? null,
     canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), classifier: r.classifier === 'client' ? 'client' : null, client: strOrNull(r.client), clientContract: strOrNull(r.client_contract), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted),
     costEquivalent: numOrNull(r.cost_equivalent),
-    costShares: r.cost_shares === null || r.cost_shares === undefined ? null : nullableNumberMap(r.cost_shares), costUsd: num(r.cost_usd),
+    costShares: orNull(r.cost_shares, nullableNumberMap), costUsd: num(r.cost_usd),
     diagnosticsSource: oneOf(DIAGNOSTICS_SOURCE_VALUES, r.diagnostics_source) ?? null,
     durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code),
     forkDepth: numOrNull(r.fork_depth), forkedFrom: strOrNull(r.forked_from),
@@ -540,16 +520,13 @@ export function decodeRequest(v: unknown): RequestLog {
 export const decodeRequestPage = (v: unknown): RequestPage => ({ landedThrough: num(rec(v).landed_through), nextCursor: strOrNull(rec(v).next_cursor), requests: list(rec(v).requests).map(decodeRequest) });
 // The four counts are the route's own; nothing here measures the request or the response it passes through.
 export const decodeBodies = (v: unknown): CapturedBodies => { const b = rec(v); return { request: b.request, requestBytesSeen: num(b.request_bytes_seen), requestBytesStored: num(b.request_bytes_stored), requestId: str(b.request_id), response: b.response, responseBytesSeen: num(b.response_bytes_seen), responseBytesStored: num(b.response_bytes_stored), responseTruncated: bool(b.response_truncated) }; };
-export const decodeRequestEvent = (v: unknown): RequestEvent => ({ accountId: strOrNull(rec(v).account_id), at: isoOr(rec(v).at, epoch), detail: rec(v).detail === null || rec(v).detail === undefined ? null : rec(rec(v).detail), keyId: strOrNull(rec(v).key_id), kind: str(rec(v).kind), model: strOrNull(rec(v).model), sessionId: strOrNull(rec(v).session_id) });
+export const decodeRequestEvent = (v: unknown): RequestEvent => ({ accountId: strOrNull(rec(v).account_id), at: isoOr(rec(v).at, epoch), detail: orNull(rec(v).detail, (d) => d), keyId: strOrNull(rec(v).key_id), kind: str(rec(v).kind), model: strOrNull(rec(v).model), sessionId: strOrNull(rec(v).session_id) });
 /** The detail's `stream_cut` member, null where the member is null or absent. */
 export function decodeStreamCut(raw: unknown): StreamCut | null {
-  if (raw === null || typeof raw !== 'object') return null;
-  const c = rec(raw);
-  return { at: isoOr(c.at, epoch), attempt: num(c.attempt), bytesRelayed: num(c.bytes_relayed), code: str(c.code), text: str(c.text), upstreamRequestId: strOrNull(c.upstream_request_id) };
+  return orNull(raw, (c) => ({ at: isoOr(c.at, epoch), attempt: num(c.attempt), bytesRelayed: num(c.bytes_relayed), code: str(c.code), text: str(c.text), upstreamRequestId: strOrNull(c.upstream_request_id) }));
 }
 
 const decisionKindOf = (v: unknown): DecisionKind | undefined => oneOf(DECISION_KIND_VALUES, v);
-const orNull = <T,>(v: unknown, read: (r: Rec) => T): T | null => (v === null || typeof v !== 'object' ? null : read(rec(v)));
 const scoreOf = (v: unknown): Score | null => orNull(v, (s) => ({ accountId: str(s.account_id), score: num(s.score), unit: str(s.unit) }));
 /** A hold with no reason is a version 1 record's, which held for a slot alone. */
 const holdOf = (v: unknown): RecordHold | null =>
@@ -756,11 +733,11 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
   const keyCreatedAt = numOrNull(g.key_created_at);
   return {
     attempts: num(g.attempts), billed: costSplit(g.billed), billedUsd: num(g.billed_usd),
-    cacheEquivalent: objectOrNull(g.cache_equivalent, (e) => ({ read: num(e.read), write: num(e.write) })),
+    cacheEquivalent: orNull(g.cache_equivalent, (e) => ({ read: num(e.read), write: num(e.write) })),
     cacheHits: num(g.cache_hits), cacheMisses: num(g.cache_misses), cacheMissReasons: missReasons(g.cache_miss_reasons),
     cost: costSplit(g.cost), costEquivalent: numOrNull(g.cost_equivalent), costUsd: num(g.cost_usd),
-    costShares: g.cost_shares === null || g.cost_shares === undefined ? null : nullableNumberMap(g.cost_shares),
-    equivalentSplit: g.equivalent_split === null || g.equivalent_split === undefined ? null : costSplit(g.equivalent_split),
+    costShares: orNull(g.cost_shares, nullableNumberMap),
+    equivalentSplit: orNull(g.equivalent_split, costSplit),
     errors: counts(g.errors), exhausted: num(g.exhausted), expiredBetweenTurns: num(g.expired_between_turns), failed: num(g.failed), failovers: num(g.failovers),
     histograms: { durationMs: histogram(h.duration_ms), outputTps: histogram(h.output_tps), ttfbMs: histogram(h.ttfb_ms), ttftMs: histogram(h.ttft_ms) },
     incomplete: num(g.incomplete),
@@ -777,7 +754,7 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     planOutputTokens: numOrNull(g.plan_output_tokens),
     planRequests: numOrNull(g.plan_requests),
     probeCostUsd: num(g.probe_cost_usd),
-    probeEquivalent: objectOrNull(g.probe_equivalent, (e) => ({ cost: num(e.cost), wasted: num(e.wasted) })),
+    probeEquivalent: orNull(g.probe_equivalent, (e) => ({ cost: num(e.cost), wasted: num(e.wasted) })),
     probes: { failed: num(rec(g.probes).failed), held: num(rec(g.probes).held), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), planOk: num(rec(g.probes).plan_ok), skipped: num(rec(g.probes).skipped) },
     rateLimited: num(g.rate_limited), refusals: counts(g.refusals), refused: num(g.refused), rejected: num(g.rejected), requests: num(g.requests),
     savingEquivalent: numOrNull(g.saving_equivalent),
@@ -961,8 +938,8 @@ export const WINDOW_ID_VALUES = ['5h', '7d', '7d_oi'] as const;
 const priceCells = (m: Rec): PriceCells => ({ cacheReadPerM: num(m.cache_read), cacheWrite1hPerM: num(m.cache_write_1h), cacheWrite5mPerM: num(m.cache_write_5m), inputPerM: num(m.input), outputPerM: num(m.output) });
 const price = (model: string, m: Rec): ModelPrice => ({
   ...priceCells(m),
-  fast: m.fast && typeof m.fast === 'object' ? priceCells(rec(m.fast)) : null,
-  longContext: m.long_context && typeof m.long_context === 'object' ? { ...priceCells(rec(m.long_context)), over: num(rec(m.long_context).over) } : null,
+  fast: orNull(m.fast, priceCells),
+  longContext: orNull(m.long_context, (l) => ({ ...priceCells(l), over: num(l.over) })),
   model,
 });
 /**
@@ -1023,8 +1000,7 @@ const must = <T>(ok: boolean, v: T): T => {
   if (!ok) throw new Malformed();
   return v;
 };
-const isMap = (v: unknown): v is Rec => v !== null && typeof v === 'object' && !Array.isArray(v);
-const map = (v: unknown): Rec => must(isMap(v), v as Rec);
+const map =(v: unknown): Rec => must(isMap(v), v as Rec);
 const finite = (v: unknown): number => must(typeof v === 'number' && Number.isFinite(v), v as number);
 const finiteOrNull = (v: unknown): number | null => (v === null ? null : finite(v));
 const text = (v: unknown): string => must(typeof v === 'string', v as string);
@@ -1192,7 +1168,7 @@ const attachmentsOf = (v: unknown): GuardrailAttachment[] => byPosition(list(v).
 
 /** The member is on the wire whether null or the stamp, while the OpenAPI document marks it optional: absent reads none. */
 const presetStateOf = (v: unknown): GuardrailPresetState | null => {
-  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  if (!isMap(v)) return null;
   const p = rec(v);
   const version = num(p.version, 1);
   return { currentVersion: num(p.current_version, version), customized: bool(p.customized), id: str(p.id), version };
