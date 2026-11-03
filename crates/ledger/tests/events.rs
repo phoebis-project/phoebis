@@ -2201,7 +2201,6 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
     let poll_fault = phoebis_oauth::PollFault {
         endpoint: "usage",
         status: Some(500),
-        transport: false,
         text: "x".into(),
     };
     for record in [

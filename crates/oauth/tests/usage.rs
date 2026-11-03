@@ -1460,7 +1460,6 @@ mod service {
             Some(PollIssue::Fault(PollFault {
                 endpoint: "usage",
                 status: Some(status),
-                transport: false,
                 text: format!("usage request rejected with status {status}"),
             }))
         };
@@ -1473,7 +1472,7 @@ mod service {
             panic!("a transport failure is a passing fault: {issue:?}");
         };
         assert_eq!(
-            (fault.endpoint, fault.status, fault.transport),
+            (fault.endpoint, fault.status, fault.transport()),
             ("usage", None, true)
         );
         assert!(fault.text.starts_with("transport: "), "{}", fault.text);
@@ -1506,7 +1505,6 @@ mod service {
         let fault = PollFault {
             endpoint: "usage",
             status: Some(403),
-            transport: false,
             text: "usage request rejected with status 403".into(),
         };
         let (snapshot, issue) = service.poll_reporting("a").await.unwrap();
@@ -1628,7 +1626,6 @@ mod service {
             PollFault {
                 endpoint: "profile",
                 status: Some(500),
-                transport: false,
                 text: "profile request rejected with status 500".into(),
             }
         );
@@ -1640,7 +1637,7 @@ mod service {
             panic!("a profile transport failure is a passing fault: {lost:?}");
         };
         assert_eq!(
-            (fault.endpoint, fault.status, fault.transport, fault.text),
+            (fault.endpoint, fault.status, fault.transport(), fault.text),
             ("profile", None, true, text)
         );
         up.shutdown().await;

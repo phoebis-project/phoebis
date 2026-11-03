@@ -2909,7 +2909,6 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
         &phoebis_oauth::PollFault {
             endpoint: "usage",
             status: Some(503),
-            transport: false,
             text: "usage request rejected with status 503".into(),
         },
     ));

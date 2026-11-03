@@ -540,7 +540,7 @@ pub fn poll_failed(account_id: &str, at: i64, fault: &PollFault) -> Record {
                 "endpoint": fault.endpoint,
                 "status": fault.status,
                 "error": fault.text,
-                "transport": fault.transport,
+                "transport": fault.transport(),
             })
             .to_string(),
         ),

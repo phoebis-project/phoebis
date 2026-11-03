@@ -205,9 +205,15 @@ pub struct PollFault {
     pub endpoint: &'static str,
     /// The status the endpoint answered, `None` on a transport failure.
     pub status: Option<u16>,
-    pub transport: bool,
     /// The error text the snapshot records for a usage fault, and the profile refresh's for a profile one.
     pub text: String,
+}
+
+impl PollFault {
+    /// Whether the request failed in transport, the fault that carries no status.
+    pub fn transport(&self) -> bool {
+        self.status.is_none()
+    }
 }
 
 /// The credential a usage 401 refused, the fence the re-pair mark's conditional write compares: the account's lineage
@@ -483,7 +489,6 @@ fn transport_fault(endpoint: &'static str, error: &str) -> PollFault {
     PollFault {
         endpoint,
         status: None,
-        transport: true,
         text: format!("transport: {error}"),
     }
 }
@@ -493,7 +498,6 @@ fn status_fault(endpoint: &'static str, status: u16) -> PollFault {
     PollFault {
         endpoint,
         status: Some(status),
-        transport: false,
         text: format!("{endpoint} request rejected with status {status}"),
     }
 }
