@@ -5352,7 +5352,14 @@ fn decode_all(decoder: &mut dyn Decoder, raw: &[u8]) -> Result<Vec<u8>, Transpor
 /// capitalizes its content type.
 fn is_event_stream(head: &ResponseHead) -> bool {
     head.get("content-type")
-        .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"))
+        .is_some_and(|v| starts_with_ignoring_case(v, "text/event-stream"))
+}
+
+/// Compared in place, so a header read per response allocates no lowercase copy.
+fn starts_with_ignoring_case(text: &str, prefix: &str) -> bool {
+    text.as_bytes()
+        .get(..prefix.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(prefix.as_bytes()))
 }
 
 /// Every coded body is decoded for the forward and `content-encoding` dropped, whatever the caller accepts, so the
@@ -5372,11 +5379,10 @@ fn forward_head(
         if NOT_FORWARDED.iter().any(|n| name.eq_ignore_ascii_case(n)) {
             continue;
         }
-        let lower = name.to_ascii_lowercase();
         if hide_rate_limits
             && RATE_LIMIT_FAMILY_PREFIXES
                 .iter()
-                .any(|p| lower.starts_with(p))
+                .any(|p| starts_with_ignoring_case(name, p))
         {
             continue;
         }
