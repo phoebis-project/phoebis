@@ -16,7 +16,7 @@ use crate::db::LedgerDb;
 #[cfg(test)]
 use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
-use crate::plan::{funding_of, PlanTables};
+use crate::plan::{funding_of, Funding, PlanTables};
 use crate::pricing::{Band, PriceRevisions, Speed};
 use crate::reconcile::{newest_rows, ReconciliationRow};
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
@@ -98,11 +98,7 @@ fn unanswered_speed<'a>(a: Option<&'a AttemptRecord>, requested: Option<&str>) -
 /// `fast` for a request that asked for it, else `STANDARD_SPEED`: the request row keeps the body's `speed` text as
 /// sent, and any other value would key a row of its own.
 fn fold_speed(raw: Option<&str>) -> &'static str {
-    if raw == Some("fast") {
-        "fast"
-    } else {
-        STANDARD_SPEED
-    }
+    Speed::of(raw).as_str()
 }
 
 /// One of `EFFORTS`, `NO_EFFORT` for a request that asked for none, else `OTHER_DIMENSION`.
@@ -982,6 +978,7 @@ fn reread_utilization(
 /// tier, so a settlement filed after its probe sits in the probe's hour and prices at the cells and the revision the
 /// probe ran at.
 pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<(), LedgerError> {
+    let speed = delta.speed.unwrap_or(Speed::Standard);
     let key = RollupRow::key(
         hour_of(delta.at),
         &delta.key_id,
@@ -1000,27 +997,19 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         },
         NO_EFFORT,
         NO_CLASS,
-        if delta.speed == Some(Speed::Fast) {
-            "fast"
-        } else {
-            STANDARD_SPEED
-        },
+        speed.as_str(),
         // A credit files beside its probe's request row, under the tier the router prices by as that row does (none
-        // for a free organization or a usage-based seat), and in the order `funding_of` reads an attempt: `billed` on
+        // for a free organization or a usage-based seat), and in the order `Funding::of` reads an attempt: `billed` on
         // an api_key account, `usage_based` on a usage-based seat, `fast` for a fast delta (a fast answer's request
         // row `deltas_of` keys `fast` whatever the overage flag), else the overage fact the probe's answer reported,
         // else `plan`.
-        if delta.account_kind == Some(AccountKind::ApiKey) {
-            BILLED_FUNDING
-        } else if delta.usage_based {
-            USAGE_BASED_FUNDING
-        } else if delta.speed == Some(Speed::Fast) {
-            FAST_FUNDING
-        } else if delta.overage_in_use == Some(true) {
-            OVERAGE_FUNDING
-        } else {
-            PLAN_FUNDING
-        },
+        Funding::of(
+            delta.account_kind == Some(AccountKind::ApiKey),
+            delta.usage_based,
+            speed,
+            delta.overage_in_use,
+        )
+        .rollup_word(),
         delta.band.map_or(STANDARD_BAND, Band::as_str),
         delta.tier.as_deref().unwrap_or(UNATTRIBUTED),
         NO_CLASS,

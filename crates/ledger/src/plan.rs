@@ -15,6 +15,7 @@ use jiff::Timestamp;
 use phoebis_routing::{window_for, BandSegment, PinUsage, RateTable, Rates, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::PinBurn;
 
+use crate::pricing::Speed;
 use crate::rollup::{
     BILLED_FUNDING, FAST_FUNDING, OVERAGE_FUNDING, PLAN_FUNDING, USAGE_BASED_FUNDING,
 };
@@ -1258,16 +1259,32 @@ pub fn funding_of(
     overage_in_use: Option<bool>,
     speed: Option<&str>,
 ) -> Funding {
-    match (account_kind, usage_based, speed, overage_in_use) {
-        ("api_key", ..) => Funding::ApiKey,
-        (_, true, ..) => Funding::UsageBased,
-        (_, _, Some("fast"), _) => Funding::Fast,
-        (_, _, _, Some(true)) => Funding::Overage,
-        _ => Funding::Plan,
-    }
+    Funding::of(
+        account_kind == "api_key",
+        usage_based,
+        Speed::of(speed),
+        overage_in_use,
+    )
 }
 
 impl Funding {
+    /// The funding of four facts in `Funding`'s order: an api_key account, a usage-based seat, a fast answer, the
+    /// overage the head reported, else the plan. `funding_of` and the kept-warm fold both read through it.
+    pub fn of(
+        api_key: bool,
+        usage_based: bool,
+        speed: Speed,
+        overage_in_use: Option<bool>,
+    ) -> Funding {
+        match (api_key, usage_based, speed, overage_in_use) {
+            (true, ..) => Funding::ApiKey,
+            (_, true, ..) => Funding::UsageBased,
+            (_, _, Speed::Fast, _) => Funding::Fast,
+            (_, _, _, Some(true)) => Funding::Overage,
+            _ => Funding::Plan,
+        }
+    }
+
     /// A rollup row's funding from its key's word alone: the key carries the served attempt's funding whole, so the
     /// kind the registry holds for the account now has no say, and a deleted or recreated account moves no row.
     pub fn of_rollup(funding: &str) -> Funding {

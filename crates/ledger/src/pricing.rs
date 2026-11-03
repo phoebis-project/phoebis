@@ -11,7 +11,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use phoebis_routing::PinUsage;
 
-use crate::rollup::{CostSplit, LONG_BAND, STANDARD_BAND};
+use crate::rollup::{CostSplit, LONG_BAND, STANDARD_BAND, STANDARD_SPEED};
 use crate::LedgerError;
 
 const SHIPPED_API_PRICES: &str = include_str!("../api_prices.yaml");
@@ -39,6 +39,14 @@ impl Speed {
         match reported {
             Some("fast") => Speed::Fast,
             _ => Speed::Standard,
+        }
+    }
+
+    /// The rollup key word: `fast` or `STANDARD_SPEED`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Speed::Fast => "fast",
+            Speed::Standard => STANDARD_SPEED,
         }
     }
 }
