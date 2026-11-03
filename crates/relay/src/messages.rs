@@ -2369,15 +2369,7 @@ impl Relay {
         {
             outcome.obstacle = Some(REAUTH_OBSTACLE);
         }
-        self.answer(
-            admitted.trace,
-            response,
-            outcome,
-            None,
-            ResponseFacts::default(),
-            None,
-        )
-        .await
+        self.answer(admitted.trace, response, outcome).await
     }
 
     /// One account's leg of the request. `attempt` is the wire-submission index every bus event and attempt row
@@ -2440,9 +2432,6 @@ impl Relay {
                     admitted.trace,
                     pool_moved_response(&admitted.trace.request_id),
                     outcome,
-                    None,
-                    ResponseFacts::default(),
-                    None,
                 )
                 .await,
             );
@@ -2892,9 +2881,6 @@ impl Relay {
                             admitted.trace,
                             ACCOUNT_CANCELED.response(&admitted.trace.request_id),
                             outcome,
-                            None,
-                            ResponseFacts::default(),
-                            None,
                         )
                         .await,
                     );
@@ -2921,9 +2907,6 @@ impl Relay {
                             admitted.trace,
                             UPSTREAM_UNREACHABLE.response(&admitted.trace.request_id),
                             outcome,
-                            None,
-                            ResponseFacts::default(),
-                            None,
                         )
                         .await,
                     );
@@ -2974,9 +2957,6 @@ impl Relay {
                                 admitted.trace,
                                 ACCOUNT_CANCELED.response(&admitted.trace.request_id),
                                 outcome,
-                                None,
-                                ResponseFacts::default(),
-                                None,
                             )
                             .await,
                         );
@@ -3651,9 +3631,6 @@ impl Relay {
                     &ctx.admitted.trace.request_id,
                 ),
                 outcome,
-                None,
-                ResponseFacts::default(),
-                None,
             )
             .await;
         self.after_answer(waiting, ctx.guards());
@@ -3994,15 +3971,8 @@ impl Relay {
         );
         outcome.client_drift = client_drift.map(|kind| kind.as_str().to_string());
         outcome.client_contract = client_contract.map(str::to_string);
-        self.answer(
-            trace,
-            failure.response(&trace.request_id),
-            outcome,
-            None,
-            ResponseFacts::default(),
-            None,
-        )
-        .await
+        self.answer(trace, failure.response(&trace.request_id), outcome)
+            .await
     }
 
     /// A client-drift refusal with its trigger, the warn that tells the operator which client to re-pin to, and the
@@ -4123,23 +4093,15 @@ impl Relay {
     /// A locally built answer: the outcome rides on the response for the accounting layer, and the completion
     /// is published with the status the response carries, which for a local refusal is the refusal's own. Built
     /// entirely in memory, so it carries no relayed chunks.
-    async fn answer(
-        &self,
-        trace: &Trace,
-        response: Response,
-        outcome: RelayOutcome,
-        usage: Option<Usage>,
-        facts: ResponseFacts,
-        response_bytes: Option<u64>,
-    ) -> Response {
+    async fn answer(&self, trace: &Trace, response: Response, outcome: RelayOutcome) -> Response {
         trace
             .complete(
                 &outcome,
                 response.status().as_u16(),
-                usage,
-                facts,
                 None,
-                response_bytes,
+                ResponseFacts::default(),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -4172,9 +4134,6 @@ impl Relay {
             trace,
             failure.response(&outcome.request_id),
             unreachable_outcome(outcome, code),
-            None,
-            ResponseFacts::default(),
-            None,
         )
         .await
     }
@@ -4266,9 +4225,6 @@ impl Relay {
             ctx.admitted.trace,
             ACCOUNT_CANCELED.response(&ctx.admitted.trace.request_id),
             outcome,
-            None,
-            ResponseFacts::default(),
-            None,
         )
         .await
     }
