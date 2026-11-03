@@ -1,4 +1,5 @@
 import { iso } from '@/api/decode';
+import { fmtInt } from './format';
 
 /** The pages one auto reload poll reads at most, so a burst of arrivals cannot keep a poll reading without end. */
 export const FOLLOW_PAGES = 8;
@@ -11,6 +12,11 @@ export const RELOAD_INTERVALS = [
   { label: '1 min', ms: 60_000 },
 ] as const;
 export const FOLLOW_OVERRUN = 'More rows arrived than auto reload could fetch. Reload to read them.';
+/** Why Refresh is off while a custom span has ended, on every view that reads one. */
+export const ENDED_RANGE = 'A custom range that has ended has nothing new to read';
+/** A log's count beside its filters: the rows shown and whether a next page waits, nothing before the first answer. */
+export const shownCount = (rows: readonly unknown[], nextCursor: string | null, loaded: boolean): string =>
+  rows.length > 0 ? `${fmtInt(rows.length)} shown${nextCursor ? ', more available' : ''}` : loaded ? 'No rows' : '';
 /**
  * The one interval the control and the poll read: 0 while a custom span has ended (nothing new to read, the part Off
  * and disabled), else the chosen interval.

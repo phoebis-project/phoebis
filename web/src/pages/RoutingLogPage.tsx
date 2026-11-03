@@ -4,20 +4,21 @@ import { api } from '@/api';
 import { iso } from '@/api/decode';
 import type { DecisionKind, FactEntity, RoutingLogQuery, RoutingLogRow } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
-import { useFollow } from '@/app/useFollow';
+import { useFollow, usePaging } from '@/app/useFollow';
 import { ChipView } from '@/components/ChipView';
 import { DecisionCard } from '@/components/DecisionCard';
 import { EventDetail } from '@/components/EventDetail';
 import { FilterBar } from '@/components/FilterBar';
 import type { Option } from '@/components/ui/OptionList';
-import { IconChevronLeft, IconChevronRight, IconChevronsLeft } from '@/components/ui/icons';
+import { IconChevronRight } from '@/components/ui/icons';
+import { PagerNav } from '@/components/ui/PagerNav';
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, useHostedDescription } from '@/components/ui/primitives';
 import { addressWindow, type LogFilters, ROUTING_LOG_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { tierOrder, weekReadingOf } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
-import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, readEnd, spanEnded } from '@/lib/follow';
-import { fmtAbsolute, fmtDatedTime, fmtInt, fmtTime, plural, upperFirst } from '@/lib/format';
+import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, readEnd, shownCount, spanEnded } from '@/lib/follow';
+import { fmtAbsolute, fmtDatedTime, fmtTime, plural, upperFirst } from '@/lib/format';
 import { toggled, useAsync, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { ALL_KINDS, byOf, catalogModel, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref, movedFrom, registryTarget, words } from '@/lib/routingLog';
 
@@ -62,12 +63,8 @@ export function RoutingLogPage() {
   const reading = weekReadingOf(settings.data?.subscriptionCosts ?? null, settings.error, week);
   const modelOptions = useMemo<Option[]>(() => tierOrder((catalog.data ?? []).map((m) => m.id), modelTiers).map((id) => ({ label: id, value: id })), [catalog.data, modelTiers]);
 
-  // The cursor and the pages before it belong to the address they were read under, so a filter change drops them in
-  // the render that brings it, and one list request follows.
-  // `to` holds the range's end a walk from the poll's overrun reads under, the end its cursor came from.
-  const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
-  if (paging.for !== address) setPaging({ for: address, stack: [] });
-  const { cursor, stack, to: pagedTo } = pagingFor(paging, address);
+  // `pagedTo` holds the range's end a walk from the poll's overrun reads under, the end its cursor came from.
+  const { cursor, pagedTo, paging, reset: resetPaging, setPaging, stack } = usePaging(address);
   // The open rows belong to the page they were opened on, so another page or another filter starts with every row shut.
   const pageKey = `${cursor ?? ''}|${address}`;
   const [opened, setOpened] = useState<{ for: string; ids: Set<string> }>({ for: pageKey, ids: new Set() });
@@ -112,7 +109,7 @@ export function RoutingLogPage() {
 
   // A preset is read again from now, and a custom span as it stands.
   const refresh = () => {
-    setPaging({ for: address, stack: [] });
+    resetPaging();
     setFollowed(null);
     setLoadedAt(clock.now());
     log.reload();
@@ -152,7 +149,7 @@ export function RoutingLogPage() {
     <div className="routing-log stack">
       <FilterBar
         address={address}
-        count={rows.length > 0 ? `${fmtInt(rows.length)} shown${nextCursor ? ', more available' : ''}` : log.data === null ? '' : 'No rows'}
+        count={shownCount(rows, nextCursor, log.data !== null)}
         dimensions={dimensions}
         disabled={disabled}
         filters={barFilters}
@@ -161,7 +158,7 @@ export function RoutingLogPage() {
         presets={KIND_PRESET_ROWS}
         range={{ now: clock.now, window: range }}
         refresh={{
-          disabled: ended ? 'A custom range that has ended has nothing new to read' : undefined,
+          disabled: ended ? ENDED_RANGE : undefined,
           intervalMs,
           onIntervalChange: setIntervalMs,
           onRefresh: refresh,
@@ -230,17 +227,7 @@ export function RoutingLogPage() {
           </table>
         </div>
         <footer className="pager">
-          <div className="pager__nav">
-            <button type="button" onClick={() => setPaging({ for: address, stack: [] })} disabled={stack.length === 0} aria-label="First page">
-              <IconChevronsLeft size={15} />
-            </button>
-            <button type="button" onClick={goPrevious} disabled={stack.length === 0} aria-label="Previous page">
-              <IconChevronLeft size={15} />
-            </button>
-            <button type="button" onClick={goNext} disabled={nextCursor === null} aria-label="Next page">
-              <IconChevronRight size={15} />
-            </button>
-          </div>
+          <PagerNav atFirst={stack.length === 0} atLast={nextCursor === null} onFirst={resetPaging} onNext={goNext} onPrevious={goPrevious} />
         </footer>
       </Card>
     </div>

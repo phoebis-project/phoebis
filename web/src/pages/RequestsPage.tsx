@@ -5,7 +5,7 @@ import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
 import type { Account, ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, SubscriptionCosts, Usage } from '@/api/types';
 import { REFUSAL_CATEGORIES, STOP_REASONS } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
-import { useFollow } from '@/app/useFollow';
+import { useFollow, usePaging } from '@/app/useFollow';
 import { BodyViewer } from '@/components/BodyViewer';
 import { Chips } from '@/components/ChipView';
 import { FilterBar } from '@/components/FilterBar';
@@ -14,7 +14,8 @@ import { TokenBar } from '@/components/TokenBar';
 import { AttemptCount } from '@/components/ui/AttemptTrail';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import type { Option } from '@/components/ui/OptionList';
-import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconX } from '@/components/ui/icons';
+import { IconChevronLeft, IconChevronRight, IconX } from '@/components/ui/icons';
+import { PagerNav } from '@/components/ui/PagerNav';
 import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, Select, Skeleton } from '@/components/ui/primitives';
 import { accountHref, addressWindow, requestHref, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
 import { shareHint, shareHintLines, type WeekReading } from '@/lib/analytics';
@@ -26,7 +27,7 @@ import { clock } from '@/lib/clock';
 import { weekReadingOf } from '@/lib/costs';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
-import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, pollQuery, readEnd, spanEnded } from '@/lib/follow';
+import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, shownCount, spanEnded } from '@/lib/follow';
 import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, keyGenerationOf, parseKeyLifetime, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
@@ -298,15 +299,9 @@ export function RequestsPage() {
   const { address, filters: read, replace } = useQueryFilters(REQUESTS_CODEC);
   const filters = useMemo<Filters>(() => ({ ...read, outcomes: outcomesOf(read.outcomes), rows: Number(read.rows), statuses: read.statuses.filter((code) => /^\d+$/.test(code)) }), [read]);
   const [visible, setVisible] = useState<Set<ColumnId>>(() => new Set(COLUMNS.map((c) => c.id).filter((id) => !HIDDEN_BY_DEFAULT.includes(id))));
-  // The cursor and the pages before it belong to the address they were read under, so any change of the address (a
-  // filter, Reset, a link) drops them in the render that brings it, with no reset of their own to render apart and read
-  // the old filters once more without the cursor. The stale entry is replaced in that same render, so changing a
-  // filter back does not return to the page left behind under it.
-  // `to` holds the end the walk's cursor came from. Under a preset a cursor page here reads to the router's clock, as
-  // the poll under the watermark does, so only the first page and a custom range read an end.
-  const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
-  if (paging.for !== address) setPaging({ for: address, stack: [] });
-  const { cursor, stack, to: pagedTo } = pagingFor(paging, address);
+  // Under a preset a cursor page here reads to the router's clock, as the poll under the watermark does, so only the
+  // first page and a custom range read an end.
+  const { cursor, pagedTo, paging, reset: resetPaging, setPaging, stack } = usePaging(address);
   // The range ends where the list was loaded, so the first page and a custom range's cursor pages read against the
   // window the list was loaded under, a preset's cursor page to the router's clock, and Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
@@ -347,7 +342,6 @@ export function RequestsPage() {
     stale: requests.stale,
   });
 
-  const resetPaging = () => setPaging({ for: address, stack: [] });
   const refresh = () => {
     resetPaging();
     setFollowed(null);
@@ -394,7 +388,7 @@ export function RequestsPage() {
     <div className={`requests ${requestId ? 'has-drawer' : ''}`}>
       <FilterBar
         address={address}
-        count={rows.length > 0 ? `${fmtInt(rows.length)} shown${nextCursor ? ', more available' : ''}` : requests.data === null ? '' : 'No rows'}
+        count={shownCount(rows, nextCursor, requests.data !== null)}
         dimensions={REQUESTS_DIMENSIONS}
         disabled={disabled}
         filters={filters}
@@ -403,7 +397,7 @@ export function RequestsPage() {
         placeholder="Search id, session, key, account, model, error, message id"
         range={{ now: clock.now, window: span }}
         refresh={{
-          disabled: ended ? 'A custom range that has ended has nothing new to read' : undefined,
+          disabled: ended ? ENDED_RANGE : undefined,
           intervalMs,
           onIntervalChange: setIntervalMs,
           onRefresh: refresh,
@@ -563,17 +557,7 @@ export function RequestsPage() {
                 ))}
               </Select>
             </label>
-            <div className="pager__nav">
-              <button type="button" onClick={resetPaging} disabled={stack.length === 0} aria-label="First page">
-                <IconChevronsLeft size={15} />
-              </button>
-              <button type="button" onClick={goPrevious} disabled={stack.length === 0} aria-label="Previous page">
-                <IconChevronLeft size={15} />
-              </button>
-              <button type="button" onClick={goNext} disabled={nextCursor === null} aria-label="Next page">
-                <IconChevronRight size={15} />
-              </button>
-            </div>
+            <PagerNav atFirst={stack.length === 0} atLast={nextCursor === null} onFirst={resetPaging} onNext={goNext} onPrevious={goPrevious} />
           </footer>
         </Card>
       </div>

@@ -171,3 +171,17 @@ export function useFollow<R>(input: {
   };
   return { error: standIn === null ? error : null, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed };
 }
+
+/**
+ * A log's paging under `address`. The cursor and the pages before it belong to the address they were read under, so a
+ * change of the address (a filter, Reset, a link) drops them in the render that brings it, with no reset of their own to
+ * render apart and read the old filters once more without the cursor. The stale entry is replaced in that same render,
+ * so changing a filter back does not return to the page left behind under it. `pagedTo` is the end the walk's cursor
+ * came from, and `reset` returns to the first page.
+ */
+export function usePaging(address: string): { cursor: string | undefined; pagedTo: number | undefined; paging: Paging; reset: () => void; setPaging: Dispatch<SetStateAction<Paging>>; stack: (string | undefined)[] } {
+  const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
+  if (paging.for !== address) setPaging({ for: address, stack: [] });
+  const { cursor, stack, to: pagedTo } = pagingFor(paging, address);
+  return { cursor, pagedTo, paging, reset: () => setPaging({ for: address, stack: [] }), setPaging, stack };
+}

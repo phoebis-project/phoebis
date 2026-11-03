@@ -25,7 +25,7 @@ import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missRea
 import { clock } from '@/lib/clock';
 import { failed, weekReadingOf, weekScale } from '@/lib/costs';
 import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
-import { effectiveInterval, readEnd, spanEnded } from '@/lib/follow';
+import { effectiveInterval, ENDED_RANGE, readEnd, spanEnded } from '@/lib/follow';
 import { SESSION_CHARS, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useHashSection, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
@@ -631,7 +631,7 @@ export function AnalyticsPage() {
         range={{ now: clock.now, window: { from: span.fromMs, to: span.toMs } }}
         ref={filtersRef}
         refresh={{
-          disabled: ended ? 'A custom range that has ended has nothing new to read' : undefined,
+          disabled: ended ? ENDED_RANGE : undefined,
           intervalMs,
           note: intervalMs === 0 && !custom ? `the window ends ${fmtShortTime(toIso)}` : undefined,
           onIntervalChange: setIntervalMs,
