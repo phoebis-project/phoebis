@@ -29,6 +29,7 @@ import { latestPerWindow, meterGroups } from '@/lib/meter';
 import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, planEndedSentence, planWordLabel, readWindows, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { speedHover } from '@/lib/selection';
+import { MINUTE } from '@/lib/time';
 import { joinTrend } from '@/lib/trend';
 import type { WeekPosition } from '@/lib/unit';
 import { WINDOW_HOURS, windowLabelOf, windowWord } from '@/lib/windows';
@@ -1379,7 +1380,7 @@ function PairingExpiry({ remaining, expired, ready }: { expired: boolean; ready:
   if (!ready) return <span className="muted">Preparing the login link…</span>;
   // The visible line ticks every second under a minute; a screen reader hears the time in whole minutes alone, from the
   // region, so the line is hidden from it rather than read beside a region it disagrees with mid-minute.
-  const minutes = Math.ceil(remaining / 60_000);
+  const minutes = Math.ceil(remaining / MINUTE);
   return (
     <>
       {expired ? (

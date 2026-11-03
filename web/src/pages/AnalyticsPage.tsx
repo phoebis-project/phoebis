@@ -33,6 +33,7 @@ import { readWindows } from '@/lib/quota';
 import { REFUSED_TITLE } from '@/lib/requests';
 import { CLIENT_PATTERNS_PLAIN, linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { words } from '@/lib/routingLog';
+import { HOUR } from '@/lib/time';
 import { plainOutputOf } from '@/lib/tokenBar';
 import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition, type WeekPosition } from '@/lib/unit';
 import { WINDOW_HOURS, windowLabelOf } from '@/lib/windows';
@@ -46,7 +47,6 @@ type PatternDim = 'clients' | 'userAgents';
 /** No route groups on a session, so it filters the page from the side rather than joining the group-by. */
 type Dim = QueryDim | 'sessionId';
 
-const HOUR = 3_600_000;
 const GROUP_LABEL: Record<GroupBy, string> = { account: 'Account', classifier: 'Classifier', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', request_class: 'Request class', speed: 'Speed', user_agent: 'User agent' };
 /** The two speeds the rollups file an answer under, standard at the foot of each stacked bar. */
 const SPEED_SERIES = [

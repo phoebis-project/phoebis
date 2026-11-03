@@ -13,6 +13,7 @@ import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn,
 import { useAsync, useNow, useResizeObserver } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, sortByPace, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
+import { DAY, HOUR } from '@/lib/time';
 
 type Sort = 'default' | 'pace5h' | 'pace7d' | 'paceWeek' | 'soonest';
 
@@ -428,8 +429,6 @@ function SpendWindow({ spend, now, soon }: { now: number; soon: boolean; spend: 
 type Mode = 'session' | 'weekly';
 /** A bar label's fallback: 0 the whole label, 1 the share alone, 2 none, the bar's title keeping it. */
 type LabelStep = 0 | 1 | 2;
-const HOUR = 3_600_000;
-const DAY = 24 * HOUR;
 
 function spanFor(mode: Mode, offset: number, now: number, sessionCells: number) {
   const dayStart = new Date(now).setHours(0, 0, 0, 0);
