@@ -241,7 +241,7 @@ export function KeysPage() {
         <div className="keys-layout">
           <Card title="Lifetime cost by key" subtitle="Relative spend across all keys">
             {byRank ? (
-              <ul className="hbars">
+              <ul className="plain-list hbars">
                 {byRank.map((k) => {
                   const figure = keyFigureOf(unit, k.lifetime, 'No request yet', reading);
                   const rank = keyRankOf(unit, k.lifetime);
@@ -528,7 +528,7 @@ export function GuardrailList({ inherited = [], onChange, pending, refs, registr
   return (
     <div className="pattern-editor guardrail-list" role="group" aria-label="Guardrails">
       {fromPool.length + own.length > 0 && (
-        <ol className="pattern-editor__rows">
+        <ol className="plain-list pattern-editor__rows">
           {fromPool.map((r) => (
             <li key={`inherited-${r.id}`} className="pattern-editor__row pattern-editor__row--inherited">
               <GuardrailWords guardrail={r} />
@@ -906,7 +906,7 @@ function EffectiveList({ processed }: { processed: Loaded<KeyModels | null> }) {
       ) : rules.length === 0 ? (
         <p className="muted">No rules: every model the pool's accounts serve is allowed.</p>
       ) : (
-        <ol className="effective-rules">
+        <ol className="plain-list effective-rules">
           {rules.map((r, i) => {
             const cooling = new Set(r.cooldowns.map((c) => c.accountId)).size;
             return (

@@ -211,15 +211,6 @@
   background: var(--surface-3);
 }
 
-.plain-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 0;
-  margin: 0;
-  list-style: none;
-}
-
 .spin {
   animation: spin 900ms linear infinite;
 }
@@ -381,15 +372,6 @@
   grid-template-columns: 148px 1fr;
   gap: 20px;
   align-items: center;
-}
-
-.remaining__list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 0;
-  margin: 0;
-  list-style: none;
 }
 
 .remaining__list li {
@@ -1314,12 +1296,7 @@
 }
 
 .account-rows {
-  display: flex;
-  flex-direction: column;
   gap: 6px;
-  padding: 0;
-  margin: 0;
-  list-style: none;
 }
 
 .account-row {
@@ -1908,12 +1885,7 @@
 }
 
 .hbars {
-  display: flex;
-  flex-direction: column;
   gap: 12px;
-  padding: 0;
-  margin: 0;
-  list-style: none;
 }
 
 /* The gap an Analytics section keeps under its tiles row, so the reasons stand as clear of their own tiles. */
@@ -3779,12 +3751,7 @@
 
 /* The processed list of a saved key, one line per entry with the level it came from. */
 .effective-rules {
-  display: flex;
-  flex-direction: column;
   gap: 6px;
-  padding: 0;
-  margin: 0;
-  list-style: none;
 }
 
 .effective-rules li {

@@ -150,7 +150,7 @@ export function AccountsPage() {
           </Button>
         </FilterBar>
         <aside className="accounts__list">
-          <ul className="account-rows">
+          <ul className="plain-list account-rows">
             {!accounts.data
               ? accounts.error
                 ? (

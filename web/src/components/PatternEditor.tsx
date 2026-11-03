@@ -79,7 +79,7 @@ export function PatternEditor({ inherited = [], label, onChange, suggestions, va
         {UNDATED_MODEL_NOTE}
       </div>
       {(value.length > 0 || inherited.length > 0) && (
-        <ol className="pattern-editor__rows">
+        <ol className="plain-list pattern-editor__rows">
           {value.map((rule, i) => {
             const key = keys[i];
             const refusal = refusals[i];

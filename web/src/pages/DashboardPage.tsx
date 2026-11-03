@@ -263,7 +263,7 @@ function WeighedRing({ figures, slotOf }: { figures: RingFigures; slotOf: (id: s
         centerValue={fmtPct(left / capacity)}
         onHover={setHover}
       />
-      <ul className="remaining__list">
+      <ul className="plain-list remaining__list">
         {rows.map((r) => (
           <li key={r.id} className={hover && hover !== r.id ? 'is-dim' : ''} title={titleOf(r)}>
             <span className="legend__swatch" style={{ background: accountColor(ink, slotOf(r.id)) }} />

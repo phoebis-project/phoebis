@@ -1340,7 +1340,7 @@ function CountBars({ color, empty, rows }: { color: string; empty: string; rows:
   const total = rows.reduce((s, r) => s + r.count, 0);
   if (total === 0) return <p className="muted">{empty}</p>;
   return (
-    <ul className="hbars hbars--errors">
+    <ul className="plain-list hbars hbars--errors">
       {rows.map((r) => (
         <li key={r.label}>
           <span className="mono">{r.label}</span>
@@ -1421,7 +1421,7 @@ function ReasonBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks
   const max = Math.max(1, ...rows.map((r) => r.count));
   if (rows.every((r) => r.count === 0)) return <p className="muted">No diagnostics in range.</p>;
   return (
-    <ul className="hbars hbars--reasons">
+    <ul className="plain-list hbars hbars--reasons">
       {rows.map((r) => (
         <li key={r.reason}>
           <span>{missLabel(r.reason)}</span>
@@ -1489,7 +1489,7 @@ function WastedProbes({ billed, group, probes, reading, unit }: { billed: Analyt
         <Tile label="Wasted cost" value={tiles.cost.value} note={tiles.cost.note} />
         <Tile label="Share of probe cost" value={tiles.share.value} note={tiles.share.note} />
       </div>
-      <ul className="hbars hbars--reasons hbars--under-tiles">
+      <ul className="plain-list hbars hbars--reasons hbars--under-tiles">
         {rows.map((r) => (
           // The longest reason wraps in this column, so the row anchors the bar and the count to its first line.
           <li key={r.reason} className="hbars__row--top">
@@ -1788,7 +1788,7 @@ function CostDonut({ center, cost, figureTitle, format = fmtUsd, label = 'cost' 
   return (
     <div className="split-row">
       <Donut slices={COST_PARTS.map((p) => ({ id: p.key, label: p.label, value: cost[p.key], color: ink.series[p.slot] }))} total={total} centerLabel={label} centerValue={(center ?? format)(total)} onHover={setHover} />
-      <ul className="remaining__list">
+      <ul className="plain-list remaining__list">
         {COST_PARTS.map((p) => (
           <li key={p.key} className={hover && hover !== p.key ? 'is-dim' : ''}>
             <span className="legend__swatch" style={{ background: ink.series[p.slot] }} />
@@ -2046,7 +2046,7 @@ function RewritesCard({ answer, axis, error, loading, unfiltered }: { answer: Re
             )}
           </ul>
           {moves.length > 0 && (
-            <ul className="hbars hbars--moves" aria-label="Moves by reason">
+            <ul className="plain-list hbars hbars--moves" aria-label="Moves by reason">
               {moves.map(([reason, n]) => {
                 const label = upperFirst(moveLabel(reason));
                 const fits = fitsOf(reason);

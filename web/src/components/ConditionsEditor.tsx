@@ -41,7 +41,7 @@ export function ConditionsEditor({ onChange, refusals, value }: { onChange: (c: 
   return (
     <div className="conditions-editor" role="group" aria-label="Conditions">
       {value.length > 0 && (
-        <ol className="conditions-editor__rows">
+        <ol className="plain-list conditions-editor__rows">
           {value.map((c, i) => {
             const key = keys[i];
             const n = i + 1;
