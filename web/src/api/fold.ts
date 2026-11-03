@@ -3,12 +3,11 @@ import { fundingOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt } from '@/lib/dimensions';
 import { earlierHolderLabel, keyLifetime, tokensTotal } from '@/lib/format';
-import { emptyHistogram, histogramOf, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
+import { emptyHistogram, histogramOf, mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, FundingFilter, RequestLog, RequestPage } from './types';
 
-const METRICS = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'] as const;
-const quartet = (h: readonly number[]) => ({ p50: percentileFromHistogram(h, 0.5), p90: percentileFromHistogram(h, 0.9), p95: percentileFromHistogram(h, 0.95), p99: percentileFromHistogram(h, 0.99) });
+export const METRICS = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'] as const;
 
 /**
  * A group as the routes answer one, every figure present and the shares null. `foldGroups` fills `costShares` under
@@ -91,6 +90,9 @@ export function foldUserAgent(raw: string): string {
   return parts.length === 2 && parts.every((part) => /^[A-Za-z0-9.:_-]+$/.test(part)) ? token.slice(0, 64) : 'other';
 }
 
+/** A user agent as the ledger keys a rollup by it: its product token, `-` for a request that sent none. */
+export const agentTokenOf = (userAgent: string | null): string => (userAgent === null ? '-' : foldUserAgent(userAgent));
+
 const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): string => {
   if (by === 'account') return r.accountId ?? '-';
   if (by === 'client') return r.client ?? '-';
@@ -111,7 +113,7 @@ const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): stri
     // The rollups key an agent by its token and file a row that named no client under '-', which every route
     // answers as unattributed; under a pattern list the token falls with every other unmatched client under
     // 'other', as the breakdown route does.
-    const agent = r.userAgent === null ? '-' : foldUserAgent(r.userAgent);
+    const agent = agentTokenOf(r.userAgent);
     if (agentGroups.length === 0) return agent;
     return agentGroups.find((p) => matchesPattern(p, agent)) ?? 'other';
   }
@@ -221,7 +223,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
   // rows under both scopes.
   const kept = rows.filter(
     (r) =>
-      (!agentPatterns.length || agentPatterns.some((p) => matchesPattern(p, r.userAgent === null ? '-' : foldUserAgent(r.userAgent)))) &&
+      (!agentPatterns.length || agentPatterns.some((p) => matchesPattern(p, agentTokenOf(r.userAgent)))) &&
       (!clientPatterns.length || clientPatterns.some((p) => matchesPattern(p, r.client ?? '-'))) &&
       (funding === undefined || onSide(r, funding)),
   );
@@ -336,7 +338,8 @@ export async function loadSessionRequests(load: (cursor: string | undefined) => 
   return { partial: true, requests };
 }
 
-const plus = (a: number | null, b: number | null): number | null => (a === null || b === null ? null : a + b);
+/** Figures summed with a null on either side reading null, so no partial sum reads as the whole. */
+export const plus = (a: number | null, b: number | null): number | null => (a === null || b === null ? null : a + b);
 /** A count a fold may lack: it stays unknown only while no group carries one. */
 const plusKnown = (a: number | null, b: number | null): number | null => (a === null ? b : b === null ? a : a + b);
 const plusSplit = (a: AnalyticsGroup['cost'], b: AnalyticsGroup['cost']): AnalyticsGroup['cost'] => ({ cacheRead: plus(a.cacheRead, b.cacheRead), cacheWrite: plus(a.cacheWrite, b.cacheWrite), input: a.input + b.input, output: a.output + b.output });

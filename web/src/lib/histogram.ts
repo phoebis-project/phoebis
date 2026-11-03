@@ -47,3 +47,6 @@ export function percentileFromHistogram(h: readonly number[], p: number): number
   }
   return Math.sqrt(BUCKET_EDGES[BUCKET_COUNT - 1] * BUCKET_EDGES[BUCKET_COUNT]);
 }
+
+/** The four percentiles a group reads off a histogram, one reading for the session fold and the mock's routes. */
+export const quartet = (h: readonly number[]) => ({ p50: percentileFromHistogram(h, 0.5), p90: percentileFromHistogram(h, 0.9), p95: percentileFromHistogram(h, 0.95), p99: percentileFromHistogram(h, 0.99) });

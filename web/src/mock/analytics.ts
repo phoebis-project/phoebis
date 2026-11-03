@@ -1,4 +1,4 @@
-import { foldUserAgent } from '@/api/fold';
+import { METRICS, agentTokenOf, plus } from '@/api/fold';
 import type {
   Account, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, QuotaHistory, Reconciliation, ReconciliationsAnswer,
   RefusalCategoriesAnswer, RequestKind, RequestLog, RewritePoint, RewritesAnswer, UnusedAllowanceAnswer, WastedProbeReason,
@@ -8,7 +8,7 @@ import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, m
 import { equivalentOf, modelWeeks, pricedWindow, tierCapacity, weightOf, type Usage } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, placementHit } from '@/lib/format';
-import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
+import { emptyHistogram, mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import { endOf } from '@/lib/quota';
 import { ACCOUNTS, sharedWindowsOf } from './accounts';
@@ -137,10 +137,6 @@ function selectsKey(selector: string, r: Pick<HourlyRollup, 'keyGeneration' | 'k
   return live !== undefined && r.keyId === selector && Date.parse(live.createdAt) === r.keyGeneration;
 }
 
-const METRICS: (keyof LatencyHistograms)[] = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'];
-const PERCENTILES = { p50: 0.5, p90: 0.9, p95: 0.95, p99: 0.99 };
-const quartet = (h: readonly number[]) => ({ p50: percentileFromHistogram(h, PERCENTILES.p50), p90: percentileFromHistogram(h, PERCENTILES.p90), p95: percentileFromHistogram(h, PERCENTILES.p95), p99: percentileFromHistogram(h, PERCENTILES.p99) });
-
 const KIND_OF = new Map(ACCOUNTS.map((a) => [a.id, a.kind]));
 const TIER_OF = new Map(ACCOUNTS.map((a) => [a.id, a.subscription?.rateLimitTier]));
 
@@ -201,8 +197,6 @@ function costSharesOf(counted: HourlyRollup[]): Record<string, number> {
  *  together the read the requests paid instead. */
 const keptUsageOf = (r: HourlyRollup): Usage => ({ cacheRead: r.keptWarm.tokens1h + r.keptWarm.tokens5m, cacheWrite1h: r.keptWarm.tokens1h, cacheWrite5m: r.keptWarm.tokens5m, input: 0, output: 0 });
 
-/** Figures summed with a null on either side reading null, so no partial sum reads as the whole. */
-const plus = (sum: number | null, figure: number | null): number | null => (sum === null || figure === null ? null : sum + figure);
 
 const TOKEN_KINDS: Record<keyof CostSplit, (u: Usage) => Usage> = {
   cacheRead: (u) => ({ cacheRead: u.cacheRead, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }),
@@ -680,7 +674,7 @@ export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): 
     if (q.models?.length && !q.models.some((m) => m.toLowerCase() === r.canonicalModel)) continue;
     if (q.kinds?.length && !q.kinds.includes(r.kind)) continue;
     if (r.kind === 'probe' && !q.includeProbes && !q.kinds?.includes('probe')) continue;
-    if (q.userAgents?.length && !q.userAgents.some((p) => matchesPattern(p, r.userAgent === null ? '-' : foldUserAgent(r.userAgent)))) continue;
+    if (q.userAgents?.length && !q.userAgents.some((p) => matchesPattern(p, agentTokenOf(r.userAgent)))) continue;
     if (q.clients?.length && !q.clients.some((p) => matchesPattern(p, r.client ?? '-'))) continue;
     const answer = r.attempts[r.attempts.length - 1]?.response;
     if (answer?.stopReason !== 'refusal') continue;

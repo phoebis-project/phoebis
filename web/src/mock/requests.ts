@@ -1,4 +1,4 @@
-import { foldUserAgent } from '@/api/fold';
+import { agentTokenOf, plus } from '@/api/fold';
 import type {
   Account, AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
   PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
@@ -2176,7 +2176,6 @@ function hourShares(accountId: string, model: string, priced: { at: number; usag
   const windows = shareWindowsOf(accountId, model);
   const weighted = weightOf(TABLES, model, 'seven_day') !== null;
   const shares: Record<string, number | null> = Object.fromEntries(windows.map((w) => [w, 0]));
-  const plus = (sum: number | null, figure: number | null) => (figure === null || sum === null ? null : sum + figure);
   let equivalent: number | null = 0;
   for (const { at, usage } of priced) {
     if (tokensTotal(usage) === 0) continue;
@@ -2197,8 +2196,6 @@ function incompleteCodesOf(rows: RequestLog[]): Record<string, number> {
   return codes;
 }
 
-/** A user agent as the ledger keys a rollup by it: its product token, `-` for a request that sent none. */
-const agentTokenOf = (userAgent: string | null) => (userAgent === null ? '-' : foldUserAgent(userAgent));
 
 export function rollups(rows: RequestLog[]): HourlyRollup[] {
   const h = createRng(4_242);
