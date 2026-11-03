@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
 import type { ModelPrice, SubscriptionCosts } from '@/api/types';
 import { Input, Segmented } from '@/components/ui/primitives';
-import { anchorTier, bandNow, COST_WINDOWS, MODEL_WEEK_TIERS, modelWeeks, regimeNames, regimeTitle, regimeWord, shareIn, sizedTiers, tierGroups, unreachableBand, weightedWindows, weightOf, withRegime, type TokenType, type Usage } from '@/lib/costs';
+import { anchorTier, bandNow, COST_WINDOWS, MODEL_WEEK_TIERS, modelWeeks, regimeNames, regimeTitle, regimeWord, shareIn, newestAndOlder, sizedTiers, tierGroups, unreachableBand, weightedWindows, weightOf, withRegime, type TokenType, type Usage } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { figure, fmtShare, undatedModel, upperFirst } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
@@ -37,6 +37,22 @@ export function FoldRow({ cols, count, onToggle, open }: { cols: number; count: 
         </button>
       </td>
     </tr>
+  );
+}
+
+/**
+ * A model table's body: the newest models, the fold row and, while it is open, the older models. A model and its
+ * sub-rows share one stripe, and the count runs on through the fold, so the stripes alternate whether the older models
+ * show or not.
+ */
+export function FoldedRows<T>({ cols, older, onToggle, open, row, shown }: { cols: number; older: T[]; onToggle: () => void; open: boolean; row: (item: T, alt: string) => ReactNode[]; shown: T[] }) {
+  const rows = (items: T[], from: number) => items.flatMap((item, i) => row(item, (from + i) % 2 ? 'is-alt' : ''));
+  return (
+    <>
+      {rows(shown, 0)}
+      {older.length > 0 && <FoldRow cols={cols} count={older.length} onToggle={onToggle} open={open} />}
+      {open && rows(older, shown.length)}
+    </>
   );
 }
 
@@ -78,9 +94,7 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
     seen.add(undated);
     return true;
   });
-  const groups = tierGroups(models, costs);
-  const shown = groups.map((g) => g.models[0]);
-  const older = groups.flatMap((g) => g.models.slice(1));
+  const { newest: shown, older } = newestAndOlder(tierGroups(models, costs));
   // The lightest is a model weighed on the 5-hour window itself, since a model weighed on the week alone has no 5-hour
   // weight there. The heaviest reads every model's own 5-hour weight, an unweighed model counting nothing, so no bar
   // runs past its track.
@@ -149,32 +163,28 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
       </td>
     );
   };
-  // A model and its sub-rows share one stripe, and the count runs on through the fold, so the stripes alternate
-  // whether the older models show or not.
-  const rows = (models: string[], from: number) =>
-    models.flatMap((model, i) => {
-      const alt = (from + i) % 2 ? 'is-alt' : '';
-      // A model week draws only under a tier whose plan carries it, so no row names a Fable week against Pro.
-      const weeks = modelWeeks(costs, model).filter((week) => weightOf(costs, model, week) !== null && (MODEL_WEEK_TIERS[week]?.includes(tier) ?? false));
-      return [
-        <tr key={model} className={`${alt}${weeks.length ? ' has-sub' : ''}`}>
-          <td className="mono">{model}</td>
-          {weightCell(model)}
-          {WINDOWS.map((w) => TOKEN_TYPES.map((t, i) => cell(model, w.key, w.label, t, i)))}
-        </tr>,
-        ...weeks.map((week) => (
-          <tr key={`${model} ${week}`} className={`cost-ref__sub ${alt}`}>
-            <td title="A window only these models carry, sized against the 7-day window">{weekLabel(week)}</td>
-            <td />
-            {WINDOWS.map((w) =>
-              TOKEN_TYPES.map((t, i) =>
-                w.key === 'seven_day' ? cell(model, week, weekLabel(week), t, i) : <td key={`${w.key}-${t.key}`} className={i === 0 ? 'cost-ref__sep' : undefined} />,
-              ),
-            )}
-          </tr>
-        )),
-      ];
-    });
+  const row = (model: string, alt: string) => {
+    // A model week draws only under a tier whose plan carries it, so no row names a Fable week against Pro.
+    const weeks = modelWeeks(costs, model).filter((week) => weightOf(costs, model, week) !== null && (MODEL_WEEK_TIERS[week]?.includes(tier) ?? false));
+    return [
+      <tr key={model} className={`${alt}${weeks.length ? ' has-sub' : ''}`}>
+        <td className="mono">{model}</td>
+        {weightCell(model)}
+        {WINDOWS.map((w) => TOKEN_TYPES.map((t, i) => cell(model, w.key, w.label, t, i)))}
+      </tr>,
+      ...weeks.map((week) => (
+        <tr key={`${model} ${week}`} className={`cost-ref__sub ${alt}`}>
+          <td title="A window only these models carry, sized against the 7-day window">{weekLabel(week)}</td>
+          <td />
+          {WINDOWS.map((w) =>
+            TOKEN_TYPES.map((t, i) =>
+              w.key === 'seven_day' ? cell(model, week, weekLabel(week), t, i) : <td key={`${w.key}-${t.key}`} className={i === 0 ? 'cost-ref__sep' : undefined} />,
+            ),
+          )}
+        </tr>
+      )),
+    ];
+  };
 
   return (
     <>
@@ -247,9 +257,7 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
             </tr>
           </thead>
           <tbody>
-            {rows(shown, 0)}
-            {older.length > 0 && <FoldRow cols={cols} count={older.length} onToggle={onToggleOlder} open={olderOpen} />}
-            {olderOpen && rows(older, shown.length)}
+            <FoldedRows cols={cols} older={older} onToggle={onToggleOlder} open={olderOpen} row={row} shown={shown} />
           </tbody>
         </table>
       </div>
