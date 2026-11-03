@@ -2767,7 +2767,7 @@ impl Relay {
         // Seeded from what this account has already refused, so a leg the operator has not touched since the
         // last 400 never resubmits a field or a beta the upstream is known to reject.
         let mut skip: BTreeSet<Injected> = self.memory.refused(account);
-        let (mut edited, mut body_injected, mut inject_betas, mut ttl) = match build(&skip) {
+        let (edited, mut body_injected, mut inject_betas, mut ttl) = match build(&skip) {
             Ok(built) => built,
             Err(error) => {
                 ending(end_guard, REFUSED);
@@ -2784,6 +2784,22 @@ impl Relay {
                 );
             }
         };
+        let gzip_out = match self.limits.upstream_gzip {
+            UpstreamGzip::On => true,
+            UpstreamGzip::Off => false,
+            UpstreamGzip::Auto => admitted.client_gzip,
+        };
+        // Encoded once per build: every pass of the leg sends the same bytes, so a retry or a replay reuses them
+        // rather than copying or compressing the body again.
+        let on_the_wire = |edited: &Bytes| {
+            if gzip_out {
+                Bytes::from(phoebis_transport::encode::gzip(edited))
+            } else {
+                edited.clone()
+            }
+        };
+        let mut edited = Bytes::from(edited);
+        let mut wire_body = on_the_wire(&edited);
         let authority = dispatch::UPSTREAM_AUTHORITY;
         let Some(addr) = (self.resolver)(authority).await else {
             tracing::warn!(host = %authority, "the upstream host does not resolve");
@@ -2868,16 +2884,6 @@ impl Relay {
                 .as_ref()
                 .filter(|_| !skip.contains(&Injected::ClientRequestId))
                 .map(|_| uuid_v4());
-            let gzip_out = match self.limits.upstream_gzip {
-                UpstreamGzip::On => true,
-                UpstreamGzip::Off => false,
-                UpstreamGzip::Auto => admitted.client_gzip,
-            };
-            let wire_body = if gzip_out {
-                phoebis_transport::encode::gzip(&edited)
-            } else {
-                edited.clone()
-            };
             let head = outbound_headers(
                 admitted.caller,
                 admitted.original,
@@ -2949,7 +2955,7 @@ impl Relay {
                 method: "POST",
                 target: admitted.target.to_string(),
                 headers: head.headers,
-                body: Bytes::from(wire_body),
+                body: wire_body.clone(),
             };
             let dispatched =
                 match dispatch::attempt(self, &request, &pool_key, addr, fresh, cancel).await {
@@ -3118,7 +3124,8 @@ impl Relay {
                     // the body stopped being editable between two edits of the same bytes.
                     match build(&skip) {
                         Ok((rebuilt, restored, betas, rebuilt_ttl)) => {
-                            edited = rebuilt;
+                            edited = Bytes::from(rebuilt);
+                            wire_body = on_the_wire(&edited);
                             body_injected = restored;
                             inject_betas = betas;
                             ttl = rebuilt_ttl;
