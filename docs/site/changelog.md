@@ -400,7 +400,9 @@ reload skips a tick while the view's previous read is still in flight, and a rea
 and frees the next tick ([The console](console.md)). The Dashboard's attention line skips a tick or a focus that finds
 its previous read still out, so a slow read lands and the next tick reads again ([Dashboard](console.md#dashboard)). On
 Requests and the Routing log auto reload also waits while the list for the view's filters is still loading, unless its
-last read failed ([The console](console.md)).
+last read failed ([The console](console.md)). Auto reload's read at once, when a wait ends or the interval changes a
+full interval after the last answer, also waits for a read still in flight and leaves the read to the next tick ([The
+console](console.md)).
 
 Every finished request lands in the ledger as one row for the client request, one per attempt and one per routing
 decision, folded into the hourly rollup the analytics read ([Statistics](statistics.md#the-ledger)). Each attempt

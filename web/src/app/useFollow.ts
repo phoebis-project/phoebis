@@ -8,11 +8,11 @@ import { armPoll, counted } from '@/lib/hooks';
  * The auto reload poll both logs run: every `intervalMs` while the tab is visible, the page's `paused` is false and the
  * first page shows, read the newest pages up to now over the rows shown under `address` (the followed rows it holds,
  * else the list's), merge them under the fresh tint, keep an overrun's cursor with its poll's end, and toast a failing
- * streak once. When a wait ends a full interval after the last answer, the poll reads at once. A tick that finds a
- * poll of the hook still out is skipped, and so is one while no rows show under `address` and the list's read has not
- * failed, since the list's own read is then still out. The caller hands in the list's last answer, its error and its
- * paging state, and reads back the rows to draw, the error to show, the pager's next cursor and the pager's handlers,
- * so nothing the caller passes depends on the hook's own state.
+ * streak once. When a wait ends a full interval after the last answer, the poll reads at once. A tick or such a read
+ * that finds a poll of the hook still out is skipped, and so is one while no rows show under `address` and the list's
+ * read has not failed, since the list's own read is then still out. The caller hands in the list's last answer, its
+ * error and its paging state, and reads back the rows to draw, the error to show, the pager's next cursor and the
+ * pager's handlers, so nothing the caller passes depends on the hook's own state.
  *
  * A list that answers `landedThrough` runs the poll under a watermark: every page of a poll reads the rows written
  * after it (`read`'s `landedAfter`), the list's own stamp first and then each poll's first page's, so a request that
@@ -70,8 +70,8 @@ export function useFollow<R>(input: {
   const streak = useRef({ failing: false, paths: new Set<string>() });
   // When the last poll answered, null until one has, so a wait that ends reads at once only after a full interval.
   const lastAnswered = useRef<number | null>(null);
-  // The hook's polls still out. It outlives the poll's effect, so the first tick after a drawer closes, the interval
-  // changes or the first page returns skips while a poll from before it is out.
+  // The hook's polls still out. It outlives the poll's effect, so the read at once and the first tick after a drawer
+  // closes, the interval changes or the first page returns skip while a poll from before it is out.
   const out = useRef(0);
   // The rows under the reader would move on an older page, so its cursor holds the poll until the first page returns.
   const polling = intervalMs > 0 && !paused && cursor === undefined;
@@ -89,12 +89,7 @@ export function useFollow<R>(input: {
     // The rows the tab's return read brought. The interval keeps its phase, so its next tick can follow that read
     // within milliseconds and bring nothing, and that tick's answer keeps their tint beside its own rows.
     let kept: { for: string; rows: Set<string> } | null = null;
-    // The polls in the order they went out, and the latest of them that answered. The tab's return reads beside a
-    // tick's poll still out, so either can answer first.
-    let issued = 0;
-    let newest = 0;
     const poll = (returned = false) => {
-      const nth = (issued += 1);
       const { address: polled, compare: order, fixedEnd, identity: identify, list, mark: landedAfter, read: reader, shown: start, standIn: standing } = latest.current;
       // Every page of one poll reads from the same stamp and is handed the same instant, so a reader that bounds its
       // range by it walks one fixed range. A reader under a watermark may read to the router's clock instead, and the
@@ -143,13 +138,6 @@ export function useFollow<R>(input: {
           // older ones too.
           const next = polledPages.overrun === null ? current.overrun : { cursor: polledPages.overrun, to };
           const rows = merged(current.shown, polledPages.rows, identify, order);
-          if (nth < newest) {
-            // A later poll answered first and tinted what it brought. This older answer finds those rows known, so it
-            // merges its rows and leaves the tint for a later poll to take away.
-            setFollowed((f) => ({ for: polled, fresh: f !== null && f.for === polled ? f.fresh : new Set(), landedThrough: withheld ? landedAfter : (polledPages.landedThrough ?? landedAfter), overrun: next, rows, standIn: current.standIn }));
-            return;
-          }
-          newest = nth;
           const brought = new Set(polledPages.rows.map(identify).filter((k) => !known.has(k)));
           const fresh = kept !== null && kept.for === polled ? new Set([...kept.rows, ...brought]) : brought;
           kept = returned ? { for: polled, rows: brought } : null;

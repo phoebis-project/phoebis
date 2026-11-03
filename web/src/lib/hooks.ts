@@ -25,9 +25,8 @@ export interface AsyncOptions {
    * Re-run `load` every `refreshMs` while the document is visible and `paused` is false. A refresh keeps `data` drawn,
    * never turns `loading` on, replaces `data` on success and keeps it on failure with `error` set, and one still in
    * flight when `paused` turns true is dropped. When the pause ends, the period is set or the tab comes back, a refresh
-   * runs at once if the last answer is a full period old, unless the same render changed the deps, whose read stands
-   * for it. A read that settles after a newer one has landed is dropped. A tick that finds a read of the hook still
-   * out, a load or a refresh, is skipped.
+   * runs at once if the last answer is a full period old. A read that settles after a newer one has landed is dropped.
+   * A tick, or such a read at once, that finds a read of the hook still out, a load or a refresh, is skipped.
    */
   refreshMs?: number;
   paused?: boolean;
@@ -53,18 +52,18 @@ export function counted<T>(out: { current: number }, pending: Promise<T>): Promi
 
 /**
  * Arms a poll that reads every `periodMs` while the tab is visible and `idle()` holds. When the tab comes back, and on
- * arming with `readDueNow`, it reads at once if `answeredAt()` is a full period old, with `returned` true only for the
- * tab's return. Returns the cleanup.
+ * arming with `readDueNow`, it reads at once if `answeredAt()` is a full period old and `idle()` holds, with `returned`
+ * true only for the tab's return. Returns the cleanup.
  */
 export function armPoll(periodMs: number, read: (returned: boolean) => void, idle: () => boolean, answeredAt: () => number | null, readDueNow: boolean): () => void {
-  // A tick that finds a read still out skips with no catch-up read, which would read back to back under a slow server,
-  // and the next tick arrives one period later at most.
+  // A tick or a due read that finds a read still out skips with no catch-up read, which would read back to back under a
+  // slow server, and the next tick arrives one period later at most.
   const id = clock.setInterval(() => {
     if (!document.hidden && idle()) read(false);
   }, periodMs);
   const readDue = (returned: boolean) => {
     const at = answeredAt();
-    if (!document.hidden && at !== null && clock.now() - at >= periodMs) read(returned);
+    if (!document.hidden && idle() && at !== null && clock.now() - at >= periodMs) read(returned);
   };
   const onVisible = () => readDue(true);
   if (readDueNow) readDue(false);
@@ -96,12 +95,6 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   // The load effect's run for the current deps: a refresh that lands after the deps changed or the page left is
   // dropped by it, as the load's own answer is.
   const run = useRef({ alive: false });
-  // Whether the load effect read in the commit being flushed. Every commit's layout pass clears it before the passive
-  // effects run, so a refresh armed in the same commit as a read for new deps knows that read already answers them.
-  const loadReadInCommit = useRef(false);
-  useLayoutEffect(() => {
-    loadReadInCommit.current = false;
-  });
   // Every read takes the next number, and one that settles after a higher number has landed is dropped, success and
   // failure alike, so an older answer never replaces a newer one; a slow read still lands while nothing newer has.
   const started = useRef(0);
@@ -153,7 +146,6 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     setLoading(true);
     started.current += 1;
     const seq = started.current;
-    loadReadInCommit.current = true;
     counted(inFlight, latest.current.load()).then(
       (value) => {
         if (!current.alive || !lands(seq)) return;
@@ -183,7 +175,8 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
       const { deps: answered, load: read } = latest.current;
       started.current += 1;
       const seq = started.current;
-      // A refresh that outruns the load it supersedes ends the loading too, since that load's answer will be dropped.
+      // A refresh starts only while no read is out, and a load for new deps ends the run a refresh still out belongs to,
+      // so no refresh outruns a load.
       counted(inFlight, failing.current ? quietly(read) : read()).then(
         (value) => {
           if (!armed.alive || !loadRun.alive || !lands(seq)) return;
@@ -197,9 +190,9 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
         },
       );
     };
-    // The arm's read at once yields to a read the load effect started in the same commit, so one render that changes
-    // the deps and arms the refresh reads once.
-    const disarm = armPoll(refreshMs, () => refresh(), () => inFlight.current === 0, () => (fetched.current === null ? null : Date.parse(fetched.current)), !loadReadInCommit.current);
+    // The load effect runs first in a commit and counts its read, so the arm's read at once yields to a read for new
+    // deps the same render started, and that render reads once.
+    const disarm = armPoll(refreshMs, () => refresh(), () => inFlight.current === 0, () => (fetched.current === null ? null : Date.parse(fetched.current)), true);
     return () => {
       armed.alive = false;
       disarm();

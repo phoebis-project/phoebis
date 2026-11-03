@@ -269,8 +269,8 @@ const held = () => {
 };
 
 /**
- * Hides the tab across `ms` of the clock and brings it back. A tick skips while a read is out, so the tab's return a
- * full period after the last answer is the read that goes out beside one still in flight.
+ * Hides the tab across `ms` of the clock and brings it back, so a tick inside the span reads nothing and the return is
+ * the read the period makes due.
  */
 const away = (clock, ms) => {
   let hidden = true;
@@ -280,39 +280,48 @@ const away = (clock, ms) => {
   visibility();
 };
 
-test('an older refresh that settles after a newer one landed changes nothing, and fetchedAt stays the newer one', async () => {
-  const clock = frozen();
-  const reads = held();
-  const p = await probe(reads.load);
-  reads.calls[0].resolve('first');
+/** `KeyedProbe` over `reads` with its first deps answered and a refresh for them still out at the period. */
+async function refreshOut(clock, reads) {
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  const seen = [];
+  const show = (id) => act(() => root.render(h(KeyedProbe, { id, load: reads.load, seen })));
+  show('a');
+  reads.calls[0].resolve('a');
   await settled();
   act(() => clock.tick(30_000));
-  away(clock, 30_000);
-  assert.equal(reads.calls.length, 3, "the tab's return reads while the first refresh is still out");
-  reads.calls[2].resolve('third');
+  assert.equal(reads.calls.length, 2, 'the period reads');
+  return { seen, show };
+}
+
+test("a refresh still out when the deps change lands nothing, and fetchedAt stays the new deps' answer", async () => {
+  const clock = frozen();
+  const reads = held();
+  const { seen, show } = await refreshOut(clock, reads);
+  show('b');
+  reads.calls[2].resolve('b');
   await settled();
   act(() => clock.tick(1_000));
-  reads.calls[1].resolve('second');
+  reads.calls[1].resolve('refresh');
   await settled();
-  assert.deepEqual([p.last().data, p.last().fetchedAt, p.last().error], ['third', at(60_000), null], 'the older answer, landing last, changes nothing');
+  assert.deepEqual([seen.at(-1).data, seen.at(-1).fetchedAt, seen.at(-1).error], ['b', at(30_000), null], 'the refresh for the old deps, landing last, changes nothing');
 });
 
-test('a failure of an older read that settles after a newer success sets no error', async () => {
+test("a refresh still out when the deps change that fails after the new deps' answer sets no error", async () => {
   const clock = frozen();
   const reads = held();
-  const p = await probe(reads.load);
-  reads.calls[0].resolve('first');
-  await settled();
-  act(() => clock.tick(30_000));
-  away(clock, 30_000);
-  reads.calls[2].resolve('third');
+  const { seen, show } = await refreshOut(clock, reads);
+  show('b');
+  reads.calls[2].resolve('b');
   await settled();
   reads.calls[1].reject(new Error('ledger locked'));
   await settled();
-  assert.deepEqual([p.last().data, p.last().error, p.last().stale], ['third', null, false]);
+  assert.deepEqual([seen.at(-1).data, seen.at(-1).error, seen.at(-1).stale], ['b', null, false]);
 });
 
-test('a refresh slower than the period lands while nothing newer has, and the newer one lands after it', async () => {
+test("a refresh slower than the period lands, the tab's return under it reads nothing, and the tick after it lands reads again", async () => {
   const clock = frozen();
   const reads = held();
   const p = await probe(reads.load);
@@ -320,14 +329,13 @@ test('a refresh slower than the period lands while nothing newer has, and the ne
   await settled();
   act(() => clock.tick(30_000));
   away(clock, 30_000);
+  assert.equal(reads.calls.length, 2, "the tab's return finds the refresh still out and reads nothing");
   act(() => clock.tick(1_000));
   reads.calls[1].resolve('second');
   await settled();
-  const slow = [p.last().data, p.last().fetchedAt];
-  act(() => clock.tick(1_000));
-  reads.calls[2].resolve('third');
-  await settled();
-  assert.deepEqual([slow, p.last().data, p.last().fetchedAt], [['second', at(61_000)], 'third', at(62_000)]);
+  assert.deepEqual([p.last().data, p.last().fetchedAt], ['second', at(61_000)], 'the slow refresh lands');
+  act(() => clock.tick(29_000));
+  assert.equal(reads.calls.length, 3, 'the tick after it lands reads again');
 });
 
 test('a first load still out through a pause lands once it answers', async () => {
@@ -342,7 +350,7 @@ test('a first load still out through a pause lands once it answers', async () =>
   assert.deepEqual([p.last().data, p.last().loading, p.last().fetchedAt], ['load', false, at(30_000)]);
 });
 
-test("a refresh that outruns a load for new deps ends the loading, and the load's late answer is dropped", async () => {
+test("a tab's return under a load for new deps still out reads nothing, and the load's answer lands and ends the loading", async () => {
   const clock = frozen();
   const reads = held();
   const container = document.createElement('div');
@@ -356,12 +364,10 @@ test("a refresh that outruns a load for new deps ends the loading, and the load'
   await settled();
   show('b');
   away(clock, 30_000);
-  reads.calls[2].resolve('refresh');
-  await settled();
-  const early = { data: seen.at(-1).data, loading: seen.at(-1).loading };
+  assert.equal(reads.calls.length, 2, "the tab's return finds the load for the new deps out and reads nothing");
   reads.calls[1].resolve('load');
   await settled();
-  assert.deepEqual([early, seen.at(-1).data, seen.at(-1).loading], [{ data: 'refresh', loading: false }, 'refresh', false]);
+  assert.deepEqual([seen.at(-1).data, seen.at(-1).loading], ['load', false]);
 });
 
 function KeyedProbe({ id, load, seen }) {
@@ -426,6 +432,36 @@ test('one render that changes the deps and arms the refresh reads once, the refr
   assert.equal(seen.at(-1).data, 'b');
   act(() => clock.tick(30_000));
   assert.deepEqual(calls, ['a', 'b', 'b'], 'the armed period reads at its first tick');
+  await settled();
+});
+
+test("a pause's end under an out load reads nothing until the next tick", async () => {
+  const clock = frozen();
+  const calls = [];
+  const pending = [];
+  const load = (id) => {
+    calls.push(id);
+    return id === 'a' ? Promise.resolve(id) : new Promise((resolve) => pending.push(() => resolve(id)));
+  };
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  const seen = [];
+  const show = (id, options) => act(() => root.render(h(ArmingProbe, { id, load, options, seen })));
+  show('a', { refreshMs: 30_000 });
+  await settled();
+  show('a', { paused: true, refreshMs: 30_000 });
+  act(() => clock.tick(30_000));
+  show('b', { paused: true, refreshMs: 30_000 });
+  // The pause ends in a later render than the deps change, a full period after the last answer.
+  show('b', { refreshMs: 30_000 });
+  assert.deepEqual(calls, ['a', 'b'], "the pause's end finds the load for the new deps out and reads nothing");
+  pending.shift()();
+  await settled();
+  assert.equal(seen.at(-1).data, 'b', 'the load lands');
+  act(() => clock.tick(30_000));
+  assert.deepEqual(calls, ['a', 'b', 'b'], 'the next tick reads');
   await settled();
 });
 
