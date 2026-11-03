@@ -1333,6 +1333,16 @@ function PctLabel({ text }: { text: string }) {
   );
 }
 
+function StateRow({ colSpan, empty, error, errorTitle, loading }: { colSpan: number; empty: string; error: string | null; errorTitle: string; loading: boolean }) {
+  return (
+    <tr>
+      <td colSpan={colSpan} className={error ? '' : 'muted'}>
+        {error ? <ErrorState title={errorTitle} body={error} /> : loading ? <Skeleton height={22} /> : empty}
+      </td>
+    </tr>
+  );
+}
+
 function BreakdownTable({
   title,
   groupLabel,
@@ -1385,11 +1395,13 @@ function BreakdownTable({
                 </tr>
               ))}
             {(failure !== null || rows.length === 0) && (
-              <tr>
-                <td colSpan={columns.length + 1} className={failure ? '' : 'muted'}>
-                  {failure ? <ErrorState title={failure.unpriced ? `Unpriced: ${title.toLowerCase()}` : 'Could not load this breakdown'} body={failure.text} /> : loading ? <Skeleton height={22} /> : 'No rows.'}
-                </td>
-              </tr>
+              <StateRow
+                colSpan={columns.length + 1}
+                empty="No rows."
+                error={failure?.text ?? null}
+                errorTitle={failure?.unpriced ? `Unpriced: ${title.toLowerCase()}` : 'Could not load this breakdown'}
+                loading={loading}
+              />
             )}
           </tbody>
         </table>
@@ -2224,11 +2236,7 @@ function GuardrailsCard({ answer, error }: { answer: GuardrailCounts | null; err
                 );
               })}
             {(error !== null || rows.length === 0) && (
-              <tr>
-                <td colSpan={4} className={error ? '' : 'muted'}>
-                  {error ? <ErrorState title="Could not load the guardrail matches" body={error} /> : answer === null ? <Skeleton height={22} /> : 'No guardrail matched in this range.'}
-                </td>
-              </tr>
+              <StateRow colSpan={4} empty="No guardrail matched in this range." error={error} errorTitle="Could not load the guardrail matches" loading={answer === null} />
             )}
           </tbody>
         </table>
@@ -2498,11 +2506,7 @@ function PlacementTable({ error, rows, unfiltered }: { error: string | null; row
               );
             })}
             {(rows === null || rows.length === 0) && (
-              <tr>
-                <td colSpan={6} className={error ? '' : 'muted'}>
-                  {error ? <ErrorState title="Could not load the placements" body={error} /> : rows === null ? <Skeleton height={22} /> : 'No placements in range'}
-                </td>
-              </tr>
+              <StateRow colSpan={6} empty="No placements in range" error={error} errorTitle="Could not load the placements" loading={rows === null} />
             )}
           </tbody>
         </table>
@@ -2571,11 +2575,7 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
               );
             })}
             {(budgets === null || budgets.length === 0) && (
-              <tr>
-                <td colSpan={5} className={error ? '' : 'muted'}>
-                  {error ? <ErrorState title="Could not load the member budgets" body={error} /> : budgets === null ? <Skeleton height={22} /> : 'No member carries a budget'}
-                </td>
-              </tr>
+              <StateRow colSpan={5} empty="No member carries a budget" error={error} errorTitle="Could not load the member budgets" loading={budgets === null} />
             )}
           </tbody>
         </table>
@@ -2815,11 +2815,7 @@ function AllowanceTable({ answer, costs, error, week }: { answer: UnusedAllowanc
                 </tr>
               ))}
             {(error !== null || rows === null || rows.length === 0) && (
-              <tr>
-                <td colSpan={2 + windows.length * 2} className={error === null && rows !== null ? 'muted' : ''}>
-                  {error !== null ? <ErrorState title="Could not load the unused allowance" body={error} /> : rows === null ? <Skeleton height={22} /> : 'No weekly reset in the last four weeks'}
-                </td>
-              </tr>
+              <StateRow colSpan={2 + windows.length * 2} empty="No weekly reset in the last four weeks" error={error} errorTitle="Could not load the unused allowance" loading={rows === null} />
             )}
           </tbody>
         </table>
