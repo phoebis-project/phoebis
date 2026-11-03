@@ -19,7 +19,7 @@ import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { accountHref, addressWindow, ANALYTICS_CODEC, type AnalyticsAddress } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceColumnWord, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, type AllowanceFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, hintPlan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, shareHint, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, hintPlan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, shareHint, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -1573,11 +1573,6 @@ function WastedProbes({ billed, group, probes, reading, unit }: { billed: Analyt
   );
 }
 
-/**
- * A side pair in one line, the plan side's figure in the chosen week and the billed side's dollars, as the native
- * tooltip reads it.
- */
-const sidesText = (s: ReturnType<typeof probeSidesOf>, week: WeekPosition, weekFactor: number): string => [...(s.equivalent === undefined ? [] : [equivalentOrDash(s.equivalent, week, weekFactor)]), ...(s.billed === undefined ? [] : [`${fmtUsd(s.billed)} billed`])].join(', ');
 /** A figure as the chart prints it: a side with no row reads its zero, and a side priced nothing a dash. */
 const chartEquivalent = (s: ReturnType<typeof probeSidesOf>, week: WeekPosition, weekFactor: number): string => equivalentOrDash(s.equivalent === undefined ? 0 : s.equivalent, week, weekFactor);
 
@@ -1628,7 +1623,7 @@ function SavingChart({ axis, billed, failure, loading, points, reading, session,
     if (session) return rows(['-', '-', '-']);
     if (!equivalents) return rows([fmtUsd(p.savingUsd), fmtUsd(p.probeCostUsd), fmtUsd(netSaving(p.savingUsd, p.probeCostUsd))]);
     const paid = billedAt.get(p.at) ?? null;
-    return rows([sidesText(savingSidesOf(p, paid, 'gross'), week, factor), sidesText(probeSidesOf(p, paid, 'cost'), week, factor), sidesText(savingSidesOf(p, paid, 'net'), week, factor)]);
+    return rows([sidesLine(savingSidesOf(p, paid, 'gross'), week, factor), sidesLine(probeSidesOf(p, paid, 'cost'), week, factor), sidesLine(savingSidesOf(p, paid, 'net'), week, factor)]);
   };
   return (
     <ChartCard

@@ -14,7 +14,7 @@ import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { IconChevron, IconInfo, IconPlus, IconWarning, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC, type KeysAddress } from '@/lib/address';
-import { dollarsUnder, nativeFiguresOf, nativeSidesOf, UNPRICED_TITLE, type FundedSum, type WeekReading } from '@/lib/analytics';
+import { dollarsUnder, nativeSidesOf, sidesLine, UNPRICED_TITLE, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { effectiveCaptureHours } from '@/lib/capture';
 import { clock } from '@/lib/clock';
@@ -61,8 +61,7 @@ function keyFigureOf(unit: UnitPosition, s: FundedSum, empty: string, reading: W
   const sides = nativeSidesOf(s);
   if (sides.equivalent === undefined && sides.billed === undefined) return { text: '-', title: empty };
   if (reading.scale === null) return null;
-  const native = nativeFiguresOf(sides, reading.week, reading.scale);
-  return { text: native.figures.map((f) => (f.word === 'billed' ? `${f.text} billed` : f.text)).join(', '), title: native.unpriced ? UNPRICED_TITLE : undefined };
+  return { text: sidesLine(sides, reading.week, reading.scale), title: sides.equivalent === null ? UNPRICED_TITLE : undefined };
 }
 /**
  * A key's bar length on the lifetime cost card: under native the Pro-week figure, which the chosen week scales alike for

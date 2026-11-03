@@ -23,7 +23,7 @@ import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, KEYS_CODEC } from '@/lib/address';
-import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, UNPRICED_TITLE, dollarsUnder, equivalentOrDash, moveLabel, nativeFiguresOf, nativeSidesOf, type FundedSum, type WeekReading } from '@/lib/analytics';
+import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, dollarsUnder, moveLabel, nativeSidesOf, sidesLine, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
 import { fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, messageOf, shortModel } from '@/lib/format';
@@ -616,11 +616,10 @@ function PoolCost({ pool, reading }: { pool: Pool; reading: WeekReading }) {
     ) : (
       dash(reading.failure.text)
     );
-  const full = [...(sides.equivalent === undefined ? [] : [equivalentOrDash(sides.equivalent, week, scale)]), ...(sides.billed === undefined ? [] : [`${fmtUsd(sides.billed)} billed`])];
-  const native = nativeFiguresOf(sides, week, scale);
+  const tile = sumTileOf(unit, day, reading);
   return (
-    <dd className="num" title={native.unpriced ? UNPRICED_TITLE : full.join(', ')}>
-      {sumTileOf(unit, day, reading).value}
+    <dd className="num" title={tile.title ?? sidesLine(sides, week, scale)}>
+      {tile.value}
     </dd>
   );
 }

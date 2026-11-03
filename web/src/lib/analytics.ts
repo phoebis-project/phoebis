@@ -383,6 +383,14 @@ export function nativeFiguresOf(sides: { billed: number | undefined; equivalent:
     unpriced,
   };
 }
+/**
+ * A side pair in one line, the plan side's figure in the chosen week and the billed side's dollars marked billed, as a
+ * tooltip or a title reads it.
+ */
+export const sidesLine = (sides: { billed: number | undefined; equivalent: number | null | undefined }, week: WeekPosition, scale: number): string =>
+  nativeFiguresOf(sides, week, scale)
+    .figures.map((f) => (f.word === 'billed' ? `${f.text} billed` : f.text))
+    .join(', ');
 /** A sum over both fundings, as a key's lifetime and week and a pool's day carry it. */
 export interface FundedSum {
   /** The rows no subscription window paid, in dollars. */
