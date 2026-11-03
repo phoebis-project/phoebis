@@ -223,8 +223,8 @@ pub(crate) fn is_auxiliary(request_class: Option<&str>) -> bool {
 /// The first item of the contract the request lacks, in the table's order, or `None`. The version and the
 /// session header are judged for every kind, since a token count and a keepalive probe send both, and the five
 /// body and class items for an inference request alone. `client_version` is the user agent's version as
-/// `client_version` reads it, judged against the client's own spelling. The class header is judged before the two
-/// items that depend on it, so a request without it is never refused for them, and the line is required where
+/// `drift::client_version` reads it, judged against the client's own spelling. The class header is judged before the
+/// two items that depend on it, so a request without it is never refused for them, and the line is required where
 /// `system` is an array alone, so the client's quota probe (no `system`) is outside the item.
 pub(crate) fn contract_gap(
     headers: &HeaderMap,
