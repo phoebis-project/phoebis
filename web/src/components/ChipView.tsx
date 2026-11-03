@@ -33,12 +33,14 @@ export function ChipView({ chip, className, describedBy, marked = false }: { chi
   );
 }
 
-export function Chips({ chips }: { chips: Chip[] }) {
+/** A row of chips, `children` drawn after them on their line. */
+export function Chips({ children, chips }: { children?: ReactNode; chips: Chip[] }) {
   return (
     <span className="chips">
       {chips.map((c, i) => (
         <ChipView key={`${c.label ?? ''}/${c.value}/${i}`} chip={c} />
       ))}
+      {children}
     </span>
   );
 }

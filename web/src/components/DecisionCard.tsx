@@ -39,14 +39,11 @@ export const keyValueRows = (rows: CardRow[], expanded = false, setExpanded?: (e
     title: r.title,
     value:
       r.more && setExpanded ? (
-        <span className="chips">
-          {(expanded ? r.more.all : r.chips).map((c, i) => (
-            <ChipView key={`${c.label ?? ''}/${c.value}/${i}`} chip={c} />
-          ))}
+        <Chips chips={expanded ? r.more.all : r.chips}>
           <button type="button" className="link-btn" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
             {expanded ? 'Latest 3' : `All ${r.more.count} entries`}
           </button>
-        </span>
+        </Chips>
       ) : (
         rowValue(r.chips)
       ),
