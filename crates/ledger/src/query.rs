@@ -32,8 +32,8 @@ use crate::record::{
 use crate::rollup::{
     add_counts, detail_json, fold_identifier, fold_user_agent, hour_of, migration_reason,
     read_account_rollups, read_rollups_paged, visit_rollups, CostSplit, KeySelector, RollupRow,
-    RollupSelect, DIMENSION_MAX_BYTES, EFFORTS, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, PLAN_FUNDING,
-    UNATTRIBUTED,
+    RollupSelect, DIMENSION_MAX_BYTES, EFFORTS, EXPIRED_BETWEEN_TURNS, NO_CLASS, NO_EFFORT,
+    OTHER_DIMENSION, PLAN_FUNDING, UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -2271,11 +2271,11 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
     let equivalent = plan.equivalent.finish(plan.split);
     let expired = sum
         .cache_miss_reasons
-        .get("expired_between_turns")
+        .get(EXPIRED_BETWEEN_TURNS)
         .copied()
         .unwrap_or(0);
     let mut reasons = sum.cache_miss_reasons;
-    reasons.remove("expired_between_turns");
+    reasons.remove(EXPIRED_BETWEEN_TURNS);
     GroupRow {
         key: key.into(),
         label,

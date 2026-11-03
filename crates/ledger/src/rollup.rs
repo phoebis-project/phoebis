@@ -38,6 +38,10 @@ pub const NO_EFFORT: &str = "none";
 /// The value a request with no `x-claude-code-request-class` header files under, and a keepalive delta's own.
 pub const NO_CLASS: &str = "-";
 
+/// The reserved key of `cache_miss_reasons` that counts a request whose serving attempt named no miss reason and read
+/// nothing back: its cache expired between turns. A group row reads it as a count of its own.
+pub const EXPIRED_BETWEEN_TURNS: &str = "expired_between_turns";
+
 /// The value a request files under when its answer named no `usage.speed` and it did not ask for `fast`; `fast`
 /// is the other value.
 pub const STANDARD_SPEED: &str = "standard";
@@ -648,7 +652,7 @@ pub fn deltas_of(
         *d.cache_miss_reasons.entry(reason.clone()).or_default() += 1;
         if reason == "none" && read == 0 {
             *d.cache_miss_reasons
-                .entry("expired_between_turns".into())
+                .entry(EXPIRED_BETWEEN_TURNS.into())
                 .or_default() += 1;
         }
     }

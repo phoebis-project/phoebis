@@ -163,7 +163,7 @@ pub(crate) async fn overview(
     for row in &rows {
         expired += row
             .cache_miss_reasons
-            .get("expired_between_turns")
+            .get(phoebis_ledger::EXPIRED_BETWEEN_TURNS)
             .copied()
             .unwrap_or(0);
         if row.kind == "probe" {
