@@ -2683,22 +2683,9 @@ mod tests {
         }
     }
 
+    /// Both event builders name account `a`, so each hour holds one row.
     fn folded(events: &[EventRecord]) -> u64 {
-        let db = crate::LedgerDb::open_in_memory().unwrap();
-        db.write(|c| {
-            let tx = c.transaction()?;
-            for event in events {
-                fold_event(&tx, event)?;
-            }
-            tx.commit()?;
-            Ok(())
-        })
-        .unwrap();
-        db.read_blocking(|c| read_account_rollups(c, 0, i64::MAX))
-            .unwrap()
-            .iter()
-            .map(|r| r.cooldown_seconds)
-            .sum()
+        folded_by_hour(events).values().sum()
     }
 
     #[test]
