@@ -465,8 +465,8 @@ pub struct Purged {
     /// The same entries whole, with why each left, for the expiry events.
     pub affinity_entries: Vec<PurgedEntry>,
     pub cooldowns: Vec<(String, CooldownScope)>,
-    /// Each dropped pin with the one fact that dropped it: `deleted`, `expired`, or `unserved`.
-    pub pins: Vec<(PinKey, &'static str)>,
+    /// Each dropped pin's row with the one fact that dropped it: `deleted`, `expired`, or `unserved`.
+    pub pins: Vec<(PinRow, &'static str)>,
     /// The slow-down entries dropped, by pool id and account id, whole: an open span ends with its entry.
     pub slow_downs: Vec<((String, String), SlowDownState)>,
 }
@@ -3631,16 +3631,14 @@ impl RoutingState {
 
     /// Every agent's pin of the session, released together: the session leaves every account it was on, not
     /// just its main turn's.
-    pub fn release_session(&mut self, key_id: &str, session_id: &str) -> Vec<PinKey> {
-        let gone: Vec<_> = self
+    pub fn release_session(&mut self, key_id: &str, session_id: &str) -> Vec<PinRow> {
+        let keys: Vec<_> = self
             .pins
             .keys()
             .filter(|k| k.key_id == key_id && k.session_id == session_id)
             .cloned()
             .collect();
-        for key in &gone {
-            self.take_pin(key);
-        }
+        let gone = keys.iter().filter_map(|key| self.take_pin(key)).collect();
         // The session ended, so its paces leave with it, one whose pin a failover took and no landing wrote back among
         // them.
         self.pin_paces
@@ -3765,7 +3763,7 @@ impl RoutingState {
         for key in &cooldowns {
             self.cooldowns.remove(key);
         }
-        let pins: Vec<_> = self
+        let doomed: Vec<_> = self
             .pins
             .iter()
             .filter_map(|(k, p)| {
@@ -3786,9 +3784,10 @@ impl RoutingState {
                 }
             })
             .collect();
-        for (key, _) in &pins {
-            self.take_pin(key);
-        }
+        let pins = doomed
+            .into_iter()
+            .filter_map(|(key, reason)| self.take_pin(&key).map(|row| (row, reason)))
+            .collect();
         // A move writes the key again within the selection that took the row, so a key no pin holds at the tick
         // belongs to a session that ended, or to a failover: the task's report handling takes that row and the landing
         // comes on a later selection, so a tick between the two drops the pace and the landed pin starts a new one.

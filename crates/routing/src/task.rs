@@ -3274,41 +3274,30 @@ impl Task {
                 session_id,
                 reply,
             } => {
-                // The account and the mark a pin names are only readable while it is still held, so the rows come
-                // first.
-                let held: HashMap<PinKey, PinRow> = self
-                    .state
-                    .pins()
-                    .into_iter()
-                    .filter(|p| p.key_id == key_id && p.session_id == session_id)
-                    .map(|p| (p.key(), p))
-                    .collect();
                 // Every agent's pin of the session leaves together: the session's next request starts fresh
                 // wherever each of its agents lands, not only its main turn's.
                 let gone = self.state.release_session(&key_id, &session_id);
                 let ended = self.state.end_first_seen(&key_id, &session_id);
                 let count = gone.len();
                 let now = (self.clock)();
-                for key in &gone {
-                    if let Some(row) = held.get(key) {
-                        self.emit(RouterEvent::PinReleased {
-                            key_id: key.key_id.clone(),
-                            session_id: key.session_id.clone(),
-                            agent_id: key.agent_id.clone(),
-                            model: key.model.clone(),
-                            account_id: row.account_id.clone(),
-                            at: now,
-                        });
-                        if let Some(event) = released_mark(row, now) {
-                            self.emit(event);
-                        }
+                for row in &gone {
+                    self.emit(RouterEvent::PinReleased {
+                        key_id: row.key_id.clone(),
+                        session_id: row.session_id.clone(),
+                        agent_id: row.agent_id.clone(),
+                        model: row.model.clone(),
+                        account_id: row.account_id.clone(),
+                        at: now,
+                    });
+                    if let Some(event) = released_mark(row, now) {
+                        self.emit(event);
                     }
                 }
                 // Every end carries the session's, since a backlog may fold any one of them away under a later write
                 // of its key.
                 self.write(
-                    gone.into_iter()
-                        .map(|key| StateWrite::EndPin(key, ended.then_some(now)))
+                    gone.iter()
+                        .map(|row| StateWrite::EndPin(row.key(), ended.then_some(now)))
                         .collect(),
                 );
                 let _ = reply.send(count);
@@ -4464,20 +4453,13 @@ impl Task {
                 at: now,
             });
         }
-        // The account and the mark a pin names are only readable while it is still held, so the rows come first.
-        let held: HashMap<PinKey, PinRow> = self
-            .state
-            .pins()
-            .into_iter()
-            .map(|p| (p.key(), p))
-            .collect();
         let purged = self.state.purge(&snapshot, now);
         // After the takes, so a session whose last pin the purge took ends with it.
         let ended: HashSet<(String, String)> = purged
             .pins
             .iter()
-            .filter(|(key, _)| self.state.end_first_seen(&key.key_id, &key.session_id))
-            .map(|(key, _)| (key.key_id.clone(), key.session_id.clone()))
+            .filter(|(row, _)| self.state.end_first_seen(&row.key_id, &row.session_id))
+            .map(|(row, _)| (row.key_id.clone(), row.session_id.clone()))
             .collect();
         self.slow_down_edges(now);
         tracing::debug!(
@@ -4505,20 +4487,18 @@ impl Task {
                 at: now,
             });
         }
-        for (key, reason) in &purged.pins {
-            if let Some(row) = held.get(key) {
-                self.emit(RouterEvent::PinExpired {
-                    key_id: key.key_id.clone(),
-                    session_id: key.session_id.clone(),
-                    agent_id: key.agent_id.clone(),
-                    model: key.model.clone(),
-                    account_id: row.account_id.clone(),
-                    reasons: vec![*reason],
-                    at: now,
-                });
-                if let Some(event) = released_mark(row, now) {
-                    self.emit(event);
-                }
+        for (row, reason) in &purged.pins {
+            self.emit(RouterEvent::PinExpired {
+                key_id: row.key_id.clone(),
+                session_id: row.session_id.clone(),
+                agent_id: row.agent_id.clone(),
+                model: row.model.clone(),
+                account_id: row.account_id.clone(),
+                reasons: vec![*reason],
+                at: now,
+            });
+            if let Some(event) = released_mark(row, now) {
+                self.emit(event);
             }
         }
         let restored = !std::mem::replace(&mut self.purged, true);
@@ -4530,9 +4510,9 @@ impl Task {
             .into_iter()
             .map(|(a, s)| StateWrite::DeleteCooldown(a, s))
             .collect();
-        writes.extend(purged.pins.into_iter().map(|(key, _)| {
-            let session = (key.key_id.clone(), key.session_id.clone());
-            StateWrite::EndPin(key, ended.contains(&session).then_some(now))
+        writes.extend(purged.pins.into_iter().map(|(row, _)| {
+            let session = (row.key_id.clone(), row.session_id.clone());
+            StateWrite::EndPin(row.key(), ended.contains(&session).then_some(now))
         }));
         writes.extend(
             lapsed
