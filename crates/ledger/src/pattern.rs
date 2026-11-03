@@ -207,7 +207,7 @@ mod tests {
     }
 
     /// A pattern of many stars against a value that cannot match is where a split-per-star matcher goes
-    /// exponential; the two-cursor walk answers in `pattern * value` steps at most.
+    /// exponential. The two-cursor walk answers in `pattern * value` steps at most.
     #[test]
     fn a_failing_pattern_of_many_stars_answers_in_bounded_steps() {
         let pattern = "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b";
