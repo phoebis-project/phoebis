@@ -3,8 +3,8 @@
 //! with no wildcard matches its own text alone. ASCII case folds, since the name a rule is judged against is the
 //! folded canonical id. The ledger's request-log matcher is another grammar, where `*` crosses everything.
 
-/// The longest pattern an entry accepts, and the longest name the matcher walks; either past its bound answers
-/// no match. The table a match fills is at most the product of the two.
+/// The longest pattern an entry accepts and the longest name the matcher walks. Either past its bound answers no
+/// match, and the cells a match decides are at most the product of the two.
 pub const MAX_PATTERN_CHARS: usize = 256;
 pub const MAX_NAME_CHARS: usize = 256;
 
@@ -82,32 +82,33 @@ pub fn check(pattern: &str) -> Result<(), PatternError> {
 
 /// Whether `name` matches `pattern` under the grammar above. ASCII case folds. The match is a table over token
 /// index and character index filled from the end, so every (token, position) pair is decided once and the work
-/// is bounded by `tokens * chars`, never by the number of ways stars could split the name.
+/// is bounded by `tokens * chars`, never by the number of ways stars could split the name. A token's row reads only
+/// its own cells and the next token's row, so two rows hold the table.
 pub fn matches(pattern: &str, name: &str) -> bool {
     let tokens = tokenize(pattern);
     let chars: Vec<char> = name.chars().collect();
     if tokens.len() > MAX_PATTERN_CHARS || chars.len() > MAX_NAME_CHARS {
         return false;
     }
-    // table[t][c]: whether tokens[t..] matches chars[c..].
-    let mut table = vec![vec![false; chars.len() + 1]; tokens.len() + 1];
-    table[tokens.len()][chars.len()] = true;
-    for t in (0..tokens.len()).rev() {
+    // row[c]: whether tokens[t..] matches chars[c..], for the token t being filled. next[c]: the same for t + 1.
+    let mut next = vec![false; chars.len() + 1];
+    next[chars.len()] = true;
+    let mut row = vec![false; chars.len() + 1];
+    for token in tokens.iter().rev() {
         for c in (0..=chars.len()).rev() {
-            let next = chars.get(c).copied();
-            table[t][c] = match tokens[t] {
-                Token::AnyPath => table[t + 1][c] || next.is_some_and(|_| table[t][c + 1]),
-                Token::AnyRun => {
-                    table[t + 1][c] || next.is_some_and(|ch| ch != '/' && table[t][c + 1])
-                }
-                Token::AnyOne => next.is_some_and(|ch| ch != '/' && table[t + 1][c + 1]),
+            let at = chars.get(c).copied();
+            row[c] = match *token {
+                Token::AnyPath => next[c] || at.is_some_and(|_| row[c + 1]),
+                Token::AnyRun => next[c] || at.is_some_and(|ch| ch != '/' && row[c + 1]),
+                Token::AnyOne => at.is_some_and(|ch| ch != '/' && next[c + 1]),
                 Token::Literal(want) => {
-                    next.is_some_and(|ch| ch.eq_ignore_ascii_case(&want) && table[t + 1][c + 1])
+                    at.is_some_and(|ch| ch.eq_ignore_ascii_case(&want) && next[c + 1])
                 }
             };
         }
+        std::mem::swap(&mut row, &mut next);
     }
-    table[0][0]
+    next[0]
 }
 
 #[cfg(test)]
