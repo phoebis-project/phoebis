@@ -16,7 +16,6 @@ use phoebis_routing::{
     SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{AccountKind, AccountRow, AccountState, Store};
-use phoebis_transport::response::ResponseHead;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 
@@ -104,16 +103,10 @@ fn warn_unpriced_tier(tables: &PlanTables, at: i64, account_id: &str, plan: &str
 pub(crate) fn samples_from_unified(
     account_id: &str,
     unified: &UnifiedHeaders,
-    head: &ResponseHead,
     observed_at: i64,
     usage_based: bool,
 ) -> (Vec<QuotaSampleRecord>, Option<ExtraUsageSampleRecord>) {
     let bucket = bucket_of(observed_at);
-    let float = |name: &str| {
-        head.get(name)
-            .and_then(|v| v.trim().parse::<f64>().ok())
-            .filter(|f| f.is_finite())
-    };
     let mut quota = Vec::new();
     // The head names its windows `5h`, `7d` and `7d_oi`; the table spells them by the usage endpoint's keys, so a
     // head and a poll of one bucket write one row per window.
@@ -147,7 +140,7 @@ pub(crate) fn samples_from_unified(
             });
         }
     }
-    let overage_utilization = float("anthropic-ratelimit-unified-overage-utilization");
+    let overage_utilization = unified.overage_utilization;
     // A usage-based seat's overage family is its spend window, never an overage episode, so its row keeps the share
     // and the reset with no in-use flag, written whenever the head moves either.
     let in_use = if usage_based {
@@ -1004,12 +997,8 @@ mod tests {
         .iter()
         .map(|(n, v)| (n.to_string(), v.to_string()))
         .collect();
-        let head = ResponseHead {
-            status: 200,
-            headers,
-        };
-        let unified = UnifiedHeaders::parse(&head).unwrap();
-        let (quota, extra) = samples_from_unified("a", &unified, &head, 1_234_567, false);
+        let unified = UnifiedHeaders::parse_list(&headers).unwrap();
+        let (quota, extra) = samples_from_unified("a", &unified, 1_234_567, false);
         assert_eq!(
             quota
                 .iter()

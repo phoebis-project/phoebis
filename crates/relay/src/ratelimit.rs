@@ -29,6 +29,7 @@ pub struct UnifiedHeaders {
     pub seven_day_oi_reset: Option<i64>,
     pub seven_day_oi_utilization: Option<f64>,
     pub overage_in_use: Option<bool>,
+    pub overage_utilization: Option<f64>,
     pub overage_reset: Option<i64>,
     pub overage_disabled_reason: Option<String>,
 }
@@ -70,6 +71,7 @@ impl UnifiedHeaders {
             seven_day_oi_reset: secs("7d_oi-reset"),
             seven_day_oi_utilization: float("7d_oi-utilization"),
             overage_in_use: text("overage-in-use").map(|v| v.eq_ignore_ascii_case("true")),
+            overage_utilization: float("overage-utilization"),
             overage_reset: secs("overage-reset"),
             overage_disabled_reason: text("overage-disabled-reason"),
         })

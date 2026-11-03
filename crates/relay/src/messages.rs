@@ -4568,10 +4568,7 @@ impl Relay {
         };
         let observed_at = upstream_date(head).unwrap_or(now);
         if self.router.snapshot().usage_based(&account.id) {
-            let utilization = head
-                .get("anthropic-ratelimit-unified-overage-utilization")
-                .and_then(|value| value.trim().parse::<f64>().ok())
-                .filter(|share| share.is_finite());
+            let utilization = unified.overage_utilization;
             if utilization.is_some() || unified.overage_reset.is_some() {
                 self.router
                     .report(Report::SpendHead {

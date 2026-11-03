@@ -13,7 +13,6 @@ use phoebis_oauth::Clock;
 use phoebis_relay::UnifiedHeaders;
 use phoebis_routing::{LoadCounts, MODEL_REJECTED_REASON};
 use phoebis_store::AccountKind;
-use phoebis_transport::response::ResponseHead as WireHead;
 use serde_json::json;
 
 use crate::bodies::MAX_CAPTURED_BODY;
@@ -273,11 +272,10 @@ impl Assembler {
                     }));
                 }
                 if attempt.account_kind == AccountKind::Oauth {
-                    if let Some((unified, wire)) = parsed {
+                    if let Some(unified) = parsed {
                         let (quota, extra) = samples_from_unified(
                             &attempt.account_id,
                             &unified,
-                            &wire,
                             head.observed_at,
                             attempt.usage_based,
                         );
@@ -391,12 +389,8 @@ fn attempt_row(selected: &AccountSelected) -> AttemptRecord {
 }
 
 /// Fills the attempt row's rate-limit fields and hands back the parse it just ran, so the quota sampler
-/// downstream reads the same `UnifiedHeaders` and `WireHead` instead of cloning the header vector and parsing
-/// it again.
-fn fill_head(
-    attempt: &mut AttemptRecord,
-    head: &ResponseHead,
-) -> Option<(UnifiedHeaders, WireHead)> {
+/// downstream reads the same `UnifiedHeaders` instead of parsing the headers again.
+fn fill_head(attempt: &mut AttemptRecord, head: &ResponseHead) -> Option<UnifiedHeaders> {
     attempt.upstream_status = Some(head.status);
     attempt.ttfb_ms = Some(head.observed_at - attempt.started_at);
     attempt.written_at = Some(head.written_at);
@@ -410,24 +404,16 @@ fn fill_head(
         attempt.cooldown_scope = Some(cooldown.scope.clone());
         attempt.cooldown_until = Some(cooldown.until);
     }
-    let wire = WireHead {
-        status: head.status,
-        headers: head.headers.clone(),
-    };
-    let unified = UnifiedHeaders::parse(&wire)?;
+    let unified = UnifiedHeaders::parse_list(&head.headers)?;
     attempt.ratelimit_5h_utilization = unified.five_hour_utilization;
     attempt.ratelimit_5h_reset = unified.five_hour_reset;
     attempt.ratelimit_7d_utilization = unified.seven_day_utilization;
     attempt.ratelimit_7d_reset = unified.seven_day_reset;
     attempt.ratelimit_7d_oi_reset = unified.seven_day_oi_reset;
-    attempt.ratelimit_7d_oi_utilization = wire
-        .get("anthropic-ratelimit-unified-7d_oi-utilization")
-        .and_then(|v| v.trim().parse().ok());
+    attempt.ratelimit_7d_oi_utilization = unified.seven_day_oi_utilization;
     attempt.overage_in_use = unified.overage_in_use;
-    attempt.overage_utilization = wire
-        .get("anthropic-ratelimit-unified-overage-utilization")
-        .and_then(|v| v.trim().parse().ok());
-    Some((unified, wire))
+    attempt.overage_utilization = unified.overage_utilization;
+    Some(unified)
 }
 
 /// The attempt outcome a request's terminal cause implies for the attempt that served it, once the head's
@@ -1006,6 +992,34 @@ mod tests {
             detail["request_id"].as_str()?.to_string(),
             detail["reason"].as_str()?.to_string(),
         ))
+    }
+
+    #[test]
+    fn a_non_finite_overage_utilization_header_lands_no_reading_on_the_attempt() {
+        let mut a = Assembler::new(clock());
+        a.observe(observed("r1", Some("k")));
+        a.observe(selected("r1", 1, "a", 1_010));
+        a.observe(Event::ResponseHead(ResponseHead {
+            request_id: "r1".into(),
+            attempt: 1,
+            status: 200,
+            headers: vec![(
+                "anthropic-ratelimit-unified-overage-utilization".into(),
+                "nan".into(),
+            )],
+            first_event: None,
+            outcome: AttemptOutcome::Succeeded,
+            cooldown: None,
+            written_at: 1_050,
+            observed_at: 1_060,
+        }));
+        let Some(Record::Request { attempts, .. }) = a
+            .observe(complete("r1", 1, Some("a"), Outcome::Succeeded, 200, None))
+            .pop()
+        else {
+            panic!("the completion lands the request")
+        };
+        assert_eq!(attempts[0].overage_utilization, None);
     }
 
     #[test]
