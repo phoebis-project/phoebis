@@ -161,7 +161,7 @@ impl CostSplit {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct RollupRow {
     pub hour: i64,
     pub key_id: String,
@@ -291,48 +291,7 @@ impl RollupRow {
             band: band.into(),
             tier: tier.into(),
             classifier: classifier.into(),
-            requests: 0,
-            succeeded: 0,
-            rate_limited: 0,
-            failed: 0,
-            exhausted: 0,
-            incomplete: 0,
-            rejected: 0,
-            attempts: 0,
-            failovers: 0,
-            cache_hits: 0,
-            cache_misses: 0,
-            uncached_requests: 0,
-            input_tokens: 0,
-            cache_read_tokens: 0,
-            cache_write_5m_tokens: 0,
-            cache_write_1h_tokens: 0,
-            output_tokens: 0,
-            thinking_tokens: 0,
-            web_search_requests: 0,
-            web_fetch_requests: 0,
-            kept_warm_requests: 0,
-            kept_warm_5m_tokens: 0,
-            kept_warm_1h_tokens: 0,
-            probe_migrated: 0,
-            wasted_probes: 0,
-            wasted_input_tokens: 0,
-            wasted_cache_read_tokens: 0,
-            wasted_cache_write_5m_tokens: 0,
-            wasted_cache_write_1h_tokens: 0,
-            wasted_output_tokens: 0,
-            wasted_probe_reasons: BTreeMap::new(),
-            probes_skipped: 0,
-            probes_held: 0,
-            slow_down_held_ms: 0,
-            slow_down_held: 0,
-            ttfb_hist: Histogram::new(),
-            ttfc_hist: Histogram::new(),
-            duration_hist: Histogram::new(),
-            output_tps_hist: Histogram::new(),
-            errors: BTreeMap::new(),
-            refusals: BTreeMap::new(),
-            cache_miss_reasons: BTreeMap::new(),
+            ..RollupRow::default()
         }
     }
 

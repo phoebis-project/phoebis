@@ -2618,12 +2618,8 @@ impl GroupSums {
     ) {
         let key = group_of(row, group_by, live, agent_groups);
         let entry = self.0.entry(key.clone()).or_insert_with(|| GroupSum {
-            sum: RollupRow::key(
-                0, &key, 0, "", "", "", "", "", "", "", "", "", "", "", "", "",
-            ),
-            probes: RollupRow::key(
-                0, &key, 0, "", "", "", "", "", "", "", "", "", "", "", "", "",
-            ),
+            sum: RollupRow::default(),
+            probes: RollupRow::default(),
             dollars: GroupDollars::default(),
             saw_non_probe: false,
             shares: None,
@@ -3928,6 +3924,21 @@ pub struct TrafficBucket {
     pub equivalent: Option<f64>,
 }
 
+/// No row, so the figure is the sum of no plan row: zero, which the fold keeps until a row that priced nothing joins.
+impl Default for TrafficBucket {
+    fn default() -> Self {
+        TrafficBucket {
+            at: 0,
+            requests: 0,
+            failed: 0,
+            tokens: 0,
+            cost_usd: 0.0,
+            billed_usd: 0.0,
+            equivalent: Some(0.0),
+        }
+    }
+}
+
 /// Every bucket in the range from the rollups of one pool, probes left out, read through `read_rollups_paged` with
 /// the pool bound in SQL, each row's dollars and Pro-week figure priced from its counts, the figure against the anchor
 /// row in force at `now`.
@@ -4013,12 +4024,7 @@ impl<'a> TrafficFold<'a> {
         let zero = bucket_starts(first, to_hour, bucket_seconds)
             .map(|at| TrafficBucket {
                 at: at * 1_000,
-                requests: 0,
-                failed: 0,
-                tokens: 0,
-                cost_usd: 0.0,
-                billed_usd: 0.0,
-                equivalent: Some(0.0),
+                ..TrafficBucket::default()
             })
             .collect();
         Ok(TrafficFold {
