@@ -605,7 +605,7 @@ pub struct AccountUpdate<'a> {
     pub actor: &'a str,
     /// The staged `enabled` flag; `None` leaves it.
     pub enabled: Option<bool>,
-    /// The staged cancellation; `None` leaves the flag and the end both.
+    /// The staged cancellation. `None` leaves the flag and the end both.
     pub cancellation: Option<Cancellation>,
 }
 
