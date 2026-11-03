@@ -1993,9 +1993,7 @@ impl Relay {
         }
         // The pool's switch alone; a request with no pool reads off. A `count_tokens` request never gets it, since
         // its public schema has no slot for the beta or the member to land in.
-        let cache_diagnostics_on = snapshot
-            .pool(&key.pool_id)
-            .is_some_and(|p| p.cache_diagnostics);
+        let cache_diagnostics_on = pool.is_some_and(|p| p.cache_diagnostics);
         // Mirrors the client's own gate: the member and its beta go only where the client cached and sent tools,
         // so a helper that shares no prefix with its conversation never reports a false miss. The markers are the
         // client's, read before the cache TTL policy's rewrite, so a body the policy gives a member stays
@@ -2007,8 +2005,7 @@ impl Relay {
         // The same raw lookup `insert_diagnostics` makes, so the recorded source and the edit never disagree.
         let client_diagnostics = trace.kind != Kind::CountTokens
             && phoebis_cch::object_member_span(&raw, &["diagnostics"]).is_some();
-        let cache_ttl_policy = snapshot
-            .pool(&key.pool_id)
+        let cache_ttl_policy = pool
             .map(|p| CacheTtlPolicy::from_json(&p.cache_ttl_json))
             .unwrap_or_default();
         let portable = facts.portable;
