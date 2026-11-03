@@ -86,10 +86,6 @@ pub enum DiscoveryError {
     Unreachable(String),
 }
 
-pub struct Discovered {
-    pub models: Vec<CatalogRow>,
-}
-
 /// An account's listing differs from the one before: the ids that came and went and the new count.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogChange {
@@ -263,7 +259,7 @@ impl CatalogService {
     }
 
     /// The uncached probe with the measured request shape; the admin's verify and the staged-secret check.
-    pub async fn discover(&self, account: &AccountRow) -> Result<Discovered, DiscoveryError> {
+    pub async fn discover(&self, account: &AccountRow) -> Result<Vec<CatalogRow>, DiscoveryError> {
         self.discover_with(account, None).await
     }
 
@@ -273,7 +269,7 @@ impl CatalogService {
         &self,
         account: &AccountRow,
         secret: Option<&Secret>,
-    ) -> Result<Discovered, DiscoveryError> {
+    ) -> Result<Vec<CatalogRow>, DiscoveryError> {
         // The credential step (an OAuth `acquire` that may refresh) shares the round trip's own bound, so
         // the whole discovery is bounded by `self.timeout`, not just the network exchange.
         let (status, body) = tokio::time::timeout(self.timeout, async {
@@ -322,8 +318,8 @@ impl CatalogService {
         // failed slot would be stale on commit and every caller waiting on the fill lock would discover again.
         let fetched_at = (self.clock)();
         let catalog = match discovered {
-            Ok(discovered) => Catalog {
-                models: discovered.models,
+            Ok(models) => Catalog {
+                models,
                 fetched_at,
                 error: None,
             },
@@ -944,7 +940,7 @@ async fn exchange<C: AsyncRead + AsyncWrite + Unpin>(
     Ok((head.status, out, reusable))
 }
 
-fn parse_models(body: &[u8]) -> Result<Discovered, DiscoveryError> {
+fn parse_models(body: &[u8]) -> Result<Vec<CatalogRow>, DiscoveryError> {
     let root: serde_json::Value =
         serde_json::from_slice(body).map_err(|e| DiscoveryError::Malformed(e.to_string()))?;
     let data = root
@@ -977,7 +973,7 @@ fn parse_models(body: &[u8]) -> Result<Discovered, DiscoveryError> {
             })
         })
         .collect();
-    Ok(Discovered { models })
+    Ok(models)
 }
 
 /// The API's own effort order, which a row's levels are shown in; a name outside it follows, as listed.
@@ -1072,7 +1068,7 @@ mod tests {
                 "supported": false,
             } } },
         ] });
-        let models = parse_models(body.to_string().as_bytes()).unwrap().models;
+        let models = parse_models(body.to_string().as_bytes()).unwrap();
         assert_eq!(models.len(), 8, "no shape of capabilities drops its row");
         let levels = |id: &str| {
             models

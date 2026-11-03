@@ -41,8 +41,8 @@ pub use cache_ttl::{
 };
 pub use casing::{head_queue, HeadQueue, HeadRecorder, OriginalHead};
 pub use catalog::{
-    Catalog, CatalogChange, CatalogHook, CatalogRow, CatalogService, Discovered, DiscoveryError,
-    Prefetched, Warmth, EFFORT_LEVELS, ERROR_HOLD, MAX_BODY, REFRESH_TICK,
+    Catalog, CatalogChange, CatalogHook, CatalogRow, CatalogService, DiscoveryError, Prefetched,
+    Warmth, EFFORT_LEVELS, ERROR_HOLD, MAX_BODY, REFRESH_TICK,
 };
 pub use chains::{canonical, Chains};
 pub use classify::{
