@@ -283,16 +283,6 @@
   white-space: nowrap;
 }
 
-/* A bar's two parts, a whole bar's reset and projection or a compact bar's share and horizon, each stay whole, so the
-   line breaks between them, never inside one. */
-.wbar__reset--split {
-  white-space: normal;
-}
-
-.wbar__part {
-  white-space: nowrap;
-}
-
 .wbar__reset.is-soon,
 .qwin__reset.is-soon {
   color: var(--accent-ink);
@@ -383,7 +373,8 @@
   vertical-align: bottom;
 }
 
-.remaining {
+.remaining,
+.split-row {
   display: grid;
   grid-template-columns: 148px 1fr;
   gap: 20px;
@@ -772,12 +763,16 @@
   white-space: normal;
 }
 
-/* A live label breaks between its reset and its projection, never inside one. */
-.qwin__reset--split {
+/* A label's two parts each stay whole, so the line breaks between them, never inside one: a whole bar's or a live quota
+   label's reset and projection, a compact bar's share and horizon. The split follows `.qwin__reset`, whose
+   `white-space: nowrap` it beats only by coming later. */
+.qwin__reset--split,
+.wbar__reset--split {
   white-space: normal;
 }
 
-.qwin__part {
+.qwin__part,
+.wbar__part {
   white-space: nowrap;
 }
 
@@ -1475,14 +1470,12 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding-top: 14px;
-  margin-top: 14px;
-  border-top: 1px solid var(--hairline);
 }
 
-/* A section of its own under the account page's usage bars, as extra usage is; the quota card spaces it by its
-   body's gap instead. */
-.card .fast-lane {
+/* The fast lane is a section of its own under the account page's usage bars, as extra usage is. The quota card spaces
+   it by its body's gap instead. */
+.card .fast-lane,
+.extra-usage {
   padding-top: 14px;
   margin-top: 14px;
   border-top: 1px solid var(--hairline);
@@ -2264,9 +2257,12 @@
   white-space: nowrap;
 }
 
-/* The held marker follows the count at the step size the `.trail__step` rule gives the card's badges, so the row reads
-   as one run, and drops under the count, since a fit column is as wide as its widest single item. */
-.requests__attempts {
+/* The held marker follows the attempts' count and the outcome word the status badge, each at the step size the
+   `.trail__step` rule gives the card's badges, so the pair reads as one run. The second item drops under the first
+   where the column is narrow, since a fit column is as wide as its widest single item, so it widens the column by its
+   own width at most, never by the pair's. */
+.requests__attempts,
+.requests__status {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
@@ -2289,15 +2285,6 @@
   border: 1px solid var(--hairline-strong);
   border-radius: 6px;
   box-shadow: var(--shadow-pop);
-}
-
-/* The outcome word follows the status badge at the attempts' step and drops under it where the column is narrow, so
-   the word widens the column by its own width at most, never by the pair's. */
-.requests__status {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
 }
 
 /* A fit column is as wide as its widest single item, so the two links take the sub line's 11.5 px and stack there,
@@ -4750,13 +4737,6 @@
    figures fit, and wrap where they do not. */
 .tiles-row--panel > .stat {
   flex-basis: calc((100% - 24px) / 3);
-}
-
-.split-row {
-  display: grid;
-  grid-template-columns: 148px 1fr;
-  gap: 20px;
-  align-items: center;
 }
 
 /* A native Cost figure stays whole, so a narrow tile moves the funding's word under the figure rather than breaking
