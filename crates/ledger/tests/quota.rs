@@ -249,20 +249,12 @@ fn rate_limited_for(retry_after_seconds: &str) -> Respond {
 fn pair(store: &Store, id: &str, secret: &str) {
     store
         .insert_account(&AccountRow {
-            id: id.into(),
-            kind: AccountKind::Oauth,
-            label: id.into(),
-            enabled: true,
             identity: Some(Identity {
                 account_uuid: "00000000-0000-4000-8000-000000000199".into(),
                 email: format!("{id}@example.invalid"),
                 organization_uuid: None,
             }),
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
+            ..AccountRow::for_tests(id, AccountKind::Oauth)
         })
         .unwrap();
     let incarnation = store.account(id).unwrap().unwrap().incarnation;

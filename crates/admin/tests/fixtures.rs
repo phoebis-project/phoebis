@@ -457,20 +457,14 @@ async fn every_route_is_captured_and_holds_its_shape() {
     parts
         .store
         .insert_account(&AccountRow {
-            id: "usage-seat".into(),
-            kind: AccountKind::Oauth,
             label: "Seat".into(),
-            enabled: true,
             identity: Some(Identity {
                 account_uuid: "00000000-0000-4000-8000-000000000003".into(),
                 email: "seat@example.invalid".into(),
                 organization_uuid: Some("00000000-0000-4000-8000-000000000004".into()),
             }),
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
             state_cause: StateCause::Paired,
+            ..AccountRow::for_tests("usage-seat", AccountKind::Oauth)
         })
         .unwrap();
     parts
@@ -506,20 +500,14 @@ async fn every_route_is_captured_and_holds_its_shape() {
     parts
         .store
         .insert_account(&AccountRow {
-            id: "free-org".into(),
-            kind: AccountKind::Oauth,
             label: "Free".into(),
-            enabled: true,
             identity: Some(Identity {
                 account_uuid: "00000000-0000-4000-8000-000000000005".into(),
                 email: "free@example.invalid".into(),
                 organization_uuid: Some("00000000-0000-4000-8000-000000000006".into()),
             }),
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
             state_cause: StateCause::Paired,
+            ..AccountRow::for_tests("free-org", AccountKind::Oauth)
         })
         .unwrap();
     parts

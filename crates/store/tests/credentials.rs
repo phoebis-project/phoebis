@@ -5,16 +5,8 @@ use phoebis_store::{
 
 fn account(id: &str) -> AccountRow {
     AccountRow {
-        id: id.into(),
-        kind: AccountKind::Oauth,
-        label: id.into(),
-        enabled: true,
-        identity: None,
-        lifecycle_generation: 1,
-        incarnation: 1,
-        revision: 1,
         state: AccountState::Unpaired,
-        state_cause: StateCause::Operator,
+        ..AccountRow::for_tests(id, AccountKind::Oauth)
     }
 }
 
@@ -497,18 +489,7 @@ fn an_attempt_of_a_deleted_incarnation_settles_nothing_on_the_slot_that_took_its
 fn resolved_refresh_attempts_are_listed_after_a_watermark() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store
-        .insert_account(&AccountRow {
-            id: "a".into(),
-            kind: AccountKind::Oauth,
-            label: "a".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
-        })
+        .insert_account(&AccountRow::for_tests("a", AccountKind::Oauth))
         .unwrap();
     let first = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
     store

@@ -10,9 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use phoebis_store::{
-    AccountKind, AccountRow, AccountState, NewBundle, Secret, StateCause, StorageKey, Store,
-};
+use phoebis_store::{AccountKind, AccountRow, AccountState, NewBundle, Secret, StorageKey, Store};
 
 const HEX_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -147,16 +145,8 @@ fn registry_from_before_the_canary(registry: &Path, key: &StorageKey) {
     let store = Store::open(registry, key).unwrap();
     store
         .insert_account(&AccountRow {
-            id: "a".into(),
-            kind: AccountKind::Oauth,
-            label: "a".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
             state: AccountState::Unpaired,
-            state_cause: StateCause::Operator,
+            ..AccountRow::for_tests("a", AccountKind::Oauth)
         })
         .unwrap();
     store

@@ -17,7 +17,7 @@ use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
     CooldownRow, CooldownScope, Failover, FirstSeenRow, OveragePolicy, PinBurn, PinKey, PinMark,
     PinRow, PoolMember, PoolRow, RegistryLoad, ReturnToPlan, RoutingLoad, RulesMode,
-    SessionPlacement, ShedRoundRow, Shedding, SlowDown, StateCause, Strategy, SubagentPlacement,
+    SessionPlacement, ShedRoundRow, Shedding, SlowDown, Strategy, SubagentPlacement,
     SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
@@ -156,16 +156,9 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             .map(|(_, k)| *k)
             .unwrap_or(AccountKind::Oauth);
         AccountRow {
-            id: id.into(),
-            kind,
-            label: id.into(),
             enabled,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
             state,
-            state_cause: StateCause::Operator,
+            ..AccountRow::for_tests(id, kind)
         }
     };
     RegistryLoad {
@@ -5310,18 +5303,7 @@ fn an_entry_another_key_wrote_places_the_request() {
 /// key `(id, pool)` and each member `(pool, account, priority)` as given. The dwell is set on each pool so the cases
 /// that read 900 s do not rest on the default preset.
 fn shedding_pools(keys: &[(&str, &str)], members: &[(&str, &str, u32)]) -> RegistrySnapshot {
-    let account = |id: &str| AccountRow {
-        id: id.into(),
-        kind: AccountKind::Oauth,
-        label: id.into(),
-        enabled: true,
-        identity: None,
-        lifecycle_generation: 1,
-        incarnation: 1,
-        revision: 1,
-        state: AccountState::Ready,
-        state_cause: StateCause::Operator,
-    };
+    let account = |id: &str| AccountRow::for_tests(id, AccountKind::Oauth);
     let api_key = |&(id, pool_id): &(&str, &str)| ApiKeyRow {
         id: id.into(),
         label: id.into(),

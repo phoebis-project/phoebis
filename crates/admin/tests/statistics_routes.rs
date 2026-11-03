@@ -2386,16 +2386,9 @@ async fn the_unused_allowance_route_groups_each_subscription_accounts_weekly_res
     parts
         .store
         .insert_account(&AccountRow {
-            id: "second".into(),
-            kind: AccountKind::Oauth,
             label: "Second".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
             state_cause: StateCause::Paired,
+            ..AccountRow::for_tests("second", AccountKind::Oauth)
         })
         .unwrap();
     for (id, document, tier) in [
@@ -3506,16 +3499,9 @@ async fn the_funding_partition_holds_when_an_api_key_account_is_deleted_and_its_
     parts
         .store
         .insert_account(&AccountRow {
-            id: "direct".into(),
-            kind: AccountKind::Oauth,
             label: "Direct again".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
             state: AccountState::Unpaired,
-            state_cause: StateCause::Operator,
+            ..AccountRow::for_tests("direct", AccountKind::Oauth)
         })
         .unwrap();
     assert_eq!(
@@ -4552,16 +4538,8 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
     parts
         .store
         .insert_account(&phoebis_store::AccountRow {
-            id: "metered".into(),
-            kind: phoebis_store::AccountKind::ApiKey,
             label: "Metered".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: phoebis_store::AccountState::Ready,
-            state_cause: phoebis_store::StateCause::Operator,
+            ..phoebis_store::AccountRow::for_tests("metered", phoebis_store::AccountKind::ApiKey)
         })
         .unwrap();
     post(
@@ -5883,16 +5861,8 @@ async fn the_routing_log_reads_a_rewrite_hold_and_the_request_it_waited_for() {
     parts
         .store
         .insert_account(&AccountRow {
-            id: "sibling".into(),
-            kind: AccountKind::ApiKey,
             label: "Sibling".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
+            ..AccountRow::for_tests("sibling", AccountKind::ApiKey)
         })
         .unwrap();
     parts

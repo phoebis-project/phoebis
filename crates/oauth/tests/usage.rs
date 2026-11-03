@@ -193,20 +193,12 @@ mod service {
         let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
         store
             .insert_account(&AccountRow {
-                id: "a".into(),
-                kind: AccountKind::Oauth,
-                label: "a".into(),
-                enabled: true,
                 identity: Some(phoebis_store::Identity {
                     account_uuid: "00000000-0000-4000-8000-000000000001".into(),
                     email: "test@example.invalid".into(),
                     organization_uuid: None,
                 }),
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
-                state: AccountState::Ready,
-                state_cause: StateCause::Operator,
+                ..AccountRow::for_tests("a", AccountKind::Oauth)
             })
             .unwrap();
         store
@@ -287,20 +279,12 @@ mod service {
         let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
         store
             .insert_account(&AccountRow {
-                id: "business".into(),
-                kind: AccountKind::Oauth,
-                label: "business".into(),
-                enabled: true,
                 identity: Some(phoebis_store::Identity {
                     account_uuid: "00000000-0000-4000-8000-000000000001".into(),
                     email: "test@example.invalid".into(),
                     organization_uuid: None,
                 }),
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
-                state: AccountState::Ready,
-                state_cause: StateCause::Operator,
+                ..AccountRow::for_tests("business", AccountKind::Oauth)
             })
             .unwrap();
         store
@@ -1208,18 +1192,7 @@ mod service {
         store.delete_account("a", "test").unwrap();
         service.invalidate("a");
         store
-            .insert_account(&AccountRow {
-                id: "a".into(),
-                kind: AccountKind::Oauth,
-                label: "a".into(),
-                enabled: true,
-                identity: None,
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
-                state: AccountState::Ready,
-                state_cause: StateCause::Operator,
-            })
+            .insert_account(&AccountRow::for_tests("a", AccountKind::Oauth))
             .unwrap();
         let replacement = store.account("a").unwrap().unwrap();
         assert_eq!(
@@ -1281,18 +1254,7 @@ mod service {
         .await;
         store.delete_account("a", "test").unwrap();
         store
-            .insert_account(&AccountRow {
-                id: "a".into(),
-                kind: AccountKind::Oauth,
-                label: "a".into(),
-                enabled: true,
-                identity: None,
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
-                state: AccountState::Ready,
-                state_cause: StateCause::Operator,
-            })
+            .insert_account(&AccountRow::for_tests("a", AccountKind::Oauth))
             .unwrap();
         assert!(
             service.latest("a").is_none(),

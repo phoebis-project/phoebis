@@ -4674,18 +4674,7 @@ mod tests {
             enabled: true,
             ..KeepalivePolicy::default()
         };
-        let account = |id: &str, kind| phoebis_store::AccountRow {
-            id: id.into(),
-            kind,
-            label: id.into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: phoebis_store::StateCause::Operator,
-        };
+        let account = |id: &str, kind| phoebis_store::AccountRow::for_tests(id, kind);
         let member = |account_id: &str| phoebis_store::PoolMember {
             pool_id: "main".into(),
             account_id: account_id.into(),

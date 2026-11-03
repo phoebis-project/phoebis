@@ -2864,20 +2864,12 @@ fn seed_oauth_account(db_path: &std::path::Path, key_path: &std::path::Path) {
     if store.accounts().unwrap().is_empty() {
         store
             .insert_account(&phoebis_store::AccountRow {
-                id: "a".into(),
-                kind: phoebis_store::AccountKind::Oauth,
-                label: "a".into(),
-                enabled: true,
                 identity: Some(phoebis_store::Identity {
                     account_uuid: "00000000-0000-4000-8000-000000000001".into(),
                     email: "a@example.invalid".into(),
                     organization_uuid: None,
                 }),
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
-                state: phoebis_store::AccountState::Ready,
-                state_cause: phoebis_store::StateCause::Operator,
+                ..phoebis_store::AccountRow::for_tests("a", phoebis_store::AccountKind::Oauth)
             })
             .unwrap();
         store
@@ -3729,20 +3721,12 @@ async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever
 fn pair_oauth(store: &phoebis_store::Store, id: &str, token: &str, account_uuid: &str) {
     store
         .insert_account(&phoebis_store::AccountRow {
-            id: id.into(),
-            kind: phoebis_store::AccountKind::Oauth,
-            label: id.into(),
-            enabled: true,
             identity: Some(phoebis_store::Identity {
                 account_uuid: account_uuid.into(),
                 email: format!("{id}@example.invalid"),
                 organization_uuid: None,
             }),
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: phoebis_store::AccountState::Ready,
-            state_cause: phoebis_store::StateCause::Operator,
+            ..phoebis_store::AccountRow::for_tests(id, phoebis_store::AccountKind::Oauth)
         })
         .unwrap();
     // A re-paired id takes the next incarnation, which the credential write is fenced on.

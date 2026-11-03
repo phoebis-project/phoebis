@@ -2342,16 +2342,9 @@ async fn the_tick_writes_the_word_the_writer_stored() {
 fn replaced_and_marked(store: &Store) {
     store
         .insert_account(&phoebis_store::AccountRow {
-            id: "a".into(),
-            kind: phoebis_store::AccountKind::Oauth,
-            label: "a".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
             state: AccountState::ReauthRequired,
             state_cause: StateCause::RefreshFailed,
+            ..phoebis_store::AccountRow::for_tests("a", phoebis_store::AccountKind::Oauth)
         })
         .unwrap();
 }
@@ -2463,16 +2456,8 @@ async fn a_row_born_ready_by_a_pairing_records_its_transition_from_unpaired() {
     let h = harness(&up, &[oauth("b", B, 0)], (0, None), polled_every_50_ms()).await;
     h.store
         .insert_account(&phoebis_store::AccountRow {
-            id: "a".into(),
-            kind: phoebis_store::AccountKind::Oauth,
-            label: "a".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
             state_cause: StateCause::Paired,
+            ..phoebis_store::AccountRow::for_tests("a", phoebis_store::AccountKind::Oauth)
         })
         .unwrap();
     let expected = [transition("unpaired", "ready", "paired", None)];
@@ -3180,18 +3165,10 @@ async fn a_wind_down_a_cancellation_after_the_start_opens_lands_whenever_its_win
 async fn a_clock_reset_that_passed_while_the_router_was_down_lands_once_at_the_start() {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     store
-        .insert_account(&phoebis_store::AccountRow {
-            id: "a".into(),
-            kind: phoebis_store::AccountKind::Oauth,
-            label: "a".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
-        })
+        .insert_account(&phoebis_store::AccountRow::for_tests(
+            "a",
+            phoebis_store::AccountKind::Oauth,
+        ))
         .unwrap();
     let down_since = NOW - 60_000;
     let reset_at = NOW - 30_000;
@@ -3282,18 +3259,10 @@ async fn a_clock_reset_that_passed_while_the_router_was_down_lands_once_at_the_s
 async fn the_start_row_dates_the_gap_from_the_previous_run_whatever_the_mirror_finds_at_spawn() {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     store
-        .insert_account(&phoebis_store::AccountRow {
-            id: "a".into(),
-            kind: phoebis_store::AccountKind::Oauth,
-            label: "a".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
-        })
+        .insert_account(&phoebis_store::AccountRow::for_tests(
+            "a",
+            phoebis_store::AccountKind::Oauth,
+        ))
         .unwrap();
     let down_since = NOW - 60_000;
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
@@ -3428,16 +3397,8 @@ async fn the_start_fold_waits_for_the_start_row_so_a_span_the_previous_run_left_
 async fn a_quarantine_the_start_lands_after_the_mirrors_baseline_is_mirrored() {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     let account = |id: &str, cause: StateCause| phoebis_store::AccountRow {
-        id: id.into(),
-        kind: phoebis_store::AccountKind::Oauth,
-        label: id.into(),
-        enabled: true,
-        identity: None,
-        lifecycle_generation: 1,
-        incarnation: 1,
-        revision: 1,
-        state: AccountState::Ready,
         state_cause: cause,
+        ..phoebis_store::AccountRow::for_tests(id, phoebis_store::AccountKind::Oauth)
     };
     store
         .insert_account(&account("a", StateCause::Operator))

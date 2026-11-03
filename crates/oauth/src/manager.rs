@@ -1368,20 +1368,12 @@ mod tests {
         let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
         store
             .insert_account(&AccountRow {
-                id: "a".into(),
-                kind: AccountKind::Oauth,
-                label: "a".into(),
-                enabled: true,
                 identity: Some(Identity {
                     account_uuid: "00000000-0000-4000-8000-000000000001".into(),
                     email: "test@example.invalid".into(),
                     organization_uuid: None,
                 }),
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
-                state: AccountState::Ready,
-                state_cause: StateCause::Operator,
+                ..AccountRow::for_tests("a", AccountKind::Oauth)
             })
             .unwrap();
         let clock: Clock = Arc::new(move || now);

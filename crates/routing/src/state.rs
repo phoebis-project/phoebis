@@ -4122,16 +4122,8 @@ mod tests {
         RegistrySnapshot::from_load(
             phoebis_store::RegistryLoad {
                 accounts: vec![phoebis_store::AccountRow {
-                    id: "a".into(),
-                    kind: AccountKind::Oauth,
-                    label: "a".into(),
-                    enabled: true,
-                    identity: None,
-                    lifecycle_generation: 1,
-                    incarnation: 1,
                     revision,
-                    state: AccountState::Ready,
-                    state_cause: StateCause::Operator,
+                    ..phoebis_store::AccountRow::for_tests("a", AccountKind::Oauth)
                 }],
                 ..phoebis_store::RegistryLoad::default()
             },
@@ -4842,18 +4834,10 @@ mod tests {
         // The account is present, so only the bucket cut can empty its map.
         let snapshot = RegistrySnapshot::from_load(
             phoebis_store::RegistryLoad {
-                accounts: vec![phoebis_store::AccountRow {
-                    id: "a".into(),
-                    kind: AccountKind::ApiKey,
-                    label: "a".into(),
-                    enabled: true,
-                    identity: None,
-                    lifecycle_generation: 1,
-                    incarnation: 1,
-                    revision: 1,
-                    state: AccountState::Ready,
-                    state_cause: StateCause::Operator,
-                }],
+                accounts: vec![phoebis_store::AccountRow::for_tests(
+                    "a",
+                    AccountKind::ApiKey,
+                )],
                 ..Default::default()
             },
             [0; 32],

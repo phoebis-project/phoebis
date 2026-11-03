@@ -5924,18 +5924,7 @@ mod tests {
         let path = scratch.path().join("store").join("router.sqlite");
         let store = Store::open(&path, &key).unwrap();
         store
-            .insert_account(&AccountRow {
-                id: "a".into(),
-                kind: AccountKind::ApiKey,
-                label: "a".into(),
-                enabled: true,
-                identity: None,
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
-                state: AccountState::Ready,
-                state_cause: StateCause::Operator,
-            })
+            .insert_account(&AccountRow::for_tests("a", AccountKind::ApiKey))
             .unwrap();
         let linked = scratch.path().join("holder").join("router.sqlite");
         std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
@@ -6058,18 +6047,7 @@ mod tests {
         let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
         for id in ["a", "b"] {
             store
-                .insert_account(&AccountRow {
-                    id: id.into(),
-                    kind: AccountKind::Oauth,
-                    label: id.into(),
-                    enabled: true,
-                    identity: None,
-                    lifecycle_generation: 1,
-                    incarnation: 1,
-                    revision: 1,
-                    state: AccountState::Ready,
-                    state_cause: StateCause::Operator,
-                })
+                .insert_account(&AccountRow::for_tests(id, AccountKind::Oauth))
                 .unwrap();
         }
         // Two windows of `a` and none of `b`: one account with a reading.
@@ -6114,18 +6092,7 @@ mod tests {
         pool.slow_down.slow_down = true;
         let snapshot = RegistrySnapshot::from_load(
             RegistryLoad {
-                accounts: vec![AccountRow {
-                    id: "a".into(),
-                    kind: AccountKind::Oauth,
-                    label: "a".into(),
-                    enabled: true,
-                    identity: None,
-                    lifecycle_generation: 1,
-                    incarnation: 1,
-                    revision: 1,
-                    state: AccountState::Ready,
-                    state_cause: StateCause::Operator,
-                }],
+                accounts: vec![AccountRow::for_tests("a", AccountKind::Oauth)],
                 keys: vec![ApiKeyRow {
                     id: "k".into(),
                     label: "k".into(),

@@ -1392,16 +1392,9 @@ async fn the_account_view_answers_the_plan_the_profile_resolves_to() {
     for (id, label) in [("seat", "Seat"), ("unpaired", "Unpaired")] {
         store
             .insert_account(&phoebis_store::AccountRow {
-                id: id.into(),
-                kind: phoebis_store::AccountKind::Oauth,
                 label: label.into(),
-                enabled: true,
-                identity: None,
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
-                state: phoebis_store::AccountState::Ready,
                 state_cause: phoebis_store::StateCause::Paired,
+                ..phoebis_store::AccountRow::for_tests(id, phoebis_store::AccountKind::Oauth)
             })
             .unwrap();
     }
@@ -1458,16 +1451,9 @@ async fn a_usage_based_account_answers_its_class_and_no_overage_whatever_a_head_
     parts
         .store
         .insert_account(&phoebis_store::AccountRow {
-            id: "seat".into(),
-            kind: phoebis_store::AccountKind::Oauth,
             label: "Seat".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: phoebis_store::AccountState::Ready,
             state_cause: phoebis_store::StateCause::Paired,
+            ..phoebis_store::AccountRow::for_tests("seat", phoebis_store::AccountKind::Oauth)
         })
         .unwrap();
     parts
@@ -1590,16 +1576,8 @@ fn insert_oauth(parts: &common::Full, id: &str, seat: bool) {
     parts
         .store
         .insert_account(&phoebis_store::AccountRow {
-            id: id.into(),
-            kind: phoebis_store::AccountKind::Oauth,
-            label: id.into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: phoebis_store::AccountState::Ready,
             state_cause: phoebis_store::StateCause::Paired,
+            ..phoebis_store::AccountRow::for_tests(id, phoebis_store::AccountKind::Oauth)
         })
         .unwrap();
     if seat {

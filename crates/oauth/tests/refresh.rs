@@ -104,20 +104,12 @@ fn store_with_account() -> Arc<Store> {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     store
         .insert_account(&AccountRow {
-            id: "a".into(),
-            kind: AccountKind::Oauth,
-            label: "a".into(),
-            enabled: true,
             identity: Some(phoebis_store::Identity {
                 account_uuid: "00000000-0000-4000-8000-000000000001".into(),
                 email: "test@example.invalid".into(),
                 organization_uuid: None,
             }),
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
+            ..AccountRow::for_tests("a", AccountKind::Oauth)
         })
         .unwrap();
     store
@@ -1254,20 +1246,12 @@ async fn a_reauth_verdict_from_a_previous_incarnation_is_dropped() {
     store.delete_account("a", "test").unwrap();
     store
         .insert_account(&AccountRow {
-            id: "a".into(),
-            kind: AccountKind::Oauth,
-            label: "a".into(),
-            enabled: true,
             identity: Some(phoebis_store::Identity {
                 account_uuid: "00000000-0000-4000-8000-000000000001".into(),
                 email: "test@example.invalid".into(),
                 organization_uuid: None,
             }),
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
+            ..AccountRow::for_tests("a", AccountKind::Oauth)
         })
         .unwrap();
     store
@@ -1464,18 +1448,7 @@ async fn an_unreadable_credential_row_quarantines_its_account_instead_of_failing
     let now = Arc::new(AtomicI64::new(1_000_000));
     let (mgr, store, up) = manager_with(vec![], now).await;
     store
-        .insert_account(&AccountRow {
-            id: "b".into(),
-            kind: AccountKind::Oauth,
-            label: "b".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
-        })
+        .insert_account(&AccountRow::for_tests("b", AccountKind::Oauth))
         .unwrap();
     let bundle = || NewBundle {
         access_token: Secret::new("old"),

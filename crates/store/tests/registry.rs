@@ -9,18 +9,7 @@ use phoebis_store::{
 };
 
 fn account(id: &str, kind: AccountKind) -> AccountRow {
-    AccountRow {
-        id: id.into(),
-        kind,
-        label: id.into(),
-        enabled: true,
-        identity: None,
-        lifecycle_generation: 1,
-        incarnation: 1,
-        revision: 1,
-        state: AccountState::Ready,
-        state_cause: StateCause::Operator,
-    }
+    AccountRow::for_tests(id, kind)
 }
 
 fn pool(id: &str) -> PoolRow {

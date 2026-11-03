@@ -20,8 +20,8 @@ use phoebis_profile::{
 use phoebis_relay::{router, Accounting, CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Identity, MemberWrite,
-    NewBundle, PoolRow, RulesMode, Secret, StateCause, StorageKey, Store, StoreError, Strategy,
+    AccountKind, AccountRow, AccountUpdate, ApiKeyRow, Identity, MemberWrite, NewBundle, PoolRow,
+    RulesMode, Secret, StorageKey, Store, StoreError, Strategy,
 };
 use phoebis_transport::request::parse_head;
 // The polls live with the fake so every integration suite has them; only some of them are used here.
@@ -119,16 +119,8 @@ pub async fn harness_on(
             });
             store
                 .insert_account(&AccountRow {
-                    id: account.id.into(),
-                    kind: account.kind,
-                    label: account.id.into(),
-                    enabled: true,
                     identity,
-                    lifecycle_generation: 1,
-                    incarnation: 1,
-                    revision: 1,
-                    state: AccountState::Ready,
-                    state_cause: StateCause::Operator,
+                    ..AccountRow::for_tests(account.id, account.kind)
                 })
                 .unwrap();
             match account.kind {

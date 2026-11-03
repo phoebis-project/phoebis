@@ -364,24 +364,10 @@ async fn a_scrape_reads_the_routers_drop_counters_at_gather() {
 
 #[tokio::test]
 async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_longer_wait() {
-    use phoebis_store::{
-        AccountKind, AccountRow, AccountState, CooldownRow, CooldownScope, StateCause, StorageKey,
-        Store,
-    };
+    use phoebis_store::{AccountKind, AccountRow, CooldownRow, CooldownScope, StorageKey, Store};
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     store
-        .insert_account(&AccountRow {
-            id: "a".into(),
-            kind: AccountKind::ApiKey,
-            label: "a".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
-        })
+        .insert_account(&AccountRow::for_tests("a", AccountKind::ApiKey))
         .unwrap();
     for (model, until) in [("vendor-x", 61_000), ("vendor-y", 121_000)] {
         store
@@ -428,22 +414,11 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
 
 #[tokio::test]
 async fn an_overage_observations_reset_decides_the_gauge_rather_than_the_raw_flag() {
-    use phoebis_store::{AccountKind, AccountRow, AccountState, StateCause, StorageKey, Store};
+    use phoebis_store::{AccountKind, AccountRow, StorageKey, Store};
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     for id in ["past", "ahead"] {
         store
-            .insert_account(&AccountRow {
-                id: id.into(),
-                kind: AccountKind::Oauth,
-                label: id.into(),
-                enabled: true,
-                identity: None,
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
-                state: AccountState::Ready,
-                state_cause: StateCause::Operator,
-            })
+            .insert_account(&AccountRow::for_tests(id, AccountKind::Oauth))
             .unwrap();
     }
     let router = phoebis_routing::spawn(

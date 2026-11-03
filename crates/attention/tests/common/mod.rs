@@ -19,8 +19,8 @@ use phoebis_oauth::{Clock, CredentialManager, UsageService};
 use phoebis_profile::claude_code_2_1_310_linux_x64;
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, MemberWrite, NewBundle, PoolRow,
-    RulesMode, Secret, StateCause, StorageKey, Store, Strategy,
+    AccountKind, AccountRow, ApiKeyRow, Identity, MemberWrite, NewBundle, PoolRow, RulesMode,
+    Secret, StorageKey, Store, Strategy,
 };
 use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
@@ -161,18 +161,7 @@ fn seed(store: &Store) {
         ("direct", AccountKind::ApiKey),
     ] {
         store
-            .insert_account(&AccountRow {
-                id: id.into(),
-                kind,
-                label: id.into(),
-                enabled: true,
-                identity: None,
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
-                state: AccountState::Ready,
-                state_cause: StateCause::Operator,
-            })
+            .insert_account(&AccountRow::for_tests(id, kind))
             .unwrap();
     }
     store

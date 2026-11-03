@@ -93,6 +93,24 @@ fn unpack_token(token: u64, low_bits: u32) -> (u64, u64) {
 }
 
 impl AccountRow {
+    /// A ready account labeled by its id, at its first incarnation, generation and revision, with no identity: a
+    /// test overrides the fields its case is about, so a field added to or removed from the row touches this one site.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_tests(id: &str, kind: AccountKind) -> AccountRow {
+        AccountRow {
+            id: id.into(),
+            kind,
+            label: id.into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+            state_cause: StateCause::Operator,
+        }
+    }
+
     /// What an operator's edit sends back to be fenced on: the incarnation and the revision in one integer. An
     /// account deleted and created again under the same id restarts its revision at 1, so the revision alone would
     /// let an editor opened before the deletion land on the replacement. A part past its share saturates: the token

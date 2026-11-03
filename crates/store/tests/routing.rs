@@ -1,9 +1,8 @@
 use phoebis_routing::lane_key;
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, ApiKeyRow, CooldownRow,
-    CooldownScope, CreditsRow, FirstSeenRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolRow,
-    RekeyWrite, ResolutionRow, RulesMode, ShedRoundRow, ShedStamp, StateCause, StorageKey, Store,
-    WindowRow, WindowSetRow,
+    AccountKind, AccountRow, AffinityChain, AffinityRow, ApiKeyRow, CooldownRow, CooldownScope,
+    CreditsRow, FirstSeenRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolRow, RekeyWrite,
+    ResolutionRow, RulesMode, ShedRoundRow, ShedStamp, StorageKey, Store, WindowRow, WindowSetRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -52,18 +51,7 @@ fn store_with(ids: &[&str]) -> Store {
 fn seed_accounts(store: &Store, ids: &[&str]) {
     for id in ids {
         store
-            .insert_account(&AccountRow {
-                id: (*id).into(),
-                kind: AccountKind::ApiKey,
-                label: (*id).into(),
-                enabled: true,
-                identity: None,
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
-                state: AccountState::Ready,
-                state_cause: StateCause::Operator,
-            })
+            .insert_account(&AccountRow::for_tests(id, AccountKind::ApiKey))
             .unwrap();
     }
 }

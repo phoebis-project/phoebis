@@ -8,8 +8,8 @@ use phoebis_routing::{
     SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, PoolMember, PoolRow, RegistryLoad,
-    RoutingLoad, RulesMode, StateCause, Strategy,
+    AccountKind, AccountRow, ApiKeyRow, PoolMember, PoolRow, RegistryLoad, RoutingLoad, RulesMode,
+    Strategy,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -18,18 +18,7 @@ const HOUR: i64 = 3_600_000;
 
 /// Key `k` on Pace pool `p` over the subscription members `a` and `b` and the api_key member `c`.
 fn snapshot() -> RegistrySnapshot {
-    let account = |(id, kind): (&str, AccountKind)| AccountRow {
-        id: id.into(),
-        kind,
-        label: id.into(),
-        enabled: true,
-        identity: None,
-        lifecycle_generation: 1,
-        incarnation: 1,
-        revision: 1,
-        state: AccountState::Ready,
-        state_cause: StateCause::Operator,
-    };
+    let account = |(id, kind): (&str, AccountKind)| AccountRow::for_tests(id, kind);
     let load = RegistryLoad {
         accounts: [
             ("a", AccountKind::Oauth),

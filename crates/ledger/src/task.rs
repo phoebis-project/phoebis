@@ -2111,18 +2111,10 @@ mod tests {
         let store =
             Arc::new(Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap());
         store
-            .insert_account(&phoebis_store::AccountRow {
-                id: "a".into(),
-                kind: AccountKind::Oauth,
-                label: "a".into(),
-                enabled: true,
-                identity: None,
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
-                state: phoebis_store::AccountState::Ready,
-                state_cause: phoebis_store::StateCause::Operator,
-            })
+            .insert_account(&phoebis_store::AccountRow::for_tests(
+                "a",
+                AccountKind::Oauth,
+            ))
             .unwrap();
         store
             .insert_pool(
@@ -2235,18 +2227,10 @@ mod tests {
             Arc::new(Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap());
         for (id, _) in members {
             store
-                .insert_account(&phoebis_store::AccountRow {
-                    id: id.to_string(),
-                    kind: AccountKind::ApiKey,
-                    label: id.to_string(),
-                    enabled: true,
-                    identity: None,
-                    lifecycle_generation: 1,
-                    incarnation: 1,
-                    revision: 1,
-                    state: phoebis_store::AccountState::Ready,
-                    state_cause: phoebis_store::StateCause::Operator,
-                })
+                .insert_account(&phoebis_store::AccountRow::for_tests(
+                    id,
+                    AccountKind::ApiKey,
+                ))
                 .unwrap();
         }
         store

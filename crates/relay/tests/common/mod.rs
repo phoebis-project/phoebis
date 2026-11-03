@@ -26,9 +26,8 @@ use phoebis_routing::{
     spawn, DecisionRecord, DecisionSummary, RefusalFacts, RouterConfig, RouterEvent, RouterHandle,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Failover, Identity,
-    MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, StateCause,
-    StorageKey, Store, StoreError, Strategy,
+    AccountKind, AccountRow, AccountUpdate, ApiKeyRow, Failover, Identity, MemberWrite, ModelRule,
+    NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, StorageKey, Store, StoreError, Strategy,
 };
 use phoebis_transport::request::parse_head;
 use tokio::sync::broadcast;
@@ -166,16 +165,8 @@ pub fn test_account_row(account: &TestAccount) -> AccountRow {
         organization_uuid: None,
     });
     AccountRow {
-        id: account.id.into(),
-        kind: account.kind,
-        label: account.id.into(),
-        enabled: true,
         identity,
-        lifecycle_generation: 1,
-        incarnation: 1,
-        revision: 1,
-        state: AccountState::Ready,
-        state_cause: StateCause::Operator,
+        ..AccountRow::for_tests(account.id, account.kind)
     }
 }
 
@@ -770,16 +761,8 @@ async fn build(
             });
             store
                 .insert_account(&AccountRow {
-                    id: account.id.into(),
-                    kind: account.kind,
-                    label: account.id.into(),
-                    enabled: true,
                     identity,
-                    lifecycle_generation: 1,
-                    incarnation: 1,
-                    revision: 1,
-                    state: AccountState::Ready,
-                    state_cause: StateCause::Operator,
+                    ..AccountRow::for_tests(account.id, account.kind)
                 })
                 .unwrap();
             match account.kind {

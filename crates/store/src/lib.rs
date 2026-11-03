@@ -1371,16 +1371,8 @@ mod tests {
     fn with_a_credential_on(store: &Store, id: &str) {
         store
             .insert_account(&AccountRow {
-                id: id.into(),
-                kind: AccountKind::Oauth,
-                label: id.into(),
-                enabled: true,
-                identity: None,
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
                 state: AccountState::Unpaired,
-                state_cause: StateCause::Operator,
+                ..AccountRow::for_tests(id, AccountKind::Oauth)
             })
             .unwrap();
         store
@@ -1474,16 +1466,8 @@ mod tests {
 
     fn account(id: &str, kind: AccountKind) -> AccountRow {
         AccountRow {
-            id: id.into(),
-            kind,
-            label: id.into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
             state: AccountState::Unpaired,
-            state_cause: StateCause::Operator,
+            ..AccountRow::for_tests(id, kind)
         }
     }
 

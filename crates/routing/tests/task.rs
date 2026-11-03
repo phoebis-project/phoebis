@@ -54,18 +54,7 @@ fn averaged(store: Arc<Store>) -> Arc<Store> {
 fn seed(store: Arc<Store>, kind: AccountKind, ids: &[&str]) -> Arc<Store> {
     for id in ids {
         store
-            .insert_account(&AccountRow {
-                id: (*id).into(),
-                kind,
-                label: (*id).into(),
-                enabled: true,
-                identity: None,
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
-                state: AccountState::Ready,
-                state_cause: StateCause::Operator,
-            })
+            .insert_account(&AccountRow::for_tests(id, kind))
             .unwrap();
     }
     store
@@ -255,18 +244,7 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
     .await;
     assert_eq!(pinned.account_id, "a");
     store
-        .insert_account(&AccountRow {
-            id: "b".into(),
-            kind: AccountKind::ApiKey,
-            label: "b".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
-        })
+        .insert_account(&AccountRow::for_tests("b", AccountKind::ApiKey))
         .unwrap();
     store
         .set_pool_members(
@@ -486,18 +464,7 @@ async fn a_pool_with_no_member_at_admission_and_one_added_before_the_selection_s
         "the pool had no member at admission"
     );
     store
-        .insert_account(&AccountRow {
-            id: "a".into(),
-            kind: AccountKind::ApiKey,
-            label: "a".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
-        })
+        .insert_account(&AccountRow::for_tests("a", AccountKind::ApiKey))
         .unwrap();
     store
         .set_pool_members(
@@ -1372,18 +1339,7 @@ async fn a_refused_rekey() -> (Arc<Store>, phoebis_routing::RouterHandle) {
 
 fn restore_a(store: &Store) {
     store
-        .insert_account(&AccountRow {
-            id: "a".into(),
-            kind: AccountKind::ApiKey,
-            label: "a".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
-        })
+        .insert_account(&AccountRow::for_tests("a", AccountKind::ApiKey))
         .unwrap();
 }
 
@@ -2204,18 +2160,7 @@ async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state
     store.delete_account("a", "test").unwrap();
     handle.reload().await.unwrap();
     store
-        .insert_account(&AccountRow {
-            id: "a".into(),
-            kind: AccountKind::ApiKey,
-            label: "a".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
-        })
+        .insert_account(&AccountRow::for_tests("a", AccountKind::ApiKey))
         .unwrap();
     store
         .set_pool_members(
@@ -2243,18 +2188,7 @@ async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state
 /// the next incarnation while both generations read 1 again.
 fn insert_account_a(store: &Store) {
     store
-        .insert_account(&AccountRow {
-            id: "a".into(),
-            kind: AccountKind::ApiKey,
-            label: "a".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
-        })
+        .insert_account(&AccountRow::for_tests("a", AccountKind::ApiKey))
         .unwrap();
     store
         .set_api_key_secret("a", &phoebis_store::Secret::new("k1"))
@@ -3518,18 +3452,7 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
     // The id held again under a new incarnation, with its own readings: a report from the old holder is late.
     store.delete_account("a", "test").unwrap();
     store
-        .insert_account(&AccountRow {
-            id: "a".into(),
-            kind: AccountKind::Oauth,
-            label: "a".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
-        })
+        .insert_account(&AccountRow::for_tests("a", AccountKind::Oauth))
         .unwrap();
     with_tier(&store, "a");
     handle.reload().await.unwrap();
@@ -3782,18 +3705,7 @@ async fn a_clean_poll_without_five_hour_writes_the_drop_and_the_set_and_a_restar
 async fn an_api_key_account_and_an_account_without_a_tier_are_charged_nothing() {
     let store = seeded_oauth(&["a", "n"]);
     store
-        .insert_account(&AccountRow {
-            id: "k".into(),
-            kind: AccountKind::ApiKey,
-            label: "k".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
-        })
+        .insert_account(&AccountRow::for_tests("k", AccountKind::ApiKey))
         .unwrap();
     with_tier(&store, "a");
     let now = Arc::new(AtomicI64::new(3_000));
@@ -3849,18 +3761,7 @@ async fn a_windows_write_queued_for_a_deleted_holder_lands_nowhere_and_its_repla
     handle.shutdown().await.unwrap();
     store.delete_account("a", "test").unwrap();
     store
-        .insert_account(&AccountRow {
-            id: "a".into(),
-            kind: AccountKind::Oauth,
-            label: "a".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
-        })
+        .insert_account(&AccountRow::for_tests("a", AccountKind::Oauth))
         .unwrap();
     assert_eq!(store.account("a").unwrap().unwrap().incarnation, 2);
     assert!(
@@ -8182,18 +8083,7 @@ async fn an_account_recreated_under_its_id_drops_its_affinity_entries_and_a_late
 
     store.delete_account("a", "test").unwrap();
     store
-        .insert_account(&AccountRow {
-            id: "a".into(),
-            kind: AccountKind::ApiKey,
-            label: "a".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
-        })
+        .insert_account(&AccountRow::for_tests("a", AccountKind::ApiKey))
         .unwrap();
     store
         .set_pool_members(
@@ -13736,18 +13626,7 @@ async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_th
     let store = shedding_store(&["a"]);
     // An api_key member beside the slowed account: it has no 5-hour window to slow.
     store
-        .insert_account(&AccountRow {
-            id: "d".into(),
-            kind: AccountKind::ApiKey,
-            label: "d".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            incarnation: 1,
-            revision: 1,
-            state: AccountState::Ready,
-            state_cause: StateCause::Operator,
-        })
+        .insert_account(&AccountRow::for_tests("d", AccountKind::ApiKey))
         .unwrap();
     store
         .set_pool_members(

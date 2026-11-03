@@ -1,24 +1,13 @@
 use phoebis_routing::{resolve, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, ModelRule, PoolMember, PoolRow, RegistryLoad,
-    RulesMode, StateCause, Strategy,
+    AccountKind, AccountRow, ApiKeyRow, ModelRule, PoolMember, PoolRow, RegistryLoad, RulesMode,
+    Strategy,
 };
 
 const DIGEST_KEY: [u8; 32] = [7; 32];
 
 fn account_kind(id: &str, kind: AccountKind) -> AccountRow {
-    AccountRow {
-        id: id.into(),
-        kind,
-        label: id.into(),
-        enabled: true,
-        identity: None,
-        lifecycle_generation: 1,
-        incarnation: 1,
-        revision: 1,
-        state: AccountState::Ready,
-        state_cause: StateCause::Operator,
-    }
+    AccountRow::for_tests(id, kind)
 }
 
 fn account(id: &str) -> AccountRow {

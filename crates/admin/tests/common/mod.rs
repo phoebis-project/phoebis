@@ -29,7 +29,7 @@ use phoebis_relay::{AccountingSource, CatalogService, Limits, Relay, UpstreamGzi
 use phoebis_routing::{spawn, RouterConfig, RouterHandle, SharePricer};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle, PinBurn, Secret,
-    StateCause, StorageKey, Store,
+    StorageKey, Store,
 };
 use phoebis_transport::{
     connector_builder,
@@ -1026,20 +1026,14 @@ async fn build_app_bounded(
     if store.accounts().unwrap().is_empty() {
         store
             .insert_account(&AccountRow {
-                id: "business".into(),
-                kind: AccountKind::Oauth,
                 label: "Business".into(),
-                enabled: true,
                 identity,
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
                 state: if paired {
                     AccountState::Ready
                 } else {
                     AccountState::Unpaired
                 },
-                state_cause: StateCause::Operator,
+                ..AccountRow::for_tests("business", AccountKind::Oauth)
             })
             .unwrap();
         if paired {
@@ -1067,16 +1061,8 @@ async fn build_app_bounded(
         // API-key account reaches.
         store
             .insert_account(&AccountRow {
-                id: "direct".into(),
-                kind: AccountKind::ApiKey,
                 label: "Direct".into(),
-                enabled: true,
-                identity: None,
-                lifecycle_generation: 1,
-                incarnation: 1,
-                revision: 1,
-                state: AccountState::Ready,
-                state_cause: StateCause::Operator,
+                ..AccountRow::for_tests("direct", AccountKind::ApiKey)
             })
             .unwrap();
         store

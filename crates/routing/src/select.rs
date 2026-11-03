@@ -7626,8 +7626,7 @@ mod banded_tests {
     use std::sync::Arc;
 
     use phoebis_store::{
-        AccountKind, AccountRow, AccountState, PoolMember, PoolRow, RegistryLoad, RoutingLoad,
-        StateCause, SubscriptionTerm,
+        AccountKind, AccountRow, PoolMember, PoolRow, RegistryLoad, RoutingLoad, SubscriptionTerm,
     };
 
     use super::{fit_of, lane_key, slow_down_of, Banded, Figures, Judge, SelectRequest};
@@ -7714,18 +7713,7 @@ mod banded_tests {
         let (band_from, band_to) = (T + HOUR / 2, T + 10 * HOUR);
         let snapshot = RegistrySnapshot::from_load(
             RegistryLoad {
-                accounts: vec![AccountRow {
-                    id: "b".into(),
-                    kind: AccountKind::Oauth,
-                    label: "b".into(),
-                    enabled: true,
-                    identity: None,
-                    lifecycle_generation: 1,
-                    incarnation: 1,
-                    revision: 1,
-                    state: AccountState::Ready,
-                    state_cause: StateCause::Operator,
-                }],
+                accounts: vec![AccountRow::for_tests("b", AccountKind::Oauth)],
                 members: vec![PoolMember {
                     pool_id: "p".into(),
                     account_id: "b".into(),
@@ -7892,18 +7880,7 @@ mod banded_tests {
         pool.window_ceiling = 0.9;
         let snapshot = RegistrySnapshot::from_load(
             RegistryLoad {
-                accounts: vec![AccountRow {
-                    id: "b".into(),
-                    kind: AccountKind::Oauth,
-                    label: "b".into(),
-                    enabled: true,
-                    identity: None,
-                    lifecycle_generation: 1,
-                    incarnation: 1,
-                    revision: 1,
-                    state: AccountState::Ready,
-                    state_cause: StateCause::Operator,
-                }],
+                accounts: vec![AccountRow::for_tests("b", AccountKind::Oauth)],
                 pools: vec![pool],
                 terms: vec![SubscriptionTerm {
                     account_id: "b".into(),

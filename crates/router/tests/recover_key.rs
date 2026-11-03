@@ -123,19 +123,11 @@ fn assert_no_key(out: &Output, keys: &[&str]) {
 /// Seeded under a cause other than `operator`, so the cause the recovery writes shows in the read-back.
 fn account(id: &str, kind: AccountKind) -> AccountRow {
     AccountRow {
-        id: id.into(),
-        kind,
-        label: id.into(),
-        enabled: true,
-        identity: None,
-        lifecycle_generation: 1,
-        incarnation: 1,
-        revision: 1,
-        state: AccountState::Ready,
         state_cause: match kind {
             AccountKind::ApiKey => StateCause::AuthFailed,
             AccountKind::Oauth => StateCause::Paired,
         },
+        ..AccountRow::for_tests(id, kind)
     }
 }
 
