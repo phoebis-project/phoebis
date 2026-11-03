@@ -40,18 +40,6 @@ const ONE_HOUR: Duration = Duration::from_secs(3_600);
 /// retry's first sleep. A listing is held until the scheduled refresh or an eviction replaces it.
 pub const ERROR_HOLD: Duration = Duration::from_secs(60);
 
-/// The dated id `spelling` resolves to under `listing`: the newest `<spelling>-YYYYMMDD` entry, or `None` when
-/// the listing holds no dated entry for it (a dateless id of the 4.6 generation and later is its own snapshot).
-pub fn derive(listing: &[CatalogRow], spelling: &str) -> Option<String> {
-    listing
-        .iter()
-        .filter(|row| undated(&row.id) == Some(spelling))
-        .map(|row| row.id.as_str())
-        // The date is the id's last eight bytes and zero-padded, so the lexical maximum is the newest.
-        .max()
-        .map(str::to_string)
-}
-
 /// Every spelling `listing` implies with its newest dated id: one entry per undated base the listing carries a
 /// dated id for, keyed by `phoebis_routing::listing::undated`.
 pub fn derive_all(listing: &[CatalogRow]) -> HashMap<String, String> {
