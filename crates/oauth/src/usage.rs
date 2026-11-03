@@ -38,9 +38,6 @@ const BACKOFF_LADDER_MS: [i64; 3] = [120_000, 240_000, 480_000];
 const PROFILE_ENDPOINT: &str = "profile";
 const USAGE_ENDPOINT: &str = "usage";
 
-/// The snapshot's error text for a usage 401, worded as every other status the endpoint refuses with.
-const USAGE_UNAUTHORIZED: &str = "usage request rejected with status 401";
-
 /// The error code of the usage endpoint's 403 to an organization that holds no plan.
 const PLAN_REFUSED_CODE: &str = "oauth_not_allowed_for_organization";
 
@@ -507,18 +504,23 @@ fn transport_fault(endpoint: &'static str, error: &str) -> PollFault {
     }
 }
 
+/// A status either endpoint refuses with, under the one sentence the snapshot and the profile read record for it.
+fn status_fault(endpoint: &'static str, status: u16) -> PollFault {
+    PollFault {
+        endpoint,
+        status: Some(status),
+        transport: false,
+        text: format!("{endpoint} request rejected with status {status}"),
+    }
+}
+
 /// A usage status other than 200 and 429: the 401 that sends the account to the re-pair, its fence for `fetch` and
 /// `fetch_and_cache` to fill, the 403 that names an organization's refusal, and every other status a passing fault.
 fn usage_refusal(status: u16, body: &[u8]) -> FetchFailure {
     if status == 401 {
         return FetchFailure::Unauthorized(Refused::default());
     }
-    let fault = PollFault {
-        endpoint: USAGE_ENDPOINT,
-        status: Some(status),
-        transport: false,
-        text: format!("usage request rejected with status {status}"),
-    };
+    let fault = status_fault(USAGE_ENDPOINT, status);
     match error_code(body) {
         Some(code) if status == 403 && code == PLAN_REFUSED_CODE => {
             FetchFailure::PlanRefused { fault, code }
@@ -856,12 +858,10 @@ impl UsageService {
             ));
         }
         if head.status != 200 {
-            return Err(UsageError::Fault(PollFault {
-                endpoint: PROFILE_ENDPOINT,
-                status: Some(head.status),
-                transport: false,
-                text: format!("profile request rejected with status {}", head.status),
-            }));
+            return Err(UsageError::Fault(status_fault(
+                PROFILE_ENDPOINT,
+                head.status,
+            )));
         }
         parse_profile(&body).map_err(|error| UsageError::Unavailable(format!("parse: {error}")))
     }
@@ -1116,7 +1116,7 @@ impl Inner {
                         Some(PollIssue::PlanRefused { fault, code }),
                     ),
                     FetchFailure::Unauthorized(refused) => (
-                        USAGE_UNAUTHORIZED.to_string(),
+                        status_fault(USAGE_ENDPOINT, 401).text,
                         None,
                         Some(PollIssue::Unauthorized(refused)),
                     ),
