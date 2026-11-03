@@ -514,6 +514,9 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
   return { attempts, chainFrom: attempts.length - added, drawnHead: drawnTrail[drawnTrail.length - 1], whole: !ended && !committed && added === 0 };
 }
 
+/** A request's attempts with the serving one, the last, put through `edit`. */
+const onServing = (attempts: Attempt[], edit: (a: Attempt) => Attempt): Attempt[] => attempts.map((a, i, all) => (i === all.length - 1 ? edit(a) : a));
+
 function buildRequests(): RequestLog[] {
   const rows: RequestLog[] = [];
   const span = 24 * HOUR;
@@ -562,7 +565,7 @@ function buildRequests(): RequestLog[] {
     const autoMode = turn !== undefined && 'autoMode' in turn ? turn.autoMode : null;
     const attempts =
       turn !== undefined && 'refusal' in turn
-        ? diagnosis.map((a, at) => (at === diagnosis.length - 1 ? { ...a, response: { ...a.response, refusalCategory: turn.refusal, refusalRecommendedModel: 'claude-opus-5', stopReason: 'refusal' } } : a))
+        ? onServing(diagnosis, (a) => ({ ...a, response: { ...a.response, refusalCategory: turn.refusal, refusalRecommendedModel: 'claude-opus-5', stopReason: 'refusal' } }))
         : diagnosis;
     const transport = kind === 'inference' ? (rng.chance(0.86) ? 'sse' : 'json') : 'json';
     // The request runs from its arrival to its last attempt's end, the gaps between attempts included, as the router
@@ -692,22 +695,23 @@ function buildRequests(): RequestLog[] {
   for (const r of holderRows) r.keyGeneration = DELETED_HOLDER_GENERATION;
   const holderLast = holderRows.find((r) => r.kind !== 'probe');
   if (holderLast) Object.assign(holderLast, { sessionId: SESSION_IDS[0] });
+  // The newest desktop stream with a 200 head other than `skip` ends on the code and the outcome given, its serving
+  // attempt failed upstream. Neither pass draws, so every row keeps its draws.
+  const failStream = (skip: RequestLog | undefined, errorCode: string, outcome: RequestOutcome): RequestLog | undefined => {
+    const row = rows.find((r) => r !== skip && r.keyId === 'desktop' && r.kind === 'inference' && r.transport === 'sse' && r.status === 200);
+    if (row) {
+      row.errorCode = errorCode;
+      row.outcome = outcome;
+      row.attempts = onServing(row.attempts, (a) => ({ ...a, outcome: 'upstream_error' }));
+    }
+    return row;
+  };
   // A stream can commit its 200 head and fail after it: the newest such desktop stream keeps the status and
   // carries the error, which is the row the Requests table and the drawer must not draw as a success.
-  const failedAfterHead = rows.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.transport === 'sse' && r.status === 200);
-  if (failedAfterHead) {
-    failedAfterHead.errorCode = 'overloaded_error';
-    failedAfterHead.outcome = 'failed';
-    failedAfterHead.attempts = failedAfterHead.attempts.map((a, i, all) => (i === all.length - 1 ? { ...a, outcome: 'upstream_error' as const } : a));
-  }
+  const failedAfterHead = failStream(undefined, 'overloaded_error', 'failed');
   // The newest desktop stream after that one ended before its `message_stop`: the row the Requests table draws as a
   // failure and the drawer names.
-  const incompleteStream = rows.find((r) => r !== failedAfterHead && r.keyId === 'desktop' && r.kind === 'inference' && r.transport === 'sse' && r.status === 200);
-  if (incompleteStream) {
-    incompleteStream.errorCode = 'stream_incomplete';
-    incompleteStream.outcome = 'incomplete';
-    incompleteStream.attempts = incompleteStream.attempts.map((a, i, all) => (i === all.length - 1 ? { ...a, outcome: 'upstream_error' as const } : a));
-  }
+  failStream(failedAfterHead, 'stream_incomplete', 'incomplete');
   // A header sample can carry a window's reset without its utilization; the oldest row that reported the 7-day
   // window stands in for one, so the drawer has a window to read as not reported.
   const unsampled = [...rows].reverse().find((r) => r.attempts.some((a) => a.windows.some((w) => w.id === '7d')));
@@ -719,7 +723,7 @@ function buildRequests(): RequestLog[] {
   for (const r of rows) {
     if (!fastTurn(r.keyId, r.model, r.kind)) continue;
     r.shape = { ...r.shape, requestedSpeed: 'fast' };
-    r.attempts = r.attempts.map((a, i, all) => (i === all.length - 1 ? { ...a, response: { ...a.response, speed: 'fast' } } : a));
+    r.attempts = onServing(r.attempts, (a) => ({ ...a, response: { ...a.response, speed: 'fast' } }));
     r.costUsd = round(costOf(r.model, r.usage, true, r.at), 4);
   }
   // A stream the client closed: its 200 head went out and no upstream error followed, so the request ends canceled
