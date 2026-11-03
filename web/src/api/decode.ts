@@ -1,6 +1,6 @@
 import type {
   Account, AccountCatalog, AccountKind, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, CostRevision, CostSplit, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyFigures, KeyModels, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
+  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyFigures, KeyModels, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
   MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, Refusal, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WastedProbeReason, WindowId, WindowSample,
 } from './types';
@@ -333,6 +333,9 @@ export function decodeKey(v: unknown): ApiKey {
     usage7d: { ...keyFigures(k.usage_7d), tokens: num(rec(k.usage_7d).tokens) },
   };
 }
+
+/** A created or rotated key: the row, and its secret, which the route answers this once. */
+export const decodeCreatedKey = (v: unknown): CreatedApiKey => ({ key: decodeKey(v), secret: String(rec(v).secret) });
 
 const ttl = (v: unknown, fallback: CacheTtl): CacheTtl => (v === '1h' || v === '5m' ? v : fallback);
 

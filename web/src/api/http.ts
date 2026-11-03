@@ -110,7 +110,7 @@ const READ_DEADLINE_MS = 60_000;
  * `quiet` keeps a failure from the shell's toast for a read that draws its own failed state and repeats on a schedule,
  * which would otherwise toast once per tick; a 401 still returns the console to the login.
  */
-export async function call<T = unknown>(method: string, path: string, body?: unknown, raw = false, { quiet: asked = false }: { quiet?: boolean } = {}): Promise<T> {
+export async function call<T = unknown>(method: string, path: string, body?: unknown, { quiet: asked = false }: { quiet?: boolean } = {}): Promise<T> {
   // Read before the first await: the quiet window is synchronous, and the report comes after the answer.
   const silent = asked || quiet;
   // The login screen draws every refusal of its own route, and the shell that would toast one mounts only after
@@ -156,8 +156,18 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
     }
     throw new ApiError(response.status, message, response.headers.get('x-phoebis-error-code'), path);
   }
-  return (raw ? text : parsed) as T;
+  return parsed as T;
 }
+
+/** A 404 is a row the ledger no longer holds, read as gone. A decoder that throws still rethrows. */
+const unlessGone = async <T,>(read: Promise<T>): Promise<T | null> => {
+  try {
+    return await read;
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null;
+    throw e;
+  }
+};
 
 const qs = (params: Record<string, string | number | boolean | string[] | undefined>) => {
   const q = new URLSearchParams();
@@ -198,14 +208,14 @@ export class HttpApi implements Api {
     return { email: r.pending.email, organization: r.pending.organization_name ?? 'Personal', state: pairingId };
   };
   confirmPairing = async (pairingId: string): Promise<PairingConfirmed> => d.decodePairingConfirmed(await call('POST', `/admin/oauth/sessions/${enc(pairingId)}/confirm`));
-  createAccount = async (input: AccountInput): Promise<Account> => d.decodeAccount(await call('POST', '/admin/accounts', { id: input.id, kind: input.kind, label: input.label, secret: input.secret }, false, DIALOG_WRITE));
-  createGuardrail = async (input: GuardrailInput) => d.decodeGuardrail(await call('POST', '/admin/guardrails', { ...d.encodeGuardrail(input), id: slug(input.name) }, false, DIALOG_WRITE));
+  createAccount = async (input: AccountInput): Promise<Account> => d.decodeAccount(await call('POST', '/admin/accounts', { id: input.id, kind: input.kind, label: input.label, secret: input.secret }, DIALOG_WRITE));
+  createGuardrail = async (input: GuardrailInput) => d.decodeGuardrail(await call('POST', '/admin/guardrails', { ...d.encodeGuardrail(input), id: slug(input.name) }, DIALOG_WRITE));
   createKey = async (input: CreateKeyInput): Promise<CreatedApiKey> => {
     const expires_at = input.expiresInDays === null ? null : Date.now() + input.expiresInDays * 86_400_000;
-    const r = await call<Record<string, unknown>>('POST', '/admin/keys', { ...d.encodeKey(input), expires_at, id: slug(input.name) }, false, DIALOG_WRITE);
-    return { key: d.decodeKey(r), secret: String(r.secret) };
+    const r = await call<Record<string, unknown>>('POST', '/admin/keys', { ...d.encodeKey(input), expires_at, id: slug(input.name) }, DIALOG_WRITE);
+    return d.decodeCreatedKey(r);
   };
-  createPool = async (input: PoolInput) => d.decodePool(await call('POST', '/admin/pools', { ...d.encodePool(input), id: slug(input.name) }, false, DIALOG_WRITE));
+  createPool = async (input: PoolInput) => d.decodePool(await call('POST', '/admin/pools', { ...d.encodePool(input), id: slug(input.name) }, DIALOG_WRITE));
   deleteAccount = (accountId: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}`);
   deleteGuardrail = (id: string) => call<void>('DELETE', `/admin/guardrails/${enc(id)}`);
   deleteKey = (id: string) => call<void>('DELETE', `/admin/keys/${enc(id)}`);
@@ -222,37 +232,22 @@ export class HttpApi implements Api {
   getAnalyticsSeries = async (q: AnalyticsQuery): Promise<AnalyticsPoint[]> => (await call<{ points: unknown[] }>('GET', `/admin/analytics/series${analytics(q)}`)).points.map(d.decodeAnalyticsPoint);
   getAnalyticsUnusedAllowance = async (span: Pick<AnalyticsQuery, 'from' | 'to'>, filters: Pick<AnalyticsQuery, 'accountIds'> = {}) =>
     d.decodeUnusedAllowance(await call('GET', `/admin/analytics/unused_allowance${qs({ accounts: filters.accountIds, range: range(span.from, span.to) })}`));
-  getAttention = async () => (await call<{ items: unknown[] }>('GET', '/admin/attention', undefined, false, { quiet: true })).items.map(d.decodeAttention);
-  getCapturedBodies = async (requestId: string) => {
-    try {
-      return d.decodeBodies(await call('GET', `/admin/requests/${enc(requestId)}/bodies`));
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 404) return null;
-      throw e;
-    }
-  };
-  getDecision = async (requestId: string, seq: number) => {
-    try {
-      return d.decodeDecisionRecord(await call('GET', `/admin/requests/${enc(requestId)}/decisions/${seq}`));
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 404) return null;
-      throw e;
-    }
-  };
+  getAttention = async () => (await call<{ items: unknown[] }>('GET', '/admin/attention', undefined, { quiet: true })).items.map(d.decodeAttention);
+  getCapturedBodies = (requestId: string) => unlessGone(call('GET', `/admin/requests/${enc(requestId)}/bodies`).then(d.decodeBodies));
+  getDecision = (requestId: string, seq: number) => unlessGone(call('GET', `/admin/requests/${enc(requestId)}/decisions/${seq}`).then(d.decodeDecisionRecord));
   getGuardrail = async (id: string) => d.decodeGuardrail(await call('GET', `/admin/guardrails/${enc(id)}`));
   getKeepaliveOverview = async (q?: { range?: OverviewRange }) => d.decodeKeepaliveOverview(await call('GET', `/admin/keepalive/overview${qs({ range: q?.range })}`));
   getKeyModels = async (keyId: string) => d.decodeKeyModels(await call('GET', `/admin/keys/${enc(keyId)}/models`));
   getOverview = async () => d.decodeDashboard(await call('GET', '/admin/dashboard'));
   getQuotaHistory = async (accountId: string) => d.decodeQuotaHistory(await call('GET', `/admin/accounts/${enc(accountId)}/quota?range=7d`));
-  getRequest = async (id: string): Promise<RequestDetail | null> => {
-    try {
-      const body = await call<{ events: unknown[]; request: unknown; stream_cut?: unknown }>('GET', `/admin/requests/${enc(id)}`);
-      return { events: body.events.map(d.decodeRequestEvent), request: d.decodeRequest(body.request), streamCut: d.decodeStreamCut(body.stream_cut) };
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 404) return null;
-      throw e;
-    }
-  };
+  getRequest = (id: string): Promise<RequestDetail | null> =>
+    unlessGone(
+      call<{ events: unknown[]; request: unknown; stream_cut?: unknown }>('GET', `/admin/requests/${enc(id)}`).then((body) => ({
+        events: body.events.map(d.decodeRequestEvent),
+        request: d.decodeRequest(body.request),
+        streamCut: d.decodeStreamCut(body.stream_cut),
+      })),
+    );
   getSession = async (): Promise<SessionInfo | null> => {
     // Read straight through: a missing session is the normal first load, not a lost one for the hook to report.
     let response: Response;
@@ -303,28 +298,28 @@ export class HttpApi implements Api {
   };
   releaseSession = (keyId: string, sessionId: string) => call<void>('POST', `/admin/sessions/${enc(keyId)}/${enc(sessionId)}/release`);
   renameAccount = async (accountId: string, label: string, revision?: number) =>
-    d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision({ label }, revision), false, DIALOG_WRITE));
+    d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision({ label }, revision), DIALOG_WRITE));
   // Quiet: the dashboard's line draws a refusal, the held writer's `503` among them, in its own slot.
-  replayParked = async () => d.decodeReplay(await call('POST', '/admin/ledger/parked/replay', undefined, false, { quiet: true }));
+  replayParked = async () => d.decodeReplay(await call('POST', '/admin/ledger/parked/replay', undefined, { quiet: true }));
   resumeAccount = (accountId: string) => call<void>('POST', `/admin/accounts/${enc(accountId)}/resume`);
   revokeKey = (id: string) => call<void>('POST', `/admin/keys/${enc(id)}/revoke`);
   rotateKey = async (id: string): Promise<CreatedApiKey> => {
     const r = await call<Record<string, unknown>>('POST', `/admin/keys/${enc(id)}/rotate`);
-    return { key: d.decodeKey(r), secret: String(r.secret) };
+    return d.decodeCreatedKey(r);
   };
   startPairing = async (start: PairingStart) =>
-    d.decodePairingSession(await call('POST', '/admin/oauth/sessions', 'accountId' in start ? { account_id: start.accountId, login: 'claude_ai' } : { login: 'claude_ai', new: { id: start.id, label: start.label } }, false, DIALOG_WRITE));
+    d.decodePairingSession(await call('POST', '/admin/oauth/sessions', 'accountId' in start ? { account_id: start.accountId, login: 'claude_ai' } : { login: 'claude_ai', new: { id: start.id, label: start.label } }, DIALOG_WRITE));
   // The test panel draws a refusal in its own slot.
-  testGuardrail = async (input: GuardrailTestInput) => d.decodeGuardrailTest(await call('POST', '/admin/guardrails/test', d.encodeGuardrailTest(input), false, DIALOG_WRITE));
+  testGuardrail = async (input: GuardrailTestInput) => d.decodeGuardrailTest(await call('POST', '/admin/guardrails/test', d.encodeGuardrailTest(input), DIALOG_WRITE));
   updateAccount = async (accountId: string, patch: AccountPatch, revision?: number) =>
     d.decodeAccount(
-      await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision(d.encodeAccountPatch(patch), revision), false, DIALOG_WRITE),
+      await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision(d.encodeAccountPatch(patch), revision), DIALOG_WRITE),
     );
-  updateGuardrail = async (id: string, input: Partial<GuardrailInput>, revision?: number) => d.decodeGuardrail(await call('PATCH', `/admin/guardrails/${enc(id)}`, withRevision(d.encodeGuardrail(input), revision), false, DIALOG_WRITE));
-  updateKey = async (id: string, input: KeyInput, revision?: number): Promise<ApiKey> => d.decodeKey(await call('PATCH', `/admin/keys/${enc(id)}`, withRevision(d.encodeKey(input), revision), false, DIALOG_WRITE));
+  updateGuardrail = async (id: string, input: Partial<GuardrailInput>, revision?: number) => d.decodeGuardrail(await call('PATCH', `/admin/guardrails/${enc(id)}`, withRevision(d.encodeGuardrail(input), revision), DIALOG_WRITE));
+  updateKey = async (id: string, input: KeyInput, revision?: number): Promise<ApiKey> => d.decodeKey(await call('PATCH', `/admin/keys/${enc(id)}`, withRevision(d.encodeKey(input), revision), DIALOG_WRITE));
   // The route writes the settings and the members in one transaction, so a refusal stores nothing; a 409
   // `stale_edit` means the row moved since the dialog read it, which the dialog answers with Reload.
-  updatePool = async (id: string, input: PoolInput, revision?: number) => d.decodePool(await call('PATCH', `/admin/pools/${enc(id)}`, withRevision(d.encodePool(input), revision), false, DIALOG_WRITE));
+  updatePool = async (id: string, input: PoolInput, revision?: number) => d.decodePool(await call('PATCH', `/admin/pools/${enc(id)}`, withRevision(d.encodePool(input), revision), DIALOG_WRITE));
   verifyAccount = (accountId: string) => call<{ ok: boolean; status: number }>('POST', `/admin/accounts/${enc(accountId)}/verify`);
 }
 
