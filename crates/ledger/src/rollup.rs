@@ -3229,21 +3229,8 @@ mod tests {
             "the answer's own speed keys the row"
         );
         let row = &rows[0];
-        let key = crate::price::RowKey {
-            model: &row.canonical_model,
-            speed: Speed::of(Some(row.speed.as_str())),
-            band: Band::of_rollup(&row.band),
-            funding: crate::plan::Funding::of_rollup(&row.funding),
-            kind: row.kind.as_str(),
-            tier: None,
-            entrypoint: crate::plan::entrypoint_of_client(&row.client),
-            classifier: false,
-            at: row.hour * 1_000,
-            band_at: None,
-            now: row.hour * 1_000,
-        };
         let costs = crate::test_tables::subscription_costs();
-        let usd = crate::price::price_row(&prices(), &costs, &key, row.usage())
+        let usd = crate::query::priced(row, &prices(), &costs, row.hour * 1_000)
             .usd
             .expect("the test list carries the model")
             .total();
@@ -3311,20 +3298,7 @@ mod tests {
         let priced: f64 = deltas
             .iter()
             .map(|d| {
-                let key = crate::price::RowKey {
-                    model: &d.canonical_model,
-                    speed: Speed::of(Some(d.speed.as_str())),
-                    band: Band::of_rollup(&d.band),
-                    funding: crate::plan::Funding::of_rollup(&d.funding),
-                    kind: d.kind.as_str(),
-                    tier: None,
-                    entrypoint: crate::plan::entrypoint_of_client(&d.client),
-                    classifier: false,
-                    at: d.hour * 1_000,
-                    band_at: None,
-                    now: d.hour * 1_000,
-                };
-                crate::price::price_row(&prices(), &costs, &key, d.usage())
+                crate::query::priced(d, &prices(), &costs, d.hour * 1_000)
                     .usd
                     .expect("the test list carries the model")
                     .total()
