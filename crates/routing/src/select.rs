@@ -5448,7 +5448,7 @@ fn pin_ref(row: &PinRow) -> PinRef {
     }
 }
 
-/// Every path that selects an account has already passed it through `obstacle`, which answers `Operator` for
+/// Every path that selects an account has already passed it through `obstacle`, which answers `Deleted` for
 /// an id the snapshot does not hold, so the row is there.
 fn selected_row(snapshot: &RegistrySnapshot, account_id: &str) -> AccountRow {
     snapshot
