@@ -597,6 +597,73 @@ SESSIONS.forEach((pin, i) => {
 });
 
 /**
+ * A written row that names no fork, no cycle, no runway and no shed stamp, and has reached no ledger, its figures read
+ * off the main agent's line. A pinned row the ledger holds overrides its ledger fields and any figure of its own.
+ */
+const writtenRow = (row: Pick<Session, 'accountId' | 'agentContexts' | 'agentId' | 'agents' | 'burn' | 'companion' | 'createdAt' | 'keepalive' | 'keyId' | 'presenceAgeSeconds' | 'sessionId'>, line: Omit<AgentContext, 'createdAt'>): Session => ({
+  ...SESSION_SAMPLE,
+  ...row,
+  burnAt: line.lastUsedAt,
+  burnEquivalent: null,
+  burnUnit: 'usd',
+  burnWindow: null,
+  cacheTtlMs: line.cacheTtlMs,
+  companionSince: null,
+  cycleMs: null,
+  effort: line.effort,
+  epoch: 1,
+  forkDepth: null,
+  forkedFrom: null,
+  historical: false,
+  keyGeneration: Date.parse(keyById.get(row.keyId)!.createdAt),
+  lastInputTokens: line.lastInputTokens,
+  lastRefreshAt: line.lastUsedAt,
+  lastRequestAt: null,
+  lastUsedAt: line.lastUsedAt,
+  model: line.model,
+  pinned: true,
+  requests: 0,
+  runwayBounded: null,
+  runwayMs: null,
+  shedFrom: null,
+  shedReason: null,
+  speed: null,
+});
+
+/**
+ * A row the router lists off the ledger's rows alone: no pin, no recipe and no line, the activity fold's count and
+ * last request its own.
+ */
+const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGeneration' | 'keyId' | 'lastRequestAt' | 'model' | 'requests' | 'sessionId'>): Session => ({
+  ...SESSION_SAMPLE,
+  agentContexts: [],
+  agentId: null,
+  agents: 0,
+  burn: null,
+  burnAt: null,
+  burnEquivalent: null,
+  burnUnit: null,
+  burnWindow: null,
+  cacheTtlMs: null,
+  companion: 'none',
+  companionSince: null,
+  createdAt: null,
+  effort: null,
+  epoch: null,
+  forkDepth: null,
+  forkedFrom: null,
+  keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
+  lastInputTokens: null,
+  lastRefreshAt: null,
+  lastUsedAt: null,
+  pinned: false,
+  presenceAgeSeconds: null,
+  shedFrom: null,
+  shedReason: null,
+  ...fields,
+});
+
+/**
  * Studio's notebook sessions in work, pinned there while the slow-down holds it: the slowed one with its subagent, whose
  * main pin has the cycle its turns since the placement give, the two the round marked and the one whose turn opened the
  * span, whose pins have none yet. Each burn is the main pin's demand at the account's half speed. No recipe warms them.
@@ -615,9 +682,6 @@ SLOWED_PINS.forEach((pin, k) => {
   // The rows run newest first, and the main agent's newest turn is the pin's last use.
   const rows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'notebook' && r.sessionId === pin.sessionId);
   const main = rows.filter((r) => r.agentId === 'main');
-  const last = main[0];
-  const lastAttempt = last.attempts[last.attempts.length - 1];
-  const lastInputTokens = promptOf(last.usage);
   const effort = effortAt(k);
   const createdAt = main[main.length - 1].at;
   // Each agent's pin reads its own newest turn, which wrote the hour's cache.
@@ -635,42 +699,30 @@ SLOWED_PINS.forEach((pin, k) => {
     });
   });
   SESSIONS.push({
-    ...SESSION_SAMPLE,
-    accountId: 'studio',
-    agentContexts: datedLines(createdAt, activityOf('notebook', Date.parse(keyById.get('notebook')!.createdAt), pin.sessionId), lines),
-    agentId: 'main',
-    agents: pin.agents.length,
-    burn: pin.burn,
-    burnAt: lastAttempt.startedAt,
+    ...writtenRow(
+      {
+        accountId: 'studio',
+        agentContexts: datedLines(createdAt, activityOf('notebook', Date.parse(keyById.get('notebook')!.createdAt), pin.sessionId), lines),
+        agentId: 'main',
+        agents: pin.agents.length,
+        burn: pin.burn,
+        companion: 'none',
+        createdAt,
+        keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
+        keyId: 'notebook',
+        presenceAgeSeconds: null,
+        sessionId: pin.sessionId,
+      },
+      lines[0],
+    ),
     burnEquivalent: burnEquivalentOf(pin.burn, 'studio', burnWindowOf('studio')),
     burnUnit: 'window_share',
     burnWindow: burnWindowOf('studio'),
-    cacheTtlMs: HOUR,
-    companion: 'none',
-    companionSince: null,
-    createdAt,
     cycleMs: pin.cycleMs,
-    effort,
-    epoch: 1,
-    forkDepth: null,
-    forkedFrom: null,
-    historical: false,
-    keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
-    keyGeneration: Date.parse(keyById.get('notebook')!.createdAt),
-    keyId: 'notebook',
-    lastInputTokens,
-    lastRefreshAt: lastAttempt.startedAt,
     lastRequestAt: rows[0].at,
-    lastUsedAt: lastAttempt.startedAt,
-    model: 'claude-sonnet-5-5',
-    pinned: true,
-    presenceAgeSeconds: null,
     requests: rows.length,
     runwayBounded: studioRunwayMs !== null,
     runwayMs: studioRunwayMs,
-    sessionId: pin.sessionId,
-    shedFrom: null,
-    shedReason: null,
     speed: accountById.get('studio')?.slowDown?.factor ?? null,
   });
 });
@@ -693,7 +745,6 @@ const FLEET_PINS = [...new Set(fleetRows.map((r) => r.canonicalModel))]
 if (FLEET_PINS.length > 0) {
   const last = FLEET_PINS[0];
   const lastAttempt = last.attempts[last.attempts.length - 1];
-  const lastInputTokens = promptOf(last.usage);
   const keyGeneration = Date.parse(keyById.get('fleet')!.createdAt);
   const seen = ledgered.get(activityOf('fleet', keyGeneration, FLEET_SESSION_ID)) ?? null;
   // The session is first seen at the oldest turn of its last unbroken run: a turn that came once the pin before it had
@@ -709,43 +760,24 @@ if (FLEET_PINS.length > 0) {
     return pinLine({ accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, model: pin.canonicalModel });
   });
   SESSIONS.push({
-    ...SESSION_SAMPLE,
-    accountId: lastAttempt.accountId,
-    agentContexts: datedLines(firstSeen.at, activityOf('fleet', keyGeneration, FLEET_SESSION_ID), lines),
-    agentId: 'main',
-    agents: 1,
-    burn: 0.36,
-    burnAt: lastAttempt.startedAt,
-    burnEquivalent: null,
-    burnUnit: 'usd',
-    burnWindow: null,
-    cacheTtlMs: 5 * MINUTE,
-    companion: 'none',
-    companionSince: null,
-    createdAt: firstSeen.at,
-    cycleMs: null,
-    effort: lines[0].effort,
-    epoch: 1,
-    forkDepth: null,
-    forkedFrom: null,
-    historical: false,
-    keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
-    keyGeneration,
-    keyId: 'fleet',
-    lastInputTokens,
-    lastRefreshAt: lastAttempt.startedAt,
+    ...writtenRow(
+      {
+        accountId: lastAttempt.accountId,
+        agentContexts: datedLines(firstSeen.at, activityOf('fleet', keyGeneration, FLEET_SESSION_ID), lines),
+        agentId: 'main',
+        agents: 1,
+        burn: 0.36,
+        companion: 'none',
+        createdAt: firstSeen.at,
+        keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
+        keyId: 'fleet',
+        presenceAgeSeconds: null,
+        sessionId: FLEET_SESSION_ID,
+      },
+      lines[0],
+    ),
     lastRequestAt: seen?.last ?? null,
-    lastUsedAt: lastAttempt.startedAt,
-    model: last.canonicalModel,
-    pinned: true,
-    presenceAgeSeconds: null,
     requests: seen?.requests ?? 0,
-    runwayBounded: null,
-    runwayMs: null,
-    sessionId: FLEET_SESSION_ID,
-    shedFrom: null,
-    shedReason: null,
-    speed: null,
   });
 }
 
@@ -765,43 +797,27 @@ const WORKSHOP_BURN = 0.0021;
   const createdAt = workshopRows[workshopRows.length - 1].at;
   const line = pinLine({ accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, model: WORKSHOP_PIN.canonicalModel });
   SESSIONS.push({
-    ...SESSION_SAMPLE,
-    accountId: 'workshop',
-    agentContexts: datedLines(createdAt, activityOf('bench', keyGeneration, WORKSHOP_SESSION_ID), [line]),
-    agentId: 'main',
-    agents: 1,
-    burn: WORKSHOP_BURN,
-    burnAt: lastAttempt.startedAt,
+    ...writtenRow(
+      {
+        accountId: 'workshop',
+        agentContexts: datedLines(createdAt, activityOf('bench', keyGeneration, WORKSHOP_SESSION_ID), [line]),
+        agentId: 'main',
+        agents: 1,
+        burn: WORKSHOP_BURN,
+        companion: 'none',
+        createdAt,
+        keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
+        keyId: 'bench',
+        presenceAgeSeconds: null,
+        sessionId: WORKSHOP_SESSION_ID,
+      },
+      line,
+    ),
     burnEquivalent: burnEquivalentOf(WORKSHOP_BURN, 'workshop', burnWindowOf('workshop')),
     burnUnit: 'window_share',
     burnWindow: burnWindowOf('workshop'),
-    cacheTtlMs: HOUR,
-    companion: 'none',
-    companionSince: null,
-    createdAt,
-    cycleMs: null,
-    effort: line.effort,
-    epoch: 1,
-    forkDepth: null,
-    forkedFrom: null,
-    historical: false,
-    keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
-    keyGeneration,
-    keyId: 'bench',
-    lastInputTokens: promptOf(WORKSHOP_PIN.usage),
-    lastRefreshAt: lastAttempt.startedAt,
     lastRequestAt: seen?.last ?? null,
-    lastUsedAt: lastAttempt.startedAt,
-    model: WORKSHOP_PIN.canonicalModel,
-    pinned: true,
-    presenceAgeSeconds: null,
     requests: seen?.requests ?? 0,
-    runwayBounded: null,
-    runwayMs: null,
-    sessionId: WORKSHOP_SESSION_ID,
-    shedFrom: null,
-    shedReason: null,
-    speed: null,
   });
 }
 
@@ -813,41 +829,7 @@ const WORKSHOP_BURN = 0.0021;
 const holderRows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION && r.sessionId === SESSION_IDS[0]);
 const holderLast = holderRows[0];
 if (holderLast && insideSessionExpiry(holderLast.at, NOW)) {
-  SESSIONS.push({
-    ...SESSION_SAMPLE,
-    accountId: holderLast.accountId,
-    agentContexts: [],
-    agentId: null,
-    agents: 0,
-    burn: null,
-    burnAt: null,
-    burnEquivalent: null,
-    burnUnit: null,
-    burnWindow: null,
-    cacheTtlMs: null,
-    companion: 'none',
-    companionSince: null,
-    createdAt: null,
-    effort: null,
-    epoch: null,
-    forkDepth: null,
-    forkedFrom: null,
-    historical: true,
-    keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
-    keyGeneration: DELETED_HOLDER_GENERATION,
-    keyId: 'desktop',
-    lastInputTokens: null,
-    lastRefreshAt: null,
-    lastRequestAt: holderLast.at,
-    lastUsedAt: null,
-    model: holderLast.canonicalModel,
-    pinned: false,
-    presenceAgeSeconds: null,
-    requests: holderRows.length,
-    sessionId: SESSION_IDS[0],
-    shedFrom: null,
-    shedReason: null,
-  });
+  SESSIONS.push(ledgerOnlyRow({ accountId: holderLast.accountId, historical: true, keyGeneration: DELETED_HOLDER_GENERATION, keyId: 'desktop', lastRequestAt: holderLast.at, model: holderLast.canonicalModel, requests: holderRows.length, sessionId: SESSION_IDS[0] }));
 }
 
 // The desktop session whose every request the key's own guardrail refused before any account was asked. The router
@@ -861,42 +843,7 @@ const blocked = ledgered.get(activityOf('desktop', blockedGeneration, BLOCKED_SE
 const blockedLast = REQUESTS.find((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === blockedGeneration && r.sessionId === BLOCKED_SESSION_ID);
 export function refusalOnlyRows(now: number): Session[] {
   if (!blocked || !blockedLast || !insideSessionExpiry(blockedLast.at, now)) return [];
-  const row: Session = {
-    ...SESSION_SAMPLE,
-    accountId: null,
-    agentContexts: [],
-    agentId: null,
-    agents: 0,
-    burn: null,
-    burnAt: null,
-    burnEquivalent: null,
-    burnUnit: null,
-    burnWindow: null,
-    cacheTtlMs: null,
-    companion: 'none',
-    companionSince: null,
-    createdAt: null,
-    effort: null,
-    epoch: null,
-    forkDepth: null,
-    forkedFrom: null,
-    historical: false,
-    keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
-    keyGeneration: blockedGeneration,
-    keyId: 'desktop',
-    lastInputTokens: null,
-    lastRefreshAt: null,
-    lastRequestAt: blocked.last,
-    lastUsedAt: null,
-    model: blockedLast.canonicalModel,
-    pinned: false,
-    presenceAgeSeconds: null,
-    requests: blocked.requests,
-    sessionId: BLOCKED_SESSION_ID,
-    shedFrom: null,
-    shedReason: null,
-  };
-  return [row];
+  return [ledgerOnlyRow({ accountId: null, historical: false, keyGeneration: blockedGeneration, keyId: 'desktop', lastRequestAt: blocked.last, model: blockedLast.canonicalModel, requests: blocked.requests, sessionId: BLOCKED_SESSION_ID })];
 }
 SESSIONS.push(...refusalOnlyRows(NOW));
 
@@ -947,36 +894,6 @@ const noModLines = [
   pinLine({ accountId: 'contract', agentId: '5c8e', cacheTtlMs: 5 * MINUTE, effort: 'low', lastInputTokens: 7_900, lastUsedAt: ago(25 * MINUTE), model: HAIKU }),
 ];
 const NO_MOD_CREATED_AT = ago(47 * MINUTE);
-/** A written row that names no fork, no cycle, no runway and no shed stamp, and has reached no ledger. */
-const writtenRow = (row: Pick<Session, 'accountId' | 'agentContexts' | 'agentId' | 'agents' | 'burn' | 'companion' | 'createdAt' | 'keepalive' | 'keyId' | 'presenceAgeSeconds' | 'sessionId'>, line: Omit<AgentContext, 'createdAt'>): Session => ({
-  ...SESSION_SAMPLE,
-  ...row,
-  burnAt: line.lastUsedAt,
-  burnEquivalent: null,
-  burnUnit: 'usd',
-  burnWindow: null,
-  cacheTtlMs: line.cacheTtlMs,
-  companionSince: null,
-  cycleMs: null,
-  effort: line.effort,
-  epoch: 1,
-  forkDepth: null,
-  forkedFrom: null,
-  historical: false,
-  keyGeneration: Date.parse(keyById.get(row.keyId)!.createdAt),
-  lastInputTokens: line.lastInputTokens,
-  lastRefreshAt: line.lastUsedAt,
-  lastRequestAt: null,
-  lastUsedAt: line.lastUsedAt,
-  model: line.model,
-  pinned: true,
-  requests: 0,
-  runwayBounded: null,
-  runwayMs: null,
-  shedFrom: null,
-  shedReason: null,
-  speed: null,
-});
 const WRITTEN_SESSIONS = [
   writtenRow(
     {
