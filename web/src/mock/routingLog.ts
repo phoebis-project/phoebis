@@ -4,6 +4,7 @@ import type {
 } from '@/api/types';
 import { shareIn, weightOf } from '@/lib/costs';
 import { endOf } from '@/lib/quota';
+import { compareRows } from '@/lib/routingLog';
 import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN } from './accounts';
 import { GUARDRAILS } from './guardrails';
 import { leadOf } from './lead';
@@ -2740,13 +2741,6 @@ function after(row: RoutingLogPage['rows'][number], cursor: string): boolean {
   }
   return rank === '1' || row.id < Number(id);
 }
-const order = (a: RoutingLogPage['rows'][number], b: RoutingLogPage['rows'][number]) => {
-  const at = Date.parse(b.at) - Date.parse(a.at);
-  if (at !== 0) return at;
-  if (a.type !== b.type) return a.type === 'decision' ? -1 : 1;
-  if (a.type === 'decision' && b.type === 'decision') return a.requestId === b.requestId ? b.seq - a.seq : a.requestId < b.requestId ? 1 : -1;
-  return (b as RoutingEvent).id - (a as RoutingEvent).id;
-};
 
 /**
  * The merged page by the route's rules. The range runs from an hour back by default. An absent `kinds` is every
@@ -2790,7 +2784,7 @@ export function listRoutingLog(query: RoutingLogQuery, now: number, written: rea
       inList(query.accountIds, e.accountId) &&
       (kinds === undefined || kinds.includes(e.kind)),
   );
-  const merged = [...decisions, ...events].sort(order);
+  const merged = [...decisions, ...events].sort(compareRows);
   const rest = query.cursor ? merged.filter((row) => after(row, query.cursor!)) : merged;
   const limit = query.limit ?? 25;
   const rows = rest.slice(0, limit);
