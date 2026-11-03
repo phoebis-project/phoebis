@@ -30,7 +30,7 @@ const PURGE_INTERVAL_MS: i64 = 60_000;
 pub const RECORD_VERSION: u32 = 1;
 
 /// Version 1 of the record: the entry as the map holds it, minus `last_seen`, which is the row's own column.
-#[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Default, serde::Deserialize)]
 struct RecordV1 {
     #[serde(default)]
     accounts: HashMap<String, AccountRecordV1>,
@@ -38,7 +38,7 @@ struct RecordV1 {
     prompt_id: Option<String>,
 }
 
-#[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Default, serde::Deserialize)]
 struct AccountRecordV1 {
     #[serde(default)]
     message_ids: HashMap<String, String>,
@@ -884,15 +884,16 @@ mod tests {
 
     /// A version-1 record over one account, the shape `record_request_id` and `touch` would have written.
     fn seeded(request_id: &str, prompt_id: Option<&str>, last_seen: i64) -> MemoryRecord {
-        let v1 = RecordV1 {
+        let message_ids = HashMap::new();
+        let v1 = RecordV1Ref {
             accounts: HashMap::from([(
-                "acct".to_string(),
-                AccountRecordV1 {
-                    message_ids: HashMap::new(),
-                    request_id: Some(request_id.to_string()),
+                "acct",
+                AccountRecordV1Ref {
+                    message_ids: &message_ids,
+                    request_id: Some(request_id),
                 },
             )]),
-            prompt_id: prompt_id.map(String::from),
+            prompt_id,
         };
         MemoryRecord {
             record_version: RECORD_VERSION,
