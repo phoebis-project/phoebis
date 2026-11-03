@@ -7,6 +7,7 @@ import { Donut } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
 import { accountColor, accountSlots } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
+import { statusTone } from '@/components/ui/AttemptTrail';
 import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
@@ -428,9 +429,8 @@ function RecentTable({ accounts, rows, error, scale, settings, settingsError }: 
 }
 
 export function StatusBadge({ status, attempts = 1 }: { attempts?: number; status: number | null }) {
-  const tone = status === null ? 'neutral' : status === 200 ? 'good' : status === 429 ? 'warning' : status === 529 ? 'serious' : 'critical';
   return (
-    <Badge tone={tone} title={attempts > 1 ? `${attempts} attempts` : undefined}>
+    <Badge tone={statusTone(status)} title={attempts > 1 ? `${attempts} attempts` : undefined}>
       {status ?? '-'}
       {attempts > 1 && <span className="badge__extra">×{attempts}</span>}
     </Badge>

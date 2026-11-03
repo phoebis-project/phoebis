@@ -24,7 +24,7 @@ const OUTCOME_LABEL: Record<AttemptOutcome, string> = {
   upstream_error: 'upstream error',
 };
 
-const toneOf = (status: number | null): BadgeTone => (status === null ? 'neutral' : status === 200 ? 'good' : status === 429 ? 'warning' : status === 529 ? 'serious' : 'critical');
+export const statusTone = (status: number | null): BadgeTone => (status === null ? 'neutral' : status === 200 ? 'good' : status === 429 ? 'warning' : status === 529 ? 'serious' : 'critical');
 
 const lineFor = (a: TrailAttempt) =>
   [`${a.index + 1}. ${a.accountId}: ${OUTCOME_LABEL[a.outcome]}`, a.upstreamStatus === null ? 'no status' : `HTTP ${a.upstreamStatus}`, a.cooldownSet ? `cooldown set, ${a.cooldownSet.reason}, until ${fmtAbsolute(a.cooldownSet.until)}` : 'no cooldown set'].join(', ');
@@ -41,7 +41,7 @@ export function AttemptTrail({ attempts }: { attempts: TrailAttempt[] }) {
       {(describedBy) => (
         <span className="trail" title={title} aria-describedby={describedBy}>
           {attempts.map((a) => (
-            <span key={a.index} className={`trail__step badge badge--${toneOf(a.upstreamStatus)}`}>
+            <span key={a.index} className={`trail__step badge badge--${statusTone(a.upstreamStatus)}`}>
               {a.accountId} <span className="num">{a.upstreamStatus ?? '…'}</span>
             </span>
           ))}
