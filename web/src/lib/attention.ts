@@ -2,7 +2,7 @@ import { isoOrNull } from '@/api/decode';
 import type { AttentionItem, AttentionKind } from '@/api/types';
 import { METER_CODEC } from './address';
 import { lookup } from './counts';
-import { fmtAbsolute, fmtRelative, instant as clockInstant, listWords, percentText } from './format';
+import { fmtAbsolute, fmtRelative, instant as clockInstant, listWords, percentText, plural } from './format';
 import { WINDOW_WORD, entityHref, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
 import { speedWord } from './selection';
 
@@ -117,7 +117,6 @@ export function anchorOf(hash: string): string | null {
 
 const text = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
 const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-const days = (n: number): string => `${n} ${n === 1 ? 'day' : 'days'}`;
 /** The listener a certificate item's subject names: `proxy.tls` is the proxy listener's pair. */
 const listenerOf = ({ subject }: AttentionItem): string => subject.id.replace(/\.tls$/, '');
 
@@ -147,25 +146,25 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     case 'ledger_record_parked': {
       const n = count(d.count);
       const accounts = Array.isArray(d.accounts) ? d.accounts.filter((a): a is string => typeof a === 'string') : [];
-      return `${n} priced ${n === 1 ? 'record' : 'records'} parked, landing at the next start or on the dashboard's Replay${accounts.length ? ` (${accounts.join(', ')})` : ''}`;
+      return `${plural(n, 'priced record')} parked, landing at the next start or on the dashboard's Replay${accounts.length ? ` (${accounts.join(', ')})` : ''}`;
     }
     case 'poll_backoff': {
       const n = count(d.rate_limited_in_a_row);
       const next = isoOrNull(d.next_attempt_at);
-      return `${n} rate-limited ${n === 1 ? 'answer' : 'answers'} in a row${next ? `, next attempt ${fmtRelative(next, now)}` : ''}`;
+      return `${plural(n, 'rate-limited answer')} in a row${next ? `, next attempt ${fmtRelative(next, now)}` : ''}`;
     }
     case 'certificate_expiring': {
       const left = count(d.days_left);
       const file = text(d.cert_file);
       // The route floors the days left, so a leaf at 0 ends within a day and one at -1 ended within the last day.
-      const end = left === 0 ? 'expires today' : left === -1 ? 'expired today' : left < 0 ? `expired ${days(-left)} ago` : `expires in ${days(left)}`;
+      const end = left === 0 ? 'expires today' : left === -1 ? 'expired today' : left < 0 ? `expired ${plural(-left, 'day')} ago` : `expires in ${plural(left, 'day')}`;
       return `The ${listenerOf(item)} listener's certificate${file ? ` ${file}` : ''} ${end} (${fmtAbsolute(isoOrNull(d.expires))}). Replace the pair and run phoebis tls reload.`;
     }
     case 'certificate_reload_failed':
       return `The ${listenerOf(item)} listener's pair did not load: ${text(d.error) ?? ''}. The router keeps serving the pair it loaded at ${fmtAbsolute(isoOrNull(d.serving_since))}.`;
     case 'model_unpriced': {
       const n = count(d.requests);
-      return `${text(d.model) ?? item.subject.id} has no weight in the cost model, so its ${n} plan-funded ${n === 1 ? 'request' : 'requests'} since ${fmtAbsolute(item.since)} priced no window share.`;
+      return `${text(d.model) ?? item.subject.id} has no weight in the cost model, so its ${plural(n, 'plan-funded request')} since ${fmtAbsolute(item.since)} priced no window share.`;
     }
     case 'wall_reached':
     case 'destination_spent':
@@ -180,7 +179,6 @@ export function attentionDetail(item: AttentionItem, now: number): string {
   }
 }
 
-const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 const names = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 /** The spent windows as the record names them, `5h`, `7d` or `Fable`, a key the console does not know as sent. */
 const windowsOf = (v: unknown): string => {

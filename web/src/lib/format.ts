@@ -71,6 +71,8 @@ export const fmtShare = (ratio: number) => `${Number((ratio * 100).toPrecision(3
 export const shareLabel = (windowKey: string, share: number): string => `${fmtShare(share)} of ${lookup(WINDOW_LABEL, windowKeyId(windowKey) ?? '') ?? windowKey}`;
 /** A share as a whole percent with the space before the sign, as the pool card's badge writes it. */
 export const percentText = (share: number) => `${Math.round(share * 100)} %`;
+/** A count with its noun, `1 day`, `3 days`, `2 cache-map entries` where the plural is not the noun with an s. */
+export const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 /** "a", "a and b", "a, b and c". */
 export const listWords = (words: string[]): string => (words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
 /** The values a list chip prints before it counts the rest. */
@@ -153,7 +155,7 @@ export function fmtEndsIn(at: string, now: number): string {
   const delta = Date.parse(at) - now;
   const abs = Math.abs(delta);
   const [n, unit]: [number, string] = abs >= DAY ? [Math.floor(abs / DAY), 'day'] : abs >= HOUR ? [Math.floor(abs / HOUR), 'hour'] : [Math.max(1, Math.floor(abs / MINUTE)), 'minute'];
-  const span = `${n} ${unit}${n === 1 ? '' : 's'}`;
+  const span = plural(n, unit);
   return delta > 0 ? `ends in ${span}` : `ended ${span} ago`;
 }
 

@@ -1,6 +1,6 @@
 import type { Account, MemberEligibility, Pool, RateLimitWindow, Session } from '@/api/types';
 import { lookup } from './counts';
-import { byteOrder, fmtDuration, instant, percentText } from './format';
+import { byteOrder, fmtDuration, instant, percentText, plural } from './format';
 import { endOf, minuteSpan, windowOf } from './quota';
 import { speedWord, windingDown } from './selection';
 import { HOUR } from './time';
@@ -331,7 +331,7 @@ export function shedPreviewLine(preview: ShedPreview, now: number = Date.now()):
   }
   const over = hot.length === 1 ? `1 member projects over the ceiling: ${hot[0].label}.` : `${hot.length} members project over the ceiling: ${hot.map((h) => h.label).join(', ')}.`;
   if (preview.off) return [...off, over, ...held].join(' ');
-  const count = `${preview.sessions} ${preview.sessions === 1 ? 'session' : 'sessions'}`;
+  const count = plural(preview.sessions, 'session');
   const round = preview.noRunway
     ? 'No sibling has runway for them, so nothing would be marked.'
     : preview.unpriced

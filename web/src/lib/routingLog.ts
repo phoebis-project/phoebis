@@ -5,7 +5,7 @@ import { FAILOVER_MOVE_REASONS, moveLabel, RULE_MOVE_REASONS, type WeekReading }
 import { compareByModelTier } from './costs';
 import { has, lookup } from './counts';
 import type { ChipText } from './filterBar';
-import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, listed, shortModel, weekShort } from './format';
+import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, listed, plural, shortModel, weekShort } from './format';
 import { PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL } from './quota';
 import { speedWord } from './selection';
 import { ageWord, HOUR, MINUTE, span } from './time';
@@ -1646,7 +1646,7 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
         const tierChips = [...tiers].map(([tier, found]): Chip => {
           const [min, max] = [Math.min(...found), Math.max(...found)];
           const n = found.length;
-          return { label: `${tier} ×${n}`, title: `${n} cache-map ${n === 1 ? 'entry' : 'entries'} on the ${tier} tier`, value: min === max ? `depth ${min}` : `depth ${min} to ${max}` };
+          return { label: `${tier} ×${n}`, title: `${plural(n, 'cache-map entry', 'cache-map entries')} on the ${tier} tier`, value: min === max ? `depth ${min}` : `depth ${min} to ${max}` };
         });
         // The next turn reads the deepest message depths, while the router writes the static chain after them.
         const deepest = new Set(entries.filter((e) => e.tier === 'message').sort((a, b) => b.depth - a.depth).slice(0, 3));

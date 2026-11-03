@@ -1,7 +1,7 @@
 import type { Account, AccountSlowDown, Cooldown, ExtraUsage, PLAN_WORDS, PlanWord, PollOutcome, QuotaPoll, RateLimitWindow, Spend, SubscriptionCosts, WindowId } from '@/api/types';
 import { tierRow } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
-import { fmtAbsolute, fmtPct, fmtRelative, instant } from '@/lib/format';
+import { fmtAbsolute, fmtPct, fmtRelative, instant, plural } from '@/lib/format';
 import { HOUR, MINUTE, span } from '@/lib/time';
 
 export type MeterTone = 'good' | 'low' | 'warn';
@@ -321,7 +321,7 @@ export function pollReading(poll: QuotaPoll | null, fetchedAt: string | null, no
     const next = poll.nextAttemptAt;
     lines.push({ text: next ? `backing off, next attempt ${fmtRelative(next, now)}` : 'backing off', tone: 'serious' });
     const n = poll.rateLimitedInARow;
-    title.push(`backing off since ${fmtAbsolute(poll.backoffSince)}`, `${n} rate-limited ${n === 1 ? 'answer' : 'answers'} in a row`, ...(next ? [`next attempt ${fmtAbsolute(next)}`] : []));
+    title.push(`backing off since ${fmtAbsolute(poll.backoffSince)}`, `${plural(n, 'rate-limited answer')} in a row`, ...(next ? [`next attempt ${fmtAbsolute(next)}`] : []));
   }
   return { lines, title: title.join('\n') };
 }

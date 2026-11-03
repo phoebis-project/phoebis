@@ -2,7 +2,7 @@ import type { AllowanceAccount, AllowanceReset, AllowanceWindow, SubscriptionCos
 import { HINT_WINDOW } from '@/lib/analytics';
 import { anchorTier, pricedWindow, tierCapacity, weekScale, weekUnpricedTitle } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
-import { byteOrder, fmtAbsolute, fmtShare, fmtShortTime, weekShort } from '@/lib/format';
+import { byteOrder, fmtAbsolute, fmtShare, fmtShortTime, plural, weekShort } from '@/lib/format';
 import { pricedTier } from '@/lib/quota';
 import { DAY } from '@/lib/time';
 import type { WeekPosition } from '@/lib/unit';
@@ -177,7 +177,6 @@ export function allowanceRows(answer: UnusedAllowanceAnswer, costs: Subscription
   );
 }
 
-const counted = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
 
 /** The two fleet figures: the priced accounts' figures in the chosen week added, with the unpriced accounts named, and
  *  where the week's `scale` is null, every figure a dash, the note naming the week the cost model does not size. */
@@ -193,5 +192,5 @@ export function fleetFigures(rows: AllowanceRow[], week: WeekPosition, scale: nu
     .filter((r) => r.unpriced)
     .map((r) => r.accountId)
     .sort();
-  return { fable: sum('seven_day_fable'), note: `${counted(priced, 'account')} priced${unpriced.length === 0 ? '' : `, ${unpriced.join(', ')} left out unpriced`}`, sevenDay: sum('seven_day') };
+  return { fable: sum('seven_day_fable'), note: `${plural(priced, 'account')} priced${unpriced.length === 0 ? '' : `, ${unpriced.join(', ')} left out unpriced`}`, sevenDay: sum('seven_day') };
 }
