@@ -241,7 +241,7 @@ function AccountCell({ row }: { row: RoutingLogRow }) {
   const keyId = row.type === 'event' ? (row.keyId ?? registryTarget(row, 'key')) : null;
   if (accountId !== null) {
     return (
-      <span className="routing-log__cut">
+      <span className="routing-log__cut ellipsis">
         {from !== null && (
           <>
             <EntityLink kind="account" id={from} /> <span className="muted">to</span>{' '}
@@ -253,14 +253,14 @@ function AccountCell({ row }: { row: RoutingLogRow }) {
   }
   if (row.type === 'event' && row.poolId !== null) {
     return (
-      <span className="routing-log__cut">
+      <span className="routing-log__cut ellipsis">
         <span className="muted">pool</span> <EntityLink kind="pool" id={row.poolId} />
       </span>
     );
   }
   if (keyId !== null) {
     return (
-      <span className="routing-log__cut">
+      <span className="routing-log__cut ellipsis">
         <span className="muted">key</span> <EntityLink kind="key" id={keyId} />
       </span>
     );
@@ -289,7 +289,7 @@ function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now
       <td className="num routing-log__time" title={fmtAbsolute(row.at)}>
         {fmtDatedTime(row.at, now)}
         {row.type === 'decision' && (
-          <span className="sub mono routing-log__cut">
+          <span className="sub mono routing-log__cut ellipsis">
             <EntityLink kind="request" id={row.requestId} />
           </span>
         )}
@@ -303,14 +303,14 @@ function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now
         {row.sessionId === null ? (
           <Dash />
         ) : (
-          <span className="routing-log__cut">
+          <span className="routing-log__cut ellipsis">
             <EntityLink kind="session" id={row.sessionId} mono>
               {row.sessionId.slice(0, 8)}
             </EntityLink>
           </span>
         )}
         {row.agentId !== null && (
-          <span className="sub mono routing-log__cut" title={row.agentId}>
+          <span className="sub mono routing-log__cut ellipsis" title={row.agentId}>
             {row.agentId}
           </span>
         )}
@@ -318,7 +318,7 @@ function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now
       <td className="routing-log__account">
         <AccountCell row={row} />
         {model !== null && (
-          <span className="sub mono routing-log__cut routing-log__model-under">
+          <span className="sub mono routing-log__cut ellipsis routing-log__model-under">
             <EntityLink kind="model" id={model} />
           </span>
         )}
@@ -327,13 +327,13 @@ function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now
         {model === null ? (
           <Dash />
         ) : (
-          <span className="mono routing-log__cut">
+          <span className="mono routing-log__cut ellipsis">
             <EntityLink kind="model" id={model} />
           </span>
         )}
       </td>
       <td className="routing-log__by">
-        <ChipView chip={{ ...by, title: by.title ?? by.value }} className="routing-log__chip" describedBy={describedBy} />
+        <ChipView chip={{ ...by, title: by.title ?? by.value }} className="routing-log__chip ellipsis" describedBy={describedBy} />
       </td>
       <td className="routing-log__fact">
         {facts.length === 0 ? (
@@ -343,7 +343,7 @@ function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now
             {facts.map((p) => (
               <div className="fact__pair" key={p.label}>
                 <span className="fact__label">{p.label}</span>
-                <span className="fact__value mono" title={p.value}>
+                <span className="fact__value ellipsis mono" title={p.value}>
                   {p.entity ? <EntityLink kind={p.entity.kind} id={p.entity.id}>{p.value}</EntityLink> : p.value}
                 </span>
               </div>

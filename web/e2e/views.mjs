@@ -3160,6 +3160,7 @@ async function poolDialogWalk(theme, mode) {
     if (group === 'Members') {
       await tableColumns(theme, `pools ${mode} dialog`, '.members-table', ['Account']);
       await memberInputs();
+      await cutReaders(theme, `/pools ${mode} dialog`);
     }
     if (group === 'Keys') await tableColumns(theme, `pools ${mode} dialog`, '.keys-table', ['Key']);
     if (group === 'Cache TTL' && expert) {
@@ -5859,6 +5860,7 @@ async function analyticsTypedPicker(theme) {
     await loadAtOrigin('/analytics?accounts=primary', '.analytics-section#traffic');
     await page.locator('.filter-bar__row > button', { hasText: /^Add filter$/ }).click();
     await advance(CLOCK_STEP_MS);
+    await cutReaders(theme, '/analytics with Add filter open');
     await page.locator('.popover .add-filter__row').filter({ has: page.locator('.add-filter__label', { hasText: /^Client$/ }) }).click();
     await advance(CLOCK_STEP_MS);
     const field = await page.evaluate(() => {
@@ -7038,6 +7040,7 @@ async function barRow(theme, view) {
         const got = await read();
         measurements.push(`${theme} ${view} bar row at ${width} by ${height} ${label} ${JSON.stringify(got)}`);
         check(`${width} by ${height} ${label}`, got, chipped);
+        if (chipped) await cutReaders(theme, `${view} at ${width} by ${height} ${label}`);
         if (label === 'at rest' && ROW_BOUND[view] !== undefined && got !== null && got.width >= ROW_BOUND[view]) say(`${width} by ${height} at rest: the row's slots take ${got.width} px, not under ${ROW_BOUND[view]}`);
       }
     }
@@ -10238,6 +10241,7 @@ async function catalogDialog(theme) {
     if (read.wrapped.length) say(`the effort levels wrap on ${read.wrapped.join(', ')}`);
     if (read.overflow === null || read.overflow > 0) say(`the table runs ${read.overflow} px past the dialog`);
     await tableColumns(theme, 'accounts catalog', 'dialog[open] table', ['Model', 'Name']);
+    await cutReaders(theme, '/accounts catalog');
     if (mock) {
       await atRest();
       await dialog.screenshot({ path: join(shots, theme, 'accounts-catalog.png') });
@@ -10777,6 +10781,53 @@ async function tableStripes(theme, path) {
   if (path === '/routing-log') await routingLogStripes(theme, tones);
   if (path === '/requests') await requestRowStripes(theme, tones);
   if (path === '/pools') await poolFormTables(theme);
+}
+
+/**
+ * The elements that cut a long value with an ellipsis, each named by its own class rather than by the shared cut
+ * class, so one that lost the cut class still counts.
+ */
+const CUT_READERS = [
+  '.account-mini__sub',
+  '.add-filter__value',
+  '.attention__detail',
+  '.catalog__id',
+  '.chip--filter .chip__values',
+  '.dash__model',
+  '.fact__value',
+  '.lane__label',
+  '.lane__name',
+  '.members-table__name',
+  '.qcard__name',
+  '.requests__client-text',
+  '.routing-log__chip',
+  '.routing-log__cut',
+  '.srow__id',
+];
+
+/**
+ * Every cut reader the page holds at `where` computes the cut: `overflow: hidden`, `text-overflow: ellipsis` and
+ * `white-space: nowrap`, so a long value ends behind an ellipsis rather than running past its box or wrapping. The
+ * count of each reader read goes to the measurements.
+ */
+async function cutReaders(theme, where) {
+  const read = await page.evaluate(
+    (selectors) =>
+      selectors.flatMap((selector) =>
+        [...document.querySelectorAll(selector)].map((el) => {
+          const s = getComputedStyle(el);
+          return { overflow: s.overflow, selector, textOverflow: s.textOverflow, whiteSpace: s.whiteSpace };
+        }),
+      ),
+    CUT_READERS,
+  );
+  const counts = {};
+  for (const r of read) counts[r.selector] = (counts[r.selector] ?? 0) + 1;
+  measurements.push(`${theme} ${where} cut readers ${JSON.stringify(counts)}`);
+  const wrong = read.filter((r) => r.overflow !== 'hidden' || r.textOverflow !== 'ellipsis' || r.whiteSpace !== 'nowrap');
+  for (const what of new Set(wrong.map((r) => `a ${r.selector} reads overflow ${r.overflow}, text-overflow ${r.textOverflow} and white-space ${r.whiteSpace}, not the ellipsis cut`))) {
+    failures.push(`${theme} ${where}: ${what}`);
+  }
 }
 
 /**
@@ -12394,6 +12445,7 @@ try {
       }
       // After the view's own measures, so the Routing log's first decision is open and its row reads over the stripes.
       await tableStripes(theme, view.path);
+      await cutReaders(theme, view.path);
       // A full-page capture paints the fixed header and sidebar at the window's scroll offset, over the content, and
       // the checks above can leave the page scrolled (`keyDialogGeometry`'s click on the revoked row's menu trigger
       // scrolls that row into view).

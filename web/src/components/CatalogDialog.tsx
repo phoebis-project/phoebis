@@ -81,7 +81,7 @@ export function CatalogDialog({ accountId, label, now, onClose, open }: { accoun
                     <tr key={m.id}>
                       <td className="col-fill" title={m.id}>
                         <div className="catalog__model">
-                          <span className="mono catalog__id">{m.id}</span>
+                          <span className="mono catalog__id ellipsis">{m.id}</span>
                         </div>
                       </td>
                       <td className="col-fill" title={m.displayName || undefined}>{m.displayName || '-'}</td>

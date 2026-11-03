@@ -313,7 +313,7 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
           status
         )}
       </div>
-      {account.email && <div className="account-mini__sub mono muted">{account.email}</div>}
+      {account.email && <div className="account-mini__sub ellipsis mono muted">{account.email}</div>}
       <WindowTriple account={account} now={now} compact />
       <div className="account-mini__foot">
         {planExtraUsage(account)?.inUse && <Badge tone="serious">Overage active</Badge>}
@@ -393,7 +393,7 @@ function RecentTable({ accounts, rows, error, scale, settings, settingsError }: 
                     </td>
                     <td className="col-fit">{r.accountId}</td>
                     <td className="mono nowrap col-fit" title={shown !== r.model || shown.length > MODEL_CHARS ? r.model : undefined}>
-                      <span className="dash__model" style={{ maxWidth: `${MODEL_CHARS}ch` }}>
+                      <span className="dash__model ellipsis" style={{ maxWidth: `${MODEL_CHARS}ch` }}>
                         {shown}
                       </span>
                     </td>

@@ -197,7 +197,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
         <span className="qcard__icon qcard__icon--oauth" title="Claude.ai subscription">
           <IconUser size={15} />
         </span>
-        <span className="qcard__name mono" title={account.email ?? undefined}>
+        <span className="qcard__name ellipsis mono" title={account.email ?? undefined}>
           {account.label}
         </span>
         <Badge tone={STATUS_TONE[account.status]} dot>
@@ -480,7 +480,7 @@ function Lane({ account, cells, children, chips, color, end, nowPct, period }: {
       <div className="lane__head">
         <div className="lane__id">
           <span className="lane__dot" />
-          <span className="lane__name" title={account.email ?? account.label}>
+          <span className="lane__name ellipsis" title={account.email ?? account.label}>
             {account.label}
           </span>
           <span className="lane__period">{period}</span>
@@ -520,12 +520,12 @@ function LaneBar({ barKey, end, extra = '', label, share, span, stamp, start, st
       )}
       {/* A live bar's label falls back to its share alone, and a reset stamp alone straight to the title. */}
       {filled ? (
-        <span className="lane__label" data-bar={barKey} hidden={step === 2}>
+        <span className="lane__label ellipsis" data-bar={barKey} hidden={step === 2}>
           {share}
           <span className="lane__label-reset" hidden={step !== 0}> · {stamp(end)}</span>
         </span>
       ) : (
-        <span className="lane__label" data-bar={barKey} hidden={step !== 0}>
+        <span className="lane__label ellipsis" data-bar={barKey} hidden={step !== 0}>
           {stamp(end)}
         </span>
       )}

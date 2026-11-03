@@ -19,7 +19,7 @@ export function FilterChip({ chip, editing = null, hidden, onOpen, onRemove }: {
         {values !== null && (
           <>
             {/* The gap draws the space, and the text keeps it for a reader and a copy. */}{' '}
-            <span className={chip.mono ? 'chip__values mono' : 'chip__values'}>{values}</span>
+            <span className={chip.mono ? 'chip__values ellipsis mono' : 'chip__values ellipsis'}>{values}</span>
           </>
         )}
       </button>

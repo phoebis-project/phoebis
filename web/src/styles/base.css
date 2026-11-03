@@ -83,6 +83,12 @@ code,
   color: var(--ink-2);
 }
 
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Here rather than with the components, so a list's own rule in a later sheet overrides the gap. */
 .plain-list {
   display: flex;

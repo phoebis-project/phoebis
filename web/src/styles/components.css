@@ -958,10 +958,7 @@ textarea.input {
 .add-filter__value {
   min-width: 0;
   margin-left: auto;
-  overflow: hidden;
   color: var(--ink-2);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* The split Refresh button: one bordered box, the body and the interval part parted by a hairline. The part reserves

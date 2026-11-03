@@ -456,7 +456,7 @@ export function RequestsPage() {
                           )}
                           {shown.has('client') && (
                             <td className="mono requests__client col-fit" title={r.client ?? undefined}>
-                              {r.client === null ? <span className="muted">-</span> : <span className="requests__client-text" title={r.client}>{r.client}</span>}
+                              {r.client === null ? <span className="muted">-</span> : <span className="requests__client-text ellipsis" title={r.client}>{r.client}</span>}
                               {r.agentType && (
                                 <span className="sub" title={r.agentType}>
                                   {r.agentType}

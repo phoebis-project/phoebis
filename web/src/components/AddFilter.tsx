@@ -158,7 +158,7 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
               {/* A disabled row stays a stop for the keys so a reader hears its reason, and the keys that would press it are held. */}
               <button type="button" role="option" className="add-filter__row" aria-disabled={reason !== undefined ? true : undefined} aria-describedby={reason !== undefined ? `${boxId}-${d.field}` : undefined} title={reason} onClick={() => reason === undefined && choose(d)} onKeyDown={(e) => reason !== undefined && (e.key === 'Enter' || e.key === ' ') && e.preventDefault()}>
                 <span className="add-filter__label">{d.label}</span>
-                {words !== '' && <span className={d.mono ? 'add-filter__value mono' : 'add-filter__value'}>{words}</span>}
+                {words !== '' && <span className={d.mono ? 'add-filter__value ellipsis mono' : 'add-filter__value ellipsis'}>{words}</span>}
                 {reason !== undefined && (
                   <span className="add-filter__description" id={`${boxId}-${d.field}`}>
                     {reason}

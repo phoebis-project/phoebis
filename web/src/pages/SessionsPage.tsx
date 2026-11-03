@@ -628,7 +628,7 @@ function SessionRows({
           </span>
         </td>
         <td className="mono col-fill" title={session.sessionId}>
-          <span className="srow__id">{sessionLabel(session)}</span>
+          <span className="srow__id ellipsis">{sessionLabel(session)}</span>
           {session.forkedFrom !== null && forkBase !== null && (
             <ForkBadge
               base={baseRow ? forkBase : null}

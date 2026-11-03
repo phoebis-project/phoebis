@@ -1502,7 +1502,7 @@ export function PoolDialog({
                         <td className="col-fill" title={a.label}>
                           <div className="row">
                             <div className="members-table__check" />
-                            <span className="members-table__name">{a.label}</span>
+                            <span className="members-table__name ellipsis">{a.label}</span>
                             {a.email && <span className="muted mono">{a.email}</span>}
                             <span className="muted" title={`An account belongs to one pool. Remove it from ${heldBy.id} first.`}>
                               In pool {heldBy.id}
@@ -1532,7 +1532,7 @@ export function PoolDialog({
                               setMemberOrder(orderedAccountIds(accounts, next));
                             }}
                           />
-                          <span className="members-table__name">{a.label}</span>
+                          <span className="members-table__name ellipsis">{a.label}</span>
                           {a.email && <span className="muted mono">{a.email}</span>}
                         </label>
                       </td>
@@ -1597,7 +1597,7 @@ export function PoolDialog({
                           }}
                           aria-invalid={invalid(`member:${id}`)}
                         />
-                        <span className="members-table__name">{id}</span>
+                        <span className="members-table__name ellipsis">{id}</span>
                         {accountsLoaded && <Badge tone="neutral">not listed</Badge>}
                       </label>
                     </td>
