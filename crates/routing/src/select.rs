@@ -5,9 +5,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AffinityMode, BudgetPeriod, CooldownRow, CooldownScope,
-    OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow, ReturnToPlan,
-    SessionPlacement, ShedStamp, Strategy, SubagentPlacement, WarmSessions,
+    AccountKind, AccountRow, AccountState, AffinityMode, ApiKeyRow, BudgetPeriod, CooldownRow,
+    CooldownScope, OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow,
+    ReturnToPlan, SessionPlacement, ShedStamp, Strategy, SubagentPlacement, WarmSessions,
 };
 use rand::{Rng, RngExt};
 
@@ -1172,7 +1172,9 @@ pub fn decide(
         walk: Vec::with_capacity(WALK_STEPS.len()),
         ..Recorder::default()
     };
-    let (result, writes) = run(state, snapshot, request, rng, &mut rec);
+    let key = snapshot.key(&request.key_id);
+    let pool = key.and_then(|k| snapshot.pool(&k.pool_id));
+    let (result, writes) = run(state, snapshot, pool, request, rng, &mut rec);
     // The reserve station draws on every walk. A placement and a move record it where they book, and an answer that
     // never reached the booking states here that it booked nothing, naming the account it landed or waits on.
     if rec.walk.iter().all(|step| step.step != "reserve") {
@@ -1187,10 +1189,7 @@ pub fn decide(
             account.map(account_fact).into_iter().collect(),
         );
     }
-    let pool = snapshot
-        .key(&request.key_id)
-        .and_then(|k| snapshot.pool(&k.pool_id));
-    let (record, summary, shed_round) = finish(rec, request, snapshot, pool, &result);
+    let (record, summary, shed_round) = finish(rec, request, key, pool, &result);
     Decided {
         result,
         writes,
@@ -1347,15 +1346,13 @@ impl Recorder {
 fn run(
     state: &mut RoutingState,
     snapshot: &RegistrySnapshot,
+    pool: Option<&PoolRow>,
     request: &SelectRequest,
     rng: &mut impl Rng,
     rec: &mut Recorder,
 ) -> (SelectResult, Vec<StateWrite>) {
     let mut writes = Vec::new();
-    let Some(pool) = snapshot
-        .key(&request.key_id)
-        .and_then(|k| snapshot.pool(&k.pool_id))
-    else {
+    let Some(pool) = pool else {
         rec.pin_reason = Some("not_looked_up");
         rec.step("eligible", "none", Vec::new());
         return (SelectResult::Exhausted(Exhaustion::Untimed), writes);
@@ -6910,7 +6907,7 @@ fn request_facts(request: &SelectRequest, pool_id: String) -> RequestFacts {
 fn finish(
     rec: Recorder,
     request: &SelectRequest,
-    snapshot: &RegistrySnapshot,
+    key: Option<&ApiKeyRow>,
     pool: Option<&PoolRow>,
     result: &SelectResult,
 ) -> (DecisionRecord, DecisionSummary, Option<ShedRoundRecord>) {
@@ -6933,7 +6930,6 @@ fn finish(
         slow_down,
         hold_plan,
     } = rec;
-    let key = snapshot.key(&request.key_id);
     let settings = pool.zip(key).map(|(pool, _)| settings_of(pool));
     let mut outcome = Outcome {
         kind: "placed",
