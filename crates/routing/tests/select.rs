@@ -328,6 +328,7 @@ fn placement_req(
 ) -> SelectRequest {
     req.boundaries = boundaries.iter().map(|b| b.to_string()).collect();
     req.static_boundaries = static_boundaries.iter().map(|b| b.to_string()).collect();
+    req.static_hash = static_boundaries.last().map(|b| b.to_string());
     req.marker = marker;
     req
 }
@@ -421,6 +422,7 @@ fn select_request(
         count: false,
         request_class: None,
         context_compacted: false,
+        static_hash: None,
         boundaries: Arc::from([]),
         client: ClientClass::ClaudeCode,
         entrypoint: None,
@@ -9492,7 +9494,7 @@ fn with_facts(
     SelectRequest {
         request_class: class.map(String::from),
         context_compacted: compacted,
-        static_boundaries: static_hash.into_iter().map(String::from).collect(),
+        static_hash: static_hash.map(String::from),
         boundaries: boundaries.iter().map(|b| b.to_string()).collect(),
         ..req
     }
@@ -16161,6 +16163,7 @@ fn a_refused_probe_reads_as_a_probe_and_keeps_what_its_request_carried() {
         context_compacted: true,
         marker: true,
         parent_agent_id: Some("main".into()),
+        static_hash: Some("s2".into()),
         static_boundaries: Arc::from(["s1".to_string(), "s2".to_string()]),
         boundaries: Arc::from(["b1".to_string(), "b2".to_string(), "b3".to_string()]),
         lane: lane_key("claude-sonnet-5", "standard", "adaptive", "high"),
