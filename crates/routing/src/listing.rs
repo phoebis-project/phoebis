@@ -67,7 +67,7 @@ pub fn listing(
     twins: bool,
 ) -> Vec<CatalogRow> {
     let mut folded_seen = HashSet::new();
-    let mut kept: Vec<(String, CatalogRow)> = Vec::new();
+    let mut out: Vec<CatalogRow> = Vec::new();
     for member in members {
         for row in member {
             // The upstream never lists a twin of its own; a row already carrying the suffix is not this
@@ -76,16 +76,11 @@ pub fn listing(
                 continue;
             }
             let folded = row.id.to_ascii_lowercase();
-            if folded_seen.insert(folded.clone()) {
-                kept.push((folded, row.clone()));
+            if folded_seen.insert(folded.clone()) && allows(processed, &folded) {
+                out.push(row.clone());
             }
         }
     }
-    let mut out: Vec<CatalogRow> = kept
-        .into_iter()
-        .filter(|(folded, _)| allows(processed, folded))
-        .map(|(_, row)| row)
-        .collect();
     if twins {
         let twinned: Vec<CatalogRow> = out
             .iter()
