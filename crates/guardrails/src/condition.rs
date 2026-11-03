@@ -116,10 +116,6 @@ impl Operator {
             _ => return None,
         })
     }
-
-    pub fn takes_value(self) -> bool {
-        !matches!(self, Operator::Absent | Operator::Present)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -626,9 +622,6 @@ mod tests {
         let operator = Operator::parse("present").expect("an operator word parses");
         assert_eq!(operator.as_str(), "present");
         assert_eq!(serde_json::to_value(operator).unwrap(), json!("present"));
-        assert!(!Operator::Absent.takes_value());
-        assert!(!Operator::Present.takes_value());
-        assert!(Operator::Equals.takes_value());
         assert_eq!(Operator::parse("contains"), None);
         let selector = Selector::parse("last_assistant").expect("a selector word parses");
         assert_eq!(selector.as_str(), "last_assistant");
