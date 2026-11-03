@@ -2,6 +2,7 @@
 //! that has to follow both, and the first-party fields a reduced-shape request lacks.
 
 use phoebis_cch::Stamp;
+pub(crate) use phoebis_cch::{find, BILLING_BLOCK};
 
 use crate::billing::{restore_billing_line, CarriedVersion, Restore};
 use crate::identity::is_valid_id;
@@ -229,9 +230,6 @@ enum Spliced {
 
 /// `"account_uuid":"` as it appears escaped inside the `metadata.user_id` string.
 const ESCAPED_UUID_KEY: &[u8] = br#"\"account_uuid\":\""#;
-
-/// Opening quote and prefix of the billing block as it appears in `system[0].text`.
-pub(crate) const BILLING_BLOCK: &[u8] = br#""x-anthropic-billing-header:"#;
 
 pub(crate) const BILLING_LINE_PATH: &str = "system[0].text";
 
@@ -711,12 +709,6 @@ fn replace_model(body: &mut Vec<u8>, upstream_model: &str) -> Spliced {
     let encoded = serde_json::to_string(upstream_model).expect("a string always encodes as JSON");
     body.splice(start..end, encoded.bytes());
     Spliced::Replaced
-}
-
-pub(crate) fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
 }
 
 #[cfg(test)]

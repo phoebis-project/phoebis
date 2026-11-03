@@ -16,6 +16,9 @@ const MAX_DEPTH: usize = 128;
 /// The four bytes RFC 8259 allows as whitespace between tokens, for every walk that skips it.
 pub const JSON_WS: &[u8] = b" \t\r\n";
 
+/// Opening quote and prefix of the billing block as it appears in `system[0].text`.
+pub const BILLING_BLOCK: &[u8] = br#""x-anthropic-billing-header:"#;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CchError {
     #[error("body is not valid JSON at byte {0}")]
@@ -61,7 +64,7 @@ pub fn find_cch(body: &[u8]) -> Option<CchLocation> {
 fn billing_line(body: &[u8]) -> Option<((usize, usize), Option<usize>)> {
     let (start, end) = string_member_span(body, &["system", "0", "text"])?;
     let raw = &body[start..end];
-    if !raw.starts_with(b"\"x-anthropic-billing-header:") {
+    if !raw.starts_with(BILLING_BLOCK) {
         return None;
     }
     let mut from = 0;
@@ -403,7 +406,8 @@ pub fn remove_top_level_member(body: &mut Vec<u8>, key: &str) -> Option<(usize, 
     Some((cut_start, cut_end))
 }
 
-fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+/// The offset of the first `needle` in `hay`.
+pub fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
