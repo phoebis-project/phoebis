@@ -11,8 +11,8 @@ pub mod presets;
 
 pub use body::parse_body;
 pub use compile::{
-    compile_pattern, CompileError, CompiledCondition, CompiledGuardrail, CompiledTest,
-    COMPILED_SIZE_LIMIT, PATTERN_MAX_CHARS,
+    CompileError, CompiledCondition, CompiledGuardrail, CompiledTest, COMPILED_SIZE_LIMIT,
+    PATTERN_MAX_CHARS,
 };
 pub use condition::{
     Checked, Condition, ConditionWords, GuardrailAction, GuardrailMode, Operator, Reason, Selector,

@@ -14,14 +14,9 @@ pub enum CompileError {
     Condition { index: usize, reason: String },
 }
 
-/// `pattern is longer than 2048 characters`, or `pattern does not compile: {message}` with the display's whitespace
-/// runs collapsed to one space, else the regex under the size limit.
-pub fn compile_pattern(pattern: &str) -> Result<regex::Regex, Reason> {
-    if pattern.chars().count() > PATTERN_MAX_CHARS {
-        return Err(Reason(format!(
-            "pattern is longer than {PATTERN_MAX_CHARS} characters"
-        )));
-    }
+/// `pattern does not compile: {message}` with the display's whitespace runs collapsed to one space, else the regex
+/// under the size limit. The length bound is `Condition::check`'s, which every condition passes before it compiles.
+pub(crate) fn compile_pattern(pattern: &str) -> Result<regex::Regex, Reason> {
     regex::RegexBuilder::new(pattern)
         .size_limit(COMPILED_SIZE_LIMIT)
         .build()
@@ -151,14 +146,21 @@ mod tests {
 
     #[test]
     fn a_pattern_of_2048_characters_compiles_and_one_of_2049_is_refused() {
-        assert!(compile_pattern(&"a".repeat(2_048)).is_ok());
-        assert!(compile_pattern(&"\u{e9}".repeat(2_048)).is_ok());
+        let matching = |pattern: &str| condition(Subject::Model, Operator::Matches, Some(pattern));
+        assert!(compile(&[matching(&"a".repeat(2_048))]).is_ok());
+        assert!(compile(&[matching(&"\u{e9}".repeat(2_048))]).is_ok());
         assert_eq!(
-            refusal(&"a".repeat(2_049)),
+            matching(&"a".repeat(2_049))
+                .check()
+                .unwrap_err()
+                .to_string(),
             "pattern is longer than 2048 characters"
         );
         assert_eq!(
-            refusal(&"\u{e9}".repeat(2_049)),
+            matching(&"\u{e9}".repeat(2_049))
+                .check()
+                .unwrap_err()
+                .to_string(),
             "pattern is longer than 2048 characters"
         );
     }
