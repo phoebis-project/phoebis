@@ -2398,23 +2398,18 @@ function planRows(account: Account): EventSeed[] {
   ];
 }
 
-/**
- * The plan-ended account's one row: the profile read found the free organization its canceled plan left, at the
- * instant the account's flag names, and no read since found a plan, so no `plan_restored` follows.
- */
-function planEndedRow(account: Account): EventSeed[] {
-  if (account.planEndedAt === null) return [];
-  return [{ accountId: account.id, at: account.planEndedAt, detail: { organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', source: 'profile', subscription_status: 'canceled' }, kind: 'plan_ended' }];
-}
-
-/**
- * The plan-ended account's backoff close: a run one rate limit opened six minutes earlier stood open when the profile
- * read paused the poll, and the pause closes it at its own instant, since no clean answer will come.
- */
-function planEndedClose(account: Account): EventSeed[] {
+/** The plan-ended account's two rows, at the instant the account's flag names. */
+function planEndedRows(account: Account): EventSeed[] {
   if (account.planEndedAt === null) return [];
   const at = Date.parse(account.planEndedAt);
-  return [{ accountId: account.id, at: account.planEndedAt, detail: { attempts: 1, cause: 'plan_ended', duration_ms: 6 * MINUTE, resumed_at: at }, kind: 'poll_backoff_ended' }];
+  return [
+    // The profile read found the free organization its canceled plan left, and no read since found a plan, so no
+    // `plan_restored` follows.
+    { accountId: account.id, at: account.planEndedAt, detail: { organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', source: 'profile', subscription_status: 'canceled' }, kind: 'plan_ended' },
+    // The backoff close: a run one rate limit opened six minutes earlier stood open when the profile read paused the
+    // poll, and the pause closes it at its own instant, since no clean answer will come.
+    { accountId: account.id, at: account.planEndedAt, detail: { attempts: 1, cause: 'plan_ended', duration_ms: 6 * MINUTE, resumed_at: at }, kind: 'poll_backoff_ended' },
+  ];
 }
 
 const WEEK = 7 * DAY;
@@ -2694,8 +2689,7 @@ function buildEvents(): RoutingEvent[] {
     // Drawn at the instant it fires: the subscription's end less the pool's wind-down, which is still ahead.
     { accountId: 'secondary', at: iso(endsAt - pool.windDownMinutes * MINUTE), detail: { end_source: 'canceled', ends_at: endsAt, wind_down_minutes: pool.windDownMinutes }, kind: 'wind_down_started', poolId: 'all' },
     ...planRows(primary),
-    ...planEndedRow(accountById.get('sunset')!),
-    ...planEndedClose(accountById.get('sunset')!),
+    ...planEndedRows(accountById.get('sunset')!),
   );
   if (oldestCooldown) seeds.push({ accountId: oldestCooldown.accountId, at: iso(oldestCooldown.until), detail: { cause: 'expired', scope: oldestCooldown.scope }, kind: 'cooldown_cleared' });
   if (gap) seeds.push({ accountId: null, at: iso(Date.parse(gap.at) + (gap.durationMs ?? 0)), detail: { reason: 'chunk_skipped', request_id: gap.id }, kind: 'ledger_gap', requestId: gap.id });
