@@ -4248,31 +4248,15 @@
   white-space: nowrap;
 }
 
-/* Windows by tier */
-.cost-ref__tiers {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
+/* Windows by tier: the shared table's look, with its own cell padding and middle alignment, which win over `.table th`
+   and `.table td` at the same specificity by coming later. */
 .cost-ref__tiers th {
   padding: 0 10px 6px 8px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--ink-2);
-  text-align: left;
-  white-space: nowrap;
-  border-bottom: 1px solid var(--hairline);
 }
 
 .cost-ref__tiers td {
   padding: 7px 10px 7px 8px;
   vertical-align: middle;
-  border-bottom: 1px solid var(--hairline);
-}
-
-.cost-ref__tiers tr:last-child td {
-  border-bottom: 0;
 }
 
 .cost-ref__tier-name {

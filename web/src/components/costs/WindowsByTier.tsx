@@ -127,7 +127,7 @@ export function WindowsByTier({ costs }: { costs: SubscriptionCosts }) {
   ];
   return (
     <Card title="Windows by tier" subtitle={`How much each tier's windows hold, against ${smallest === null ? 'the smallest' : planLabel(smallest)}`} actions={<BandSwitch inside={inside} onChange={setInside} />}>
-      <table className="cost-ref__tiers">
+      <table className="table table--plain cost-ref__tiers">
         <thead>
           <tr>
             <th>Tier</th>
