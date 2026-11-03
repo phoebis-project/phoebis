@@ -173,8 +173,11 @@ const USER_AGENT: Dimension = { field: 'agent', group: 'Request', kind: 'pattern
  * the user agent's chip.
  */
 export const AGENT_ID: Dimension = { field: 'agentId', group: 'Subject', kind: 'id', label: 'Agent', mono: true, word: 'agent' };
+/** A request's id, which both logs offer. */
 const REQUEST_ID: Dimension = { field: 'request', group: 'Subject', kind: 'id', label: 'Request', mono: true, word: 'request' };
+/** A request's session id, which both logs and Analytics offer. */
 const SESSION_ID: Dimension = { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' };
+/** The status choice Accounts lists under its own group and Keys spreads under the Keys group. */
 const STATUS: Dimension = { anyLabel: 'All statuses', defaultValue: 'all', field: 'status', group: 'Accounts', kind: 'choice', label: 'Status', word: 'status' };
 
 /**

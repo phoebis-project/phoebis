@@ -72,6 +72,7 @@ function conditionLog({ kind, link }: LinkedItem): { log: Pick<LogLink, 'account
   return null;
 }
 
+/** The entity each of the route's three link pages opens, in the kind entityHref takes. */
 const PAGE_ENTITY = { accounts: 'account', keys: 'key', pools: 'pool' } as const;
 
 /**
