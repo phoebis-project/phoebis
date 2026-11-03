@@ -609,8 +609,8 @@ pub enum SelectResult {
     Selected(Selection),
 }
 
-/// Why a candidate is out of the eligible set. Only a cooldown or a budget carries a deadline the caller can
-/// wait for.
+/// Why a candidate is out of the eligible set. Only a budget, a cooldown, an overage and a spent window carry a
+/// deadline the caller can wait for.
 enum Obstacle {
     Attempted,
     /// The member's spend reached one of its budgets; `until` is the latest end among the budgets reached and
@@ -634,20 +634,31 @@ enum Obstacle {
     /// Canceled and past the saved end.
     Ended,
     Operator,
+    /// The account is in overage until `until`, which the pool's `never` policy refuses.
+    Overage {
+        until: i64,
+    },
+    /// The account has no allowance left in `window` until `until`: the seat's spend cap under `spend`, or the
+    /// model's own week where the model-window partition passes the account over.
+    Spent {
+        until: i64,
+        window: String,
+    },
 }
 
 /// The step-2 name `release_reasons` and the trace report for an obstacle: `attempted`, `budget`,
-/// `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`, or `subscription_ended`.
+/// `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`, `spent`, or `subscription_ended`.
 fn obstacle_name(obstacle: &Obstacle) -> &'static str {
     match obstacle {
         Obstacle::Attempted => "attempted",
         Obstacle::Budget { .. } => "budget",
         Obstacle::BudgetUnknown => "budget_unknown",
-        Obstacle::Cooldown { reason, .. } if reason == "overage" => "overage",
         Obstacle::Cooldown { .. } => "cooldown",
         Obstacle::Credits { .. } => "credits",
         Obstacle::Ended => "subscription_ended",
         Obstacle::Operator => "operator",
+        Obstacle::Overage { .. } => "overage",
+        Obstacle::Spent { .. } => "spent",
     }
 }
 
@@ -1943,8 +1954,7 @@ fn run(
             {
                 spent_deadlines.push((
                     c.account_id.clone(),
-                    Obstacle::Cooldown {
-                        reason: "spent".into(),
+                    Obstacle::Spent {
                         until,
                         window: spent.to_string(),
                     },
@@ -5323,8 +5333,7 @@ fn obstacle(
     // The spend funds every model and the fast lane alike, so a seat at its cap is out of the set for any request,
     // a live pin's renewal included, until the window resets.
     if let Some(reset) = spend_spent(state, snapshot, &candidate.account_id, now) {
-        return Some(Obstacle::Cooldown {
-            reason: "spent".into(),
+        return Some(Obstacle::Spent {
             until: reset,
             window: "spend".into(),
         });
@@ -5335,11 +5344,7 @@ fn obstacle(
             .overage_deadline(&candidate.account_id, fallback_ms)
             .filter(|d| *d > now)
         {
-            return Some(Obstacle::Cooldown {
-                reason: "overage".into(),
-                until: deadline,
-                window: "overage".into(),
-            });
+            return Some(Obstacle::Overage { until: deadline });
         }
     }
     // An account this request already tried is out of the set either way, so its cooldown is reported ahead of
@@ -6378,7 +6383,10 @@ fn exhaustion_of(obstacles: Vec<Obstacle>) -> Exhaustion {
                 Some((reason == FAST_CREDITS_REASON).then_some(window.as_str()))
             }
             Obstacle::Credits { reason } => Some(Some(reason.as_str())),
-            Obstacle::Budget { .. } | Obstacle::BudgetUnknown => Some(None),
+            Obstacle::Budget { .. }
+            | Obstacle::BudgetUnknown
+            | Obstacle::Overage { .. }
+            | Obstacle::Spent { .. } => Some(None),
             _ => None,
         })
         .collect();
@@ -6403,6 +6411,8 @@ fn exhaustion_of(obstacles: Vec<Obstacle>) -> Exhaustion {
                 window,
                 reason,
             } => Some((until, window, reason)),
+            Obstacle::Overage { until } => Some((until, "overage".into(), "overage".into())),
+            Obstacle::Spent { until, window } => Some((until, window, "spent".into())),
             _ => None,
         })
         .collect();
@@ -6452,14 +6462,9 @@ fn pin_key_text(key: &PinKey) -> String {
     )
 }
 
-/// An obstacle as the exhausted line names it beside its account. The model-window partition's deadline is a
-/// spent window rather than a cooldown row, so it reads as such.
+/// An obstacle as the exhausted line names it beside its account.
 fn weighed_name(account_id: &str, obstacle: &Obstacle) -> String {
-    let name = match obstacle {
-        Obstacle::Cooldown { reason, .. } if reason == "spent" => "spent",
-        other => obstacle_name(other),
-    };
-    format!("{account_id}:{name}")
+    format!("{account_id}:{}", obstacle_name(obstacle))
 }
 
 fn exhaustion_facts(exhaustion: &Exhaustion) -> ExhaustionFacts {
@@ -6620,6 +6625,16 @@ fn obstacle_facts(obstacle: &Obstacle) -> ObstacleFacts {
             (Some(period.as_str().to_string()), None, Some(*until))
         }
         Obstacle::Credits { reason } => (Some(reason.clone()), None, None),
+        Obstacle::Overage { until } => (
+            Some("overage".to_string()),
+            Some("overage".to_string()),
+            Some(*until),
+        ),
+        Obstacle::Spent { until, window } => (
+            Some("spent".to_string()),
+            Some(window.clone()),
+            Some(*until),
+        ),
         Obstacle::Attempted | Obstacle::BudgetUnknown | Obstacle::Ended | Obstacle::Operator => {
             (None, None, None)
         }

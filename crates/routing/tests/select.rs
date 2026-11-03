@@ -12960,6 +12960,54 @@ fn a_usage_based_seat_at_a_share_of_one_is_held_out_on_the_window_spend_until_th
 }
 
 #[test]
+fn a_seat_at_its_spend_cap_reads_spent_and_an_overage_deadline_reads_overage_wherever_the_record_names_them(
+) {
+    let s = snapshot_with_terms(
+        Pool {
+            policy: OveragePolicy::Never,
+            members: vec![("b", 0), ("a", 1), ("c", 2)],
+            ..Pool::default()
+        },
+        vec![usage_based_seat("b")],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_credits("b", credits(true, None, Some(1.0), T - 500));
+    st.record_overage("a", overage(true, T - 500, Some(T + HOUR)));
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(picked(&d.result), "c", "the one member with room serves");
+    let eligible = line(&d.record, "eligible");
+    assert_eq!(
+        (
+            fact_of(eligible, "standing", "b"),
+            fact_of(eligible, "standing", "a")
+        ),
+        (
+            &FactValue::Text("spent".into()),
+            &FactValue::Text("overage".into())
+        ),
+        "the standing facts name the spend cap and the overage deadline"
+    );
+    assert_eq!(
+        skipped_as(&d.result),
+        [("b", "spent"), ("a", "overage")],
+        "the trace skips the two members under the same words"
+    );
+    assert_eq!(
+        (
+            candidate(&d.record, "b").obstacle.as_ref().map(|o| o.name),
+            candidate(&d.record, "a").obstacle.as_ref().map(|o| o.name)
+        ),
+        (Some("spent"), Some("overage")),
+        "the candidate facts name the two obstacles under the same words"
+    );
+}
+
+#[test]
 fn a_usage_based_seats_plan_week_read_before_the_class_holds_no_request_and_refuses_no_placement() {
     // The week a plan seat read at its cap before it converted, which the routing state keeps across the class.
     let spent_week = sample(0.1, 1.0, T - 500).with(

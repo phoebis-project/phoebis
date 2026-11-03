@@ -108,6 +108,9 @@ poll carried, both before the first, so a poll that lacks the 5-hour window drop
 charges, ends its slow-down entries and leaves the window out of the prediction, the projection, the reservation and the
 burn, while a head drops nothing and a head's reading of a window the account lacks does not land ([The windows the
 router works from](routing.md#the-windows-the-router-works-from)).
+A decision record names a seat its spend cap holds out `spent` and an account the `never` policy holds out until its
+overage ends `overage`, in its standing facts, its trace, its candidates' obstacles and its probe line, as its
+exhausted line does ([Overage](routing.md#overage)).
 
 With `keepalive.enabled` on a pool the router keeps a replayable copy of every eligible request a session sends and,
 shortly before the cache entry would expire, sends a probe that reads it ([Keepalive](keepalive.md)). The policy's
