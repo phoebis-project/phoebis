@@ -795,7 +795,8 @@ export function compareRows(a: RoutingLogRow, b: RoutingLogRow): number {
 /** The log's address for `link` through its codec: a preset by name, nothing for the hour, and a window as two instants. */
 export function logHref(link: LogLink): string {
   const range: RangeValue = 'range' in link ? { from: '', preset: link.range, to: '' } : { from: iso(link.from), preset: 'custom', to: iso(link.to) };
-  const search = ROUTING_LOG_CODEC.toParams({ accounts: link.accounts ?? [], agentId: '', keys: [], kinds: link.kinds ?? [], models: link.models ?? [], pools: link.pools ?? [], range, request: link.request ?? '', session: link.session ?? '' }).toString();
+  const d = ROUTING_LOG_CODEC.defaults;
+  const search = ROUTING_LOG_CODEC.toParams({ ...d, accounts: link.accounts ?? d.accounts, kinds: link.kinds ?? d.kinds, models: link.models ?? d.models, pools: link.pools ?? d.pools, range, request: link.request ?? d.request, session: link.session ?? d.session }).toString();
   return search ? `/routing-log?${search}` : '/routing-log';
 }
 

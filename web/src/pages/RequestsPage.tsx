@@ -115,8 +115,6 @@ const requestClassOptions = (rows: RequestLog[], selected: string[]) => {
  */
 type Filters = Omit<RequestsAddress, 'outcomes' | 'rows'> & { outcomes: RequestOutcome[]; rows: number };
 
-const DEFAULTS = REQUESTS_CODEC.fromParams(new URLSearchParams());
-
 /** Keyed by every outcome the ledger records, so one it gains is a type error until it is named here. */
 const REQUEST_OUTCOME_LABEL: Record<RequestOutcome, string> = {
   canceled: 'canceled',
@@ -335,7 +333,7 @@ export function RequestsPage() {
     settings.reload();
   };
   // The page size is how the operator reads the log rather than what it narrows to, so Reset filters keeps it.
-  const reset = () => replace({ ...DEFAULTS, rows: read.rows });
+  const reset = () => replace({ ...REQUESTS_CODEC.defaults, rows: read.rows });
   const options: Record<string, Option[]> = {
     accounts: (accounts.data ?? []).map((a) => ({ label: a.label, value: a.id })),
     agentTypes: AGENT_TYPES.map((v) => ({ label: v, value: v })),

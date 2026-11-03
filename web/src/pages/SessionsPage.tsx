@@ -123,13 +123,13 @@ const rowDomId = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'
  * the log's session chip, which matches the id exactly, and an agent line's link adds its agent's.
  */
 const requestsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId'>, lastRequestAt: string | null, agentId?: string) => {
-  const defaults = REQUESTS_CODEC.fromParams(new URLSearchParams());
+  const defaults = REQUESTS_CODEC.defaults;
   const range = requestsRange(lastRequestAt, clock.now());
   return `/requests?${REQUESTS_CODEC.toParams({ ...defaults, agentId: agentId ?? defaults.agentId, keys: [keyLifetime(session.keyId, session.keyGeneration)], range: range === null ? defaults.range : { from: '', preset: range, to: '' }, session: trafficSession })}`;
 };
 /** The analytics on the session the client sent under the row's key lifetime. */
 const analyticsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId'>) =>
-  `/analytics?${ANALYTICS_CODEC.toParams({ ...ANALYTICS_CODEC.fromParams(new URLSearchParams()), key: keyLifetime(session.keyId, session.keyGeneration), session: trafficSession })}`;
+  `/analytics?${ANALYTICS_CODEC.toParams({ ...ANALYTICS_CODEC.defaults, key: keyLifetime(session.keyId, session.keyGeneration), session: trafficSession })}`;
 
 /**
  * A session id reads whole, since the cell's column cuts it with an ellipsis, and a sentence passes `chars` to cut it

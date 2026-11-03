@@ -1,6 +1,6 @@
 import { iso } from '@/api/decode';
 import type { AnalyticsGroupBy, RequestLog } from '@/api/types';
-import { type RangeValue, REQUESTS_DEFAULTS, requestsHref, type RequestsAddress } from './address';
+import { type RangeValue, REQUESTS_CODEC, requestsHref, type RequestsAddress } from './address';
 import { OTHER_DIMENSION, foldRequestClass } from './dimensions';
 import { matchesPattern } from './pattern';
 import { aroundRequest, aroundSubject, clockMinute, type LogWindow } from './routingLog';
@@ -108,7 +108,7 @@ export function requestsLink({ count, filters, group, reason, refusalCategory, w
   if (group?.by !== 'client' && unlistableClientPattern(filters.clientPattern)) return { href: null, title: CLIENT_PATTERN_PLAIN };
   const { from, to } = hourWindow(window);
   const address: RequestsAddress = {
-    ...REQUESTS_DEFAULTS,
+    ...REQUESTS_CODEC.defaults,
     accounts: filters.accountIds,
     cacheMissReasons: reason === undefined ? [] : [reason],
     client: filters.clientPattern,
@@ -161,7 +161,7 @@ export function requestsWiden(request: Pick<RequestLog, 'accountId' | 'at' | 'du
   // A row the list read after the page's clock sample is newer than it, and a window capped there would leave the
   // request out, or put this minute's end before its start.
   const cap = Math.max(now, finished ?? at);
-  const defaults = { ...REQUESTS_DEFAULTS, rows };
+  const defaults = { ...REQUESTS_CODEC.defaults, rows };
   const over = (link: LogWindow): RangeValue => ('range' in link ? { from: '', preset: link.range, to: '' } : { from: iso(link.from), preset: 'custom', to: iso(link.to) });
   return [
     { href: requestsHref({ ...defaults, range: over(clockMinute(at, cap)) }), label: 'this minute', title: null },

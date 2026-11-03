@@ -71,7 +71,12 @@ export const sortAddressOf = (keys: readonly SortKey[], next: { dir: SortDir; so
   sort: next.sort,
 });
 
-export type Codec<F> = { fromParams(params: URLSearchParams, now?: number): F; toParams(filters: F): URLSearchParams };
+export type Codec<F> = {
+  /** The address with every field at its default, for a link that names one field and leaves the rest as the view's. */
+  defaults: F;
+  fromParams(params: URLSearchParams, now?: number): F;
+  toParams(filters: F): URLSearchParams;
+};
 
 /** The instant a window key carries, or empty: any RFC 3339 instant parses, a bare integer reads as milliseconds. */
 export const instantOf = (value: string | null): string => {
@@ -142,10 +147,11 @@ function writeKey(key: KeySpec, value: unknown, params: URLSearchParams): void {
  */
 export function codecOf<F extends object>(spec: { [K in keyof F]: KeySpec }): Codec<F> {
   const keys = Object.entries(spec) as [string, KeySpec][];
+  const fromParams = (params: URLSearchParams, now = clock.now()): F => Object.fromEntries(keys.map(([field, key]) => [field, readKey(key, params, now)])) as F;
   return {
-    fromParams(params, now = clock.now()) {
-      return Object.fromEntries(keys.map(([field, key]) => [field, readKey(key, params, now)])) as F;
-    },
+    // An empty address names no instant, so the clock the range is capped at does not enter it.
+    defaults: fromParams(new URLSearchParams()),
+    fromParams,
     toParams(filters) {
       const params = new URLSearchParams();
       for (const [field, key] of keys) writeKey(key, (filters as Record<string, unknown>)[field], params);
@@ -233,8 +239,6 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   rows: { default: '25', kind: 'choice', name: 'rows', values: ['10', '25', '50', '100'] },
   range: { default: '24h', kind: 'range' },
 });
-/** The Requests address with no query. An empty query reads no instant, so one value answers every caller. */
-export const REQUESTS_DEFAULTS: RequestsAddress = REQUESTS_CODEC.fromParams(new URLSearchParams());
 export const requestsHref = (address: RequestsAddress): string => `/requests?${REQUESTS_CODEC.toParams(address)}`;
 
 export const accountHref = (id: string): string => `/accounts/${encodeURIComponent(id)}`;
@@ -336,7 +340,7 @@ export const KEYS_CODEC = codecOf<KeysAddress>({
   status: { default: 'all', kind: 'choice', name: 'status', values: KEY_STATUSES },
 });
 /** The Keys view on one pool's keys, every other filter at its default. */
-export const poolKeysHref = (poolId: string): string => `/keys?${KEYS_CODEC.toParams({ pools: [poolId], search: '', status: 'all' })}`;
+export const poolKeysHref = (poolId: string): string => `/keys?${KEYS_CODEC.toParams({ ...KEYS_CODEC.defaults, pools: [poolId] })}`;
 
 export interface AccountsAddress {
   /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
