@@ -1992,7 +1992,7 @@ pub(crate) fn account(state: &AdminState, id: &str) -> Result<AccountRow, Respon
 pub(crate) struct AccountContext {
     pub cooldowns: Vec<CooldownRow>,
     pub day: BTreeMap<String, phoebis_ledger::Totals>,
-    /// Each account's profile, subscription and term, read once; a row created since reads its own.
+    /// Each account's profile, subscription and term, read once. A row created since reads its own.
     pub extras: BTreeMap<String, phoebis_store::AccountExtras>,
     pub extra: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
     /// The newest polled extra-usage row per account, the one that carries the amounts a later head row lacks.

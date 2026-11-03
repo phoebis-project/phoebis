@@ -773,7 +773,7 @@ pub type RegistryLoadHold = Hold;
 
 #[cfg(any(test, feature = "debug-hooks"))]
 impl Hold {
-    /// Whether the held call waits on the hold; a test polls it before it queues what should land behind.
+    /// Whether the held call waits on the hold, which a test polls before it queues what should land behind.
     pub fn is_parked(&self) -> bool {
         self.0.is_parked()
     }
