@@ -1545,16 +1545,9 @@ export function landedAt(row: RequestLog): number {
   return landings.get(row.id) ?? Date.parse(row.at) + (row.durationMs ?? 0);
 }
 
-// The ci key's last use is its newest request the key check let through: a send after the revocation is refused as an
-// unknown key and uses nothing.
-keyById.get('ci')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'ci' && r.errorCode !== 'auth_unknown')?.at ?? null;
-// The notebook key's last use is its newest request, a turn of studio's story sessions after its one drawn row. Its
-// counts derive from the rollups with every other key's.
-keyById.get('notebook')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'notebook')?.at ?? null;
-// The fleet key's last use is its newest request, a turn of the contract seat's story session.
-keyById.get('fleet')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'fleet')?.at ?? null;
-// The bench key's last use is its newest request, a turn of the approved Ultra's story session.
-keyById.get('bench')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'bench')?.at ?? null;
+// A key whose seed leaves its last use to the rows reads its newest request the key check let through: the ci send
+// after the revocation is refused as an unknown key and uses nothing.
+for (const k of keyById.values()) if (k.lastUsedAt === null) k.lastUsedAt = REQUESTS.find((r) => r.keyId === k.id && r.errorCode !== 'auth_unknown')?.at ?? null;
 
 /**
  * The head that first read nightly in plan overage: the first attempt the day sent it after its spend cap was raised
