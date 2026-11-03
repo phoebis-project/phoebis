@@ -119,6 +119,16 @@ struct SlotKey {
     revision: u64,
 }
 
+impl SlotKey {
+    fn of(account: &AccountRow) -> SlotKey {
+        SlotKey {
+            account_id: account.id.clone(),
+            incarnation: account.incarnation,
+            revision: account.revision,
+        }
+    }
+}
+
 /// What the startup fetch found before the bound: `landed` accounts answered rows, `failed` answered an error
 /// and are retried in the background, `pending` were still fetching when the bound passed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -281,11 +291,7 @@ impl CatalogService {
     /// dropped mid-wait (the three HTTP handlers below, on a client disconnect) leaves the publication to
     /// finish rather than abandoning it mid-way.
     pub async fn fetch(self: &Arc<Self>, account: &AccountRow) -> Catalog {
-        let key = SlotKey {
-            account_id: account.id.clone(),
-            incarnation: account.incarnation,
-            revision: account.revision,
-        };
+        let key = SlotKey::of(account);
         if let Some(catalog) = self.fresh_slot(&key, (self.clock)()) {
             return catalog;
         }
@@ -300,13 +306,7 @@ impl CatalogService {
         if let Some(catalog) = self.fresh_slot(&key, (self.clock)()) {
             return catalog;
         }
-        let generation = self
-            .generations
-            .lock()
-            .expect(SLOTS_POISONED)
-            .get(&key.account_id)
-            .copied()
-            .unwrap_or(0);
+        let generation = self.generation(&key.account_id);
         self.raise_in_flight();
         // Two callers await `fetch` inside an HTTP handler (the catalog popup, `GET /v1/models`) whose future
         // the server drops on a client disconnect; the guard's `Drop` still lowers the count then, so a caller
@@ -335,13 +335,7 @@ impl CatalogService {
         let still_current = reread
             .as_ref()
             .is_some_and(|row| row.incarnation == key.incarnation && row.revision == key.revision);
-        let current_generation = self
-            .generations
-            .lock()
-            .expect(SLOTS_POISONED)
-            .get(&key.account_id)
-            .copied()
-            .unwrap_or(0);
+        let current_generation = self.generation(&key.account_id);
         if still_current && current_generation == generation {
             let change = catalog
                 .error
@@ -439,11 +433,7 @@ impl CatalogService {
     /// Whether the account's current slot (keyed on its own incarnation and revision) is missing or has aged
     /// past `every`.
     fn slot_due(&self, account: &AccountRow, every: Duration, now: i64) -> bool {
-        let key = SlotKey {
-            account_id: account.id.clone(),
-            incarnation: account.incarnation,
-            revision: account.revision,
-        };
+        let key = SlotKey::of(account);
         let fetched_at = self
             .slots
             .lock()
@@ -460,11 +450,7 @@ impl CatalogService {
     /// right now: its coalescing lock is held. A map this cannot even inspect (another insert mid-flight) counts
     /// as in flight too, since skipping a tick costs nothing but colliding with a caller it cannot see does.
     fn fill_in_flight(&self, account: &AccountRow) -> bool {
-        let key = SlotKey {
-            account_id: account.id.clone(),
-            incarnation: account.incarnation,
-            revision: account.revision,
-        };
+        let key = SlotKey::of(account);
         let Ok(fills) = self.fills.try_lock() else {
             return true;
         };
@@ -894,6 +880,15 @@ impl CatalogService {
             self.pool.checkin(key, conn);
         }
         Ok((status, body))
+    }
+
+    fn generation(&self, account_id: &str) -> u64 {
+        self.generations
+            .lock()
+            .expect(SLOTS_POISONED)
+            .get(account_id)
+            .copied()
+            .unwrap_or(0)
     }
 
     fn fresh_slot(&self, key: &SlotKey, now: i64) -> Option<Catalog> {
