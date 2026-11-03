@@ -158,6 +158,39 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<AccountRow> {
 }
 
 /// Shared by `Store::account` and the account edit, which reads the row it changes inside its own transaction.
+pub(crate) fn identity_json(row: &AccountRow) -> Result<Option<String>, StoreError> {
+    Ok(row
+        .identity
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()?)
+}
+
+/// The account row under the incarnation one past its id's tombstone, stamped `at`.
+pub(crate) fn insert_account_row(
+    tx: &rusqlite::Transaction<'_>,
+    row: &AccountRow,
+    at: i64,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, state_cause, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?10, ?9, ?9)",
+        params![
+            row.id,
+            row.kind,
+            row.label,
+            row.enabled,
+            identity_json(row)?,
+            next_incarnation(tx, &row.id)? as i64,
+            row.lifecycle_generation as i64,
+            row.state,
+            at,
+            row.state_cause,
+        ],
+    )?;
+    Ok(())
+}
+
 // The columns `row_to_account` reads, in its order.
 const ACCOUNT_SELECT: &str =
     "SELECT id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, \
@@ -201,28 +234,7 @@ impl Store {
     pub fn insert_account(&self, row: &AccountRow) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let identity_json = row
-            .identity
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()?;
-        let now = self.now_ms();
-        tx.execute(
-            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, state_cause, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?10, ?9, ?9)",
-            params![
-                row.id,
-                row.kind,
-                row.label,
-                row.enabled,
-                identity_json,
-                next_incarnation(&tx, &row.id)? as i64,
-                row.lifecycle_generation as i64,
-                row.state,
-                now,
-                row.state_cause,
-            ],
-        )?;
+        insert_account_row(&tx, row, self.now_ms())?;
         tx.commit()?;
         Ok(())
     }

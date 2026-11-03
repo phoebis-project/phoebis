@@ -1298,28 +1298,11 @@ impl Store {
     ) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let identity_json = row
-            .identity
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()?;
-        tx.execute(
-            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, state_cause, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?9, ?6, 1, ?7, ?10, ?8, ?8)",
-            params![
-                row.id,
-                row.kind,
-                row.label,
-                row.enabled,
-                identity_json,
-                row.lifecycle_generation as i64,
-                row.state,
-                at,
-                crate::accounts::next_incarnation(&tx, &row.id)? as i64,
-                row.state_cause,
-            ],
-        )
-        .map_err(|error| create_failure(&tx, "accounts", &row.id, error))?;
+        // `create_failure` answers any error but a constraint's as it came, so the row's own reads pass through.
+        crate::accounts::insert_account_row(&tx, row, at).map_err(|error| match error {
+            StoreError::Sqlite(error) => create_failure(&tx, "accounts", &row.id, error),
+            other => other,
+        })?;
         if let Some(secret) = secret {
             store_api_key_secret(&tx, &self.key, &row.id, secret)?;
         }
@@ -1329,11 +1312,7 @@ impl Store {
             actor,
             "account_created",
             &row.id,
-            &serde_json::json!({
-                "kind": row.kind.as_str(),
-                "label": row.label,
-            })
-            .to_string(),
+            &account_created_diff(row),
         )?;
         tx.commit()?;
         Ok(())
@@ -1355,11 +1334,7 @@ impl Store {
         self.fail_injected_commit()?;
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let identity_json = row
-            .identity
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()?;
+        let identity_json = crate::accounts::identity_json(row)?;
         let incarnation = crate::accounts::next_incarnation(&tx, &row.id)?;
         let inserted = tx.execute(
             "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, \
@@ -1415,11 +1390,7 @@ impl Store {
             actor,
             "account_created",
             &row.id,
-            &serde_json::json!({
-                "kind": row.kind.as_str(),
-                "label": row.label,
-            })
-            .to_string(),
+            &account_created_diff(row),
         )?;
         tx.commit()?;
         Ok(generation)
@@ -2150,6 +2121,14 @@ fn unknown_word(column: usize, word: &str) -> rusqlite::Error {
         rusqlite::types::Type::Text,
         format!("unknown word {word:?}").into(),
     )
+}
+
+fn account_created_diff(row: &AccountRow) -> String {
+    serde_json::json!({
+        "kind": row.kind.as_str(),
+        "label": row.label,
+    })
+    .to_string()
 }
 
 fn pool_diff(row: &PoolRow) -> String {
