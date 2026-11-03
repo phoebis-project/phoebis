@@ -14,8 +14,10 @@ use phoebis_attention::{
     Attention, AttentionError, Condition, Kind, Link, PairFacts, Subject, SubjectKind,
     BACKOFF_ATTENTION_AFTER_MS,
 };
-use phoebis_bus::{Kind as RequestKind, Origin, Outcome};
-use phoebis_ledger::{AttemptRecord, Metrics, PriceRevisions, Pricing, Record, RequestRecord};
+use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome, ResponseChunk};
+use phoebis_ledger::{
+    AttemptRecord, Metrics, PriceRevisions, Pricing, Record, RequestRecord, IN_FLIGHT_TTL_MS,
+};
 use phoebis_oauth::PollOutcome;
 use phoebis_store::{
     AccountState, AttemptOutcome, NewBundle, Secret, StateCause, StorageKey, Store,
@@ -175,6 +177,50 @@ async fn a_pool_exhaustion_holds_from_its_first_exhausted_outcome_until_a_reques
         (cleared.holds, cleared.since),
         (false, None),
         "a success clears it, and the series stays at 0"
+    );
+}
+
+fn chunk(id: &str) -> Event {
+    Event::ResponseChunk(ResponseChunk {
+        request_id: id.into(),
+        attempt: 1,
+        index: 0,
+        body: bytes::Bytes::new(),
+        phase: None,
+    })
+}
+
+/// Both requests are still live when the TTL of the first request passes, and each later event meets them past that
+/// instant: the silent one's completion comes past the TTL of silence, and the streaming one's past the TTL of its
+/// observation but inside the TTL of its last chunk.
+#[tokio::test]
+async fn a_completion_past_the_ttl_of_silence_files_nothing_and_a_chunk_inside_it_keeps_the_request(
+) {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    rig.at(NOW);
+    attention.observe(&observed("first", Some("desktop"), "main"));
+    rig.at(NOW + 1);
+    attention.observe(&observed("silent", Some("desktop"), "main"));
+    attention.observe(&observed("streaming", Some("desktop"), "main"));
+    rig.at(NOW + IN_FLIGHT_TTL_MS);
+    attention.observe(&observed("other", Some("desktop"), "main"));
+    attention.observe(&chunk("streaming"));
+    rig.at(NOW + IN_FLIGHT_TTL_MS + 1);
+    let at = NOW + IN_FLIGHT_TTL_MS + 1;
+    attention.observe(&complete("silent", Outcome::Exhausted, None, None, at));
+    assert!(
+        !find(&read(&attention, at), Kind::PoolExhausted, "main")
+            .unwrap()
+            .holds,
+        "a request silent for the TTL is forgotten, so its completion names no pool"
+    );
+    attention.observe(&complete("streaming", Outcome::Exhausted, None, None, at));
+    assert!(
+        find(&read(&attention, at), Kind::PoolExhausted, "main")
+            .unwrap()
+            .holds,
+        "a chunk inside the TTL keeps the stream on file"
     );
 }
 

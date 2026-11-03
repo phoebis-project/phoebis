@@ -210,6 +210,9 @@ pub(crate) struct ReaderState {
     exhausted: HashMap<String, Exhausted>,
     in_flight: HashMap<String, InFlight>,
     state_since: HashMap<(Kind, String), i64>,
+    /// When the in-flight map was last swept, so a sweep runs once per TTL rather than on every chunk a stream
+    /// publishes. Between sweeps each lookup treats an expired entry as absent.
+    swept_at: i64,
 }
 
 /// A request's key, pool, origin and kind, which its completion does not carry, held from its observation until then.
@@ -239,9 +242,12 @@ struct Drift {
 /// The bus arm's reading of one event: an exhausted outcome on a pool enters it and a succeeded one clears it, and a
 /// drift refusal activates its version until a client inference from that version succeeds.
 pub(crate) fn observe(state: &mut ReaderState, event: &Event, now: i64) {
-    state
-        .in_flight
-        .retain(|_, e| now - e.seen_at < IN_FLIGHT_TTL_MS);
+    if now - state.swept_at >= IN_FLIGHT_TTL_MS {
+        state
+            .in_flight
+            .retain(|_, e| now - e.seen_at < IN_FLIGHT_TTL_MS);
+        state.swept_at = now;
+    }
     match event {
         Event::RequestObserved(o) => {
             state.in_flight.insert(
@@ -258,13 +264,18 @@ pub(crate) fn observe(state: &mut ReaderState, event: &Event, now: i64) {
         Event::ResponseChunk(c) => {
             // The TTL asks whether a request went silent, so a stream still sending is not idle.
             if let Some(e) = state.in_flight.get_mut(&c.request_id) {
-                e.seen_at = now;
+                if now - e.seen_at < IN_FLIGHT_TTL_MS {
+                    e.seen_at = now;
+                }
             }
         }
         Event::RequestComplete(c) => {
             let Some(e) = state.in_flight.remove(&c.request_id) else {
                 return;
             };
+            if now - e.seen_at >= IN_FLIGHT_TTL_MS {
+                return;
+            }
             if let Some(pool) = &e.pool {
                 match c.outcome {
                     Outcome::Exhausted => {
