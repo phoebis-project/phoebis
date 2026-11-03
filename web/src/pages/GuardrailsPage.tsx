@@ -405,7 +405,7 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
   const refusals = guardrailRefusals({ conditions: form.conditions, description: form.description, id: draftId, name }, existingIds, existing !== null);
   const { first, invalid, refusedGroups } = refusalsView(refusals);
   const rowRefusals = new Map<number, string>();
-  for (const r of refusals) if (r.field.startsWith('Condition ')) rowRefusals.set(Number(r.field.slice('Condition '.length)) - 1, r.text);
+  for (const r of refusals) if (r.row !== undefined) rowRefusals.set(r.row, r.text);
   if (rowRefusal && !rowRefusals.has(rowRefusal.index)) rowRefusals.set(rowRefusal.index, rowRefusal.text);
   const conditionsHeld = refusals.some((r) => r.group === 'conditions');
 

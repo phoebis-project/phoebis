@@ -151,6 +151,8 @@ export function conditionRefusal(condition: Condition, index: number): string | 
 export interface GuardrailRefusal {
   field: string;
   group: 'conditions' | 'identity';
+  /** The refused condition's index in the list, for a row's refusal. */
+  row?: number;
   text: string;
 }
 
@@ -170,7 +172,7 @@ export function guardrailRefusals(form: { conditions: Condition[]; description: 
   if (form.conditions.length === 0 || form.conditions.length > MAX_CONDITIONS) out.push({ field: 'conditions', group: 'conditions', text: `A guardrail holds 1 to ${MAX_CONDITIONS} conditions.` });
   form.conditions.forEach((c, i) => {
     const text = conditionRefusal(c, i);
-    if (text !== null) out.push({ field: `Condition ${i + 1}`, group: 'conditions', text });
+    if (text !== null) out.push({ field: `Condition ${i + 1}`, group: 'conditions', row: i, text });
   });
   return out;
 }

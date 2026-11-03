@@ -64,7 +64,7 @@ test('the_form_refusals_read_their_six_sentences', () => {
   assert.deepEqual(texts(g.guardrailRefusals(form({ conditions: [] }), taken, false)), ['A guardrail holds 1 to 16 conditions.']);
   assert.deepEqual(texts(g.guardrailRefusals(form({ conditions: Array.from({ length: 17 }, () => valid) }), taken, false)), ['A guardrail holds 1 to 16 conditions.']);
   const refused = g.guardrailRefusals(form({ conditions: [valid, { operator: 'present', subject: 'body' }] }), taken, false);
-  assert.deepEqual(refused, [{ field: 'Condition 2', group: 'conditions', text: 'Condition 2: needs a path' }], 'a row refusal holds the save on its own row');
+  assert.deepEqual(refused, [{ field: 'Condition 2', group: 'conditions', row: 1, text: 'Condition 2: needs a path' }], 'a row refusal holds the save on its own row');
   assert.deepEqual(g.guardrailRefusals(form({ name: '' }), taken, false)[0], { field: 'Name', group: 'identity', text: 'The guardrail needs a name.' });
 });
 

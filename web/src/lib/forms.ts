@@ -69,10 +69,15 @@ export function prefixThresholdRefusal(value: string): string | null {
 export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'guardrails', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'slowDown', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics'] as const;
 export type PoolGroup = (typeof POOL_GROUPS)[number];
 
+/** A member row's refused control. */
+export type MemberColumn = 'budget_daily' | 'budget_monthly' | 'member' | 'priority';
+
 export interface PoolRefusal {
   /** The refused control's accessible name; `priority:<id>`, `budget_daily:<id>`, `budget_monthly:<id>`, `member:<id>` for a member row; `members` for the missing member or an account list that did not load. */
   field: string;
   group: PoolGroup;
+  /** The member row and the control a member row's refusal names. */
+  member?: { accountId: string; column: MemberColumn };
   /** The words the control's callout and the footer read. */
   text: string;
 }
@@ -151,8 +156,8 @@ const hoursRefusal = (subject: string, typed: string, maxHours: number | undefin
  */
 export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> | null, checks: PoolChecks = {}): PoolRefusal[] {
   const out: PoolRefusal[] = [];
-  const refuse = (group: PoolGroup, field: string, text: string | null) => {
-    if (text !== null) out.push({ field, group, text });
+  const refuse = (group: PoolGroup, field: string, text: string | null, member?: PoolRefusal['member']) => {
+    if (text !== null) out.push(member === undefined ? { field, group, text } : { field, group, member, text });
   };
   const k = input.keepalive;
   const affinity = input.affinityTtlSeconds;
@@ -164,11 +169,11 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   refuse('members', 'members', input.members.length > 0 ? null : 'the pool needs a member.');
   for (const m of input.members) {
     const id = m.accountId;
-    if (accountIds !== null) refuse('members', `member:${id}`, accountIds.has(id) ? null : `${id} is not an account the console lists.`);
-    refuse('members', `priority:${id}`, whole(m.priority, 0, Number.MAX_SAFE_INTEGER) ? null : 'Priority is a whole number of 0 or more.');
+    if (accountIds !== null) refuse('members', `member:${id}`, accountIds.has(id) ? null : `${id} is not an account the console lists.`, { accountId: id, column: 'member' });
+    refuse('members', `priority:${id}`, whole(m.priority, 0, Number.MAX_SAFE_INTEGER) ? null : 'Priority is a whole number of 0 or more.', { accountId: id, column: 'priority' });
     // A member written without a budget field has no budget over that period, as the member write reads it.
-    refuse('members', `budget_daily:${id}`, m.budgetDailyUsd == null ? null : budgetRefusal(String(m.budgetDailyUsd)));
-    refuse('members', `budget_monthly:${id}`, m.budgetMonthlyUsd == null ? null : budgetRefusal(String(m.budgetMonthlyUsd)));
+    refuse('members', `budget_daily:${id}`, m.budgetDailyUsd == null ? null : budgetRefusal(String(m.budgetDailyUsd)), { accountId: id, column: 'budget_daily' });
+    refuse('members', `budget_monthly:${id}`, m.budgetMonthlyUsd == null ? null : budgetRefusal(String(m.budgetMonthlyUsd)), { accountId: id, column: 'budget_monthly' });
   }
 
   refuse('models', 'Model rules', modelRulesRefusal(input.modelRules));

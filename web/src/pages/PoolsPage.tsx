@@ -1342,9 +1342,9 @@ export function PoolDialog({
     setForm((f) => (name === 'custom' ? { ...f, failoverCustom: true } : { ...f, engine: { ...f.engine, ...FAILOVER_PRESETS[name] }, failoverCustom: false }));
   const rulesRefusal = refusalOf('Model rules');
   const prefixRefusal = refusalOf('Minimum shared prefix, tokens');
-  const budgetRefusal = refusals.find((r) => r.field.startsWith('budget_daily:') || r.field.startsWith('budget_monthly:'));
+  const budgetRefusal = refusals.find((r) => r.member?.column === 'budget_daily' || r.member?.column === 'budget_monthly');
   const budgetRefused = budgetRefusal && {
-    label: accounts.find((a) => budgetRefusal.field === `budget_daily:${a.id}` || budgetRefusal.field === `budget_monthly:${a.id}`)?.label ?? budgetRefusal.field,
+    label: accounts.find((a) => a.id === budgetRefusal.member?.accountId)?.label ?? budgetRefusal.field,
     refusal: budgetRefusal.text,
   };
   const memberAccounts = accounts.filter((a) => a.id in form.members);
