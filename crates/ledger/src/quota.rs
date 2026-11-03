@@ -281,11 +281,10 @@ pub struct Sampled {
 
 /// One polled account's place in the schedule.
 struct Slot {
-    /// The row the attempt is made with, kept so a registry read that fails leaves the schedule as it was.
+    /// The row the attempt is made with, kept so a registry read that fails leaves the schedule as it was. Its
+    /// incarnation is the one the slot was drawn for: a re-pairing is a new account to the schedule, and a completion
+    /// drawn for another incarnation moves nothing here.
     account: AccountRow,
-    /// The account's incarnation the slot was drawn for: a re-pairing is a new account to the schedule, and a
-    /// completion drawn for another incarnation moves nothing here.
-    incarnation: u64,
     /// The attempt out on this slot, by its task id; `None` between attempts.
     in_flight: Option<tokio::task::Id>,
     /// The next attempt's instant, or the slot the attempt in flight was drawn at.
@@ -341,16 +340,15 @@ fn spread(
         .collect();
     let drawn: BTreeSet<(String, u64)> = slots
         .iter()
-        .map(|(id, slot)| (id.clone(), slot.incarnation))
+        .map(|(id, slot)| (id.clone(), slot.account.incarnation))
         .collect();
     if drawn == known {
         return;
     }
-    slots.retain(|id, slot| known.contains(&(id.clone(), slot.incarnation)));
+    slots.retain(|id, slot| known.contains(&(id.clone(), slot.account.incarnation)));
     for (index, account) in accounts.iter().enumerate() {
         let slot = slots.entry(account.id.clone()).or_insert_with(|| Slot {
             account: account.clone(),
-            incarnation: account.incarnation,
             in_flight: None,
             at: now,
             polls: u32::from(first_pass),
@@ -458,7 +456,7 @@ impl QuotaPoll {
                     let profile_due = slot.polls % PROFILE_EVERY_POLLS == 0;
                     slot.polls = slot.polls.wrapping_add(1);
                     slot.last_read = Some(now);
-                    let (account, incarnation) = (slot.account.clone(), slot.incarnation);
+                    let (account, incarnation) = (slot.account.clone(), slot.account.incarnation);
                     let (store, usage, tables, ledger, router) = (
                         store.clone(),
                         usage.clone(),
@@ -511,7 +509,7 @@ impl QuotaPoll {
                             // A completion drawn for a holder the slot no longer belongs to moves nothing: the
                             // replacement's own attempt keeps its own time.
                             if let Some(slot) = slots.get_mut(&done.account_id) {
-                                if slot.in_flight == Some(id) && slot.incarnation == done.incarnation {
+                                if slot.in_flight == Some(id) && slot.account.incarnation == done.incarnation {
                                     slot.in_flight = None;
                                     let next = next_slot(slot.at, slot.last_read.unwrap_or(slot.at));
                                     slot.at = done.held.map_or(next, |wait| Instant::now() + wait);
