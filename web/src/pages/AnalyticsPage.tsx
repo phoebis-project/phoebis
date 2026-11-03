@@ -20,7 +20,7 @@ import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceColumnWord, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, type AllowanceFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, MAX_BURN_LINES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, hintPlan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, placementCells, placementRungLabel, readBurn, sampledWindows, shareHint, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, MAX_BURN_LINES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, hintPlan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, shareHint, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -2659,24 +2659,7 @@ function AccountsSection({
       }),
     [accounts, rollups],
   );
-  const data = useMemo(() => {
-    const start = Math.floor(span.fromMs / bucketMs) * bucketMs;
-    const rows: Record<string, number | null>[] = [];
-    const byAt = new Map<number, Record<string, number | null>>();
-    for (let t = start; t <= span.toMs; t += bucketMs) {
-      const row: Record<string, number | null> = { at: t };
-      for (const a of accounts) row[a] = null;
-      rows.push(row);
-      byAt.set(t, row);
-    }
-    for (const r of rollups ?? []) {
-      const row = byAt.get(Math.floor(Date.parse(r.hour) / bucketMs) * bucketMs);
-      const peak = r.peak['5h'];
-      if (!row || peak === null) continue;
-      row[r.accountId] = Math.max(row[r.accountId] ?? 0, peak * 100);
-    }
-    return rows;
-  }, [rollups, accounts, span, bucketMs]);
+  const data = useMemo(() => peakLines(rollups ?? [], accounts, span, bucketMs), [rollups, accounts, span, bucketMs]);
   const windows = useMemo(() => sampledWindows(rollups ?? []), [rollups]);
   const [window, setWindow] = useState('five_hour');
   // A chosen window no longer offered (the extra-usage week once no row of the range holds it) falls to the 5-hour one.

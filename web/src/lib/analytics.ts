@@ -459,6 +459,23 @@ export const paceScoreOf = (sample: WindowSample): number | null => {
 };
 
 /**
+ * One row per bucket from the bucket holding the span's start through its end, each account's keys at null, and the
+ * rows by their start, so the charts that bucket one span draw on one grid.
+ */
+function bucketRows(accounts: string[], span: { fromMs: number; toMs: number }, bucketMs: number, keysOf: (account: string) => string[] = (a) => [a]): { byAt: Map<number, Record<string, number | null>>; data: Record<string, number | null>[] } {
+  const start = Math.floor(span.fromMs / bucketMs) * bucketMs;
+  const data: Record<string, number | null>[] = [];
+  const byAt = new Map<number, Record<string, number | null>>();
+  for (let t = start; t <= span.toMs; t += bucketMs) {
+    const row: Record<string, number | null> = { at: t };
+    for (const a of accounts) for (const key of keysOf(a)) row[key] = null;
+    data.push(row);
+    byAt.set(t, row);
+  }
+  return { byAt, data };
+}
+
+/**
  * Per account per bucket of the span the chosen window's utilization (`usage`) or lead over pace (`pace`) in percent,
  * null for a gap: a bucket no hour of which holds a sample of the window, or a sample without the figure (a
  * reset-only sample has neither). A bucket wider than an hour reads the latest hour inside it that holds a sample.
@@ -467,18 +484,7 @@ export const paceScoreOf = (sample: WindowSample): number | null => {
  */
 export function windowLines(rollups: AccountRollup[], window: string, read: 'pace' | 'usage', span: { fromMs: number; toMs: number }, bucketMs: number): { accounts: string[]; data: Record<string, number | null>[] } {
   const accounts = [...new Set(rollups.map((r) => r.accountId))].sort((a, b) => a.localeCompare(b));
-  const start = Math.floor(span.fromMs / bucketMs) * bucketMs;
-  const data: Record<string, number | null>[] = [];
-  const byAt = new Map<number, Record<string, number | null>>();
-  for (let t = start; t <= span.toMs; t += bucketMs) {
-    const row: Record<string, number | null> = { at: t };
-    for (const a of accounts) {
-      row[a] = null;
-      if (read === 'pace') row[`${a}:score`] = null;
-    }
-    data.push(row);
-    byAt.set(t, row);
-  }
+  const { byAt, data } = bucketRows(accounts, span, bucketMs, read === 'pace' ? (a) => [a, `${a}:score`] : undefined);
   const drawn = new Map<string, number>();
   for (const r of rollups) {
     const sample = r.windows[window];
@@ -495,6 +501,21 @@ export function windowLines(rollups: AccountRollup[], window: string, read: 'pac
     if (read === 'pace') row[`${r.accountId}:score`] = sample.lead === null ? null : paceScoreOf(sample);
   }
   return { accounts, data };
+}
+
+/**
+ * Per account per bucket of the span the highest 5-hour peak in percent, null for a bucket no peak of the account
+ * falls in.
+ */
+export function peakLines(rollups: AccountRollup[], accounts: string[], span: { fromMs: number; toMs: number }, bucketMs: number): Record<string, number | null>[] {
+  const { byAt, data } = bucketRows(accounts, span, bucketMs);
+  for (const r of rollups) {
+    const row = byAt.get(Math.floor(Date.parse(r.hour) / bucketMs) * bucketMs);
+    const peak = r.peak['5h'];
+    if (!row || peak === null) continue;
+    row[r.accountId] = Math.max(row[r.accountId] ?? 0, peak * 100);
+  }
+  return data;
 }
 
 /** Each value weighed by its weight, so a bucket counts for the part of its width it covers. */

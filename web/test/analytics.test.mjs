@@ -775,6 +775,18 @@ test("the window lines fold each account's utilization and lead per bucket and l
   assert.deepEqual(later.data.map((r) => r.a), [70, null], 'the later hour wins whatever order the rows arrive in');
 });
 
+test("the Peak grid keeps a bucket's largest peak, starts at the span's first edge and leaves a missing bucket null", () => {
+  const t = Date.UTC(2026, 8, 16, 10);
+  const peaked = (hourMs, peak) => ({ ...rollup('a', hourMs, {}), peak: { '5h': peak, '7d': null, '7d_fable': null } });
+  const span = { fromMs: t + 30 * 60_000, toMs: t + 4 * HOUR };
+  const rows = [peaked(t, 0.75), peaked(t + HOUR, 0.5), peaked(t + 4 * HOUR, 0.25)];
+  assert.deepEqual(d.peakLines(rows, ['a'], span, 2 * HOUR), [
+    { at: t, a: 75 },
+    { at: t + 2 * HOUR, a: null },
+    { at: t + 4 * HOUR, a: 25 },
+  ]);
+});
+
 test("the pace score is the remaining share over the hours from the sample's instant to the reset", () => {
   const late = windowSample({ resetsAt: '2026-09-16T11:00:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5 });
   assert.ok(Math.abs(d.paceScoreOf(late) - 6) < 1e-9, `five minutes to the reset, not the hour from the bucket's start: ${d.paceScoreOf(late)}`);
