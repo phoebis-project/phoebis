@@ -628,7 +628,7 @@ test('the address carries a unit as text and a bare address none', () => {
 test("one named account's shares sum over the groups the route answered them on, under any grouping", () => {
   const g = (costShares, planRequests = 2) => accountGroup({ costShares, planRequests });
   const plan = (x) => x.planRequests === null || x.planRequests > 0;
-  const sum = (groups) => d.oneAccountShares(groups, (x) => x.costShares, (a, b) => a + b, plan);
+  const sum = (groups) => d.oneAccountShares(groups, plan);
   assert.deepEqual(sum([g({ five_hour: 0.25, seven_day: 0.125, seven_day_fable: 0.0625 }), g({ five_hour: 0.5, seven_day: 0.25 })]), { five_hour: 0.75, seven_day: 0.375, seven_day_fable: 0.0625 }, "each model's group adds to the account's own windows, the model week where a group ran on one");
   assert.deepEqual(sum([g({ five_hour: 0.25, seven_day: 0.125 }), g({ five_hour: 0.5 })]), { five_hour: 0.75 }, 'a group with plan requests that priced no figure on a window leaves it out, since a partial sum would read as the whole');
   assert.deepEqual(sum([g({ five_hour: 0.25, seven_day: 0.125 }), g({ five_hour: 0.5, seven_day: null })]), { five_hour: 0.75 }, 'and so does a window carried as null');
@@ -641,7 +641,7 @@ test("one named account's whole is unavailable where a group with plan usage ans
   const unmapped = accountGroup({ costShares: null });
   assert.ok(unmapped.planRequests > 0 && unmapped.planOutputTokens > 0, 'the captured group holds plan rows with tokens');
   for (const [what, groups] of [['priced first', [priced, unmapped]], ['unmapped first', [unmapped, priced]]]) {
-    assert.equal(d.oneAccountShares(groups, (x) => x.costShares, (a, b) => a + b, d.planRowsRequired), null, `${what}: the priced group's shares are not the account's whole`);
+    assert.equal(d.oneAccountShares(groups, d.planRowsRequired), null, `${what}: the priced group's shares are not the account's whole`);
   }
   assert.equal(d.oneAccountGroupOf(priced, [priced, unmapped]).costShares, null, 'and the whole the page reads is unavailable');
 });
@@ -682,7 +682,7 @@ test("a group with nothing to charge a plan window forces no gap on the named ac
   const priced = accountGroup({ costShares: { five_hour: 0.25, seven_day: 0.125 } });
   const failed = accountGroup({ costEquivalent: 0, costShares: {}, planOutputTokens: 0, tokens: none });
   assert.ok(failed.planRequests > 0, 'the failures still count as plan requests');
-  assert.deepEqual(d.oneAccountShares([priced, failed], (x) => x.costShares, (a, b) => a + b, d.planRowsRequired), priced.costShares, 'plan requests that wrote no token carry no window to lack');
+  assert.deepEqual(d.oneAccountShares([priced, failed], d.planRowsRequired), priced.costShares, 'plan requests that wrote no token carry no window to lack');
 });
 
 test('the probe cost counts the probes that reached the upstream, so a group whose probes were all held or skipped costs nothing', () => {

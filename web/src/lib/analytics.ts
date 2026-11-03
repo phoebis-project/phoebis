@@ -242,19 +242,19 @@ export const hintPlan = (account: Pick<Account, 'subscription'> | undefined, tie
  * account's. A model week sums where a group carries one, a group off such a model carrying none. Null where no group
  * answered a map, and where a required group answered none, whatever the others priced.
  */
-export function oneAccountShares<T>(groups: AnalyticsGroup[], read: (g: AnalyticsGroup) => Record<string, T | null> | null, add: (a: T, b: T) => T, required: (g: AnalyticsGroup) => boolean = () => false): Record<string, T> | null {
+export function oneAccountShares(groups: AnalyticsGroup[], required: (g: AnalyticsGroup) => boolean): Record<string, number> | null {
   // The required test runs over every group before a missing map drops one, or the others would read as the whole.
-  const answered = groups.map((g) => ({ map: read(g), required: required(g) }));
+  const answered = groups.map((g) => ({ map: g.costShares, required: required(g) }));
   if (answered.some((a) => a.map === null && a.required)) return null;
   const maps = answered.flatMap((a) => (a.map === null ? [] : [{ map: a.map, required: a.required }]));
   if (maps.length === 0) return null;
-  const out: Record<string, T> = {};
+  const out: Record<string, number> = {};
   const left = new Set<string>();
   for (const { map, required: carries } of maps) {
     if (carries) for (const window of SHARED_WINDOWS) if (!has(map, window)) left.add(window);
     for (const [window, v] of Object.entries(map)) {
       if (v === null) left.add(window);
-      else out[window] = has(out, window) ? add(out[window], v) : v;
+      else out[window] = has(out, window) ? out[window] + v : v;
     }
   }
   for (const window of left) delete out[window];
@@ -285,7 +285,7 @@ export const upstreamProbes = (g: Pick<AnalyticsGroup, 'probes'>): number => g.p
  */
 export const oneAccountGroupOf = (totals: AnalyticsGroup, groups: AnalyticsGroup[]): AnalyticsGroup => ({
   ...totals,
-  costShares: oneAccountShares(groups, (g) => g.costShares, (a, b) => a + b, planRowsRequired),
+  costShares: oneAccountShares(groups, planRowsRequired),
 });
 
 /** The two counts summed, the one figure the charts and the by-pool table print per group. */
