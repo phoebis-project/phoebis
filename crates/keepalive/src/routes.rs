@@ -10,9 +10,7 @@ use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::Router;
-use phoebis_relay::{
-    auth_error_response, key_refusal_response, new_request_id, no_store, presented_key,
-};
+use phoebis_relay::{authenticated_key, new_request_id, no_store};
 
 use crate::engine::Engine;
 use crate::events::{decode_json_event, err, EventError};
@@ -33,13 +31,9 @@ pub fn keepalive_router(engine: Arc<Engine>) -> Router {
 #[allow(clippy::result_large_err)]
 fn authenticate(engine: &Engine, request: &Request<Body>) -> Result<(String, i64), Response> {
     let request_id = new_request_id();
-    let presented = presented_key(request.headers())
-        .map_err(|error| no_store(auth_error_response(&error, &request_id)))?;
     let snapshot = engine.parts.router.snapshot();
-    snapshot
-        .authenticate(presented, engine.now())
-        .map(|(key, _)| (key.id.clone(), key.created_at))
-        .map_err(|refusal| no_store(key_refusal_response(&refusal, &request_id)))
+    authenticated_key(&snapshot, request.headers(), engine.now(), &request_id)
+        .map(|key| (key.id.clone(), key.created_at))
 }
 
 fn json(status: StatusCode, body: String) -> Response {

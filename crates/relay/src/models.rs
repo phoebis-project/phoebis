@@ -14,10 +14,7 @@ use phoebis_routing::rules::{process, ProcessedRule};
 use phoebis_store::{AccountRow, AccountState, ModelRule};
 use serde_json::json;
 
-use crate::{
-    anthropic_error, auth_error_response, key_refusal_response, new_request_id, no_store,
-    presented_key, Relay,
-};
+use crate::{anthropic_error, authenticated_key, new_request_id, no_store, Relay};
 
 /// The default `limit`, and the bounds a query outside them is refused for.
 const DEFAULT_LIMIT: usize = 20;
@@ -89,13 +86,9 @@ async fn authenticate(
     headers: &HeaderMap,
     request_id: &str,
 ) -> Result<Access, Response> {
-    let presented = presented_key(headers)
-        .map_err(|error| no_store(auth_error_response(&error, request_id)))?;
     let snapshot = relay.router().snapshot();
     let now = (relay.clock)();
-    let (key, _) = snapshot
-        .authenticate(presented, now)
-        .map_err(|refusal| no_store(key_refusal_response(&refusal, request_id)))?;
+    let key = authenticated_key(&snapshot, headers, now, request_id)?;
     let pool_rules: &[ModelRule] = snapshot
         .pool(&key.pool_id)
         .map(|pool| pool.model_rules.as_slice())

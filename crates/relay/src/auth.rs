@@ -1,6 +1,11 @@
 //! The caller's credential header: which one was presented, and in what shape.
 
 use axum::http::{header, HeaderMap};
+use axum::response::Response;
+use phoebis_routing::RegistrySnapshot;
+use phoebis_store::ApiKeyRow;
+
+use crate::errors::{auth_error_response, key_refusal_response, no_store};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
@@ -39,6 +44,24 @@ pub fn presented_key(headers: &HeaderMap) -> Result<&str, AuthError> {
         return Err(AuthError::Malformed);
     }
     Ok(presented)
+}
+
+/// The key the request presents, resolved exactly as `/v1/messages` resolves it, for a side route on the proxy
+/// listener: either refusal answers the relay's own 401 body, marked `no-store`, so a wrong key learns nothing there
+/// it would not learn on the messages route.
+#[allow(clippy::result_large_err)]
+pub fn authenticated_key<'a>(
+    snapshot: &'a RegistrySnapshot,
+    headers: &HeaderMap,
+    now: i64,
+    request_id: &str,
+) -> Result<&'a ApiKeyRow, Response> {
+    let presented = presented_key(headers)
+        .map_err(|error| no_store(auth_error_response(&error, request_id)))?;
+    snapshot
+        .authenticate(presented, now)
+        .map(|(key, _)| key)
+        .map_err(|refusal| no_store(key_refusal_response(&refusal, request_id)))
 }
 
 fn bearer_token(raw: &str) -> Result<&str, AuthError> {

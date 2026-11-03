@@ -30,7 +30,7 @@ mod serve;
 mod sse;
 mod stream;
 
-pub use auth::{presented_key, AuthError};
+pub use auth::{authenticated_key, presented_key, AuthError};
 pub use billing::is_entrypoint_token;
 pub use body::{
     edit_body, BodyEdits, BodyMember, Markerless, NativeEdit, SafeguardsEdit, CACHE_DIAGNOSIS_BETA,

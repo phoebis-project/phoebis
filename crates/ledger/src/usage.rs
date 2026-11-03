@@ -11,10 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use phoebis_oauth::Clock;
-use phoebis_relay::{
-    anthropic_error, auth_error_response, key_refusal_response, new_request_id, no_store,
-    presented_key,
-};
+use phoebis_relay::{anthropic_error, authenticated_key, new_request_id, no_store};
 use phoebis_routing::{RouterHandle, DAY_MS};
 use rusqlite::Connection;
 use serde::Serialize;
@@ -195,24 +192,16 @@ async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> 
     let request_id = new_request_id();
     let now = (state.clock)();
     let html = wants_html(request.headers().get(ACCEPT).and_then(|v| v.to_str().ok()));
-    // The key is resolved exactly as `/v1/messages` resolves it, refusals included, so a wrong key learns
-    // nothing here it would not learn there.
-    let presented = match presented_key(request.headers()) {
-        Ok(presented) => presented,
-        Err(error) => return no_store(auth_error_response(&error, &request_id)),
-    };
     let snapshot = state.router.snapshot();
-    let generation;
-    let key = match snapshot.authenticate(presented, now) {
-        Ok((row, _)) => {
-            generation = row.created_at;
-            KeyView {
-                id: row.id.clone(),
-                label: row.label.clone(),
-                pool_id: row.pool_id.clone(),
-            }
-        }
-        Err(refusal) => return no_store(key_refusal_response(&refusal, &request_id)),
+    let row = match authenticated_key(&snapshot, request.headers(), now, &request_id) {
+        Ok(row) => row,
+        Err(refused) => return refused,
+    };
+    let generation = row.created_at;
+    let key = KeyView {
+        id: row.id.clone(),
+        label: row.label.clone(),
+        pool_id: row.pool_id.clone(),
     };
     let key_id = key.id.clone();
     let prices = state.pricing.revisions();
