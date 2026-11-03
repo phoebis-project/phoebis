@@ -544,7 +544,9 @@ export function Dialog({ open, onClose, title, subtitle, children, footer, width
   const { onBackdrop, question, ref } = useModalDialog(open, onClose, unsaved);
   const titleId = useId();
   // The question is a sibling, mounted only while asked: inside the element it would be read by every check that
-  // reads the dialog's text, and its clicks would bubble into the dialog's own handler.
+  // reads the dialog's text, and its clicks would bubble into the dialog's own handler. The body renders only while
+  // open, so a page render rebuilds no closed form, and the element stays mounted, since its close hands the focus
+  // back to the opener.
   return (
     <>
       <dialog
@@ -556,7 +558,7 @@ export function Dialog({ open, onClose, title, subtitle, children, footer, width
       >
         <DialogInner>
           <DialogHead onClose={onClose} subtitle={subtitle} title={title} titleId={titleId} />
-          <div className="dialog__body">{children}</div>
+          {open && <div className="dialog__body">{children}</div>}
           {footer && <footer className="dialog__foot">{footer}</footer>}
         </DialogInner>
       </dialog>
@@ -620,7 +622,8 @@ export function Expert({ children, refused = false }: { children: ReactNode; ref
   const registry = useContext(ExpertGroup);
   const id = useId();
   const shown = registry === null || registry.on || refused;
-  useEffect(() => {
+  // A layout effect, so the frame that opens the dialog already counts the fields the mode hides.
+  useLayoutEffect(() => {
     if (registry === null) return;
     registry.set(id, !shown);
     return () => registry.drop(id);
@@ -687,8 +690,9 @@ function DialogGroupPanel({ chosen, group, on, register, turnOn }: { chosen: str
 }
 
 /**
- * A long form split into groups behind a rail, one group shown at a time. The rest stay mounted and hidden, so
- * their state and their refusal checks live on while another group is in view.
+ * A long form split into groups behind a rail, one group shown at a time. While the dialog is open the rest stay
+ * mounted and hidden, so their state and their refusal checks live on while another group is in view. The panels
+ * render only while it is open, as a `Dialog`'s body does, so a field's own state starts fresh at each opening.
  */
 export function GroupedDialog({
   open,
@@ -885,12 +889,14 @@ export function GroupedDialog({
               })}
               <span className="dialog-rail__break" aria-hidden />
             </nav>
-            <div className="dialog__body dialog__body--grouped" ref={bodyRef}>
-              {notice && <div style={{ paddingTop: 18 }}>{notice}</div>}
-              {shown.map((g) => (
-                <DialogGroupPanel key={g.id} chosen={current} group={g} on={expertView} register={register} turnOn={() => setExpertView(true)} />
-              ))}
-            </div>
+            {open && (
+              <div className="dialog__body dialog__body--grouped" ref={bodyRef}>
+                {notice && <div style={{ paddingTop: 18 }}>{notice}</div>}
+                {shown.map((g) => (
+                  <DialogGroupPanel key={g.id} chosen={current} group={g} on={expertView} register={register} turnOn={() => setExpertView(true)} />
+                ))}
+              </div>
+            )}
           </div>
           <footer className="dialog__foot dialog__foot--status">
             <p className={`dialog__status ${held ? 'is-held' : ''}`} role="status">

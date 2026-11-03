@@ -96,7 +96,8 @@ the cache TTL's per-model overrides. The key dialog gains Server-side auto mode,
 models listing, and the sidebar the Diagnostics group. With the mode off, a group with hidden fields closes on
 `{n} more settings in the expert view` (`1 more setting` for one), whose link turns the mode on, and a hidden field that
 holds a refusal shows anyway. Closing a dialog with unsaved changes asks "Discard changes?" with "This dialog has
-changes that are not saved.", "Keep editing" and "Discard".
+changes that are not saved.", "Keep editing" and "Discard". A dialog draws its fields afresh at each opening, so a
+picker's search text starts empty.
 
 ## Dashboard
 

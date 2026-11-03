@@ -3687,7 +3687,8 @@ expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off
       return s;
     });
   const link = (dlg) => dlg?.querySelector('.pairing__url')?.textContent ?? '';
-  // A closed dialog keeps its last step in the DOM, so every read below asks for an open one first.
+  // A closed dialog keeps its element, its head and its footer in the DOM, so every read below asks for an open one
+  // first.
   const shown = (dlg) => dlg?.hasAttribute('open') === true;
   const refusal = (dlg) => dlg?.querySelector('.callout--critical')?.textContent?.trim() ?? '';
   const footer = (dlg) => [...(dlg?.querySelectorAll('.dialog__foot button') ?? [])].map((b) => b.textContent?.trim() ?? '');
@@ -7562,15 +7563,17 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 {
   // A failed catalog read leaves the picker with no model, and no period reads the catalog again. The spy is made
   // before the one-shot failure, which puts the spy back as it fires, so a retry would be counted. The dialog stays
-  // closed through the period, since an open one pauses the reads and would hide a retry. A closed dialog keeps its
-  // groups mounted and the expert view is on here, so the picker is read in place.
+  // closed through the period, since an open one pauses the reads and would hide a retry, and opens after the count,
+  // since a closed dialog renders no group. The expert view is on here, so the open dialog draws the picker.
   const spy = countCalls('listCatalog');
   failNextCall('listCatalog', '/admin/accounts', 'the registry is unavailable');
   const page = await mount('/pools', { now: CLOCK_ORIGIN });
   tick(5_000);
   await page.settle();
   const reads = spy.calls.length;
-  const picker = page.container.querySelector('[data-rule-set="plan"] select[aria-label^="Model to add"]');
+  [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await page.settle(300);
+  const picker = page.container.querySelector('dialog[open] [data-rule-set="plan"] select[aria-label^="Model to add"]');
   const options = [...(picker?.querySelectorAll('option') ?? [])].map((o) => [o.value, o.textContent]);
   spy.restore();
   page.unmount();
@@ -25890,8 +25893,7 @@ m.unmount();
   localStorage.setItem('phoebis.mockEmpty', '1');
   const zeroTiles = (c) => [...c.querySelectorAll('.stat-grid .stat__value')].map((v) => v.textContent);
   const pairLines = (c) => [...c.querySelectorAll('.stat-grid .stat__pair-line')].map((l) => `${l.querySelector('.cost-figure')?.textContent} ${l.querySelector('.stat__pair-word')?.textContent}`);
-  // A closed dialog keeps its markup in the DOM and reaches nobody, so the pairing dialog's link placeholder is no
-  // wait.
+  // A closed dialog reaches nobody, so a placeholder inside one is no wait.
   const skeletonIn = (c) => [...c.querySelectorAll('.skeleton')].some((s) => s.closest('dialog:not([open])') === null);
   const views = [
     ['/', (c, t) => t.includes('No subscription accounts') && t.includes('No requests'), 'No subscription accounts, No requests'],

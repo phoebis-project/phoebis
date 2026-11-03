@@ -158,6 +158,27 @@ test('Keep editing focuses the first control of the dialog when none held the fo
   focusedIs(close, 'the first control a Tab reaches has the focus');
 });
 
+test('a closed dialog holds no body in the document, its reopening draws the body, and Keep editing hands the focus back', () => {
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  const render = (open) => act(() => root.render(h(Dialog, { footer: h('button', { type: 'button' }, 'Save'), onClose: () => {}, open, title: 'Edit', unsaved: true }, h('input', { 'aria-label': 'Name' }))));
+  const name = () => container.querySelector('input[aria-label="Name"]');
+  render(false);
+  const element = container.querySelector('dialog');
+  assert.ok(element, 'the closed dialog keeps its element');
+  assert.ok(name() === null, 'the closed dialog holds no body control');
+  render(true);
+  assert.ok(container.querySelector('dialog') === element, 'the element that opens is the one that stayed mounted');
+  assert.ok(name(), 'the open dialog draws its body');
+  act(() => name().focus());
+  clickOn(element);
+  assert.ok(question(), 'the dialog asks');
+  act(() => buttonIn(question(), 'Keep editing').click());
+  focusedIs(name(), 'the body control that held the focus has it again');
+});
+
 test('Discard closes the dialog', () => {
   const { closes, element } = dialog(true);
   clickOn(element);
