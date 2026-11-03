@@ -10,7 +10,7 @@ use crate::memory::Injected;
 use crate::ratelimit::{retry_after, FastHeaders, UnifiedHeaders};
 
 /// Deadlines carry a second of margin so a request sent at the reset is not refused by a clock a hair behind.
-pub(crate) const MARGIN_MS: i64 = 1_000;
+const MARGIN_MS: i64 = 1_000;
 const PERMISSION_MS: i64 = 3_600_000;
 const FAST_RATE_LIMIT_FALLBACK_MS: i64 = 600_000;
 const FAST_CREDITS_FALLBACK_MS: i64 = 3_600_000;
@@ -53,6 +53,28 @@ pub struct Cooldown {
     pub until: i64,
     pub reason: &'static str,
     pub window: String,
+}
+
+impl Cooldown {
+    /// A row that holds until `deadline` and `MARGIN_MS` past it.
+    pub fn new(
+        scope: Scope,
+        deadline: i64,
+        reason: &'static str,
+        window: impl Into<String>,
+    ) -> Cooldown {
+        Cooldown {
+            scope,
+            until: deadline.saturating_add(MARGIN_MS),
+            reason,
+            window: window.into(),
+        }
+    }
+
+    /// The wait from `now` to the deadline the row was built on, its margin taken back off.
+    pub fn wait_from(&self, now: i64) -> i64 {
+        self.until.saturating_sub(now).saturating_sub(MARGIN_MS)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -123,15 +145,12 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
         })
     {
         return Verdict::FailOver {
-            cooldown: Some(Cooldown {
-                scope: Scope::Model,
-                until: ctx
-                    .now
-                    .saturating_add(ctx.model_rejection_ms)
-                    .saturating_add(MARGIN_MS),
-                reason: MODEL_REJECTED_REASON,
-                window: MODEL_REJECTION_WINDOW.into(),
-            }),
+            cooldown: Some(Cooldown::new(
+                Scope::Model,
+                ctx.now.saturating_add(ctx.model_rejection_ms),
+                MODEL_REJECTED_REASON,
+                MODEL_REJECTION_WINDOW,
+            )),
             mark: None,
         };
     }
@@ -160,12 +179,12 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
         }
         AccountKind::ApiKey if rate_limited && ctx.body_prefix.is_some_and(names_spend_limit) => {
             return Verdict::FailOver {
-                cooldown: Some(Cooldown {
-                    scope: Scope::Account,
-                    until: next_month_start(ctx.now).saturating_add(MARGIN_MS),
-                    reason: SPEND_CAP_REASON,
-                    window: "overage".into(),
-                }),
+                cooldown: Some(Cooldown::new(
+                    Scope::Account,
+                    next_month_start(ctx.now),
+                    SPEND_CAP_REASON,
+                    "overage",
+                )),
                 mark: None,
             }
         }
@@ -209,15 +228,12 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
             .is_some_and(|b| error_type(b).as_deref() == Some("permission_error"))
     {
         return Verdict::FailOver {
-            cooldown: Some(Cooldown {
-                scope: Scope::Model,
-                until: ctx
-                    .now
-                    .saturating_add(PERMISSION_MS)
-                    .saturating_add(MARGIN_MS),
-                reason: "permission",
-                window: "retry_after".into(),
-            }),
+            cooldown: Some(Cooldown::new(
+                Scope::Model,
+                ctx.now.saturating_add(PERMISSION_MS),
+                "permission",
+                "retry_after",
+            )),
             mark: None,
         };
     }
@@ -230,6 +246,12 @@ fn oauth_cooldown(
     ctx: &HeadContext<'_>,
 ) -> Cooldown {
     let rejected = |s: &Option<String>| s.as_deref() == Some("rejected");
+    let row = |scope: Scope, reset: Option<i64>| {
+        let deadline = reset
+            .or_else(|| retry_after(head, ctx.now).map(|d| ctx.now.saturating_add(d)))
+            .unwrap_or(ctx.now.saturating_add(ctx.fallback_ms));
+        Cooldown::new(scope, deadline, "rate_limit", exhaustion_window(unified))
+    };
     if let Some(u) = unified {
         if shared_window_rejected(u, ctx.canonical_model) {
             let reset = [
@@ -240,15 +262,7 @@ fn oauth_cooldown(
             .into_iter()
             .flatten()
             .max();
-            let until = reset
-                .or_else(|| retry_after(head, ctx.now).map(|d| ctx.now.saturating_add(d)))
-                .unwrap_or(ctx.now.saturating_add(ctx.fallback_ms));
-            return Cooldown {
-                scope: Scope::Account,
-                until: until.saturating_add(MARGIN_MS),
-                reason: "rate_limit",
-                window: exhaustion_window(Some(u)),
-            };
+            return row(Scope::Account, reset);
         }
         if model_only(u, ctx.canonical_model)
             && (rejected(&u.seven_day_oi_status) || rejected(&u.status))
@@ -256,28 +270,12 @@ fn oauth_cooldown(
             // Same deadline rule as the shared row: the later of the rejected window's own reset and the
             // top-level reset, which only ever lengthens the cooldown when it wins.
             let reset = [u.seven_day_oi_reset, u.reset].into_iter().flatten().max();
-            let until = reset
-                .or_else(|| retry_after(head, ctx.now).map(|d| ctx.now.saturating_add(d)))
-                .unwrap_or(ctx.now.saturating_add(ctx.fallback_ms));
             // The row keeps the upstream's claim: it reaches the client as an exhausted pool's claim, and the
             // client resumes only on a claim it knows. Recovery reads the model's own week, not this text.
-            return Cooldown {
-                scope: Scope::Model,
-                until: until.saturating_add(MARGIN_MS),
-                reason: "rate_limit",
-                window: exhaustion_window(Some(u)),
-            };
+            return row(Scope::Model, reset);
         }
     }
-    let until = retry_after(head, ctx.now)
-        .map(|d| ctx.now.saturating_add(d))
-        .unwrap_or(ctx.now.saturating_add(ctx.fallback_ms));
-    Cooldown {
-        scope: Scope::Account,
-        until: until.saturating_add(MARGIN_MS),
-        reason: "rate_limit",
-        window: exhaustion_window(unified),
-    }
+    row(Scope::Account, None)
 }
 
 /// A shared plan window rejected: the 5-hour or the 7-day status, or the top-level status unless the requested
@@ -309,12 +307,7 @@ fn fast_cooldown(
                 .and_then(|u| u.overage_reset)
                 .unwrap_or(ctx.now.saturating_add(FAST_CREDITS_FALLBACK_MS))
         };
-        return Cooldown {
-            scope: Scope::FastCredits,
-            until: until.saturating_add(MARGIN_MS),
-            reason: FAST_CREDITS_REASON,
-            window: reason.to_string(),
-        };
+        return Cooldown::new(Scope::FastCredits, until, FAST_CREDITS_REASON, reason);
     }
     // The per-minute bucket's reset decides the normal case; a 429 with neither reset is more likely an
     // organization without fast access, and ten minutes bounds the dials wasted on it.
@@ -333,12 +326,7 @@ fn fast_cooldown(
         (None, Some(delay)) => (ctx.now.saturating_add(delay), "retry_after"),
         (None, None) => (ctx.now.saturating_add(FAST_RATE_LIMIT_FALLBACK_MS), "fast"),
     };
-    Cooldown {
-        scope: Scope::Fast,
-        until: until.saturating_add(MARGIN_MS),
-        reason: FAST_RATE_LIMIT_REASON,
-        window: window.into(),
-    }
+    Cooldown::new(Scope::Fast, until, FAST_RATE_LIMIT_REASON, window)
 }
 
 /// A shared window is healthy when its status reads `allowed` or `allowed_warning` (the near-cap warning is
@@ -381,23 +369,16 @@ fn model_only(u: &UnifiedHeaders, canonical_model: &str) -> bool {
 }
 
 fn api_key_cooldown(head: &ResponseHead, ctx: &HeadContext<'_>) -> Cooldown {
-    match retry_after(head, ctx.now) {
-        Some(delay) => Cooldown {
-            scope: Scope::Model,
-            until: ctx.now.saturating_add(delay).saturating_add(MARGIN_MS),
-            reason: "rate_limit",
-            window: "retry_after".into(),
-        },
-        None => Cooldown {
-            scope: Scope::Account,
-            until: ctx
-                .now
-                .saturating_add(ctx.fallback_ms)
-                .saturating_add(MARGIN_MS),
-            reason: "rate_limit",
-            window: "retry_after".into(),
-        },
-    }
+    let (scope, delay) = match retry_after(head, ctx.now) {
+        Some(delay) => (Scope::Model, delay),
+        None => (Scope::Account, ctx.fallback_ms),
+    };
+    Cooldown::new(
+        scope,
+        ctx.now.saturating_add(delay),
+        "rate_limit",
+        "retry_after",
+    )
 }
 
 pub fn exhaustion_window(unified: Option<&UnifiedHeaders>) -> String {

@@ -56,7 +56,6 @@ use crate::catalog::CatalogService;
 use crate::chains::Chains;
 use crate::classify::{
     classify, error_message, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict,
-    MARGIN_MS,
 };
 use crate::credit::CreditStore;
 use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
@@ -3985,7 +3984,7 @@ impl Relay {
         {
             return None;
         }
-        let delay = cooldown.until.saturating_sub(now).saturating_sub(MARGIN_MS);
+        let delay = cooldown.wait_from(now);
         let delay = Duration::from_millis(u64::try_from(delay).unwrap_or(0));
         // The deadline bounds this wait as it bounds the refresh ladder's: the retry a longer wait leads to would
         // be submitted after the request is due its answer, with its permits and buffers held all the while, so
