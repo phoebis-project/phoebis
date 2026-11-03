@@ -290,7 +290,7 @@ export const earlierHolderLabel = (id: string, generation: number): string => {
 };
 
 /** A client names itself in full, which is wider than any table cell affords; the whole string rides the title. */
-export const shortAgent = (ua: string) => (ua.length > 28 ? `${ua.slice(0, 28)}…` : ua);
+export const shortAgent = (ua: string) => shortId(ua, 28);
 export const shortId = (id: string, n = 8) => (id.length > n ? `${id.slice(0, n)}…` : id);
 
 /** The characters a session or conversation id shows where the whole id does not fit a label. */

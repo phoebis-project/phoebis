@@ -1,6 +1,7 @@
 // A type-only import, so the API bundle the unit tests load stays free of React.
 import type { Option } from '@/components/ui/OptionList';
 import { NO_CLASS } from './dimensions';
+import { shortId } from './format';
 import { kindsChipText } from './routingLog';
 
 export type DimensionKind = 'choice' | 'flag' | 'id' | 'list' | 'pattern';
@@ -122,13 +123,13 @@ export function chipText(dimension: Dimension, value: unknown, options: Option[]
       return { text: word, title: word, values: null };
     case 'id': {
       const id = value as string;
-      return worded(word, id.length > ID_SHOWN ? `${id.slice(0, ID_SHOWN)}…` : id, id);
+      return worded(word, shortId(id, ID_SHOWN), id);
     }
     case 'list': {
       // A value no option names prints itself, so an earlier key holder or a status code only a loaded row carries
       // still reads.
       const labels = (value as string[]).map((v) => labelOf(v, options));
-      const shown = dimension.typed ? labels.map((l) => (l.length > TYPED_SHOWN ? `${l.slice(0, TYPED_SHOWN)}…` : l)) : labels;
+      const shown = dimension.typed ? labels.map((l) => shortId(l, TYPED_SHOWN)) : labels;
       return worded(word, listed(shown), labels.join(', '));
     }
     case 'pattern':
