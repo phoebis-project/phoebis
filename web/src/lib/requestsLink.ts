@@ -1,6 +1,6 @@
 import { iso } from '@/api/decode';
 import type { AnalyticsGroupBy, RequestLog } from '@/api/types';
-import { type RangeValue, REQUESTS_CODEC, type RequestsAddress } from './address';
+import { type RangeValue, REQUESTS_DEFAULTS, requestsHref, type RequestsAddress } from './address';
 import { OTHER_DIMENSION, foldRequestClass } from './dimensions';
 import { matchesPattern } from './pattern';
 import { aroundRequest, aroundSubject, clockMinute, type LogWindow } from './routingLog';
@@ -108,7 +108,7 @@ export function requestsLink({ count, filters, group, reason, refusalCategory, w
   if (group?.by !== 'client' && unlistableClientPattern(filters.clientPattern)) return { href: null, title: CLIENT_PATTERN_PLAIN };
   const { from, to } = hourWindow(window);
   const address: RequestsAddress = {
-    ...REQUESTS_CODEC.fromParams(new URLSearchParams()),
+    ...REQUESTS_DEFAULTS,
     accounts: filters.accountIds,
     cacheMissReasons: reason === undefined ? [] : [reason],
     client: filters.clientPattern,
@@ -128,7 +128,7 @@ export function requestsLink({ count, filters, group, reason, refusalCategory, w
     else address[field] = [group.key];
   }
   const probes = group?.by === 'kind' && group.key === 'probe';
-  return { href: `/requests?${REQUESTS_CODEC.toParams(address)}`, title: filters.includeProbes && !probes ? LISTED_WITHOUT_PROBES : LISTED };
+  return { href: requestsHref(address), title: filters.includeProbes && !probes ? LISTED_WITHOUT_PROBES : LISTED };
 }
 
 /** A count of the refusals card: its category's refused answers over the exact window the route counted, since the
@@ -161,12 +161,11 @@ export function requestsWiden(request: Pick<RequestLog, 'accountId' | 'at' | 'du
   // A row the list read after the page's clock sample is newer than it, and a window capped there would leave the
   // request out, or put this minute's end before its start.
   const cap = Math.max(now, finished ?? at);
-  const defaults = { ...REQUESTS_CODEC.fromParams(new URLSearchParams()), rows };
+  const defaults = { ...REQUESTS_DEFAULTS, rows };
   const over = (link: LogWindow): RangeValue => ('range' in link ? { from: '', preset: link.range, to: '' } : { from: iso(link.from), preset: 'custom', to: iso(link.to) });
-  const href = (address: RequestsAddress) => `/requests?${REQUESTS_CODEC.toParams(address)}`;
   return [
-    { href: href({ ...defaults, range: over(clockMinute(at, cap)) }), label: 'this minute', title: null },
-    ...(request.sessionId === null ? [] : [{ href: href({ ...defaults, range: over(aroundSubject(at, cap)), session: request.sessionId }), label: 'this session' as const, title: request.sessionId }]),
-    ...(request.accountId === null ? [] : [{ href: href({ ...defaults, accounts: [request.accountId], range: over(aroundRequest(at, finished, cap)) }), label: 'this account' as const, title: request.accountId }]),
+    { href: requestsHref({ ...defaults, range: over(clockMinute(at, cap)) }), label: 'this minute', title: null },
+    ...(request.sessionId === null ? [] : [{ href: requestsHref({ ...defaults, range: over(aroundSubject(at, cap)), session: request.sessionId }), label: 'this session' as const, title: request.sessionId }]),
+    ...(request.accountId === null ? [] : [{ href: requestsHref({ ...defaults, accounts: [request.accountId], range: over(aroundRequest(at, finished, cap)) }), label: 'this account' as const, title: request.accountId }]),
   ];
 }

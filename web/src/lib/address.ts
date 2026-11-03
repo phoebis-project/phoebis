@@ -236,6 +236,9 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   rows: { default: '25', kind: 'choice', name: 'rows', values: ['10', '25', '50', '100'] },
   range: { default: '24h', kind: 'range', presets: RANGE_PRESETS },
 });
+/** The Requests address with no query. An empty query reads no instant, so one value answers every caller. */
+export const REQUESTS_DEFAULTS: RequestsAddress = REQUESTS_CODEC.fromParams(new URLSearchParams());
+export const requestsHref = (address: RequestsAddress): string => `/requests?${REQUESTS_CODEC.toParams(address)}`;
 
 export interface AnalyticsAddress {
   accounts: string[];
