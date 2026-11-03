@@ -101,6 +101,14 @@ impl Inspect {
     }
 }
 
+fn committing(event: SseEvent) -> Option<Commit> {
+    match event.name.as_deref() {
+        Some(b"message_start") => Some(Commit::MessageStart(Bytes::from(event.data))),
+        Some(b"error") => Some(Commit::Error(Bytes::from(event.data))),
+        _ => None,
+    }
+}
+
 pub struct Held {
     pub commit: Commit,
     pub bytes: Bytes,
@@ -117,22 +125,12 @@ pub async fn hold<R: AsyncRead + Unpin>(
     loop {
         // Events are taken in stream order, so the first committing one decides and a later one is post-commit.
         while let Some(event) = inspect.next_event() {
-            match event.name.as_deref() {
-                Some(b"message_start") => {
-                    return Ok(Held {
-                        commit: Commit::MessageStart(Bytes::from(event.data)),
-                        bytes: raw.freeze(),
-                        inspect,
-                    })
-                }
-                Some(b"error") => {
-                    return Ok(Held {
-                        commit: Commit::Error(Bytes::from(event.data)),
-                        bytes: raw.freeze(),
-                        inspect,
-                    })
-                }
-                _ => {}
+            if let Some(commit) = committing(event) {
+                return Ok(Held {
+                    commit,
+                    bytes: raw.freeze(),
+                    inspect,
+                });
             }
         }
         if raw.len() > HOLD_BUFFER {
@@ -155,14 +153,10 @@ pub async fn hold<R: AsyncRead + Unpin>(
         let Some(chunk) = next else {
             // A stream cut off after its last event never sent the empty line that would close it, so the
             // committing event can still be sitting in the parser's buffer.
-            let commit = match inspect.finish() {
-                Some(SseEvent { name, data }) => match name.as_deref() {
-                    Some(b"message_start") => Commit::MessageStart(Bytes::from(data)),
-                    Some(b"error") => Commit::Error(Bytes::from(data)),
-                    _ => Commit::EndOfStream,
-                },
-                None => Commit::EndOfStream,
-            };
+            let commit = inspect
+                .finish()
+                .and_then(committing)
+                .unwrap_or(Commit::EndOfStream);
             return Ok(Held {
                 commit,
                 bytes: raw.freeze(),
