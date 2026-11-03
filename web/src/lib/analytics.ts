@@ -31,7 +31,7 @@ export const moveLabel = (reason: string): string => lookup(PIN_MIGRATION_LABEL,
 
 /** The held bars: one per bucket with its milliseconds and request count, and the range's sum for the legend. */
 export function heldBars(answer: RewritesAnswer): { bars: HeldPoint[]; totalMs: number; totalRequests: number } {
-  const bars = answer.held.map((p) => ({ at: p.at, heldMs: p.heldMs, requests: p.requests }));
+  const bars = answer.held;
   return { bars, totalMs: bars.reduce((n, b) => n + b.heldMs, 0), totalRequests: bars.reduce((n, b) => n + b.requests, 0) };
 }
 
@@ -299,7 +299,7 @@ export const keptWarmTokens = (k: { tokens1h: number; tokens5m: number }): numbe
 /** The net saving, the gross less the probe cost, in whatever unit both figures came in. */
 export const netSaving = (gross: number, probeCost: number): number => gross - probeCost;
 /** The two counts' note: "12,345 tokens read warm, 8,000 at five minutes and 4,345 at an hour". */
-export function keptWarmNote(k: { requests: number; tokens1h: number; tokens5m: number }): string {
+export function keptWarmNote(k: { tokens1h: number; tokens5m: number }): string {
   return `${fmtInt(keptWarmTokens(k))} tokens read warm, ${fmtInt(k.tokens5m)} at five minutes and ${fmtInt(k.tokens1h)} at an hour`;
 }
 
