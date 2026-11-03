@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::db::{
-    request_guardrails, row_to_attempt, row_to_event, row_to_extra_usage_sample,
-    row_to_quota_sample, row_to_request, LedgerDb, ATTEMPT_SELECT, REQUEST_SELECT,
+    request_guardrails, row_to_event, row_to_extra_usage_sample, row_to_quota_sample,
+    row_to_request, with_attempts, LedgerDb, REQUEST_SELECT,
 };
 use crate::histogram::Histogram;
 use crate::plan::{
@@ -534,16 +534,9 @@ pub fn list_requests(
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let more = requests.len() > limit;
     requests.truncate(limit);
-    let mut out = Vec::with_capacity(requests.len());
-    let mut attempts_stmt = conn.prepare(&format!(
-        "{ATTEMPT_SELECT} WHERE request_id = ?1 ORDER BY attempt"
-    ))?;
-    for mut request in requests {
-        let attempts = attempts_stmt
-            .query_map(params![request.id], row_to_attempt)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut out = with_attempts(conn, requests)?;
+    for (request, _) in &mut out {
         request.guardrails = request_guardrails(conn, &request.id)?;
-        out.push((request, attempts));
     }
     let next = more
         .then(|| {
@@ -694,15 +687,12 @@ pub fn request_by_id(
             row_to_request,
         )
         .optional()?;
-    let Some(mut request) = request else {
+    let Some(request) = request else {
         return Ok(None);
     };
-    let mut stmt = conn.prepare(&format!(
-        "{ATTEMPT_SELECT} WHERE request_id = ?1 ORDER BY attempt"
-    ))?;
-    let attempts = stmt
-        .query_map(params![id], row_to_attempt)?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let Some((mut request, attempts)) = with_attempts(conn, vec![request])?.pop() else {
+        return Ok(None);
+    };
     request.guardrails = request_guardrails(conn, id)?;
     Ok(Some((request, attempts)))
 }

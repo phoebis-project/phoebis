@@ -23,9 +23,7 @@ use phoebis_routing::DAY_MS;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 
-use crate::db::{
-    begin_write, row_to_attempt, row_to_request, LedgerDb, ATTEMPT_SELECT, REQUEST_SELECT,
-};
+use crate::db::{begin_write, row_to_request, with_attempts, LedgerDb, REQUEST_SELECT};
 use crate::generations::PAGE;
 use crate::pricing::{
     effective_instant, LongContext, ModelPrice, ModelRow, PriceRevisions, PriceTable,
@@ -358,18 +356,7 @@ fn requests_after(
             row_to_request,
         )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut attempts_of = conn.prepare(&format!(
-        "{ATTEMPT_SELECT} WHERE request_id = ?1 ORDER BY attempt"
-    ))?;
-    requests
-        .into_iter()
-        .map(|request| {
-            let attempts = attempts_of
-                .query_map(params![request.id], row_to_attempt)?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok((request, attempts))
-        })
-        .collect()
+    with_attempts(conn, requests)
 }
 
 pub(crate) fn read_meta<T: for<'de> Deserialize<'de>>(
@@ -521,6 +508,54 @@ mod tests {
         })
         .unwrap()
         .map(|text| serde_json::from_str(&text).expect("the meta value is JSON"))
+    }
+
+    /// A page's attempts land under their own request in attempt order: a failover's two among requests with one, its
+    /// second attempt written first.
+    #[test]
+    fn a_page_files_each_attempt_under_its_request_in_attempt_order() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let prices = list(None);
+        land(&db, &haiku("r1", NEW_YEAR + 1, 10), &prices);
+        let (request, mut attempts) = haiku("r2", NEW_YEAR + 2, 10);
+        attempts.insert(
+            0,
+            AttemptRecord {
+                request_id: "r2".into(),
+                attempt: 2,
+                account_id: "b".into(),
+                started_at: NEW_YEAR + 3,
+                outcome: "succeeded".into(),
+                ..Default::default()
+            },
+        );
+        land(&db, &(request, attempts), &prices);
+        let (request, mut attempts) = haiku("r3", NEW_YEAR + 3, 10);
+        attempts[0].account_id = "c".into();
+        land(&db, &(request, attempts), &prices);
+        let page = db
+            .read_blocking(|c| requests_after(c, NEW_YEAR, None, 10))
+            .unwrap();
+        let filed: Vec<(&str, Vec<(u32, &str)>)> = page
+            .iter()
+            .map(|(r, attempts)| {
+                (
+                    r.id.as_str(),
+                    attempts
+                        .iter()
+                        .map(|a| (a.attempt, a.account_id.as_str()))
+                        .collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            filed,
+            [
+                ("r1", vec![(1, "a")]),
+                ("r2", vec![(1, "a"), (2, "b")]),
+                ("r3", vec![(1, "c")]),
+            ]
+        );
     }
 
     /// The thresholds a mark or a cursor holds for Haiku 5.5 in its one entry.

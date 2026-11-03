@@ -4,6 +4,7 @@
 //! `read_blocking`. WAL lets a read run beside either writer, and the two take SQLite's one write lock in turn, each
 //! waiting for the other's transaction under the busy timeout.
 
+use std::collections::HashMap;
 use std::path::Path;
 #[cfg(any(test, feature = "debug-hooks"))]
 use std::sync::atomic::AtomicUsize;
@@ -13,11 +14,12 @@ use std::time::Duration;
 
 use phoebis_store::migrations;
 use rusqlite::{
-    params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
+    params, params_from_iter, Connection, OpenFlags, OptionalExtension, Transaction,
+    TransactionBehavior,
 };
 
 use crate::pricing::PriceRevisions;
-use crate::query::request_by_id;
+use crate::query::{request_by_id, RequestWithAttempts};
 use crate::record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
     GuardrailMatchRecord, QuotaSampleRecord, RequestRecord, SampleSource,
@@ -1065,6 +1067,42 @@ pub(crate) fn row_to_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptR
         written_at: r.get(43)?,
         usage_based: r.get(45)?,
     })
+}
+
+/// Each of `requests` with its attempts in attempt order, the requests' own order kept, through one statement over the
+/// page's ids rather than one per request.
+pub(crate) fn with_attempts(
+    conn: &Connection,
+    requests: Vec<RequestRecord>,
+) -> Result<Vec<RequestWithAttempts>, LedgerError> {
+    if requests.is_empty() {
+        return Ok(Vec::new());
+    }
+    let marks = (1..=requests.len())
+        .map(|n| format!("?{n}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut stmt = conn.prepare(&format!(
+        "{ATTEMPT_SELECT} WHERE request_id IN ({marks}) ORDER BY request_id, attempt"
+    ))?;
+    let mut filed: HashMap<String, Vec<AttemptRecord>> = HashMap::new();
+    for attempt in stmt.query_map(
+        params_from_iter(requests.iter().map(|r| &r.id)),
+        row_to_attempt,
+    )? {
+        let attempt = attempt?;
+        filed
+            .entry(attempt.request_id.clone())
+            .or_default()
+            .push(attempt);
+    }
+    Ok(requests
+        .into_iter()
+        .map(|request| {
+            let attempts = filed.remove(&request.id).unwrap_or_default();
+            (request, attempts)
+        })
+        .collect())
 }
 
 /// An `events` row in the column order every reader of the table selects.
