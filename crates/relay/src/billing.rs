@@ -1,6 +1,8 @@
 //! The billing-line editor: filling in the first-party fields a reduced-shape request lacks, without disturbing
 //! a field the caller already sent.
 
+use std::borrow::Cow;
+
 use crate::body::BILLING_BLOCK;
 use crate::memory::Injected;
 use crate::RelayError;
@@ -158,43 +160,25 @@ pub fn is_entrypoint_token(candidate: &str) -> bool {
 /// Absent-field candidates in `FIELD_ORDER`'s relative order: `cch` before `cc_prev_req` before `cc_prompt_id`.
 /// An item the account has refused (`restore.skip`) never becomes a candidate, whether or not its field is
 /// otherwise absent and restorable.
-fn candidates(restore: &Restore<'_>) -> Vec<(&'static str, String, Injected)> {
-    let mut out = Vec::new();
-    if !restore.skip.contains(&Injected::Cch) {
-        out.push(("cch", "cch=00000".to_string(), Injected::Cch));
-    }
-    if let Some(id) = restore.prev_req {
-        if !restore.skip.contains(&Injected::PrevReq) {
-            out.push((
-                "cc_prev_req",
-                format!("cc_prev_req={id}"),
-                Injected::PrevReq,
-            ));
-        }
-    }
-    if let Some(id) = restore.prompt_id {
-        if !restore.skip.contains(&Injected::PromptId) {
-            out.push((
-                "cc_prompt_id",
-                format!("cc_prompt_id={id}"),
-                Injected::PromptId,
-            ));
-        }
-    }
-    out
+fn candidates<'r, 'a>(restore: &'r Restore<'a>) -> impl Iterator<Item = (Injected, &'a str)> + 'r {
+    [
+        (Injected::Cch, Some("00000")),
+        (Injected::PrevReq, restore.prev_req),
+        (Injected::PromptId, restore.prompt_id),
+    ]
+    .into_iter()
+    .filter_map(|(item, value)| Some((item, value?)))
+    .filter(|(item, _)| !restore.skip.contains(item))
 }
 
-/// Inserts `value` after the last field in `fields` that precedes `name` in `FIELD_ORDER`, or at the front when
-/// none does. A field already present is left untouched and not counted as injected.
-fn insert_if_absent(
-    fields: &mut Vec<String>,
-    injected: &mut Vec<Injected>,
-    name: &str,
-    value: String,
-    item: Injected,
-) {
-    if fields.iter().any(|f| f.starts_with(&format!("{name}="))) {
-        return;
+/// Inserts `name=value` after the last field in `fields` that precedes `name` in `FIELD_ORDER`, or at the front
+/// when none does, and answers whether it did. A field already present is left untouched.
+fn insert_if_absent(fields: &mut Vec<Cow<'_, str>>, name: &str, value: &str) -> bool {
+    if fields.iter().any(|f| {
+        f.strip_prefix(name)
+            .is_some_and(|rest| rest.starts_with('='))
+    }) {
+        return false;
     }
     let order = FIELD_ORDER
         .iter()
@@ -210,19 +194,8 @@ fn insert_if_absent(
                 .is_some_and(|p| p < order)
         })
         .map_or(0, |i| i + 1);
-    fields.insert(at, value);
-    injected.push(item);
-}
-
-fn apply_candidates(
-    restore: &Restore<'_>,
-    mut fields: Vec<String>,
-) -> (Vec<String>, Vec<Injected>) {
-    let mut injected = Vec::new();
-    for (name, value, item) in candidates(restore) {
-        insert_if_absent(&mut fields, &mut injected, name, value, item);
-    }
-    (fields, injected)
+    fields.insert(at, Cow::Owned(format!("{name}={value}")));
+    true
 }
 
 fn patch_line(
@@ -243,8 +216,13 @@ fn patch_line(
     if rest.is_empty() {
         return Ok(Vec::new());
     }
-    let fields: Vec<String> = rest.split("; ").map(String::from).collect();
-    let (fields, injected) = apply_candidates(restore, fields);
+    let mut fields: Vec<Cow<'_, str>> = rest.split("; ").map(Cow::Borrowed).collect();
+    let mut injected = Vec::new();
+    for (item, value) in candidates(restore) {
+        if insert_if_absent(&mut fields, item.wire_name(), value) {
+            injected.push(item);
+        }
+    }
     if injected.is_empty() {
         return Ok(Vec::new());
     }
