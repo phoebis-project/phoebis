@@ -1,7 +1,7 @@
 //! The unused weekly allowance: the share of each weekly window an account left unused at its resets, read off the
 //! stored `window_reset` events, with an account's term end read as a reset of the week it cut short.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use phoebis_routing::{SEVEN_DAY, SEVEN_DAY_FABLE};
 use rusqlite::types::Value;
@@ -56,8 +56,8 @@ fn share_left(utilization: f64) -> f64 {
 }
 
 /// The weekly resets of the listed accounts whose event `at` lies in `[from, to]`, read off the stored `window_reset`
-/// events, plus one `term_ended` row per weekly window with a reading before each `(account_id, end_at)` of `term_ends`
-/// whose end lies at or after `from`. The read keeps the listed accounts and answers no row for an empty list, since the
+/// events, plus one `term_ended` row per weekly window with a reading before each account's end in `term_ends` that
+/// lies at or after `from`. The read keeps the listed accounts and answers no row for an empty list, since the
 /// ledger holds no account kind: the caller lists the `oauth` accounts it answers for. A term end's row reads
 /// the last reading before the end of a week still open at it (its reset at or after the end), the head's
 /// overage-included week folded into `seven_day_fable` with the newer reading standing, and a reading with no
@@ -69,16 +69,10 @@ pub fn unused_allowance(
     accounts: &[String],
     from: i64,
     to: i64,
-    term_ends: &[(String, i64)],
+    term_ends: &BTreeMap<String, i64>,
 ) -> Result<Vec<AllowanceReset>, LedgerError> {
     if accounts.is_empty() {
         return Ok(Vec::new());
-    }
-    let mut ends: HashMap<&str, i64> = HashMap::new();
-    for (account_id, end_at) in term_ends {
-        ends.entry(account_id.as_str())
-            .and_modify(|end| *end = (*end).min(*end_at))
-            .or_insert(*end_at);
     }
     let mut binds = vec![
         Value::Integer(from),
@@ -117,7 +111,7 @@ pub fn unused_allowance(
         // restart announces a week that reset before the end only after it, and the week the end cut short is the
         // `term_ended` row's alone.
         if !is_weekly(&detail.window)
-            || ends
+            || term_ends
                 .get(account_id.as_str())
                 .is_some_and(|&end_at| detail.reset_at >= end_at)
         {
@@ -145,7 +139,7 @@ pub fn unused_allowance(
           ORDER BY window",
     )?;
     // An end before the range drops the resets after it above, and its own row belongs to a range that holds it.
-    for (account_id, end_at) in term_ends.iter().filter(|(_, end_at)| *end_at >= from) {
+    for (account_id, end_at) in term_ends.iter().filter(|(_, end_at)| **end_at >= from) {
         let mut last: BTreeMap<String, (f64, i64)> = BTreeMap::new();
         let found = readings.query_map(params![account_id, end_at], |r| {
             Ok((

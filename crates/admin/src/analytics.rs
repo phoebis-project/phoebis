@@ -1292,7 +1292,7 @@ pub(crate) async fn unused_allowance(
     // ended no plan, so a passed trial end ends a week only through a plan-ended flag that followed it, at the flag's
     // instant. An end still ahead of `now` ends no week yet, and a custom range may reach a day past it. An end before
     // `from` is listed too, since the week it cut short can reset inside the range, and the read drops that reset.
-    let term_ends: Vec<(String, i64)> = oauth
+    let term_ends: BTreeMap<String, i64> = oauth
         .iter()
         .filter_map(|id| {
             let end = term::end_of(snapshot.term(id)?, to.min(now))?;

@@ -1,5 +1,6 @@
 //! Router and registry events reach the events table, and the account rollup counts what they say.
 mod common;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -2786,7 +2787,13 @@ fn the_unused_allowance_lists_each_weekly_reset_in_range_newest_first_and_a_term
     };
     let listed = db
         .read_blocking(|c| {
-            unused_allowance(c, &["a".into(), "c".into()], from, to, &[("c".into(), end)])
+            unused_allowance(
+                c,
+                &["a".into(), "c".into()],
+                from,
+                to,
+                &BTreeMap::from([("c".into(), end)]),
+            )
         })
         .unwrap();
     let mut expected = a_rows();
@@ -2804,7 +2811,7 @@ fn the_unused_allowance_lists_each_weekly_reset_in_range_newest_first_and_a_term
          read from the last reading before it"
     );
     let none = db
-        .read_blocking(|c| unused_allowance(c, &[], from, to, &[]))
+        .read_blocking(|c| unused_allowance(c, &[], from, to, &BTreeMap::new()))
         .unwrap();
     assert_eq!(none, [], "an empty list reads no account's resets");
 }
@@ -2871,7 +2878,13 @@ fn a_term_end_reads_each_open_weeks_last_reading_once_and_leaves_out_the_resets_
     }
     let rows = db
         .read_blocking(|c| {
-            unused_allowance(c, &["d".into()], now - 30 * DAY, now, &[("d".into(), end)])
+            unused_allowance(
+                c,
+                &["d".into()],
+                now - 30 * DAY,
+                now,
+                &BTreeMap::from([("d".into(), end)]),
+            )
         })
         .unwrap();
     assert_eq!(
@@ -2906,7 +2919,13 @@ fn a_term_end_reads_each_open_weeks_last_reading_once_and_leaves_out_the_resets_
     );
     let reversed = db
         .read_blocking(|c| {
-            unused_allowance(c, &["e".into()], now - 30 * DAY, now, &[("e".into(), end)])
+            unused_allowance(
+                c,
+                &["e".into()],
+                now - 30 * DAY,
+                now,
+                &BTreeMap::from([("e".into(), end)]),
+            )
         })
         .unwrap();
     assert_eq!(
@@ -2971,7 +2990,13 @@ fn a_term_end_leaves_out_an_ended_accounts_resets_by_the_resets_own_instant() {
     .unwrap();
     let rows = db
         .read_blocking(|c| {
-            unused_allowance(c, &["f".into()], now - 30 * DAY, now, &[("f".into(), end)])
+            unused_allowance(
+                c,
+                &["f".into()],
+                now - 30 * DAY,
+                now,
+                &BTreeMap::from([("f".into(), end)]),
+            )
         })
         .unwrap();
     assert_eq!(
@@ -3034,8 +3059,16 @@ fn a_term_end_before_the_range_drops_the_resets_after_it_and_lists_no_row_of_its
     )
     .unwrap();
     let read = |from: i64, to: i64| {
-        db.read_blocking(|c| unused_allowance(c, &["g".into()], from, to, &[("g".into(), end)]))
-            .unwrap()
+        db.read_blocking(|c| {
+            unused_allowance(
+                c,
+                &["g".into()],
+                from,
+                to,
+                &BTreeMap::from([("g".into(), end)]),
+            )
+        })
+        .unwrap()
     };
     assert_eq!(
         read(11 * DAY, 13 * DAY),
@@ -3084,7 +3117,9 @@ fn the_unused_allowance_answers_each_resets_pair_from_its_event_and_none_where_t
         db.insert_event(&row).unwrap();
     }
     let rows = db
-        .read_blocking(|c| unused_allowance(c, &["a".into()], now - 30 * DAY, now, &[]))
+        .read_blocking(|c| {
+            unused_allowance(c, &["a".into()], now - 30 * DAY, now, &BTreeMap::new())
+        })
         .unwrap();
     assert_eq!(
         rows,
@@ -3155,7 +3190,13 @@ fn a_term_end_s_row_names_no_pair() {
     .unwrap();
     let rows = db
         .read_blocking(|c| {
-            unused_allowance(c, &["h".into()], now - 30 * DAY, now, &[("h".into(), end)])
+            unused_allowance(
+                c,
+                &["h".into()],
+                now - 30 * DAY,
+                now,
+                &BTreeMap::from([("h".into(), end)]),
+            )
         })
         .unwrap();
     let ended = rows
