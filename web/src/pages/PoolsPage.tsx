@@ -101,33 +101,22 @@ function RangeFigures({ range }: { range: Range }) {
   const [min, max] = [fmtDuration(range.min * 1_000), fmtDuration(range.max * 1_000)];
   return min === max ? <span className="nowrap">{min}</span> : <><span className="nowrap">{min}</span> to <span className="nowrap">{max}</span></>;
 }
-/** Beside a ceiling left off: the figure it resolves to, in the pattern of the key dialog's inherited values. */
-function BreakEven({ range }: { range: Range }) {
+/**
+ * A line about the break-even under the hint that explains it: beside a ceiling left off, the figure it resolves to in
+ * the pattern of the key dialog's inherited values, beside a parked or horizon ceiling switched on past the break-even,
+ * the figures the router caps it at, and under the idle window set past the break-even, the note that the ceiling lies
+ * above it, as the router runs it.
+ */
+function BreakEvenNote({ lead, range }: { lead: string; range: Range }) {
   return (
     <span className="keepalive-resolved" title={BREAK_EVEN_HINT}>
-      Break-even: <RangeFigures range={range} />
+      {lead} <RangeFigures range={range} />
     </span>
   );
 }
 /** A ceiling past the break-even's low end, as the router caps it: the figures it runs to, or null below the cap. */
 const cappedAt = (seconds: number, breakEven: Range): Range | null =>
   seconds > breakEven.min ? { max: Math.min(seconds, breakEven.max), min: Math.min(seconds, breakEven.min) } : null;
-/** Beside a parked or horizon ceiling switched on past the break-even: the figures the router caps it at. */
-function CappedAt({ range }: { range: Range }) {
-  return (
-    <span className="keepalive-resolved" title={BREAK_EVEN_HINT}>
-      Capped at the break-even, <RangeFigures range={range} />
-    </span>
-  );
-}
-/** Under the idle window set past the break-even: the note that the ceiling lies above it, as the router runs it. */
-function AboveBreakEven({ range }: { range: Range }) {
-  return (
-    <span className="keepalive-resolved" title={BREAK_EVEN_HINT}>
-      Above the break-even, <RangeFigures range={range} />
-    </span>
-  );
-}
 /** The card's line: the three ceilings the router resolves for the pool, in whole hours. */
 const ceilingsLine = (r: NonNullable<Pool['keepaliveResolved']>) => {
   const hours = (seconds: number) => fmtHours(seconds * 1_000);
@@ -2234,7 +2223,7 @@ export function PoolDialog({
                     )}
                   </span>
                 )}
-                {idleAbove && <AboveBreakEven range={idleAbove} />}
+                {idleAbove && <BreakEvenNote lead="Above the break-even," range={idleAbove} />}
               </>
             }
           >
@@ -2258,8 +2247,8 @@ export function PoolDialog({
               hint={
                 <>
                   How long a park on a background command or a subagent is probed. Off is the recipe&apos;s break-even.
-                  {resolved && !form.maxParkedOn && <BreakEven range={resolved.breakEvenSeconds} />}
-                  {parkedCapped && <CappedAt range={parkedCapped} />}
+                  {resolved && !form.maxParkedOn && <BreakEvenNote lead="Break-even:" range={resolved.breakEvenSeconds} />}
+                  {parkedCapped && <BreakEvenNote lead="Capped at the break-even," range={parkedCapped} />}
                 </>
               }
             />
@@ -2274,8 +2263,8 @@ export function PoolDialog({
               hint={
                 <>
                   A park on a scheduled wakeup is probed while the wake is at most this far away. Off is the recipe&apos;s break-even.
-                  {resolved && !form.horizonOn && <BreakEven range={resolved.breakEvenSeconds} />}
-                  {scheduledCapped && <CappedAt range={scheduledCapped} />}
+                  {resolved && !form.horizonOn && <BreakEvenNote lead="Break-even:" range={resolved.breakEvenSeconds} />}
+                  {scheduledCapped && <BreakEvenNote lead="Capped at the break-even," range={scheduledCapped} />}
                 </>
               }
             />
