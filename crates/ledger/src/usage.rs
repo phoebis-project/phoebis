@@ -16,9 +16,10 @@ use phoebis_routing::{RouterHandle, DAY_MS};
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::query::{hour_ceil, priced, PROBE_KIND};
+use crate::price::price_usd;
+use crate::query::{hour_ceil, row_key, PROBE_KIND};
 use crate::rollup::{hour_of, read_rollups_for_key, RollupRow};
-use crate::{LedgerDb, LedgerError, PlanTables, PriceRevisions, Pricing};
+use crate::{LedgerDb, LedgerError, PriceRevisions, Pricing};
 
 pub const USAGE_PATH: &str = "/v1/usage";
 
@@ -74,69 +75,77 @@ fn add(tokens: &mut UsageTokens, row: &RollupRow) {
 /// The generation is the presenting key's own `created_at`, so an id an earlier key used answers only what
 /// this key spent, whole hours included: nothing is left out and each window starts where its name says.
 ///
-/// Each row's dollars price from its counts at the revision in force at its hour.
+/// Each row's dollars price from its counts at the revision in force at its hour, once for both windows, and probe
+/// rows are left out as the key list's totals leave them out.
 pub fn key_usage_windows(
     conn: &Connection,
     key_id: &str,
     key_generation: i64,
     now: i64,
     prices: &PriceRevisions,
-    costs: &PlanTables,
 ) -> Result<(KeyUsageWindow, KeyUsageWindow), LedgerError> {
     let day_hour = hour_of(now - DAY_MS);
     let week_hour = hour_of(now - 7 * DAY_MS);
     let rows = read_rollups_for_key(conn, key_id, key_generation, week_hour, hour_ceil(now))?;
-    Ok((
-        window(
-            rows.iter().filter(|r| r.hour >= day_hour),
-            day_hour,
-            now,
-            prices,
-            costs,
-        ),
-        window(rows.iter(), week_hour, now, prices, costs),
-    ))
+    let (mut day, mut week) = (
+        WindowSum::new(day_hour, now),
+        WindowSum::new(week_hour, now),
+    );
+    for row in rows.iter().filter(|r| r.kind != PROBE_KIND) {
+        let usd = price_usd(prices, &row_key(row, now), row.usage()).map_or(0.0, |usd| usd.total());
+        week.add(row, usd);
+        if row.hour >= day_hour {
+            day.add(row, usd);
+        }
+    }
+    Ok((day.finish(), week.finish()))
 }
 
-/// One window folded from the rows already read for it; probe rows are left out as the key list's totals
-/// leave them out.
-fn window<'a>(
-    rows: impl Iterator<Item = &'a RollupRow>,
-    from_hour: i64,
-    to: i64,
-    prices: &PriceRevisions,
-    costs: &PlanTables,
-) -> KeyUsageWindow {
-    let mut out = KeyUsageWindow {
-        from: from_hour * 1_000,
-        to,
-        ..KeyUsageWindow::default()
-    };
-    let mut models: std::collections::BTreeMap<String, ModelUsage> = Default::default();
-    for row in rows {
-        if row.kind == PROBE_KIND {
-            continue;
+/// One window's sums as the rows fold into it, each model summed once under its id.
+struct WindowSum {
+    window: KeyUsageWindow,
+    models: std::collections::BTreeMap<String, ModelUsage>,
+}
+
+impl WindowSum {
+    fn new(from_hour: i64, to: i64) -> WindowSum {
+        WindowSum {
+            window: KeyUsageWindow {
+                from: from_hour * 1_000,
+                to,
+                ..KeyUsageWindow::default()
+            },
+            models: Default::default(),
         }
+    }
+
+    fn add(&mut self, row: &RollupRow, usd: f64) {
+        let out = &mut self.window;
         out.requests += row.requests;
         out.succeeded += row.succeeded;
         out.failed += row.failed + row.rate_limited + row.exhausted + row.rejected;
         out.incomplete += row.incomplete;
-        let usd = priced(row, prices, costs, to)
-            .usd
-            .map_or(0.0, |usd| usd.total());
         out.cost_usd += usd;
         add(&mut out.tokens, row);
         let model = row.canonical_model.clone();
-        let entry = models.entry(model.clone()).or_insert_with(|| ModelUsage {
-            model,
-            ..ModelUsage::default()
-        });
+        let entry = self
+            .models
+            .entry(model.clone())
+            .or_insert_with(|| ModelUsage {
+                model,
+                ..ModelUsage::default()
+            });
         entry.requests += row.requests;
         entry.cost_usd += usd;
         add(&mut entry.tokens, row);
     }
-    out.models = models.into_values().collect();
-    out
+
+    fn finish(self) -> KeyUsageWindow {
+        KeyUsageWindow {
+            models: self.models.into_values().collect(),
+            ..self.window
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -166,7 +175,6 @@ struct UsageState {
     db: Arc<LedgerDb>,
     pricing: Arc<Pricing>,
     router: RouterHandle,
-    tables: Arc<PlanTables>,
 }
 
 /// The self-service route on the proxy listener: `GET /v1/usage` behind the caller's own API key.
@@ -175,7 +183,6 @@ pub fn usage_router(
     router: RouterHandle,
     clock: Clock,
     pricing: Arc<Pricing>,
-    tables: Arc<PlanTables>,
 ) -> Router {
     Router::new()
         .route(USAGE_PATH, get(usage))
@@ -184,7 +191,6 @@ pub fn usage_router(
             db,
             pricing,
             router,
-            tables,
         }))
 }
 
@@ -205,10 +211,9 @@ async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> 
     };
     let key_id = key.id.clone();
     let prices = state.pricing.revisions();
-    let tables = Arc::clone(&state.tables);
     let (day, week) = match state
         .db
-        .read(move |c| key_usage_windows(c, &key_id, generation, now, &prices, &tables))
+        .read(move |c| key_usage_windows(c, &key_id, generation, now, &prices))
         .await
     {
         Ok(windows) => windows,

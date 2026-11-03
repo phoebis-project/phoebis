@@ -3906,7 +3906,6 @@ fn an_incomplete_request_counts_in_the_rollups_incomplete_column_and_nowhere_els
                 1,
                 7_200_000,
                 &PriceRevisions::shipped(),
-                &PlanTables::shipped(),
             )
         })
         .unwrap();

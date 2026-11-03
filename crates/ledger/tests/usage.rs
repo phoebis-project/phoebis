@@ -12,8 +12,8 @@ use common::*;
 use fake_upstream::{FakeUpstream, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{
-    key_usage_windows, AttemptRecord, LedgerConfig, LedgerDb, PlanTables, PriceRevisions,
-    RequestRecord, KEY_RANGE_PREDICATE,
+    key_usage_windows, AttemptRecord, LedgerConfig, LedgerDb, PriceRevisions, RequestRecord,
+    KEY_RANGE_PREDICATE,
 };
 use phoebis_store::{ApiKeyRow, RulesMode, Store};
 use tower::ServiceExt;
@@ -114,18 +114,9 @@ fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
     // Rows an hour old, planted under the generation the builders stamp, so the day window is every row the
     // reading key filed under the id.
     let day = |id: &str| {
-        db.read_blocking(|c| {
-            key_usage_windows(
-                c,
-                id,
-                0,
-                10_000,
-                &PriceRevisions::shipped(),
-                &PlanTables::shipped(),
-            )
-        })
-        .map(|(day, _)| day)
-        .unwrap()
+        db.read_blocking(|c| key_usage_windows(c, id, 0, 10_000, &PriceRevisions::shipped()))
+            .map(|(day, _)| day)
+            .unwrap()
     };
 
     let k1 = day("k1");
@@ -187,16 +178,7 @@ fn the_day_window_is_the_tail_of_the_weeks_own_rows() {
     }
 
     let (day, week) = db
-        .read_blocking(|c| {
-            key_usage_windows(
-                c,
-                "k1",
-                0,
-                now,
-                &PriceRevisions::shipped(),
-                &PlanTables::shipped(),
-            )
-        })
+        .read_blocking(|c| key_usage_windows(c, "k1", 0, now, &PriceRevisions::shipped()))
         .unwrap();
     assert_eq!(
         (day.requests, week.requests),
@@ -228,16 +210,7 @@ fn the_windows_read_the_presenting_keys_generation_alone_and_start_where_their_n
     db.insert_request(&earlier, &[used("r1")], None).unwrap();
     db.insert_request(&current, &[used("r2")], None).unwrap();
     let (day, week) = db
-        .read_blocking(|c| {
-            key_usage_windows(
-                c,
-                "k1",
-                2_000,
-                now,
-                &PriceRevisions::shipped(),
-                &PlanTables::shipped(),
-            )
-        })
+        .read_blocking(|c| key_usage_windows(c, "k1", 2_000, now, &PriceRevisions::shipped()))
         .unwrap();
     assert_eq!(
         (day.requests, week.requests),
@@ -251,16 +224,7 @@ fn the_windows_read_the_presenting_keys_generation_alone_and_start_where_their_n
         "nothing is left out of the window: the row it shares an hour with is another generation's"
     );
     let (day, _) = db
-        .read_blocking(|c| {
-            key_usage_windows(
-                c,
-                "k1",
-                1_000,
-                now,
-                &PriceRevisions::shipped(),
-                &PlanTables::shipped(),
-            )
-        })
+        .read_blocking(|c| key_usage_windows(c, "k1", 1_000, now, &PriceRevisions::shipped()))
         .unwrap();
     assert_eq!(
         day.requests, 1,
@@ -407,7 +371,6 @@ async fn the_usage_route_answers_the_callers_own_key_and_refuses_the_rest() {
         h.router.clone(),
         clock_of(&h),
         h.pricing.clone(),
-        Arc::new(PlanTables::shipped()),
     );
 
     let (status, headers, body) = get(&app, None).await;
@@ -479,7 +442,6 @@ async fn a_second_key_sees_its_own_usage_and_not_the_firsts() {
         h.router.clone(),
         clock_of(&h),
         h.pricing.clone(),
-        Arc::new(PlanTables::shipped()),
     );
     const LAPTOP: &str = "phoebis-laptop";
     h.store
@@ -573,7 +535,6 @@ async fn the_route_reads_the_generation_of_the_key_that_presented_the_secret() {
         h.router.clone(),
         clock_of(&h),
         h.pricing.clone(),
-        Arc::new(PlanTables::shipped()),
     );
 
     let now = h.clock.load(Ordering::SeqCst);
@@ -638,7 +599,6 @@ async fn a_deleted_keys_usage_stays_with_it() {
         h.router.clone(),
         clock_of(&h),
         h.pricing.clone(),
-        Arc::new(PlanTables::shipped()),
     );
     // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
     let first = generation_of(&h.store, "desktop");
@@ -708,7 +668,6 @@ async fn a_deleted_keys_usage_stays_with_it() {
             first,
             now + 1,
             &PriceRevisions::shipped(),
-            &PlanTables::shipped()
         ))
         .await
         .unwrap()
@@ -728,7 +687,6 @@ async fn an_earlier_holders_unstamped_rows_are_not_the_new_keys_own() {
         h.router.clone(),
         clock_of(&h),
         h.pricing.clone(),
-        Arc::new(PlanTables::shipped()),
     );
     let now = h.clock.load(Ordering::SeqCst);
     // A row written before the column existed, under an id whose holder was gone when the stamp ran.
@@ -767,7 +725,6 @@ async fn a_ledger_the_route_cannot_read_is_refused_in_the_relays_error_shape() {
         h.router.clone(),
         clock_of(&h),
         h.pricing.clone(),
-        Arc::new(PlanTables::shipped()),
     );
 
     let (status, headers, body) = get(&app, Some(KEY)).await;
@@ -826,7 +783,6 @@ async fn the_usage_page_is_html_when_accept_prefers_it_and_escapes_the_label() {
         h.router.clone(),
         clock_of(&h),
         h.pricing.clone(),
-        Arc::new(PlanTables::shipped()),
     );
 
     let row = h.store.api_key("desktop").unwrap().unwrap();

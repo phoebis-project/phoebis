@@ -2086,7 +2086,7 @@ pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
 
 /// The price key of a rollup row: its own model, speed, band, funding and `kind`, its tier (`None` under
 /// `UNATTRIBUTED`), the entrypoint its `client` names, and its hour as the instant, with no completion, read at `now`.
-fn row_key(row: &RollupRow, now: i64) -> RowKey<'_> {
+pub(crate) fn row_key(row: &RollupRow, now: i64) -> RowKey<'_> {
     RowKey {
         model: &row.canonical_model,
         speed: Speed::of(Some(row.speed.as_str())),
@@ -2103,10 +2103,10 @@ fn row_key(row: &RollupRow, now: i64) -> RowKey<'_> {
 }
 
 /// One rollup row priced through `price_row` at its own key with no tier, a plain call that fills nothing in after it:
-/// a probe row on a model the revision lacks takes its dearest-cell dollars inside `price_row`. Its readers,
-/// `shared_figures` and the `/v1/usage` sums, read its `usd` and `equivalent`, and none reads its `shares`, since the
-/// shares a route answers come from `ShareSums::add` under the caller's `pricing`. So the key carries no tier, as
-/// `price_group`'s does, and `price_row` prices no share window.
+/// a probe row on a model the revision lacks takes its dearest-cell dollars inside `price_row`. Its reader,
+/// `shared_figures`, reads its `usd` and `equivalent` and not its `shares`, since the shares a route answers come from
+/// `ShareSums::add` under the caller's `pricing`. So the key carries no tier, as `price_group`'s does, and `price_row`
+/// prices no share window.
 pub(crate) fn priced(
     row: &RollupRow,
     prices: &PriceRevisions,

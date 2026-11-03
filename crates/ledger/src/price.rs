@@ -68,10 +68,7 @@ pub fn price_row(
     key: &RowKey<'_>,
     counts: PinUsage,
 ) -> Priced {
-    let usd = prices
-        .in_force(key.at)
-        .estimate_banded(key.model, key.speed, key.band, counts)
-        .or_else(|| (key.kind == PROBE_KIND).then(|| dearest(prices, key.at, counts)));
+    let usd = price_usd(prices, key, counts);
     if key.funding != Funding::Plan {
         return Priced {
             usd,
@@ -135,6 +132,19 @@ pub fn price_row(
         equivalent,
         share_reason: None,
     }
+}
+
+/// `price_row`'s dollars alone: the counts at the price revision in force at the row's instant, a probe row on a model
+/// that revision lacks at its dearest listed cells. The `/v1/usage` sums read these and no other figure.
+pub(crate) fn price_usd(
+    prices: &PriceRevisions,
+    key: &RowKey<'_>,
+    counts: PinUsage,
+) -> Option<CostSplit> {
+    prices
+        .in_force(key.at)
+        .estimate_banded(key.model, key.speed, key.band, counts)
+        .or_else(|| (key.kind == PROBE_KIND).then(|| dearest(prices, key.at, counts)))
 }
 
 /// The five counts at `fallback_rates(at)`, split through `split_of` as `estimate_banded` splits them.

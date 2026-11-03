@@ -583,7 +583,6 @@ pub async fn run_until(
             router_task.clone(),
             clock.clone(),
             pricing.clone(),
-            tables.clone(),
         )),
         proxy_stop,
         ListenLimits {
