@@ -228,13 +228,13 @@ export class HttpApi implements Api {
   };
   confirmPairing = async (pairingId: string): Promise<PairingConfirmed> => d.decodePairingConfirmed(await call('POST', `/admin/oauth/sessions/${enc(pairingId)}/confirm`));
   createAccount = async (input: AccountInput): Promise<Account> => d.decodeAccount(await call('POST', '/admin/accounts', { id: input.id, kind: input.kind, label: input.label, secret: input.secret }, DIALOG_WRITE));
-  createGuardrail = async (input: GuardrailInput) => d.decodeGuardrail(await call('POST', '/admin/guardrails', { ...d.encodeGuardrail(input), id: slug(input.name) }, DIALOG_WRITE));
+  createGuardrail = async (input: GuardrailInput & { presetVersion?: never }) => d.decodeGuardrail(await call('POST', '/admin/guardrails', { ...d.encodeGuardrail(input), id: slug(input.name) }, DIALOG_WRITE));
   createKey = async (input: CreateKeyInput): Promise<CreatedApiKey> => {
     const expires_at = input.expiresInDays === null ? null : Date.now() + input.expiresInDays * DAY;
     const r = await call<Record<string, unknown>>('POST', '/admin/keys', { ...d.encodeKey(input), expires_at, id: slug(input.name) }, DIALOG_WRITE);
     return d.decodeCreatedKey(r);
   };
-  createPool = async (input: PoolInput) => d.decodePool(await call('POST', '/admin/pools', { ...d.encodePool(input), id: slug(input.name) }, DIALOG_WRITE));
+  createPool = async (input: PoolInput & { guardrails?: never }) => d.decodePool(await call('POST', '/admin/pools', { ...d.encodePool(input), id: slug(input.name) }, DIALOG_WRITE));
   deleteAccount = (accountId: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}`);
   deleteGuardrail = (id: string) => call<void>('DELETE', `/admin/guardrails/${enc(id)}`);
   deleteKey = (id: string) => call<void>('DELETE', `/admin/keys/${enc(id)}`);
@@ -338,7 +338,7 @@ export class HttpApi implements Api {
     d.decodeAccount(
       await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision(d.encodeAccountPatch(patch), revision), DIALOG_WRITE),
     );
-  updateGuardrail = async (id: string, input: Partial<GuardrailInput>, revision?: number) => d.decodeGuardrail(await call('PATCH', `/admin/guardrails/${enc(id)}`, withRevision(d.encodeGuardrail(input), revision), DIALOG_WRITE));
+  updateGuardrail = async (id: string, input: Partial<GuardrailInput> & { preset?: never }, revision?: number) => d.decodeGuardrail(await call('PATCH', `/admin/guardrails/${enc(id)}`, withRevision(d.encodeGuardrail(input), revision), DIALOG_WRITE));
   updateKey = async (id: string, input: KeyInput, revision?: number): Promise<ApiKey> => d.decodeKey(await call('PATCH', `/admin/keys/${enc(id)}`, withRevision(d.encodeKey(input), revision), DIALOG_WRITE));
   // The route writes the settings and the members in one transaction, so a refusal stores nothing; a 409
   // `stale_edit` means the row moved since the dialog read it, which the dialog answers with Reload.

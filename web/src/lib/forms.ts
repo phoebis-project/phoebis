@@ -337,7 +337,7 @@ export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
   };
 }
 
-export function keyInputOf(form: KeyForm, now: number): KeyInput {
+export function keyInputOf(form: KeyForm, now: number): KeyInput & { guardrails?: never } {
   return {
     autoModeServer: form.autoModeServer === 'inherit' ? null : form.autoModeServer === 'on',
     bodyCaptureHours: form.captureMode === 'inherit' ? null : form.captureMode === 'off' ? 0 : Number(form.captureHours),

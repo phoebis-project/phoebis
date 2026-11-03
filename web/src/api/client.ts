@@ -77,6 +77,7 @@ export interface KeyInput {
 
 export interface CreateKeyInput extends KeyInput {
   expiresInDays: number | null;
+  guardrails?: never;
 }
 
 /** The keepalive ceilings a new pool starts with, which the pool dialog shows as its initial values. */
@@ -202,9 +203,9 @@ export interface Api {
   completePairing(pairingId: string, input: PairingInput): Promise<PairingPreview>;
   confirmPairing(pairingId: string): Promise<PairingConfirmed>;
   createAccount(input: AccountInput): Promise<Account>;
-  createGuardrail(input: GuardrailInput): Promise<Guardrail>;
+  createGuardrail(input: GuardrailInput & { presetVersion?: never }): Promise<Guardrail>;
   createKey(input: CreateKeyInput): Promise<CreatedApiKey>;
-  createPool(input: PoolInput): Promise<Pool>;
+  createPool(input: PoolInput & { guardrails?: never }): Promise<Pool>;
   /** Removes the account from every pool and deletes it; its request history stays in the ledger. */
   deleteAccount(accountId: string): Promise<void>;
   /** Detaches the guardrail from every pool and key, and the requests it matched keep its id. */
@@ -279,7 +280,7 @@ export interface Api {
   /** `revision` is the one the row was read at; a save over a row that moved since answers 409 `stale_edit`. */
   updateAccount(accountId: string, patch: AccountPatch, revision?: number): Promise<Account>;
   /** Sends the members `input` defines. `revision` is the one the row was read at, as on the other edits. */
-  updateGuardrail(id: string, input: Partial<GuardrailInput>, revision?: number): Promise<Guardrail>;
+  updateGuardrail(id: string, input: Partial<GuardrailInput> & { preset?: never }, revision?: number): Promise<Guardrail>;
   /** `revision` is the one the row was read at. A save over a row that moved since answers 409 `stale_edit`. */
   updateKey(id: string, input: KeyInput, revision?: number): Promise<ApiKey>;
   updatePool(id: string, input: PoolInput, revision?: number): Promise<Pool>;

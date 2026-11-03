@@ -430,7 +430,7 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
       if (existing) {
         // The guardrail's side appends a newly named subject and detaches one left out, so an untouched picker sends
         // nothing and leaves an attachment made meanwhile from the subject's side in place.
-        const input: Partial<GuardrailInput> = {
+        const input: Partial<GuardrailInput> & { preset?: never } = {
           ...fields,
           ...(sameSet(form.pools, opened.pools) ? {} : { pools: form.pools }),
           ...(sameSet(form.keys, opened.keys) ? {} : { keys: form.keys }),

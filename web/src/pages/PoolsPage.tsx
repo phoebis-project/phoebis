@@ -1310,7 +1310,7 @@ export function PoolDialog({
   // Sessions by warm prefix and subagents by cohort both place by the shared prefix, so either one reads the threshold.
   const prefixEnabled = form.sessionPlacement === 'by_warm_prefix' || form.subagentPlacement === 'by_cohort';
   const budgetOf = (accountId: string) => form.budgets[accountId] ?? { daily: '', monthly: '' };
-  const input: PoolInput = {
+  const input: PoolInput & { guardrails?: never } = {
     ...form.engine,
     affinityMode: form.affinityMode,
     affinityTtlSeconds: form.affinity,

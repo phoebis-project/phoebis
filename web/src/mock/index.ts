@@ -815,7 +815,7 @@ export class MockApi implements Api {
    * The create route's checks in its order. A preset supplies the name, the mode and the conditions the input leaves
    * out, never the description, and stamps the row whatever the input changed.
    */
-  async createGuardrail(input: GuardrailInput): Promise<Guardrail> {
+  async createGuardrail(input: GuardrailInput & { presetVersion?: never }): Promise<Guardrail> {
     if (input.presetVersion !== undefined) throw new ApiError(400, 'preset_version applies on edit', null);
     const preset = input.preset === undefined ? undefined : PRESETS.find((p) => p.id === input.preset);
     // The client sends the id it derives from the name, so a name already taken is an id already taken.
@@ -906,7 +906,7 @@ export class MockApi implements Api {
     return latency({ key: this.keyView(key), secret }, 300);
   }
 
-  async createPool(input: PoolInput): Promise<Pool> {
+  async createPool(input: PoolInput & { guardrails?: never }): Promise<Pool> {
     // A new pool starts with no guardrail, so the route refuses the member before it reads anything else.
     if (input.guardrails !== undefined) throw new ApiError(400, 'guardrails applies on edit', null);
     const id = slug(input.name);
@@ -1423,7 +1423,7 @@ export class MockApi implements Api {
    * The edit route's checks in its order. An edit stamps the guardrail and every pool and key it attaches or detaches,
    * so a dialog of either side opened before it is refused as stale.
    */
-  async updateGuardrail(id: string, input: Partial<GuardrailInput>, revision?: number): Promise<Guardrail> {
+  async updateGuardrail(id: string, input: Partial<GuardrailInput> & { preset?: never }, revision?: number): Promise<Guardrail> {
     const current = this.guardrails.find((g) => g.id === id);
     if (!current) throw new ApiError(404, 'guardrail not found', null);
     if (input.preset !== undefined) throw new ApiError(400, 'preset applies on create', null);
