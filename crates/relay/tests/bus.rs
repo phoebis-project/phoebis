@@ -382,6 +382,68 @@ async fn a_capture_window_past_the_running_cap_is_published_at_the_cap() {
 }
 
 #[tokio::test]
+async fn a_held_stream_whose_first_event_is_a_rate_limit_error_records_its_attempt_as_rate_limited()
+{
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body:
+                br#"{"id":"msg_2","type":"message","usage":{"input_tokens":3,"output_tokens":4}}"#
+                    .to_vec(),
+        },
+    }])
+    .await;
+    // The type spelled with an escaped underscore: the verdict's parse reads `rate_limit_error`, a search of the raw
+    // bytes for the word does not.
+    up.add_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Sse {
+            status: 200,
+            headers: vec![],
+            events: vec![SseEvent {
+                event: "error".into(),
+                data: r#"{"type":"error","error":{"type":"rate_limit\u005ferror","message":"slow down"}}"#
+                    .into(),
+            }],
+            delay_between: Duration::from_millis(2),
+        },
+    );
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+        bus,
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.into_body().collect().await.unwrap();
+    let (events, _) = drain_until_complete(&mut sub).await;
+    let first = events
+        .iter()
+        .find_map(|e| match e {
+            Event::ResponseHead(head) => Some(head),
+            _ => None,
+        })
+        .expect("the first attempt's head");
+    assert_eq!(
+        (first.attempt, first.status, first.outcome),
+        (1, 200, AttemptOutcome::RateLimited)
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_failover_publishes_a_head_per_attempt_and_the_completion_names_the_serving_account() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),

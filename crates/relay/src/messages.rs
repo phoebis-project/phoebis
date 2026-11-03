@@ -55,7 +55,8 @@ use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
 use crate::chains::Chains;
 use crate::classify::{
-    classify, error_message, error_type, refused_injected, Cooldown, HeadContext, Scope, Verdict,
+    classify, error_message, is_rate_limit_event, refused_injected, Cooldown, HeadContext, Scope,
+    Verdict,
 };
 use crate::credit::CreditStore;
 use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
@@ -1026,17 +1027,14 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
     }
 }
 
-/// The attempt outcome the verdict on a head implies.
-fn attempt_outcome(verdict: &Verdict, status: u16, first_event: Option<&[u8]>) -> AttemptOutcome {
+/// The attempt outcome the verdict on a head implies. `rate_limit_event` is a held stream whose first event is a
+/// `rate_limit_error`.
+fn attempt_outcome(verdict: &Verdict, status: u16, rate_limit_event: bool) -> AttemptOutcome {
     match verdict {
         Verdict::Refresh => AttemptOutcome::AuthFailed,
         Verdict::Commit if status < 400 => AttemptOutcome::Succeeded,
         Verdict::Commit => AttemptOutcome::UpstreamError,
-        Verdict::FailOver { .. } if status == 429 => AttemptOutcome::RateLimited,
-        Verdict::FailOver { .. }
-            if first_event
-                .is_some_and(|e| e.windows(18).any(|w| w == br#""rate_limit_error""#)) =>
-        {
+        Verdict::FailOver { .. } if status == 429 || rate_limit_event => {
             AttemptOutcome::RateLimited
         }
         Verdict::FailOver {
@@ -3116,6 +3114,8 @@ impl Relay {
                 }
             }
         }
+        // Read once for the attempt's recorded outcome and for the rate-limit families a committed error keeps.
+        let rate_limit_event = first_event.as_deref().is_some_and(is_rate_limit_event);
         // The commit's own arrival time: a held stream may have taken most of the hold timeout to commit.
         let arrived = (self.clock)();
         // A stream that commits on `message_start` is the leg's final answer: the upstream writes the cache from here.
@@ -3164,7 +3164,7 @@ impl Relay {
                     ..
                 }
         );
-        let classified = attempt_outcome(&verdict, head.status, first_event.as_deref());
+        let classified = attempt_outcome(&verdict, head.status, rate_limit_event);
         ctx.admitted
             .trace
             .head(
@@ -3522,9 +3522,7 @@ impl Relay {
                     on_message_id: None,
                     outcome,
                     prefix: held.bytes,
-                    rate_limit_event: first_event
-                        .as_deref()
-                        .is_some_and(|e| error_type(e).as_deref() == Some("rate_limit_error")),
+                    rate_limit_event,
                     reader: reader
                         .expect("a streaming head still holds the reader the hold read from"),
                     renewal: None,

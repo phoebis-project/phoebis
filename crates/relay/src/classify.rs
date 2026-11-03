@@ -122,10 +122,7 @@ pub struct HeadContext<'a> {
 
 pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
     let unified = ctx.unified;
-    let sse_rate_limited = head.status == 200
-        && ctx
-            .first_event
-            .is_some_and(|e| error_type(e).as_deref() == Some("rate_limit_error"));
+    let sse_rate_limited = head.status == 200 && ctx.first_event.is_some_and(is_rate_limit_event);
     let rate_limited = head.status == 429 || sse_rate_limited;
     // Ahead of the per-kind table below, for either account kind: a 400 naming an item this leg added is a fact
     // about the request shape, not about the credential, and a name outside `injected` is the client's own to
@@ -456,6 +453,13 @@ fn error_member(body: &[u8], pointer: &str, key: &str) -> Option<String> {
 /// The error body's `error.type`.
 pub(crate) fn error_type(body: &[u8]) -> Option<String> {
     error_member(body, "/error/type", "type")
+}
+
+/// Whether an error event's data names a `rate_limit_error`, read off its parsed `error.type`, so a type spelled with
+/// an escape counts and the word inside a message does not. The verdict and the attempt's recorded outcome both read
+/// this one rule.
+pub(crate) fn is_rate_limit_event(data: &[u8]) -> bool {
+    error_type(data).as_deref() == Some("rate_limit_error")
 }
 
 /// `body` up to its first byte that is not UTF-8: a prefix cut at the buffer bound can end inside a multi-byte
