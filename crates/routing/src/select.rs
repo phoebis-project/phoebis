@@ -6710,7 +6710,7 @@ fn candidate_facts(
                 if name == FIVE_HOUR && kind == Some(AccountKind::Oauth) {
                     facts.demand = Some(five_hour_demand(state, snapshot, pool, id, &burn, now));
                 }
-                windows.insert(name.to_string(), facts);
+                windows.insert(name, facts);
             }
         }
     }
@@ -6721,7 +6721,7 @@ fn candidate_facts(
     {
         let observed_at = spend.observed_at.unwrap_or(now);
         windows.insert(
-            "spend".to_string(),
+            "spend",
             WindowFacts {
                 utilization,
                 reset: Some(spend.reset),
@@ -6739,17 +6739,11 @@ fn candidate_facts(
         );
     }
     if let Some(reading) = sample.and_then(|s| s.worst_bucket(now)) {
-        windows.insert(
-            "worst_bucket".to_string(),
-            window_facts(&reading, None, None, 0.0, now),
-        );
+        windows.insert("worst_bucket", window_facts(&reading, None, None, 0.0, now));
     }
     for name in [FAST_INPUT, FAST_OUTPUT] {
         if let Some(reading) = sample.and_then(|s| s.reading(name)) {
-            windows.insert(
-                name.to_string(),
-                window_facts(&reading, None, None, 0.0, now),
-            );
+            windows.insert(name, window_facts(&reading, None, None, 0.0, now));
         }
     }
     let budget = budgeted_member(snapshot, &pool.id, id)

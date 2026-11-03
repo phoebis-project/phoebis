@@ -13221,11 +13221,11 @@ fn a_usage_based_seats_candidate_facts_list_its_spend_entry_and_no_plan_window_w
         &request(&s, None, "claude-sonnet-5", true, &[], T),
         &mut rng(),
     );
-    let windows = |account: &str| -> Vec<String> {
+    let windows = |account: &str| -> Vec<&'static str> {
         candidate(&d.record, account)
             .windows
             .keys()
-            .cloned()
+            .copied()
             .collect()
     };
     assert_eq!(
@@ -16326,7 +16326,7 @@ fn the_candidate_table_fills_tier_pace_and_budget_for_every_member() {
     assert_eq!(d.record.candidates.len(), 4);
     for member in &d.record.candidates {
         for (window, facts) in &member.windows {
-            let booked = if member.account_id == "b" && window == FIVE_HOUR {
+            let booked = if member.account_id == "b" && *window == FIVE_HOUR {
                 0.05
             } else {
                 0.0
