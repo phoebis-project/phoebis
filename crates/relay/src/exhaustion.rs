@@ -2,6 +2,7 @@
 //! automatic continue arms, a 503 only an operator can clear, the same 503 with a one-second retry for a key moved
 //! to another pool mid-flight, and the two 429s of a fast request no upstream's fast lane can take.
 
+use axum::http::HeaderValue;
 use axum::response::Response;
 use phoebis_routing::{Exhaustion, BUDGET_WINDOW, RETRY_AFTER_WINDOW};
 
@@ -43,14 +44,14 @@ pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) 
                 window.as_str()
             };
             let headers = response.headers_mut();
-            headers.insert("retry-after", seconds.to_string().parse().expect("digits"));
+            headers.insert("retry-after", HeaderValue::from(seconds));
             headers.insert(
                 "anthropic-ratelimit-unified-status",
-                "rejected".parse().expect("ascii"),
+                HeaderValue::from_static("rejected"),
             );
             headers.insert(
                 "anthropic-ratelimit-unified-reset",
-                (deadline / 1_000).to_string().parse().expect("digits"),
+                HeaderValue::from(deadline / 1_000),
             );
             if let Ok(value) = claim.parse() {
                 headers.insert("anthropic-ratelimit-unified-representative-claim", value);
@@ -67,10 +68,7 @@ pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) 
             );
             response.headers_mut().insert(
                 "retry-after",
-                whole_seconds(*deadline, now)
-                    .to_string()
-                    .parse()
-                    .expect("digits"),
+                HeaderValue::from(whole_seconds(*deadline, now)),
             );
             response
         }
@@ -100,7 +98,7 @@ pub(crate) fn pool_moved_response(request_id: &str) -> Response {
     let mut response = exhaustion_response(&Exhaustion::Untimed, 0, request_id);
     response
         .headers_mut()
-        .insert("retry-after", "1".parse().expect("digits"));
+        .insert("retry-after", HeaderValue::from_static("1"));
     response
 }
 
