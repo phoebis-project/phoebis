@@ -2315,9 +2315,6 @@ fn run(
                 .or_else(|| failed_over.map(|f| (f.from_account_id.clone(), f.reason.to_string()))),
             moving.as_ref().or(failed_over.map(|f| &f.row)),
         );
-        let lane = row.lane.clone();
-        let entrypoint = row.entrypoint.clone();
-        let effort = Some(row.effort.clone()).filter(|effort| !effort.is_empty());
         rec.pin_written = Some(PinWritten {
             action: if migrated.is_some() {
                 "moved"
@@ -2325,7 +2322,7 @@ fn run(
                 "created"
             },
             epoch,
-            lane: lane.clone(),
+            lane: row.lane.clone(),
             refresh_stamped: true,
             hashes_stamped: request.static_hash.is_some() || !request.boundaries.is_empty(),
         });
@@ -2341,18 +2338,10 @@ fn run(
             );
         }
         let first_seen = state.note_first_seen(&row, request.now);
+        let handed = pin_ref(&row);
         writes.push(StateWrite::UpsertPin(row));
         writes.extend(first_seen.map(StateWrite::InsertFirstSeen));
-        PinRef {
-            key_id: request.key_id.clone(),
-            session_id: session.to_string(),
-            agent_id: request.agent_id.clone(),
-            model: request.canonical_model.clone(),
-            epoch,
-            lane,
-            entrypoint,
-            effort,
-        }
+        handed
     });
     let mut trace_skipped: Vec<Skipped> = obstacles
         .iter()
@@ -5350,9 +5339,7 @@ fn renew(
         renewed.entrypoint = request.entrypoint.clone().unwrap_or_default();
         renewed.effort = request.effort.clone().unwrap_or_default();
     }
-    let lane = renewed.lane.clone();
-    let entrypoint = renewed.entrypoint.clone();
-    let effort = Some(renewed.effort.clone()).filter(|effort| !effort.is_empty());
+    let handed = pin_ref(&renewed);
     let (refresh_stamped, hashes_stamped) = (
         verdict == Warmth::Refresh,
         verdict != Warmth::Untouched && chained,
@@ -5367,7 +5354,7 @@ fn renew(
         "renewed",
         vec![
             account_fact(&current.account_id),
-            Fact::text("lane", lane.as_str()),
+            Fact::text("lane", handed.lane.as_str()),
             Fact::bool("refresh_stamped", refresh_stamped),
             Fact::bool("hashes_stamped", hashes_stamped),
         ],
@@ -5375,7 +5362,7 @@ fn renew(
     rec.pin_written = Some(PinWritten {
         action: "renewed",
         epoch: current.epoch,
-        lane: lane.clone(),
+        lane: handed.lane.clone(),
         refresh_stamped,
         hashes_stamped,
     });
@@ -5390,16 +5377,7 @@ fn renew(
     Selection {
         account: selected_row(snapshot, &current.account_id),
         upstream_model: candidate.upstream_model.clone(),
-        pin: Some(PinRef {
-            key_id: current.key_id.clone(),
-            session_id: current.session_id.clone(),
-            agent_id: current.agent_id.clone(),
-            model: current.model.clone(),
-            epoch: current.epoch,
-            lane,
-            entrypoint,
-            effort,
-        }),
+        pin: Some(handed),
         migrated: None,
         in_overage: state.in_overage(&current.account_id, now, fallback_ms),
         trace: SelectionTrace {
@@ -5412,6 +5390,20 @@ fn renew(
         left: previous_landing
             .filter(|account| *account != current.account_id)
             .map(String::from),
+    }
+}
+
+/// The pin a selection hands out as the row it placed or renewed holds it.
+fn pin_ref(row: &PinRow) -> PinRef {
+    PinRef {
+        key_id: row.key_id.clone(),
+        session_id: row.session_id.clone(),
+        agent_id: row.agent_id.clone(),
+        model: row.model.clone(),
+        epoch: row.epoch,
+        lane: row.lane.clone(),
+        entrypoint: row.entrypoint.clone(),
+        effort: Some(row.effort.clone()).filter(|effort| !effort.is_empty()),
     }
 }
 
