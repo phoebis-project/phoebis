@@ -1,6 +1,7 @@
 //! What a probe replays: the request body with its output controls zeroed and its `safeguards` member cut, the headers
 //! the bus published, and the TTL the body asks for. The output-control exclusions are the Go engine's.
 
+use phoebis_cch::Stamp;
 use serde_json::Value;
 
 use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
@@ -126,8 +127,9 @@ pub fn make_recipe(
     // shape check, so a `max_tokens` that is no positive number stays an unsupported shape.
     let decoded =
         |name: &str| phoebis_cch::top_level_member_count(body, name).map_err(|_| "invalid_request");
-    let stamp_hidden =
-        phoebis_cch::decoded_stamp_count(body) > usize::from(phoebis_cch::find_cch(body).is_some());
+    let stamp = phoebis_cch::stamp(body);
+    let stamp_hidden = phoebis_cch::decoded_stamp_count(body)
+        > usize::from(matches!(stamp, Stamp::Placeholder(_) | Stamp::Hash(_)));
     let stream_hidden = decoded("stream")?
         > usize::from(phoebis_cch::bool_member_span(body, &["stream"]).is_some());
     let max_tokens_hidden = decoded("max_tokens")?
@@ -180,8 +182,7 @@ pub fn make_recipe(
         return Err("invalid_model");
     }
     // The relay's own rule for what counts as a client hash, so a probe is re-signed exactly where its request was.
-    let client_hash =
-        phoebis_cch::find_cch(body).is_some() && !phoebis_cch::carries_only_the_placeholder(body);
+    let client_hash = matches!(stamp, Stamp::Hash(_));
     let mut edited = body.to_vec();
     let (start, end) =
         phoebis_cch::number_member_span(&edited, &["max_tokens"]).ok_or("invalid_request")?;

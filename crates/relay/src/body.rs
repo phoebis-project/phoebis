@@ -1,6 +1,8 @@
 //! The in-place body edits: the bound account's identity, the model the upstream is asked for, the billing hash
 //! that has to follow both, and the first-party fields a reduced-shape request lacks.
 
+use phoebis_cch::Stamp;
+
 use crate::billing::{restore_billing_line, CarriedVersion, Restore};
 use crate::identity::is_valid_id;
 use crate::memory::Injected;
@@ -178,7 +180,7 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
     }
     // Read before any edit moves the line: a client hash is checked and re-signed, the client's own placeholder
     // (its unpatched paths send `00000`, which the server accepts) is neither.
-    let client_hash = carries_a_stamp(body)? && !phoebis_cch::carries_only_the_placeholder(body);
+    let client_hash = matches!(stamp_of(body)?, Stamp::Hash(_));
     // Judged at admission on the body the client sent; a leg never meets a drift.
     debug_assert!(
         matches!(drift(body), Ok(None)),
@@ -541,17 +543,14 @@ fn detach_diagnostics(body: &mut Vec<u8>) -> bool {
 /// cannot read at all; that counts as drift rather than as a body carrying no hash. Errs as `carries_a_stamp`
 /// errs, on a stamp only the decoded walk reaches.
 pub(crate) fn drift(body: &[u8]) -> Result<Option<&'static str>, RelayError> {
-    if !carries_a_stamp(body)? {
-        return Ok(None);
-    }
-    let Some(location) = phoebis_cch::find_cch(body) else {
-        return Ok(Some("hash"));
+    let location = match stamp_of(body)? {
+        Stamp::None | Stamp::Placeholder(_) => return Ok(None),
+        Stamp::Unreadable => return Ok(Some("hash")),
+        Stamp::Hash(location) => location,
     };
-    if phoebis_cch::carries_only_the_placeholder(body) {
-        return Ok(None);
-    }
     let digits = location.digits_start..location.digits_start + CCH_DIGITS;
-    let signed = phoebis_cch::sign(body)?;
+    let mut signed = body.to_vec();
+    phoebis_cch::sign_at(&mut signed, &location)?;
     Ok((signed[digits.clone()] != body[digits]).then_some("hash"))
 }
 
@@ -580,21 +579,22 @@ pub(crate) fn version_drift(body: &[u8], check: VersionCheck<'_>) -> Option<&'st
     (!reproduced).then_some("version_suffix")
 }
 
-/// Whether the billing block claims a hash, as the raw walk the restamp edits through reads `system[0].text`.
+/// Whether the billing block claims a hash, as the raw walk the restamp edits through reads `system[0].text`, erring
+/// as `stamp_of` errs.
+pub(crate) fn carries_a_stamp(body: &[u8]) -> Result<bool, RelayError> {
+    Ok(!matches!(stamp_of(body)?, Stamp::None))
+}
+
+/// The billing block's stamp as the raw walk the restamp edits through reads `system[0].text`.
 /// `Err(BodyShape(BillingStamp))` when the decoded walk, which sees a key spelled with an escape, finds a stamp
 /// the raw walk cannot reach: edited, such a body would carry the client's hash over bytes it was not computed
 /// for; unedited, a hash nothing verified.
-pub(crate) fn carries_a_stamp(body: &[u8]) -> Result<bool, RelayError> {
-    let raw = phoebis_cch::string_member_span(body, &["system", "0", "text"]).is_some_and(
-        |(start, end)| {
-            let text = &body[start..end];
-            text.starts_with(BILLING_BLOCK) && find(text, b"cch=").is_some()
-        },
-    );
-    if phoebis_cch::decoded_stamp_count(body) > usize::from(raw) {
+fn stamp_of(body: &[u8]) -> Result<Stamp, RelayError> {
+    let stamp = phoebis_cch::stamp(body);
+    if phoebis_cch::decoded_stamp_count(body) > usize::from(!matches!(stamp, Stamp::None)) {
         return Err(RelayError::BodyShape(BodyMember::BillingStamp));
     }
-    Ok(raw)
+    Ok(stamp)
 }
 
 fn starts_with_object(body: &[u8]) -> bool {

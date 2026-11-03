@@ -32,11 +32,33 @@ pub struct CchLocation {
     pub line: (usize, usize),
 }
 
+/// What the billing line in `system[0].text` stamps, read in one raw walk, so every caller judges a stamp by one rule.
+pub enum Stamp {
+    /// No billing line, or one that holds no `cch=`.
+    None,
+    /// A billing line holding a `cch=` whose digits `find_cch` cannot read.
+    Unreadable,
+    /// The client's unsigned placeholder as the line's only `cch=`, which claims no hash to verify or re-sign.
+    Placeholder(CchLocation),
+    /// Every other readable stamp: a hash to verify and re-sign.
+    Hash(CchLocation),
+}
+
 /// Finds the five digits after `cch=` inside the top-level `system[0].text`, when that text is a billing header.
 ///
 /// The span comes from the scanner, not from a search for the text: a tool-use input can carry its own `"system"`
 /// member holding a string that matches the billing header, and it can sit earlier in the body than the real one.
 pub fn find_cch(body: &[u8]) -> Option<CchLocation> {
+    let (line, digits_start) = billing_line(body)?;
+    Some(CchLocation {
+        digits_start: digits_start?,
+        line,
+    })
+}
+
+/// The billing line's span, quotes included, and where the digits of its first readable `cch=` field start, `None`
+/// where `system[0].text` is no billing line.
+fn billing_line(body: &[u8]) -> Option<((usize, usize), Option<usize>)> {
     let (start, end) = string_member_span(body, &["system", "0", "text"])?;
     let raw = &body[start..end];
     if !raw.starts_with(b"\"x-anthropic-billing-header:") {
@@ -51,14 +73,30 @@ pub fn find_cch(body: &[u8]) -> Option<CchLocation> {
                 .iter()
                 .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(c))
         {
-            return Some(CchLocation {
-                digits_start: start + digits,
-                line: (start, end),
-            });
+            return Some(((start, end), Some(start + digits)));
         }
         from += rel + 4;
     }
-    None
+    Some(((start, end), None))
+}
+
+pub fn stamp(body: &[u8]) -> Stamp {
+    let Some((line, digits_start)) = billing_line(body) else {
+        return Stamp::None;
+    };
+    let Some(digits_start) = digits_start else {
+        return if find(&body[line.0..line.1], b"cch=").is_some() {
+            Stamp::Unreadable
+        } else {
+            Stamp::None
+        };
+    };
+    let location = CchLocation { digits_start, line };
+    if placeholder_alone(body, &location) {
+        Stamp::Placeholder(location)
+    } else {
+        Stamp::Hash(location)
+    }
 }
 
 /// The digits the client writes after `cch=` wherever its native patch does not run.
@@ -67,9 +105,10 @@ const PLACEHOLDER: &[u8; LEN] = b"00000";
 /// Whether the billing line's one and only `cch=` field is the client's unsigned placeholder, which claims no
 /// hash to verify or re-sign.
 pub fn carries_only_the_placeholder(body: &[u8]) -> bool {
-    let Some(location) = find_cch(body) else {
-        return false;
-    };
+    matches!(stamp(body), Stamp::Placeholder(_))
+}
+
+fn placeholder_alone(body: &[u8], location: &CchLocation) -> bool {
     if body[location.digits_start..location.digits_start + LEN] != *PLACEHOLDER {
         return false;
     }
@@ -760,13 +799,19 @@ pub fn sign(body: &[u8]) -> Result<Vec<u8>, CchError> {
     Ok(out)
 }
 
-/// Signs the body in place where it carries a stamp, answering whether it did. The digits are zeroed for the view and
-/// written back on an error, so a failed restamp hands the caller the body it passed in.
+/// Signs the body in place where it carries a stamp, answering whether it did, as `sign_at` signs it.
 pub fn restamp_if_present(body: &mut [u8]) -> Result<bool, CchError> {
-    let Some(loc) = find_cch(body) else {
+    let Some(location) = find_cch(body) else {
         return Ok(false);
     };
-    let digits = loc.digits_start..loc.digits_start + LEN;
+    sign_at(body, &location)?;
+    Ok(true)
+}
+
+/// Signs the stamp at `location` in place. The digits are zeroed for the view and written back on an error, so a
+/// failed signing hands the caller the body it passed in.
+pub fn sign_at(body: &mut [u8], location: &CchLocation) -> Result<(), CchError> {
+    let digits = location.digits_start..location.digits_start + LEN;
     let mut kept = [0; LEN];
     kept.copy_from_slice(&body[digits.clone()]);
     body[digits.clone()].copy_from_slice(PLACEHOLDER);
@@ -774,7 +819,7 @@ pub fn restamp_if_present(body: &mut [u8]) -> Result<bool, CchError> {
         Ok(view) => {
             let h = xxh64(&view, SEED) & 0xF_FFFF;
             body[digits].copy_from_slice(format!("{h:05x}").as_bytes());
-            Ok(true)
+            Ok(())
         }
         Err(error) => {
             body[digits].copy_from_slice(&kept);
