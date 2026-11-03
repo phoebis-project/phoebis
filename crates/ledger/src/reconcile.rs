@@ -13,7 +13,7 @@ use rusqlite::{params, params_from_iter, Connection, Row, Transaction};
 
 use crate::plan::{Funding, PlanTables};
 use crate::pricing::PriceRevisions;
-use crate::query::{price_usage, BurnSums, PricedAttempt, PRICED_ATTEMPT_COLUMNS};
+use crate::query::{in_list, price_usage, BurnSums, PricedAttempt, PRICED_ATTEMPT_COLUMNS};
 use crate::record::SampleSource;
 use crate::rollup::bucket_of;
 use crate::LedgerError;
@@ -587,18 +587,12 @@ pub fn read_reconciliations(
     now: i64,
 ) -> Result<Vec<ReconciliationRow>, LedgerError> {
     let mut binds = vec![Value::Integer(now - RECONCILIATION_RETENTION_MS)];
-    let filter = if accounts.is_empty() {
-        String::new()
-    } else {
-        binds.extend(accounts.iter().cloned().map(Value::Text));
-        format!(
-            " AND account_id IN ({})",
-            vec!["?"; accounts.len()].join(", ")
-        )
-    };
+    let mut clauses = vec!["window_end >= ?1".to_string()];
+    in_list("account_id", accounts, &mut binds, &mut clauses);
     let mut stmt = conn.prepare(&format!(
-        "SELECT {COLUMNS} FROM window_reconciliations WHERE window_end >= ?{filter} \
-         ORDER BY window_end DESC, account_id, window"
+        "SELECT {COLUMNS} FROM window_reconciliations WHERE {} \
+         ORDER BY window_end DESC, account_id, window",
+        clauses.join(" AND ")
     ))?;
     let rows = stmt.query_map(params_from_iter(binds), row_to_reconciliation)?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
