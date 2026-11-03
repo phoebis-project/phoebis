@@ -419,20 +419,20 @@ export function breakdownOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsG
 export function seriesOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsPoint[] {
   const fromMs = Date.parse(q.from);
   const toMs = Date.parse(q.to);
-  const bucketMs = bucketMsFor(toMs - fromMs);
-  const kept = rows.filter((r) => inQuery(r, q, fromMs, toMs));
-  const points: AnalyticsPoint[] = [];
-  // Buckets start on a whole multiple of their own width and run to the hour after the range ends, as the route's do.
-  for (let at = Math.floor(fromMs / bucketMs) * bucketMs; at < Math.ceil(toMs / HOUR) * HOUR; at += bucketMs) {
-    const inBucket = kept.filter((r) => Date.parse(r.hour) >= at && Date.parse(r.hour) < at + bucketMs);
-    points.push({ at: new Date(at).toISOString(), groups: groupsOf(inBucket, q) });
-  }
-  return points;
+  const { bucketMs, starts } = bucketsOf(q);
+  // Each row is placed in its bucket in one pass, and a bucket keeps the rows' input order, so its sums add as a scan
+  // of the whole list would. An index outside the starts names no bucket.
+  const byBucket = starts.map((): HourlyRollup[] => []);
+  for (const r of rows) if (inQuery(r, q, fromMs, toMs)) byBucket[Math.floor((Date.parse(r.hour) - starts[0]) / bucketMs)]?.push(r);
+  return starts.map((at, i) => ({ at: iso(at), groups: groupsOf(byBucket[i], q) }));
 }
 
 type Range = Pick<AnalyticsQuery, 'from' | 'to'>;
 
-/** The bucket starts the analytics routes answer a range in, and each bucket's width. */
+/**
+ * The bucket starts the analytics routes answer a range in, and each bucket's width. Buckets start on a whole
+ * multiple of their own width and run to the hour after the range ends, as the route's do.
+ */
 function bucketsOf(range: Range): { bucketMs: number; starts: number[] } {
   const fromMs = Date.parse(range.from);
   const toMs = Date.parse(range.to);
@@ -589,12 +589,23 @@ const FIT_TURNS = ['fits', 'fits', 'rewrite_only', 'fits', 'least_bad', 'fits', 
  */
 export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], range: Range): RewritesAnswer {
   const { bucketMs, starts } = bucketsOf(range);
+  // Placed in their buckets in one pass, as the series places its rows: the rollups that moved a pin in, each with its
+  // parsed hour, and the requests that waited on a slow-down, each with its summed wait.
+  const moved = starts.map((): { hour: number; r: AccountRollup }[] => []);
+  for (const r of rollups) {
+    if (r.pins.migratedIn === 0) continue;
+    const hour = Date.parse(r.hour);
+    moved[Math.floor((hour - starts[0]) / bucketMs)]?.push({ hour, r });
+  }
+  const slowedMs = starts.map((): number[] => []);
+  for (const r of requests) {
+    const slowed = (r.held?.waits ?? []).filter((w) => w.reason === 'slow_down');
+    if (slowed.length > 0) slowedMs[Math.floor((Date.parse(r.at) - starts[0]) / bucketMs)]?.push(slowed.reduce((n, w) => n + w.heldMs, 0));
+  }
   const movesByReasonAndFit: Record<string, Record<string, number>> = {};
-  const points = starts.map((at): RewritePoint => {
+  const points = starts.map((at, i): RewritePoint => {
     let rewriteTokens = 0;
-    for (const r of rollups) {
-      const hour = Date.parse(r.hour);
-      if (hour < at || hour >= at + bucketMs || r.pins.migratedIn === 0) continue;
+    for (const { hour, r } of moved[i]) {
       const turn = Math.floor(hour / HOUR);
       rewriteTokens += r.pins.migratedIn * (18_000 + (turn % 5) * 9_000);
       const reason = MOVE_TURNS[turn % MOVE_TURNS.length];
@@ -605,18 +616,7 @@ export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], ran
     return { at: iso(at), rewriteTokens };
   });
   const moves = Object.fromEntries(Object.entries(movesByReasonAndFit).map(([reason, fits]) => [reason, Object.values(fits).reduce((n, x) => n + x, 0)]));
-  const held = starts.map((at): HeldPoint => {
-    let heldMs = 0;
-    let waited = 0;
-    for (const r of requests) {
-      const t = Date.parse(r.at);
-      const slowed = t >= at && t < at + bucketMs ? (r.held?.waits ?? []).filter((w) => w.reason === 'slow_down') : [];
-      if (slowed.length === 0) continue;
-      heldMs += slowed.reduce((n, w) => n + w.heldMs, 0);
-      waited += 1;
-    }
-    return { at: iso(at), heldMs, requests: waited };
-  });
+  const held = starts.map((at, i): HeldPoint => ({ at: iso(at), heldMs: slowedMs[i].reduce((n, x) => n + x, 0), requests: slowedMs[i].length }));
   return { held, moves, movesByReasonAndFit, points };
 }
 
