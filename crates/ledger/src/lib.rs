@@ -84,8 +84,8 @@ pub use query::{
 pub use query::{guardrail_sample_page, request_body, SampleRow, SampleSubject};
 pub use query::{list_request_page, refusal_categories, RequestPage};
 pub use quota::{
-    lead_over_pace, polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled,
-    POLL_INTERVAL, PROFILE_EVERY_POLLS,
+    lead_over_pace, polled, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL,
+    PROFILE_EVERY_POLLS,
 };
 pub use reconcile::{
     newest_rows, read_reconciliations, reconcile, ReconciliationRow, MIN_RISE, RATIO_HIGH,

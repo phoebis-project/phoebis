@@ -99,21 +99,6 @@ fn warn_unpriced_tier(tables: &PlanTables, at: i64, account_id: &str, plan: &str
     }
 }
 
-pub fn samples_from_head(
-    account_id: &str,
-    headers: &[(String, String)],
-    observed_at: i64,
-) -> (Vec<QuotaSampleRecord>, Option<ExtraUsageSampleRecord>) {
-    let head = ResponseHead {
-        status: 200,
-        headers: headers.to_vec(),
-    };
-    match UnifiedHeaders::parse(&head) {
-        Some(unified) => samples_from_unified(account_id, &unified, &head, observed_at, false),
-        None => (Vec::new(), None),
-    }
-}
-
 /// The assembler's entry: it parsed the head once for the attempt row and hands that parse here rather than
 /// paying for a second clone and parse on every response head.
 pub(crate) fn samples_from_unified(
@@ -1053,7 +1038,12 @@ mod tests {
         .iter()
         .map(|(n, v)| (n.to_string(), v.to_string()))
         .collect();
-        let (quota, extra) = samples_from_head("a", &headers, 1_234_567);
+        let head = ResponseHead {
+            status: 200,
+            headers,
+        };
+        let unified = UnifiedHeaders::parse(&head).unwrap();
+        let (quota, extra) = samples_from_unified("a", &unified, &head, 1_234_567, false);
         assert_eq!(
             quota
                 .iter()
@@ -1089,7 +1079,6 @@ mod tests {
             ),
             (true, Some(true), Some(0.5), Some(3_000_000), None, "head")
         );
-        assert_eq!(samples_from_head("a", &[], 1), (vec![], None));
     }
 
     #[test]
