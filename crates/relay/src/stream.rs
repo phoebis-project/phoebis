@@ -457,18 +457,16 @@ impl Publish {
 
     /// The phases of the complete events the parser holds.
     fn parsed(&mut self, waiting: &mut Waiting) -> Vec<Phase> {
-        let Some(parser) = self.parser.as_mut() else {
+        // Taken out while `phase_of` borrows the whole struct, and put back once the parser holds no complete event.
+        let Some(mut parser) = self.parser.take() else {
             return Vec::new();
         };
-        // Collected first: `phase_of` borrows the whole struct, so the parser's borrow has to end before it runs.
-        let mut events = Vec::new();
+        let mut phases = Vec::new();
         while let Some(event) = parser.next_event() {
-            events.push(event);
+            phases.extend(self.phase_of(&event, waiting));
         }
-        events
-            .iter()
-            .filter_map(|event| self.phase_of(event, waiting))
-            .collect()
+        self.parser = Some(parser);
+        phases
     }
 
     fn phase_of(&mut self, event: &SseEvent, waiting: &mut Waiting) -> Option<Phase> {
