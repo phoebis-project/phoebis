@@ -2,7 +2,7 @@ import type { Account, MemberEligibility, Pool, RateLimitWindow, Session } from 
 import { lookup } from './counts';
 import { fmtDuration, instant } from './format';
 import { endOf, minuteSpan, windowOf } from './quota';
-import { speedWord } from './selection';
+import { speedWord, windingDown } from './selection';
 
 export type SheddingPreset = 'balanced' | 'conservative' | 'custom' | 'fast';
 
@@ -200,7 +200,7 @@ export function shedPreview(
       ({ account, eligible }) =>
         account.id !== source &&
         eligible &&
-        (endOf(account, now) ?? Number.POSITIVE_INFINITY) - pool.windDownMinutes * 60_000 > now &&
+        !windingDown(pool, endOf(account, now), now) &&
         (account.kind === 'api_key'
           ? bucketRoom(account, now)
           : windowsOf(model)

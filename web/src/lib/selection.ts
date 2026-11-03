@@ -117,15 +117,17 @@ function keyOf(member: PoolMember | undefined, strategy: PoolStrategy): number {
   return 0;
 }
 
+/** Whether a member is inside the pool's wind-down before its window's end, which a member with no end never is. */
+export const windingDown = (pool: Pick<Pool, 'windDownMinutes'>, end: number | null, now: number): boolean => end !== null && now >= end - pool.windDownMinutes * 60_000;
+
 /**
  * Where a member falls in the router's fall-through for a fresh session, lowest first: not winding down, then winding
  * down. The router drops the group from the whole selection set before it picks a tier, so it trails every better
  * member of every tier.
  */
 function resortOf(pool: Pool, account: Account, now: number): { lastResort: LastResort | null; order: number } {
-  const end = endOf(account, now);
-  const windingDown = end !== null && now >= end - pool.windDownMinutes * 60_000;
-  return { lastResort: windingDown ? 'winding_down' : null, order: windingDown ? 2 : 0 };
+  const winding = windingDown(pool, endOf(account, now), now);
+  return { lastResort: winding ? 'winding_down' : null, order: winding ? 2 : 0 };
 }
 
 /**
