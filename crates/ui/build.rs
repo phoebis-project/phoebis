@@ -12,9 +12,11 @@ mod build_support;
 #[path = "../router/build_commit.rs"]
 mod build_commit;
 
-use build_support::{bundle_stale, node_supported, parse_node_version, NODE_FLOOR};
+#[path = "placeholder_mark.rs"]
+mod placeholder_mark;
 
-const PLACEHOLDER_MARKER: &str = "<!-- phoebis-ui placeholder -->";
+use build_support::{bundle_stale, node_supported, parse_node_version, NODE_FLOOR};
+use placeholder_mark::PLACEHOLDER_MARK;
 
 /// Written inside `node_modules`, so wiping the directory takes the stamp with it.
 const CI_STAMP: &str = ".phoebis-npm-ci-stamp";
@@ -78,7 +80,7 @@ fn main() {
     // A placeholder is newer than every source the moment it is copied, so freshness alone would keep it for
     // ever. The marker makes it stale on every run that may build.
     let placeholder = std::fs::read_to_string(dist.join("index.html"))
-        .is_ok_and(|page| page.contains(PLACEHOLDER_MARKER));
+        .is_ok_and(|page| page.contains(PLACEHOLDER_MARK));
     let stale = bundle_stale(placeholder, built, sources, stamped.as_deref(), &commit);
     let skip = std::env::var_os("PHOEBIS_SKIP_UI_BUILD").is_some_and(|v| v == "1");
     if stale && !skip {

@@ -30,8 +30,11 @@ const NO_STORE: &str = "no-store";
 /// The API reference page's directory: the page at it and at its index, a JSON 404 for anything else under it.
 pub const REFERENCE_PATH: &str = "/api-reference";
 
-/// The comment the placeholder page carries and a built bundle never does; the build script reads it too.
-const PLACEHOLDER_MARK: &str = "<!-- phoebis-ui placeholder -->";
+/// The comment the placeholder page carries and a built bundle never does, in one file the build script includes too.
+#[path = "../placeholder_mark.rs"]
+mod placeholder_mark;
+
+use placeholder_mark::PLACEHOLDER_MARK;
 
 pub fn router() -> Router {
     Router::new().fallback(fallback)
