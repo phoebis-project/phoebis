@@ -183,7 +183,7 @@ const repeatedMember = (members: PoolInput['members']): string | null => {
 };
 
 /** The route's 409 for a member another pool holds, since an account belongs to one pool. */
-const heldElsewhere = (members: PoolInput['members'], pools: Pick<Pool, 'id' | 'members'>[], poolId: string): string | null => {
+const heldElsewhere = (members: PoolInput['members'], pools: { id: string; members: { accountId: string }[] }[], poolId: string): string | null => {
   for (const m of members) {
     const holder = pools.find((p) => p.id !== poolId && p.members.some((x) => x.accountId === m.accountId));
     if (holder) return `account ${m.accountId} is a member of pool ${holder.id}`;
@@ -339,7 +339,7 @@ const ledgerRollups = () => (emptyStore() ? [] : unpricedStory() ? [...ALL_ROLLU
  * prices nothing and falls inside the week. The keys' fold runs once at load, so the null lands at the read, and the
  * key's other figures stay the story's.
  */
-const unpricedKey = (k: ApiKey): ApiKey => {
+const unpricedKey = (k: Omit<ApiKey, 'guardrails' | 'poolGuardrails'>): Omit<ApiKey, 'guardrails' | 'poolGuardrails'> => {
   if (!unpricedStory() || k.id !== UNPRICED_REQUEST.keyId || Date.parse(k.createdAt) !== UNPRICED_REQUEST.keyGeneration) return k;
   const nulled = <S extends Pick<ApiKey['lifetime'], 'equivalent'>>(s: S): S => ({ ...s, equivalent: null });
   return { ...k, lifetime: nulled(k.lifetime), usage7d: nulled(k.usage7d) };
@@ -417,10 +417,10 @@ const eligibilityOf = (a: Account | undefined, policy: PoolInput['overagePolicy'
 /**
  * A written member as the route answers it: the kind, the burn, the Pace score and the speed read off the account, and
  * no spend, since the mock keeps no ledger to price one from. A member sent without a budget field has no budget over
- * that period. A save moves no pin, so a member the pool held keeps its pins and one it gains holds none yet.
+ * that period.
  */
-const writtenMember = (m: PoolInput['members'][number], account: Account | undefined, slowDown: boolean, eligible: (member: Omit<PoolMember, 'eligible'>) => MemberEligibility, activePins = 0): PoolMember => {
-  const member = { accountId: m.accountId, activePins, budgetDailyUsd: m.budgetDailyUsd ?? null, budgetMonthlyUsd: m.budgetMonthlyUsd ?? null, budgetUntil: null, kind: account?.kind ?? 'oauth', priority: m.priority, spends: [], ...servedFigures(m.accountId, Date.now(), slowDown) };
+const writtenMember = (m: PoolInput['members'][number], account: Account | undefined, slowDown: boolean, eligible: (member: Omit<PoolMember, 'activePins' | 'eligible'>) => MemberEligibility): Omit<PoolMember, 'activePins'> => {
+  const member = { accountId: m.accountId, budgetDailyUsd: m.budgetDailyUsd ?? null, budgetMonthlyUsd: m.budgetMonthlyUsd ?? null, budgetUntil: null, kind: account?.kind ?? 'oauth', priority: m.priority, spends: [], ...servedFigures(m.accountId, Date.now(), slowDown) };
   return { ...member, eligible: eligible(member) };
 };
 
@@ -520,19 +520,19 @@ export class MockApi implements Api {
   private guardrails: Guardrail[] = GUARDRAILS.map((g) => ({ ...g, revision: stampToken(1, g.updatedAt) }));
   // The live desktop key was issued under the id its deleted earlier holder had, so it is that id's second; every other
   // key of the story is its id's first.
-  private keys: ApiKey[] = KEYS.map((k) => ({ ...k, revision: stampToken((this.buriedKeys.get(k.id) ?? 0) + 1, k.updatedAt) }));
+  private keys: Omit<ApiKey, 'guardrails' | 'poolGuardrails'>[] = KEYS.map((k) => ({ ...k, revision: stampToken((this.buriedKeys.get(k.id) ?? 0) + 1, k.updatedAt) }));
   /** `label` is set on a pairing that creates its row at the confirm. The row's id is `accountId` either way. */
   private pairings = new Map<string, { accountId: string; label?: string; state: string }>();
   /** Set by the first replay, which lands the story's parked records. */
   private parkedLanded = false;
   // The route reads every member's kind and verdict afresh on each answer; the story's are read once, at load.
-  private pools: Omit<Pool, 'activePins' | 'keys' | 'warnings'>[] = POOLS.map((p) => ({
+  private pools: (Omit<Pool, 'activePins' | 'guardrails' | 'keys' | 'members' | 'warnings'> & { members: Omit<PoolMember, 'activePins'>[] })[] = POOLS.map((p) => ({
     ...p,
     // Every pool of the story is its id's first.
     revision: stampToken(1, p.updatedAt),
     members: p.members.map((m) => {
       const account = this.accounts.find((a) => a.id === m.accountId);
-      return { ...m, activePins: memberPins(new Set(this.keys.filter((k) => k.poolId === p.id).map((k) => k.id)), m.accountId), budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth', ...servedFigures(m.accountId, Date.now(), p.slowDown) };
+      return { ...m, budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth', ...servedFigures(m.accountId, Date.now(), p.slowDown) };
     }),
   }));
   private secretRng = createRng(MOCK_SEED);
@@ -552,7 +552,7 @@ export class MockApi implements Api {
    * The pool as the route answers it, with its keys listed from the key registry at the time of the read, and its
    * warnings the route's checks on the saved settings and the largest cohort among the pinned sessions under its keys.
    */
-  private poolView(p: Omit<Pool, 'activePins' | 'keys' | 'warnings'>): Pool {
+  private poolView(p: Omit<Pool, 'activePins' | 'guardrails' | 'keys' | 'members' | 'warnings'> & { members: Omit<PoolMember, 'activePins'>[] }): Pool {
     const keys = this.keys.filter((k) => k.poolId === p.id).map((k) => ({ enabled: k.enabled, id: k.id, label: k.name, prefix: k.prefix }));
     const ids = new Set(keys.map((k) => k.id));
     const cohort = Math.max(0, ...this.sessions.filter((s) => s.pinned && ids.has(s.keyId)).map((s) => s.agents));
@@ -566,7 +566,7 @@ export class MockApi implements Api {
    * The key as the route answers it, its own guardrails and its pool's read from the attachments at the time of the
    * read.
    */
-  private keyView(k: ApiKey): ApiKey {
+  private keyView(k: Omit<ApiKey, 'guardrails' | 'poolGuardrails'>): ApiKey {
     return { ...k, guardrails: this.guardrailRefs('keys', k.id), poolGuardrails: this.guardrailRefs('pools', k.poolId) };
   }
 
@@ -877,10 +877,8 @@ export class MockApi implements Api {
     if (refusal) throw new ApiError(400, refusal, null);
     const body = this.token(40);
     const secret = `phoebis-${body}`;
-    const key: ApiKey = {
+    const key: Omit<ApiKey, 'guardrails' | 'poolGuardrails'> = {
       ...KEY_SAMPLE,
-      guardrails: [],
-      poolGuardrails: [],
       id,
       name: input.name,
       prefix: secret.slice(0, 16),
@@ -920,10 +918,9 @@ export class MockApi implements Api {
     if (members) throw new ApiError(400, members, null);
     const held = heldElsewhere(input.members, this.pools, id);
     if (held) throw new ApiError(409, held, null);
-    const pool: Omit<Pool, 'activePins' | 'keys' | 'warnings'> = {
+    const pool: Omit<Pool, 'activePins' | 'guardrails' | 'keys' | 'members' | 'warnings'> & { members: Omit<PoolMember, 'activePins'>[] } = {
       ...POOL_SAMPLE,
       ...input,
-      guardrails: [],
       cost24h: 0,
       id,
       // From the members' kinds, as the router composes them, and nothing for a pool with no member.
@@ -1344,7 +1341,7 @@ export class MockApi implements Api {
     const key = this.keys.find((k) => k.id === id);
     if (!key) return Promise.reject(new ApiError(404, 'key not found', null));
     const secret = `phoebis-${this.token(40)}`;
-    const next: ApiKey = { ...key, prefix: secret.slice(0, 16), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2, ...restamp(key) };
+    const next: Omit<ApiKey, 'guardrails' | 'poolGuardrails'> = { ...key, prefix: secret.slice(0, 16), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2, ...restamp(key) };
     this.keys = this.keys.map((k) => (k.id === id ? next : k));
     return latency({ key: this.keyView(next), secret }, 300);
   }
@@ -1495,7 +1492,7 @@ export class MockApi implements Api {
     const expiresAt = expiry === undefined ? current.expiresAt : expiry;
     // The status is the decoder's fold of the stored flags, so a key switched off or lapsed reads that way at once.
     const status = current.status === 'revoked' ? 'revoked' : expiresAt !== null && Date.parse(expiresAt) <= Date.now() ? 'expired' : rest.enabled ? 'active' : 'disabled';
-    const next: ApiKey = { ...current, ...rest, expiresAt, status, ...restamp(current) };
+    const next: Omit<ApiKey, 'guardrails' | 'poolGuardrails'> = { ...current, ...rest, expiresAt, status, ...restamp(current) };
     this.keys = this.keys.map((k, i) => (i === idx ? next : k));
     if (ownIds !== undefined) this.setSubjectGuardrails('keys', id, ownIds);
     return latency(this.keyView(next), 250);
@@ -1539,8 +1536,7 @@ export class MockApi implements Api {
     const missing = guardrailIds?.find((g) => !this.guardrails.some((x) => x.id === g));
     if (missing !== undefined) return Promise.reject(new ApiError(404, `guardrail ${missing} not found`, null));
     const verdict = new Map(current.members.map((m) => [m.accountId, m.eligible]));
-    const pinned = new Map(current.members.map((m) => [m.accountId, m.activePins]));
-    const next: Omit<Pool, 'activePins' | 'keys' | 'warnings'> = {
+    const next: Omit<Pool, 'activePins' | 'guardrails' | 'keys' | 'members' | 'warnings'> & { members: Omit<PoolMember, 'activePins'>[] } = {
       ...current,
       ...fields,
       // From the saved members' kinds, as the router composes them on every save.
@@ -1550,7 +1546,7 @@ export class MockApi implements Api {
       members: input.members.map((m) => {
         const account = this.accounts.find((a) => a.id === m.accountId);
         const kept = verdict.get(m.accountId) ?? 'eligible';
-        return writtenMember(m, account, input.slowDown, (member) => (kept === 'budget' ? eligibilityOf(account, input.overagePolicy, member) : kept), pinned.get(m.accountId));
+        return writtenMember(m, account, input.slowDown, (member) => (kept === 'budget' ? eligibilityOf(account, input.overagePolicy, member) : kept));
       }),
       ...restamp(current),
     };

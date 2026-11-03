@@ -36,10 +36,10 @@ export function servedFigures(accountId: string, now: number, slowDown: boolean)
 }
 /**
  * The route lists a pool's keys from the key registry, so the story seeds none on the pool itself. Its pins are its
- * members' sum, which the pool view reads, so the seed holds no figure of its own. Its warnings are the route's checks
- * on its settings, which the mock computes as the route does.
+ * members' sum, which the pool view reads, so the seed holds no figure of its own. Its guardrails are the attachments'
+ * and its warnings the route's checks on its settings, both of which the pool view reads as the route does.
  */
-export type PoolSeed = Omit<Pool, 'activePins' | 'keys' | 'members' | 'warnings'> & { members: MemberSeed[] };
+export type PoolSeed = Omit<Pool, 'activePins' | 'guardrails' | 'keys' | 'members' | 'warnings'> & { members: MemberSeed[] };
 
 const unbudgeted = (accountId: string, priority: number): MemberSeed => ({ accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority, spends: [] });
 
@@ -130,7 +130,6 @@ const UNTIL_DRAWN: Pick<PoolSeed, 'billed24h' | 'cost24h' | 'equivalent24h' | 'r
 const POOL_ROWS: PoolSeed[] = [
   {
     ...POOL_SAMPLE,
-    guardrails: [],
     id: 'all',
     name: 'all',
     status: 'degraded',
@@ -207,7 +206,6 @@ const POOL_ROWS: PoolSeed[] = [
   },
   {
     ...POOL_SAMPLE,
-    guardrails: [],
     id: 'jobs',
     name: 'jobs',
     // Its one member has spent its daily budget, which leaves the pool nothing to route to until the day ends.
@@ -261,7 +259,6 @@ const POOL_ROWS: PoolSeed[] = [
   },
   {
     ...POOL_SAMPLE,
-    guardrails: [],
     // A subscription member and the API-key annex a round moves studio's sessions to, behind a key that admits any
     // client.
     id: 'work',
@@ -303,7 +300,6 @@ const POOL_ROWS: PoolSeed[] = [
   },
   {
     ...POOL_SAMPLE,
-    guardrails: [],
     // The contract seat alone, a metered source the router never sheds: it reads no plan window for a ceiling to hold.
     id: 'contract',
     name: 'contract',
@@ -326,7 +322,6 @@ const POOL_ROWS: PoolSeed[] = [
   },
   {
     ...POOL_SAMPLE,
-    guardrails: [],
     // The approved Ultra seat alone, kept apart for the workshop's clients on a key of their own, so its week serves
     // their sessions and nobody else's. One member has nowhere to shed or slow a session into.
     id: 'workshop',
@@ -359,12 +354,11 @@ export const poolById = new Map(POOLS.map((p) => [p.id, p]));
 // Each key's 7-day usage derives from the rollups in `requests.ts`. A lifetime is the story's own where the key is
 // older than the month the rollups hold, raised there to their sum; a key created inside that month carries none,
 // so its lifetime is theirs.
-// MockApi restamps revision at construction, so the served figure is not this seed's.
-export const KEYS: ApiKey[] = [
+// MockApi restamps revision at construction, so the served figure is not this seed's. A key's guardrails and its pool's
+// are the attachments', which the key view reads.
+export const KEYS: Omit<ApiKey, 'guardrails' | 'poolGuardrails'>[] = [
   {
     ...KEY_SAMPLE,
-    guardrails: [],
-    poolGuardrails: [],
     id: 'desktop',
     autoModeServer: null,
     name: 'desktop',
@@ -392,8 +386,6 @@ export const KEYS: ApiKey[] = [
   },
   {
     ...KEY_SAMPLE,
-    guardrails: [],
-    poolGuardrails: [],
     id: 'laptop',
     autoModeServer: null,
     name: 'laptop',
@@ -423,8 +415,6 @@ export const KEYS: ApiKey[] = [
   },
   {
     ...KEY_SAMPLE,
-    guardrails: [],
-    poolGuardrails: [],
     id: 'batch',
     autoModeServer: null,
     name: 'batch',
@@ -451,8 +441,6 @@ export const KEYS: ApiKey[] = [
   },
   {
     ...KEY_SAMPLE,
-    guardrails: [],
-    poolGuardrails: [],
     id: 'ci',
     autoModeServer: null,
     name: 'ci',
@@ -482,8 +470,6 @@ export const KEYS: ApiKey[] = [
   },
   {
     ...KEY_SAMPLE,
-    guardrails: [],
-    poolGuardrails: [],
     id: 'notebook',
     // Off under a pool that is off, so the key dialog reads an explicit key value beside the pool's.
     autoModeServer: false,
@@ -509,8 +495,6 @@ export const KEYS: ApiKey[] = [
   },
   {
     ...KEY_SAMPLE,
-    guardrails: [],
-    poolGuardrails: [],
     id: 'fleet',
     autoModeServer: null,
     name: 'fleet',
@@ -535,8 +519,6 @@ export const KEYS: ApiKey[] = [
   },
   {
     ...KEY_SAMPLE,
-    guardrails: [],
-    poolGuardrails: [],
     id: 'bench',
     autoModeServer: null,
     name: 'bench',
