@@ -14,10 +14,14 @@ pub fn top_edge() -> f64 {
     MAX
 }
 
+fn edge(i: usize) -> f64 {
+    MIN * ratio().powi(i as i32)
+}
+
 pub fn bucket_edges() -> [f64; BUCKET_COUNT + 1] {
     let mut edges = [0.0; BUCKET_COUNT + 1];
-    for (i, edge) in edges.iter_mut().enumerate() {
-        *edge = MIN * ratio().powi(i as i32);
+    for (i, slot) in edges.iter_mut().enumerate() {
+        *slot = edge(i);
     }
     edges
 }
@@ -49,7 +53,8 @@ impl Histogram {
     }
 
     pub fn record(&mut self, value: f64) {
-        self.0[bucket_index(value)] = self.0[bucket_index(value)].saturating_add(1);
+        let i = bucket_index(value);
+        self.0[i] = self.0[i].saturating_add(1);
     }
 
     pub fn merge(&mut self, other: &Histogram) {
@@ -80,15 +85,14 @@ impl Histogram {
             return None;
         }
         let target = ((p * total as f64).ceil() as u64).max(1);
-        let edges = bucket_edges();
         let mut seen = 0u64;
         for (i, &n) in self.0.iter().enumerate() {
             seen += n as u64;
             if seen >= target {
-                return Some((edges[i] * edges[i + 1]).sqrt());
+                return Some((edge(i) * edge(i + 1)).sqrt());
             }
         }
-        Some((edges[BUCKET_COUNT - 1] * edges[BUCKET_COUNT]).sqrt())
+        Some((edge(BUCKET_COUNT - 1) * edge(BUCKET_COUNT)).sqrt())
     }
 
     pub fn to_le_bytes(&self) -> Vec<u8> {
