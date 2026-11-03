@@ -26,8 +26,7 @@ use crate::record::{
 };
 use crate::select::{
     decide, pace_of, passes_reset, projection_of, projections_of, release_reasons, routed_agent,
-    BurnRead, Decided, FailedOver, MigrateReason, Refusal, SelectRequest, SelectResult,
-    RATE_LIMIT_REASON,
+    BurnRead, Decided, FailedOver, Refusal, SelectRequest, SelectResult, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
@@ -3057,47 +3056,46 @@ impl Task {
                     }
                     (Some(old), Some(new)) if old.epoch != new.epoch => {
                         if let SelectResult::Selected(selection) = &result {
-                            let reason = selection
-                                .migrated
-                                .map(MigrateReason::as_str)
-                                .unwrap_or("expired");
-                            if reason == "expired" {
-                                pin_events.push(RouterEvent::PinExpired {
-                                    key_id: k.clone(),
-                                    session_id: s.clone(),
-                                    agent_id: ag.clone(),
-                                    model: m.clone(),
-                                    account_id: old.account_id.clone(),
-                                    reasons: released.clone(),
-                                    at: now,
-                                });
-                                pin_events.push(RouterEvent::PinCreated {
-                                    key_id: k.clone(),
-                                    session_id: s.clone(),
-                                    agent_id: ag.clone(),
-                                    model: m.clone(),
-                                    account_id: new.account_id.clone(),
-                                    epoch: new.epoch,
-                                    at: now,
-                                });
-                            } else {
-                                let (fit, runway_ms, binding) =
-                                    destination_fit(&record, &new.account_id);
-                                pin_events.push(RouterEvent::PinMigrated {
-                                    key_id: k.clone(),
-                                    session_id: s.clone(),
-                                    agent_id: ag.clone(),
-                                    model: m.clone(),
-                                    from_account: old.account_id.clone(),
-                                    to_account: new.account_id.clone(),
-                                    epoch: new.epoch,
-                                    reason: reason.into(),
-                                    fit,
-                                    runway_ms,
-                                    binding,
-                                    cause: None,
-                                    at: now,
-                                });
+                            match selection.migrated {
+                                None => {
+                                    pin_events.push(RouterEvent::PinExpired {
+                                        key_id: k.clone(),
+                                        session_id: s.clone(),
+                                        agent_id: ag.clone(),
+                                        model: m.clone(),
+                                        account_id: old.account_id.clone(),
+                                        reasons: released.clone(),
+                                        at: now,
+                                    });
+                                    pin_events.push(RouterEvent::PinCreated {
+                                        key_id: k.clone(),
+                                        session_id: s.clone(),
+                                        agent_id: ag.clone(),
+                                        model: m.clone(),
+                                        account_id: new.account_id.clone(),
+                                        epoch: new.epoch,
+                                        at: now,
+                                    });
+                                }
+                                Some(reason) => {
+                                    let (fit, runway_ms, binding) =
+                                        destination_fit(&record, &new.account_id);
+                                    pin_events.push(RouterEvent::PinMigrated {
+                                        key_id: k.clone(),
+                                        session_id: s.clone(),
+                                        agent_id: ag.clone(),
+                                        model: m.clone(),
+                                        from_account: old.account_id.clone(),
+                                        to_account: new.account_id.clone(),
+                                        epoch: new.epoch,
+                                        reason: reason.as_str().into(),
+                                        fit,
+                                        runway_ms,
+                                        binding,
+                                        cause: None,
+                                        at: now,
+                                    });
+                                }
                             }
                         }
                     }
@@ -3605,10 +3603,9 @@ impl Task {
                 row.scope = self.state.canonical_scope(&row.scope);
                 // A fast-lane row moves the session for fast mode alone; the name tells the drawer it was no
                 // rate limit on the account's standard traffic.
-                let moved = match row.scope {
-                    CooldownScope::Fast | CooldownScope::FastCredits => "fast_lane",
-                    CooldownScope::Account | CooldownScope::Model(_) => "cooldown",
-                };
+                let fast_lane =
+                    matches!(row.scope, CooldownScope::Fast | CooldownScope::FastCredits);
+                let moved = if fast_lane { "fast_lane" } else { "cooldown" };
                 let cause = MoveCause::Cooldown {
                     scope: row.scope.to_string(),
                     reason: row.reason.clone(),
@@ -3637,7 +3634,7 @@ impl Task {
                     };
                     // A fast-lane row refuses the fast lane alone: once a later turn moved the pin to another
                     // lane, the session no longer asks for what the row refuses, so a late refusal leaves it.
-                    let left_lane = moved == "fast_lane"
+                    let left_lane = fast_lane
                         && self.state.pin(&key).is_some_and(|current| {
                             current.lane != self.state.canonical_lane(&pin.lane)
                         });
