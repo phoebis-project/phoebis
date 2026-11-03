@@ -79,7 +79,7 @@ struct Cutoffs {
     sample: Option<i64>,
 }
 
-/// The requests' cutoff, `None` at a zero `retention_days`; the registry's history purge and the band refold read the
+/// The requests' cutoff, `None` at a zero `retention_days`. The registry's history purge and the band refold read the
 /// same one.
 pub(crate) fn request_cutoff(retention_days: u32, now: i64) -> Option<i64> {
     (retention_days != 0).then(|| now - retention_days as i64 * DAY_MS)
