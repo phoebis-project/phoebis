@@ -18,7 +18,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { accountHref, addressWindow, ANALYTICS_CODEC, type AnalyticsAddress } from '@/lib/address';
-import { ALLOWANCE_WEEKS, allowanceColumnWord, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, type AllowanceFigure } from '@/lib/allowance';
+import { ALLOWANCE_WEEKS, allowanceColumnWord, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
 import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, hintPlan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, shareHint, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
@@ -29,14 +29,13 @@ import { effectiveInterval, readEnd, spanEnded } from '@/lib/follow';
 import { SESSION_CHARS, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useHashSection, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
-import { readWindows } from '@/lib/quota';
 import { REFUSED_TITLE } from '@/lib/requests';
 import { CLIENT_PATTERNS_PLAIN, linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { words } from '@/lib/routingLog';
 import { HOUR } from '@/lib/time';
 import { plainOutputOf } from '@/lib/tokenBar';
 import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition, type WeekPosition } from '@/lib/unit';
-import { WINDOW_HOURS, windowLabelOf } from '@/lib/windows';
+import { windowLabelOf } from '@/lib/windows';
 
 /** The dimensions the breakdown route groups on; `all` is the ungrouped total every section reads. */
 type GroupBy = Exclude<AnalyticsGroupBy, 'all'>;
@@ -371,15 +370,7 @@ export function AnalyticsPage() {
   // A weekly row changes once a week, so the unused allowance card reads once per Accounts filter, again on Refresh and
   // once the registry's poll answers a weekly window of an account under the filter past its reset, never at the list's
   // cadence, under a custom range too. The registry's first answer moves no reset, so the page's load reads once.
-  const weeklyResetsAt =
-    registry.data === null
-      ? null
-      : registry.data
-          .filter((a) => filters.accountId.length === 0 || filters.accountId.includes(a.id))
-          .flatMap(readWindows)
-          .filter((w) => w.periodHours === WINDOW_HOURS['7d'])
-          .map((w) => w.resetsAt ?? '')
-          .join(',');
+  const weeklyResetsAt = registry.data === null ? null : weeklyResetsKey(registry.data.filter((a) => filters.accountId.length === 0 || filters.accountId.includes(a.id)));
   const [resets, setResets] = useState({ at: weeklyResetsAt, moved: 0 });
   if (weeklyResetsAt !== resets.at) setResets({ at: weeklyResetsAt, moved: resets.at === null ? resets.moved : resets.moved + 1 });
   // The weekly resets of the last four weeks whatever the range, so a range change reads nothing, and the Accounts

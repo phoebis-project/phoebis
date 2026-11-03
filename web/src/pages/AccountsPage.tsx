@@ -18,7 +18,7 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, E
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { accountHref, ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, METER_CODEC, sortAddressOf, sortDirOf } from '@/lib/address';
-import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, newestResets, ownShareHover, pairOf, resetDate, resetHover, resetInstant, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
+import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, newestResets, ownShareHover, pairOf, resetDate, resetHover, resetInstant, weeklyResetsKey, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
@@ -32,7 +32,7 @@ import { speedHover } from '@/lib/selection';
 import { MINUTE } from '@/lib/time';
 import { joinTrend } from '@/lib/trend';
 import type { WeekPosition } from '@/lib/unit';
-import { WINDOW_HOURS, windowLabelOf, windowWord } from '@/lib/windows';
+import { windowLabelOf, windowWord } from '@/lib/windows';
 
 /** The Status dimension's options, in the labels' order. */
 const STATUS_OPTIONS = { status: ACCOUNT_STATUSES.map((s) => ({ label: STATUS_LABEL[s], value: s })) };
@@ -274,10 +274,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
   // weekly window past its reset, never at the list's cadence. The route ends the week at the term's end, which moves
   // with a saved or cleared end and with the plan-ended flag while the windows keep their resets, so those read again
   // too. A trial end needs none, since the route lists it once the flag follows it.
-  const weeklyResetsAt = readWindows(account)
-    .filter((w) => w.periodHours === WINDOW_HOURS['7d'])
-    .map((w) => w.resetsAt ?? '')
-    .join(',');
+  const weeklyResetsAt = weeklyResetsKey([account]);
   const allowance = useAsync(() => (allowanceShown ? api.getAnalyticsUnusedAllowance(allowanceSpan(clock.now()), { accountIds: [account.id] }) : Promise.resolve(null)), [account.id, generation, weeklyResetsAt, account.canceled, account.subscription?.endsAt ?? null, account.planEndedAt]);
   // The ledger reconciles hourly, so the drift card reads once per account and on the bar's Refresh, never at the list's
   // cadence, and it reconciles plan windows alone, which neither an API-key account nor a seat reports.

@@ -1,12 +1,12 @@
-import type { AllowanceAccount, AllowanceReset, AllowanceWindow, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
+import type { Account, AllowanceAccount, AllowanceReset, AllowanceWindow, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
 import { HINT_WINDOW } from '@/lib/analytics';
 import { anchorTier, pricedWindow, tierCapacity, weekScale, weekUnpricedTitle } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { byteOrder, fmtAbsolute, fmtDated, fmtDayMonth, fmtShare, plural, weekShort } from '@/lib/format';
-import { pricedTier } from '@/lib/quota';
+import { pricedTier, readWindows } from '@/lib/quota';
 import { DAY } from '@/lib/time';
 import type { WeekPosition } from '@/lib/unit';
-import { windowRank, windowWord } from '@/lib/windows';
+import { WINDOW_HOURS, windowRank, windowWord } from '@/lib/windows';
 
 /** The weeks the Accounts block and the Analytics card read: the latest reset and the three before it. */
 export const ALLOWANCE_WEEKS = 4;
@@ -16,6 +16,15 @@ export const ALLOWANCE_WEEKS = 4;
 export function allowanceSpan(now: number): { from: string; to: string } {
   return { from: new Date(now - (7 * ALLOWANCE_WEEKS + 1) * DAY).toISOString(), to: new Date(now).toISOString() };
 }
+
+/** The resets of the accounts' 168-hour windows, the Fable window's among them, as one key that moves once a week has
+ *  passed, so a read keyed on it runs again at a weekly reset and not at a poll's cadence. */
+export const weeklyResetsKey = (accounts: readonly Account[]): string =>
+  accounts
+    .flatMap(readWindows)
+    .filter((w) => w.periodHours === WINDOW_HOURS['7d'])
+    .map((w) => w.resetsAt ?? '')
+    .join(',');
 
 /** The newest `weeks` resets of a window with their total and count: the answer's figures where it lists that many or
  *  fewer, the console's own sum and count over the newest `weeks` otherwise. */
