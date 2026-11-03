@@ -10,6 +10,7 @@ import { useChartInk } from '@/components/charts/useChartInk';
 import { statusTone } from '@/components/ui/AttemptTrail';
 import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
+import { CostTd } from '@/components/ui/CostTd';
 import { Badge, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
@@ -339,23 +340,7 @@ const MODEL_CHARS = 12;
  */
 function RecentCost({ accounts, error, request, scale, settings, unit, week }: { accounts: Account[] | null; error: string | null; request: RequestLog; scale: number | null; settings: Settings | null; unit: UnitPosition; week: WeekPosition }) {
   const args = requestHintArgs(request, accounts, settings?.subscriptionCosts ?? null);
-  const cell = glanceCellOf(costUnitOf(request, unit, args === null ? null : shareHint(...args)), revisionsTitle(settings, request.at), week, scale);
-  if (cell === null)
-    return error === null ? (
-      <td className="right num col-fit">
-        <Skeleton width={72} />
-      </td>
-    ) : (
-      <td className="right num col-fit" title={error}>
-        -
-      </td>
-    );
-  return (
-    <td className="right num col-fit" title={cell.title || undefined}>
-      {cell.main}
-      {cell.sub && <span className="sub">{cell.sub}</span>}
-    </td>
-  );
+  return <CostTd cell={glanceCellOf(costUnitOf(request, unit, args === null ? null : shareHint(...args)), revisionsTitle(settings, request.at), week, scale)} error={error} />;
 }
 
 function RecentTable({ accounts, rows, error, scale, settings, settingsError }: { accounts: Account[] | null; error: string | null; rows: RequestLog[] | null; scale: number | null; settings: Settings | null; settingsError: string | null }) {

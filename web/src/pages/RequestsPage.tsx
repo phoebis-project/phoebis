@@ -13,6 +13,7 @@ import { PhaseWaterfall } from '@/components/PhaseWaterfall';
 import { TokenBar } from '@/components/TokenBar';
 import { AttemptCount } from '@/components/ui/AttemptTrail';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
+import { CostTd } from '@/components/ui/CostTd';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevronLeft, IconChevronRight, IconX } from '@/components/ui/icons';
 import { PagerNav } from '@/components/ui/PagerNav';
@@ -162,23 +163,7 @@ function requestCost(request: RequestLog, unit: UnitPosition, context: CostConte
  * skeleton while the scale is out, and a dash titled with the context's failure where it carries one.
  */
 function CostCell({ context, request, unit }: { context: CostContext; request: RequestLog; unit: UnitPosition }) {
-  const cell = costCellOf(requestCost(request, unit, context).unit, context.week, context.scale);
-  if (cell === null)
-    return context.failure === null ? (
-      <td className="right num col-fit requests__cost">
-        <Skeleton width={72} />
-      </td>
-    ) : (
-      <td className="right num col-fit requests__cost" title={context.failure.text}>
-        -
-      </td>
-    );
-  return (
-    <td className="right num col-fit requests__cost" title={cell.title || undefined}>
-      {cell.main}
-      {cell.sub && <span className="sub">{cell.sub}</span>}
-    </td>
-  );
+  return <CostTd cell={costCellOf(requestCost(request, unit, context).unit, context.week, context.scale)} className="requests__cost" error={context.failure?.text ?? null} />;
 }
 
 /** A component of its own, so the expression-bodied row map reads the hold's words once. */
