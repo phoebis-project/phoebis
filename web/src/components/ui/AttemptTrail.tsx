@@ -1,10 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { AttemptOutcome } from '@/api/types';
 import { fmtAbsolute } from '@/lib/format';
 import { floatAt } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
-import { Described } from './primitives';
+import { Described, useLeaveOnMove } from './primitives';
 
 /** The shape of a ledger attempt as the trail draws it. */
 export interface TrailAttempt {
@@ -77,10 +77,6 @@ export function AttemptCount({ attempts }: { attempts: TrailAttempt[] }) {
     setAt({ left: rect.left, top: rect.bottom + 4 });
   };
   const hide = () => setAt(null);
-  const hideIfMoved = () => {
-    const rect = countRef.current?.getBoundingClientRect();
-    if (!rect || !anchor.current || rect.top !== anchor.current.top || rect.left !== anchor.current.left) setAt(null);
-  };
   // The card's size is known once it is drawn, so it opens at the count and moves inside the viewport here.
   useLayoutEffect(() => {
     const count = countRef.current;
@@ -91,20 +87,7 @@ export function AttemptCount({ attempts }: { attempts: TrailAttempt[] }) {
     const inside = { left: Math.max(0, Math.min(left, window.innerWidth - box.width)), top };
     if (inside.left !== at.left || inside.top !== at.top) setAt(inside);
   }, [at]);
-  // A refresh that re-sorts the rows moves the count with no scroll or resize to report it, so every render of the
-  // open card reads the count by the same rule.
-  useLayoutEffect(() => {
-    if (open) hideIfMoved();
-  });
-  useEffect(() => {
-    if (!open) return;
-    window.addEventListener('scroll', hideIfMoved, true);
-    window.addEventListener('resize', hide);
-    return () => {
-      window.removeEventListener('scroll', hideIfMoved, true);
-      window.removeEventListener('resize', hide);
-    };
-  }, [open]);
+  useLeaveOnMove(open, countRef, anchor, hide);
   if (!many) return null;
   return (
     <>

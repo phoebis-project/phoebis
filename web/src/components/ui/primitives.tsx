@@ -1,4 +1,4 @@
-import { createContext, forwardRef, Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type FocusEvent, type HTMLAttributes, type InputHTMLAttributes, type KeyboardEvent, type ReactNode, type SelectHTMLAttributes } from 'react';
+import { createContext, forwardRef, Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type FocusEvent, type HTMLAttributes, type InputHTMLAttributes, type KeyboardEvent, type ReactNode, type RefObject, type SelectHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useRouteError } from 'react-router-dom';
 import type { ToastItem } from '@/app/session';
@@ -955,6 +955,38 @@ const CLIPPING = new Set(['auto', 'clip', 'hidden', 'scroll']);
  * first column opens rightward, since a list aligned to its right edge would run past the table wrap's left edge,
  * which clips it.
  */
+/**
+ * Leaves a fixed layer when its trigger moves: a fixed layer stays where it was drawn while the page moves under it, so
+ * it leaves rather than float beside another row. A scroll is read by whether it moved `target` from `rest`, the box it
+ * rested at once the layer opened: the scroll that brought the row into view can report after the click that opened
+ * it, and a scroll inside the layer or in another pane moves nothing. A refresh that re-sorts the rows moves the
+ * trigger with no scroll or resize to report it, so every render of the open layer reads the trigger by the same rule.
+ * A resize leaves at once.
+ */
+export function useLeaveOnMove(active: boolean, target: RefObject<HTMLElement>, rest: RefObject<{ left: number; top: number }>, leave: () => void): void {
+  const latest = useLatest(leave);
+  useLayoutEffect(() => {
+    if (active && movedFrom(target, rest)) leave();
+  });
+  useEffect(() => {
+    if (!active) return;
+    const onScroll = () => {
+      if (movedFrom(target, rest)) latest.current();
+    };
+    const onResize = () => latest.current();
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [active, latest, rest, target]);
+}
+const movedFrom = (target: RefObject<HTMLElement>, rest: RefObject<{ left: number; top: number }>): boolean => {
+  const at = target.current?.getBoundingClientRect();
+  return !at || !rest.current || at.top !== rest.current.top || at.left !== rest.current.left;
+};
+
 export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }: { align?: MenuAlign; items: { danger?: boolean; disabled?: boolean; label: string; onClick: () => void; title?: string }[]; label?: string; onOpenChange?: (open: boolean) => void }) {
   const [open, setOpen] = useState(false);
   // A page that holds its refresh while a menu is open counts the open ones, so a closed menu says nothing as it
@@ -1014,18 +1046,7 @@ export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }
     const at = floatAt(trigger, { height: listRef.current?.offsetHeight ?? 0, width: listRef.current?.offsetWidth ?? 0 }, window.innerHeight, align);
     setPlacement((p) => (p.kind === 'float' && p.left === at.left && p.top === at.top ? p : at));
   }, [align, floating]);
-  // A fixed layer stays where it was drawn while the page moves under it, so it closes rather than float beside
-  // another row. A scroll is read by whether it moved the trigger: the scroll that brought the row into view can
-  // report after the click that opened the list, and a scroll inside the list or in another pane moves nothing.
-  const closeIfMoved = () => {
-    const at = ref.current?.getBoundingClientRect();
-    if (!at || !anchor.current || at.top !== anchor.current.top || at.left !== anchor.current.left) setOpen(false);
-  };
-  // A refresh that re-sorts the rows moves the trigger with no scroll or resize to report it, so every render of the
-  // open layer reads the trigger by the same rule.
-  useLayoutEffect(() => {
-    if (floating) closeIfMoved();
-  });
+  useLeaveOnMove(floating, ref, anchor, () => setOpen(false));
   // Focus enters the list as it opens, so the list's keys reach it, and returns to the trigger when the list closes;
   // focus already elsewhere by then stays. A list that floats draws in flow first and moves into the portal, taking the
   // focused item with it, so the portalled list takes focus again: the portal draws it after every other control on
@@ -1065,16 +1086,6 @@ export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }
     const to = e.relatedTarget;
     if (to && !listRef.current?.contains(to) && !triggerRef.current?.contains(to)) setOpen(false);
   };
-  useEffect(() => {
-    if (!floating) return;
-    const onResize = () => setOpen(false);
-    window.addEventListener('scroll', closeIfMoved, true);
-    window.addEventListener('resize', onResize);
-    return () => {
-      window.removeEventListener('scroll', closeIfMoved, true);
-      window.removeEventListener('resize', onResize);
-    };
-  }, [floating]);
   const list = open && (
     <div
       ref={listRef}
