@@ -3062,12 +3062,7 @@ impl Task {
                 if let Some(agent_id) = routed_agent(&self.state, &request) {
                     request.agent_id = agent_id;
                 }
-                let pin_key = PinKey {
-                    key_id: request.key_id.clone(),
-                    session_id: request.session_id.clone(),
-                    agent_id: request.agent_id.clone(),
-                    model: request.canonical_model.clone(),
-                };
+                let pin_key = request.pin_key();
                 let before = self.state.pin(&pin_key).cloned();
                 // A failover inside the window lands on the row its source lost: the selection prices the session's
                 // own burn and names the cause on the record. A key that holds a pin again is no landing, and the

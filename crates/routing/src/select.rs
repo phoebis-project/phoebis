@@ -138,6 +138,18 @@ pub struct SelectRequest {
     pub effort: Option<String>,
 }
 
+impl SelectRequest {
+    /// The key of the pin the request's session holds for its agent and model.
+    pub(crate) fn pin_key(&self) -> PinKey {
+        PinKey {
+            key_id: self.key_id.clone(),
+            session_id: self.session_id.clone(),
+            agent_id: self.agent_id.clone(),
+            model: self.canonical_model.clone(),
+        }
+    }
+}
+
 /// The account that issued a fallback credit token, under the incarnation that answered the refusal: a holder created
 /// again under the same id is another account, which the credit does not reach.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1367,12 +1379,7 @@ fn run(
     // The key step 1 reads under, whose row the placement's own fit and Pace score leave out of the account's burn.
     let mut own_key: Option<PinKey> = None;
     if let Some(session) = session {
-        let key = PinKey {
-            key_id: request.key_id.clone(),
-            session_id: session.to_string(),
-            agent_id: request.agent_id.clone(),
-            model: request.canonical_model.clone(),
-        };
+        let key = request.pin_key();
         // A slot wait ends at the admission, the request's dispatch, which the relay names as the cap hold's end, so
         // the wait never lands in the pin's next gap.
         if let Some(until) = request
@@ -2268,12 +2275,7 @@ fn run(
                 let reservation = Reservation {
                     account_id: chosen.account_id.clone(),
                     attempt: request.attempt,
-                    pin: session.map(|session| PinKey {
-                        key_id: request.key_id.clone(),
-                        session_id: session.to_string(),
-                        agent_id: request.agent_id.clone(),
-                        model: request.canonical_model.clone(),
-                    }),
+                    pin: session.map(|_| request.pin_key()),
                     entrypoint: regime.map(String::from),
                     booked_at: request.now,
                     rewrite,
