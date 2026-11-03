@@ -3,10 +3,10 @@ import { createPortal } from 'react-dom';
 import { useLatest } from '@/lib/hooks';
 import { useOutsidePress } from './primitives';
 
-/** The room the box keeps from the window's edges and from its anchor. */
-const GAP = 8;
+/** The room a fixed box keeps from the window's edges and from its anchor. */
+export const GAP = 8;
 // Native fields count, so a box whose first control is a search field opens onto it.
-const TABBABLE = 'a[href], button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
+export const TABBABLE = 'a[href], button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
 /**
  * The first stop after `anchor` in the page's Tab order, outside the box: where Tab would land if the box stood beside
@@ -18,6 +18,37 @@ function stopAfter(anchor: HTMLElement, box: HTMLElement): HTMLElement | undefin
     (el) => (anchor.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 && !anchor.contains(el) && !box.contains(el) && el.closest('[hidden]') === null && (el.checkVisibility?.() ?? true),
   );
 }
+
+/**
+ * Places a fixed box under its anchor, above it where it would pass the window's foot, no taller than the window less
+ * `GAP` above and below and kept `GAP` inside it, then reveals it. `left` answers the box's left edge from its measured
+ * box and the anchor's.
+ */
+export function placeFixed(el: HTMLElement, anchor: HTMLElement, left: (box: DOMRect, at: DOMRect) => number): void {
+  // A classic scrollbar stands inside the window's inner box but outside the fixed box's containing block.
+  const tall = document.documentElement.clientHeight;
+  el.style.maxHeight = `${Math.max(0, tall - 2 * GAP)}px`;
+  // A fixed box shrinks to the room right of where it last stood, so it is measured from the window's corner.
+  el.style.left = '0px';
+  el.style.top = '0px';
+  const box = el.getBoundingClientRect();
+  const at = anchor.getBoundingClientRect();
+  el.style.left = `${left(box, at)}px`;
+  const below = at.bottom + GAP;
+  const top = below + box.height > tall - GAP ? at.top - GAP - box.height : below;
+  // A list as tall as the window over a low anchor starts at the window's top rather than above it.
+  el.style.top = `${Math.max(GAP, Math.min(top, tall - GAP - box.height))}px`;
+  el.style.visibility = 'visible';
+}
+
+/**
+ * A box's blur handler, closing it when focus leaves for an element outside the box and its anchor. A blur naming no
+ * element (a click on a button Safari gives no focus, the window losing focus) closes nothing, as a menu's does.
+ */
+export const blurLeaves = (anchor: HTMLElement, close: () => void) => (e: FocusEvent<HTMLElement>) => {
+  const to = e.relatedTarget;
+  if (to !== null && !e.currentTarget.contains(to) && !anchor.contains(to)) close();
+};
 
 /** The context a bar provides: every Popover under it reports its open state, so the page can pause auto reload while a menu or a popover is open. */
 export const PopoverHost = createContext<{ add: (id: string) => void; remove: (id: string) => void } | null>(null);
@@ -56,21 +87,8 @@ export function Popover({ anchor, children, className, id, label, labelledBy, on
       closeRef.current();
       return;
     }
-    // A classic scrollbar stands inside the window's inner box but outside the fixed box's containing block.
     const wide = document.documentElement.clientWidth;
-    const tall = document.documentElement.clientHeight;
-    el.style.maxHeight = `${Math.max(0, tall - 2 * GAP)}px`;
-    // A fixed box shrinks to the room right of where it last stood, so it is measured from the window's corner.
-    el.style.left = '0px';
-    el.style.top = '0px';
-    const box = el.getBoundingClientRect();
-    const at = anchor.getBoundingClientRect();
-    el.style.left = `${Math.max(GAP, Math.min(at.left, wide - GAP - box.width))}px`;
-    const below = at.bottom + GAP;
-    const top = below + box.height > tall - GAP ? at.top - GAP - box.height : below;
-    // A list as tall as the window over a low anchor starts at the window's top rather than above it.
-    el.style.top = `${Math.max(GAP, Math.min(top, tall - GAP - box.height))}px`;
-    el.style.visibility = 'visible';
+    placeFixed(el, anchor, (box, at) => Math.max(GAP, Math.min(at.left, wide - GAP - box.width)));
   }, [anchor, closeRef]);
   useLayoutEffect(place, [open, place, placeKey]);
   useEffect(() => {
@@ -105,12 +123,7 @@ export function Popover({ anchor, children, className, id, label, labelledBy, on
   }, [host, id, shown]);
   useOutsidePress(shown && anchor !== null, () => [ref.current, anchor], onClose);
   if (!open || anchor === null) return null;
-  // A blur naming no element (a click on a button Safari gives no focus, the window losing focus) closes nothing, as a
-  // menu's does.
-  const leave = (e: FocusEvent<HTMLDivElement>) => {
-    const to = e.relatedTarget;
-    if (to !== null && !e.currentTarget.contains(to) && !anchor.contains(to)) onClose();
-  };
+  const leave = blurLeaves(anchor, onClose);
   const keys = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Escape') {
       e.preventDefault();

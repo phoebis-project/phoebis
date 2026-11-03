@@ -1,7 +1,8 @@
-import { type FocusEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ChipView, rowValue } from '@/components/ChipView';
 import { HashChip } from '@/components/EntryChips';
+import { GAP, TABBABLE, blurLeaves, placeFixed } from '@/components/ui/Popover';
 import { Badge, Described, useHostedDescription } from '@/components/ui/primitives';
 import type { StripLayout } from '@/lib/decisionStrip';
 import type { Chip } from '@/lib/routingLog';
@@ -9,9 +10,6 @@ import type { PlanGroup, PlanRow, PlanTable, PopoverPlan, WindowRow } from '@/li
 
 /** The popover's widest box, as the stylesheet bounds it too. */
 const MAX_WIDTH = 720;
-/** The room the popover keeps from the card's edges, the window's top and bottom, and its anchor. */
-const GAP = 8;
-const TABBABLE = 'a[href], button:not(:disabled), [tabindex]:not([tabindex="-1"])';
 const WINDOW_COLUMNS: { key: keyof WindowRow; label: string; numeric: boolean }[] = [
   { key: 'window', label: 'Window', numeric: false },
   { key: 'used', label: 'Used', numeric: true },
@@ -199,7 +197,6 @@ export function StripPopover({ anchor, bounds, focus, id, layout, onClose, pinne
     const card = bounds.getBoundingClientRect();
     // A classic scrollbar stands inside the window's inner box but outside the fixed box's containing block.
     const view = document.documentElement.clientWidth;
-    const tall = document.documentElement.clientHeight;
     // The log's table scrolls a card wider than the window sideways, so the box keeps to the part of the card on
     // screen.
     const from = Math.max(card.left, 0) + GAP;
@@ -207,17 +204,7 @@ export function StripPopover({ anchor, bounds, focus, id, layout, onClose, pinne
     // The bounds are set before the box is read, so a card narrower than the window's bound narrows the box it
     // measures, and a shed round's chip per mark scrolls inside a box no taller than the window.
     el.style.maxWidth = `${Math.min(MAX_WIDTH, Math.max(0, view - 2 * GAP), Math.max(0, card.width - 2 * GAP), Math.max(0, to - from))}px`;
-    el.style.maxHeight = `${Math.max(0, tall - 2 * GAP)}px`;
-    // A fixed box shrinks to the room right of where it last stood, so it is measured from the window's corner.
-    el.style.left = '0px';
-    el.style.top = '0px';
-    const box = el.getBoundingClientRect();
-    const at = anchor.getBoundingClientRect();
-    el.style.left = `${Math.max(from, Math.min(at.left + at.width / 2 - box.width / 2, to - box.width))}px`;
-    const below = at.bottom + GAP;
-    const top = below + box.height > tall - GAP ? at.top - GAP - box.height : below;
-    el.style.top = `${Math.max(GAP, Math.min(top, tall - GAP - box.height))}px`;
-    el.style.visibility = 'visible';
+    placeFixed(el, anchor, (box, at) => Math.max(from, Math.min(at.left + at.width / 2 - box.width / 2, to - box.width)));
   }, [anchor, bounds, onClose]);
   // A new plan places it again, and so does a strip redrawn for a new width or a measured label, which moves the
   // anchor it stands under.
@@ -227,12 +214,7 @@ export function StripPopover({ anchor, bounds, focus, id, layout, onClose, pinne
   useEffect(() => {
     if (focus) ref.current?.focus({ preventScroll: true });
   }, [anchor, focus]);
-  // A blur naming no element (a click on a button Safari gives no focus, the window losing focus) closes nothing, as a
-  // menu's does.
-  const leave = (e: FocusEvent<HTMLDivElement>) => {
-    const to = e.relatedTarget;
-    if (to !== null && !e.currentTarget.contains(to) && !anchor.contains(to)) onClose(false);
-  };
+  const leave = blurLeaves(anchor, () => onClose(false));
   // The box stands at the body's end, after every other stop, so Tab off either end would leave the page or land at
   // its far end. The keys keep the walk in the strip: on past the anchor, or back onto it.
   const tab = (e: KeyboardEvent<HTMLDivElement>) => {
