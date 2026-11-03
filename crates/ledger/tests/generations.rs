@@ -12,7 +12,7 @@ fn first(id: &str, created_at: i64) -> LiveKeyLifetime {
     LiveKeyLifetime {
         id: id.into(),
         created_at,
-        floor: None,
+        reused: false,
     }
 }
 
@@ -21,7 +21,7 @@ fn reused(id: &str, created_at: i64) -> LiveKeyLifetime {
     LiveKeyLifetime {
         id: id.into(),
         created_at,
-        floor: Some(created_at),
+        reused: true,
     }
 }
 

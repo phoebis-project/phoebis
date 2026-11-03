@@ -229,7 +229,7 @@ pub async fn run_until(
         .map(|k| phoebis_ledger::LiveKeyLifetime {
             id: k.id.clone(),
             created_at: k.created_at,
-            floor: reused.contains(k.id.as_str()).then_some(k.created_at),
+            reused: reused.contains(k.id.as_str()),
         })
         .collect();
     let stamped = phoebis_ledger::reconcile_key_generations(&ledger_db, &live_keys)

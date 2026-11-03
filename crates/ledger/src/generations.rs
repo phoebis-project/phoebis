@@ -15,15 +15,15 @@ pub const GENERATIONS_RECONCILED_KEY: &str = "key_generations_reconciled";
 /// next from where it left off, so a key with a year of hourly rows never sits in one `Vec`.
 pub(crate) const PAGE: usize = 1_000;
 
-/// One live key as the startup stamp sees it: the id, its `created_at`, and where its own rows start. `floor`
-/// is `Some(created_at)` for an id in `RegistryLoad.reused_key_ids` (an earlier holder's rows sit at generation
-/// 0 under the same id, so only rows at or after `hour_ceil(created_at)` are this key's) and `None` for an id
-/// whose holder is its first (every generation-0 row is this key's).
+/// One live key as the startup stamp sees it: the id, its `created_at`, and whether its own rows start there.
+/// `reused` is true for an id in `RegistryLoad.reused_key_ids` (an earlier holder's rows sit at generation 0 under
+/// the same id, so only rows at or after `hour_ceil(created_at)` are this key's) and false for an id whose holder is
+/// its first (every generation-0 row is this key's).
 #[derive(Clone, Debug)]
 pub struct LiveKeyLifetime {
     pub id: String,
     pub created_at: i64,
-    pub floor: Option<i64>,
+    pub reused: bool,
 }
 
 /// Stamps each live key's generation onto the generation-0 rollup and request rows of its own lifetime, once
@@ -55,7 +55,7 @@ pub fn reconcile_key_generations(
             // An id an earlier holder used before ids were retired carries that holder's rows at generation 0
             // too; the current holder's own rows start at its first whole hour, the creation hour left out
             // whole as the usage floor left it, since nothing in a row says which holder filed it.
-            let from_hour = key.floor.map(hour_ceil);
+            let from_hour = key.reused.then(|| hour_ceil(key.created_at));
             let tx = conn.transaction()?;
             let mut after_rowid = 0;
             loop {
