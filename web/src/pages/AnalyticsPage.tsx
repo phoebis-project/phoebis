@@ -1970,6 +1970,7 @@ function timeAxis(bucketMs: number, ink: ChartInk): TimeAxis {
   // The label sits under the last tick, so the axis grows a line taller than its 30 px to keep the two apart.
   return { ...look, height: 40, label: { fill: ink.ink2, fontSize: 11, position: 'insideBottomRight', value: 'days start at 00:00 UTC' }, tickFormatter: (v) => fmtDayTick(v) };
 }
+/** The top tick label and a line's last point center on the top and right edges. The axes hold the other labels. */
 const CHART_MARGIN = { top: 8, right: 8, bottom: 0, left: 0 };
 
 type SpeedRow = { at: number; fast: number; standard: number };
