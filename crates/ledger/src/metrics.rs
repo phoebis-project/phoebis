@@ -353,7 +353,7 @@ impl Metrics {
                 }
                 "phoebis_account_ratelimit_utilization" => {
                     for ((account, window), value) in &inner.utilization {
-                        // A deleted account's last reading would otherwise scrape forever; the registry is
+                        // A deleted account's last reading would otherwise scrape forever. The registry is
                         // the list of accounts that exist.
                         if !gauges.live_accounts.contains(account) {
                             continue;

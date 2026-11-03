@@ -567,7 +567,7 @@ impl QuotaPoll {
                     poll: true,
                 });
                 // Reported before the profile refresh, so a stalled profile endpoint holds no sample back
-                // from selection; both halves go, as the selection's own pull sends them, so the first
+                // from selection. Both halves go, as the selection's own pull sends them, so the first
                 // selection sees the overage state too.
                 let (sample, overage) = sample_from_usage(&snapshot, account.incarnation);
                 router
