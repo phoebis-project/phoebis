@@ -2264,24 +2264,6 @@ pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
     rows.into_iter().filter(|r| passes_patterns(r, f)).collect()
 }
 
-/// The price key of a rollup row: its own model, speed, band, funding and `kind`, its tier (`None` under
-/// `UNATTRIBUTED`), the entrypoint its `client` names, and its hour as the instant, with no completion, read at `now`.
-pub(crate) fn row_key(row: &RollupRow, now: i64) -> RowKey<'_> {
-    RowKey {
-        model: &row.canonical_model,
-        speed: Speed::of(Some(row.speed.as_str())),
-        band: Band::of_rollup(&row.band),
-        funding: row.funding_kind(),
-        kind: row.kind.as_str(),
-        tier: row.tier_of(),
-        entrypoint: entrypoint_of_client(&row.client),
-        classifier: row.is_classifier(),
-        at: row.hour * 1_000,
-        band_at: None,
-        now,
-    }
-}
-
 /// One rollup row priced through `price_row` at its own key with no tier, a plain call that fills nothing in after it:
 /// a probe row on a model the revision lacks takes its dearest-cell dollars inside `price_row`. Its reader,
 /// `shared_figures`, reads its `usd` and `equivalent` and not its `shares`, since the shares a route answers come from
@@ -2295,7 +2277,7 @@ pub(crate) fn priced(
 ) -> Priced {
     let key = RowKey {
         tier: None,
-        ..row_key(row, now)
+        ..row.price_key(now)
     };
     price_row(prices, costs, &key, row.usage())
 }
@@ -2795,7 +2777,7 @@ impl GroupSums {
             shares: None,
             plan: PlanSums::default(),
         });
-        let own_key = row_key(row, now);
+        let own_key = row.price_key(now);
         // Keyed as `priced` keys the row, since the group's shares come from `ShareSums::add` and a tier would price
         // share windows nothing reads.
         let price_key = RowKey {
@@ -4546,7 +4528,7 @@ fn price_burn_row(
         point,
         prices,
         tables,
-        row_key(row, now),
+        row.price_key(now),
         row.usage(),
         shares,
     );
@@ -5357,7 +5339,7 @@ mod tests {
         row.requests = 1;
         row.input_tokens = 1_000;
         row.output_tokens = 100;
-        let own_key = price_row(&prices, &costs, &row_key(&row, HOUR * 1_000), row.usage());
+        let own_key = price_row(&prices, &costs, &row.price_key(HOUR * 1_000), row.usage());
         assert!(
             own_key.shares.is_some(),
             "the tier is sized, so the row's own key prices its windows: {own_key:?}"
@@ -5418,7 +5400,7 @@ mod tests {
         let mut plan = PlanSums::default();
         plan.add(
             &row,
-            &row_key(&row, at),
+            &row.price_key(at),
             Priced {
                 equivalent: Some(sentinel),
                 ..Priced::default()

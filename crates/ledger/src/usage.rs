@@ -17,7 +17,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::price::price_usd;
-use crate::query::{hour_ceil, row_key, PROBE_KIND};
+use crate::query::{hour_ceil, PROBE_KIND};
 use crate::rollup::{hour_of, read_rollups_for_key, RollupRow};
 use crate::{LedgerDb, LedgerError, PriceRevisions, Pricing};
 
@@ -92,7 +92,8 @@ pub fn key_usage_windows(
         WindowSum::new(week_hour, now),
     );
     for row in rows.iter().filter(|r| r.kind != PROBE_KIND) {
-        let usd = price_usd(prices, &row_key(row, now), row.usage()).map_or(0.0, |usd| usd.total());
+        let usd =
+            price_usd(prices, &row.price_key(now), row.usage()).map_or(0.0, |usd| usd.total());
         week.add(row, usd);
         if row.hour >= day_hour {
             day.add(row, usd);

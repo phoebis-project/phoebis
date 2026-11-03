@@ -17,8 +17,9 @@ use crate::db::LedgerDb;
 #[cfg(test)]
 use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
-use crate::plan::{funding_of, Funding, PlanTables};
-use crate::pricing::{PriceRevisions, Speed};
+use crate::plan::{entrypoint_of_client, funding_of, Funding, PlanTables};
+use crate::price::RowKey;
+use crate::pricing::{Band, PriceRevisions, Speed};
 use crate::query::{
     in_list, key_clause, pattern_any, pool_term, COOLDOWN_CLEARED, COOLDOWN_SET, OVERAGE_ENDED,
     PIN_CREATED, PIN_MIGRATED, ROUTER_STARTED, SHEDDING_ROUND, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED,
@@ -365,6 +366,25 @@ impl RollupRow {
     /// Whether the row is the client's own classifier call.
     pub(crate) fn is_classifier(&self) -> bool {
         self.classifier == Classifier::Client.as_str()
+    }
+
+    /// The price key of the row: its own model, speed, band, funding and `kind`, its tier (`None` under
+    /// `UNATTRIBUTED`), the entrypoint its `client` names, and its hour as the instant, with no completion, read at
+    /// `now`.
+    pub(crate) fn price_key(&self, now: i64) -> RowKey<'_> {
+        RowKey {
+            model: &self.canonical_model,
+            speed: Speed::of(Some(self.speed.as_str())),
+            band: Band::of_rollup(&self.band),
+            funding: self.funding_kind(),
+            kind: self.kind.as_str(),
+            tier: self.tier_of(),
+            entrypoint: entrypoint_of_client(&self.client),
+            classifier: self.is_classifier(),
+            at: self.hour * 1_000,
+            band_at: None,
+            now,
+        }
     }
 
     /// The row's counts as the five-count usage `price_row` takes.
