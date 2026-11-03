@@ -125,15 +125,10 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
     // Ahead of the per-kind table below, for either account kind: a 400 naming an item this leg added is a fact
     // about the request shape, not about the credential, and a name outside `injected` is the client's own to
     // handle.
-    if head.status == 400 && ctx.can_strip && !ctx.injected.is_empty() {
-        if let Some(body) = ctx
-            .body_prefix
-            .filter(|b| error_type(b).as_deref() == Some("invalid_request_error"))
-        {
-            let named = refused_names(body, ctx.injected);
-            if !named.is_empty() {
-                return Verdict::StripInjected(named);
-            }
+    if ctx.can_strip {
+        let named = refused_injected(head.status, ctx.body_prefix, ctx.injected);
+        if !named.is_empty() {
+            return Verdict::StripInjected(named);
         }
     }
     // Ahead of the per-kind table, for either kind: a 404 naming the model the body carried is the upstream's word
@@ -498,6 +493,23 @@ fn names_model(body: &[u8], wire_model: &str) -> bool {
     names_token(&message, &wire_model, |c| {
         c.is_ascii_alphanumeric() || c == '-' || c == '.'
     })
+}
+
+/// The items of `injected` an upstream 400 `invalid_request_error` names, the one gate the strip and the latch
+/// both read: a 400 of another kind that happens to spell an injected name in its message never strips or
+/// latches on the strength of a coincidence.
+pub(crate) fn refused_injected(
+    status: u16,
+    body: Option<&[u8]>,
+    injected: &[Injected],
+) -> Vec<Injected> {
+    if status != 400 || injected.is_empty() {
+        return Vec::new();
+    }
+    match body.filter(|b| error_type(b).as_deref() == Some("invalid_request_error")) {
+        Some(body) => refused_names(body, injected),
+        None => Vec::new(),
+    }
 }
 
 /// The names an upstream 400 refused, read off `error.message` alone (never the envelope, where a field such as

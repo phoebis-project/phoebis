@@ -55,7 +55,7 @@ use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
 use crate::chains::Chains;
 use crate::classify::{
-    classify, error_message, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict,
+    classify, error_message, error_type, refused_injected, Cooldown, HeadContext, Scope, Verdict,
 };
 use crate::credit::CreditStore;
 use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
@@ -3358,18 +3358,11 @@ impl Relay {
         {
             leg_head.arrived(arrived);
         }
-        if !ctx.can_strip && head.status == 400 && latches(ctx.trace) {
+        if !ctx.can_strip && latches(ctx.trace) {
             // This leg cannot retry a strip, so the 400 is forwarded as it came; the account is still latched
             // against the item it named, a fact about the account whether or not this request could use it.
-            // Gated on the same error type the strip path itself requires, so a 400 of another kind that
-            // happens to spell an injected name in its message never latches on the strength of a coincidence.
-            if let Some(body) = decoded
-                .as_deref()
-                .filter(|b| error_type(b).as_deref() == Some("invalid_request_error"))
-            {
-                for item in refused_names(body, ctx.injected) {
-                    self.memory.latch(ctx.account, item);
-                }
+            for item in refused_injected(head.status, decoded.as_deref(), ctx.injected) {
+                self.memory.latch(ctx.account, item);
             }
         }
         let verdict = classify(
