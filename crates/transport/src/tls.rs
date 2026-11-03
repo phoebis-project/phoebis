@@ -2,17 +2,11 @@
 //! Claude Code release.
 
 use boring::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVerifyMode, SslVersion};
-use phoebis_profile::Profile;
+use phoebis_profile::{Plane, Profile};
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
 
 use crate::TransportError;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Plane {
-    Inference,
-    Control,
-}
 
 pub fn connector_builder(
     profile: &'static Profile,

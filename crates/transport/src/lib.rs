@@ -9,7 +9,8 @@ pub mod request;
 pub mod response;
 mod tls;
 
-pub use tls::{connect_tls, connector, connector_builder, trust_extra_ca, Plane};
+pub use phoebis_profile::Plane;
+pub use tls::{connect_tls, connector, connector_builder, trust_extra_ca};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {

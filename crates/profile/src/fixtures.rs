@@ -1,5 +1,7 @@
 //! Typed access to the measured fixture files embedded at compile time.
 
+use crate::Plane;
+
 /// The request heads `inference_head` answers. The count heads come from the same capture as the inference heads,
 /// so a difference between the two belongs to the count path. Every count head carries no `X-Stainless-Timeout`
 /// and none of the `advanced-tool-use-2025-11-20`, `extended-cache-ttl-2025-04-11`,
@@ -22,10 +24,6 @@ pub enum BodyFixture {
     ApiKey,
     /// The one count body the three count heads share.
     Count,
-}
-pub enum Plane {
-    Inference,
-    Control,
 }
 pub enum ControlFixture {
     /// The refresh grant.

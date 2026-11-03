@@ -8,6 +8,13 @@ pub mod fixtures;
 /// the fixture heads that carry it name one value.
 pub const DANGEROUS_TOOL_USE_BETA: &str = "dangerous-tool-use-2026-09-03";
 
+/// The two TLS planes the measured client speaks, each with its own recorded hello and connector settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Plane {
+    Inference,
+    Control,
+}
+
 pub struct Control {
     pub authorize_claude_ai: &'static str,
     pub authorize_console: &'static str,
