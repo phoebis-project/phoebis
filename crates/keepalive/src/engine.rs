@@ -39,7 +39,7 @@ use crate::view::{recipe_state, RecipeState};
 const LOCK_POISONED: &str = "keepalive engine poisoned by a prior panic";
 
 /// The main conversation's agent, which the idle limits apply to.
-pub const MAIN_AGENT: &str = "main";
+pub use phoebis_routing::MAIN_AGENT;
 
 pub type SessionKey = (String, String);
 

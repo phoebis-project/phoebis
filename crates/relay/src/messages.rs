@@ -30,7 +30,7 @@ use phoebis_routing::{
     EvidenceSource, Exhaustion, HoldFacts, KeyPermit, KeyRefusal, LaneFacts, OverageEvidence,
     PinRef, PredecessorQuery, Presented, Refusal, RefusalFacts, RefusedRequest, Report,
     RequestFlags, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
-    SelectionTrace, BUDGET_WINDOW,
+    SelectionTrace, BUDGET_WINDOW, MAIN_AGENT,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, CooldownScope, MemoryStore,
@@ -2659,7 +2659,7 @@ impl Relay {
             // retry reuses this body rather than pricing again.
             // A probe replays another turn's markers under that turn's agent, so the branch follows the agent for
             // a probe as for the turn, and a subagent's rewrite never reads the main turn's per-model override.
-            let branch = if admitted.identity.agent_id == "main" {
+            let branch = if admitted.identity.agent_id == MAIN_AGENT {
                 TtlBranch::Main
             } else {
                 TtlBranch::Subagent

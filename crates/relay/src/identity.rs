@@ -6,15 +6,14 @@ use std::time::Duration;
 
 use axum::http::HeaderMap;
 use phoebis_bus::{Kind, OTHER_CLIENT};
-use phoebis_routing::{ClientClass, ConversationLookup, ConversationQuery, REFRESHING_CLASSES};
+use phoebis_routing::{
+    ClientClass, ConversationLookup, ConversationQuery, MAIN_AGENT, REFRESHING_CLASSES,
+};
 use phoebis_store::ApiKeyRow;
 
 use crate::billing::{entrypoint_of, restorable_version};
 use crate::facts::BodyFacts;
 use crate::RelayError;
-
-/// The agent a request without an agent header belongs to.
-const MAIN_AGENT: &str = "main";
 
 // The words of the contract's items, in the table's order: the refusal's reason, the request row's
 // `client_contract` column and the routing log carry them.

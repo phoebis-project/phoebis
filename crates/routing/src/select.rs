@@ -299,6 +299,9 @@ impl MigrateReason {
 /// until the next main turn. Every other class is auxiliary.
 pub const REFRESHING_CLASSES: &[&str] = &["compaction", "main", "subagent"];
 
+/// The agent id of a session's main conversation, the one a request without an agent header belongs to.
+pub const MAIN_AGENT: &str = "main";
+
 /// What the incoming request says about the pin's cache: a refreshing turn, a cold one (compacted or
 /// restarted), or nothing (a foreign request, or an auxiliary class).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5750,7 +5753,7 @@ fn placement_of<'a>(
         },
     );
 
-    let is_subagent = request.agent_id != "main";
+    let is_subagent = request.agent_id != MAIN_AGENT;
     if !is_subagent {
         none(rec, "rung:with_main", "class");
     } else if pool.affinity.subagent_placement != SubagentPlacement::WithMain {
@@ -5763,7 +5766,7 @@ fn placement_of<'a>(
             agent_id: request
                 .parent_agent_id
                 .clone()
-                .unwrap_or_else(|| "main".to_string()),
+                .unwrap_or_else(|| MAIN_AGENT.to_string()),
             model: request.canonical_model.clone(),
         });
         let Some(pin) = parent else {
@@ -5958,7 +5961,7 @@ fn subagent_cohort<'a>(
     window: &str,
     rec: &mut Recorder,
 ) -> Option<&'a Candidate> {
-    if request.agent_id == "main"
+    if request.agent_id == MAIN_AGENT
         || pool.affinity.subagent_placement != SubagentPlacement::ByCohort
         || (!request.marker && request.portable)
     {

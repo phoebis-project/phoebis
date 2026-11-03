@@ -37,8 +37,8 @@ pub use select::{
     CreditAccount, Decided, Exhaustion, FailedOver, HoldFacts, HoldWait, MigrateReason, PinHold,
     Placement, Refusal, SelectRequest, SelectResult, Selection, SelectionTrace, ShedRoundRecord,
     Skipped, SlowDownRead, Warmth, WarmthCause, BUDGET_WINDOW, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, MODEL_REJECTED_REASON, RATE_LIMIT_REASON, REFRESHING_CLASSES,
-    RETRY_AFTER_WINDOW, SLOW_DOWN_MIN_HOLD_MS, SLOW_DOWN_WAIT_MS,
+    FAST_RATE_LIMIT_REASON, MAIN_AGENT, MODEL_REJECTED_REASON, RATE_LIMIT_REASON,
+    REFRESHING_CLASSES, RETRY_AFTER_WINDOW, SLOW_DOWN_MIN_HOLD_MS, SLOW_DOWN_WAIT_MS,
 };
 pub use snapshot::{paid_source, KeyRefusal, Presented, RegistrySnapshot};
 pub use state::{
