@@ -177,14 +177,11 @@ impl Store {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
                  ON CONFLICT(key_id, key_generation, session_id, agent_id) DO UPDATE SET \
                  record_version = excluded.record_version, payload = excluded.payload, \
-                 body_sealed = COALESCE(excluded.body_sealed, body_sealed), \
-                 body_nonce = COALESCE(excluded.body_nonce, body_nonce), headers = excluded.headers, \
+                 body_sealed = CASE WHEN ?14 THEN keepalive_agents.body_sealed ELSE excluded.body_sealed END, \
+                 body_nonce = CASE WHEN ?14 THEN keepalive_agents.body_nonce ELSE excluded.body_nonce END, \
+                 headers = excluded.headers, \
                  body_size = excluded.body_size, dispatched_ms = excluded.dispatched_ms, fast = excluded.fast, \
                  updated_at = excluded.updated_at",
-            )?;
-            let mut clear = tx.prepare_cached(
-                "UPDATE keepalive_agents SET body_sealed = NULL, body_nonce = NULL, body_size = 0 \
-                 WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND agent_id = ?4",
             )?;
             for (row, (blob, nonce)) in batch.agents.iter().zip(&sealed) {
                 stmt.execute(params![
@@ -197,19 +194,17 @@ impl Store {
                     blob,
                     nonce,
                     row.headers,
-                    row.body_size as i64,
+                    // A cleared body leaves no bytes to size, whatever the row carried.
+                    if row.body_write == BodyWrite::Clear {
+                        0
+                    } else {
+                        row.body_size as i64
+                    },
                     row.dispatched_ms,
                     row.fast,
-                    row.updated_at
+                    row.updated_at,
+                    row.body_write == BodyWrite::Keep
                 ])?;
-                if row.body_write == BodyWrite::Clear {
-                    clear.execute(params![
-                        row.key_id,
-                        row.key_generation,
-                        row.session_id,
-                        row.agent_id
-                    ])?;
-                }
             }
         }
         if let Some(day) = batch.purge_counters_before {
