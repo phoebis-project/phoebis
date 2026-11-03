@@ -764,6 +764,7 @@ impl Store {
         .map_err(StoreError::from)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn insert_pool(&self, row: &PoolRow, actor: &str) -> Result<PoolRow, StoreError> {
         self.insert_pool_with_members(row, None, actor)
     }
@@ -801,6 +802,7 @@ impl Store {
     }
 
     /// The policy write fenced on the `updated_at` the caller read: `Stale` when another write moved the row since.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn update_pool(
         &self,
         row: &PoolRow,
@@ -814,6 +816,7 @@ impl Store {
     /// incarnation, so an edit read from a deleted pool never lands on one created again under its id. Answers the
     /// stamp written, which the next fenced edit reads, or the stamp read where the save changes nothing, since the
     /// stamp moves only with a write.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn update_pool_with_members(
         &self,
         row: &PoolRow,
@@ -1049,6 +1052,7 @@ impl Store {
     /// The edit fenced on the `updated_at` the caller read and on `row`'s incarnation: `Stale` when another write moved
     /// the row since, or the key was deleted and created again. Answers the `updated_at` it stamped, which a response
     /// built from `row` carries.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn update_api_key(
         &self,
         row: &ApiKeyRow,

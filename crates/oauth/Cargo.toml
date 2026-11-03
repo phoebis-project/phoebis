@@ -33,5 +33,5 @@ test-support = []
 [dev-dependencies]
 fake-upstream = { path = "../../tests/fake_upstream" }
 phoebis-oauth = { path = ".", features = ["debug-hooks"] }
-phoebis-store = { path = "../store", features = ["debug-hooks"] }
+phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 tokio = { workspace = true, features = ["test-util"] }

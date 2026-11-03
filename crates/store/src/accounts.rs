@@ -230,6 +230,7 @@ impl Store {
         account_in(&conn, id)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn insert_account(&self, row: &AccountRow) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
