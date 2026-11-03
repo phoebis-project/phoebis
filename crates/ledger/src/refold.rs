@@ -499,15 +499,7 @@ mod tests {
     }
 
     fn meta(db: &LedgerDb, key: &str) -> Option<serde_json::Value> {
-        db.read_blocking(|c| {
-            Ok(rusqlite::OptionalExtension::optional(c.query_row(
-                "SELECT value FROM meta WHERE key = ?1",
-                [key],
-                |r| r.get::<_, String>(0),
-            ))?)
-        })
-        .unwrap()
-        .map(|text| serde_json::from_str(&text).expect("the meta value is JSON"))
+        db.read_blocking(|c| read_meta(c, key)).unwrap()
     }
 
     /// A page's attempts land under their own request in attempt order: a failover's two among requests with one, its
