@@ -2945,19 +2945,8 @@ impl Task {
         refusal: Refusal,
         reply: oneshot::Sender<SelectAnswer>,
     ) {
-        let reason = match &refusal {
-            Refusal::Key(refusal) => refusal.to_string(),
-            Refusal::Resolve(refusal) => refusal.to_string(),
-        };
-        let (record, summary) = DecisionRecord::refused(
-            &RefusedRequest::from(request),
-            snapshot,
-            &RefusalFacts {
-                kind: "key",
-                code: refusal.code(),
-                reason,
-            },
-        );
+        let (record, summary) =
+            DecisionRecord::refused(&RefusedRequest::from(request), snapshot, &refusal.facts());
         self.emit(RouterEvent::Decision {
             summary: Arc::new(summary),
             record: Arc::new(record),

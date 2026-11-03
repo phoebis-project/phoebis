@@ -632,6 +632,18 @@ impl Refusal {
             Refusal::Resolve(refusal) => refusal.code(),
         }
     }
+
+    /// The refusal as its record carries it: the router's own kind `key`, the code and the display reason.
+    pub(crate) fn facts(&self) -> RefusalFacts {
+        RefusalFacts {
+            kind: "key",
+            code: self.code(),
+            reason: match self {
+                Refusal::Key(refusal) => refusal.to_string(),
+                Refusal::Resolve(refusal) => refusal.to_string(),
+            },
+        }
+    }
 }
 
 // Boxing the selection would put an allocation on the path every request takes, to shrink a value that is
@@ -7050,14 +7062,7 @@ fn finish(
         }
         SelectResult::Refused(refusal) => {
             outcome.kind = "refused";
-            outcome.refusal = Some(RefusalFacts {
-                kind: "key",
-                code: refusal.code(),
-                reason: match refusal {
-                    Refusal::Key(refusal) => refusal.to_string(),
-                    Refusal::Resolve(refusal) => refusal.to_string(),
-                },
-            });
+            outcome.refusal = Some(refusal.facts());
         }
     }
     let account = outcome.account_id.as_deref();
