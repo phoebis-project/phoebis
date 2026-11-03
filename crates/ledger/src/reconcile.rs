@@ -6,7 +6,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use phoebis_bus::Classifier;
-use phoebis_routing::{window_for, PinUsage, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
+use phoebis_routing::{
+    window_for, PinUsage, FIVE_HOUR, HOUR_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+};
 use phoebis_store::AccountKind;
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, Row, Transaction};
@@ -16,7 +18,7 @@ use crate::price::RowKey;
 use crate::pricing::{prompt_tokens, PriceRevisions, Speed};
 use crate::query::{price_usage, BurnSums};
 use crate::record::SampleSource;
-use crate::rollup::UNATTRIBUTED;
+use crate::rollup::{bucket_of, UNATTRIBUTED};
 use crate::LedgerError;
 
 /// The band a completed window's ratio must lie in for `meter_drift` to read it as agreement: symmetric in log terms
@@ -44,8 +46,13 @@ pub(crate) const DRIFT_HOLD_MS: i64 = 8 * 24 * 3_600_000;
 /// the account's attempts and lies well past any answer's duration.
 const LONGEST_ATTEMPT_MS: i64 = 3_600_000;
 
-/// The windows a run is read on: the two shared ones and the Fable week, the scarce window the pick prices in.
-const WINDOWS: [&str; 3] = [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE];
+/// The windows a run is read on, each with its length: the two shared ones and the Fable week, the scarce window the
+/// pick prices in. The length bounds the buckets `readings_of` seeks, so a window joins the list with its own.
+const WINDOWS: [(&str, i64); 3] = [
+    (FIVE_HOUR, 5 * HOUR_MS),
+    (SEVEN_DAY, WEEK_MS),
+    (SEVEN_DAY_FABLE, WEEK_MS),
+];
 
 const COLUMNS: &str =
     "account_id, window, window_end, first_reading_at, last_reading_at, observed_rise, \
@@ -349,13 +356,13 @@ pub fn reconcile(
         .collect::<Result<_, _>>()?;
     for account in &accounts {
         let newest = newest_window_ends(tx, account)?;
-        for window in WINDOWS {
+        for (window, length) in WINDOWS {
             let newest = newest.get(window).copied();
             // A run the table already holds names a reset at or before its window's newest row, and a window that ended
             // before the cutoff would leave with the next purge, while every reading of a run past both names a reset
             // past them less the tolerance, so older readings need not be read at all.
             let floor = newest.unwrap_or(i64::MIN).max(cutoff) - RESET_TOLERANCE_MS;
-            'runs: for mut run in runs(&readings_of(tx, account, window, floor)?) {
+            'runs: for mut run in runs(&readings_of(tx, account, window, floor, length)?) {
                 let key = run.key();
                 let complete = run.closed_at.is_some() || key < now;
                 if !complete || key < cutoff || newest.is_some_and(|n| key <= n) {
@@ -438,19 +445,40 @@ fn newest_window_ends(
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// The statement `readings_of` runs and its binds: the account, the window, the floor the reset lies past and the
+/// first bucket a reading naming such a reset sits in. A reading names the reset of a window open when it was read,
+/// so the reset lies at most the window's `length` past the reading, and the bucket bound lets the
+/// `(account_id, window, bucket)` index seek where the reset alone would walk the window's whole retention.
+fn readings_statement(
+    account: &str,
+    window: &str,
+    floor: i64,
+    length: i64,
+) -> (&'static str, Vec<Value>) {
+    (
+        "SELECT utilization, reset_at, observed_at, source FROM quota_samples \
+         WHERE account_id = ?1 AND window = ?2 AND utilization IS NOT NULL AND reset_at > ?3 AND bucket >= ?4 \
+         ORDER BY observed_at, rowid",
+        vec![
+            Value::Text(account.to_string()),
+            Value::Text(window.to_string()),
+            Value::Integer(floor),
+            Value::Integer(bucket_of(floor - length)),
+        ],
+    )
+}
+
 /// The account's readings of `window` whose reset lies past `floor`, in the order they were observed.
 fn readings_of(
     conn: &Connection,
     account: &str,
     window: &str,
     floor: i64,
+    length: i64,
 ) -> Result<Vec<Reading>, LedgerError> {
-    let mut stmt = conn.prepare(
-        "SELECT utilization, reset_at, observed_at, source FROM quota_samples \
-         WHERE account_id = ?1 AND window = ?2 AND utilization IS NOT NULL AND reset_at > ?3 \
-         ORDER BY observed_at, rowid",
-    )?;
-    let rows = stmt.query_map(params![account, window, floor], |r| {
+    let (sql, binds) = readings_statement(account, window, floor, length);
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(params_from_iter(binds), |r| {
         Ok(Reading {
             utilization: r.get(0)?,
             reset: r.get(1)?,
@@ -673,4 +701,21 @@ pub fn newest_rows(
         out.entry(row.account_id.clone()).or_default().push(row);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_tables::plan_of;
+
+    #[test]
+    fn the_readings_of_a_window_seek_its_buckets_from_the_floor_less_its_length() {
+        let (sql, binds) = readings_statement("a", SEVEN_DAY, 30 * 86_400_000, WEEK_MS);
+        let plan = plan_of(sql, binds);
+        assert!(
+            plan.iter()
+                .any(|step| step.contains("(account_id=? AND window=? AND bucket>?)")),
+            "{plan:?}"
+        );
+    }
 }

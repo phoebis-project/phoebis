@@ -936,6 +936,43 @@ fn a_run_whose_first_reading_predates_the_oldest_retained_request_is_skipped() {
     );
 }
 
+/// A weekly reading taken as its week opened names a reset a week out, so where the floor sits an hour under that
+/// reset the reading's bucket lies almost a week before the floor, and the read still takes it.
+#[test]
+fn a_weekly_reading_almost_a_week_before_the_floor_still_opens_its_run() {
+    let reset = SATURDAY + 7 * DAY;
+    let opened = SATURDAY + MINUTE;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY);
+    db.insert_samples(
+        &[
+            reading(SEVEN_DAY, opened, 0.10, reset),
+            reading(SEVEN_DAY, reset - HOUR, 0.20, reset),
+        ],
+        None,
+    )
+    .unwrap();
+    // A hundred Sonnet units, 0.1 of the week.
+    served(&db, "r1", SONNET, opened + HOUR, 100, None);
+    // The 30-day cutoff lies an hour before the reset, and the floor a minute under it.
+    let now = reset - HOUR + 30 * DAY;
+    fold(&db, now);
+    let rows = rows(&db, now);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (
+                r.window.as_str(),
+                r.window_end,
+                r.first_reading_at,
+                r.last_reading_at,
+                r.requests
+            ))
+            .collect::<Vec<_>>(),
+        [(SEVEN_DAY, reset, opened, reset - HOUR, 1)],
+        "the run opens at the week's first reading: {rows:?}"
+    );
+}
+
 #[test]
 fn the_fable_weeks_run_prices_the_fable_attempts_alone() {
     let reset = SATURDAY + HOUR;
