@@ -15,6 +15,7 @@ import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
 import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, PLAN_WINDOWS, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, cooldownOf, failsOver, holds, oauthWindows, requestById } from './requests';
 import { createRng } from './rng';
+import { round } from './round';
 import { TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, RESEARCH_BUDGET_AT, clock, endOfMonth, iso, startOfDay, startOfMonth } from './time';
 
@@ -35,8 +36,8 @@ const WRITE_SHARE: Record<string, number> = { five_hour: 1.2e-7, seven_day: 1.4e
 const familyWeight = (model: string) => (model.includes('fable') ? 1 : model.includes('opus') ? 0.5 : model.includes('sonnet') ? 0.25 : 0.08);
 /** The plan windows a model draws: both shared windows, and a Fable model its week as well. */
 const drawnWindows = (model: string): string[] => (model.includes('fable') ? [...PLAN_WINDOWS, 'seven_day_fable'] : [...PLAN_WINDOWS]);
-const round3 = (x: number) => Math.round(x * 1_000) / 1_000;
-const round5 = (x: number) => Math.round(x * 100_000) / 100_000;
+const round3 = (x: number) => round(x, 3);
+const round5 = (x: number) => round(x, 5);
 /** A rewrite of `tokens` per plan window the model draws, in window share. */
 export const rewriteOf = (tokens: number, model: string): Record<string, number> =>
   Object.fromEntries(drawnWindows(model).map((w) => [w, round5(tokens * WRITE_SHARE[w] * familyWeight(model))]));

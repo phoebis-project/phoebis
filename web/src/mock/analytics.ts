@@ -18,6 +18,7 @@ import { earliest } from './lead';
 import { keyById } from './pools';
 import { requestsIn, sumOf, sumSplit, tokensIn } from './requests';
 import { createRng } from './rng';
+import { round } from './round';
 import type { EventSeed } from './routingLog';
 import { TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NOW, clock, iso, startOfHour } from './time';
@@ -756,8 +757,8 @@ const WEEK = 7 * DAY;
 /** The span the route answers: a window that ended before it has left the answer. */
 const SPAN_START = NOW - 30 * DAY;
 /** The rise in whole percents, as the readings move, and the priced share at four decimals. */
-const percent = (n: number) => Math.round(n * 100) / 100;
-const fourth = (n: number) => Math.round(n * 10_000) / 10_000;
+const percent = (n: number) => round(n, 2);
+const fourth = (n: number) => round(n, 4);
 
 const HISTORIES: History[] = [
   { accountId: 'primary', window: 'five_hour', newestEnd: clock(11, 44) - FIVE_HOURS, rise: [0.28, 0.66], requests: [90, 240], idle: [0.25, 4, 11], off: { 13: 1.34 }, quiet: [21] },

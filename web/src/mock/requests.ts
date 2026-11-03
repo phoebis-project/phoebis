@@ -18,6 +18,7 @@ import { cellsFor, promptOf } from './catalog';
 import { earliest, leadOf, paceHours } from './lead';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
+import { round } from './round';
 import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES } from './samples';
 import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, RESEARCH_BUDGET_AT, clock, daysAgo, iso, startOfHour } from './time';
 
@@ -317,7 +318,7 @@ function storyReading(accountId: string, w: RateLimitWindow, read: AttemptWindow
   const after = points.findIndex((p) => p.at > atMs);
   if (after < 0) return { ...read, utilization: points[points.length - 1].utilization };
   const [from, to] = [points[after - 1], points[after]];
-  return { ...read, utilization: Math.round((from.utilization + ((to.utilization - from.utilization) * (atMs - from.at)) / (to.at - from.at)) * 100) / 100 };
+  return { ...read, utilization: round(from.utilization + ((to.utilization - from.utilization) * (atMs - from.at)) / (to.at - from.at), 2) };
 }
 
 /** The routing log's story hour, written by hand: no drawn request falls inside it. */
@@ -604,7 +605,7 @@ function buildRequests(): RequestLog[] {
       ttftMs,
       durationMs,
       usage,
-      costUsd: Math.round(costOf(model, usage, false, atMs) * 10_000) / 10_000,
+      costUsd: round(costOf(model, usage, false, atMs), 4),
       diagnosticsSource: sourceOf(attempts, lane.keyId),
       errorCode,
       sessionId,
@@ -666,7 +667,7 @@ function buildRequests(): RequestLog[] {
         durationMs: Date.parse(answered.startedAt) + (answered.durationMs ?? 0) - atMs,
         canonicalModel: drawn,
         capturedBodies: false,
-        costUsd: Math.round(costOf(drawn, moved.usage, false, atMs) * 10_000) / 10_000,
+        costUsd: round(costOf(drawn, moved.usage, false, atMs), 4),
         keyGeneration: Date.parse(keyById.get('notebook')!.createdAt),
         keyId: 'notebook',
         model: drawn,
@@ -718,7 +719,7 @@ function buildRequests(): RequestLog[] {
     if (!fastTurn(r.keyId, r.model, r.kind)) continue;
     r.shape = { ...r.shape, requestedSpeed: 'fast' };
     r.attempts = r.attempts.map((a, i, all) => (i === all.length - 1 ? { ...a, response: { ...a.response, speed: 'fast' } } : a));
-    r.costUsd = Math.round(costOf(r.model, r.usage, true, r.at) * 10_000) / 10_000;
+    r.costUsd = round(costOf(r.model, r.usage, true, r.at), 4);
   }
   // A stream the client closed: its 200 head went out and no upstream error followed, so the request ends canceled
   // with the usage it had reached, under the code the relay files a client's leaving with. One drawn row takes it, so
@@ -1069,7 +1070,7 @@ function storyRow(seed: StorySeed): RequestLog {
     clientDrift: seed.clientDrift ?? null,
     compaction: null,
     contextCompacted: seed.contextCompacted ?? null,
-    costUsd: answered ? Math.round(costOf(seed.model, usage, fast, seed.at) * 10_000) / 10_000 : 0,
+    costUsd: answered ? round(costOf(seed.model, usage, fast, seed.at), 4) : 0,
     diagnosticsSource: sourceOf(attempts, seed.keyId),
     durationMs,
     errorCode: seed.errorCode ?? (status === 200 ? null : 'rate_limit_error'),
@@ -2771,7 +2772,7 @@ function accountRollups(): AccountRollup[] {
         ...ACCOUNT_ROLLUP_SAMPLE,
         accountId: account.id,
         hour: iso(t),
-        peak: { '5h': peak5 === null ? null : Math.round(peak5 * 1000) / 1000, '7d': Math.round(peak7 * 1000) / 1000, '7d_fable': peakF === null ? null : Math.round(peakF * 1000) / 1000 },
+        peak: { '5h': peak5 === null ? null : round(peak5, 3), '7d': round(peak7, 3), '7d_fable': peakF === null ? null : round(peakF, 3) },
         cooldownSeconds: cooldown,
         overageSeconds: overage,
         pins: { created: busy ? h.int(0, 3) : h.chance(0.2) ? 1 : 0, migratedIn: busy && h.chance(0.25) ? 1 : 0, migratedOut: cooldown > 0 ? h.int(1, 3) : 0 },

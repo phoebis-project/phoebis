@@ -4,6 +4,7 @@ import { endOf } from '@/lib/quota';
 import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey, windowKeyId } from '@/lib/windows';
 import { leadOf } from './lead';
 import { createRng } from './rng';
+import { round } from './round';
 import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, ago, ahead, clock, endOfMonth, iso } from './time';
 
@@ -29,7 +30,7 @@ function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoM
     lead: null,
     observedAt: ago(observedAgoMs),
     periodHours: WINDOW_HOURS[id] ?? hoursOfKey(id),
-    projection: burn === null ? null : Math.round((utilization + (burn * horizonInMs) / HOUR) * 1_000) / 1_000,
+    projection: burn === null ? null : round(utilization + (burn * horizonInMs) / HOUR, 3),
     resetsAt: ahead(resetsInMs),
     utilization,
   };
@@ -610,9 +611,9 @@ function sawtooth(seed: number, resetsAtMs: number, periodMs: number, target: nu
     const phase = (t - windowStart) / periodMs;
     const jitter = rng.float(-0.012, 0.012);
     const value = Math.max(0, Math.min(1, peak * climb(phase) + jitter));
-    samples.push({ at: iso(t), utilization: Math.round(value * 1000) / 1000 });
+    samples.push({ at: iso(t), utilization: round(value, 3) });
   }
-  samples.push({ at: iso(endMs), utilization: Math.round(target * 1000) / 1000 });
+  samples.push({ at: iso(endMs), utilization: round(target, 3) });
   return samples;
 }
 

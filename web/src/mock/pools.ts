@@ -3,6 +3,7 @@ import type { AccountKind, ApiKey, BudgetPeriod, CacheTtl, Pool, PoolCacheTtl, P
 import { endOf } from '@/lib/quota';
 import { accountById } from './accounts';
 import { earliest, paceHours } from './lead';
+import { round } from './round';
 import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, DELETED_HOLDER_END, MINUTE, NOW, ago, ahead, clock, daysAgo, endOfMonth, iso, startOfDay } from './time';
 
@@ -32,7 +33,7 @@ export function servedFigures(accountId: string, now: number, slowDown: boolean)
   const reset = week.resetsAt === null ? null : Date.parse(week.resetsAt);
   const hours = paceHours(earliest(reset, end), now);
   const burn = week.burn ?? 0;
-  return { burn: week.burn, paceScore: Math.round(((1 - week.utilization) / hours - burn) * 100_000) / 100_000, speed };
+  return { burn: week.burn, paceScore: round((1 - week.utilization) / hours - burn, 5), speed };
 }
 /**
  * The route lists a pool's keys from the key registry, so the story seeds none on the pool itself. Its pins are its

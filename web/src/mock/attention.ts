@@ -6,6 +6,8 @@ import { ACCOUNTS, accountById } from './accounts';
 import { RECONCILIATIONS } from './analytics';
 import { KEYS, POOLS, poolById } from './pools';
 import { REQUESTS, planPaid } from './requests';
+// The walls condition names its shedding round `round`, so the helper reads under another name here.
+import { round as roundTo } from './round';
 import { ROUTING_EVENTS } from './routingLog';
 import { ATTENTION_ITEM_SAMPLE, TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, iso } from './time';
@@ -73,7 +75,7 @@ function walls(accountId: string): Pick<AttentionItem, 'detail' | 'since'> | nul
   const projection = !slowed && typeof round?.detail.projection === 'number' ? round.detail.projection : null;
   const reset = typeof newest.detail.reset === 'number' ? newest.detail.reset : null;
   return {
-    detail: { early_ms: slowed && reset !== null ? Math.max(0, reset - wallAt) : null, projection_error: projection === null ? null : Math.round((1 - projection) * 1_000) / 1_000, setting: ['shed_cap', 'window_ceiling'], walls: spent.length, windows: sorted(spent.map((e) => e.detail.window)) },
+    detail: { early_ms: slowed && reset !== null ? Math.max(0, reset - wallAt) : null, projection_error: projection === null ? null : roundTo(1 - projection, 3), setting: ['shed_cap', 'window_ceiling'], walls: spent.length, windows: sorted(spent.map((e) => e.detail.window)) },
     since: spent[0].at,
   };
 }
