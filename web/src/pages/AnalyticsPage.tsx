@@ -20,7 +20,7 @@ import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceColumnWord, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, type AllowanceFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, MAX_BURN_LINES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, hintPlan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, shareHint, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, MAX_BURN_LINES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, hintPlan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, shareHint, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -165,7 +165,8 @@ function nativeRowOf(g: AnalyticsGroup, week: WeekPosition, weekFactor: number, 
   // Undefined leaves a side with no rows out of the cell, as the tiles leave it out.
   const both = (equivalent: number | null, billed: number | null, shown: string | null = null) => nativeCell(nativeCellOf(sides.equivalent === undefined ? undefined : equivalent, sides.billed === undefined ? undefined : billed, week, weekFactor, shown));
   const ratio = (planCount: number | null, whole: number, scale: number) => both(per(figure, planCount, scale), per(sides.billed ?? null, planCount === null ? null : whole - planCount, scale));
-  const label = modelGroupLabel(g);
+  // The route labels every group, the model grouping's empty key included, since the ledger labels that key itself.
+  const label = g.label;
   return {
     cells: [fmtInt(g.requests), both(figure, sides.billed ?? null, hint), ratio(g.planRequests, g.requests, 1), ratio(g.planOutputTokens, g.tokens.output, 1000)],
     key: g.key,
@@ -767,7 +768,7 @@ export function AnalyticsPage() {
             columns={[<span key="requests" title="The refused requests are left out, see the Refused column">Requests</span>, 'OK', 'Rate limited', 'Failed', 'Incomplete', 'Exhausted', 'Rejected', <span key="refused" title={REFUSED_TITLE}>Refused</span>, <span key="rate" title="The refused requests are left out, see the Refused column">Error rate</span>, 'Failovers', 'Search', 'Fetch']}
             rows={groups.map((g) => ({
               key: g.key,
-              label: modelGroupLabel(g),
+              label: g.label,
               // Search and Fetch count the server-tool calls the group's answers made, not tokens.
               cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.incomplete), fmtInt(g.exhausted), fmtInt(g.rejected), fmtInt(g.refused), rateCell(errorRateOf(g)), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
             }))}
@@ -820,7 +821,7 @@ export function AnalyticsPage() {
             ]}
             rows={groups.map((g) => ({
               key: g.key,
-              label: modelGroupLabel(g),
+              label: g.label,
               cells: [
                 fmtInt(g.requests),
                 fmtMs(g.percentiles.ttfbMs.p50),
@@ -1017,7 +1018,7 @@ export function AnalyticsPage() {
               columns={['Requests', 'Cost', 'Input', 'Cache read', 'Cache write', 'Output', 'Per request', 'Per 1k output']}
               rows={costGroups.map((g) => ({
                 key: g.key,
-                label: modelGroupLabel(g),
+                label: g.label,
                 cells: [
                   fmtInt(g.requests),
                   fmtUsd(g.costUsd),
@@ -1686,7 +1687,7 @@ function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading, plainL
       ]}
       rows={groups.map((g) => ({
         key: g.key,
-        label: modelGroupLabel(g),
+        label: g.label,
         // Expired between turns is no reason the Requests page filters by, so it stays plain.
         cells: [...order.map((reason) => cell(g, reason)), fmtInt(g.expiredBetweenTurns)],
       }))}
@@ -1923,7 +1924,7 @@ function stackOf(points: AnalyticsPoint[], value: (g: AnalyticsGroup) => number 
       const v = value(g);
       totals.set(g.key, (totals.get(g.key) ?? 0) + (v ?? 0));
       if (v === null) unpriced.add(g.key);
-      labels.set(g.key, modelGroupLabel(g));
+      labels.set(g.key, g.label);
     }
   }
   const ranked = [...totals.entries()]

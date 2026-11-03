@@ -171,12 +171,6 @@ export async function readBurn(
   return { accounts, answer };
 }
 
-/**
- * A group's label: the route's under every grouping, the model grouping's empty key included, since the ledger labels
- * that key itself.
- */
-export const modelGroupLabel = (g: Pick<AnalyticsGroup, 'key' | 'label'>): string => g.label;
-
 /** An earlier holder of a key id groups under `<id>@<generation>`, which the breakdown labels by its creation. */
 const EARLIER_HOLDER = /^(.+)@(\d+)$/;
 /**

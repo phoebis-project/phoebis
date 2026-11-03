@@ -92,7 +92,7 @@ export function weeksFigure(window: AllowanceWindow, account: Pick<AllowanceAcco
 }
 
 /** The block's subtitle, which the week control's position leaves alike. */
-export const allowanceSubtitle = (): string => 'Each weekly window left unused when it reset, as a share of the chosen week, the last four weeks';
+export const ALLOWANCE_SUBTITLE = 'Each weekly window left unused when it reset, as a share of the chosen week, the last four weeks';
 
 /** The account's weekly windows in the console's order, the 7-day window first and then each model week, a week the
  *  console does not know after the known ones in the answer's order. */

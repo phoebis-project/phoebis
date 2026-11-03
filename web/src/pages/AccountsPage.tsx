@@ -18,7 +18,7 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, E
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, METER_CODEC, sortAddressOf, sortDirOf } from '@/lib/address';
-import { FREE_NOTE, allowanceFigure, allowanceSpan, allowanceSubtitle, allowanceWindows, newestResets, ownShareHover, pairOf, resetDate, resetHover, resetInstant, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
+import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, newestResets, ownShareHover, pairOf, resetDate, resetHover, resetInstant, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
@@ -830,7 +830,7 @@ function AllowanceText({ className, figure }: { className: string; figure: Allow
  */
 function AllowanceCard({ answer, costs, error, holder, onRetry, week }: { answer: AllowanceAccount | null | undefined; costs: SubscriptionCosts | null; error: string | null; holder: Pick<Account, 'subscription'>; onRetry: () => void; week: WeekPosition }) {
   return (
-    <Card title="Allowance left at reset" subtitle={allowanceSubtitle()}>
+    <Card title="Allowance left at reset" subtitle={ALLOWANCE_SUBTITLE}>
       {error !== null ? (
         <ErrorState
           title="Could not load the weekly resets"

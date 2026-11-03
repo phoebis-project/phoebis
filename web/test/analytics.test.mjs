@@ -691,12 +691,6 @@ test('the probe cost counts the probes that reached the upstream, so a group who
   assert.equal(d.upstreamProbes(accountGroup({ probes: { ...base.probes, failed: 2, held: 3, ok: 5, skipped: 4 } })), 7, 'the answered and the failed probes');
 });
 
-test("modelGroupLabel reads the route's label, the model grouping's empty key included", () => {
-  assert.equal(d.modelGroupLabel({ key: '', label: 'no model' }), 'no model', "the label the route answers for the model grouping's empty key");
-  assert.equal(d.modelGroupLabel({ key: '', label: '' }), '', 'an empty label from the route reads empty, with no word in its place');
-  assert.equal(d.modelGroupLabel({ key: 'claude-haiku-4-5', label: 'claude-haiku-4-5' }), 'claude-haiku-4-5', 'a named model reads the label the route answered');
-});
-
 test('a burn line by model names the group without a model "no model"', () => {
   const { lines } = d.foldBurn([point(0, 'claude-haiku-4-5', { uncachedTokens: 60 }), point(0, '')], 'model', 60, NONE);
   assert.deepEqual(lines.map((l) => l.label), ['claude-haiku-4-5', 'no model'], 'the burn line under the model grouping');
