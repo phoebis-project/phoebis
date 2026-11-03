@@ -62,8 +62,6 @@ pub struct LedgerDb {
     /// The writes begun and ended through `write`, which `purge` reads to let a waiting write go first.
     writes: Writes,
     #[cfg(any(test, feature = "debug-hooks"))]
-    fail_next_read: AtomicBool,
-    #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_writer_read: Mutex<Option<WriterRead>>,
     #[cfg(any(test, feature = "debug-hooks"))]
     hold_next_writer_read: Mutex<Option<ArmedHold>>,
@@ -303,8 +301,6 @@ impl LedgerDb {
             purger: purger.map(Mutex::new),
             writes: Writes::default(),
             #[cfg(any(test, feature = "debug-hooks"))]
-            fail_next_read: AtomicBool::new(false),
-            #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_writer_read: Mutex::new(None),
             #[cfg(any(test, feature = "debug-hooks"))]
             hold_next_writer_read: Mutex::new(None),
@@ -423,7 +419,7 @@ impl LedgerDb {
         // `ReadCanceled`.
         match &self.readers {
             Some(readers) => self.lend(readers, readers.take_blocking(), f),
-            None => self.serve(&recovered(&self.writer), f),
+            None => f(&recovered(&self.writer)),
         }
     }
 
@@ -449,23 +445,7 @@ impl LedgerDb {
             reader.conn = open_reader(&pool.path)?;
             reader.generation = generation;
         }
-        self.serve(&reader.conn, f)
-    }
-
-    /// Both read paths of both ledgers run their closure here, so `debug_fail_next_read` fails the next read
-    /// whichever path and connection it takes.
-    fn serve<T>(
-        &self,
-        conn: &Connection,
-        f: impl FnOnce(&Connection) -> Result<T, LedgerError>,
-    ) -> Result<T, LedgerError> {
-        #[cfg(any(test, feature = "debug-hooks"))]
-        if self.fail_next_read.swap(false, Ordering::SeqCst) {
-            return Err(LedgerError::Io(std::io::Error::other(
-                INJECTED_READ_FAILURE,
-            )));
-        }
-        f(conn)
+        f(&reader.conn)
     }
 
     /// Runs `f` on the writer connection on a blocking worker. The writer loop awaits it between two batches, so it
@@ -544,13 +524,6 @@ impl LedgerDb {
             tx.commit()?;
             Ok(())
         })
-    }
-
-    /// The next `read` or `read_blocking` answers an injected failure once.
-    #[cfg(any(test, feature = "debug-hooks"))]
-    #[doc(hidden)]
-    pub fn debug_fail_next_read(&self) {
-        self.fail_next_read.store(true, Ordering::SeqCst);
     }
 
     /// Fails the next `writer_read` that names `which` with an I/O error whose text is `INJECTED_READ_FAILURE`.
