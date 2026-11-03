@@ -19,10 +19,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use indexmap::IndexMap;
-use phoebis_routing::DAY_MS;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 
+use crate::bodies::{first_kept_hour, request_cutoff};
 use crate::db::{begin_write, row_to_request, with_attempts, LedgerDb, REQUEST_SELECT};
 use crate::generations::PAGE;
 use crate::pricing::{
@@ -31,9 +31,6 @@ use crate::pricing::{
 use crate::record::{AttemptRecord, RequestRecord};
 use crate::rollup::{deltas_of, empty_row, read_rollup, unfold, write_rollup, RollupRow};
 use crate::LedgerError;
-
-const DAY_S: i64 = 86_400;
-const HOUR_S: i64 = 3_600;
 
 /// The `meta` key holding the mark: `{"since": <ms>, "revisions": [{"effective": "<date>", "bands": {"<model>":
 /// <over or null>}}]}`, `since` the instant the first mark was written (the first start after the migration) and the
@@ -103,10 +100,7 @@ pub fn refold_bands(
     let (cutoff, guard) = match (retention_days, rollup_retention_days) {
         (0, 0) => (None, None),
         (0, days) => (None, Some(first_kept_hour(now, days))),
-        (days, _) => (
-            Some(now - i64::from(days) * DAY_MS),
-            Some(first_kept_hour(now, days)),
-        ),
+        (days, _) => (request_cutoff(days, now), Some(first_kept_hour(now, days))),
     };
     let mut moved = 0;
     let (mark, cursor) = db.write(|c| {
@@ -237,15 +231,6 @@ fn pass(
             return Ok(moved);
         }
     }
-}
-
-/// The first hour the rollup purge keeps under a retention of `days` at `now`, in milliseconds. The purge cuts in
-/// seconds and drops every hour that starts before its cutoff.
-fn first_kept_hour(now: i64, days: u32) -> i64 {
-    let cutoff = now / 1_000 - i64::from(days) * DAY_S;
-    let hour = cutoff.div_euclid(HOUR_S) * HOUR_S;
-    let first_kept = if hour < cutoff { hour + HOUR_S } else { hour };
-    first_kept * 1_000
 }
 
 /// Whether the row each delta names stands.

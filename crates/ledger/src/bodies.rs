@@ -28,6 +28,7 @@ pub const PURGE_SLICE: usize = 1_000;
 pub const PURGE_SLICE_BYTES: usize = 32 << 20;
 
 const DAY_S: i64 = 86_400;
+const HOUR_S: i64 = 3_600;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Purged {
@@ -78,14 +79,24 @@ struct Cutoffs {
     sample: Option<i64>,
 }
 
-/// The requests' cutoff, `None` at a zero `retention_days`; the registry's history purge reads the same one.
-pub(crate) fn request_cutoff(config: &LedgerConfig, now: i64) -> Option<i64> {
-    (config.retention_days != 0).then(|| now - config.retention_days as i64 * DAY_MS)
+/// The requests' cutoff, `None` at a zero `retention_days`; the registry's history purge and the band refold read the
+/// same one.
+pub(crate) fn request_cutoff(retention_days: u32, now: i64) -> Option<i64> {
+    (retention_days != 0).then(|| now - retention_days as i64 * DAY_MS)
+}
+
+/// The first hour the rollup purge keeps under a retention of `days` at `now`, in milliseconds. The purge cuts in
+/// seconds and drops every hour that starts before its cutoff.
+pub(crate) fn first_kept_hour(now: i64, days: u32) -> i64 {
+    let cutoff = now / 1_000 - i64::from(days) * DAY_S;
+    let hour = cutoff.div_euclid(HOUR_S) * HOUR_S;
+    let first_kept = if hour < cutoff { hour + HOUR_S } else { hour };
+    first_kept * 1_000
 }
 
 impl Cutoffs {
     fn of(config: &LedgerConfig, now: i64) -> Cutoffs {
-        let request = request_cutoff(config, now);
+        let request = request_cutoff(config.retention_days, now);
         let rollup = (config.rollup_retention_days != 0)
             .then(|| now / 1_000 - config.rollup_retention_days as i64 * DAY_S);
         // The samples' buckets are seconds while the requests' timestamps are milliseconds; one window, two units.

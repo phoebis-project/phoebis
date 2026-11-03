@@ -1956,7 +1956,7 @@ async fn run_purge(
     let purged = run_retention(db.clone(), config.clone(), now, budgeted).await;
     // The registry's settled refresh attempts and its change log follow the requests' cutoff, so a zero
     // `retention_days` keeps them as it keeps the requests.
-    let history = match request_cutoff(config, now) {
+    let history = match request_cutoff(config.retention_days, now) {
         None => None,
         Some(cutoff) => {
             let store = store.clone();
