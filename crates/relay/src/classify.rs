@@ -499,11 +499,8 @@ fn names_model(body: &[u8], wire_model: &str) -> bool {
         return false;
     };
     let wire_model = wire_model.to_ascii_lowercase();
-    let boundary =
-        |c: Option<char>| c.is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '-' || c == '.'));
-    message.match_indices(&wire_model).any(|(at, _)| {
-        boundary(message[..at].chars().next_back())
-            && boundary(message[at + wire_model.len()..].chars().next())
+    names_token(&message, &wire_model, |c| {
+        c.is_ascii_alphanumeric() || c == '-' || c == '.'
     })
 }
 
@@ -514,19 +511,24 @@ pub(crate) fn refused_names(body: &[u8], candidates: &[Injected]) -> Vec<Injecte
     let Some(message) = error_message(body) else {
         return Vec::new();
     };
-    let boundary =
-        |c: Option<char>| c.is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'));
     candidates
         .iter()
         .copied()
         .filter(|item| {
-            let name = item.wire_name();
-            message.match_indices(name).any(|(at, _)| {
-                boundary(message[..at].chars().next_back())
-                    && boundary(message[at + name.len()..].chars().next())
+            names_token(&message, item.wire_name(), |c| {
+                c.is_ascii_alphanumeric() || c == '_' || c == '-'
             })
         })
         .collect()
+}
+
+/// Whether some occurrence of `token` in `text` has, on each side, the text's edge or a character outside
+/// `in_token`.
+fn names_token(text: &str, token: &str, in_token: impl Fn(char) -> bool) -> bool {
+    let bound = |c: Option<char>| c.is_none_or(|c| !in_token(c));
+    text.match_indices(token).any(|(at, _)| {
+        bound(text[..at].chars().next_back()) && bound(text[at + token.len()..].chars().next())
+    })
 }
 
 #[cfg(test)]
