@@ -6418,11 +6418,7 @@ fn exhaustion_of(obstacles: Vec<Obstacle>) -> Exhaustion {
 }
 
 fn kind_name(kind: Option<AccountKind>) -> &'static str {
-    match kind {
-        Some(AccountKind::Oauth) => "oauth",
-        Some(AccountKind::ApiKey) => "api_key",
-        None => "unknown",
-    }
+    kind.map_or("unknown", AccountKind::as_str)
 }
 
 fn kind_fact(kind: Option<AccountKind>) -> Fact {

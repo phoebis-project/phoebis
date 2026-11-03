@@ -456,24 +456,6 @@ impl Funding {
     }
 }
 
-/// The word an account kind is spelled with on the bus's `AccountSelected` and in the persisted payloads, whose
-/// spelling the store keeps to itself.
-pub(crate) fn kind_word(kind: AccountKind) -> &'static str {
-    match kind {
-        AccountKind::ApiKey => "api_key",
-        AccountKind::Oauth => "oauth",
-    }
-}
-
-/// `kind_word` read back, `None` for a word no kind is spelled with.
-pub(crate) fn kind_of_word(word: &str) -> Option<AccountKind> {
-    match word {
-        "api_key" => Some(AccountKind::ApiKey),
-        "oauth" => Some(AccountKind::Oauth),
-        _ => None,
-    }
-}
-
 pub struct EngineParts {
     pub bus: Bus,
     pub clock: Clock,
@@ -3161,7 +3143,7 @@ impl Engine {
                 if let Some(compaction) = agent.compaction.as_mut() {
                     compaction.attempt = selected.attempt;
                     compaction.account = Some(selected.account_id);
-                    compaction.kind = kind_of_word(&selected.account_kind);
+                    compaction.kind = AccountKind::parse(&selected.account_kind);
                     compaction.usage_based = selected.usage_based;
                     compaction.in_overage = false;
                     compaction.ok_head = false;
@@ -3197,7 +3179,7 @@ impl Engine {
         observation.expected = 0;
         observation.ttl_ms = 0;
         observation.dispatched_ms = selected.cache_ttl_ms;
-        observation.kind = kind_of_word(&selected.account_kind);
+        observation.kind = AccountKind::parse(&selected.account_kind);
         observation.usage_based = selected.usage_based;
         observation.in_overage = false;
         agent.cache_started = observation.started;

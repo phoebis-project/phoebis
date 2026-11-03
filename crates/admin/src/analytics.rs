@@ -516,9 +516,7 @@ pub(crate) async fn budgets(State(state): State<Arc<AdminState>>) -> Response {
         .budgeted_members()
         .flat_map(|m| {
             let rows = crate::routes::spend_rows(&spends, &m.pool_id, &m.account_id);
-            let kind = snapshot
-                .account(&m.account_id)
-                .map(|a| crate::routes::kind_name(a.kind));
+            let kind = snapshot.account(&m.account_id).map(|a| a.kind.as_str());
             m.budgets()
                 .map(|(period, budget)| {
                     let spend = rows.iter().find(|s| s.period == period);

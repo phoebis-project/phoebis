@@ -17,9 +17,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LEASE_MS};
 use crate::engine::{
-    kind_of_word, kind_word, Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket,
-    Inner, Kept, Observation, ParkKind, PrefixAnchor, PriorCoverage, Reason, SavingsUnit, Session,
-    SessionKey, Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
+    Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner, Kept, Observation,
+    ParkKind, PrefixAnchor, PriorCoverage, Reason, SavingsUnit, Session, SessionKey, Settlement,
+    UnansweredProbe, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::usage::ProbeUsage;
@@ -368,7 +368,7 @@ fn window_of(window: Option<String>) -> Option<&'static str> {
 fn optional_kind(word: Option<String>) -> Option<Option<phoebis_store::AccountKind>> {
     match word {
         None => Some(None),
-        Some(word) => kind_of_word(&word).map(Some),
+        Some(word) => phoebis_store::AccountKind::parse(&word).map(Some),
     }
 }
 
@@ -484,7 +484,7 @@ impl PersistedAgent {
                     static_hash: o.recipe.static_hash.clone(),
                     tail_hash: o.recipe.tail_hash.clone(),
                 },
-                kind: o.kind.map(|kind| kind_word(kind).to_string()),
+                kind: o.kind.map(|kind| kind.as_str().to_string()),
                 usage_based: o.usage_based,
                 in_overage: o.in_overage,
             }),
@@ -527,7 +527,7 @@ impl PersistedAgent {
                     model: probe.model.clone(),
                     expires: probe.expires,
                     covered: probe.covered,
-                    kind: probe.kind.map(|kind| kind_word(kind).to_string()),
+                    kind: probe.kind.map(|kind| kind.as_str().to_string()),
                     usage_based: probe.usage_based,
                     in_overage: probe.in_overage,
                 })
@@ -546,7 +546,7 @@ impl PersistedAgent {
                     at: kept.at,
                     band: kept.band.as_str().to_string(),
                     entry_expires: kept.entry_expires,
-                    kind: kept.kind.map(|kind| kind_word(kind).to_string()),
+                    kind: kept.kind.map(|kind| kind.as_str().to_string()),
                     usage_based: kept.usage_based,
                     in_overage: kept.in_overage,
                     covered: kept.covered,

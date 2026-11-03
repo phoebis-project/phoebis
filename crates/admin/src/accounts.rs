@@ -144,10 +144,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     if let Err(refusal) = within_text_bound("label", Some(&input.label)) {
         return refusal;
     }
-    let kind = match input.kind.as_str() {
-        "oauth" => AccountKind::Oauth,
-        "api_key" => AccountKind::ApiKey,
-        _ => return failure(StatusCode::BAD_REQUEST, "kind must be oauth or api_key"),
+    let Some(kind) = AccountKind::parse(&input.kind) else {
+        return failure(StatusCode::BAD_REQUEST, "kind must be oauth or api_key");
     };
     match (kind, &input.secret) {
         (AccountKind::Oauth, Some(_)) => {

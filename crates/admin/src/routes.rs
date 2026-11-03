@@ -2769,7 +2769,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     });
     Account {
         id: row.id.clone(),
-        kind: kind_name(row.kind).to_string(),
+        kind: row.kind.as_str().to_string(),
         label: row.label.clone(),
         enabled: row.enabled,
         canceled: term.canceled,
@@ -3120,13 +3120,6 @@ fn usage_json(
         poll,
         raw_keys: snapshot.raw_keys.clone(),
         windows: snapshot.windows.iter().map(window).collect(),
-    }
-}
-
-pub(crate) fn kind_name(kind: AccountKind) -> &'static str {
-    match kind {
-        AccountKind::ApiKey => "api_key",
-        AccountKind::Oauth => "oauth",
     }
 }
 

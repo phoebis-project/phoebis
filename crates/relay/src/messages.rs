@@ -733,11 +733,7 @@ impl Trace {
             request_id: self.request_id.clone(),
             attempt,
             account_id: account.id.clone(),
-            account_kind: match account.kind {
-                AccountKind::ApiKey => "api_key",
-                AccountKind::Oauth => "oauth",
-            }
-            .into(),
+            account_kind: account.kind.as_str().into(),
             usage_based,
             pin_epoch,
             started_at,

@@ -366,17 +366,12 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         row.enabled = enabled;
     }
     if let Some(strategy) = &input.strategy {
-        row.strategy = match strategy.as_str() {
-            "pace" => Strategy::Pace,
-            "priority" => Strategy::Priority,
-            "round_robin" => Strategy::RoundRobin,
-            _ => {
-                return Err(failure(
-                    StatusCode::BAD_REQUEST,
-                    "strategy must be pace, priority, or round_robin",
-                ))
-            }
-        };
+        row.strategy = Strategy::parse(strategy).ok_or_else(|| {
+            failure(
+                StatusCode::BAD_REQUEST,
+                "strategy must be pace, priority, or round_robin",
+            )
+        })?;
     }
     // The flag is the operator's answer and nothing else writes it: a pool orders by kind only while this is
     // on, so a strategy the operator tries out and takes back leaves the preference where they left it.
@@ -393,17 +388,12 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         row.affinity_ttl_seconds = ttl;
     }
     if let Some(policy) = &input.overage_policy {
-        row.overage_policy = match policy.as_str() {
-            "prefer_plan" => OveragePolicy::PreferPlan,
-            "allow" => OveragePolicy::Allow,
-            "never" => OveragePolicy::Never,
-            _ => {
-                return Err(failure(
-                    StatusCode::BAD_REQUEST,
-                    "overage_policy must be prefer_plan, allow, or never",
-                ))
-            }
-        };
+        row.overage_policy = OveragePolicy::parse(policy).ok_or_else(|| {
+            failure(
+                StatusCode::BAD_REQUEST,
+                "overage_policy must be prefer_plan, allow, or never",
+            )
+        })?;
     }
     if let Some(ceiling) = input.window_ceiling {
         if !(0.5..=1.0).contains(&ceiling) {
@@ -1329,7 +1319,7 @@ fn member_json(
     let kind = accounts
         .iter()
         .find(|a| a.id == m.account_id)
-        .map(|a| crate::routes::kind_name(a.kind).to_string());
+        .map(|a| a.kind.as_str().to_string());
     let rows = crate::routes::spend_rows(spends, &m.pool_id, &m.account_id);
     let reports: Vec<SpendReport> = rows
         .iter()
