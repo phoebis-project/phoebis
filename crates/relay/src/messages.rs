@@ -3536,16 +3536,10 @@ impl Relay {
                         })
                         .await;
                 }
-                // The key may have been evicted and its record saved while this request was upstream. The
-                // writes below would then build a fresh entry, with no prompt id and none of the session's
-                // other accounts, and the next flush would overwrite the saved record with it. One lock while
-                // the entry is still resident, which is the usual case.
-                if let Some(key) = ctx.memory_key {
-                    self.memory.restore(key, arrived).await;
-                }
                 if let (Some(key), Some(id)) = (ctx.memory_key, head.get("request-id")) {
                     self.memory
-                        .record_request_id(key, &ctx.account.id, id, arrived);
+                        .record_request_id(key, &ctx.account.id, id, arrived)
+                        .await;
                 }
                 // Built once and moved into whichever branch below commits: a JSON answer and a streamed one
                 // both reach the caller through `stream()`, so both parse for a message id the same way. An
@@ -3571,8 +3565,9 @@ impl Relay {
                             // `last_seen` back to the head's clock.
                             Box::pin(async move {
                                 let now = (clock)();
-                                memory.restore(&key, now).await;
-                                memory.record_message_id(&key, &account_id, &model, &id, now);
+                                memory
+                                    .record_message_id(&key, &account_id, &model, &id, now)
+                                    .await;
                             }) as BoxFuture<'static, ()>
                         })
                             as Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>

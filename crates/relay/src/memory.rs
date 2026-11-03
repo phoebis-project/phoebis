@@ -277,7 +277,17 @@ impl SessionMemory {
         }
     }
 
-    pub fn record_request_id(&self, key: &MemoryKey, account_id: &str, request_id: &str, now: i64) {
+    /// Reads the key through `restore` first: the key may have been evicted and its record saved while the
+    /// request was upstream, and a write that built a fresh entry, with no prompt id and none of the session's
+    /// other accounts, would have the next flush overwrite the saved record with it.
+    pub async fn record_request_id(
+        &self,
+        key: &MemoryKey,
+        account_id: &str,
+        request_id: &str,
+        now: i64,
+    ) {
+        self.restore(key, now).await;
         let mut inner = self.inner.lock().unwrap();
         self.purge_held(&mut inner, now);
         let account = self.account_entry(&mut inner, key, account_id, now);
@@ -285,7 +295,8 @@ impl SessionMemory {
         self.mark_dirty(&mut inner, key);
     }
 
-    pub fn record_message_id(
+    /// Reads the key through `restore` first, as `record_request_id` does.
+    pub async fn record_message_id(
         &self,
         key: &MemoryKey,
         account_id: &str,
@@ -293,6 +304,7 @@ impl SessionMemory {
         message_id: &str,
         now: i64,
     ) {
+        self.restore(key, now).await;
         let mut inner = self.inner.lock().unwrap();
         self.purge_held(&mut inner, now);
         let account = self.account_entry(&mut inner, key, account_id, now);
@@ -915,11 +927,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_cap_evicts_the_least_recently_seen_entry() {
+    #[tokio::test]
+    async fn the_cap_evicts_the_least_recently_seen_entry() {
         let mem = SessionMemory::new(2, MEMORY_IDLE_MS);
         let (a, b, c) = (key("a"), key("b"), key("c"));
-        mem.record_request_id(&a, "acct", "req_a", 1_000);
+        mem.record_request_id(&a, "acct", "req_a", 1_000).await;
         mem.touch(&b, None, 2_000);
         // A third entry past the cap evicts `a`, the least recently seen of the two held.
         mem.touch(&c, None, 3_000);
@@ -931,11 +943,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_purge_drops_an_entry_idle_past_the_bound() {
+    #[tokio::test]
+    async fn the_purge_drops_an_entry_idle_past_the_bound() {
         let mem = SessionMemory::new(10, MEMORY_IDLE_MS);
         let a = key("a");
-        mem.record_request_id(&a, "acct", "req_a", 0);
+        mem.record_request_id(&a, "acct", "req_a", 0).await;
         // The second call must clear both gates: the idle bound itself, and PURGE_INTERVAL_MS since the
         // sweep only runs once a minute, so it lands at their sum rather than at the idle bound alone.
         mem.touch(&a, None, MEMORY_IDLE_MS + PURGE_INTERVAL_MS);
@@ -948,7 +960,7 @@ mod tests {
         // An idle bound far shorter than PURGE_INTERVAL_MS still waits on the sweep: the entry is stale
         // well before the sweep runs, but the sweep, not the bound, decides when it is dropped.
         let custom = SessionMemory::new(10, 1_000);
-        custom.record_request_id(&a, "acct", "req_a", 0);
+        custom.record_request_id(&a, "acct", "req_a", 0).await;
         custom.touch(&a, None, PURGE_INTERVAL_MS + 1_000);
         assert_eq!(
             custom.previous(&a, "acct", "claude-sonnet-4-5").request_id,
@@ -1018,12 +1030,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn previous_is_isolated_per_account() {
+    #[tokio::test]
+    async fn previous_is_isolated_per_account() {
         let mem = SessionMemory::new(10, MEMORY_IDLE_MS);
         let a = key("s");
-        mem.record_request_id(&a, "acct-a", "req_a", 1_000);
-        mem.record_request_id(&a, "acct-b", "req_b", 1_000);
+        mem.record_request_id(&a, "acct-a", "req_a", 1_000).await;
+        mem.record_request_id(&a, "acct-b", "req_b", 1_000).await;
         assert_eq!(
             mem.previous(&a, "acct-a", "claude-sonnet-4-5")
                 .request_id
@@ -1048,7 +1060,7 @@ mod tests {
         let mem =
             Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let a = key("a");
-        mem.record_request_id(&a, "acct", "req", 1_000);
+        mem.record_request_id(&a, "acct", "req", 1_000).await;
         let batch = mem.snapshot_dirty(1_000);
         assert_eq!(batch.len(), 1);
         let v1: RecordV1 = serde_json::from_str(&batch[0].1.payload).unwrap();
@@ -1067,7 +1079,7 @@ mod tests {
         let mem =
             Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let (a, b) = (key("a"), key("b"));
-        mem.record_request_id(&a, "acct", "req_a", 1_000);
+        mem.record_request_id(&a, "acct", "req_a", 1_000).await;
         mem.touch(&b, None, 2_000);
         let keys: std::collections::HashSet<MemoryKey> = mem
             .snapshot_dirty(2_000)
@@ -1083,15 +1095,15 @@ mod tests {
         let mem =
             Arc::new(SessionMemory::new(2, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let (a, b, c, d, e) = (key("a"), key("b"), key("c"), key("d"), key("e"));
-        mem.record_request_id(&a, "acct", "req_a", 1_000);
+        mem.record_request_id(&a, "acct", "req_a", 1_000).await;
         // The refused save is what puts the overlay into the regime that sheds records: nothing lands from
         // here on, which is the state a store that stays down leaves behind, one eviction at a time.
         store.fail_next_save.store(true, Ordering::SeqCst);
         mem.flush(1_000).await;
-        mem.record_request_id(&b, "acct", "req_b", 2_000);
-        mem.record_request_id(&c, "acct", "req_c", 3_000); // evicts a into the overlay
-        mem.record_request_id(&d, "acct", "req_d", 4_000); // evicts b into the overlay
-        mem.record_request_id(&e, "acct", "req_e", 5_000); // evicts c; the overlay is full, a is dropped
+        mem.record_request_id(&b, "acct", "req_b", 2_000).await;
+        mem.record_request_id(&c, "acct", "req_c", 3_000).await; // evicts a into the overlay
+        mem.record_request_id(&d, "acct", "req_d", 4_000).await; // evicts b into the overlay
+        mem.record_request_id(&e, "acct", "req_e", 5_000).await; // evicts c; the overlay is full, a is dropped
         let unsaved: std::collections::HashSet<MemoryKey> = mem
             .snapshot_dirty(5_000)
             .into_iter()
@@ -1111,11 +1123,11 @@ mod tests {
         let store = Arc::new(MapStore::default());
         let mem = Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), 1_000));
         let (a, b) = (key("a"), key("b"));
-        mem.record_request_id(&a, "acct", "req_a", 1_000);
+        mem.record_request_id(&a, "acct", "req_a", 1_000).await;
         store.fail_next_save.store(true, Ordering::SeqCst);
         mem.flush(1_000).await;
-        mem.record_request_id(&b, "acct", "req_b", 1_500); // evicts a into the overlay
-                                                           // Past the retention for both: the flush that leaves them out also retires them.
+        mem.record_request_id(&b, "acct", "req_b", 1_500).await; // evicts a into the overlay
+                                                                 // Past the retention for both: the flush that leaves them out also retires them.
         mem.flush(5_000).await;
         let inner = mem.inner.lock().unwrap();
         assert!(
@@ -1139,7 +1151,7 @@ mod tests {
         let mem =
             Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let (a, b, c, d) = (key("a"), key("b"), key("c"), key("d"));
-        mem.record_request_id(&a, "acct", "req_a", 1_000);
+        mem.record_request_id(&a, "acct", "req_a", 1_000).await;
         let gate = Arc::new(Barrier::new(2));
         *store.hold_save.lock().unwrap() = Some(gate.clone());
         let held = tokio::spawn({
@@ -1151,12 +1163,12 @@ mod tests {
         })
         .await;
         // The save is parked with the store answering nothing; evictions keep arriving.
-        mem.record_request_id(&b, "acct", "req_b", 2_000); // evicts a
-        mem.record_request_id(&c, "acct", "req_c", 3_000); // evicts b; the overlay is at the cap, a is shed
-        mem.record_request_id(&d, "acct", "req_d", 4_000); // evicts c; b is shed
-                                                           // Captured before the barrier releases: the parked save thread waits on `gate` for a second party
-                                                           // that must arrive whether or not the assertion below holds, or the runtime's drop hangs forever
-                                                           // joining a blocking thread nothing would release.
+        mem.record_request_id(&b, "acct", "req_b", 2_000).await; // evicts a
+        mem.record_request_id(&c, "acct", "req_c", 3_000).await; // evicts b; the overlay is at the cap, a is shed
+        mem.record_request_id(&d, "acct", "req_d", 4_000).await; // evicts c; b is shed
+                                                                 // Captured before the barrier releases: the parked save thread waits on `gate` for a second party
+                                                                 // that must arrive whether or not the assertion below holds, or the runtime's drop hangs forever
+                                                                 // joining a blocking thread nothing would release.
         let unsaved: std::collections::HashSet<MemoryKey> = mem
             .snapshot_dirty(4_000)
             .into_iter()
@@ -1183,10 +1195,10 @@ mod tests {
         let store = Arc::new(MapStore::default());
         let mem = Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), 1_000));
         let (a, b) = (key("a"), key("b"));
-        mem.record_request_id(&a, "acct", "req_old", 0);
+        mem.record_request_id(&a, "acct", "req_old", 0).await;
         store.fail_next_save.store(true, Ordering::SeqCst);
         mem.flush(0).await;
-        mem.record_request_id(&b, "acct", "req_b", 5_000); // evicts a into the overlay
+        mem.record_request_id(&b, "acct", "req_b", 5_000).await; // evicts a into the overlay
         mem.restore(&a, 5_000).await;
         assert_eq!(
             mem.previous(&a, "acct", "claude-sonnet-4-5").request_id,
@@ -1215,10 +1227,10 @@ mod tests {
         let (a, b, c, d) = (key("a"), key("b"), key("c"), key("d"));
         // Four sessions at a cap of two: c evicts a, d evicts b, and the overlay holds what the store has not
         // taken yet, reaching the cap and asking for its own flush, rather than shedding either record.
-        mem.record_request_id(&a, "acct", "req_a", 1_000);
-        mem.record_request_id(&b, "acct", "req_b", 2_000);
-        mem.record_request_id(&c, "acct", "req_c", 3_000); // evicts a into the overlay
-        mem.record_request_id(&d, "acct", "req_d", 4_000); // evicts b into the overlay; the overlay is at the cap
+        mem.record_request_id(&a, "acct", "req_a", 1_000).await;
+        mem.record_request_id(&b, "acct", "req_b", 2_000).await;
+        mem.record_request_id(&c, "acct", "req_c", 3_000).await; // evicts a into the overlay
+        mem.record_request_id(&d, "acct", "req_d", 4_000).await; // evicts b into the overlay; the overlay is at the cap
         tokio::time::timeout(Duration::from_secs(5), mem.flush_wanted())
             .await
             .expect("an overlay at the cap asks the flusher for a flush of its own");
@@ -1236,7 +1248,7 @@ mod tests {
         // A retention shorter than the outage, so the entry falls past it while the saves are failing.
         let mem = Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), 1_000));
         let a = key("a");
-        mem.record_request_id(&a, "acct", "req_a", 1_000);
+        mem.record_request_id(&a, "acct", "req_a", 1_000).await;
         store.fail_next_save.store(true, Ordering::SeqCst);
         mem.flush(1_000).await;
         assert!(
@@ -1265,14 +1277,13 @@ mod tests {
             Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let (a, b) = (key("a"), key("b"));
         mem.touch(&a, Some("p-1"), 1_000);
-        mem.record_request_id(&a, "acct", "req_a", 1_000);
+        mem.record_request_id(&a, "acct", "req_a", 1_000).await;
         // The one slot goes to another session while a's request is still upstream, and the flush saves what
         // the eviction left in the overlay.
         mem.touch(&b, None, 2_000);
         mem.flush(2_000).await;
-        // The order the response half writes in: the read-through first, the write after it.
-        mem.restore(&a, 3_000).await;
-        mem.record_request_id(&a, "other", "req_other", 3_000);
+        // The write reads the saved record itself before it lands.
+        mem.record_request_id(&a, "other", "req_other", 3_000).await;
         mem.flush(3_000).await;
         let rows = store.rows.lock().unwrap();
         let v1: RecordV1 = serde_json::from_str(&rows.get(&a).unwrap().payload).unwrap();
@@ -1314,12 +1325,14 @@ mod tests {
             store.hold_load.lock().unwrap().is_none().then_some(())
         })
         .await;
-        mem.record_request_id(&a, "acct", "req_new", 2_000);
+        mem.touch(&a, None, 2_000);
+        mem.record_request_id(&a, "acct", "req_new", 2_000).await;
         mem.flush(2_000).await;
         assert_eq!(request_id_of(&store, &a).as_deref(), Some("req_new"));
         // At a cap of one this write asks for an eviction, and the key whose read is in flight must not be
         // the one it takes: the guard the read runs afterwards would read an absent key as its own to fill.
-        mem.record_request_id(&key("b"), "acct", "req_b", 3_000);
+        mem.record_request_id(&key("b"), "acct", "req_b", 3_000)
+            .await;
         tokio::task::spawn_blocking(move || gate.wait())
             .await
             .unwrap();
@@ -1354,7 +1367,7 @@ mod tests {
         let mem =
             Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let b = key("b");
-        mem.record_request_id(&a, "acct", "req_new", 1_000);
+        mem.record_request_id(&a, "acct", "req_new", 1_000).await;
         mem.touch(&b, None, 2_000);
         mem.restore(&a, 3_000).await;
         assert_eq!(
@@ -1375,7 +1388,7 @@ mod tests {
         let mem =
             Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let (a, b) = (key("a"), key("b"));
-        mem.record_request_id(&a, "acct", "req_a", 1_000);
+        mem.record_request_id(&a, "acct", "req_a", 1_000).await;
         mem.touch(&b, None, 2_000);
         mem.flush(2_000).await;
         assert!(
@@ -1398,9 +1411,9 @@ mod tests {
         let mem =
             Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let a = key("a");
-        mem.record_request_id(&a, "acct", "req_1", 1_000);
+        mem.record_request_id(&a, "acct", "req_1", 1_000).await;
         let batch = mem.snapshot_dirty(1_000);
-        mem.record_request_id(&a, "acct", "req_2", 2_000);
+        mem.record_request_id(&a, "acct", "req_2", 2_000).await;
         let saved: Vec<(MemoryKey, u64)> = batch.into_iter().map(|(k, _, s)| (k, s)).collect();
         mem.acknowledge(&saved);
         let after = mem.snapshot_dirty(2_000);
@@ -1544,7 +1557,7 @@ mod tests {
         let store = Arc::new(MapStore::default());
         let mem = Arc::new(SessionMemory::new(10, 1_000).with_store(store.clone(), i64::MAX));
         let a = key("a");
-        mem.record_request_id(&a, "acct", "req_kept", 0);
+        mem.record_request_id(&a, "acct", "req_kept", 0).await;
         mem.flush(0).await;
         // Overwritten after the flush and read only through the store, not the in-process copy: the two
         // would otherwise agree on `req_kept` whether or not the idle purge ever ran.
@@ -1569,7 +1582,7 @@ mod tests {
         let mem =
             Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let a = key("a");
-        mem.record_request_id(&a, "acct", "req_old", 1_000);
+        mem.record_request_id(&a, "acct", "req_old", 1_000).await;
         let gate = Arc::new(Barrier::new(2));
         *store.hold_save.lock().unwrap() = Some(gate.clone());
         let first = tokio::spawn({
@@ -1582,7 +1595,7 @@ mod tests {
         .await;
         // The first save is at the barrier with the older record; the newer write and the second flush must
         // queue behind it rather than overtake it.
-        mem.record_request_id(&a, "acct", "req_new", 2_000);
+        mem.record_request_id(&a, "acct", "req_new", 2_000).await;
         let second = tokio::spawn({
             let mem = mem.clone();
             async move { mem.flush(2_000).await }
@@ -1615,7 +1628,7 @@ mod tests {
         let mem =
             Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let (a, b) = (key("a"), key("b"));
-        mem.record_request_id(&b, "acct", "req_b", 1_000);
+        mem.record_request_id(&b, "acct", "req_b", 1_000).await;
         let gate = Arc::new(Barrier::new(2));
         *store.hold_load.lock().unwrap() = Some(gate.clone());
         let blocked = tokio::spawn({
@@ -1657,7 +1670,7 @@ mod tests {
             Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         assert!(mem.restore(&a, 1_000).await, "the row was read back");
         mem.touch(&key("b"), None, 2_000); // the one slot goes to b
-        mem.record_request_id(&a, "acct", "req_a2", 3_000);
+        mem.record_request_id(&a, "acct", "req_a2", 3_000).await;
         mem.flush(3_000).await;
         let rows = store.rows.lock().unwrap();
         let v1: RecordV1 = serde_json::from_str(&rows.get(&a).unwrap().payload).unwrap();
@@ -1785,12 +1798,13 @@ mod tests {
         assert_eq!(store.loads_started.load(Ordering::SeqCst), 2);
     }
 
-    #[test]
-    fn last_seen_never_moves_backwards() {
+    #[tokio::test]
+    async fn last_seen_never_moves_backwards() {
         let mem = SessionMemory::new(2, MEMORY_IDLE_MS);
         let (a, b, c) = (key("a"), key("b"), key("c"));
-        mem.record_request_id(&a, "acct", "req", 2_000);
-        mem.record_message_id(&a, "acct", "claude-sonnet-4-5", "msg", 1_000);
+        mem.record_request_id(&a, "acct", "req", 2_000).await;
+        mem.record_message_id(&a, "acct", "claude-sonnet-4-5", "msg", 1_000)
+            .await;
         // `b` is last seen at 1_500, between the two writes' instants, so the cap takes `a` only if the late write
         // moved it back.
         mem.touch(&b, None, 1_500);
@@ -1820,9 +1834,10 @@ mod tests {
         })
         .await;
         // Written while its read is in flight, `a` is the oldest of the two held when `c` arrives.
-        mem.record_request_id(&a, "acct", "req_a", 1_000);
-        mem.record_request_id(&b, "acct", "req_b", 2_000);
-        mem.record_request_id(&c, "acct", "req_c", 3_000);
+        mem.touch(&a, None, 1_000);
+        mem.record_request_id(&a, "acct", "req_a", 1_000).await;
+        mem.record_request_id(&b, "acct", "req_b", 2_000).await;
+        mem.record_request_id(&c, "acct", "req_c", 3_000).await;
         tokio::task::spawn_blocking(move || gate.wait())
             .await
             .unwrap();
