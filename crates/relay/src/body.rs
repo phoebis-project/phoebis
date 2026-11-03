@@ -599,7 +599,7 @@ fn detach_diagnostics(body: &mut Vec<u8>) -> bool {
 /// stripped.
 ///
 /// `find_cch` reads lowercase hex only, so a client stamping uppercase digits leaves a stamp that scanner
-/// cannot read at all; that counts as drift rather than as a body carrying no hash. Errs as `stamp_of` errs, on a
+/// cannot read at all, which counts as drift rather than as a body carrying no hash. Errs as `stamp_of` errs, on a
 /// stamp only the decoded walk reaches.
 pub(crate) fn drift(body: &[u8]) -> Result<Option<DriftKind>, RelayError> {
     drift_of(body, stamp_of(body)?)
