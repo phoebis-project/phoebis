@@ -375,11 +375,21 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
     setLabelRevision((held) => (advancesOwnToken(form.revision, revision, held) ? revision : held));
     setEndForm(null);
   };
-  // The two editors' refusal callouts. A stale one offers Reload, which closes the editor and reads the lists again.
-  const staleCallout = (message: string, onReload: (() => void) | null) => (
+  const cancelLabel = () => {
+    setEditing(false);
+    if (labelRefused?.stale) onChanged();
+    setLabelRefused(null);
+  };
+  const cancelEnd = () => {
+    setEndForm(null);
+    if (endRefused?.stale) onChanged();
+    setEndRefused(null);
+  };
+  // The two editors' refusal callouts. A stale one offers Reload, the editor's Cancel, which reads the lists again.
+  const staleCallout = (refusal: EditorRefusal, onReload: () => void) => (
     <Refusal>
-      {message}
-      {onReload && (
+      {refusal.message}
+      {refusal.stale && (
         <>
           {' '}
           <Button size="sm" variant="ghost" onClick={onReload}>
@@ -402,16 +412,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
                 <Button size="sm" variant="primary" disabled={busy || draft.trim() === ''} onClick={() => void save()}>
                   Save
                 </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy}
-                  onClick={() => {
-                    setEditing(false);
-                    if (labelRefused?.stale) onChanged();
-                    setLabelRefused(null);
-                  }}
-                >
+                <Button size="sm" variant="ghost" disabled={busy} onClick={cancelLabel}>
                   Cancel
                 </Button>
               </span>
@@ -435,18 +436,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
             )}
           </h2>
           {/* Under the title rather than in it: an h2 holds inline content alone. */}
-          {editing &&
-            labelRefused &&
-            staleCallout(
-              labelRefused.message,
-              labelRefused.stale
-                ? () => {
-                    setEditing(false);
-                    setLabelRefused(null);
-                    onChanged();
-                  }
-                : null,
-            )}
+          {editing && labelRefused && staleCallout(labelRefused, cancelLabel)}
           {account.email && <p className="detail__sub mono">{account.email}</p>}
           <div className="detail__badges">
             <Badge tone={STATUS_TONE[account.status]} dot>
@@ -630,31 +620,12 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
                 <Input type="datetime-local" value={endForm.endsAt} disabled={busy} onChange={(e) => setEndForm({ ...endForm, endsAt: e.target.value })} style={{ width: 220 }} aria-label={endsLabel} />
               </Field>
               {endRefusal && <Refusal>{endRefusal}</Refusal>}
-              {endRefused &&
-                staleCallout(
-                  endRefused.message,
-                  endRefused.stale
-                    ? () => {
-                        setEndForm(null);
-                        setEndRefused(null);
-                        onChanged();
-                      }
-                    : null,
-                )}
+              {endRefused && staleCallout(endRefused, cancelEnd)}
               <span className="row">
                 <Button size="sm" variant="primary" disabled={busy || endRefusal !== null} onClick={() => void saveEnd(endForm)}>
                   Save
                 </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy}
-                  onClick={() => {
-                    setEndForm(null);
-                    if (endRefused?.stale) onChanged();
-                    setEndRefused(null);
-                  }}
-                >
+                <Button size="sm" variant="ghost" disabled={busy} onClick={cancelEnd}>
                   Cancel
                 </Button>
               </span>
