@@ -17,7 +17,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::affinity::{
-    AffinityChain, AffinityMap, AffinityReport, AffinityRow, ConversationLookup, ConversationMatch,
+    AffinityMap, AffinityReport, AffinityRow, ConversationLookup, ConversationMatch,
     ConversationQuery, PredecessorQuery, PurgedEntry,
 };
 use crate::record::{
@@ -2437,28 +2437,16 @@ fn take_final(pending: &Pending) -> BTreeMap<CoalesceKey, Report> {
     std::mem::take(&mut pending.readings)
 }
 
-/// The rows a completed answer wrote, for the decision that selected it. `record` answers its rows in chain order,
-/// so one pass over each chain finds every row's depth.
+/// The rows a completed answer wrote, for the decision that selected it.
 fn cache_map_written(report: &AffinityReport, rows: &[AffinityRow]) -> RouterEvent {
-    let mut message = report.message_boundaries.iter().enumerate();
-    let mut static_ = report.static_boundaries.iter().enumerate();
     let entries = rows
         .iter()
-        .map(|row| {
-            let chain = match row.chain {
-                AffinityChain::Message => &mut message,
-                AffinityChain::Static => &mut static_,
-            };
-            let depth = chain
-                .find(|(_, hash)| **hash == row.hash)
-                .map_or(0, |(index, _)| u32::try_from(index + 1).unwrap_or(u32::MAX));
-            CacheMapEntry {
-                tier: row.chain.as_str(),
-                depth,
-                prefix_tokens: row.prefix_tokens,
-                ttl_ms: row.ttl_ms,
-                account_id: row.account_id.clone(),
-            }
+        .map(|row| CacheMapEntry {
+            tier: row.chain.as_str(),
+            depth: row.depth,
+            prefix_tokens: row.prefix_tokens,
+            ttl_ms: row.ttl_ms,
+            account_id: row.account_id.clone(),
         })
         .collect();
     RouterEvent::CacheMapWritten {
