@@ -891,6 +891,28 @@ fn an_id_created_again_in_the_millisecond_it_was_deleted_in_is_a_reused_one() {
     );
 }
 
+#[test]
+fn a_key_created_again_under_a_deleted_id_reads_as_reused_after_the_purge_ages_out_the_delete() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
+        .unwrap();
+    store.delete_api_key("back", "test").unwrap();
+    store
+        .insert_api_key(
+            &key(&store, "back", "main", "phoebis-back-reissued"),
+            "test",
+        )
+        .unwrap();
+    // Every change is past the retention, so only what the purge's keep rule names stays.
+    store.purge_history(i64::MAX).unwrap();
+    assert_eq!(
+        store.load_registry().unwrap().reused_key_ids,
+        vec!["back".to_string()]
+    );
+}
+
 /// A deleted key's memory rows can never be read again, so `delete_api_key` cascades `session_memory` by
 /// `key_id` the same way it cascades `pins` rather than leaving them for the retention purge.
 #[test]
@@ -2977,8 +2999,7 @@ fn the_history_purge_cuts_old_resolved_attempts_and_changes_and_keeps_what_their
         for i in 0..1_500 {
             change(1_000 + i, "pool_updated", "p");
         }
-        // A reused id: the newest create and delete tell the ledger's stamp and the next create's generation
-        // that the id had an earlier holder.
+        // A reused id: the newest create stamps the next create's generation past it, and the deletes age out.
         change(10, "key_created", "gone");
         change(11, "key_deleted", "gone");
         change(12, "key_created", "gone");
@@ -3009,7 +3030,7 @@ fn the_history_purge_cuts_old_resolved_attempts_and_changes_and_keeps_what_their
         purged,
         phoebis_store::PurgedHistory {
             attempts: 2_500 + 1,
-            changes: 1_500 + 2,
+            changes: 1_500 + 3,
         }
     );
     let raw = rusqlite::Connection::open(&path).unwrap();
@@ -3057,8 +3078,8 @@ fn the_history_purge_cuts_old_resolved_attempts_and_changes_and_keeps_what_their
         .unwrap();
     assert_eq!(
         kept,
-        [(12, "key_created".into()), (13, "key_deleted".into())],
-        "the reused id keeps its newest create and delete"
+        [(12, "key_created".into())],
+        "the reused id keeps its newest create"
     );
     assert_eq!(
         store

@@ -140,12 +140,11 @@ const PURGE_ATTEMPTS: &str = "DELETE FROM refresh_attempts WHERE id IN ( \
      ORDER BY r.resolved_at, r.id LIMIT ?2)";
 
 // A change under the cutoff, oldest id first: no index leads with `at`, and the ids follow it. Each key id keeps its
-// newest `key_created` and `key_deleted`, whatever their age: the registry load tells a reused id by a delete before
-// the newest create, and `insert_api_key` stamps a re-created key past the newest create.
+// newest `key_created`, whatever its age, since `insert_api_key` stamps a re-created key past the newest create.
 const PURGE_CHANGES: &str = "DELETE FROM registry_changes WHERE id IN ( \
      SELECT c.id FROM registry_changes c \
      WHERE c.at < ?1 \
-       AND NOT (c.kind IN ('key_created', 'key_deleted') \
+       AND NOT (c.kind = 'key_created' \
                 AND c.id = (SELECT MAX(n.id) FROM registry_changes n \
                             WHERE n.target = c.target AND n.kind = c.kind)) \
      ORDER BY c.id LIMIT ?2)";

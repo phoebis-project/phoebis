@@ -515,10 +515,10 @@ pub struct RegistryLoad {
     pub members: Vec<PoolMember>,
     pub pools: Vec<PoolRow>,
     pub retired_secrets: Vec<RetiredSecret>,
-    /// Live keys whose id was deleted with an earlier key before this one was created, in the order the
-    /// change log recorded it. The earlier holder's rollup rows from before the ledger carried a generation
-    /// sit at generation 0 under the same id, so the startup stamp starts such a key's own rows at its
-    /// creation rather than claiming every unstamped row of the id.
+    /// Live keys whose id an earlier, deleted key held, by id: an incarnation past 1, which the delete's tombstone
+    /// hands the next holder. The earlier holder's rollup rows from before the ledger carried a generation sit at
+    /// generation 0 under the same id, so the startup stamp starts such a key's own rows at its creation rather
+    /// than claiming every unstamped row of the id.
     pub reused_key_ids: Vec<String>,
     pub terms: Vec<SubscriptionTerm>,
 }
@@ -721,19 +721,8 @@ impl Store {
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
-            // The change log's own order decides, never the two clocks: a delete and the create that
-            // follows it can share a millisecond, and the id is reused all the same. The history purge keeps
-            // each id's newest create and delete whatever their age, so the create that made the live key and
-            // the delete before it stay on record, and both lookups run on `registry_changes_target (target, id)`.
             reused_key_ids: tx
-                .prepare(
-                    "SELECT k.id FROM api_keys k WHERE EXISTS ( \
-                       SELECT 1 FROM registry_changes d \
-                       WHERE d.target = k.id AND d.kind = 'key_deleted' \
-                         AND d.id < (SELECT MAX(c.id) FROM registry_changes c \
-                                     WHERE c.target = k.id AND c.kind = 'key_created')) \
-                     ORDER BY k.id",
-                )?
+                .prepare("SELECT id FROM api_keys WHERE incarnation > 1 ORDER BY id")?
                 .query_map([], |r| r.get(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             terms: tx
