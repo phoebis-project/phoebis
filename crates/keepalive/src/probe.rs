@@ -10,7 +10,7 @@ use axum::body::Body;
 use axum::http::{header, Request};
 use bytes::{Bytes, BytesMut};
 use http_body_util::BodyExt;
-use phoebis_ledger::{prompt_tokens, Band, PlanTables, PriceTable, Speed};
+use phoebis_ledger::{Band, PlanTables, PriceTable, Speed};
 use phoebis_relay::RelayOutcome;
 use phoebis_routing::{BUDGET_WINDOW, SEVEN_DAY};
 use phoebis_store::AccountKind;
@@ -486,15 +486,7 @@ impl Inner {
         if let Some(usage) = result.body.as_deref().and_then(ProbeUsage::parse) {
             record.usage = usage;
             let counts = typed(usage);
-            record.band = table.band_of(
-                &job.canonical_model,
-                prompt_tokens(
-                    counts.input,
-                    counts.cache_read,
-                    counts.write_5m,
-                    counts.write_1h,
-                ),
-            );
+            record.band = table.band_of(&job.canonical_model, counts.prompt_tokens());
         }
         if result
             .account

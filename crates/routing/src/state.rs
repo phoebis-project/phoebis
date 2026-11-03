@@ -473,6 +473,15 @@ pub struct PinUsage {
     pub output: u64,
 }
 
+impl PinUsage {
+    /// The prompt length an attempt is priced by: its uncached input, its cache read and its two cache writes
+    /// together, what the API counted as the request's input. The output, the thinking share of it and the tokens a
+    /// context edit cleared are not part of it.
+    pub fn prompt_tokens(&self) -> u64 {
+        self.input + self.cache_read + self.write_5m + self.write_1h
+    }
+}
+
 /// The share of an account's own window a completed request consumed, priced through the ledger's tables, which
 /// this crate cannot name; the default prices nothing, so a task spawned without one predicts from readings alone.
 #[derive(Clone)]

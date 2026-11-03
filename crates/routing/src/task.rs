@@ -4130,8 +4130,7 @@ impl Task {
                             // the same at every hour.
                             let band = self.config.band.at(FIVE_HOUR, entrypoint_of(&renewed), now);
                             let at = renewed.burn_at;
-                            let prompt =
-                                usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
+                            let prompt = usage.prompt_tokens();
                             // Every copy decays from the same `burn_at`, so a copy this renewal adds nothing to
                             // folds at weight 0 and keeps step with the others.
                             let folded = |copy: PinBurn, weight: f64| {

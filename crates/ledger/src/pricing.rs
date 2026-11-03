@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use indexmap::IndexMap;
+use phoebis_routing::PinUsage;
 
 use crate::rollup::{CostSplit, LONG_BAND, STANDARD_BAND};
 use crate::LedgerError;
@@ -277,11 +278,16 @@ fn per_token(p: &ModelPrice) -> phoebis_routing::Rates {
     }
 }
 
-/// The prompt length an attempt is priced by: its uncached input, its cache read and its two cache writes
-/// together, what the API counted as the request's input. The output, the thinking share of it and the tokens a
-/// context edit cleared are not part of it.
+/// `PinUsage::prompt_tokens` over loose counts, for the callers that hold no `PinUsage`.
 pub fn prompt_tokens(input: u64, cache_read: u64, write_5m: u64, write_1h: u64) -> u64 {
-    input + cache_read + write_5m + write_1h
+    PinUsage {
+        input,
+        cache_read,
+        write_5m,
+        write_1h,
+        output: 0,
+    }
+    .prompt_tokens()
 }
 
 impl PriceTable {
