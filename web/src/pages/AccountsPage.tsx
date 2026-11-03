@@ -978,35 +978,24 @@ function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds:
   const unsaved = label.trim() !== '' || (customId ?? '') !== '' || secret !== '';
   const held = busy || !label.trim() || unnamed || taken || malformed || (kind === 'api_key' && !secret);
 
-  const create = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const created = await api.createAccount({ id, kind: 'api_key', label: label.trim(), secret });
-      onDone({ kind: 'api_key', created });
-    } catch (e) {
-      setError(messageOf(e));
-    } finally {
-      setBusy(false);
-    }
-  };
   // An OAuth account is written by the pairing's confirm. The start runs here rather than in the pairing dialog so a
   // refused start leaves the typed draft in reach, with the route's sentence under it.
-  const start = async () => {
+  const proceed = async () => {
     setBusy(true);
     setError(null);
     try {
-      const session = await api.startPairing({ id, label: label.trim() });
-      onDone({ id, kind: 'oauth', label: label.trim(), session });
+      if (kind === 'oauth') {
+        const session = await api.startPairing({ id, label: label.trim() });
+        onDone({ id, kind: 'oauth', label: label.trim(), session });
+      } else {
+        const created = await api.createAccount({ id, kind: 'api_key', label: label.trim(), secret });
+        onDone({ kind: 'api_key', created });
+      }
     } catch (e) {
       setError(messageOf(e));
     } finally {
       setBusy(false);
     }
-  };
-  const proceed = () => {
-    if (kind === 'oauth') void start();
-    else void create();
   };
 
   return (
@@ -1021,7 +1010,7 @@ function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds:
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" disabled={held} onClick={proceed}>
+          <Button variant="primary" disabled={held} onClick={() => void proceed()}>
             {kind === 'oauth' ? 'Start pairing' : 'Add API key'}
           </Button>
         </>
