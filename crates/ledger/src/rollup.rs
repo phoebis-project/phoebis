@@ -1826,8 +1826,10 @@ pub(crate) fn read_rollup(
     key: &RollupRow,
 ) -> Result<Option<RollupRow>, LedgerError> {
     Ok(conn
-        .query_row(
+        .prepare_cached(
             &format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10 AND request_class = ?11 AND speed = ?12 AND funding = ?13 AND band = ?14 AND tier = ?15 AND classifier = ?16"),
+        )?
+        .query_row(
             params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client, key.request_class, key.speed, key.funding, key.band, key.tier, key.classifier],
             row_to_rollup,
         )
@@ -1835,32 +1837,32 @@ pub(crate) fn read_rollup(
 }
 
 pub(crate) fn delete_rollup(conn: &Connection, key: &RollupRow) -> Result<(), LedgerError> {
-    conn.execute(
+    conn.prepare_cached(
         "DELETE FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10 AND request_class = ?11 AND speed = ?12 AND funding = ?13 AND band = ?14 AND tier = ?15 AND classifier = ?16",
-        params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client, key.request_class, key.speed, key.funding, key.band, key.tier, key.classifier],
-    )?;
+    )?
+    .execute(params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client, key.request_class, key.speed, key.funding, key.band, key.tier, key.classifier])?;
     Ok(())
 }
 
 pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), LedgerError> {
     let counts =
         |m: &BTreeMap<String, u64>| serde_json::to_string(m).unwrap_or_else(|_| "{}".into());
-    conn.execute(
+    conn.prepare_cached(
         &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58)"),
-        params![
-            r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.client, r.effort, r.request_class, r.speed, r.funding, r.band, r.tier,
-            r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
-            r.exhausted as i64, r.rejected as i64, r.attempts as i64, r.failovers as i64, r.cache_hits as i64, r.cache_misses as i64, r.uncached_requests as i64,
-            r.input_tokens as i64, r.cache_read_tokens as i64, r.cache_write_5m_tokens as i64, r.cache_write_1h_tokens as i64, r.output_tokens as i64,
-            r.thinking_tokens as i64, r.web_search_requests as i64, r.web_fetch_requests as i64,
-            r.kept_warm_requests as i64, r.kept_warm_5m_tokens as i64, r.probe_migrated as i64, r.wasted_probes as i64, counts(&r.wasted_probe_reasons),
-            r.probes_skipped as i64, r.wasted_input_tokens as i64, r.wasted_cache_read_tokens as i64, r.wasted_cache_write_5m_tokens as i64,
-            r.wasted_cache_write_1h_tokens as i64, r.wasted_output_tokens as i64,
-            r.ttfb_hist.to_le_bytes(), r.ttfc_hist.to_le_bytes(), r.duration_hist.to_le_bytes(), r.output_tps_hist.to_le_bytes(), counts(&r.errors), counts(&r.cache_miss_reasons),
-            r.incomplete as i64, r.probes_held as i64, r.slow_down_held_ms as i64, r.slow_down_held as i64,
-            r.kept_warm_1h_tokens as i64, r.classifier, counts(&r.refusals),
-        ],
-    )?;
+    )?
+    .execute(params![
+        r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.client, r.effort, r.request_class, r.speed, r.funding, r.band, r.tier,
+        r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
+        r.exhausted as i64, r.rejected as i64, r.attempts as i64, r.failovers as i64, r.cache_hits as i64, r.cache_misses as i64, r.uncached_requests as i64,
+        r.input_tokens as i64, r.cache_read_tokens as i64, r.cache_write_5m_tokens as i64, r.cache_write_1h_tokens as i64, r.output_tokens as i64,
+        r.thinking_tokens as i64, r.web_search_requests as i64, r.web_fetch_requests as i64,
+        r.kept_warm_requests as i64, r.kept_warm_5m_tokens as i64, r.probe_migrated as i64, r.wasted_probes as i64, counts(&r.wasted_probe_reasons),
+        r.probes_skipped as i64, r.wasted_input_tokens as i64, r.wasted_cache_read_tokens as i64, r.wasted_cache_write_5m_tokens as i64,
+        r.wasted_cache_write_1h_tokens as i64, r.wasted_output_tokens as i64,
+        r.ttfb_hist.to_le_bytes(), r.ttfc_hist.to_le_bytes(), r.duration_hist.to_le_bytes(), r.output_tps_hist.to_le_bytes(), counts(&r.errors), counts(&r.cache_miss_reasons),
+        r.incomplete as i64, r.probes_held as i64, r.slow_down_held_ms as i64, r.slow_down_held as i64,
+        r.kept_warm_1h_tokens as i64, r.classifier, counts(&r.refusals),
+    ])?;
     Ok(())
 }
 

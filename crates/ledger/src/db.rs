@@ -29,6 +29,11 @@ use crate::{schema, LedgerError};
 /// write waits behind one slice at most. The registry waits as long.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The writer connection's cache of prepared statements. One batch runs about two dozen cached statements (a request's
+/// landing, the samples, the events, the decisions, the cache map, the parked rows and the rollup fold), so rusqlite's
+/// default of 16 would evict and recompile some on every batch. 64 holds them all with room, as the registry's does.
+const STATEMENT_CACHE_CAPACITY: usize = 64;
+
 /// How many read-only connections serve the attention reader, the console, the metrics scrape and `/v1/usage` at
 /// once. Four covers the five routes a Pools page polls on one tick with the sessions read still in flight, and bounds
 /// the readers' page caches at 128 MiB.
@@ -235,6 +240,7 @@ impl LedgerDb {
         }
         let mut writer = Connection::open(path)?;
         writer.busy_timeout(BUSY_TIMEOUT)?;
+        writer.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
         writer.pragma_update(None, "journal_mode", "WAL")?;
         // A power loss may lose the last transactions before a checkpoint, which the spec accepts for a
         // best-effort ledger; `FULL` would fsync on every request.
@@ -252,6 +258,7 @@ impl LedgerDb {
 
     pub fn open_in_memory() -> Result<LedgerDb, LedgerError> {
         let mut writer = Connection::open_in_memory()?;
+        writer.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
         prepare(&mut writer, Path::new(":memory:"), schema::MIGRATIONS)?;
         analyze_at_open(&writer)?;
         Ok(LedgerDb::from_parts(writer, None, None))
@@ -570,10 +577,10 @@ impl LedgerDb {
         error: &str,
     ) -> Result<(), LedgerError> {
         self.write(|conn| {
-            conn.execute(
+            conn.prepare_cached(
                 "INSERT INTO parked_records (parked_at, last_tried_at, request_id, pool_id, account_id, record, error) VALUES (?1, ?1, ?2, ?3, ?4, ?5, ?6)",
-                params![at, request_id, pool_id, account_id, record, error],
-            )?;
+            )?
+            .execute(params![at, request_id, pool_id, account_id, record, error])?;
             Ok(())
         })
     }
@@ -581,10 +588,10 @@ impl LedgerDb {
     /// Records the failure a parked row met at this start's try.
     pub(crate) fn update_parked(&self, id: i64, error: &str, at: i64) -> Result<(), LedgerError> {
         self.write(|conn| {
-            conn.execute(
+            conn.prepare_cached(
                 "UPDATE parked_records SET error = ?2, last_tried_at = ?3 WHERE id = ?1",
-                params![id, error, at],
-            )?;
+            )?
+            .execute(params![id, error, at])?;
             Ok(())
         })
     }
@@ -702,7 +709,8 @@ pub(crate) fn begin_write(conn: &mut Connection) -> rusqlite::Result<Transaction
 /// deleted on its own after the commit could outlive a landing the file then loses, and the next start would land the
 /// record again.
 pub(crate) fn delete_parked_in(tx: &Transaction<'_>, id: i64) -> Result<(), LedgerError> {
-    tx.execute("DELETE FROM parked_records WHERE id = ?1", params![id])?;
+    tx.prepare_cached("DELETE FROM parked_records WHERE id = ?1")?
+        .execute(params![id])?;
     Ok(())
 }
 
@@ -728,38 +736,46 @@ pub(crate) fn insert_samples_in(
 ) -> Result<(), LedgerError> {
     for q in quota {
         // A head sample is the newest truth for its bucket, and a poll only fills a bucket nothing else wrote.
-        let verb = match q.source {
-            SampleSource::Head => "INSERT OR REPLACE",
-            SampleSource::Poll => "INSERT OR IGNORE",
+        let sql = match q.source {
+            SampleSource::Head => "INSERT OR REPLACE INTO quota_samples (account_id, bucket, window, utilization, reset_at, source, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            SampleSource::Poll => "INSERT OR IGNORE INTO quota_samples (account_id, bucket, window, utilization, reset_at, source, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         };
-        conn.execute(
-            &format!(
-                "{verb} INTO quota_samples (account_id, bucket, window, utilization, reset_at, source, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
-            ),
-            params![q.account_id, q.bucket, q.window, q.utilization, q.reset_at, q.source, q.observed_at],
-        )?;
+        conn.prepare_cached(sql)?.execute(params![
+            q.account_id,
+            q.bucket,
+            q.window,
+            q.utilization,
+            q.reset_at,
+            q.source,
+            q.observed_at
+        ])?;
     }
     if let Some(e) = extra {
         // Keyed by the source too, so a head updates the bucket's head row and the bucket's first poll keeps its row:
         // neither hides the other. A head that names the share or the reset alone keeps the other one the row holds,
         // since each header is its own reading: the row carries the bucket's last share and last reset.
-        let (verb, conflict) = match e.source {
-            SampleSource::Head => (
-                "INSERT",
-                " ON CONFLICT (account_id, bucket, source) DO UPDATE SET is_enabled = excluded.is_enabled, in_use = excluded.in_use, utilization = COALESCE(excluded.utilization, utilization), disabled_reason = excluded.disabled_reason, overage_reset = COALESCE(excluded.overage_reset, overage_reset)",
-            ),
-            SampleSource::Poll => ("INSERT OR IGNORE", ""),
+        let sql = match e.source {
+            SampleSource::Head => "INSERT INTO extra_usage_samples (account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) ON CONFLICT (account_id, bucket, source) DO UPDATE SET is_enabled = excluded.is_enabled, in_use = excluded.in_use, utilization = COALESCE(excluded.utilization, utilization), disabled_reason = excluded.disabled_reason, overage_reset = COALESCE(excluded.overage_reset, overage_reset)",
+            SampleSource::Poll => "INSERT OR IGNORE INTO extra_usage_samples (account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         };
-        conn.execute(
-            &format!(
-                "{verb} INTO extra_usage_samples (account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16){conflict}"
-            ),
-            params![
-                e.account_id, e.bucket, e.is_enabled, e.in_use, e.monthly_limit, e.used_credits,
-                e.utilization, e.currency, e.disabled_reason, e.overage_reset, e.source,
-                e.spend_limit_minor, e.spend_used_minor, e.spend_percent, e.spend_currency, e.spend_exponent,
-            ],
-        )?;
+        conn.prepare_cached(sql)?.execute(params![
+            e.account_id,
+            e.bucket,
+            e.is_enabled,
+            e.in_use,
+            e.monthly_limit,
+            e.used_credits,
+            e.utilization,
+            e.currency,
+            e.disabled_reason,
+            e.overage_reset,
+            e.source,
+            e.spend_limit_minor,
+            e.spend_used_minor,
+            e.spend_percent,
+            e.spend_currency,
+            e.spend_exponent,
+        ])?;
     }
     Ok(())
 }
@@ -769,7 +785,9 @@ pub(crate) fn insert_samples_in(
 /// column, which no `landed_after` filter answers. The previous stamp is read in the row's own transaction, so a
 /// writer that starts again under a clock set back still stamps above every row written before.
 fn landing_stamp(tx: &Transaction<'_>, now: i64) -> Result<i64, LedgerError> {
-    let previous: i64 = tx.query_row(LANDING_STAMP_SQL, [], |r| r.get(0))?;
+    let previous: i64 = tx
+        .prepare_cached(LANDING_STAMP_SQL)?
+        .query_row([], |r| r.get(0))?;
     Ok(now.max(previous + 1))
 }
 
@@ -790,84 +808,77 @@ pub(crate) fn insert_request_in(
     // A kept-warm credit is recorded at completion while the writer batches, so the mark can be in the table
     // before the request's own row lands here.
     let marked: bool = tx
-        .query_row(
-            "SELECT 1 FROM kept_warm_marks WHERE request_id = ?1",
-            params![request.id],
-            |_| Ok(()),
-        )
+        .prepare_cached("SELECT 1 FROM kept_warm_marks WHERE request_id = ?1")?
+        .query_row(params![request.id], |_| Ok(()))
         .optional()?
         .is_some();
     let kept_warm = request.kept_warm || marked;
     let landed_at = landing_stamp(tx, now)?;
-    tx.execute(
+    tx.prepare_cached(
         "INSERT OR REPLACE INTO requests (id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, request_truncated, response_truncated, client, agent_type, compaction, context_compacted, prev_tool_ms, turn_origin, request_class, identified_by, identity_root, identity_depth, forked_from, fork_depth, auto_mode, held, stream_end_at, diagnostics_source, guardrail_id, classifier, client_contract, landed_at, refused) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, NULL, NULL, NULL, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59, ?60)",
-        params![
-            request.id, request.received_at, request.finished_at, request.key_id, request.key_generation, request.pool_id, request.session_id, request.agent_id,
-            request.parent_agent_id, request.model, request.canonical_model, request.stream, request.kind, request.origin,
-            request.status.map(i64::from), request.outcome, request.attempts, request.request_bytes.map(|n| n as i64),
-            request.response_bytes.map(|n| n as i64), request.ttfb_ms, request.ttfc_ms, request.duration_ms, request.error_code,
-            request.client_drift, kept_warm, request.bodies_captured, request.user_agent,
-            request.effort, request.thinking_type, request.thinking_budget.map(|n| n as i64), request.max_tokens.map(|n| n as i64),
-            i64::from(request.tool_count), i64::from(request.system_blocks), i64::from(request.message_count),
-            request.context_edits, request.temperature, request.requested_speed, request.requested_service_tier,
-            request.presented_retired, request.rotation_at, request.request_truncated, request.response_truncated,
-            request.client, request.agent_type, request.compaction, request.context_compacted, request.prev_tool_ms, request.turn_origin,
-            request.request_class, request.forked_from, request.fork_depth.map(|n| n as i64), request.auto_mode, request.held,
-            request.stream_end_at,
-            request.diagnostics_source, request.guardrail_id, request.classifier, request.client_contract, landed_at, request.refused,
-        ],
-    )?;
-    tx.execute(
-        "DELETE FROM attempts WHERE request_id = ?1",
-        params![request.id],
-    )?;
+    )?
+    .execute(params![
+        request.id, request.received_at, request.finished_at, request.key_id, request.key_generation, request.pool_id, request.session_id, request.agent_id,
+        request.parent_agent_id, request.model, request.canonical_model, request.stream, request.kind, request.origin,
+        request.status.map(i64::from), request.outcome, request.attempts, request.request_bytes.map(|n| n as i64),
+        request.response_bytes.map(|n| n as i64), request.ttfb_ms, request.ttfc_ms, request.duration_ms, request.error_code,
+        request.client_drift, kept_warm, request.bodies_captured, request.user_agent,
+        request.effort, request.thinking_type, request.thinking_budget.map(|n| n as i64), request.max_tokens.map(|n| n as i64),
+        i64::from(request.tool_count), i64::from(request.system_blocks), i64::from(request.message_count),
+        request.context_edits, request.temperature, request.requested_speed, request.requested_service_tier,
+        request.presented_retired, request.rotation_at, request.request_truncated, request.response_truncated,
+        request.client, request.agent_type, request.compaction, request.context_compacted, request.prev_tool_ms, request.turn_origin,
+        request.request_class, request.forked_from, request.fork_depth.map(|n| n as i64), request.auto_mode, request.held,
+        request.stream_end_at,
+        request.diagnostics_source, request.guardrail_id, request.classifier, request.client_contract, landed_at, request.refused,
+    ])?;
+    tx.prepare_cached("DELETE FROM attempts WHERE request_id = ?1")?
+        .execute(params![request.id])?;
     for a in attempts {
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO attempts (request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model, selection, upstream_message_id, written_at, tier, usage_based) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46)",
-            params![
-                a.request_id, a.attempt, a.account_id, a.account_kind, a.pin_epoch.map(|n| n as i64), a.started_at, a.finished_at,
-                a.ttfb_ms, a.ttfc_ms, a.upstream_status.map(i64::from), a.upstream_request_id, a.outcome, a.cooldown_scope, a.cooldown_until,
-                a.input_tokens.map(|n| n as i64), a.output_tokens.map(|n| n as i64), a.cache_read_tokens.map(|n| n as i64),
-                a.cache_write_5m_tokens.map(|n| n as i64), a.cache_write_1h_tokens.map(|n| n as i64), a.service_tier, a.cache_miss_reason,
-                a.client_drift, a.ratelimit_5h_utilization, a.ratelimit_5h_reset, a.ratelimit_7d_utilization, a.ratelimit_7d_reset,
-                a.ratelimit_7d_oi_utilization, a.ratelimit_7d_oi_reset, a.overage_in_use, a.overage_utilization,
-                a.thinking_tokens.map(|n| n as i64), a.web_search_requests.map(|n| n as i64), a.web_fetch_requests.map(|n| n as i64),
-                a.stop_reason, a.stop_sequence, a.served_model, a.speed, a.inference_geo,
-                a.cleared_input_tokens.map(|n| n as i64), a.refusal_category, a.refusal_recommended_model, a.selection,
-                a.upstream_message_id, a.written_at, a.tier, a.usage_based,
-            ],
-        )?;
+        )?
+        .execute(params![
+            a.request_id, a.attempt, a.account_id, a.account_kind, a.pin_epoch.map(|n| n as i64), a.started_at, a.finished_at,
+            a.ttfb_ms, a.ttfc_ms, a.upstream_status.map(i64::from), a.upstream_request_id, a.outcome, a.cooldown_scope, a.cooldown_until,
+            a.input_tokens.map(|n| n as i64), a.output_tokens.map(|n| n as i64), a.cache_read_tokens.map(|n| n as i64),
+            a.cache_write_5m_tokens.map(|n| n as i64), a.cache_write_1h_tokens.map(|n| n as i64), a.service_tier, a.cache_miss_reason,
+            a.client_drift, a.ratelimit_5h_utilization, a.ratelimit_5h_reset, a.ratelimit_7d_utilization, a.ratelimit_7d_reset,
+            a.ratelimit_7d_oi_utilization, a.ratelimit_7d_oi_reset, a.overage_in_use, a.overage_utilization,
+            a.thinking_tokens.map(|n| n as i64), a.web_search_requests.map(|n| n as i64), a.web_fetch_requests.map(|n| n as i64),
+            a.stop_reason, a.stop_sequence, a.served_model, a.speed, a.inference_geo,
+            a.cleared_input_tokens.map(|n| n as i64), a.refusal_category, a.refusal_recommended_model, a.selection,
+            a.upstream_message_id, a.written_at, a.tier, a.usage_based,
+        ])?;
     }
     // A new row with no match has no child row to clear, so it pays no statement. A replaced row keeps the delete
     // so a stale match never survives a re-landing.
     if previous.is_some() || !request.guardrails.is_empty() {
-        tx.execute(
-            "DELETE FROM request_guardrails WHERE request_id = ?1",
-            params![request.id],
-        )?;
+        tx.prepare_cached("DELETE FROM request_guardrails WHERE request_id = ?1")?
+            .execute(params![request.id])?;
     }
     for m in &request.guardrails {
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO request_guardrails (request_id, guardrail_id, position, blocked, received_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![request.id, m.guardrail_id, m.position, m.blocked, request.received_at],
-        )?;
+        )?
+        .execute(params![request.id, m.guardrail_id, m.position, m.blocked, request.received_at])?;
     }
     if let Some(b) = bodies {
-        tx.execute(
+        tx.prepare_cached(
             "INSERT OR REPLACE INTO bodies (request_id, request_body, response_body, request_len_seen, response_len_seen, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![b.request_id, b.request_body, b.response_body, b.request_len_seen as i64, b.response_len_seen as i64, b.expires_at],
-        )?;
+        )?
+        .execute(params![b.request_id, b.request_body, b.response_body, b.request_len_seen as i64, b.response_len_seen as i64, b.expires_at])?;
     }
     Ok(previous)
 }
 
 pub(crate) fn insert_event_in(conn: &Connection, e: &EventRecord) -> Result<(), LedgerError> {
-    conn.execute(
+    conn.prepare_cached(
         "INSERT INTO events (at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-        params![e.at, e.kind, e.account_id, e.key_id, e.session_id, e.model, e.actor, e.detail, e.pool_id, e.agent_id, e.request_id],
-    )?;
+    )?
+    .execute(params![e.at, e.kind, e.account_id, e.key_id, e.session_id, e.model, e.actor, e.detail, e.pool_id, e.agent_id, e.request_id])?;
     Ok(())
 }
 
@@ -878,26 +889,26 @@ pub(crate) fn insert_decision_in(
     summary: &str,
     frame: &[u8],
 ) -> Result<(), LedgerError> {
-    conn.execute(
+    conn.prepare_cached(
         "INSERT INTO decisions (request_id, seq, attempt, at, kind, probe, key_id, pool_id, account_id, from_account_id, session_id, agent_id, model, summary, record) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-        params![
-            row.request_id,
-            row.seq,
-            row.attempt,
-            row.at,
-            row.kind,
-            row.probe,
-            row.key_id,
-            row.pool_id,
-            row.account_id,
-            row.from_account_id,
-            row.session_id,
-            row.agent_id,
-            row.model,
-            summary,
-            frame
-        ],
-    )?;
+    )?
+    .execute(params![
+        row.request_id,
+        row.seq,
+        row.attempt,
+        row.at,
+        row.kind,
+        row.probe,
+        row.key_id,
+        row.pool_id,
+        row.account_id,
+        row.from_account_id,
+        row.session_id,
+        row.agent_id,
+        row.model,
+        summary,
+        frame
+    ])?;
     Ok(())
 }
 
@@ -909,10 +920,9 @@ pub(crate) fn update_cache_map_in(
     write: &CacheMapWrite,
     entries: &str,
 ) -> Result<usize, LedgerError> {
-    Ok(conn.execute(
-        "UPDATE decisions SET cache_map = ?3 WHERE request_id = ?1 AND seq = ?2",
-        params![write.request_id, write.seq, entries],
-    )?)
+    Ok(conn
+        .prepare_cached("UPDATE decisions SET cache_map = ?3 WHERE request_id = ?1 AND seq = ?2")?
+        .execute(params![write.request_id, write.seq, entries])?)
 }
 
 pub(crate) const REQUEST_SELECT: &str = "SELECT id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, request_truncated, response_truncated, client, agent_type, compaction, context_compacted, prev_tool_ms, turn_origin, request_class, forked_from, fork_depth, auto_mode, held, stream_end_at, diagnostics_source, guardrail_id, classifier, client_contract, refused FROM requests";
