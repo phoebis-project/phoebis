@@ -2344,11 +2344,8 @@ impl Relay {
             0,
             attempt,
             false,
-            None,
-            None,
             admitted.client_version.clone(),
             Some(code),
-            None,
             None,
             None,
         );
@@ -2429,11 +2426,8 @@ impl Relay {
                 0,
                 *attempt,
                 false,
-                None,
-                None,
                 admitted.client_version.clone(),
                 Some(exhaustion_code(&Exhaustion::Untimed)),
-                None,
                 None,
                 None,
             );
@@ -2888,12 +2882,9 @@ impl Relay {
                         0,
                         *attempt,
                         false,
-                        None,
-                        None,
                         admitted.client_version.clone(),
                         Some(ACCOUNT_CANCELED_CODE),
                         pin_epoch,
-                        None,
                         cache_ttl_ms(ttl),
                     );
                     return Leg::Respond(
@@ -2920,12 +2911,9 @@ impl Relay {
                         0,
                         *attempt,
                         written,
-                        None,
-                        None,
                         admitted.client_version.clone(),
                         Some(UPSTREAM_UNREACHABLE.code),
                         pin_epoch,
-                        None,
                         cache_ttl_ms(ttl),
                     );
                     return Leg::Respond(
@@ -2976,12 +2964,9 @@ impl Relay {
                             0,
                             *attempt,
                             true,
-                            None,
-                            None,
                             admitted.client_version.clone(),
                             Some(ACCOUNT_CANCELED_CODE),
                             pin_epoch,
-                            None,
                             cache_ttl_ms(ttl),
                         );
                         return Leg::Respond(
@@ -3071,14 +3056,12 @@ impl Relay {
             head.status,
             ctx.attempt,
             true,
-            None,
-            None,
             ctx.admitted.client_version.clone(),
             None,
             ctx.pin_epoch,
-            Some(head_at),
             ctx.cache_ttl_ms,
         );
+        outcome.head_at = Some(head_at);
         outcome.upstream_request_id = head.get("request-id").map(str::to_string);
         outcome.overage_in_use = unified.as_ref().and_then(|u| u.overage_in_use);
         outcome.diagnostics = ctx.diagnostics;
@@ -3996,7 +3979,7 @@ impl Relay {
             client_drift,
             client_contract,
         } = refusal.into();
-        let outcome = self.outcome(
+        let mut outcome = self.outcome(
             trace,
             key,
             identity,
@@ -4004,14 +3987,13 @@ impl Relay {
             0,
             attempt,
             false,
-            client_drift.map(|kind| kind.as_str().to_string()),
-            client_contract.map(str::to_string),
             client_version.map(str::to_string),
             Some(failure.code),
             None,
             None,
-            None,
         );
+        outcome.client_drift = client_drift.map(|kind| kind.as_str().to_string());
+        outcome.client_contract = client_contract.map(str::to_string);
         self.answer(
             trace,
             failure.response(&trace.request_id),
@@ -4271,12 +4253,9 @@ impl Relay {
             status,
             ctx.attempt,
             true,
-            None,
-            None,
             ctx.admitted.client_version.clone(),
             Some(ACCOUNT_CANCELED_CODE),
             ctx.pin_epoch,
-            None,
             ctx.cache_ttl_ms,
         );
         // The upstream compared this leg's body before the account left, so the canceled completion names the
@@ -4304,12 +4283,9 @@ impl Relay {
         upstream_status: u16,
         attempt: u8,
         written: bool,
-        client_drift: Option<String>,
-        client_contract: Option<String>,
         client_version: Option<String>,
         error_code: Option<&str>,
         pin_epoch: Option<u64>,
-        head_at: Option<i64>,
         cache_ttl_ms: Option<i64>,
     ) -> RelayOutcome {
         RelayOutcome {
@@ -4323,13 +4299,13 @@ impl Relay {
             upstream_status,
             attempt,
             written,
-            client_drift,
-            client_contract,
+            client_drift: None,
+            client_contract: None,
             client_version,
             error_code: error_code.map(str::to_string),
             pin_epoch,
             received_at: trace.received_at,
-            head_at,
+            head_at: None,
             upstream_request_id: None,
             cache_ttl_ms,
             overage_in_use: None,
