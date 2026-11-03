@@ -1009,10 +1009,7 @@ fn refunded_at<'a>(
 
 /// The pool's affinity in milliseconds, saturating for a value no clock reaches.
 pub(crate) fn affinity_ttl_ms(pool: &PoolRow) -> i64 {
-    i64::try_from(pool.affinity_ttl_seconds)
-        .ok()
-        .and_then(|s| s.checked_mul(1_000))
-        .unwrap_or(i64::MAX)
+    seconds_ms(pool.affinity_ttl_seconds)
 }
 
 fn state_name(state: AccountState) -> Option<&'static str> {
