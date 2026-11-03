@@ -7964,7 +7964,8 @@ async fn the_pool_traffic_and_the_key_totals_count_the_asked_requests_alone() {
 
 /// A pool's traffic over four hours of plan, overage, billed and cached rows beside a probe row sums, bucket by
 /// bucket, to the pool's grouped totals over the same hours: the same requests and tokens, and dollars and a Pro-week
-/// figure within one cent, whichever of the two pool readers buckets them.
+/// figure within one cent, whichever of the two pool readers buckets them. Each row is worth more than a cent, so a
+/// group dropped or doubled moves the dollars past the tolerance, and the billed dollars where the group is billed.
 #[tokio::test]
 async fn the_pool_traffic_buckets_sum_to_the_pools_grouped_totals_within_one_cent() {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
@@ -7973,10 +7974,10 @@ async fn the_pool_traffic_buckets_sum_to_the_pools_grouped_totals_within_one_cen
     let at = phoebis_ledger::test_tables::JANUARY_2026;
     const HOUR_MS: i64 = 3_600_000;
     let cached = PinUsage {
-        input: 20,
-        cache_read: 300,
-        write_5m: 40,
-        output: 5,
+        input: 2_000,
+        cache_read: 30_000,
+        write_5m: 4_000,
+        output: 500,
         ..PinUsage::default()
     };
     for row in [
@@ -7984,7 +7985,7 @@ async fn the_pool_traffic_buckets_sum_to_the_pools_grouped_totals_within_one_cen
             id: "r-plan",
             model: "claude-opus-5-5",
             at,
-            usage: usage(10, 1),
+            usage: usage(1_000, 100),
             ..ShareRow::default()
         },
         ShareRow {
@@ -8000,14 +8001,14 @@ async fn the_pool_traffic_buckets_sum_to_the_pools_grouped_totals_within_one_cen
             account_kind: AccountKind::ApiKey,
             model: "claude-opus-5-5",
             at: at + HOUR_MS,
-            usage: usage(20, 2),
+            usage: usage(2_000, 200),
             ..ShareRow::default()
         },
         ShareRow {
             id: "r-overage",
             model: "claude-opus-5-5",
             at: at + 2 * HOUR_MS,
-            usage: usage(7, 3),
+            usage: usage(700, 300),
             overage: Some(true),
             ..ShareRow::default()
         },
@@ -8017,7 +8018,7 @@ async fn the_pool_traffic_buckets_sum_to_the_pools_grouped_totals_within_one_cen
             model: "claude-opus-5-5",
             at: at + 2 * HOUR_MS,
             usage: PinUsage {
-                cache_read: 50,
+                cache_read: 5_000,
                 ..PinUsage::default()
             },
             ..ShareRow::default()
@@ -8027,7 +8028,7 @@ async fn the_pool_traffic_buckets_sum_to_the_pools_grouped_totals_within_one_cen
             account: "c",
             model: "claude-opus-5-5",
             at: at + 3 * HOUR_MS,
-            usage: usage(5, 4),
+            usage: usage(500, 400),
             ..ShareRow::default()
         },
     ] {
@@ -8056,16 +8057,24 @@ async fn the_pool_traffic_buckets_sum_to_the_pools_grouped_totals_within_one_cen
             .iter()
             .map(|b| b.equivalent.expect("every plan row prices"))
             .sum();
+        let within_a_cent = |sum: f64, total: f64| (sum - total).abs() < 0.01;
+        let missed: Vec<&str> = [
+            ("requests", requests == total.requests),
+            ("tokens", tokens == total.tokens),
+            ("dollars", within_a_cent(cost, total.cost_usd)),
+            ("billed dollars", within_a_cent(billed, total.billed_usd)),
+            (
+                "Pro-week figure",
+                within_a_cent(equivalent, total_equivalent),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(check, holds)| (!holds).then_some(check))
+        .collect();
         assert_eq!(
-            (requests, tokens),
-            (total.requests, total.tokens),
-            "{reader}: the buckets count every grouped request and token"
-        );
-        assert!(
-            (cost - total.cost_usd).abs() < 0.01
-                && (billed - total.billed_usd).abs() < 0.01
-                && (equivalent - total_equivalent).abs() < 0.01,
-            "{reader}: {cost}, {billed} and {equivalent} against {total:?}"
+            missed,
+            Vec::<&str>::new(),
+            "{reader}: {requests} requests, {tokens} tokens, {cost}, {billed} and {equivalent} against {total:?}"
         );
     }
 }
