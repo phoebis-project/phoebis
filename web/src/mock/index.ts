@@ -257,41 +257,32 @@ const seedSession = (persistent: boolean | null) => {
   }
 };
 
+/** Whether a stand-in switch is set. Without storage (the Node tests) none is. */
+const switchSet = (key: string): boolean => {
+  try {
+    return localStorage.getItem(key) === '1';
+  } catch {
+    return false;
+  }
+};
+
 /**
  * Set to stand in for a fresh installation: every registry list and every ledger read answers nothing, while the
  * seeded store stays in memory for the next read without the switch.
  */
 export const EMPTY_STORE_KEY = 'phoebis.mockEmpty';
-export const emptyStore = (): boolean => {
-  try {
-    return localStorage.getItem(EMPTY_STORE_KEY) === '1';
-  } catch {
-    return false;
-  }
-};
+export const emptyStore = (): boolean => switchSet(EMPTY_STORE_KEY);
 
 /**
  * Set to stand in for a ledger writer holding a batch past the replay route's bound: a replay answers the route's `503`
  * and lands nothing.
  */
 export const HELD_WRITER_KEY = 'phoebis.mockHeldWriter';
-const heldWriter = (): boolean => {
-  try {
-    return localStorage.getItem(HELD_WRITER_KEY) === '1';
-  } catch {
-    return false;
-  }
-};
+const heldWriter = (): boolean => switchSet(HELD_WRITER_KEY);
 
 /** Set to stand in for a sessions read the store refuses: the list answers a `503` and draws nothing. */
 export const SESSIONS_FAIL_KEY = 'phoebis.mockSessionsFail';
-const sessionsFail = (): boolean => {
-  try {
-    return localStorage.getItem(SESSIONS_FAIL_KEY) === '1';
-  } catch {
-    return false;
-  }
-};
+const sessionsFail = (): boolean => switchSet(SESSIONS_FAIL_KEY);
 
 /**
  * Set to stand in for a router that runs another build: each answer names a build other than the bundle's, as an
@@ -299,13 +290,7 @@ const sessionsFail = (): boolean => {
  * banner.
  */
 export const BUILD_MISMATCH_KEY = 'phoebis.mockBuildMismatch';
-const buildMismatch = (): boolean => {
-  try {
-    return localStorage.getItem(BUILD_MISMATCH_KEY) === '1';
-  } catch {
-    return false;
-  }
-};
+const buildMismatch = (): boolean => switchSet(BUILD_MISMATCH_KEY);
 /** A build no bundle is made from. */
 const OTHER_BUILD = '0'.repeat(40);
 
@@ -315,13 +300,7 @@ const OTHER_BUILD = '0'.repeat(40);
  * served story's figures stay as they are.
  */
 export const UNPRICED_STORY_KEY = 'phoebis.mockUnpriced';
-const unpricedStory = (): boolean => {
-  try {
-    return localStorage.getItem(UNPRICED_STORY_KEY) === '1';
-  } catch {
-    return false;
-  }
-};
+const unpricedStory = (): boolean => switchSet(UNPRICED_STORY_KEY);
 /**
  * The ledger's read sets as the routes fold them: the story's, the unpriced request's rows beside the story's under
  * its switch, and an empty form of each for a fresh installation, so a route that reads its rows here answers that
