@@ -1703,16 +1703,17 @@ impl Relay {
             .chains
             .as_ref()
             .map_or(&[][..], |c| &c.message_boundaries[..]);
-        let ids = waits_on(&identity);
         let applied = self.router.applied_report();
-        if let Some((id, seq)) =
-            self.pending_reports
-                .pending(&key.id, key.created_at, &ids, applied)
-        {
-            let deadline = tokio::time::Instant::now() + PENDING_REPORT_WAIT;
-            if self.router.wait_for_report(seq, deadline).await {
+        if let Some(session_id) = waits_on(&identity) {
+            if let Some(seq) =
                 self.pending_reports
-                    .remove_if(&key.id, key.created_at, &id, seq);
+                    .pending(&key.id, key.created_at, session_id, applied)
+            {
+                let deadline = tokio::time::Instant::now() + PENDING_REPORT_WAIT;
+                if self.router.wait_for_report(seq, deadline).await {
+                    self.pending_reports
+                        .remove_if(&key.id, key.created_at, session_id, seq);
+                }
             }
         }
         let request_class =

@@ -322,7 +322,7 @@ impl AffinityFacts {
             + cached(|u| u.cache_write_5m_tokens)
             + cached(|u| u.cache_write_1h_tokens);
         // The identifier the next turn's wait reads this conversation by.
-        let ids = vec![format!("session:{}", self.root)];
+        let session_id = self.root.clone();
         let (router, pending, key_id, key_generation) = (
             self.router,
             self.pending,
@@ -355,7 +355,13 @@ impl AffinityFacts {
         };
         let file = move |router: &RouterHandle, seq: Option<u64>| {
             if let Some(seq) = seq {
-                pending.record(&key_id, key_generation, &ids, seq, router.applied_report());
+                pending.record(
+                    &key_id,
+                    key_generation,
+                    &session_id,
+                    seq,
+                    router.applied_report(),
+                );
             }
         };
         match waiting.try_now(&router, Report::Affinity(report)) {
