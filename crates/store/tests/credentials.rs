@@ -139,7 +139,14 @@ fn an_attempt_carries_the_incarnation_it_began_under() {
         .unwrap();
     let id = store.open_refresh_attempt("a", 1, 1, g).unwrap();
     store
-        .resolve_refresh_attempt(id, 1, AttemptOutcome::Failed("rejected".into()))
+        .resolve_refresh_attempt(
+            id,
+            1,
+            AttemptOutcome::Failed {
+                cause: "rejected".into(),
+                detail: "rejected".into(),
+            },
+        )
         .unwrap();
     store.delete_account("a", "test").unwrap();
     store.insert_account(&account("a")).unwrap();
@@ -181,7 +188,14 @@ fn an_in_flight_attempt_blocks_a_new_one_and_an_uncertain_one_does_not() {
         .unwrap();
     let id = store.open_refresh_attempt("a", 1, 1, g).unwrap();
     store
-        .resolve_refresh_attempt(id, 1, AttemptOutcome::Uncertain("response lost".into()))
+        .resolve_refresh_attempt(
+            id,
+            1,
+            AttemptOutcome::Uncertain {
+                cause: "response_lost".into(),
+                detail: "response lost".into(),
+            },
+        )
         .unwrap();
     assert!(
         store.open_refresh_attempt("a", 1, 1, g).is_ok(),
@@ -227,7 +241,14 @@ fn a_commit_supersedes_an_attempt_left_open_by_the_bundle_it_replaces() {
         .unwrap();
     let id = store.open_refresh_attempt("a", 1, 1, g).unwrap();
     store
-        .resolve_refresh_attempt(id, 1, AttemptOutcome::Uncertain("response lost".into()))
+        .resolve_refresh_attempt(
+            id,
+            1,
+            AttemptOutcome::Uncertain {
+                cause: "response_lost".into(),
+                detail: "response lost".into(),
+            },
+        )
         .unwrap();
     // A pairing confirmation commits a bundle of its own and has no attempt to name.
     store
@@ -312,7 +333,14 @@ fn only_one_refresh_attempt_can_be_pending() {
         Err(StoreError::AttemptPending)
     ));
     store
-        .resolve_refresh_attempt(id, 1, AttemptOutcome::Uncertain("response lost".into()))
+        .resolve_refresh_attempt(
+            id,
+            1,
+            AttemptOutcome::Uncertain {
+                cause: "response_lost".into(),
+                detail: "response lost".into(),
+            },
+        )
         .unwrap();
     assert_eq!(
         store.pending_refresh_attempts().unwrap().len(),
@@ -474,7 +502,14 @@ fn an_attempt_of_a_deleted_incarnation_settles_nothing_on_the_slot_that_took_its
     store.insert_account(&account("a")).unwrap();
     assert!(
         matches!(
-            store.resolve_refresh_attempt(stranded, 1, AttemptOutcome::Uncertain("lost".into())),
+            store.resolve_refresh_attempt(
+                stranded,
+                1,
+                AttemptOutcome::Uncertain {
+                    cause: "lost".into(),
+                    detail: "lost".into()
+                }
+            ),
             Err(StoreError::AttemptNotFound(_))
         ),
         "the open attempt went with the holder it began under"
@@ -493,7 +528,14 @@ fn resolved_refresh_attempts_are_listed_after_a_watermark() {
         .unwrap();
     let first = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
     store
-        .resolve_refresh_attempt(first, 1, AttemptOutcome::Failed("transport".into()))
+        .resolve_refresh_attempt(
+            first,
+            1,
+            AttemptOutcome::Failed {
+                cause: "transport".into(),
+                detail: "transport".into(),
+            },
+        )
         .unwrap();
     let second = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
     assert!(
@@ -530,7 +572,14 @@ fn resolved_refresh_attempts_are_listed_after_a_watermark() {
         .map(|i| {
             let id = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
             store
-                .resolve_refresh_attempt(id, 1, AttemptOutcome::Failed(format!("tie {i}")))
+                .resolve_refresh_attempt(
+                    id,
+                    1,
+                    AttemptOutcome::Failed {
+                        cause: "tie".into(),
+                        detail: format!("tie {i}"),
+                    },
+                )
                 .unwrap();
             id
         })
@@ -560,7 +609,14 @@ fn the_newest_settled_attempt_is_the_mirrors_starting_watermark() {
     assert_eq!(store.newest_resolved_refresh_attempt().unwrap(), None);
     let first = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
     store
-        .resolve_refresh_attempt(first, 1, AttemptOutcome::Failed("transport".into()))
+        .resolve_refresh_attempt(
+            first,
+            1,
+            AttemptOutcome::Failed {
+                cause: "transport".into(),
+                detail: "transport".into(),
+            },
+        )
         .unwrap();
     let open = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
     assert_eq!(
@@ -626,9 +682,15 @@ fn a_holders_newest_settled_attempts_read_newest_first_within_the_bound_and_its_
     store.insert_account(&account("a")).unwrap();
     let mut settled = Vec::new();
     for outcome in [
-        AttemptOutcome::Failed("first".into()),
+        AttemptOutcome::Failed {
+            cause: "first".into(),
+            detail: "first".into(),
+        },
         AttemptOutcome::Committed,
-        AttemptOutcome::Failed("third".into()),
+        AttemptOutcome::Failed {
+            cause: "third".into(),
+            detail: "third".into(),
+        },
     ] {
         let id = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
         store.resolve_refresh_attempt(id, 1, outcome).unwrap();
@@ -653,7 +715,14 @@ fn a_holders_newest_settled_attempts_read_newest_first_within_the_bound_and_its_
         "an unresolved attempt (outcome null) is left out, and the rest come newest first"
     );
     store
-        .resolve_refresh_attempt(open, 1, AttemptOutcome::Uncertain("lost".into()))
+        .resolve_refresh_attempt(
+            open,
+            1,
+            AttemptOutcome::Uncertain {
+                cause: "lost".into(),
+                detail: "lost".into(),
+            },
+        )
         .unwrap();
     assert_eq!(
         read(1, 2),
@@ -671,7 +740,14 @@ fn a_holders_newest_settled_attempts_read_newest_first_within_the_bound_and_its_
     );
     let fresh = store.open_refresh_attempt("a", 2, 1, 1).unwrap();
     store
-        .resolve_refresh_attempt(fresh, 2, AttemptOutcome::Failed("fresh".into()))
+        .resolve_refresh_attempt(
+            fresh,
+            2,
+            AttemptOutcome::Failed {
+                cause: "fresh".into(),
+                detail: "fresh".into(),
+            },
+        )
         .unwrap();
     assert_eq!(
         read(2, 16),

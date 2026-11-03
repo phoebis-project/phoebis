@@ -110,7 +110,14 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
             .unwrap();
         parts
             .store
-            .resolve_refresh_attempt(attempt, 1, AttemptOutcome::Failed(detail.into()))
+            .resolve_refresh_attempt(
+                attempt,
+                1,
+                AttemptOutcome::Failed {
+                    cause: detail.into(),
+                    detail: detail.into(),
+                },
+            )
             .unwrap();
         // Apart by more than a millisecond, so the run's start can only be read off the older attempt.
         parts

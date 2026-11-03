@@ -101,13 +101,23 @@ pub struct NewBundle {
     pub scopes: String,
 }
 
+/// How a refresh attempt settles. A failure's `cause` is its class (the token endpoint's code or status, or the step
+/// that failed), recorded where the class is known so the ledger's refresh rows never derive it from the `detail` text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AttemptOutcome {
     Committed,
-    Failed(String),
-    /// The refresh may or may not have rotated the token upstream. The string says which way it went
+    Failed {
+        cause: String,
+        detail: String,
+    },
+    /// An open attempt about a holder or a bundle the account has since replaced, stored as a failure under its marker.
+    Superseded,
+    /// The refresh may or may not have rotated the token upstream. The detail says which way it went
     /// uncertain, because that is all an operator has to act on before re-pairing the slot.
-    Uncertain(String),
+    Uncertain {
+        cause: String,
+        detail: String,
+    },
 }
 
 impl AttemptOutcome {
@@ -115,21 +125,35 @@ impl AttemptOutcome {
     pub fn word(&self) -> &'static str {
         match self {
             AttemptOutcome::Committed => "committed",
-            AttemptOutcome::Failed(_) => "failed",
-            AttemptOutcome::Uncertain(_) => "uncertain",
+            AttemptOutcome::Failed { .. } | AttemptOutcome::Superseded => "failed",
+            AttemptOutcome::Uncertain { .. } => "uncertain",
         }
     }
 
     pub fn detail(&self) -> Option<&str> {
         match self {
             AttemptOutcome::Committed => None,
-            AttemptOutcome::Failed(detail) | AttemptOutcome::Uncertain(detail) => Some(detail),
+            AttemptOutcome::Superseded => Some(SUPERSEDED_DETAIL),
+            AttemptOutcome::Failed { detail, .. } | AttemptOutcome::Uncertain { detail, .. } => {
+                Some(detail)
+            }
+        }
+    }
+
+    pub fn cause(&self) -> Option<&str> {
+        match self {
+            AttemptOutcome::Committed => None,
+            AttemptOutcome::Superseded => Some(SUPERSEDED_DETAIL),
+            AttemptOutcome::Failed { cause, .. } | AttemptOutcome::Uncertain { cause, .. } => {
+                Some(cause)
+            }
         }
     }
 }
 
 // The details a settlement writes beside its outcome word as markers, which `settled` reads back: a pairing's own
-// committed row, and an open attempt a commit closed because the bundle it waited on was replaced.
+// committed row, and an open attempt a commit closed because the bundle it waited on was replaced. A superseded row's
+// class is its marker word.
 const PAIRING_DETAIL: &str = "pairing";
 const SUPERSEDED_DETAIL: &str = "superseded";
 
@@ -172,6 +196,9 @@ pub struct ResolvedAttempt {
     pub resolved_at: i64,
     pub outcome: String,
     pub detail: Option<String>,
+    /// The failure's class as its settlement recorded it, `None` for a commit and for a row settled before the
+    /// registry carried the column.
+    pub cause: Option<String>,
     pub lifecycle_generation: u64,
     pub credential_generation: u64,
 }
@@ -234,7 +261,7 @@ fn open_tokens(
 }
 
 // The columns `id, account_id, started_at, resolved_at, outcome, detail, lifecycle_generation,
-// credential_generation` of `refresh_attempts`, in that order.
+// credential_generation, cause` of `refresh_attempts`, in that order.
 fn row_to_resolved_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<ResolvedAttempt> {
     Ok(ResolvedAttempt {
         id: r.get::<_, i64>(0)? as u64,
@@ -245,6 +272,7 @@ fn row_to_resolved_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<ResolvedAt
         detail: r.get(5)?,
         lifecycle_generation: r.get::<_, i64>(6)? as u64,
         credential_generation: r.get::<_, i64>(7)? as u64,
+        cause: r.get(8)?,
     })
 }
 
@@ -592,8 +620,8 @@ impl Store {
         // quarantine the account at the next start.
         tx.execute(
             &format!(
-                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = '{SUPERSEDED_DETAIL}' \
-                 WHERE account_id = ?1 AND id IS NOT ?3 AND ({PENDING_WHERE})"
+                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = '{SUPERSEDED_DETAIL}', \
+                 cause = '{SUPERSEDED_DETAIL}' WHERE account_id = ?1 AND id IS NOT ?3 AND ({PENDING_WHERE})"
             ),
             params![account_id, now, attempt_id.map(|id| id as i64)],
         )?;
@@ -603,7 +631,7 @@ impl Store {
             // be resolved by this commit, even by accident.
             let updated = tx.execute(
                 &format!(
-                    "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'committed', detail = NULL \
+                    "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'committed', detail = NULL, cause = NULL \
                      WHERE id = ?1 AND account_id = ?3 AND ({PENDING_WHERE})"
                 ),
                 params![id as i64, now, account_id],
@@ -713,7 +741,7 @@ impl Store {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let mut stmt = conn.prepare(
             "SELECT id, account_id, started_at, resolved_at, outcome, detail, lifecycle_generation, \
-             credential_generation FROM refresh_attempts \
+             credential_generation, cause FROM refresh_attempts \
              WHERE (resolved_at > ?1 OR (resolved_at = ?1 AND id > ?2)) AND outcome IS NOT NULL \
              ORDER BY resolved_at, id LIMIT ?3",
         )?;
@@ -821,7 +849,7 @@ impl Store {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = self.now_ms();
-        let (label, detail) = (outcome.word(), outcome.detail());
+        let (label, detail, cause) = (outcome.word(), outcome.detail(), outcome.cause());
         let account_id: Option<String> = tx
             .query_row(
                 "SELECT account_id FROM refresh_attempts WHERE id = ?1",
@@ -844,10 +872,10 @@ impl Store {
         }
         let updated = tx.execute(
             &format!(
-                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = ?3, detail = ?4 \
+                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = ?3, detail = ?4, cause = ?5 \
                  WHERE id = ?1 AND ({PENDING_WHERE})"
             ),
-            params![attempt_id as i64, now, label, detail],
+            params![attempt_id as i64, now, label, detail, cause],
         )?;
         tx.commit()?;
         Ok(updated > 0)
@@ -926,7 +954,7 @@ impl Store {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let mut stmt = conn.prepare_cached(
             "SELECT id, account_id, started_at, resolved_at, outcome, detail, lifecycle_generation, \
-             credential_generation FROM refresh_attempts \
+             credential_generation, cause FROM refresh_attempts \
              WHERE account_id = ?1 AND incarnation = ?2 AND outcome IS NOT NULL \
              ORDER BY resolved_at DESC, id DESC LIMIT ?3",
         )?;

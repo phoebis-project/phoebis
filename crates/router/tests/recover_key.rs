@@ -182,7 +182,10 @@ fn seed(registry: &Path, key: &StorageKey) -> Vec<AccountRow> {
                 .resolve_refresh_attempt(
                     attempt,
                     1,
-                    AttemptOutcome::Uncertain("the token endpoint did not answer".into())
+                    AttemptOutcome::Uncertain {
+                        cause: "the_token_endpoint_did_not_answer".into(),
+                        detail: "the token endpoint did not answer".into()
+                    }
                 )
                 .unwrap());
         }

@@ -944,8 +944,8 @@ impl RecoveryStore {
         )?;
         tx.execute(
             &format!(
-                "UPDATE refresh_attempts SET resolved_at = ?1, outcome = 'failed', detail = 'disconnected' \
-                 WHERE {PENDING_WHERE}"
+                "UPDATE refresh_attempts SET resolved_at = ?1, outcome = 'failed', detail = 'disconnected', \
+                 cause = 'disconnected' WHERE {PENDING_WHERE}"
             ),
             params![now],
         )?;

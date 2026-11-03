@@ -699,7 +699,7 @@ fn refresh_detail(
         });
     }
     json!({
-        "cause": attempt.detail.as_deref().map(phoebis_oauth::refresh_cause),
+        "cause": attempt.cause,
         "error": attempt.detail,
     })
 }

@@ -410,7 +410,14 @@ async fn five_settled_refresh_attempts(up: &FakeUpstream, retention_days: u32) -
     for _ in 0..5 {
         let id = h.store.open_refresh_attempt("a", 1, 1, 1).unwrap();
         h.store
-            .resolve_refresh_attempt(id, 1, phoebis_store::AttemptOutcome::Failed("x".into()))
+            .resolve_refresh_attempt(
+                id,
+                1,
+                phoebis_store::AttemptOutcome::Failed {
+                    cause: "x".into(),
+                    detail: "x".into(),
+                },
+            )
             .unwrap();
     }
     // The store dates its rows by the wall clock; the ledger's clock moves two days past the newest.

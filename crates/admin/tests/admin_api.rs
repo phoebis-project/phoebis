@@ -928,7 +928,10 @@ fn seed_failed_refreshes(store: &phoebis_store::Store) {
             .resolve_refresh_attempt(
                 attempt,
                 1,
-                phoebis_store::AttemptOutcome::Failed(detail.into()),
+                phoebis_store::AttemptOutcome::Failed {
+                    cause: detail.into(),
+                    detail: detail.into(),
+                },
             )
             .unwrap();
     }
@@ -953,7 +956,10 @@ async fn a_pairing_over_an_uncertain_refresh_row_leaves_the_commit_as_the_newest
         .resolve_refresh_attempt(
             attempt,
             1,
-            phoebis_store::AttemptOutcome::Uncertain("lost".into()),
+            phoebis_store::AttemptOutcome::Uncertain {
+                cause: "lost".into(),
+                detail: "lost".into(),
+            },
         )
         .unwrap();
     assert_eq!(pair_business(&app, &cookie).await.status(), 200);
@@ -4345,7 +4351,10 @@ async fn a_failed_retry_beside_an_uncertain_refresh_still_shows_as_quarantined()
         .resolve_refresh_attempt(
             retry,
             1,
-            phoebis_store::AttemptOutcome::Failed("refresh rejected with status 503".into()),
+            phoebis_store::AttemptOutcome::Failed {
+                cause: "503".into(),
+                detail: "refresh rejected with status 503".into(),
+            },
         )
         .unwrap();
     let cookie = login(&app, "admin-secret").await;

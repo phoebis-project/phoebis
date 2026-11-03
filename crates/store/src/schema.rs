@@ -290,9 +290,15 @@ CREATE TABLE usage_window_sets (
 );
 "#;
 
+/// A settled attempt's class as its settlement recorded it, which the ledger's refresh rows name beside the detail
+/// text rather than reading it back out of that text.
+const V4: &str = r#"
+ALTER TABLE refresh_attempts ADD COLUMN cause TEXT;
+"#;
+
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or
 /// rebuild a table, so an older build refuses a newer registry rather than misreading it.
-pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3)];
+pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3), (4, V4)];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.

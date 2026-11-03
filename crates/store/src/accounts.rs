@@ -417,8 +417,8 @@ impl Store {
         // every refresh after re-pairing, and an uncertain one would quarantine the re-paired account at start.
         tx.execute(
             &format!(
-                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = 'disconnected' \
-                 WHERE account_id = ?1 AND ({PENDING_WHERE})"
+                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = 'disconnected', \
+                 cause = 'disconnected' WHERE account_id = ?1 AND ({PENDING_WHERE})"
             ),
             params![id, now],
         )?;

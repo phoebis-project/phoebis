@@ -591,7 +591,14 @@ pub async fn quarantined_parts(
         .unwrap();
     parts
         .store
-        .resolve_refresh_attempt(attempt, 1, AttemptOutcome::Uncertain(detail.to_string()))
+        .resolve_refresh_attempt(
+            attempt,
+            1,
+            AttemptOutcome::Uncertain {
+                cause: "refresh_response_lost".into(),
+                detail: detail.to_string(),
+            },
+        )
         .unwrap();
     (parts.app, parts.up, parts.store, parts.manager)
 }

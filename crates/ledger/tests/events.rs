@@ -218,9 +218,10 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
         .resolve_refresh_attempt(
             attempt,
             1,
-            phoebis_store::AttemptOutcome::Failed(
-                "refresh rejected with status 401 (invalid_grant)".into(),
-            ),
+            phoebis_store::AttemptOutcome::Failed {
+                cause: "invalid_grant".into(),
+                detail: "refresh rejected with status 401 (invalid_grant)".into(),
+            },
         )
         .unwrap();
     h.store
@@ -268,9 +269,10 @@ async fn a_refresh_row_names_the_failure_s_class_and_text_or_the_committed_token
         .resolve_refresh_attempt(
             failed,
             1,
-            phoebis_store::AttemptOutcome::Failed(
-                "refresh rejected with status 400 (invalid_grant)".into(),
-            ),
+            phoebis_store::AttemptOutcome::Failed {
+                cause: "invalid_grant".into(),
+                detail: "refresh rejected with status 400 (invalid_grant)".into(),
+            },
         )
         .unwrap();
     let uncertain = h.store.open_refresh_attempt("b", 1, 1, 1).unwrap();
@@ -278,9 +280,10 @@ async fn a_refresh_row_names_the_failure_s_class_and_text_or_the_committed_token
         .resolve_refresh_attempt(
             uncertain,
             1,
-            phoebis_store::AttemptOutcome::Uncertain(
-                "refresh response lost: connection reset".into(),
-            ),
+            phoebis_store::AttemptOutcome::Uncertain {
+                cause: "refresh_response_lost".into(),
+                detail: "refresh response lost: connection reset".into(),
+            },
         )
         .unwrap();
     let committed = h.store.open_refresh_attempt("a", 1, 1, 1).unwrap();
@@ -357,6 +360,87 @@ async fn a_refresh_row_names_the_failure_s_class_and_text_or_the_committed_token
                 "refresh_expires_at": NOW + 86_400_000
             })
         )
+    );
+    up.shutdown().await;
+}
+
+/// The failed and the uncertain texts lead with words other than their class, so a row that read the class out of the
+/// text would name another. The disconnect is the store's own statement settling an open attempt.
+#[tokio::test]
+async fn a_refresh_row_names_the_class_its_settlement_recorded_rather_than_one_read_from_its_text()
+{
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        (0, None),
+        polled_every_50_ms(),
+    )
+    .await;
+    let failed = h.store.open_refresh_attempt("a", 1, 1, 1).unwrap();
+    h.store
+        .resolve_refresh_attempt(
+            failed,
+            1,
+            phoebis_store::AttemptOutcome::Failed {
+                cause: "invalid_grant".into(),
+                detail: "the grant was refused: invalid_grant".into(),
+            },
+        )
+        .unwrap();
+    let uncertain = h.store.open_refresh_attempt("b", 1, 1, 1).unwrap();
+    h.store
+        .resolve_refresh_attempt(
+            uncertain,
+            1,
+            phoebis_store::AttemptOutcome::Uncertain {
+                cause: "refresh_response_lost".into(),
+                detail: "no answer after the write".into(),
+            },
+        )
+        .unwrap();
+    h.store.open_refresh_attempt("a", 1, 1, 1).unwrap();
+    h.store.bump_lifecycle("a", StateCause::Operator).unwrap();
+    let rows = wait_for_async(Duration::from_secs(5), || async {
+        let mut rows: Vec<(String, Option<String>, Option<String>)> =
+            h.db.events(0, i64::MAX, 100)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|e| e.kind.starts_with("refresh_"))
+                .map(|e| {
+                    let detail: serde_json::Value =
+                        serde_json::from_str(e.detail.as_deref().unwrap()).unwrap();
+                    let text = |key: &str| detail[key].as_str().map(str::to_string);
+                    (e.kind, text("cause"), text("error"))
+                })
+                .collect();
+        rows.sort();
+        (rows.len() == 3).then_some(rows)
+    })
+    .await;
+    let row = |kind: &str, cause: &str, error: &str| {
+        (
+            kind.to_string(),
+            Some(cause.to_string()),
+            Some(error.to_string()),
+        )
+    };
+    assert_eq!(
+        rows,
+        [
+            row("refresh_failed", "disconnected", "disconnected"),
+            row(
+                "refresh_failed",
+                "invalid_grant",
+                "the grant was refused: invalid_grant"
+            ),
+            row(
+                "refresh_uncertain",
+                "refresh_response_lost",
+                "no answer after the write"
+            ),
+        ]
     );
     up.shutdown().await;
 }
@@ -3297,7 +3381,10 @@ async fn the_start_row_dates_the_gap_from_the_previous_run_whatever_the_mirror_f
         .resolve_refresh_attempt(
             attempt,
             1,
-            phoebis_store::AttemptOutcome::Failed("quarantined at start".into()),
+            phoebis_store::AttemptOutcome::Failed {
+                cause: "quarantined_at_start".into(),
+                detail: "quarantined at start".into(),
+            },
         )
         .unwrap();
     let landed = wait_for_async(Duration::from_secs(5), || async {
@@ -3413,7 +3500,10 @@ async fn a_quarantine_the_start_lands_after_the_mirrors_baseline_is_mirrored() {
         .resolve_refresh_attempt(
             attempt,
             1,
-            phoebis_store::AttemptOutcome::Failed("quarantined at start".into()),
+            phoebis_store::AttemptOutcome::Failed {
+                cause: "quarantined_at_start".into(),
+                detail: "quarantined at start".into(),
+            },
         )
         .unwrap();
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());

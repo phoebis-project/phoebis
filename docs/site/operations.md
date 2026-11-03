@@ -221,7 +221,7 @@ UPDATE accounts SET state = CASE kind WHEN 'oauth' THEN 'disconnected' ELSE 'unp
   state_cause = 'operator', lifecycle_generation = lifecycle_generation + 1, revision = revision + 1,
   updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
 UPDATE refresh_attempts SET resolved_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000, outcome = 'failed',
-  detail = 'disconnected' WHERE resolved_at IS NULL OR outcome = 'uncertain';
+  detail = 'disconnected', cause = 'disconnected' WHERE resolved_at IS NULL OR outcome = 'uncertain';
 COMMIT;
 SQL
 ```
@@ -404,8 +404,8 @@ until a reload lands and `certificate_expiring` from 30 days before a loaded lea
 
 Schema migrations run when the new binary opens each database, every migration above the stored version in order, each
 inside its own transaction, so a crash leaves the last version that landed. The registry's migrations may drop or
-rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 2 and the
-ledger at schema 1. Both refuse to open a file a newer build wrote: the registry with `the registry's schema version
+rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 4 and the
+ledger at schema 2. Both refuse to open a file a newer build wrote: the registry with `the registry's schema version
 {found} is newer than the {supported} this build opens: restore the backup taken before the upgrade, or recreate a
 registry a pre-release build wrote with phoebis init`, and the ledger with the same words, `ledger` in place of
 `registry`. `phoebis check-config` reads both versions read-only, taking no lock, and refuses first with `the registry

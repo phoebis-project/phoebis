@@ -596,7 +596,13 @@ async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_
     let rig = rig().await;
     rig.store.set_clock(rig.clock());
     let (attention, _arm) = rig.attention(None);
-    resolve(&rig, AttemptOutcome::Failed("invalid_grant".into()));
+    resolve(
+        &rig,
+        AttemptOutcome::Failed {
+            cause: "invalid_grant".into(),
+            detail: "invalid_grant".into(),
+        },
+    );
     let conditions = read(&attention, NOW);
     let one = find(&conditions, Kind::RefreshFailed, "business").unwrap();
     assert_eq!(
@@ -608,7 +614,14 @@ async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_
     rig.at(NOW + 1);
     let lost = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
     rig.store
-        .resolve_refresh_attempt(lost, 1, AttemptOutcome::Uncertain("lost".into()))
+        .resolve_refresh_attempt(
+            lost,
+            1,
+            AttemptOutcome::Uncertain {
+                cause: "lost".into(),
+                detail: "lost".into(),
+            },
+        )
         .unwrap();
     let attempts = rig
         .store
@@ -643,7 +656,10 @@ async fn a_lost_refresh_a_committed_retry_supersedes_counts_no_second_failure() 
     let (attention, _arm) = rig.attention(None);
     let lost = resolve(
         &rig,
-        AttemptOutcome::Uncertain("refresh response lost".into()),
+        AttemptOutcome::Uncertain {
+            cause: "refresh_response_lost".into(),
+            detail: "refresh response lost".into(),
+        },
     );
     // A millisecond on the store's clock, so the commit settles the lost row again under a later time than its own.
     rig.at(NOW + 1);
@@ -691,11 +707,23 @@ async fn a_lost_refresh_a_committed_retry_supersedes_counts_no_second_failure() 
     );
 
     // A refresh that fails after the commit still counts, once: one failure holds nothing, the second holds.
-    resolve(&rig, AttemptOutcome::Failed("invalid_grant".into()));
+    resolve(
+        &rig,
+        AttemptOutcome::Failed {
+            cause: "invalid_grant".into(),
+            detail: "invalid_grant".into(),
+        },
+    );
     let one = read(&attention, NOW);
     let one = find(&one, Kind::RefreshFailed, "business").unwrap();
     assert_eq!((one.holds, &one.detail["failures"]), (false, &json!(1)));
-    resolve(&rig, AttemptOutcome::Failed("invalid_grant".into()));
+    resolve(
+        &rig,
+        AttemptOutcome::Failed {
+            cause: "invalid_grant".into(),
+            detail: "invalid_grant".into(),
+        },
+    );
     let held = read(&attention, NOW);
     let held = find(&held, Kind::RefreshFailed, "business").unwrap();
     assert_eq!((held.holds, &held.detail["failures"]), (true, &json!(2)));
@@ -708,7 +736,13 @@ async fn a_pairing_that_supersedes_a_pending_retry_leaves_no_refresh_run() {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     let rig = rig_with_store(store.clone()).await;
     rig.store.set_clock(rig.clock());
-    let failed = resolve(&rig, AttemptOutcome::Failed("invalid_grant".into()));
+    let failed = resolve(
+        &rig,
+        AttemptOutcome::Failed {
+            cause: "invalid_grant".into(),
+            detail: "invalid_grant".into(),
+        },
+    );
     rig.at(NOW + 1);
     let pending = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
     rig.at(NOW + 2);
@@ -770,7 +804,13 @@ async fn a_refresh_run_is_read_back_by_a_second_reader_over_the_same_store() {
     let rig = rig().await;
     let (first, mut arm) = rig.attention(None);
     for detail in ["one", "two"] {
-        resolve(&rig, AttemptOutcome::Failed(detail.into()));
+        resolve(
+            &rig,
+            AttemptOutcome::Failed {
+                cause: detail.into(),
+                detail: detail.into(),
+            },
+        );
     }
     assert!(
         find(&read(&first, NOW), Kind::RefreshFailed, "business")

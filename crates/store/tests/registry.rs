@@ -151,6 +151,7 @@ fn a_version_one_registry_opens_at_three_with_the_new_columns_at_their_defaults_
          ALTER TABLE usage_windows DROP COLUMN tier;
          DROP TABLE session_first_seen;
          DROP TABLE usage_window_sets;
+         ALTER TABLE refresh_attempts DROP COLUMN cause;
          DROP TABLE keepalive_idle_returns;
          CREATE TABLE IF NOT EXISTS keepalive_idle_returns (
            pool_id TEXT NOT NULL, bucket INTEGER NOT NULL, reached INTEGER NOT NULL, returned INTEGER NOT NULL,
@@ -162,7 +163,7 @@ fn a_version_one_registry_opens_at_three_with_the_new_columns_at_their_defaults_
     .unwrap();
     drop(conn);
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 3);
+    assert_eq!(store.schema_version().unwrap(), 4);
     assert!(
         store.load_keepalive().unwrap().2.is_empty(),
         "the all-time counters leave with their table"
@@ -3012,7 +3013,14 @@ fn the_history_purge_cuts_old_resolved_attempts_and_changes_and_keeps_what_their
     for _ in 0..2 {
         let id = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
         store
-            .resolve_refresh_attempt(id, 1, phoebis_store::AttemptOutcome::Failed("x".into()))
+            .resolve_refresh_attempt(
+                id,
+                1,
+                phoebis_store::AttemptOutcome::Failed {
+                    cause: "x".into(),
+                    detail: "x".into(),
+                },
+            )
             .unwrap();
     }
     let watermark = store.newest_registry_change_id().unwrap().unwrap();

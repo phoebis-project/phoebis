@@ -987,12 +987,13 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
         "DROP TABLE usage_window_sets;
+         ALTER TABLE refresh_attempts DROP COLUMN cause;
          UPDATE meta SET value = '2' WHERE key = 'schema_version';",
     )
     .unwrap();
     drop(conn);
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 3);
+    assert_eq!(store.schema_version().unwrap(), 4);
     assert!(
         store
             .upsert_window_set(&window_set_row("seven_day", 1_000, 1))

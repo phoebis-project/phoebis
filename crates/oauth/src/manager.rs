@@ -488,7 +488,7 @@ impl CredentialManager {
                 self.inner.store.resolve_refresh_attempt(
                     attempt.id,
                     incarnation,
-                    AttemptOutcome::Failed("superseded".into()),
+                    AttemptOutcome::Superseded,
                 )?;
                 continue;
             }
@@ -500,7 +500,10 @@ impl CredentialManager {
             self.inner.store.resolve_refresh_attempt(
                 attempt.id,
                 incarnation,
-                AttemptOutcome::Failed("quarantined at start".into()),
+                AttemptOutcome::Failed {
+                    cause: "quarantined_at_start".into(),
+                    detail: "quarantined at start".into(),
+                },
             )?;
             if !recovered.contains(&attempt.account_id) {
                 recovered.push(attempt.account_id);
@@ -883,6 +886,7 @@ impl Inner {
                 attempt,
                 &account,
                 &bundle,
+                "no_refresh_token".into(),
                 "no refresh token".into(),
             ));
         };
@@ -903,7 +907,10 @@ impl Inner {
                 self.resolve(
                     attempt,
                     account.incarnation,
-                    AttemptOutcome::Failed(format!("transport: {error}")),
+                    AttemptOutcome::Failed {
+                        cause: "transport".into(),
+                        detail: format!("transport: {error}"),
+                    },
                 );
                 self.arm_backoff(account_id, TRANSIENT_BACKOFF_MS, Armed::Refused);
                 return self.stored_or(
@@ -921,6 +928,7 @@ impl Inner {
                     attempt,
                     &account,
                     &bundle,
+                    "refresh_response_lost".into(),
                     format!("refresh response lost: {error}"),
                 );
             }
@@ -933,11 +941,12 @@ impl Inner {
                 Some(code) => format!("refresh rejected with status {} ({code})", head.status),
                 None => format!("refresh rejected with status {}", head.status),
             };
+            let cause = code.clone().unwrap_or_else(|| head.status.to_string());
             // The refresh token is gone, and no retry brings it back; only re-pairing does.
             if head.status == 401
                 || (head.status == 400 && code.as_deref() == Some("invalid_grant"))
             {
-                return Err(self.refused_for_good(attempt, &account, &bundle, detail));
+                return Err(self.refused_for_good(attempt, &account, &bundle, cause, detail));
             }
             // A rejected request never got far enough to rotate anything, so the stored refresh token is
             // still the live one and the only thing to do is wait. A 5xx is the one status where that is not
@@ -949,7 +958,10 @@ impl Inner {
             self.resolve(
                 attempt,
                 account.incarnation,
-                AttemptOutcome::Failed(detail.clone()),
+                AttemptOutcome::Failed {
+                    cause,
+                    detail: detail.clone(),
+                },
             );
             let asked = retry_after_ms(&head, (self.clock)(), MAX_NOT_BEFORE_MS);
             self.arm_backoff(
@@ -972,6 +984,7 @@ impl Inner {
                     attempt,
                     &account,
                     &bundle,
+                    "refresh_response_could_not_be_read".into(),
                     "refresh response could not be read".into(),
                 );
             }
@@ -985,6 +998,7 @@ impl Inner {
                     attempt,
                     &account,
                     &bundle,
+                    "identity_mismatch".into(),
                     "identity mismatch".into(),
                 ));
             }
@@ -1030,7 +1044,10 @@ impl Inner {
                 self.resolve(
                     attempt,
                     account.incarnation,
-                    AttemptOutcome::Failed("stale lifecycle".into()),
+                    AttemptOutcome::Failed {
+                        cause: "stale_lifecycle".into(),
+                        detail: "stale lifecycle".into(),
+                    },
                 );
                 Err(RefreshFailure::Disconnected)
             }
@@ -1041,6 +1058,7 @@ impl Inner {
                 attempt,
                 &account,
                 &bundle,
+                "commit_failed_after_a_rotated_response".into(),
                 format!("commit failed after a rotated response: {error}"),
             ),
         }
@@ -1053,9 +1071,14 @@ impl Inner {
         attempt: u64,
         account: &AccountRow,
         bundle: &CredentialBundle,
+        cause: String,
         detail: String,
     ) -> RefreshFailure {
-        self.resolve(attempt, account.incarnation, AttemptOutcome::Failed(detail));
+        self.resolve(
+            attempt,
+            account.incarnation,
+            AttemptOutcome::Failed { cause, detail },
+        );
         let mark = self.mark_reauth(
             &account.id,
             StateCause::RefreshFailed,
@@ -1071,12 +1094,13 @@ impl Inner {
         attempt: u64,
         account: &AccountRow,
         bundle: &CredentialBundle,
+        cause: String,
         detail: String,
     ) -> Result<AccessToken, RefreshFailure> {
         self.resolve(
             attempt,
             account.incarnation,
-            AttemptOutcome::Uncertain(detail),
+            AttemptOutcome::Uncertain { cause, detail },
         );
         self.arm_backoff(&account.id, SERVER_ERROR_BACKOFF_MS, Armed::Uncertain);
         self.stored_or(account, bundle, RefreshFailure::Quarantined)
@@ -1273,27 +1297,6 @@ fn error_code(body: &[u8]) -> Option<String> {
     }
 }
 
-/// The class of the text a refresh attempt row stores, for the ledger's refresh rows: the token endpoint's error code
-/// where a rejection named one, else the status it answered, else the words before the colon of a failure that
-/// carries its error after one (`transport`), else the text's own words. The rejection is read first, so a code that
-/// holds a colon stays whole. The texts are the ones `refresh` and `recover_on_start` store, each pinned by a case.
-pub fn refresh_cause(text: &str) -> String {
-    let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join("_");
-    if let Some(rest) = text.strip_prefix("refresh rejected with status ") {
-        return match rest
-            .strip_suffix(')')
-            .and_then(|rest| rest.split_once(" ("))
-        {
-            Some((_, code)) => code.to_string(),
-            None => rest.to_string(),
-        };
-    }
-    match text.split_once(':') {
-        Some((lead, _)) => words(lead),
-        None => words(text),
-    }
-}
-
 /// `Retry-After` as a delay in milliseconds, in both of the forms the header takes, clamped to `max_ms`. The
 /// ceiling belongs to the caller because what an overlong wait costs differs: a refresh races a token's own
 /// expiry, a usage fetch races nothing. The HTTP-date form names an instant rather than a delay, so it is read
@@ -1321,27 +1324,6 @@ mod tests {
     use phoebis_store::{AccountKind, Identity, NewBundle, StorageKey};
     use phoebis_transport::control::{ResolveFuture, Resolver};
     use phoebis_transport::{connector_builder, Plane};
-
-    /// One case per branch of the class rule: a rejection's code, a code that holds a colon, a rejection's status,
-    /// the words before a colon, and the text's own words.
-    #[test]
-    fn every_branch_of_a_refresh_attempts_text_reads_as_its_class() {
-        for (text, class) in [
-            (
-                "refresh rejected with status 400 (invalid_grant)",
-                "invalid_grant",
-            ),
-            (
-                "refresh rejected with status 400 (scope:denied)",
-                "scope:denied",
-            ),
-            ("refresh rejected with status 503", "503"),
-            ("refresh response lost: timed out", "refresh_response_lost"),
-            ("quarantined at start", "quarantined_at_start"),
-        ] {
-            assert_eq!(refresh_cause(text), class, "{text}");
-        }
-    }
 
     /// A manager for account `a` over an in-memory store, a fixed clock, and a fake token endpoint that
     /// answers every refresh with the measured fixture.
