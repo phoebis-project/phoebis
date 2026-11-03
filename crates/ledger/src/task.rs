@@ -317,7 +317,7 @@ impl Ledger {
     /// answers the landing's result, past the bound included (the reply arm of the `select!` reads first, `biased`, so
     /// a ready answer is never thrown away).
     pub async fn replay_parked(&self, now: i64, bound: Duration) -> Result<Replayed, LedgerError> {
-        let stopped = || LedgerError::Io(std::io::Error::other("the ledger task has stopped"));
+        let stopped = || LedgerError::Io(std::io::Error::other(LedgerGone));
         let deadline = (self.clock)() + bound.as_millis() as i64;
         let claimed = Arc::new(AtomicBool::new(false));
         let (reply, mut answer) = oneshot::channel();
@@ -1197,7 +1197,7 @@ async fn land_parked(
 }
 
 /// Runs `f` against the ledger on a blocking worker; a worker that died answers as an I/O error.
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     db: &Arc<LedgerDb>,
     f: impl FnOnce(&LedgerDb) -> Result<T, LedgerError> + Send + 'static,
 ) -> Result<T, LedgerError> {

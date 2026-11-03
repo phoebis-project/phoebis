@@ -140,9 +140,10 @@ pub async fn run_retention(
     now: i64,
     budgeted: Vec<BudgetedMember>,
 ) -> Result<Purged, LedgerError> {
-    tokio::task::spawn_blocking(move || run_retention_blocking(&db, &config, now, &budgeted))
-        .await
-        .map_err(|e| LedgerError::Io(std::io::Error::other(e)))?
+    crate::task::blocking(&db, move |db| {
+        run_retention_blocking(db, &config, now, &budgeted)
+    })
+    .await
 }
 
 /// The pass on the calling thread: every family in slices, a family repeated while its slice says more rows wait, and
