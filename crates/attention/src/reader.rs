@@ -346,23 +346,27 @@ fn evict_drift(drift: &mut HashMap<String, Drift>) {
     }
 }
 
-/// A condition about a pool, one of the router's own components or a model: a pool's belongs to its card and opens
-/// it, every other subject's belongs to no pool and opens nothing.
+/// A condition about a pool, one of the router's own components or a model. `card` names the pool whose card the
+/// condition joins and opens: a live pool's own, and `None` for a pool the registry no longer holds and for every
+/// other subject.
 fn condition_for(
     kind: Kind,
     subject: Subject,
+    card: Option<&str>,
     holds: bool,
     since: Option<i64>,
     detail: serde_json::Value,
 ) -> Condition {
-    let pool = (subject.kind == SubjectKind::Pool).then(|| subject.id.clone());
     Condition {
         kind,
         subject,
         holds,
         since,
-        pools: pool.iter().cloned().collect(),
-        link: pool.map(|id| Link { page: "pools", id }),
+        pools: card.iter().map(|id| id.to_string()).collect(),
+        link: card.map(|id| Link {
+            page: "pools",
+            id: id.to_string(),
+        }),
         detail,
     }
 }
@@ -411,18 +415,20 @@ fn detached(mut condition: Condition, live: bool) -> Condition {
     condition
 }
 
-fn account_pools(snapshot: &RegistrySnapshot, account_id: &str) -> Vec<String> {
-    let mut pools: Vec<String> = snapshot
-        .pools()
-        .filter(|p| {
-            snapshot
-                .members(&p.id)
-                .iter()
-                .any(|m| m.account_id == account_id)
-        })
-        .map(|p| p.id.clone())
-        .collect();
-    pools.sort();
+/// Each account's pools, sorted, from one walk of the snapshot's memberships. An account no pool holds has no entry.
+fn account_pools(snapshot: &RegistrySnapshot) -> HashMap<String, Vec<String>> {
+    let mut pools: HashMap<String, Vec<String>> = HashMap::new();
+    for pool in snapshot.pools() {
+        for member in snapshot.members(&pool.id).iter() {
+            let ids = pools.entry(member.account_id.clone()).or_default();
+            if ids.last() != Some(&pool.id) {
+                ids.push(pool.id.clone());
+            }
+        }
+    }
+    for ids in pools.values_mut() {
+        ids.sort();
+    }
     pools
 }
 
@@ -471,6 +477,7 @@ pub(crate) fn conditions(
     now: i64,
 ) -> Result<Vec<Condition>, AttentionError> {
     let snapshot = router.snapshot();
+    let pools_of = account_pools(&snapshot);
     let mut out = Vec::new();
     // A deleted pool's exhaustion goes with it, so a pool created later under the same id starts clear.
     state.exhausted.retain(|id, _| snapshot.pool(id).is_some());
@@ -479,6 +486,7 @@ pub(crate) fn conditions(
         out.push(condition_for(
             Kind::PoolExhausted,
             Subject::pool(pool),
+            Some(&pool.id),
             held.is_some(),
             held.map(|e| e.since),
             json!({ "key": held.and_then(|e| e.key.clone()), "pool": pool.id }),
@@ -494,6 +502,7 @@ pub(crate) fn conditions(
         out.push(condition_for(
             Kind::WriterDegraded,
             Subject::router(component),
+            None,
             degraded,
             since_of(
                 state,
@@ -513,6 +522,7 @@ pub(crate) fn conditions(
         out.push(condition_for(
             Kind::CertificateReloadFailed,
             Subject::router(&pair.key),
+            None,
             pair.failed.is_some(),
             pair.failed.as_ref().map(|(at, _)| *at),
             json!({
@@ -531,6 +541,7 @@ pub(crate) fn conditions(
         out.push(condition_for(
             Kind::CertificateExpiring,
             Subject::router(&pair.key),
+            None,
             expiring,
             expiring.then_some(warning_from),
             json!({ "cert_file": cert_file, "days_left": days_left, "expires": pair.not_after_ms }),
@@ -550,13 +561,14 @@ pub(crate) fn conditions(
             let row = parked
                 .iter()
                 .find(|p| p.pool_id.as_deref() == Some(pool_id.as_str()));
-            let condition = condition_for(
+            out.push(condition_for(
                 Kind::LedgerRecordParked,
                 Subject {
                     kind: SubjectKind::Pool,
                     id: pool_id.clone(),
                     label,
                 },
+                live.then_some(pool_id.as_str()),
                 row.is_some(),
                 row.map(|r| r.oldest_at),
                 json!({
@@ -564,13 +576,13 @@ pub(crate) fn conditions(
                     "count": row.map_or(0, |r| r.count),
                     "pool": pool_id,
                 }),
-            );
-            out.push(detached(condition, live));
+            ));
         }
         if let Some(row) = parked.iter().find(|p| p.pool_id.is_none()) {
             out.push(condition_for(
                 Kind::LedgerRecordParked,
                 Subject::router(NO_POOL),
+                None,
                 true,
                 Some(row.oldest_at),
                 json!({ "accounts": row.account_ids, "count": row.count, "pool": null }),
@@ -597,14 +609,17 @@ pub(crate) fn conditions(
         });
     }
     for account in accounts {
-        let pools = account_pools(&snapshot, &account.id);
+        let pools = pools_of
+            .get(&account.id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let condition =
             |kind: Kind, holds: bool, since: Option<i64>, detail: serde_json::Value| Condition {
                 kind,
                 subject: Subject::account(account),
                 holds,
                 since,
-                pools: pools.clone(),
+                pools: pools.to_vec(),
                 link: Some(Link {
                     page: "accounts",
                     id: account.id.clone(),
@@ -684,6 +699,7 @@ pub(crate) fn conditions(
         out.push(condition_for(
             Kind::ModelUnpriced,
             Subject::model(&entry.model),
+            None,
             entry.since.is_some(),
             entry.since,
             json!({
@@ -693,7 +709,7 @@ pub(crate) fn conditions(
         ));
     }
     if let Some(rows) = routing {
-        out.extend(routing_conditions(&snapshot, accounts, rows));
+        out.extend(routing_conditions(&snapshot, &pools_of, accounts, rows));
     }
     // A cleared state, a deleted account and an account that changed kind all lose their first-seen time, so the
     // next holding read dates the state afresh.
@@ -709,13 +725,18 @@ pub(crate) fn conditions(
 /// holds keeps its row's condition, labeled by its id and opening nothing, until the fold no longer writes the row.
 fn routing_conditions(
     snapshot: &RegistrySnapshot,
+    pools_of: &HashMap<String, Vec<String>>,
     accounts: &[AccountRow],
     rows: &[RoutingCondition],
 ) -> Vec<Condition> {
-    let row = |kind: Kind, id: &str| {
-        rows.iter()
-            .find(|r| r.kind == kind.as_str() && r.subject_id == id)
-    };
+    // The first row per kind and subject answers, as a scan in order finds it.
+    let mut by_subject: HashMap<(&str, &str), &RoutingCondition> = HashMap::new();
+    for r in rows {
+        by_subject
+            .entry((r.kind.as_str(), r.subject_id.as_str()))
+            .or_insert(r);
+    }
+    let row = |kind: Kind, id: &str| by_subject.get(&(kind.as_str(), id)).copied();
     let detail_of = |row: Option<&RoutingCondition>, cleared: serde_json::Value| {
         let Some(row) = row else {
             return cleared;
@@ -754,21 +775,21 @@ fn routing_conditions(
     );
     for (pool_id, label, live) in pools {
         let held = row(Kind::ShedNoRunway, &pool_id);
-        let condition = condition_for(
+        out.push(condition_for(
             Kind::ShedNoRunway,
             Subject {
                 kind: SubjectKind::Pool,
                 id: pool_id.clone(),
                 label,
             },
+            live.then_some(pool_id.as_str()),
             held.is_some(),
             held.map(|r| r.since),
             detail_of(
                 held,
                 json!({ "accounts": [], "rounds": 0, "setting": CEILING_SETTING }),
             ),
-        );
-        out.push(detached(condition, live));
+        ));
     }
     let account_kinds = [
         (
@@ -815,7 +836,10 @@ fn routing_conditions(
             .map(|r| r.subject_id.as_str()),
     );
     for (account_id, label, live) in subjects {
-        let pools = account_pools(snapshot, &account_id);
+        let pools = pools_of
+            .get(&account_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         for (kind, cleared) in &account_kinds {
             let held = row(*kind, &account_id);
             let condition = Condition {
@@ -827,7 +851,7 @@ fn routing_conditions(
                 },
                 holds: held.is_some(),
                 since: held.map(|r| r.since),
-                pools: pools.clone(),
+                pools: pools.to_vec(),
                 link: Some(Link {
                     page: "accounts",
                     id: account_id.clone(),
