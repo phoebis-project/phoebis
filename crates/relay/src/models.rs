@@ -4,10 +4,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::body::Body;
 use axum::extract::{Path, Request, State};
-use axum::http::{header, HeaderMap, StatusCode, Uri};
-use axum::response::Response;
+use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::response::{IntoResponse, Response};
+use axum::Json;
 use futures::future::join_all;
 use phoebis_routing::listing::{find, listing, page, CatalogRow};
 use phoebis_routing::rules::{process, ProcessedRule};
@@ -38,15 +38,6 @@ fn query_of(uri: &Uri) -> HashMap<String, String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn json_response(status: StatusCode, value: serde_json::Value) -> Response {
-    Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(value.to_string()))
-        // `value` is built from strings this module owns; serializing it never fails.
-        .expect("a models JSON body is always well formed")
 }
 
 fn row_json(row: &CatalogRow) -> serde_json::Value {
@@ -141,15 +132,18 @@ pub(crate) async fn list(State(relay): State<Arc<Relay>>, request: Request) -> R
         query.get("after_id").map(String::as_str),
         query.get("before_id").map(String::as_str),
     );
-    no_store(json_response(
-        StatusCode::OK,
-        json!({
-            "data": paged.data.iter().map(row_json).collect::<Vec<_>>(),
-            "first_id": paged.first_id,
-            "last_id": paged.last_id,
-            "has_more": paged.has_more,
-        }),
-    ))
+    no_store(
+        (
+            StatusCode::OK,
+            Json(json!({
+                "data": paged.data.iter().map(row_json).collect::<Vec<_>>(),
+                "first_id": paged.first_id,
+                "last_id": paged.last_id,
+                "has_more": paged.has_more,
+            })),
+        )
+            .into_response(),
+    )
 }
 
 pub(crate) async fn show(
@@ -164,7 +158,7 @@ pub(crate) async fn show(
     };
     let rows = caller_listing(&relay, &access).await;
     match find(&rows, &id) {
-        Some(row) => no_store(json_response(StatusCode::OK, row_json(row))),
+        Some(row) => no_store((StatusCode::OK, Json(row_json(row))).into_response()),
         None => no_store(anthropic_error(
             StatusCode::NOT_FOUND,
             "not_found_error",
