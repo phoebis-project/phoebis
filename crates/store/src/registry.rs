@@ -824,15 +824,16 @@ impl Store {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction()?;
         let mut labels = Vec::new();
-        for (table, subject) in [
-            (
-                "pools",
-                AttachmentSubject::Pool as fn(String) -> AttachmentSubject,
-            ),
-            ("api_keys", AttachmentSubject::Key),
-        ] {
-            let mut stmt = tx.prepare(&format!("SELECT id, label FROM {table}"))?;
-            let rows = stmt.query_map([], |r| Ok((subject(r.get(0)?), r.get(1)?)))?;
+        for kind in [SubjectKind::Pool, SubjectKind::Key] {
+            let mut stmt = tx.prepare(&format!("SELECT id, label FROM {}", kind.table()))?;
+            let rows = stmt.query_map([], |r| {
+                let id = r.get(0)?;
+                let subject = match kind {
+                    SubjectKind::Key => AttachmentSubject::Key(id),
+                    SubjectKind::Pool => AttachmentSubject::Pool(id),
+                };
+                Ok((subject, r.get(1)?))
+            })?;
             labels.extend(rows.collect::<rusqlite::Result<Vec<_>>>()?);
         }
         let index = GuardrailIndex {
