@@ -2319,7 +2319,7 @@ m.unmount();
 {
   // primary's snapshot is overridden to an error with no poll beside the windows it holds.
   const { listAccounts } = api;
-  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'primary' ? { ...a, usage: { ...a.usage, error: 'the admin API timed out', poll: null, status: 'error' } } : a));
+  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'primary' ? { ...a, usage: { ...a.usage, error: 'the admin API timed out', poll: null } } : a));
   const held = await mount('/quota');
   const primary = [...held.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'primary');
   results.push({
@@ -2341,9 +2341,9 @@ m.unmount();
   api.listAccounts = async () =>
     (await listAccounts.call(api)).map((a) =>
       a.id === 'secondary'
-        ? { ...a, fableWindow: null, usage: { ...a.usage, error: 'usage request rate-limited', heldUntil, status: 'error' }, windows: [] }
+        ? { ...a, fableWindow: null, usage: { ...a.usage, error: 'usage request rate-limited', heldUntil }, windows: [] }
         : a.id === 'nightly'
-          ? { ...a, fableWindow: null, status: 'funding_required', usage: { ...a.usage, error: 'the admin API timed out', poll: null, status: 'error' }, windows: [] }
+          ? { ...a, fableWindow: null, status: 'funding_required', usage: { ...a.usage, error: 'the admin API timed out', poll: null }, windows: [] }
           : a,
     );
   const held = await mount('/quota');
@@ -2662,7 +2662,7 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
     // card keeps its Spend row where a plan account with no window draws the error.
     const { listAccounts } = api;
     api.listAccounts = async () =>
-      (await listAccounts.call(api)).map((a) => (a.id === 'contract' ? { ...a, usage: { ...a.usage, error: 'the poll has not read this account yet', fetchedAt: null, heldUntil: null, poll: null, status: 'error' } } : a));
+      (await listAccounts.call(api)).map((a) => (a.id === 'contract' ? { ...a, usage: { ...a.usage, error: 'the poll has not read this account yet', fetchedAt: null, heldUntil: null, poll: null } } : a));
     try {
       const page = await mount('/quota', { now: CLOCK_ORIGIN });
       const card = [...page.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'contract');
@@ -2684,7 +2684,7 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
     const { listAccounts } = api;
     api.listAccounts = async () =>
       (await listAccounts.call(api)).map((a) =>
-        a.id === 'contract' ? { ...a, spend: { ...a.spend, amounts: null, utilization: null }, usage: { ...a.usage, error: 'the poll has not read this account yet', fetchedAt: null, heldUntil: null, poll: null, status: 'error' } } : a,
+        a.id === 'contract' ? { ...a, spend: { ...a.spend, amounts: null, utilization: null }, usage: { ...a.usage, error: 'the poll has not read this account yet', fetchedAt: null, heldUntil: null, poll: null } } : a,
       );
     try {
       const page = await mount('/quota', { now: CLOCK_ORIGIN });
