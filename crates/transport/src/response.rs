@@ -118,29 +118,33 @@ pub fn keep_alive(head: &ResponseHead, framing: &Framing) -> bool {
             .unwrap_or(false)
 }
 
+/// Reads more of the body into `buf` and answers whether any bytes arrived. Free rather than a method, since
+/// `next_chunk` calls it while it holds a borrow of the reader's framing.
+async fn refill<R: AsyncRead + Unpin>(
+    r: &mut R,
+    buf: &mut BytesMut,
+) -> Result<bool, TransportError> {
+    // A prior split may have handed the buffer's capacity to a returned Bytes.
+    buf.reserve(8 * 1024);
+    Ok(r.read_buf(buf).await? != 0)
+}
+
 /// `chunk_left` is the number of payload bytes still owed by the chunk being streamed; `Some(0)` means the payload
 /// is complete and only its terminating CRLF is outstanding.
 pub struct BodyReader<R> {
     r: R,
     buf: BytesMut,
     framing: Framing,
-    remaining: u64,
     chunk_left: Option<usize>,
     done: bool,
 }
 
 impl<R: AsyncRead + Unpin> BodyReader<R> {
     pub fn new(r: R, leftover: BytesMut, framing: Framing) -> Self {
-        let remaining = if let Framing::ContentLength(n) = framing {
-            n
-        } else {
-            0
-        };
         Self {
             r,
             buf: leftover,
             framing,
-            remaining,
             chunk_left: None,
             done: false,
         }
@@ -156,33 +160,25 @@ impl<R: AsyncRead + Unpin> BodyReader<R> {
         if self.done {
             return Ok(None);
         }
-        match self.framing {
-            Framing::ContentLength(_) => {
-                if self.remaining == 0 {
+        match &mut self.framing {
+            Framing::ContentLength(remaining) => {
+                if *remaining == 0 {
                     self.done = true;
                     return Ok(None);
                 }
-                if self.buf.is_empty() {
-                    // A prior split_to may have handed the buffer's capacity to the returned Bytes.
-                    self.buf.reserve(8 * 1024);
-                    if self.r.read_buf(&mut self.buf).await? == 0 {
-                        return Err(TransportError::Response(
-                            "connection closed inside body".into(),
-                        ));
-                    }
+                if self.buf.is_empty() && !refill(&mut self.r, &mut self.buf).await? {
+                    return Err(TransportError::Response(
+                        "connection closed inside body".into(),
+                    ));
                 }
-                let take = (self.buf.len() as u64).min(self.remaining) as usize;
-                self.remaining -= take as u64;
+                let take = (self.buf.len() as u64).min(*remaining) as usize;
+                *remaining -= take as u64;
                 Ok(Some(self.buf.split_to(take).freeze()))
             }
             Framing::UntilClose => {
-                if self.buf.is_empty() {
-                    // A prior split may have handed the buffer's capacity to the returned Bytes.
-                    self.buf.reserve(8 * 1024);
-                    if self.r.read_buf(&mut self.buf).await? == 0 {
-                        self.done = true;
-                        return Ok(None);
-                    }
+                if self.buf.is_empty() && !refill(&mut self.r, &mut self.buf).await? {
+                    self.done = true;
+                    return Ok(None);
                 }
                 Ok(Some(self.buf.split().freeze()))
             }
@@ -191,9 +187,7 @@ impl<R: AsyncRead + Unpin> BodyReader<R> {
     }
 
     async fn fill(&mut self) -> Result<(), TransportError> {
-        // A prior split_to may have handed the buffer's capacity to a returned Bytes.
-        self.buf.reserve(8 * 1024);
-        if self.r.read_buf(&mut self.buf).await? == 0 {
+        if !refill(&mut self.r, &mut self.buf).await? {
             return Err(TransportError::Response(
                 "connection closed inside chunked body".into(),
             ));
