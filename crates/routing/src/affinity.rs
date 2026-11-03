@@ -52,7 +52,7 @@ impl AffinityEntry {
 /// One boundary the rung walk visited, deepest first: the gate's verdict beside the entry, so a record names each
 /// member's deepest entry whether or not the rung took it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Visited<'a> {
+pub(crate) struct Visited<'a> {
     pub depth: u32,
     pub hash: &'a str,
     pub entry: &'a AffinityEntry,
@@ -61,7 +61,7 @@ pub struct Visited<'a> {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RungWalk<'a> {
+pub(crate) struct RungWalk<'a> {
     /// The index into `visited` of the deepest accepted entry, what `deepest` answers, or `None` when every entry
     /// was refused or no boundary has one.
     pub matched: Option<usize>,
@@ -258,7 +258,7 @@ impl AffinityMap {
     /// Every boundary with an entry for the model, from the last boundary to the first, each judged by `gate`
     /// (`None` accepts, `Some(name)` refuses). Every entry is judged, not only those down to the match, so the
     /// record reads a member's standing at a depth the rung never reached.
-    pub fn walk<'a>(
+    pub(crate) fn walk<'a>(
         &'a self,
         canonical_model: &str,
         boundaries: &'a [String],
