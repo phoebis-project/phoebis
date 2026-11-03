@@ -12,7 +12,8 @@ use axum::Json;
 use phoebis_bus::OTHER_CLIENT;
 use phoebis_guardrails::{
     evaluate, parse_body, CompileError, CompiledGuardrail, Condition, ConditionWords,
-    GuardrailAction, GuardrailMode, HintLookup, Preset, RequestFacts, Verdict, MAX_CONDITIONS,
+    GuardrailAction, GuardrailMode, HintLookup, Preset, RequestFacts, Subject, Verdict,
+    MAX_CONDITIONS,
 };
 use phoebis_ledger::{guardrail_sample_page, request_body, RequestCursor, SampleSubject};
 use phoebis_store::{
@@ -836,6 +837,11 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
         Ok(false) => return failure(StatusCode::NOT_FOUND, side.missing()),
         Err(error) => return store_failure(error),
     }
+    // A definition with no body or message condition reads no body, so its sample parses none.
+    let reads_body = compiled
+        .conditions
+        .iter()
+        .any(|c| matches!(c.probe.subject(), Subject::Body | Subject::Message));
     let window_hours = state.body_capture_max_hours;
     let now = (state.clock)();
     let since = now - i64::from(window_hours) * 3_600_000;
@@ -875,7 +881,7 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
                     let Some(body) = request_body(c, &row.id, now)? else {
                         continue;
                     };
-                    let tree = parse_body(&body);
+                    let tree = if reads_body { parse_body(&body) } else { None };
                     let hints = HintLookup {
                         request_class: row.request_class.as_deref(),
                         agent_type: row.agent_type.as_deref(),
