@@ -3726,6 +3726,8 @@ impl RoutingState {
                 .account(account_id)
                 .is_none_or(|a| a.incarnation != incarnation)
         };
+        let ttl_of =
+            |key_id: &str| -> Option<i64> { snapshot.key_pool(key_id).map(affinity_ttl_ms) };
         let cooldowns: Vec<_> = self
             .cooldowns
             .iter()
@@ -3745,7 +3747,7 @@ impl RoutingState {
                 if gone(&p.account_id, p.incarnation) || key_replaced {
                     return Some((k.clone(), "deleted"));
                 }
-                let ttl = snapshot.key_pool(&p.key_id).map(affinity_ttl_ms);
+                let ttl = ttl_of(&p.key_id);
                 match ttl {
                     // No key or no pool: nothing serves the pin any more.
                     None => Some((k.clone(), "unserved")),
@@ -3801,8 +3803,6 @@ impl RoutingState {
                 .pool(pool_id)
                 .is_some_and(|pool| now - *at < shed_dwell_ms(pool))
         });
-        let ttl_of =
-            |key_id: &str| -> Option<i64> { snapshot.key_pool(key_id).map(affinity_ttl_ms) };
         let affinity_entries = self
             .affinity
             .write()
