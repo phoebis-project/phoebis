@@ -3019,13 +3019,19 @@ impl RoutingState {
         pool_id: &str,
         account_id: &str,
     ) -> impl Iterator<Item = &MemberSpend> {
-        let (pool_id, account_id) = (pool_id.to_string(), account_id.to_string());
-        [BudgetPeriod::Day, BudgetPeriod::Month]
-            .into_iter()
-            .filter_map(move |period| {
-                self.member_spend
-                    .get(&(pool_id.clone(), account_id.clone(), period))
-            })
+        let (day, month) = if self.member_spend.is_empty() {
+            (None, None)
+        } else {
+            let mut key = (
+                pool_id.to_string(),
+                account_id.to_string(),
+                BudgetPeriod::Day,
+            );
+            let day = self.member_spend.get(&key);
+            key.2 = BudgetPeriod::Month;
+            (day, self.member_spend.get(&key))
+        };
+        day.into_iter().chain(month)
     }
 
     /// The member's spend rows, each only while the snapshot's member still carries a budget over its period:
