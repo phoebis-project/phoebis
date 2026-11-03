@@ -1549,8 +1549,8 @@ impl Handles {
     }
 
     /// One transaction over `range` of the batch on a blocking thread. A transaction that fails rolls back and leaves
-    /// the records to the caller to retry, replay or park, and only a panicking closure drops them, counted, so the
-    /// gap that follows names them. Metrics are observed only after the commit succeeds, so a failed write never reaches
+    /// the records to the caller to retry, replay or park, and only a panicking closure drops them, counted, so the gap
+    /// that follows names them. Metrics are observed only after the commit succeeds, so a failed write never reaches
     /// the request or sample series.
     async fn land(
         &self,
