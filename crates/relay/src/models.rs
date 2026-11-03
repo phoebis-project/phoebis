@@ -11,9 +11,10 @@ use axum::response::Response;
 use futures::future::join_all;
 use phoebis_routing::listing::{find, listing, page, CatalogRow};
 use phoebis_routing::rules::{process, ProcessedRule};
-use phoebis_store::{AccountRow, AccountState, ModelRule};
+use phoebis_store::{AccountRow, ModelRule};
 use serde_json::json;
 
+use crate::catalog::is_ready;
 use crate::{anthropic_error, authenticated_key, new_request_id, no_store, Relay};
 
 /// The default `limit`, and the bounds a query outside them is refused for.
@@ -98,7 +99,7 @@ async fn authenticate(
         .members(&key.pool_id)
         .iter()
         .filter_map(|member| snapshot.account(&member.account_id))
-        .filter(|account| account.enabled && account.state == AccountState::Ready)
+        .filter(|account| is_ready(account))
         .cloned()
         .collect();
     Ok(Access {

@@ -110,6 +110,11 @@ pub struct Catalog {
     pub error: Option<String>,
 }
 
+/// An account whose models the catalog lists: enabled and `Ready`.
+pub(crate) fn is_ready(row: &AccountRow) -> bool {
+    row.enabled && row.state == AccountState::Ready
+}
+
 /// Fences a cached or in-flight fetch to the credential it was read for: an id is reusable, and a deletion
 /// followed by a re-creation, or a secret patch, must never answer with the replaced holder's rows.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -410,13 +415,7 @@ impl CatalogService {
             loop {
                 tokio::time::sleep(tick).await;
                 let now = (service.clock)();
-                let accounts: Vec<AccountRow> = service
-                    .store
-                    .accounts()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|a| a.enabled && a.state == AccountState::Ready)
-                    .collect();
+                let accounts = service.ready_accounts();
                 for account in accounts {
                     if service.slot_due(&account, every, now) && !service.fill_in_flight(&account) {
                         service.refresh(&account).await;
@@ -502,12 +501,9 @@ impl CatalogService {
         }
         let service = Arc::clone(self);
         self.tasks.spawn(async move {
-            let Ok(Some(row)) = service.store.account(&triple.0) else {
+            let Some(row) = service.ready_row(&triple.0) else {
                 return;
             };
-            if !row.enabled || row.state != AccountState::Ready {
-                return;
-            }
             let refreshed = service.refresh(&row).await;
             // A refresh that ended in an error leaves `lookup` at the old mapping, which would misjudge
             // every carried triple as still mismatched; nothing is remembered from a refresh that answered
@@ -620,13 +616,7 @@ impl CatalogService {
     /// `ERROR_HOLD` up to one hour, until it lands, the row leaves `Ready`, or `shutdown` cancels it.
     pub async fn prefetch(self: &Arc<Self>) -> Prefetched {
         let deadline = tokio::time::Instant::now() + self.startup_bound;
-        let accounts: Vec<AccountRow> = self
-            .store
-            .accounts()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|a| a.enabled && a.state == AccountState::Ready)
-            .collect();
+        let accounts = self.ready_accounts();
         let handles: Vec<(AccountRow, JoinHandle<Catalog>)> = accounts
             .into_iter()
             .map(|account| {
@@ -695,12 +685,9 @@ impl CatalogService {
                     _ = service.stop.cancelled() => return,
                     _ = tokio::time::sleep(backoff) => {}
                 }
-                let Ok(Some(row)) = service.store.account(&account.id) else {
+                let Some(row) = service.ready_row(&account.id) else {
                     return;
                 };
-                if !row.enabled || row.state != AccountState::Ready {
-                    return;
-                }
                 if service.refresh(&row).await.error.is_none() {
                     return;
                 }
@@ -880,6 +867,25 @@ impl CatalogService {
             self.pool.checkin(key, conn);
         }
         Ok((status, body))
+    }
+
+    /// The store's enabled `Ready` accounts, none when the store cannot list them.
+    fn ready_accounts(&self) -> Vec<AccountRow> {
+        self.store
+            .accounts()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(is_ready)
+            .collect()
+    }
+
+    /// The account's current row while it is enabled and `Ready`.
+    fn ready_row(&self, account_id: &str) -> Option<AccountRow> {
+        self.store
+            .account(account_id)
+            .ok()
+            .flatten()
+            .filter(is_ready)
     }
 
     fn generation(&self, account_id: &str) -> u64 {
