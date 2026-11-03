@@ -182,6 +182,22 @@ const WARM_CHOICES: { body: string; title: string; value: WarmSessions }[] = [
   { value: 'always', title: 'Always', body: 'every session by burn over the prompt it would rewrite, warm or cold alike' },
 ];
 
+/** A radio group over a choice table, each choice's title leading its body and the picked one marked active. */
+function ChoiceList<T extends string>({ choices, invalid, label, name, onChange, value }: { choices: readonly { body: string; title: string; value: T }[]; invalid?: true; label: string; name: string; onChange: (value: T) => void; value: T }) {
+  return (
+    <div className="radio-list" role="radiogroup" aria-label={label} aria-invalid={invalid}>
+      {choices.map((c) => (
+        <label key={c.value} className={`radio-list__item ${value === c.value ? 'is-active' : ''}`}>
+          <input type="radio" name={name} checked={value === c.value} onChange={() => onChange(c.value)} />
+          <span>
+            <b>{c.title}:</b> {c.body}
+          </span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 /** The two groups name their presets alike, so one row of pills serves both. */
 function PresetPills({ label, value, onPick, hints }: { hints: Record<SheddingPreset | FailoverPreset, string>; label: string; onPick: (name: SheddingPreset | FailoverPreset) => void; value: SheddingPreset | FailoverPreset }) {
   return (
@@ -1919,16 +1935,7 @@ export function PoolDialog({
                 </>
               }
             >
-              <div className="radio-list" role="radiogroup" aria-label="Warm sessions" aria-invalid={invalid('Warm sessions')}>
-                {WARM_CHOICES.map((c) => (
-                  <label key={c.value} className={`radio-list__item ${form.engine.warmSessions === c.value ? 'is-active' : ''}`}>
-                    <input type="radio" name={`warm-${pool?.id ?? 'new'}`} checked={form.engine.warmSessions === c.value} onChange={() => setEngine('warmSessions', c.value)} />
-                    <span>
-                      <b>{c.title}:</b> {c.body}
-                    </span>
-                  </label>
-                ))}
-              </div>
+              <ChoiceList choices={WARM_CHOICES} invalid={invalid('Warm sessions')} label="Warm sessions" name={`warm-${pool?.id ?? 'new'}`} onChange={(v) => setEngine('warmSessions', v)} value={form.engine.warmSessions} />
             </Field>
           </Expert>
           <Expert>
@@ -2051,16 +2058,7 @@ export function PoolDialog({
             </>
           }
         >
-          <div className="radio-list" role="radiogroup" aria-label="Overage policy">
-            {OVERAGE_CHOICES.map((c) => (
-              <label key={c.value} className={`radio-list__item ${form.overage === c.value ? 'is-active' : ''}`}>
-                <input type="radio" name={`overage-${pool?.id ?? 'new'}`} checked={form.overage === c.value} onChange={() => set('overage', c.value)} />
-                <span>
-                  <b>{c.title}:</b> {c.body}
-                </span>
-              </label>
-            ))}
-          </div>
+          <ChoiceList choices={OVERAGE_CHOICES} label="Overage policy" name={`overage-${pool?.id ?? 'new'}`} onChange={(v) => set('overage', v)} value={form.overage} />
         </Field>
         <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.overageMoveGraceMinutes)}>
           <Field label={ENGINE_FIELD_LABELS.overageMoveGraceMinutes} hint="Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes. At 0 it moves at once.">
@@ -2076,16 +2074,7 @@ export function PoolDialog({
         </Expert>
         <Expert refused={refusedFields.has('Return to plan')}>
           <Field label="Return to plan" plain hint="When a session on an API-key member returns to a subscription member. Under Never it leaves the metered member on expiry, a cooldown or a mark alone.">
-            <div className="radio-list" role="radiogroup" aria-label="Return to plan" aria-invalid={invalid('Return to plan')}>
-              {RETURN_CHOICES.map((c) => (
-                <label key={c.value} className={`radio-list__item ${form.engine.returnToPlan === c.value ? 'is-active' : ''}`}>
-                  <input type="radio" name={`return-${pool?.id ?? 'new'}`} checked={form.engine.returnToPlan === c.value} onChange={() => setEngine('returnToPlan', c.value)} />
-                  <span>
-                    <b>{c.title}:</b> {c.body}
-                  </span>
-                </label>
-              ))}
-            </div>
+            <ChoiceList choices={RETURN_CHOICES} invalid={invalid('Return to plan')} label="Return to plan" name={`return-${pool?.id ?? 'new'}`} onChange={(v) => setEngine('returnToPlan', v)} value={form.engine.returnToPlan} />
           </Field>
         </Expert>
         <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.returnToPlanDwellSeconds)}>
