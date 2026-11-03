@@ -2172,7 +2172,7 @@
    right, so the width that moves it inside the viewport holds once it has moved. */
 .trail-pop {
   position: fixed;
-  z-index: 20;
+  z-index: var(--z-menu);
   width: max-content;
   padding: 6px 8px;
   background: var(--surface);
@@ -2683,7 +2683,7 @@
    between the two. */
 .strip-popover {
   position: fixed;
-  z-index: 20;
+  z-index: var(--z-menu);
   max-width: min(720px, 100vw - 16px);
   overflow-y: auto;
   padding: 10px 12px;
@@ -3052,7 +3052,7 @@
 }
 
 .filter-bar--sticky {
-  z-index: 5;
+  z-index: var(--z-sticky);
   border-bottom: 1px solid var(--hairline);
 }
 
@@ -4411,7 +4411,7 @@
 
 /* Analytics */
 .section-bar {
-  z-index: 4;
+  z-index: calc(var(--z-sticky) - 1);
 }
 
 /* The page's group-by: a 160 px select after its label. */
