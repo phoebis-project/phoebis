@@ -1045,7 +1045,7 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
                     utilization: Some(0.62),
                     reset_at: Some(now + 3_600_000),
                     source: phoebis_ledger::SampleSource::Poll,
-                    observed_at: None,
+                    observed_at: bucket * 1_000,
                 },
                 QuotaSampleRecord {
                     account_id: "business".into(),
@@ -1054,7 +1054,7 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
                     utilization: Some(0.1),
                     reset_at: None,
                     source: phoebis_ledger::SampleSource::Poll,
-                    observed_at: None,
+                    observed_at: bucket * 1_000,
                 },
             ],
             Some(&ExtraUsageSampleRecord {
@@ -1401,7 +1401,7 @@ async fn a_five_hour_ledger_sample_on_an_account_whose_set_lacks_the_window_draw
         utilization: Some(utilization),
         reset_at: None,
         source: phoebis_ledger::SampleSource::Poll,
-        observed_at: None,
+        observed_at: bucket * 1_000,
     };
     parts
         .db
@@ -1456,7 +1456,7 @@ fn seed_five_hour(parts: &common::Full, utilization: Option<f64>) {
                 utilization,
                 reset_at: Some(FIVE_HOUR_RESET),
                 source: phoebis_ledger::SampleSource::Poll,
-                observed_at: None,
+                observed_at: phoebis_ledger::bucket_of(common::NOW - 60_000) * 1_000,
             }],
             None,
         )

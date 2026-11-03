@@ -2702,7 +2702,7 @@ fn weekly_sample(
         utilization,
         reset_at: Some(reset_at),
         source: SampleSource::Poll,
-        observed_at: Some(observed_at),
+        observed_at,
     }
 }
 

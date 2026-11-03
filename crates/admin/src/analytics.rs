@@ -597,7 +597,7 @@ fn base_windows() -> Map<String, Value> {
 /// a trial end and for the samples taken after a cancellation was recorded, and the older samples of the window that
 /// holds a canceled end re-read with it.
 fn window_json(s: &HourlyWindowSample, term: Option<&SubscriptionTerm>) -> WindowSample {
-    let sampled_at = s.observed_at.unwrap_or(s.bucket * 1_000);
+    let sampled_at = s.observed_at;
     let end = term.and_then(|t| term::end_of(t, sampled_at));
     WindowSample {
         utilization: s.utilization,

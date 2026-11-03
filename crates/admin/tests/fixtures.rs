@@ -763,7 +763,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                     utilization: Some(0.62),
                     reset_at: Some(now + 3_600_000),
                     source: phoebis_ledger::SampleSource::Poll,
-                    observed_at: None,
+                    observed_at: bucket * 1_000,
                 },
                 QuotaSampleRecord {
                     account_id: "business".into(),
@@ -772,7 +772,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                     utilization: Some(0.41),
                     reset_at: Some(now + 86_400_000),
                     source: phoebis_ledger::SampleSource::Head,
-                    observed_at: None,
+                    observed_at: bucket * 1_000,
                 },
                 QuotaSampleRecord {
                     account_id: "business".into(),
@@ -781,7 +781,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                     utilization: Some(0.12),
                     reset_at: Some(now + 86_400_000),
                     source: phoebis_ledger::SampleSource::Poll,
-                    observed_at: None,
+                    observed_at: bucket * 1_000,
                 },
                 QuotaSampleRecord {
                     account_id: "business".into(),
@@ -790,7 +790,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                     utilization: Some(0.03),
                     reset_at: Some(now + 86_400_000),
                     source: phoebis_ledger::SampleSource::Poll,
-                    observed_at: None,
+                    observed_at: bucket * 1_000,
                 },
             ],
             Some(&ExtraUsageSampleRecord {
@@ -1058,7 +1058,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 utilization: Some(0.3),
                 reset_at: Some(free_end + 4 * DAY),
                 source: phoebis_ledger::SampleSource::Poll,
-                observed_at: Some(free_read_at),
+                observed_at: free_read_at,
             }],
             None,
         )

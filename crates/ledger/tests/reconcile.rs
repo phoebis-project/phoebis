@@ -147,7 +147,7 @@ fn reading(window: &str, at: i64, utilization: f64, reset_at: i64) -> QuotaSampl
         utilization: Some(utilization),
         reset_at: Some(reset_at),
         source: SampleSource::Poll,
-        observed_at: Some(at),
+        observed_at: at,
     }
 }
 

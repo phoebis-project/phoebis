@@ -194,7 +194,7 @@ fn gauges_come_from_the_routing_state_and_drops_are_counted_per_table() {
             utilization: Some(0.42),
             reset_at: None,
             source: SampleSource::Head,
-            observed_at: None,
+            observed_at: 0,
         }],
         false,
     );

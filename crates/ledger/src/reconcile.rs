@@ -90,8 +90,7 @@ const SOURCES_GAP: f64 = 0.01;
 
 #[derive(Clone, Copy, Debug)]
 struct Reading {
-    /// `None` for a reading stored before its instant was kept.
-    at: Option<i64>,
+    at: i64,
     utilization: f64,
     reset: i64,
     source: SampleSource,
@@ -142,9 +141,7 @@ impl Part {
 #[derive(Debug)]
 struct Run {
     parts: Vec<Part>,
-    /// A later reading named another reset.
-    closed: bool,
-    /// That reading's instant, `None` for one stored before its instant was kept.
+    /// The instant of the later reading that named another reset, `None` while none has.
     closed_at: Option<i64>,
 }
 
@@ -154,7 +151,6 @@ impl Run {
             parts: vec![Part {
                 readings: vec![reading],
             }],
-            closed: false,
             closed_at: None,
         }
     }
@@ -192,8 +188,7 @@ fn runs(readings: &[Reading]) -> Vec<Run> {
             // A window's reset only moves forward: a reading naming an earlier one is a stale answer.
             Some(run) if reading.reset < run.first().reset => {}
             Some(run) => {
-                run.closed = true;
-                run.closed_at = reading.at;
+                run.closed_at = Some(reading.at);
                 out.push(Run::open(*reading));
             }
             None => out.push(Run::open(*reading)),
@@ -216,7 +211,7 @@ fn rounded(value: f64) -> f64 {
 /// the failure left. Neither the dip's length nor its depth tells the two apart, so the attempts between its ends do.
 /// A reset climbs back only as far as they draw, while a failed poll's dip returns to where the readings stood with
 /// nothing served to explain it. A climb under `MIN_RISE`, a few of the meter's quanta, keeps its split, and so does a
-/// dip the fold cannot price or whose ends carry no instant, since nothing judges it.
+/// dip the fold cannot price, since nothing judges it.
 fn drop_faulty_dips(
     tx: &Transaction<'_>,
     prices: &PriceRevisions,
@@ -279,10 +274,7 @@ fn drop_faulty_dips(
             if climb < MIN_RISE {
                 continue;
             }
-            let (Some(from), Some(to)) = (first.at, close.at) else {
-                continue;
-            };
-            let share = match predicted(tx, prices, tables, account, window, from, to)? {
+            let share = match predicted(tx, prices, tables, account, window, first.at, close.at)? {
                 Prediction::Unpriced => continue,
                 Prediction::Empty => 0.0,
                 Prediction::Priced { share, .. } => share,
@@ -365,15 +357,14 @@ pub fn reconcile(
             let floor = newest.unwrap_or(i64::MIN).max(cutoff) - RESET_TOLERANCE_MS;
             'runs: for mut run in runs(&readings_of(tx, account, window, floor)?) {
                 let key = run.key();
-                let complete = run.closed || key < now;
+                let complete = run.closed_at.is_some() || key < now;
                 if !complete || key < cutoff || newest.is_some_and(|n| key <= n) {
                     continue;
                 }
                 // The reset slid rather than ended. The margin is the reset tolerance: the key rounds a fractional poll
                 // reset up by as much as half a second and a router clock that lags moves the closing instant earlier,
                 // so a run its own reset closed can read just short of its key, while a live slide moves the reset by
-                // whole 10-minute steps. A closing reading stored before its instant was kept carries none, so its run
-                // reconciles as one its own reset closed.
+                // whole 10-minute steps.
                 if run
                     .closed_at
                     .is_some_and(|closed_at| key > closed_at + RESET_TOLERANCE_MS)
@@ -387,9 +378,7 @@ pub fn reconcile(
                     let Some((first, last)) = part.ends() else {
                         continue;
                     };
-                    let (Some(from), Some(to)) = (first.at, last.at) else {
-                        continue;
-                    };
+                    let (from, to) = (first.at, last.at);
                     match predicted(tx, prices, tables, account, window, from, to)? {
                         Prediction::Unpriced => continue 'runs,
                         Prediction::Empty => {}
@@ -449,8 +438,7 @@ fn newest_window_ends(
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// The account's readings of `window` whose reset lies past `floor`, in the order they were observed. A reading from
-/// before the instant was kept sorts at its bucket's start.
+/// The account's readings of `window` whose reset lies past `floor`, in the order they were observed.
 fn readings_of(
     conn: &Connection,
     account: &str,
@@ -460,7 +448,7 @@ fn readings_of(
     let mut stmt = conn.prepare(
         "SELECT utilization, reset_at, observed_at, source FROM quota_samples \
          WHERE account_id = ?1 AND window = ?2 AND utilization IS NOT NULL AND reset_at > ?3 \
-         ORDER BY COALESCE(observed_at, bucket * 1000), rowid",
+         ORDER BY observed_at, rowid",
     )?;
     let rows = stmt.query_map(params![account, window, floor], |r| {
         Ok(Reading {

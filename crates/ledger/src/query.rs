@@ -3189,8 +3189,7 @@ pub fn latest_quota(conn: &Connection, now: i64) -> Result<Vec<QuotaSampleRecord
 
 /// The last quota sample of one account's window inside one hour, as `GET /admin/analytics/accounts` reads it.
 /// `observed_at` is the sample's own instant (`quota_samples.observed_at`, Unix milliseconds), which the lead and the
-/// wire's `sampled_at` read, since `bucket` is the 300-second floor the sampler files the row under. A row written
-/// before the column existed carries none, and the reader falls back to the bucket's floor in milliseconds.
+/// wire's `sampled_at` read, since `bucket` is the 300-second floor the sampler files the row under.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HourlyWindowSample {
     pub account_id: String,
@@ -3198,7 +3197,7 @@ pub struct HourlyWindowSample {
     pub hour: i64,
     pub window: String,
     pub bucket: i64,
-    pub observed_at: Option<i64>,
+    pub observed_at: i64,
     pub utilization: Option<f64>,
     pub reset_at: Option<i64>,
 }

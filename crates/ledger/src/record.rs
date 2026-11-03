@@ -378,7 +378,7 @@ pub struct QuotaSampleRecord {
     pub source: SampleSource,
     /// Milliseconds: the poll's `fetched_at` or the head's clock, stamping the reading itself where the bucket
     /// only names its five minutes.
-    pub observed_at: Option<i64>,
+    pub observed_at: i64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

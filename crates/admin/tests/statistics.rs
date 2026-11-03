@@ -579,7 +579,7 @@ async fn the_accounts_route_answers_each_hour_s_last_window_sample_with_its_lead
             utilization,
             reset_at: Some(reset_at),
             source: phoebis_ledger::SampleSource::Poll,
-            observed_at: Some(at),
+            observed_at: at,
         }
     };
     parts
@@ -748,7 +748,7 @@ async fn the_accounts_route_runs_a_canceled_account_s_lead_to_its_end_inside_the
                 utilization: Some(0.41),
                 reset_at: Some(sampled_at + 6 * 24 * HOUR),
                 source: phoebis_ledger::SampleSource::Poll,
-                observed_at: Some(sampled_at),
+                observed_at: sampled_at,
             }],
             None,
         )
@@ -2204,7 +2204,7 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
                     utilization: Some(0.5),
                     reset_at: Some(now + HOUR),
                     source: phoebis_ledger::SampleSource::Head,
-                    observed_at: None,
+                    observed_at: phoebis_ledger::bucket_of(now - 2 * HOUR) * 1_000,
                 },
                 phoebis_ledger::QuotaSampleRecord {
                     account_id: "business".into(),
@@ -2213,7 +2213,7 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
                     utilization: Some(0.6),
                     reset_at: Some(now + HOUR),
                     source: phoebis_ledger::SampleSource::Poll,
-                    observed_at: None,
+                    observed_at: phoebis_ledger::bucket_of(now - HOUR) * 1_000,
                 },
                 phoebis_ledger::QuotaSampleRecord {
                     account_id: "business".into(),
@@ -2222,7 +2222,7 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
                     utilization: Some(0.2),
                     reset_at: None,
                     source: phoebis_ledger::SampleSource::Poll,
-                    observed_at: None,
+                    observed_at: phoebis_ledger::bucket_of(now - HOUR) * 1_000,
                 },
             ],
             None,

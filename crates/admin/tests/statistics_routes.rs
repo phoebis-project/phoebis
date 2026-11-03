@@ -965,7 +965,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                     utilization: Some(0.4),
                     reset_at: Some(now + HOUR),
                     source: phoebis_ledger::SampleSource::Head,
-                    observed_at: None,
+                    observed_at: bucket * 1_000,
                 },
                 phoebis_ledger::QuotaSampleRecord {
                     account_id: "business".into(),
@@ -974,7 +974,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                     utilization: Some(0.5),
                     reset_at: Some(now + HOUR),
                     source: phoebis_ledger::SampleSource::Poll,
-                    observed_at: None,
+                    observed_at: (bucket + 300) * 1_000,
                 },
                 phoebis_ledger::QuotaSampleRecord {
                     account_id: "business".into(),
@@ -983,7 +983,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                     utilization: Some(0.1),
                     reset_at: None,
                     source: phoebis_ledger::SampleSource::Poll,
-                    observed_at: None,
+                    observed_at: bucket * 1_000,
                 },
             ],
             Some(&phoebis_ledger::ExtraUsageSampleRecord {
@@ -2458,7 +2458,7 @@ async fn the_unused_allowance_route_groups_each_subscription_accounts_weekly_res
                 utilization: Some(0.8),
                 reset_at: Some(end + 2 * DAY),
                 source: phoebis_ledger::SampleSource::Poll,
-                observed_at: Some(end - DAY),
+                observed_at: end - DAY,
             }],
             None,
         )
@@ -2637,7 +2637,7 @@ async fn the_unused_allowance_route_answers_each_resets_plan_and_tier_and_null_o
                 utilization: Some(0.8),
                 reset_at: Some(end + 2 * DAY),
                 source: phoebis_ledger::SampleSource::Poll,
-                observed_at: Some(end - DAY),
+                observed_at: end - DAY,
             }],
             None,
         )
@@ -2772,7 +2772,7 @@ async fn a_trial_end_that_passed_in_range_ends_a_week_only_where_the_plan_ended_
                     utilization: Some(utilization),
                     reset_at: Some(reset_at),
                     source: phoebis_ledger::SampleSource::Poll,
-                    observed_at: Some(observed_at),
+                    observed_at,
                 }
             }),
             None,
@@ -2852,7 +2852,7 @@ async fn a_term_end_before_the_range_still_drops_the_resets_after_it() {
                 utilization: Some(0.8),
                 reset_at: Some(week_reset),
                 source: phoebis_ledger::SampleSource::Poll,
-                observed_at: Some(end - DAY),
+                observed_at: end - DAY,
             }],
             None,
         )
@@ -2966,7 +2966,7 @@ async fn a_canceled_end_still_ahead_of_now_ends_no_week_in_a_range_that_reaches_
                 utilization: Some(0.7),
                 reset_at: Some(reset_at + 7 * DAY),
                 source: phoebis_ledger::SampleSource::Poll,
-                observed_at: Some(now - DAY),
+                observed_at: now - DAY,
             }],
             None,
         )
@@ -6095,7 +6095,7 @@ async fn the_dashboard_answers_one_fable_week_row_per_account_under_seven_day_fa
         } else {
             phoebis_ledger::SampleSource::Head
         },
-        observed_at: Some(at),
+        observed_at: at,
     };
     parts
         .db

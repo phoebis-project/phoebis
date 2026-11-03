@@ -2207,7 +2207,7 @@ async fn the_account_view_answers_the_fable_week_under_one_id_from_a_head_row_a_
         } else {
             phoebis_ledger::SampleSource::Head
         },
-        observed_at: Some(at),
+        observed_at: at,
     };
     let held = |account: &str, utilization: f64, at: i64| Report::Sample {
         account_id: account.into(),
@@ -3119,7 +3119,7 @@ async fn a_refresh_whose_read_ends_after_the_clock_moved_answers_the_one_reading
             .unwrap_or_else(|| panic!("no row under {key}: {rows:?}"));
         assert_eq!(
             (row.source.as_str(), row.observed_at, row.utilization),
-            ("poll", Some(NOW), Some(share)),
+            ("poll", NOW, Some(share)),
             "{row:?}"
         );
     }
@@ -3303,8 +3303,7 @@ async fn a_refresh_and_the_list_read_after_it_carry_its_reading_at_its_own_insta
 }
 
 /// The ledger's rows stand where the router holds no plan window of the account: an api_key account's always, and an
-/// OAuth account's while the router holds its fast lane alone. Each window reads its row's own instant, and the
-/// bucket's floor only for a row written before the samples carried one.
+/// OAuth account's while the router holds its fast lane alone. Each window reads its row's own instant.
 #[tokio::test]
 async fn an_account_the_router_holds_no_plan_window_of_lists_the_ledger_rows_at_their_own_instants()
 {
@@ -3350,10 +3349,10 @@ async fn an_account_the_router_holds_no_plan_window_of_lists_the_ledger_rows_at_
     };
     h.db.insert_samples(
         &[
-            row("business", "five_hour", 0.4, Some(read_at)),
-            row("business", "seven_day", 0.2, None),
-            row("direct", "five_hour", 0.1, Some(read_at)),
-            row("direct", "seven_day", 0.05, None),
+            row("business", "five_hour", 0.4, read_at),
+            row("business", "seven_day", 0.2, bucket * 1_000),
+            row("direct", "five_hour", 0.1, read_at),
+            row("direct", "seven_day", 0.05, bucket * 1_000),
         ],
         None,
     )
@@ -3896,7 +3895,7 @@ async fn business_with_both_windows_paths() -> (common::Polled, String, serde_js
         utilization: Some(utilization),
         reset_at: None,
         source: phoebis_ledger::SampleSource::Head,
-        observed_at: Some(read_at),
+        observed_at: read_at,
     };
     h.db.insert_samples(&[row("five_hour", 0.4), row("seven_day", 0.5)], None)
         .unwrap();
@@ -5817,7 +5816,7 @@ async fn an_account_window_carries_its_projection_horizon_and_burn_and_null_wher
         utilization: Some(utilization),
         reset_at: None,
         source: phoebis_ledger::SampleSource::Head,
-        observed_at: None,
+        observed_at: bucket * 1_000,
     };
     parts
         .db

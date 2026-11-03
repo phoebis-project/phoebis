@@ -2714,7 +2714,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                     id: id.to_string(),
                     utilization: q.utilization,
                     resets_at: q.reset_at,
-                    observed_at: q.observed_at.unwrap_or(q.bucket * 1_000),
+                    observed_at: q.observed_at,
                     projection,
                     horizon,
                     burn,

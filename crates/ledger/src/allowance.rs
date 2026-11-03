@@ -137,12 +137,12 @@ pub fn unused_allowance(
     }
     // The primary key holds one row per bucket and window, so the newest qualifying bucket is one reading.
     let mut readings = conn.prepare(
-        r"SELECT window, utilization, COALESCE(observed_at, bucket * 1000) FROM quota_samples q
+        r"SELECT window, utilization, observed_at FROM quota_samples q
           WHERE account_id = ?1 AND (window = 'seven_day' OR window LIKE 'seven_day\_%' ESCAPE '\')
-            AND utilization IS NOT NULL AND reset_at >= ?2 AND COALESCE(observed_at, bucket * 1000) < ?2
+            AND utilization IS NOT NULL AND reset_at >= ?2 AND observed_at < ?2
             AND bucket = (SELECT MAX(bucket) FROM quota_samples WHERE account_id = q.account_id
                           AND window = q.window AND utilization IS NOT NULL AND reset_at >= ?2
-                          AND COALESCE(observed_at, bucket * 1000) < ?2)
+                          AND observed_at < ?2)
           ORDER BY window",
     )?;
     // An end before the range drops the resets after it above, and its own row belongs to a range that holds it.

@@ -136,7 +136,7 @@ pub(crate) fn samples_from_unified(
                 utilization,
                 reset_at,
                 source: SampleSource::Head,
-                observed_at: Some(observed_at),
+                observed_at,
             });
         }
     }
@@ -182,7 +182,7 @@ pub fn samples_from_poll(
         utilization: utilization.map(|u| u / 100.0),
         reset_at,
         source: SampleSource::Poll,
-        observed_at: Some(snapshot.fetched_at),
+        observed_at: snapshot.fetched_at,
     };
     // The `limits` window is the Fable week, as the router reads it: a top-level key of the same name would be a
     // second reading of one window, and the table keeps one row per window.

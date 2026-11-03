@@ -209,7 +209,7 @@ fn seed(db: &LedgerDb) {
                 utilization: Some(0.5),
                 reset_at: Some(bucket + 3_600),
                 source: SampleSource::Poll,
-                observed_at: Some(bucket * 1_000),
+                observed_at: bucket * 1_000,
             });
             let extra = ExtraUsageSampleRecord {
                 account_id: account.into(),

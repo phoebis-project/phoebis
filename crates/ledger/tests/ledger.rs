@@ -3423,8 +3423,9 @@ async fn a_relayed_heads_reading_reaches_the_router_and_a_head_sample_with_its_i
         (row.utilization, row.reset_at, row.source.as_str()),
         (Some(0.3125), Some(4_600_000), "head")
     );
-    assert!(
-        row.observed_at.is_some(),
+    assert_eq!(
+        phoebis_ledger::bucket_of(row.observed_at),
+        row.bucket,
         "the head's instant lands beside its bucket"
     );
     up.shutdown().await;

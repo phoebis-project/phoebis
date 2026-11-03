@@ -2708,7 +2708,7 @@ fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
         utilization: Some(utilization),
         reset_at: Some(bucket * 1_000 + 3_600_000),
         source: SampleSource::Poll,
-        observed_at: Some(bucket * 1_000 + 17_000),
+        observed_at: bucket * 1_000 + 17_000,
     };
     let sample = |bucket: i64, utilization: f64| sample_of("a", bucket, utilization);
     // Three samples in the hour from 3,600 s written out of order, one in the hour after, and one before the
@@ -2751,7 +2751,7 @@ fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
             hour: 3_600,
             window: FIVE_HOUR.into(),
             bucket: 4_500,
-            observed_at: Some(4_517_000),
+            observed_at: 4_517_000,
             utilization: Some(0.3),
             reset_at: Some(8_100_000),
         },
@@ -2789,7 +2789,7 @@ fn latest_quota_answers_each_windows_newest_sample_of_the_day_and_an_account_who
         utilization: Some(utilization),
         reset_at: Some(bucket * 1_000 + 3_600_000),
         source: SampleSource::Poll,
-        observed_at: Some(bucket * 1_000 + 17_000),
+        observed_at: bucket * 1_000 + 17_000,
     };
     // `a` has two windows, the five-hour one sampled twice in the day, `b` one sample older than the day, and `c` one
     // sample: the table holds one row per bucket and window, so the read answers one row per window it holds.
