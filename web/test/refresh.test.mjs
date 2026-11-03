@@ -465,33 +465,38 @@ test("a pause's end under an out load reads nothing until the next tick", async 
   await settled();
 });
 
-const toast = (id, message, dwellMs, path = null) => ({ dwellMs, id, message, path });
+const toast = (id, message, kind, dwellMs, path = null) => ({ dwellMs, id, kind, message, path });
+
+test("a failure whose dwell equals a confirmation's keeps its turn in the queue", () => {
+  const failing = queueToast([], toast(1, '/admin/keys failed: ledger locked', 'failure', 2_400, '/admin/keys'));
+  assert.deepEqual(queueToast(failing, toast(2, 'Key saved', 'confirmation', 2_400)).map((t) => t.id), [1, 2], 'a confirmation replaces confirmations alone, whatever their dwell');
+});
 
 test('a confirmation replaces a showing one, and a failure on screen keeps its turn', () => {
-  const saved = queueToast([], toast(1, 'Key saved', 2_400));
-  assert.deepEqual(queueToast(saved, toast(2, 'Key revoked', 2_400)), [toast(2, 'Key revoked', 2_400)], 'the newer confirmation takes the screen with its own dwell');
-  const failing = queueToast([], toast(3, '/admin/keys failed: ledger locked', 6_000, '/admin/keys'));
-  const behind = queueToast(failing, toast(4, 'Key saved', 2_400));
+  const saved = queueToast([], toast(1, 'Key saved', 'confirmation', 2_400));
+  assert.deepEqual(queueToast(saved, toast(2, 'Key revoked', 'confirmation', 2_400)), [toast(2, 'Key revoked', 'confirmation', 2_400)], 'the newer confirmation takes the screen with its own dwell');
+  const failing = queueToast([], toast(3, '/admin/keys failed: ledger locked', 'failure', 6_000, '/admin/keys'));
+  const behind = queueToast(failing, toast(4, 'Key saved', 'confirmation', 2_400));
   assert.deepEqual(behind.map((t) => t.id), [3, 4], 'a confirmation waits behind a failure');
-  assert.deepEqual(queueToast(behind, toast(5, 'Key revoked', 2_400)).map((t) => t.id), [3, 5], 'and is replaced where it waits');
-  assert.deepEqual(queueToast(failing, toast(6, '/admin/pools failed: ledger locked', 6_000, '/admin/pools')).map((t) => t.id), [3, 6], 'a failure of another route queues behind');
+  assert.deepEqual(queueToast(behind, toast(5, 'Key revoked', 'confirmation', 2_400)).map((t) => t.id), [3, 5], 'and is replaced where it waits');
+  assert.deepEqual(queueToast(failing, toast(6, '/admin/pools failed: ledger locked', 'failure', 6_000, '/admin/pools')).map((t) => t.id), [3, 6], 'a failure of another route queues behind');
 });
 
 test('a confirmation lands behind the failure on screen, ahead of the failures queued, and the next one replaces it there', () => {
   let queue = [];
-  for (const [id, path] of [[1, '/admin/keys'], [2, '/admin/pools'], [3, '/admin/models']]) queue = queueToast(queue, toast(id, `${path} failed: ledger locked`, 6_000, path));
-  const saved = queueToast(queue, toast(4, 'Key saved', 2_400));
+  for (const [id, path] of [[1, '/admin/keys'], [2, '/admin/pools'], [3, '/admin/models']]) queue = queueToast(queue, toast(id, `${path} failed: ledger locked`, 'failure', 6_000, path));
+  const saved = queueToast(queue, toast(4, 'Key saved', 'confirmation', 2_400));
   assert.deepEqual(saved.map((t) => t.id), [1, 4, 2, 3], 'the confirmation takes the slot behind the failure on screen');
-  assert.deepEqual(queueToast(saved, toast(5, 'Key revoked', 2_400)).map((t) => t.id), [1, 5, 2, 3], 'a second confirmation replaces it in that slot');
+  assert.deepEqual(queueToast(saved, toast(5, 'Key revoked', 'confirmation', 2_400)).map((t) => t.id), [1, 5, 2, 3], 'a second confirmation replaces it in that slot');
 });
 
 test('an identical text is dropped, and so is a failure of a route already queued', () => {
-  const showing = queueToast([], toast(1, 'Key saved', 2_400));
-  assert.equal(queueToast(showing, toast(2, 'Key saved', 2_400)), showing, 'the same confirmation again keeps the one showing and its dwell');
-  const failing = queueToast([], toast(3, '/admin/settings failed: ledger locked', 6_000, '/admin/settings'));
-  assert.equal(queueToast(failing, toast(4, '/admin/settings failed: the router answered 500', 6_000, '/admin/settings')), failing, 'a second failure of the route adds none');
-  const refused = queueToast(failing, toast(5, 'the viewer role cannot change anything', 6_000));
-  assert.equal(queueToast(refused, toast(6, 'the viewer role cannot change anything', 6_000)), refused, 'a refusal already queued adds none');
+  const showing = queueToast([], toast(1, 'Key saved', 'confirmation', 2_400));
+  assert.equal(queueToast(showing, toast(2, 'Key saved', 'confirmation', 2_400)), showing, 'the same confirmation again keeps the one showing and its dwell');
+  const failing = queueToast([], toast(3, '/admin/settings failed: ledger locked', 'failure', 6_000, '/admin/settings'));
+  assert.equal(queueToast(failing, toast(4, '/admin/settings failed: the router answered 500', 'failure', 6_000, '/admin/settings')), failing, 'a second failure of the route adds none');
+  const refused = queueToast(failing, toast(5, 'the viewer role cannot change anything', 'failure', 6_000));
+  assert.equal(queueToast(refused, toast(6, 'the viewer role cannot change anything', 'failure', 6_000)), refused, 'a refusal already queued adds none');
 });
 
 test('a menu reports open and closed and nothing at mount', () => {

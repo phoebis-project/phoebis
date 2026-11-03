@@ -10,28 +10,32 @@ export interface SessionState {
   logout: () => Promise<void>;
   /** Puts a page's confirmation or refusal on the shell's queue. */
   notify: (message: string) => void;
-  /** The toasts waiting, the first one on screen: the transport's failures and refusals and the pages' messages. */
-  queue: ToastItem[];
   sessionId: string;
 }
 
 const Ctx = createContext<SessionState | null>(null);
+// The queue changes with every toast, so it has a context of its own: a page that reads the session alone does not
+// render again for a toast.
+const QueueCtx = createContext<ToastItem[]>([]);
+
+/** The toasts waiting, the first one on screen: the transport's failures and refusals and the pages' messages. */
+export const useToastQueue = (): ToastItem[] => useContext(QueueCtx);
 
 export interface ToastItem {
   dwellMs: number;
   id: number;
+  kind: 'confirmation' | 'failure';
   message: string;
   /** The route a failure names, so the read's recovery can take it down; null for anything else. */
   path: string | null;
 }
 
 /**
- * Long enough to read the route a failure names. A confirmation only acknowledges the action just taken, for the 2.4 s
- * the smoke run's confirmation reads are timed against.
+ * A failure's dwell is long enough to read the route it names. A confirmation only acknowledges the action just taken,
+ * for the 2.4 s the smoke run's confirmation reads are timed against.
  */
-const FAILURE_MS = 6_000;
-const CONFIRMATION_MS = 2_400;
-const isConfirmation = (t: ToastItem) => t.dwellMs === CONFIRMATION_MS;
+const DWELL_MS: Record<ToastItem['kind'], number> = { confirmation: 2_400, failure: 6_000 };
+const isConfirmation = (t: ToastItem) => t.kind === 'confirmation';
 
 /**
  * A message already queued adds nothing, and neither does a failure of a route already queued. A confirmation takes
@@ -58,12 +62,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [queue, setQueue] = useState<ToastItem[]>([]);
   const lastId = useRef(0);
 
-  const push = useCallback((message: string, dwellMs: number, path: string | null) => {
+  const push = useCallback((message: string, kind: ToastItem['kind'], path: string | null) => {
     lastId.current += 1;
-    const item = { dwellMs, id: lastId.current, message, path };
+    const item = { dwellMs: DWELL_MS[kind], id: lastId.current, kind, message, path };
     setQueue((q) => queueToast(q, item));
   }, []);
-  const notify = useCallback((message: string) => push(message, CONFIRMATION_MS, null), [push]);
+  const notify = useCallback((message: string) => push(message, 'confirmation', null), [push]);
   const done = useCallback((id: number) => setQueue((q) => q.filter((t) => t.id !== id)), []);
   const dismiss = useCallback((path: string) => setQueue((q) => q.filter((t) => t.path !== path)), []);
 
@@ -79,9 +83,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setHooks({
       // The route is named because a page draws several lists, and the operator has to know which one is gone.
-      onFailure: ({ message, path, status }) => push(`${path} failed: ${message ?? (status === 0 ? 'the router did not answer' : `the router answered ${status}`)}`, FAILURE_MS, path),
+      onFailure: ({ message, path, status }) => push(`${path} failed: ${message ?? (status === 0 ? 'the router did not answer' : `the router answered ${status}`)}`, 'failure', path),
       // The server's own wording: the origin check is what answers this status, and its message names the cause.
-      onForbidden: (message) => push(message, FAILURE_MS, null),
+      onForbidden: (message) => push(message, 'failure', null),
       onRecovered: dismiss,
       // The queue belongs to the session that ended, so the next login starts with none of its toasts.
       onUnauthorized: () => {
@@ -105,8 +109,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const session = sessionOf(probe);
   const value = useMemo<SessionState | null>(
-    () => (session ? { done, logout, notify, queue, sessionId: session.sessionId } : null),
-    [done, logout, notify, queue, session],
+    () => (session ? { done, logout, notify, sessionId: session.sessionId } : null),
+    [done, logout, notify, session],
   );
 
   if (probe === 'pending')
@@ -127,7 +131,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         outage={typeof probe === 'object' && 'noAnswer' in probe ? probe.noAnswer : null}
       />
     );
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  return (
+    <Ctx.Provider value={value}>
+      <QueueCtx.Provider value={queue}>{children}</QueueCtx.Provider>
+    </Ctx.Provider>
+  );
 }
 
 export function useSession(): SessionState {

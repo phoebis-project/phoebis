@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { api } from '@/api';
 import { setBuildHook } from '@/api/http';
-import { useSession } from '@/app/session';
+import { useSession, useToastQueue } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { useAsync, useMediaQuery } from '@/lib/hooks';
 import { Button, Descriptions, Segmented, Toast, Toggle } from '@/components/ui/primitives';
@@ -50,7 +50,8 @@ export function Shell() {
   const { pathname } = useLocation();
   const { expertView, setExpertView, setModelTiers, setTheme, setUnit, setWeek, theme, unit, week } = useAppSettings();
   const narrow = useMediaQuery('(max-width: 900px)');
-  const { done, logout, queue } = useSession();
+  const { done, logout } = useSession();
+  const queue = useToastQueue();
   const settings = useAsync(() => api.getSettings(), []);
   const [navOpen, setNavOpen] = useState(false);
   // A navigation closes the menu in the render that brings the new view.
