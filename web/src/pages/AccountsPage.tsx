@@ -216,7 +216,7 @@ export function AccountsPage() {
         />
         <PairingDialog
           open={pairing !== null}
-          start={pairing?.start ?? { accountId: '' }}
+          start={pairing?.start ?? NO_PAIRING}
           label={pairing?.label ?? ''}
           repair={pairing?.repair ?? false}
           onClose={() => setPairing(null)}
@@ -1067,6 +1067,8 @@ const PAIR_STEPS: { label: string; step: PairStep }[] = [
  * its confirm creates under `id`.
  */
 type PairingTarget = { accountId: string } | { id: string; session: PairingSession };
+/** The closed dialog's start, one object for every render, so the dialog keys its opening on the start's identity. */
+const NO_PAIRING: PairingTarget = { accountId: '' };
 
 function PairingDialog({ open, start, label, repair, onClose, onPaired }: { label: string; onClose: () => void; onPaired: (p: PairingPreview, confirmed: PairingConfirmed) => void; open: boolean; repair: boolean; start: PairingTarget }) {
   const [session, setSession] = useState<PairingSession | null>(null);
@@ -1088,11 +1090,10 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
     setSealed(false);
   };
 
-  // The start by value, so the placeholder the page rebuilds for the closed dialog every render restarts nothing. An
-  // opening, or a new start while open, resets the steps in the render that brings it.
-  const startKey = JSON.stringify(start);
-  const opening = open ? startKey : null;
-  const [openedFor, setOpenedFor] = useState<string | null>(null);
+  // An opening, or a new start while open, resets the steps in the render that brings it. The page replaces its start
+  // only as it opens or closes the dialog, so the start's identity names the opening.
+  const opening = open ? start : null;
+  const [openedFor, setOpenedFor] = useState<PairingTarget | null>(null);
   if (openedFor !== opening) {
     setOpenedFor(opening);
     if (opening !== null) restart('session' in start ? start.session : null);
@@ -1103,13 +1104,10 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
   // claim or the transport left standing expires on its own.
   const consumed = useRef<string | null>(null);
   useEffect(() => {
-    if (!open) return;
-    // Read back from the key the effect runs on, so the start it pairs is the one that key names.
-    const target = JSON.parse(startKey) as PairingTarget;
-    if ('session' in target) return;
+    if (!open || 'session' in start) return;
     const run = { alive: true };
     live.current = run;
-    api.startPairing(target).then(
+    api.startPairing(start).then(
       (s) => {
         // A pairing that lands after the dialog closed would hold the account until its own deadline.
         if (run.alive) setSession(s);
@@ -1122,7 +1120,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
     return () => {
       run.alive = false;
     };
-  }, [open, startKey]);
+  }, [open, start]);
 
   const dismiss = () => {
     // The router keeps the account busy until the pairing expires, so leaving unconfirmed gives the session back.
