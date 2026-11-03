@@ -129,6 +129,19 @@ export function derivedId(name: string): { id: string; unnamed: boolean } {
 export const sortKeys = (value: unknown): unknown =>
   Array.isArray(value) ? value.map(sortKeys) : value !== null && typeof value === 'object' ? Object.fromEntries(Object.keys(value as object).sort().map((k) => [k, sortKeys((value as Record<string, unknown>)[k])])) : value;
 
+/** A new pool's or key's name whose derived id is no name or one `taken` holds, as the sentence that holds the save. */
+const derivedIdRefusal = (noun: 'key' | 'pool', name: string, taken: ReadonlySet<string>): string | null => {
+  const { id, unnamed } = derivedId(name);
+  if (unnamed) return `The ${noun} needs a name with a letter or a digit.`;
+  return taken.has(id) ? `Another ${noun} already has the id ${id}.` : null;
+};
+
+/** Typed capture hours outside 1 to `maxHours`, or under 1 with no ceiling, as the sentence `subject` leads. */
+const hoursRefusal = (subject: string, typed: string, maxHours: number | undefined): string | null => {
+  if (whole(Number(typed), 1, maxHours ?? Number.MAX_SAFE_INTEGER)) return null;
+  return maxHours === undefined ? `${subject} of at least 1.` : `${subject} from 1 to ${maxHours}.`;
+};
+
 /**
  * Every check of the pool routes the input fails, in rail order and in each group's order below; empty when the routes
  * would take it. `accountIds` null means the account list did not load: one refusal holds the save, and no member is
@@ -143,10 +156,7 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   const affinity = input.affinityTtlSeconds;
 
   refuse('identity', 'Name', input.name.length > 0 ? null : 'the pool needs a name.');
-  if (checks.identity?.isNew && input.name.length > 0) {
-    const { id, unnamed } = derivedId(input.name);
-    refuse('identity', 'Name', unnamed ? 'The pool needs a name with a letter or a digit.' : checks.identity.poolIds.has(id) ? `Another pool already has the id ${id}.` : null);
-  }
+  if (checks.identity?.isNew && input.name.length > 0) refuse('identity', 'Name', derivedIdRefusal('pool', input.name, checks.identity.poolIds));
 
   refuse('members', 'members', accountIds !== null ? null : 'the account list did not load, so the members cannot be checked.');
   refuse('members', 'members', input.members.length > 0 ? null : 'the pool needs a member.');
@@ -161,12 +171,13 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
 
   refuse('models', 'Model rules', modelRulesRefusal(input.modelRules));
 
-  refuse('placement', 'Subagent placement', SUBAGENT_PLACEMENT_VALUES.some((placement) => placement === input.subagentPlacement) ? null : listed('Subagent placement'));
-  refuse('placement', 'Session placement', SESSION_PLACEMENT_VALUES.some((placement) => placement === input.sessionPlacement) ? null : listed('Session placement'));
+  const choice = (group: PoolGroup, label: string, values: readonly string[], value: string) => refuse(group, label, values.some((v) => v === value) ? null : listed(label));
+  choice('placement', 'Subagent placement', SUBAGENT_PLACEMENT_VALUES, input.subagentPlacement);
+  choice('placement', 'Session placement', SESSION_PLACEMENT_VALUES, input.sessionPlacement);
   refuse('placement', 'Minimum shared prefix, tokens', prefixThresholdRefusal(String(input.minSharedPrefixTokens)));
 
   refuse('pinning', 'Session affinity in seconds', whole(affinity, 0, Number.MAX_SAFE_INTEGER) && (affinity === 0 || affinity >= 60) ? null : 'Session affinity is off or at least 60 whole seconds.');
-  refuse('pinning', 'Pin sessions', AFFINITY_MODE_VALUES.some((mode) => mode === input.affinityMode) ? null : listed('Pin sessions'));
+  choice('pinning', 'Pin sessions', AFFINITY_MODE_VALUES, input.affinityMode);
 
   // NaN is a field left empty, which fails the range and so holds the save.
   refuse('utilization', 'Window ceiling (%)', ratio(input.windowCeiling, 0.5) ? null : 'Window ceiling (%) is from 50 to 100.');
@@ -177,7 +188,7 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
 
   refuse('shedding', 'Shed cap (%)', ratio(input.shedCap, 0.1) ? null : 'Shed cap (%) is from 10 to 100.');
   engine('shedding', 'shedDwellSeconds');
-  refuse('shedding', 'Warm sessions', WARM_SESSIONS_VALUES.some((mode) => mode === input.warmSessions) ? null : listed('Warm sessions'));
+  choice('shedding', 'Warm sessions', WARM_SESSIONS_VALUES, input.warmSessions);
 
   engine('slowDown', 'slowDownStretchSeconds');
   engine('slowDown', 'slowDownHoldSeconds');
@@ -186,7 +197,7 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   engine('failover', 'retryInPlaceSeconds');
 
   engine('overage', 'overageMoveGraceMinutes');
-  refuse('overage', 'Return to plan', RETURN_TO_PLAN_VALUES.some((mode) => mode === input.returnToPlan) ? null : listed('Return to plan'));
+  choice('overage', 'Return to plan', RETURN_TO_PLAN_VALUES, input.returnToPlan);
   engine('overage', 'returnToPlanDwellSeconds');
   engine('overage', 'windDownMinutes');
 
@@ -196,11 +207,7 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
     refuse('keepalive', KEEPALIVE_FIELD_LABELS[key], value === null || whole(value, KEEPALIVE_BOUNDS[key].min, KEEPALIVE_BOUNDS[key].max) ? null : boundText(KEEPALIVE_FIELD_LABELS[key], KEEPALIVE_BOUNDS[key]));
   }
 
-  if (checks.capture?.on) {
-    const { maxHours, typed } = checks.capture;
-    const text = maxHours === undefined ? 'Retention is a whole number of hours of at least 1.' : `Retention is a whole number of hours from 1 to ${maxHours}.`;
-    refuse('bodyCapture', 'Capture retention in hours', whole(Number(typed), 1, maxHours ?? Number.MAX_SAFE_INTEGER) ? null : text);
-  }
+  if (checks.capture?.on) refuse('bodyCapture', 'Capture retention in hours', hoursRefusal('Retention is a whole number of hours', checks.capture.typed, checks.capture.maxHours));
   return out;
 }
 
@@ -375,20 +382,16 @@ export function keyRefusals(form: Pick<KeyForm, 'captureHours' | 'captureMode' |
   const name = form.name.trim();
   if (!name) out.push({ field: 'Name', group: 'key', text: 'the key needs a name.' });
   if (checks.identity?.isNew && name) {
-    const { id, unnamed } = derivedId(name);
-    if (unnamed) out.push({ field: 'Name', group: 'key', text: 'The key needs a name with a letter or a digit.' });
-    else if (checks.identity.existingIds.has(id)) out.push({ field: 'Name', group: 'key', text: `Another key already has the id ${id}.` });
+    const text = derivedIdRefusal('key', name, checks.identity.existingIds);
+    if (text) out.push({ field: 'Name', group: 'key', text });
   }
   if (!form.poolId) out.push({ field: 'Pool', group: 'key', text: 'the key needs a pool.' });
   const rules = modelRulesRefusal(form.modelRules);
   if (rules) out.push({ field: 'Model rules', group: 'models', text: rules });
   // An emptied field would send 0, which the route stores as capture off while the radio still says Override.
   if (form.captureMode === 'override') {
-    const { maxHours } = checks;
-    if (!whole(Number(form.captureHours), 1, maxHours ?? Number.MAX_SAFE_INTEGER)) {
-      const text = maxHours === undefined ? 'Capture hours is a whole number of at least 1.' : `Capture hours is a whole number from 1 to ${maxHours}.`;
-      out.push({ field: 'Capture hours for this key', group: 'capture', text });
-    }
+    const text = hoursRefusal('Capture hours is a whole number', form.captureHours, checks.maxHours);
+    if (text) out.push({ field: 'Capture hours for this key', group: 'capture', text });
   }
   return out;
 }
