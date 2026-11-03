@@ -25,8 +25,9 @@ use crate::record::{
     RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    decide, pace_of, passes_reset, projection_of, projections_of, release_reasons, BurnRead,
-    Decided, FailedOver, MigrateReason, Refusal, SelectRequest, SelectResult, FIVE_HOUR_MS,
+    decide, pace_of, passes_reset, projection_of, projections_of, release_reasons, routed_agent,
+    BurnRead, Decided, FailedOver, MigrateReason, Refusal, SelectRequest, SelectResult,
+    FIVE_HOUR_MS,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
@@ -3033,6 +3034,11 @@ impl Task {
                         }
                     }
                     request.revision = snapshot.revision;
+                }
+                // The client's classifier call is routed as the agent of the turn it judges (`routed_agent`), so the
+                // pin the facts and the events below read is that agent's.
+                if let Some(agent_id) = routed_agent(&self.state, &request) {
+                    request.agent_id = agent_id;
                 }
                 let pin_key = PinKey {
                     key_id: request.key_id.clone(),

@@ -33,11 +33,12 @@ pub use record::{
 pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{
     cohort_hold, decide, effective_warm, elapsed_share_at, exhaustion_status, lane_key,
-    release_reasons, seconds_ms, select, warmth_of, Banded, ClientClass, CohortHold, CreditAccount,
-    Decided, Exhaustion, FailedOver, HoldFacts, HoldWait, MigrateReason, PinHold, Placement,
-    Refusal, SelectRequest, SelectResult, Selection, SelectionTrace, ShedRoundRecord, Skipped,
-    SlowDownRead, Warmth, WarmthCause, BUDGET_WINDOW, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON,
-    MODEL_REJECTED_REASON, REFRESHING_CLASSES, SLOW_DOWN_MIN_HOLD_MS, SLOW_DOWN_WAIT_MS,
+    release_reasons, routed_agent, seconds_ms, select, warmth_of, Banded, ClientClass, CohortHold,
+    CreditAccount, Decided, Exhaustion, FailedOver, HoldFacts, HoldWait, MigrateReason, PinHold,
+    Placement, Refusal, SelectRequest, SelectResult, Selection, SelectionTrace, ShedRoundRecord,
+    Skipped, SlowDownRead, Warmth, WarmthCause, BUDGET_WINDOW, FAST_CREDITS_REASON,
+    FAST_RATE_LIMIT_REASON, MODEL_REJECTED_REASON, REFRESHING_CLASSES, SLOW_DOWN_MIN_HOLD_MS,
+    SLOW_DOWN_WAIT_MS,
 };
 pub use snapshot::{paid_source, KeyRefusal, Presented, RegistrySnapshot};
 pub use state::{

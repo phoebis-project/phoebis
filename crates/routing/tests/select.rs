@@ -28894,3 +28894,93 @@ fn a_renewal_without_a_hold_carries_no_cohort_hold() {
         (None, None)
     );
 }
+
+/// An Opus turn of `session` under `agent` and `class`, with `attempted` so a case steers where it lands.
+fn opus_turn(
+    s: &RegistrySnapshot,
+    session: &str,
+    agent: &str,
+    class: &str,
+    attempted: &[&str],
+    now: i64,
+) -> SelectRequest {
+    SelectRequest {
+        agent_id: agent.into(),
+        ..with_facts(
+            request(s, Some(session), "claude-opus-5-5", true, attempted, now),
+            Some(class),
+            false,
+            None,
+            &[],
+        )
+    }
+}
+
+/// The client's marked classifier call of `session`, as the client sends it: an auxiliary call on Sonnet 5 under
+/// `main`, whatever agent's turn it judges.
+fn classifier_call(s: &RegistrySnapshot, session: &str, now: i64) -> SelectRequest {
+    SelectRequest {
+        classifier: true,
+        ..with_facts(
+            request(s, Some(session), "claude-sonnet-5", true, &[], now),
+            Some("auxiliary"),
+            false,
+            None,
+            &[],
+        )
+    }
+}
+
+#[test]
+fn a_classifier_call_follows_the_sessions_turn_that_ended_last_onto_its_account() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    let main_turn = opus_turn(&s, "s1", "main", "main", &[], 1_000);
+    assert_eq!(picked(&select(&mut st, &s, &main_turn, &mut r).0), "a");
+    let sub_turn = opus_turn(&s, "s1", "x", "subagent", &["a"], 2_000);
+    assert_eq!(picked(&select(&mut st, &s, &sub_turn, &mut r).0), "b");
+    // A plain auxiliary call of the session takes the strategy's pick, whatever turn ended last.
+    let plain = SelectRequest {
+        classifier: false,
+        ..classifier_call(&s, "s1", 2_500)
+    };
+    assert_eq!(picked(&select(&mut st, &s, &plain, &mut r).0), "a");
+    // The classifier call follows the subagent's turn, under the subagent's own pin on the classifier's model.
+    let call = classifier_call(&s, "s1", 2_600);
+    assert_eq!(picked(&select(&mut st, &s, &call, &mut r).0), "b");
+    assert_eq!(pinned_agent(&st, "s1", "x").account_id, "b");
+    // The main agent's next turn ends last, so the next call follows it onto the main's own Sonnet 5 pin.
+    let main_turn = opus_turn(&s, "s1", "main", "main", &[], 3_000);
+    select(&mut st, &s, &main_turn, &mut r);
+    let call = classifier_call(&s, "s1", 3_100);
+    assert_eq!(picked(&select(&mut st, &s, &call, &mut r).0), "a");
+    assert_eq!(pinned(&st, "s1").account_id, "a");
+}
+
+#[test]
+fn a_classifier_call_whose_judged_account_cannot_serve_it_lands_like_any_request_and_follows_once_it_can(
+) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    let main_turn = opus_turn(&s, "s1", "main", "main", &[], 1_000);
+    select(&mut st, &s, &main_turn, &mut r);
+    let sub_turn = opus_turn(&s, "s1", "x", "subagent", &["a"], 2_000);
+    assert_eq!(picked(&select(&mut st, &s, &sub_turn, &mut r).0), "b");
+    // b cools after the subagent's turn: the call cannot follow it and lands by the strategy.
+    st.record_cooldown(cooled("b", "account", 5_000, "five_hour", "rate_limit"));
+    let call = classifier_call(&s, "s1", 2_600);
+    assert_eq!(picked(&select(&mut st, &s, &call, &mut r).0), "a");
+    assert_eq!(pinned_agent(&st, "s1", "x").account_id, "a");
+    // Once b serves again, the next call follows the judged turn and its pin goes there.
+    let call = classifier_call(&s, "s1", 6_000);
+    assert_eq!(picked(&select(&mut st, &s, &call, &mut r).0), "b");
+    assert_eq!(pinned_agent(&st, "s1", "x").account_id, "b");
+}

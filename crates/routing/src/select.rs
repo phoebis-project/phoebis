@@ -1217,6 +1217,20 @@ fn round_write(
     writes
 }
 
+/// The agent a request is routed as where it differs from the one it names: the client's own classifier call carries
+/// `main` and no agent header whatever turn it judges, so it is routed as the agent of the session's turn that ended
+/// last (`RoutingState::latest_turn_pin`), on whose account the upstream keeps the call free. `None` for every other
+/// request, and for a classifier call with no turn pin to follow.
+pub fn routed_agent(state: &RoutingState, request: &SelectRequest) -> Option<String> {
+    if !request.classifier {
+        return None;
+    }
+    state
+        .latest_turn_pin(&request.key_id, &request.session_id)
+        .filter(|judged| judged.agent_id != request.agent_id)
+        .map(|judged| judged.agent_id.clone())
+}
+
 /// `decide` without its record: the tests' entry and nothing else's.
 pub fn select(
     state: &mut RoutingState,
@@ -1304,13 +1318,14 @@ impl Recorder {
             .find(|c| c.account_id == account_id)
     }
 
-    /// The credit placement shows under the `pin` step, which step 1 has already pushed: its verdict reads `match`
-    /// and it gains the `credit` fact, so the record keeps its stations and its verdict words.
-    fn credit_placed(&mut self, account_id: &str) {
+    /// A directed placement, the credit issuer's or the judged turn's for a classifier call, shows under the `pin`
+    /// step, which step 1 has already pushed: its verdict reads `match` and it gains the fact `key` naming the
+    /// account, so the record keeps its stations and its verdict words.
+    fn directed_placed(&mut self, key: &'static str, account_id: &str) {
         if let Some(pin) = self.walk.iter_mut().find(|w| w.step == "pin") {
             pin.verdict = "match";
             pin.facts
-                .push(Fact::text("credit", account_id).about(account_id));
+                .push(Fact::text(key, account_id).about(account_id));
         }
     }
 }
@@ -1323,6 +1338,20 @@ fn run(
     rec: &mut Recorder,
 ) -> (SelectResult, Vec<StateWrite>) {
     let mut writes = Vec::new();
+    // The client's classifier call is routed as the agent of the turn it judges, so its pin is held under that agent
+    // (`routed_agent`). The task swapped the id ahead of its own pin lookup, and the swap here answers the same for a
+    // caller that did not.
+    let routed;
+    let request = match routed_agent(state, request) {
+        Some(agent_id) => {
+            routed = SelectRequest {
+                agent_id,
+                ..request.clone()
+            };
+            &routed
+        }
+        None => request,
+    };
     let Some(pool) = snapshot
         .key(&request.key_id)
         .and_then(|k| snapshot.pool(&k.pool_id))
@@ -1558,7 +1587,9 @@ fn run(
     );
     let in_set = |set: &[&Candidate], id: &str| set.iter().any(|c| c.account_id == id);
     // A fallback credit token is good on the organization that issued it alone, so the body carrying one goes to that
-    // account ahead of the moves and the strategy, which would place it where the upstream refuses the token.
+    // account ahead of the moves and the strategy, which would place it where the upstream refuses the token. The
+    // client's classifier call goes to the account of the turn it judges the same way, since the upstream charges it
+    // on any other account.
     let credit = credit_candidate(
         request,
         &eligible,
@@ -1566,8 +1597,12 @@ fn run(
         state,
         pool,
     );
-    if let Some(candidate) = credit {
-        rec.credit_placed(&candidate.account_id);
+    let judged = judged_candidate(state, snapshot, request, pin.as_ref(), &eligible, window);
+    let directed = credit
+        .map(|c| (c, CREDIT_WORDS))
+        .or(judged.map(|c| (c, JUDGED_WORDS)));
+    if let Some((candidate, words)) = directed {
+        rec.directed_placed(words.fact, &candidate.account_id);
     }
 
     // A probe warms the pin it was sent for. With that member at its spend budget, disabled by the operator, past
@@ -1711,9 +1746,9 @@ fn run(
             for rule in RULES {
                 rec.step(rule, "not_run", vec![Fact::text("reason", reason)]);
             }
-        } else if let Some(candidate) = credit {
+        } else if let Some((candidate, words)) = directed {
             for rule in RULES {
-                rec.step(rule, "not_run", vec![Fact::text("reason", "credit")]);
+                rec.step(rule, "not_run", vec![Fact::text("reason", words.reason)]);
             }
             if candidate.account_id == current.account_id {
                 // The pin renews in place at step 5, which reads the account's pace as a pinned turn does.
@@ -1721,7 +1756,7 @@ fn run(
                     slow_down_read(state, snapshot, pool, &current.account_id, request.now);
             } else {
                 // Handed to the placement as a fired move hands its source, so the new row carries its burn and its
-                // last prompt. No move reason names a credit, so the write reads `created`.
+                // last prompt. No move reason names a credit or a judged turn, so the write reads `created`.
                 state.remove_pin(&current.key());
                 writes.push(StateWrite::DeletePin(current.key()));
                 if mark_holds(&current) {
@@ -2088,7 +2123,7 @@ fn run(
     );
     let affinity_handle = state.affinity();
     let affinity_guard = affinity_handle.read().expect("affinity lock poisoned");
-    let placed = match credit {
+    let placed = match directed {
         Some(_) => None,
         None => placement_of(
             state,
@@ -2103,17 +2138,18 @@ fn run(
             rec,
         ),
     };
-    let (chosen, tier, placement) = if let Some(candidate) = credit {
-        // Every station the console draws is recorded, the rungs and the pick naming the credit as their reason.
+    let (chosen, tier, placement) = if let Some((candidate, words)) = directed {
+        // Every station the console draws is recorded, the rungs and the pick naming the credit or the judged turn as
+        // their reason.
         for rung in ["rung:content", "rung:with_main", "rung:static"] {
-            rec.step(rung, "none", vec![Fact::text("reason", "credit")]);
+            rec.step(rung, "none", vec![Fact::text("reason", words.reason)]);
         }
         rec.step(
             "pick",
             "chosen",
             vec![
                 account_fact(&candidate.account_id),
-                Fact::text("reason", "credit"),
+                Fact::text("reason", words.reason),
             ],
         );
         (candidate, None, None)
@@ -2370,8 +2406,8 @@ fn run(
         })
         .collect();
     trace_skipped.extend(skipped);
-    if placement.is_some() || credit.is_some() {
-        // Rung 3 and `with_main` choose from `allowed` and the credit placement from the eligible set, each ahead of
+    if placement.is_some() || directed.is_some() {
+        // Rung 3 and `with_main` choose from `allowed` and a directed placement from the eligible set, each ahead of
         // step 6's own partitions, so the account they land on can already carry a partition's label here. The
         // placement itself is proof enough that it serves.
         trace_skipped.retain(|s| s.account_id != chosen.account_id);
@@ -5590,6 +5626,56 @@ fn credit_candidate<'a>(
         .then_some(candidate)
 }
 
+/// The words a placement directed ahead of the moves and the strategy writes: `reason` on the move rules, the rungs
+/// and the pick, `fact` as the key of the pin step's fact naming the account.
+#[derive(Clone, Copy)]
+struct DirectedWords {
+    reason: &'static str,
+    fact: &'static str,
+}
+
+/// The fallback credit token's placement, on the account that issued the token.
+const CREDIT_WORDS: DirectedWords = DirectedWords {
+    reason: "credit",
+    fact: "credit",
+};
+
+/// The classifier call's placement, on the account of the turn it judges.
+const JUDGED_WORDS: DirectedWords = DirectedWords {
+    reason: "classifier",
+    fact: "judged",
+};
+
+/// The candidate the client's classifier call follows: the account of the session's turn that ended last, under the
+/// incarnation its pin names, among the eligible set and holding allowance, as the `with_main` rung admits a parent's
+/// account. The cap does not bound it, as it bounds no renewal: the call belongs to a session already on that
+/// account. `None` for every other request, for a non-portable call, and for a judged account that cannot serve the
+/// call, which is then placed like any request. `None` too where `own`, the call's live pin, is the judged pin itself:
+/// the session's turn runs on the classifier's model and the two share the pin, so the call is a request of that
+/// conversation and renews or moves as any request does, where a call directed to its own pin's account would hold
+/// the conversation off every move.
+fn judged_candidate<'a>(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    request: &SelectRequest,
+    own: Option<&PinRow>,
+    eligible: &[&'a Candidate],
+    window: &str,
+) -> Option<&'a Candidate> {
+    if !request.classifier || request.count || request.probe || !request.portable {
+        return None;
+    }
+    let judged = state.latest_turn_pin(&request.key_id, &request.session_id)?;
+    if own.is_some_and(|own| own.key() == judged.key()) {
+        return None;
+    }
+    eligible
+        .iter()
+        .copied()
+        .find(|c| c.account_id == judged.account_id && c.incarnation == judged.incarnation)
+        .filter(|c| holds_allowance(state, snapshot, &c.account_id, window, request.now))
+}
+
 /// A fresh request with no live pin lands where its prefix is already warm: the deepest message boundary
 /// (rung 3, always, bypassing the cap as a pin renewal does, since a tail match is the conversation's own
 /// account); else, behind the class knob, the parent agent's pin (`with_main`, bypassing the cap the same way,
@@ -7294,15 +7380,17 @@ impl Readings<'_> {
     fn pick_fact(&self) -> Vec<SummaryFact> {
         let text =
             |key: &'static str, value: String| summary_fact(key, FactValue::Text(value), "text");
-        // The credit placed the request ahead of the strategy, which ranked no candidate.
-        if self
-            .walk
-            .iter()
-            .filter(|w| w.step == "pin")
-            .flat_map(|w| &w.facts)
-            .any(|f| f.key == "credit")
-        {
-            return vec![text("pick", "credit".into())];
+        // The credit or the judged turn placed the request ahead of the strategy, which ranked no candidate.
+        let pin_facts = || {
+            self.walk
+                .iter()
+                .filter(|w| w.step == "pin")
+                .flat_map(|w| &w.facts)
+        };
+        for words in [CREDIT_WORDS, JUDGED_WORDS] {
+            if pin_facts().any(|f| f.key == words.fact) {
+                return vec![text("pick", words.reason.into())];
+            }
         }
         // Read off the accounts tried rather than the wire attempt: a retry in place advances the attempt on one
         // account, and a credential failure moves on to the next without advancing it.

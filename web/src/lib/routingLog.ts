@@ -1096,6 +1096,9 @@ export function factChips(f: WalkFact, record: DecisionRecord, now: number): Chi
     // The pin step writes the issuer's id as the value and about the same account, so one chip names it once.
     case 'credit':
       return typeof v === 'string' ? [accountChip(v, 'credit issuer')] : [];
+    // The judged turn's account a classifier call followed, written the same way.
+    case 'judged':
+      return typeof v === 'string' ? [accountChip(v, 'judged turn')] : [];
     case 'lane':
       if (typeof v === 'string') return laneChips(v);
       break;

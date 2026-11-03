@@ -3642,6 +3642,25 @@ impl RoutingState {
             })
     }
 
+    /// The session's pin whose turn ended last under one key, any agent and model: the renewal at a stream's end
+    /// stamps `last_used_at`, so the greatest stamp names the turn a classifier call that follows within milliseconds
+    /// judges. A pin only auxiliary calls use is left out, so a classifier pin never names itself. Rows stamped at one
+    /// instant answer the later placement, then the greater agent and model ids, so the answer never rests on the
+    /// map's order.
+    pub(crate) fn latest_turn_pin(&self, key_id: &str, session_id: &str) -> Option<&PinRow> {
+        self.pins
+            .values()
+            .filter(|p| p.key_id == key_id && p.session_id == session_id && !p.auxiliary_only)
+            .max_by_key(|&p| {
+                (
+                    p.last_used_at,
+                    p.created_at,
+                    p.agent_id.as_str(),
+                    p.model.as_str(),
+                )
+            })
+    }
+
     /// Expired cooldowns, pins past their pool's idle TTL, pins whose key or pool is gone, bucket windows read
     /// longer than `BUCKET_TTL_MS` ago, and everything held against an account the registry no longer has. An id
     /// is reusable, so state the deleted account left behind would otherwise be inherited by whatever is created
