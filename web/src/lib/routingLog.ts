@@ -16,8 +16,6 @@ export { ageWord };
 // The routing log's words. The routes answer structured values and no English, so a label change touches this module
 // alone and never a route or a fixture.
 
-export type FactLabel = '5h' | '7d' | 'Fable' | 'answer' | 'attempt' | 'capture' | 'cause' | 'client' | 'depth' | 'epoch' | 'field' | 'fields' | 'fit' | 'gap' | 'held' | 'idle' | 'in flight' | 'key' | 'lasted' | 'models' | 'next' | 'over' | 'pick' | 'pins' | 'prefix' | 'rank' | 'resets' | 'retry' | 'rewrite in flight' | 'runway' | 'secret' | 'slow-down' | 'slowest' | 'speed' | 'spent' | 'state' | 'to' | 'turn' | 'until' | 'was';
-
 const LABELS = {
   answer: 'answer',
   attempt: 'attempt',
@@ -59,11 +57,9 @@ const LABELS = {
   turn: 'turn',
   until: 'until',
   was: 'was',
-} as const satisfies Record<string, FactLabel>;
+} as const;
 type FactKey = keyof typeof LABELS;
-
-/** The fact keys the router and the event rows carry, each to its label. A key without a label is a type error. */
-export const FACT_LABEL: Record<string, FactLabel> = LABELS;
+export type FactLabel = (typeof LABELS)[FactKey];
 
 export interface FactPair {
   entity: FactEntity | null;
