@@ -14,9 +14,9 @@ pub fn apply(
 ) -> rusqlite::Result<()> {
     // A fresh file carries its version row as a stepped one does, so an `UPDATE` of the marker finds a row to change.
     // A version read that takes a `meta` without its row for the baseline would read a file a crash left between the
-    // two as prepared, and the file would never get its row: the two share one transaction, and any open that finds
-    // the row absent writes it. A row already there is kept, and an open that finds it writes nothing, so it lands
-    // beside a connection holding the write lock.
+    // baseline and the row as prepared, and the file would never get its row: the two share one transaction, and any
+    // open that finds the row absent writes it. A row already there is kept, and an open that finds it writes
+    // nothing, so it lands beside a connection holding the write lock.
     let tx = conn.transaction()?;
     tx.execute_batch(baseline)?;
     let marked = tx
