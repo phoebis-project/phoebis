@@ -1076,10 +1076,10 @@ impl PlanTables {
     /// The operator's file when one is at the path, the shipped model when nothing is (`NotFound`), and the I/O
     /// error for any other failure to read it; `source` and `path` set to match.
     pub fn load(override_path: Option<&Path>) -> Result<PlanTables, LedgerError> {
-        let text = match override_path {
-            Some(path) => crate::pricing::read_override(path)?,
-            None => None,
-        };
+        let text = override_path
+            .map(crate::pricing::read_override)
+            .transpose()?
+            .flatten();
         let path = override_path.map(Path::to_path_buf);
         Ok(match text {
             Some(text) => PlanTables {
@@ -1088,9 +1088,8 @@ impl PlanTables {
                 source: "file".to_string(),
             },
             None => PlanTables {
-                revisions: CostRevisions::shipped(),
                 path,
-                source: "shipped".to_string(),
+                ..PlanTables::shipped()
             },
         })
     }

@@ -502,10 +502,7 @@ impl Pricing {
     /// The operator's file when one is at the path, the shipped file when nothing is (`NotFound`), and the I/O
     /// error for any other failure to read it. The operator's file replaces the whole list.
     pub fn load(override_path: Option<&Path>) -> Result<Pricing, LedgerError> {
-        let text = match override_path {
-            Some(path) => read_override(path)?,
-            None => None,
-        };
+        let text = override_path.map(read_override).transpose()?.flatten();
         Ok(Pricing::new(match text {
             Some(text) => PriceRevisions::from_yaml(&text, "file")?,
             None => PriceRevisions::shipped(),
