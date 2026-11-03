@@ -525,7 +525,7 @@ impl Pricing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_tables::JANUARY_2026;
+    use crate::test_tables::{FEBRUARY_2026, JANUARY_2026};
 
     /// The refusal `from_yaml` answers for a file whose one revision's one model carries `standard` and, when given,
     /// `fast` cells and a `long_context` block.
@@ -1002,9 +1002,6 @@ mod tests {
         assert!(close(usd, 7_942.5e-6), "{usd}");
         assert_eq!(prompt_tokens(1, 2, 3, 4), 10);
     }
-
-    /// 2026-02-15 12:00 UTC, inside the price fixture's second entry.
-    const FEBRUARY_2026: i64 = 1_771_156_800_000;
 
     fn input(tokens: u64) -> phoebis_routing::PinUsage {
         phoebis_routing::PinUsage {

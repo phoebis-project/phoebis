@@ -11,6 +11,9 @@ pub const API_PRICES: &str = include_str!("../tests/fixtures/api_prices.yaml");
 /// An instant inside the fixtures' first entry, 2026-01-15 12:00 UTC, for a test that wants the first entry's figures.
 pub const JANUARY_2026: i64 = 1_768_478_400_000;
 
+/// An instant inside the fixtures' second entries and out of band, Sunday 2026-02-15 12:00 UTC.
+pub const FEBRUARY_2026: i64 = 1_771_156_800_000;
+
 pub fn subscription_costs() -> PlanTables {
     PlanTables {
         revisions: CostRevisions::from_yaml(SUBSCRIPTION_COSTS)

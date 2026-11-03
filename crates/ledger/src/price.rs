@@ -142,7 +142,8 @@ fn dearest(prices: &PriceRevisions, at: i64, counts: PinUsage) -> CostSplit {
 mod tests {
     use super::*;
     use crate::test_tables::{
-        api_prices, first_entry_costs_text, subscription_costs, JANUARY_2026, SUBSCRIPTION_COSTS,
+        api_prices, first_entry_costs_text, subscription_costs, FEBRUARY_2026, JANUARY_2026,
+        SUBSCRIPTION_COSTS,
     };
     use crate::CostRevisions;
     use phoebis_routing::{FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
@@ -153,8 +154,6 @@ mod tests {
     const OPUS: &str = "claude-opus-5-5";
     /// Thursday 2026-01-15 at 14:00 UTC, 06:00 in Los Angeles: inside the band and the fixtures' first entries.
     const JANUARY_IN_BAND: i64 = 1_768_485_600_000;
-    /// Sunday 2026-02-15 at 12:00 UTC, inside the fixtures' second entries and out of band.
-    const FEBRUARY_2026: i64 = 1_771_156_800_000;
     /// Monday 2026-02-02 at 14:00 UTC, 06:00 in Los Angeles: inside the band and the second entries.
     const FEBRUARY_IN_BAND: i64 = 1_770_040_800_000;
     /// Saturday 2026-01-31 at 23:30 UTC, half an hour before the second entries take effect.
