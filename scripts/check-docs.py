@@ -508,12 +508,23 @@ def check_check_config(main_rs, installation_md):
 # it would backtrack to zero width and test the space ahead of the `&`. `self.code` in `Failure::response` forwards
 # a `code:` field the check has read, so it is passed by too.
 # A `pub code:` is a member's declaration, never a value, so a `code:` after `pub` is passed by.
+# A bare identifier that names no const is a local: it resolves through the last `let <ident> = <fn>(..)` ahead of it
+# in the function that holds it, to every arm of `fn <fn>` in the files read, whose body is one `match` and nothing
+# else. Each arm's value is a literal, a const, or a `Failure` const's `.code`, read off that const's own `code:`
+# literal. A local with no such binding, a function the files read do not hold once, a body of another shape and an
+# arm of any other value are each a finding.
 CODE_FIELD = re.compile(r"(?<!pub )\bcode:(?!\s*&)\s*")
 ERROR_CALL = re.compile(r"(?<!fn )\banthropic_error\(")
 CODE_LITERAL = re.compile(r'^r?(#*)"([a-z_]+)"\1$')
 CODE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*$")
 FIELD_FORWARD = "self.code"
 CODE_CONST = re.compile(r"\bconst ([A-Z_][A-Z0-9_]*): &(?:'static )?str = \"([a-z_]+)\";")
+LOCAL = re.compile(r"^[a-z_][a-z0-9_]*$")
+LET_CALL = re.compile(r"\blet ([a-z_][a-z0-9_]*) = ([a-z_][a-z0-9_]*)\(")
+FN_NAME = re.compile(r"\bfn ([a-z_][a-z0-9_]*)\b")
+MATCH_BODY = re.compile(r"\s*match\b")
+FAILURE_CONST = re.compile(r"\bconst ([A-Z_][A-Z0-9_]*): Failure = Failure \{")
+FAILURE_CODE = re.compile(r"^([A-Z_][A-Z0-9_]*)\.code$")
 # The `auth_*` arms of `errors.rs` answer a two-string tuple, the code first.
 CODE_TUPLE = re.compile(r'\(\s*"([a-z][a-z_]*)",\s*"')
 # A row of the refusal code table: the code in backticks in its first cell.
@@ -550,6 +561,80 @@ def expression_end(blanked, start):
     raise SystemExit(f"an expression with no end at offset {start}")
 
 
+def closing(blanked, opened):
+    """The offset of the bracket that closes the one at `opened`."""
+    depth = 0
+    for pos in range(opened, len(blanked)):
+        if blanked[pos] in "([{":
+            depth += 1
+        elif blanked[pos] in ")]}":
+            depth -= 1
+            if depth == 0:
+                return pos
+    raise SystemExit(f"an unclosed bracket at offset {opened}")
+
+
+def function_bodies(blanked):
+    """(name, open, close) of each function body: the braces after a `fn` signature, a declaration that ends in `;`
+    passed by."""
+    bodies = []
+    for fn in FN_NAME.finditer(blanked):
+        opened = blanked.find("{", fn.end())
+        semicolon = blanked.find(";", fn.end())
+        if opened < 0 or 0 <= semicolon < opened:
+            continue
+        bodies.append((fn.group(1), opened, closing(blanked, opened)))
+    return bodies
+
+
+def bound_call(blanked, offset, local):
+    """The function the last `let <local> = <fn>(..)` ahead of `offset` calls, in the innermost function holding
+    `offset`, or None."""
+    holding = [(opened, close) for _, opened, close in function_bodies(blanked) if opened < offset < close]
+    if not holding:
+        return None
+    opened, _ = min(holding, key=lambda span: span[1] - span[0])
+    calls = [let.group(2) for let in LET_CALL.finditer(blanked, opened, offset) if let.group(1) == local]
+    return calls[-1] if calls else None
+
+
+def match_arms(code, blanked, opened, close):
+    """The (offset, value) of each arm when the body between the braces at `opened` and `close` is one `match` and
+    nothing else, or None."""
+    lead = MATCH_BODY.match(blanked, opened + 1)
+    if not lead:
+        return None
+    block = blanked.find("{", lead.end())
+    if block < 0 or block > close:
+        return None
+    end = closing(blanked, block)
+    if blanked[end + 1 : close].strip():
+        return None
+    arms = []
+    for start, stop in split_arguments(blanked, block + 1, end):
+        arrow = blanked.find("=>", start, stop)
+        if arrow < 0:
+            return None
+        value = code[arrow + 2 : stop]
+        arms.append((arrow + 2 + len(value) - len(value.lstrip()), value.strip()))
+    return arms
+
+
+def failure_codes(code, blanked):
+    """The `code:` literal of each `Failure` const, by the const's name."""
+    found = {}
+    for failure in FAILURE_CONST.finditer(blanked):
+        opened = failure.end() - 1
+        fields = blanked[opened : closing(blanked, opened)]
+        field = CODE_FIELD.search(fields)
+        if field:
+            start = opened + field.end()
+            literal = CODE_LITERAL.match(code[start : expression_end(blanked, start)].strip())
+            if literal:
+                found[failure.group(1)] = literal.group(2)
+    return found
+
+
 def code_expressions(code, blanked):
     """Every expression that carries a refusal code, as (offset, text): the value of each `code:` field and the
     third argument of each `anthropic_error(` call, the function's own definition passed by."""
@@ -578,31 +663,77 @@ def check_codes(code_files, client_md):
     table, both ways. A code expression the check cannot read is a finding, never a silent pass."""
     if missing([client_md]):
         return 1
-    consts, answered, pending, findings = {}, set(), [], 0
+    consts, failures, sources, answered, pending, findings = {}, {}, {}, set(), [], 0
+    # Each bound function's arms are read once, however many locals bind it.
+    read_arms = set()
     for path in code_files:
         if not path.is_file():
             print(f"{path} is missing; the code file list names it")
             return 1
         code, blanked = tokenized(path.read_text(encoding="utf-8"))
+        sources[path] = code, blanked
         consts.update(CODE_CONST.findall(code))
+        failures.update(failure_codes(code, blanked))
         for offset, expression in code_expressions(code, blanked):
             literal = CODE_LITERAL.match(expression)
             if literal:
                 answered.add(literal.group(2))
             elif CODE_IDENT.match(expression):
-                pending.append((path, line_of(code, offset), expression))
+                pending.append((path, offset, expression))
             elif expression != FIELD_FORWARD:
                 print(f"{path.name}:{line_of(code, offset)}: unsupported code expression {expression}")
                 findings += 1
         if path.name == "errors.rs":
             answered.update(CODE_TUPLE.findall(code))
-    for path, line, ident in pending:
+    for path, offset, ident in pending:
+        code, blanked = sources[path]
+        line = line_of(code, offset)
         name = ident.rsplit("::", 1)[-1]
         if name in consts:
             answered.add(consts[name])
-        else:
+            continue
+        if not LOCAL.match(ident):
             print(f"{path.name}:{line}: code {ident} resolves to no const in the files read")
             findings += 1
+            continue
+        called = bound_call(blanked, offset, ident)
+        if called is None:
+            print(f"{path.name}:{line}: code {ident} resolves to no const or binding in the files read")
+            findings += 1
+            continue
+        bodies = [
+            (source, opened, close)
+            for source, (_, source_blanked) in sources.items()
+            for fn, opened, close in function_bodies(source_blanked)
+            if fn == called
+        ]
+        if len(bodies) != 1:
+            print(f"{path.name}:{line}: code {ident} binds fn {called}, found {len(bodies)} times in the files read")
+            findings += 1
+            continue
+        if called in read_arms:
+            continue
+        read_arms.add(called)
+        source, opened, close = bodies[0]
+        source_code, source_blanked = sources[source]
+        arms = match_arms(source_code, source_blanked, opened, close)
+        if arms is None:
+            print(f"{source.name}:{line_of(source_code, opened)}: fn {called} is no single match the check reads")
+            findings += 1
+            continue
+        for at, value in arms:
+            literal = CODE_LITERAL.match(value)
+            failure = FAILURE_CODE.match(value)
+            if literal:
+                answered.add(literal.group(2))
+            elif failure and failure.group(1) in failures:
+                answered.add(failures[failure.group(1)])
+            elif CODE_IDENT.match(value) and value.rsplit("::", 1)[-1] in consts:
+                answered.add(consts[value.rsplit("::", 1)[-1]])
+            else:
+                where = f"{source.name}:{line_of(source_code, at)}"
+                print(f"{where}: arm {value} of fn {called} is no code the check reads")
+                findings += 1
     lines = client_md.read_text(encoding="utf-8").splitlines()
     span = between(lines, REFUSAL_CODES_BEGIN, REFUSAL_CODES_END, client_md)
     if span is None:
