@@ -3602,6 +3602,12 @@ fn move_of<'a>(
     };
     let prefer_plan = pool.overage_policy == OveragePolicy::PreferPlan;
     let kind = |id: &str| snapshot.account(id).map(|a| a.kind);
+    let plan_funded = |state: &RoutingState, c: &Candidate| {
+        kind(&c.account_id) == Some(AccountKind::Oauth)
+            && !paid_source(snapshot, &c.account_id)
+            && !state.in_overage(&c.account_id, now, fallback_ms)
+            && holds_allowance(state, snapshot, &c.account_id, window, now)
+    };
     let dwell_ms = shed_dwell_ms(pool);
 
     // A spent window is not a hover: the pinned account cannot serve the request until the window resets, so
@@ -3731,12 +3737,7 @@ fn move_of<'a>(
                     current,
                     eligible,
                     window,
-                    &|c| {
-                        kind(&c.account_id) == Some(AccountKind::Oauth)
-                            && !paid_source(snapshot, &c.account_id)
-                            && !state.in_overage(&c.account_id, now, fallback_ms)
-                            && holds_allowance(state, snapshot, &c.account_id, window, now)
-                    },
+                    &|c| plan_funded(state, c),
                     false,
                     rec,
                 );
@@ -3796,12 +3797,7 @@ fn move_of<'a>(
                 current,
                 eligible,
                 window,
-                &|c| {
-                    kind(&c.account_id) == Some(AccountKind::Oauth)
-                        && !paid_source(snapshot, &c.account_id)
-                        && !state.in_overage(&c.account_id, now, fallback_ms)
-                        && holds_allowance(state, snapshot, &c.account_id, window, now)
-                },
+                &|c| plan_funded(state, c),
                 false,
                 rec,
             );
