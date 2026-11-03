@@ -495,7 +495,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
         const ahead = leadOf({ resetsAt: w.resetsAt, utilization: w.utilization }, WINDOW_MS[name], at, end);
         const horizon = horizonOf(name, w.resetsAt, end, at);
         windows[name] = {
-          ageMs, ahead: name === 'seven_day_fable' ? null : Math.round(ahead * 1000) / 1000,
+          ageMs, ahead: name === 'seven_day_fable' ? null : round3(ahead),
           // The 5-hour window's burn over the speed the account's holds realize, 1 with no entry in force.
           demand: name === 'five_hour' ? round5((burn[name] ?? 0) / (entry?.speed ?? 1)) : null,
           horizon: iso(horizon), observedAt: iso(at - ageMs),
@@ -1497,7 +1497,7 @@ export function placementFactOf(record: DecisionRecord, pick: ReturnType<typeof 
   if (others.length > 0 && others.every((c) => record.request.attempted.includes(c.accountId))) return [summaryFact('pick', 'last account', 'text')];
   if (pick.tierSize <= 1) return [summaryFact('pick', 'only candidate', 'text')];
   if (strategy === 'pace' && pick.score && pick.runnerUp) {
-    return [summaryFact('gap', Math.round((pick.score.score - pick.runnerUp.score) * 100_000) / 100_000, pick.score.unit as SummaryFact['unit']), { entity: { id: pick.runnerUp.accountId, kind: 'account' }, key: 'over', unit: null, value: pick.runnerUp.accountId }];
+    return [summaryFact('gap', round5(pick.score.score - pick.runnerUp.score), pick.score.unit as SummaryFact['unit']), { entity: { id: pick.runnerUp.accountId, kind: 'account' }, key: 'over', unit: null, value: pick.runnerUp.accountId }];
   }
   // A round-robin pick reads its turn as the engine names it. The story keeps no cursor, so the chosen member reads
   // first, as a rank does.
@@ -2455,7 +2455,7 @@ function weeklyResets(accountId: string, window: string, resetsAtMs: number, sha
     const reset = resetsAtMs - (i + 1) * WEEK;
     const clockWalk = i === clockAt;
     const { plan, tier } = earlier !== null && reset <= earlier.through ? earlier.pair : currentPair(accountId);
-    return { accountId, at: iso(reset), detail: { next_reset: clockWalk ? null : reset + WEEK, observed: clockWalk ? 'clock' : 'sample', plan, reset_at: reset, tier, utilization_before: Math.round((1 - share) * 1000) / 1000, window }, kind: 'window_reset' };
+    return { accountId, at: iso(reset), detail: { next_reset: clockWalk ? null : reset + WEEK, observed: clockWalk ? 'clock' : 'sample', plan, reset_at: reset, tier, utilization_before: round3(1 - share), window }, kind: 'window_reset' };
   });
 }
 
