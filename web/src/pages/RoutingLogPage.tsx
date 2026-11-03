@@ -19,7 +19,7 @@ import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterB
 import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, readEnd, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtDatedTime, fmtInt, fmtTime, upperFirst } from '@/lib/format';
 import { useAsync, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
-import { ALL_KINDS, byOf, compareModels, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref } from '@/lib/routingLog';
+import { ALL_KINDS, byOf, catalogModel, compareModels, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref, movedFrom, registryTarget } from '@/lib/routingLog';
 
 const PAGE_SIZE = 25;
 
@@ -264,16 +264,9 @@ export function RoutingLogPage() {
   );
 }
 
-/**
- * The account or the key a registry change edited. The ledger's row names a pool's change in its pool column and
- * these two in the change's target alone.
- */
-const registryTarget = (row: RoutingLogRow, subject: 'account' | 'key'): string | null =>
-  row.type === 'event' && row.kind === 'registry_changed' && typeof row.detail.kind === 'string' && row.detail.kind.startsWith(`${subject}_`) && typeof row.detail.target === 'string' ? row.detail.target : null;
-
 /** The account a row is about: a move draws where it left and where it landed, a pool or key event its subject. */
 function AccountCell({ row }: { row: RoutingLogRow }) {
-  const from = row.type === 'decision' ? row.fromAccountId : row.kind === 'pin_migrated' && typeof row.detail.from_account === 'string' ? row.detail.from_account : null;
+  const from = row.type === 'decision' ? row.fromAccountId : movedFrom(row);
   const accountId = row.accountId ?? registryTarget(row, 'account');
   const keyId = row.type === 'event' ? (row.keyId ?? registryTarget(row, 'key')) : null;
   if (accountId !== null) {
@@ -309,9 +302,7 @@ function AccountCell({ row }: { row: RoutingLogRow }) {
 const modelOf = (row: RoutingLogRow) => {
   // The router records an empty model for a request it refused before it resolved one, which names no model to draw.
   const model = row.model === '' ? null : row.model;
-  if (model !== null || row.type !== 'event' || row.kind !== 'catalog_changed') return model;
-  const named = [row.detail.added, row.detail.removed].flatMap((v) => (Array.isArray(v) ? v : []));
-  return named.length === 1 && typeof named[0] === 'string' ? named[0] : null;
+  return model ?? catalogModel(row);
 };
 
 function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now: number; onToggle: () => void; open: boolean; row: RoutingLogRow; rows: RoutingLogRow[] }) {

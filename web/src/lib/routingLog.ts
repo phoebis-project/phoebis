@@ -404,6 +404,23 @@ const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFi
 const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const rec = (v: unknown): Record<string, unknown> => (v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 
+/** The account a moved pin left, null on any row but a pin's move. */
+export const movedFrom = (row: RoutingLogRow): string | null => (row.type === 'event' && row.kind === 'pin_migrated' ? str(row.detail.from_account) : null);
+
+/**
+ * The account or the key a registry change edited. The ledger's row names a pool's change in its pool column and
+ * these two in the change's target alone.
+ */
+export const registryTarget = (row: RoutingLogRow, subject: 'account' | 'key'): string | null =>
+  row.type === 'event' && row.kind === 'registry_changed' && (str(row.detail.kind) ?? '').startsWith(`${subject}_`) ? str(row.detail.target) : null;
+
+/** The one model a catalog change names, null for a change of several and on any other row. */
+export const catalogModel = (row: RoutingLogRow): string | null => {
+  if (row.type !== 'event' || row.kind !== 'catalog_changed') return null;
+  const named = [...list(row.detail.added), ...list(row.detail.removed)];
+  return named.length === 1 ? str(named[0]) : null;
+};
+
 /** A window's name as the windows read elsewhere in the console. */
 export const WINDOW_WORD: Record<string, string> = { five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' };
 const STATE_WORD: Record<string, string> = { funding_required: 'funding required', reauth_required: 're-auth required' };
@@ -1919,7 +1936,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Found by', request ?? plain('the sweep'));
       break;
     case 'pin_migrated': {
-      const from = str(d.from_account);
+      const from = movedFrom(row);
       const reason = str(d.reason) ?? '';
       const epoch = num(d.epoch);
       add('From', from === null ? null : accountChip(from));
