@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use phoebis_bus::{
     user_agent_of, AccountSelected, AutoMode, Event, Outcome, Phase, RequestComplete,
-    RequestObserved, ResponseChunk, ResponseHead, BODY_SHAPE_ERROR_CODE,
+    RequestObserved, ResponseChunk, ResponseHead, ACCOUNT_CANCELED_CODE, BODY_SHAPE_ERROR_CODE,
+    CLIENT_GONE_CODE, ROUTER_SHUTDOWN_CODE,
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::UnifiedHeaders;
@@ -519,7 +520,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         if last.upstream_status.is_none()
             && matches!(
                 complete.error_code.as_deref(),
-                Some("account_canceled" | "client_gone" | "router_shutdown")
+                Some(ACCOUNT_CANCELED_CODE | CLIENT_GONE_CODE | ROUTER_SHUTDOWN_CODE)
             )
         {
             last.outcome = "canceled".into();

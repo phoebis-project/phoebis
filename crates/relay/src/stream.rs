@@ -8,7 +8,9 @@ use std::time::Duration;
 use axum::body::Body;
 use bytes::{Bytes, BytesMut};
 use futures::future::BoxFuture;
-use phoebis_bus::{Interruption, Outcome, Phase, ResponseChunk, ResponseFacts, Usage};
+use phoebis_bus::{
+    Interruption, Outcome, Phase, ResponseChunk, ResponseFacts, Usage, ACCOUNT_CANCELED_CODE,
+};
 use phoebis_oauth::Clock;
 use phoebis_routing::{AffinityReport, PinRef, PinUsage, Report, RouterHandle};
 use phoebis_transport::decode::Decoder;
@@ -594,7 +596,7 @@ impl Publish {
             }
             (BodyEnd::Complete, None) => None,
             (BodyEnd::Complete, Some(error)) => Some((Outcome::Failed, Some(error))),
-            (BodyEnd::Canceled, _) => Some((Outcome::Canceled, Some("account_canceled".into()))),
+            (BodyEnd::Canceled, _) => Some((Outcome::Canceled, Some(ACCOUNT_CANCELED_CODE.into()))),
             (BodyEnd::ClientGone, _) => Some((
                 Outcome::Canceled,
                 Some(cut_code(self.trace.shutdown_mark.as_ref()).into()),

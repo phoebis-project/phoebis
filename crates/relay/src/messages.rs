@@ -21,7 +21,7 @@ use phoebis_bus::{
     AccountSelected, AttemptOutcome, AutoMode, Bus, Classifier, ClientFacts, CooldownSet,
     DiagnosticsSource, Event, Fork, GuardrailMatch, Interruption, Kind, Origin, Outcome,
     RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts,
-    ResponseHead as BusHead, Usage,
+    ResponseHead as BusHead, Usage, ACCOUNT_CANCELED_CODE, CLIENT_GONE_CODE, ROUTER_SHUTDOWN_CODE,
 };
 use phoebis_guardrails::{evaluate_all, Evaluation, HeaderLookup, Lookup, RequestFacts};
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
@@ -327,8 +327,8 @@ pub type ShutdownMark = Arc<AtomicBool>;
 /// `router_shutdown` while the mark is set, else `client_gone`.
 pub(crate) fn cut_code(mark: Option<&ShutdownMark>) -> &'static str {
     match mark {
-        Some(mark) if mark.load(Ordering::SeqCst) => "router_shutdown",
-        _ => "client_gone",
+        Some(mark) if mark.load(Ordering::SeqCst) => ROUTER_SHUTDOWN_CODE,
+        _ => CLIENT_GONE_CODE,
     }
 }
 
@@ -990,7 +990,7 @@ fn inflate_request(raw: &[u8], bound: usize) -> Result<Vec<u8>, RelayError> {
 /// The request outcome a local answer implies; a body that ends badly overrides it at the end of the body.
 fn outcome_of(outcome: &RelayOutcome) -> Outcome {
     match outcome.error_code.as_deref() {
-        Some("account_canceled") => Outcome::Canceled,
+        Some(ACCOUNT_CANCELED_CODE) => Outcome::Canceled,
         // A probe answered on its pinned member's standing (`Exhaustion::Pinned`, the one untimed answer that
         // names an obstacle) is refused for the probe alone, whatever its siblings hold: conclusive, and no
         // exhaustion of the pool for the attention gauge or the rollups to count.
@@ -3086,7 +3086,7 @@ impl Relay {
                         None,
                         None,
                         admitted.client_version.clone(),
-                        Some("account_canceled"),
+                        Some(ACCOUNT_CANCELED_CODE),
                         pin_epoch,
                         None,
                         cache_ttl_ms(ttl),
@@ -3174,7 +3174,7 @@ impl Relay {
                             None,
                             None,
                             admitted.client_version.clone(),
-                            Some("account_canceled"),
+                            Some(ACCOUNT_CANCELED_CODE),
                             pin_epoch,
                             None,
                             cache_ttl_ms(ttl),
@@ -4464,7 +4464,7 @@ impl Relay {
             None,
             None,
             ctx.client_version.clone(),
-            Some("account_canceled"),
+            Some(ACCOUNT_CANCELED_CODE),
             ctx.pin_epoch,
             None,
             ctx.cache_ttl_ms,

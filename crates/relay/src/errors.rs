@@ -469,7 +469,7 @@ pub fn no_store(mut response: Response) -> Response {
 pub(crate) const ACCOUNT_CANCELED: Failure = Failure {
     status: StatusCode::SERVICE_UNAVAILABLE,
     error_type: "api_error",
-    code: "account_canceled",
+    code: phoebis_bus::ACCOUNT_CANCELED_CODE,
     message: Cow::Borrowed("the bound account was disconnected while the request was in flight"),
     retry_after: None,
     no_retry: false,

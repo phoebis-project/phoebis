@@ -15,8 +15,9 @@ pub use event::{
     header_published, user_agent_cut, user_agent_of, AccountSelected, AttemptOutcome, AutoMode,
     Classifier, ClientFacts, CooldownSet, DiagnosticsSource, Event, Fork, GuardrailMatch,
     Interruption, Kind, Origin, Outcome, Phase, RequestComplete, RequestObserved, RequestShape,
-    ResponseChunk, ResponseFacts, ResponseHead, Usage, BODY_SHAPE_ERROR_CODE, HEADER_DENYLIST,
-    NEVER_COPIED, OTHER_CLIENT, USER_AGENT_MAX_BYTES,
+    ResponseChunk, ResponseFacts, ResponseHead, Usage, ACCOUNT_CANCELED_CODE,
+    BODY_SHAPE_ERROR_CODE, CLIENT_GONE_CODE, HEADER_DENYLIST, NEVER_COPIED, OTHER_CLIENT,
+    ROUTER_SHUTDOWN_CODE, USER_AGENT_MAX_BYTES,
 };
 
 /// Deep enough to hold a whole streamed answer's chunks behind a consumer that is busy for a moment; a
