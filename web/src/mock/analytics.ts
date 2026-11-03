@@ -3,7 +3,7 @@ import type {
   Account, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, QuotaHistory, Reconciliation, ReconciliationsAnswer,
   RefusalCategoriesAnswer, RequestKind, RequestLog, RewritePoint, RewritesAnswer, UnusedAllowanceAnswer, WastedProbeReason,
 } from '@/api/types';
-import { bucketShare } from '@/lib/analytics';
+import { bucketShare, keptWarmTokens } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { anchorTier, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf, type Usage } from '@/lib/costs';
@@ -193,7 +193,7 @@ function costSharesOf(counted: HourlyRollup[]): Record<string, number> {
 
 /** A row's kept-warm counts as the usage their saving prices: each count the write it avoided at its TTL, and the two
  *  together the read the requests paid instead. */
-const keptUsageOf = (r: HourlyRollup): Usage => ({ cacheRead: r.keptWarm.tokens1h + r.keptWarm.tokens5m, cacheWrite1h: r.keptWarm.tokens1h, cacheWrite5m: r.keptWarm.tokens5m, input: 0, output: 0 });
+const keptUsageOf = (r: HourlyRollup): Usage => ({ cacheRead: keptWarmTokens(r.keptWarm), cacheWrite1h: r.keptWarm.tokens1h, cacheWrite5m: r.keptWarm.tokens5m, input: 0, output: 0 });
 
 const TOKEN_KINDS: Record<keyof CostSplit, (u: Usage) => Usage> = {
   cacheRead: (u) => ({ cacheRead: u.cacheRead, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }),
@@ -263,7 +263,7 @@ function equivalentsOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[]):
   }
   let saving: number | null = 0;
   for (const r of planRows(counted)) {
-    if (r.keptWarm.tokens1h + r.keptWarm.tokens5m === 0) continue;
+    if (keptWarmTokens(r.keptWarm) === 0) continue;
     const { keptRead, keptWrite } = figuresOf(r);
     saving = keptRead === null || keptWrite === null ? null : plus(saving, keptWrite - keptRead);
   }

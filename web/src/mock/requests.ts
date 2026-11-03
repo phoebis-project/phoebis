@@ -4,6 +4,7 @@ import type {
   PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
 import type { GuardrailMatch } from '@/api/types';
+import { keptWarmTokens } from '@/lib/analytics';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
 import { anchorTier, fundingOf, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf } from '@/lib/costs';
@@ -236,7 +237,7 @@ function cellsAtPrompt(model: string, prompt: number, fast: boolean, at: string 
 function savingUsdOf(model: string, kept: { tokens1h: number; tokens5m: number }, prompt: number, fast: boolean, at: string | number): number {
   const p = cellsAtPrompt(model, prompt, fast, at);
   if (p === null) return 0;
-  return (kept.tokens5m * p.cacheWrite5mPerM + kept.tokens1h * p.cacheWrite1hPerM - (kept.tokens1h + kept.tokens5m) * p.cacheReadPerM) / 1_000_000;
+  return (kept.tokens5m * p.cacheWrite5mPerM + kept.tokens1h * p.cacheWrite1hPerM - keptWarmTokens(kept) * p.cacheReadPerM) / 1_000_000;
 }
 
 /** A kept request's read under the TTL its own write took, five minutes for a request that wrote none. */
