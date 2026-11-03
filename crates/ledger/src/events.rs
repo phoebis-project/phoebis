@@ -25,7 +25,6 @@ use crate::query::{
 };
 use crate::record::{CacheMapWrite, DecisionRow, EventRecord};
 use crate::task::Ledger;
-use crate::LedgerDb;
 
 /// Rows read per mirror tick; a registry busier than this per tick is caught up on the next.
 const MIRROR_BATCH: usize = 500;
@@ -874,7 +873,6 @@ impl MirrorBaseline {
 }
 
 pub fn spawn_event_mirror(
-    db: Arc<LedgerDb>,
     ledger: Ledger,
     store: Arc<Store>,
     router: RouterHandle,
@@ -895,7 +893,7 @@ pub fn spawn_event_mirror(
         gone: HashMap::new(),
     };
     // Read before this run's writer lands anything, so it names the previous run's newest row.
-    let down_since = match db.read_blocking(|conn| Ok(newest_row_at(conn)?)) {
+    let down_since = match ledger.db().read_blocking(|conn| Ok(newest_row_at(conn)?)) {
         Ok(down_since) => down_since,
         Err(error) => {
             tracing::warn!(

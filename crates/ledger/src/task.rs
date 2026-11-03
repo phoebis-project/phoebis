@@ -402,7 +402,6 @@ pub fn spawn(
         start_landed
     });
     let mirror = spawn_event_mirror(
-        db.clone(),
         ledger.clone(),
         store,
         router.clone(),
@@ -410,26 +409,18 @@ pub fn spawn(
         config.event_poll,
         config.mirror_baseline.take(),
     );
-    ledger.tasks.lock().expect(TASKS_POISONED).push(mirror);
+    ledger.track(mirror);
     let subscriber = bus.subscribe("ledger", Delivery::Durable);
     let assembling = ledger.clone();
     let assembler_stop = stopped.clone();
-    let assembler_clock = clock.clone();
     let expire_interval = config.expire_interval;
     let assembler = spawn_subscriber(subscriber, move |subscriber| {
-        assemble(
-            subscriber,
-            assembling,
-            assembler_clock,
-            expire_interval,
-            assembler_stop,
-        )
+        assemble(subscriber, assembling, expire_interval, assembler_stop)
     });
     // The purge has its own task and connection so a pass never takes the writer's lock or turn: the cut runs
     // in slices, so a write waits behind one slice at most and never on a whole day's deletion.
     let purging = ledger.clone();
     let purge_router = router.clone();
-    let purge_clock = clock.clone();
     let purge_config = config.clone();
     let purge_pricing = pricing.clone();
     let purge_tables = tables.clone();
@@ -442,7 +433,13 @@ pub fn spawn(
         // the fold waits for its commit, at most one purge interval, since a writer held on a full disk must not keep
         // the purge that frees room waiting.
         let _ = tokio::time::timeout(purge_config.purge_interval, start_committed).await;
-        fold_conditions(purging.db(), &purge_pricing, &purge_tables, purge_clock()).await;
+        fold_conditions(
+            purging.db(),
+            &purge_pricing,
+            &purge_tables,
+            (purging.clock)(),
+        )
+        .await;
         purging
             .stats
             .condition_folds
@@ -454,11 +451,17 @@ pub fn spawn(
                 &purge_store,
                 &purge_config,
                 &purge_router,
-                purge_clock(),
+                (purging.clock)(),
             )
             .await;
             purging.stats.purge_passes.fetch_add(1, Ordering::Relaxed);
-            fold_conditions(purging.db(), &purge_pricing, &purge_tables, purge_clock()).await;
+            fold_conditions(
+                purging.db(),
+                &purge_pricing,
+                &purge_tables,
+                (purging.clock)(),
+            )
+            .await;
             purging
                 .stats
                 .condition_folds
@@ -509,11 +512,10 @@ async fn ended(handle: &mut Option<tokio::task::JoinHandle<()>>) {
 async fn assemble(
     mut subscriber: Subscriber,
     ledger: Ledger,
-    clock: Clock,
     expire_interval: Duration,
     mut stopped: watch::Receiver<bool>,
 ) {
-    let mut assembler = Assembler::new(clock.clone());
+    let mut assembler = Assembler::new(ledger.clock.clone());
     let mut expire = tokio::time::interval(expire_interval);
     expire.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -523,7 +525,7 @@ async fn assemble(
                 None => break,
             },
             _ = expire.tick() => {
-                let now = clock();
+                let now = (ledger.clock)();
                 for id in assembler.expire(now) {
                     // The ledger names it so the system page's gap list has a row for it rather than a count
                     // with nothing behind it.
