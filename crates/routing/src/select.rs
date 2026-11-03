@@ -1990,16 +1990,16 @@ fn run(
     // names the account the strategy would have chosen. A pinned request never gets here: step 5 renewed it.
     // A token count is bound to no cap: it occupies no slot (the task charges none for it), so the cap it would
     // be held for is one it never fills. It keeps the whole set and lands where its pin or the strategy says.
-    let under_cap: Vec<&Candidate> = selection_set
+    let free: Vec<&Candidate> = selection_set
         .iter()
         .copied()
         .filter(|c| request.count || under_cap(state, pool, &c.account_id))
         .collect();
-    let held = under_cap.is_empty();
+    let held = free.is_empty();
     let at_cap = if held && !selection_set.is_empty() {
         Fact::text("at_cap", "held")
     } else {
-        narrow(&mut selection_set, &mut skipped, under_cap, "at_cap", rec)
+        narrow(&mut selection_set, &mut skipped, free, "at_cap", rec)
     };
     partitions.push(at_cap);
     // The fit is a preference, not a refusal: with no account fitting the request goes where the strategy picks
@@ -2297,7 +2297,7 @@ fn run(
         .filter(|account| account != &chosen.account_id);
     // Step 7: a fresh pin with a fresh epoch. A token count touches no cache, so it creates none: a pin it left
     // on an account at its cap would carry the agent's next message past the cap, since a renewal never reads it.
-    let pin_ref = session.filter(|_| !request.count).map(|session| {
+    let handed = session.filter(|_| !request.count).map(|session| {
         let epoch = state.fresh_epoch();
         // A failover's landing carries the row its source lost and remembers the source as a shed move does.
         let failed_over = request.failed_over.as_ref();
@@ -2358,7 +2358,7 @@ fn run(
         SelectResult::Selected(Selection {
             account: selected_row(snapshot, &chosen.account_id),
             upstream_model: chosen.upstream_model.clone(),
-            pin: pin_ref,
+            pin: handed,
             migrated,
             in_overage: state.in_overage(&chosen.account_id, request.now, request.fallback_ms),
             trace: SelectionTrace {
