@@ -478,6 +478,11 @@ test('a session read with no answer within the deadline fails as a read that nev
   }
 });
 
+test('a session body that is not JSON raises its parse error rather than reading as no answer', async () => {
+  stub(() => ({ headers: { get: () => null }, ok: true, status: 200, text: async () => '<html>' }));
+  await assert.rejects(new HttpApi().getSession(), (e) => e instanceof SyntaxError && !(e instanceof ApiError));
+});
+
 test('a GET with no answer within the deadline fails as a read that never answered', async () => {
   setHooks({ onFailure: () => undefined, onForbidden: () => undefined, onRecovered: () => undefined, onUnauthorized: () => undefined });
   const time = fakeClock();
