@@ -759,8 +759,8 @@ function liftCooldowns(rows: RequestLog[]) {
       if (!set) continue;
       const setAt = Date.parse(a.startedAt) + (a.durationMs ?? 0);
       const until = Date.parse(set.until);
-      const holds = (u: (typeof uses)[number]) => u.r !== r && u.accountId === a.accountId && coolingHolds(set.reason, r.canonicalModel, u.model, u.fast);
-      const next = uses.find((u) => holds(u) && u.at >= setAt && u.at < until);
+      const wouldHold = (u: (typeof uses)[number]) => u.r !== r && u.accountId === a.accountId && coolingHolds(set.reason, r.canonicalModel, u.model, u.fast);
+      const next = uses.find((u) => wouldHold(u) && u.at >= setAt && u.at < until);
       if (next) a.cooldownSet = { ...set, until: iso(next.at) };
     }
   }
@@ -1626,11 +1626,11 @@ function supportedRule(r: RequestLog, from: string): PinMigrationReason | null {
   const inOverage = (id: string) => id === 'nightly' && at >= OVERAGE_FROM;
   const spent = (windows: AttemptWindow[]) => spentWindows(windows).length > 0;
   const known = head.windows.some((w) => w.id === '5h' && w.utilization !== null) && head.windows.some((w) => w.id === '7d' && w.utilization !== null);
-  const holds = registryKind(head.accountId) === 'api_key' || (known && !spent(head.windows));
+  const headHolds = registryKind(head.accountId) === 'api_key' || (known && !spent(head.windows));
   // The gate answers a destination that does not fit where no sibling at room fits, so any sibling the rule keeps can
   // take the move, and the record reads its fitting rivals full.
-  const toPlan = registryKind(head.accountId) === 'oauth' && !inOverage(head.accountId) && holds;
-  if (!fast && pool.migrateWhenSpent && spent(oauthWindows(from, at, () => SERVED_FACTOR))) return holds && !(pool.overagePolicy === 'prefer_plan' && inOverage(head.accountId)) ? 'spent' : null;
+  const toPlan = registryKind(head.accountId) === 'oauth' && !inOverage(head.accountId) && headHolds;
+  if (!fast && pool.migrateWhenSpent && spent(oauthWindows(from, at, () => SERVED_FACTOR))) return headHolds && !(pool.overagePolicy === 'prefer_plan' && inOverage(head.accountId)) ? 'spent' : null;
   if (!fast && pool.overagePolicy === 'prefer_plan' && registryKind(from) === 'oauth' && inOverage(from)) return toPlan ? 'overage' : null;
   if (registryKind(from) === 'api_key') return toPlan && at - pinned.createdAt >= pool.shedDwellSeconds * 1_000 ? 'return_to_plan' : null;
   return null;
