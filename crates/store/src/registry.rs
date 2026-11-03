@@ -872,12 +872,11 @@ impl Store {
             }
             None => Vec::new(),
         };
-        let pairs = pool_pairs(&before, row);
-        let diff = match guardrails {
-            Some(ids) => with_guardrails_change(pairs, &held, ids)?,
-            None => pairs,
-        };
-        let pairs_changed = diff != "{}";
+        let mut pairs = pool_pairs(&before, row);
+        if let Some(ids) = guardrails {
+            with_guardrails_change(&mut pairs, &held, ids);
+        }
+        let pairs_changed = !pairs.is_empty();
         // The policy's members ride the pairs. The compare reads both texts parsed, so a key order or a whitespace
         // alone writes nothing. Two texts that both fail to parse count as no change, and no route writes such a text.
         let policy_changed = parsed(&before.keepalive_json) != parsed(&row.keepalive_json);
@@ -904,6 +903,7 @@ impl Store {
         }
         // A save that changed the member list alone records that list's row and no empty pool edit beside it.
         if pairs_changed || policy_changed {
+            let diff = serde_json::Value::Object(pairs).to_string();
             record_change(&tx, at, actor, "pool_updated", &row.id, &diff)?;
         }
         if let Some(members) = members {
@@ -1122,11 +1122,11 @@ impl Store {
         }
         // Read back rather than taken from `row`: the edit leaves the display prefix, which the pairs name too.
         let after = tx.query_row(&key_row, params![row.id], row_to_key)?;
-        let pairs = key_pairs(&before, &after);
-        let diff = match guardrails {
-            Some(ids) => with_guardrails_change(pairs, &held, ids)?,
-            None => pairs,
-        };
+        let mut pairs = key_pairs(&before, &after);
+        if let Some(ids) = guardrails {
+            with_guardrails_change(&mut pairs, &held, ids);
+        }
+        let diff = serde_json::Value::Object(pairs).to_string();
         record_change(&tx, at, actor, "key_updated", &row.id, &diff)?;
         if let Some(ids) = guardrails {
             set_subject_guardrails_in(&tx, &AttachmentSubject::Key(row.id.clone()), ids, at)?;
@@ -1824,21 +1824,16 @@ fn check_guardrail_bound(
 /// A pool or key diff with the subject's list as a `from` and `to` pair, present only when the list changed, so the
 /// member reads like a changed field.
 fn with_guardrails_change(
-    diff: String,
+    pairs: &mut serde_json::Map<String, serde_json::Value>,
     from: &[String],
     to: &[String],
-) -> Result<String, StoreError> {
-    if from == to {
-        return Ok(diff);
-    }
-    let mut value: serde_json::Value = serde_json::from_str(&diff)?;
-    if let Some(members) = value.as_object_mut() {
-        members.insert(
+) {
+    if from != to {
+        pairs.insert(
             "guardrails".into(),
             serde_json::json!({ "from": from, "to": to }),
         );
     }
-    Ok(value.to_string())
 }
 
 /// The stored member rows of a pool in the order the write inserted them, the shape `MemberWrite` compares against.
@@ -2108,9 +2103,9 @@ fn pool_diff(row: &PoolRow) -> String {
 }
 
 /// The pairs of the fields whose value differs between `before` and `after`, over the fields `pool_diff` names,
-/// `{}` when none does.
-fn pool_pairs(before: &PoolRow, after: &PoolRow) -> String {
-    serde_json::Value::Object(changed(&pool_fields(before), &pool_fields(after))).to_string()
+/// empty when none does.
+fn pool_pairs(before: &PoolRow, after: &PoolRow) -> serde_json::Map<String, serde_json::Value> {
+    changed(&pool_fields(before), &pool_fields(after))
 }
 
 /// The pool's fields the change rows name, with each member of the stored keepalive policy under
@@ -2167,8 +2162,8 @@ fn key_diff(row: &ApiKeyRow) -> String {
     key_fields(row).to_string()
 }
 
-fn key_pairs(before: &ApiKeyRow, after: &ApiKeyRow) -> String {
-    serde_json::Value::Object(changed(&key_fields(before), &key_fields(after))).to_string()
+fn key_pairs(before: &ApiKeyRow, after: &ApiKeyRow) -> serde_json::Map<String, serde_json::Value> {
+    changed(&key_fields(before), &key_fields(after))
 }
 
 /// Never the digest: the change log is read by the ledger and the UI.
