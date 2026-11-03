@@ -224,6 +224,16 @@ impl AffinityMap {
             .unwrap_or(model)
     }
 
+    /// `canonical` applied to a lane's model part, as `RoutingState::canonical_lane` applies it: the map files an
+    /// entry under the resolved model, so its lane names that model too, and an answer selected before the
+    /// resolution landed still reports the spelling admission read.
+    fn canonical_lane(&self, lane: &str) -> String {
+        match crate::select::lane_parts(lane)[3] {
+            Some(model) => format!("{}{}", self.canonical(model), &lane[model.len()..]),
+            None => lane.to_string(),
+        }
+    }
+
     /// Learns a folded spelling's dated id, fed at load and when a resolution lands. Never rekeys an entry
     /// already written under the old spelling; it ages out through the purge instead.
     pub fn learn_resolution(&mut self, spelling: &str, dated_id: &str) {
@@ -289,6 +299,7 @@ impl AffinityMap {
     /// Upserts the report's boundaries; answers the rows to persist (new or moved).
     pub fn record(&mut self, report: &AffinityReport) -> Vec<AffinityRow> {
         let canonical_model = self.canonical(&report.canonical_model).to_string();
+        let lane = self.canonical_lane(&report.lane);
         let root = report.root.as_str();
         // The upstream's own TTL beats the marker's for the boundaries the response wrote, when every marker of the
         // request carried one TTL and the split says the cache wrote at the other: the markers are what the request
@@ -329,6 +340,7 @@ impl AffinityMap {
                 boundary,
                 AffinityChain::Message,
                 ordinal(index),
+                &lane,
                 report,
                 root,
                 message_warmth,
@@ -345,6 +357,7 @@ impl AffinityMap {
                     boundary,
                     AffinityChain::Static,
                     ordinal(index),
+                    &lane,
                     report,
                     root,
                     static_ttl_ms.map(|ttl| (ttl, size)),
@@ -437,6 +450,7 @@ impl AffinityMap {
         hash: &str,
         chain: AffinityChain,
         depth: u32,
+        lane: &str,
         report: &AffinityReport,
         root: &str,
         warmth: Option<(i64, u64)>,
@@ -456,7 +470,7 @@ impl AffinityMap {
                     entry.written_at = report.now;
                     entry.ttl_ms = ttl_ms;
                     entry.prefix_tokens = prefix_tokens;
-                } else if !crate::select::same_lane(&entry.lane, &report.lane) {
+                } else if !crate::select::same_lane(&entry.lane, lane) {
                     entry.ttl_ms = 0;
                     entry.written_at = report.now;
                 } else {
@@ -482,7 +496,7 @@ impl AffinityMap {
                 entry.incarnation = report.incarnation;
                 // One entry holds one lane: a conversation that switched lanes forgets the earlier lane's cache here,
                 // which a lane change reads as cold anyway.
-                entry.lane.clone_from(&report.lane);
+                lane.clone_into(&mut entry.lane);
                 if let Some(hashes) = self.dirty.get_mut(model) {
                     if !hashes.contains(hash) {
                         hashes.insert(hash.to_string());
@@ -516,7 +530,7 @@ impl AffinityMap {
                 .filter(|_| entry_root == root)
                 .map(str::to_string),
             root: entry_root,
-            lane: report.lane.clone(),
+            lane: lane.to_string(),
             depth,
         };
         let row = row_of(model, hash.to_string(), &entry);

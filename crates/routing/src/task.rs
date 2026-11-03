@@ -3488,16 +3488,13 @@ impl Task {
 
     fn report(&mut self, report: Report) {
         match report {
-            Report::Affinity(mut report) => {
+            Report::Affinity(report) => {
                 // The account's next holder passes the report over, so it writes no row and its decision's cache map
                 // reads empty, as an answer's that wrote none does.
                 if self.moved_past(&report.account_id, report.incarnation) {
                     self.emit(cache_map_written(&report, &[]));
                     return;
                 }
-                // The map files the entry under the resolved model, so its lane names that model too: an answer
-                // selected before the resolution landed still reports the spelling admission read.
-                report.lane = self.state.canonical_lane(&report.lane);
                 let rows = self
                     .state
                     .affinity()
