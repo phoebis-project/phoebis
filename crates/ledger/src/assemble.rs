@@ -12,7 +12,7 @@ use phoebis_bus::{
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::UnifiedHeaders;
-use phoebis_routing::{LoadCounts, MODEL_REJECTED_REASON};
+use phoebis_routing::{LoadCounts, HOUR_MS, MODEL_REJECTED_REASON};
 use phoebis_store::AccountKind;
 use serde_json::json;
 
@@ -605,7 +605,7 @@ fn finish(entry: InFlight, mut complete: RequestComplete, now: i64) -> Vec<Recor
         // The request is never cut: it is the bus's whole `Bytes`, read once at observation.
         request_len_seen: request_len,
         response_len_seen,
-        expires_at: complete.finished_at + observed.body_capture_hours as i64 * 3_600_000,
+        expires_at: complete.finished_at + observed.body_capture_hours as i64 * HOUR_MS,
     });
     // An incomplete trail keeps the completion's attempt number, so a refusal after an attempt whose selection the
     // bus lost keeps its count and stays a rejected request.
