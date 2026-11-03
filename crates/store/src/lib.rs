@@ -1431,15 +1431,7 @@ fn check_schema(conn: &Connection) -> Result<u32, StoreError> {
 /// above runs before `schema::SCHEMA` creates it. A `meta` without a `schema_version` row reads as
 /// version 1, the baseline `schema::SCHEMA` creates.
 fn read_version(conn: &Connection) -> Result<u32, StoreError> {
-    let has_meta: bool = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'",
-            [],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some();
-    if !has_meta {
+    if !has_table(conn, "meta")? {
         return Ok(0);
     }
     let stored: Option<String> = conn
