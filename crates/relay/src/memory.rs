@@ -757,14 +757,7 @@ fn evict_if_full(inner: &mut Inner, cap: usize) {
     let Some(oldest) = oldest else {
         return;
     };
-    let entry = inner
-        .entries
-        .remove(&oldest)
-        .expect("just found under the lock");
-    if let Some(sequence) = inner.dirty.remove(&oldest) {
-        let record = entry.record();
-        stash_pending(inner, cap, oldest, record, sequence);
-    }
+    retire(inner, cap, oldest);
 }
 
 fn purge_locked(inner: &mut Inner, now: i64, idle_ms: i64, cap: usize) {
@@ -779,14 +772,20 @@ fn purge_locked(inner: &mut Inner, now: i64, idle_ms: i64, cap: usize) {
         .map(|(k, _)| k.clone())
         .collect();
     for key in idle {
-        let entry = inner
-            .entries
-            .remove(&key)
-            .expect("just found under the lock");
-        if let Some(sequence) = inner.dirty.remove(&key) {
-            let record = entry.record();
-            stash_pending(inner, cap, key, record, sequence);
-        }
+        retire(inner, cap, key);
+    }
+}
+
+/// Takes a resident key out of the map. One with an unflushed change goes to the overlay under the sequence of
+/// its latest write rather than being lost.
+fn retire(inner: &mut Inner, cap: usize, key: MemoryKey) {
+    let entry = inner
+        .entries
+        .remove(&key)
+        .expect("just found under the lock");
+    if let Some(sequence) = inner.dirty.remove(&key) {
+        let record = entry.record();
+        stash_pending(inner, cap, key, record, sequence);
     }
 }
 
