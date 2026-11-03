@@ -2,6 +2,8 @@
 //! subagent turn take, and the per-model overrides on the two; a keepalive probe replays its turn under the
 //! branch of the agent it warms.
 
+use serde::Deserialize;
+
 /// The two TTLs the API accepts. Serialized as the wire spells them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum CacheTtl {
@@ -177,8 +179,7 @@ impl CacheTtlPolicy {
                 "cache_ttl policy must be a JSON object".into(),
             ));
         }
-        let raw: RawPolicy =
-            serde_json::from_value(raw.clone()).map_err(|e| CacheTtlError::Shape(e.to_string()))?;
+        let raw = RawPolicy::deserialize(raw).map_err(|e| CacheTtlError::Shape(e.to_string()))?;
         let plan = TtlRules::complete(raw.plan.unwrap_or_default(), &TtlRules::plan_default());
         let metered = TtlRules::complete(
             raw.metered.unwrap_or_default(),
