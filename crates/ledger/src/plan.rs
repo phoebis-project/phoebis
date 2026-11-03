@@ -15,7 +15,7 @@ use jiff::Timestamp;
 use phoebis_routing::{window_for, BandSegment, PinUsage, RateTable, Rates, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::PinBurn;
 
-use crate::pricing::Speed;
+use crate::pricing::{Revisions, Speed};
 use crate::rollup::{
     BILLED_FUNDING, FAST_FUNDING, OVERAGE_FUNDING, PLAN_FUNDING, USAGE_BASED_FUNDING,
 };
@@ -944,18 +944,22 @@ fn version_of(canonical_model: &str) -> Vec<u32> {
     version.split('-').filter_map(|p| p.parse().ok()).collect()
 }
 
-/// The cost model's revisions sorted ascending by instant, with the instants precomputed at load so `in_force` is a
-/// binary search. Serializes with the unit first, then the revisions, as the file reads.
+/// The cost model's unit and revisions. Serializes with the unit first, then the revisions, as the file reads.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct CostRevisions {
     unit: Unit,
-    revisions: Vec<SubscriptionCosts>,
-    #[serde(skip)]
-    instants: Vec<i64>,
+    #[serde(flatten)]
+    revisions: Revisions<SubscriptionCosts>,
 }
 
-// `new` refuses an empty list, so a list never reads empty.
-#[allow(clippy::len_without_is_empty)]
+impl std::ops::Deref for CostRevisions {
+    type Target = Revisions<SubscriptionCosts>;
+
+    fn deref(&self) -> &Revisions<SubscriptionCosts> {
+        &self.revisions
+    }
+}
+
 impl CostRevisions {
     /// Sorts, refuses an empty list and two entries dated the same, and computes the instants. Each revision takes
     /// `unit`, the file's one unit, so the unit the envelope reports is the one every pricer reads its anchor off,
@@ -971,13 +975,9 @@ impl CostRevisions {
                 ..revision
             })
             .collect();
-        let dates: Vec<&str> = revisions.iter().map(|r| r.effective.as_str()).collect();
-        let instants = crate::pricing::sorted_instants(&dates).map_err(refuse)?;
-        let (instants, revisions) = crate::pricing::by_instant(instants, revisions);
         Ok(CostRevisions {
             unit,
-            revisions,
-            instants,
+            revisions: Revisions::new(revisions, |r| r.effective.as_str(), refuse)?,
         })
     }
 
@@ -1020,29 +1020,6 @@ impl CostRevisions {
     pub fn shipped() -> CostRevisions {
         CostRevisions::from_yaml(SHIPPED_SUBSCRIPTION_COSTS)
             .expect("the shipped subscription cost model parses")
-    }
-
-    /// The last entry whose instant is at or before `at_ms`, else the first.
-    pub fn in_force(&self, at_ms: i64) -> &SubscriptionCosts {
-        &self.revisions[crate::pricing::in_force_index(&self.instants, at_ms)]
-    }
-
-    pub fn latest(&self) -> &SubscriptionCosts {
-        &self.revisions[self.revisions.len() - 1]
-    }
-
-    /// The first entry dated after `now_ms` that `in_force` does not answer, held until its instant.
-    pub fn pending(&self, now_ms: i64) -> Option<&SubscriptionCosts> {
-        self.revisions
-            .get(crate::pricing::pending_index(&self.instants, now_ms))
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &SubscriptionCosts> {
-        self.revisions.iter()
-    }
-
-    pub fn len(&self) -> usize {
-        self.revisions.len()
     }
 }
 

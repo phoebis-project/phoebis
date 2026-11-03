@@ -111,28 +111,79 @@ struct PriceFile {
     revisions: Vec<PriceTable>,
 }
 
-/// The file's revisions sorted ascending by instant, with the instants precomputed at load so `in_force` is a
-/// binary search, and the file's source (`shipped`, `file` or `test`). Serializes as the file's one key.
+/// A file's revisions sorted ascending by instant, with the instants precomputed at load so `in_force` is a binary
+/// search. Serializes as its one `revisions` key. The price list and the cost model each hold one.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub struct PriceRevisions {
-    revisions: Vec<PriceTable>,
+pub struct Revisions<T> {
+    revisions: Vec<T>,
     #[serde(skip)]
     instants: Vec<i64>,
-    #[serde(skip)]
-    pub source: String,
 }
 
 // `new` refuses an empty list, so a list never reads empty.
 #[allow(clippy::len_without_is_empty)]
+impl<T> Revisions<T> {
+    /// Sorts by each entry's `effective` date, refuses an empty list, a date not in `YYYY-MM-DD` form and two entries
+    /// dated the same through `refuse`, and computes the instants.
+    pub(crate) fn new(
+        revisions: Vec<T>,
+        effective: impl Fn(&T) -> &str,
+        refuse: impl FnOnce(String) -> LedgerError,
+    ) -> Result<Revisions<T>, LedgerError> {
+        let dates: Vec<&str> = revisions.iter().map(effective).collect();
+        let instants = sorted_instants(&dates).map_err(refuse)?;
+        let (instants, revisions) = by_instant(instants, revisions);
+        Ok(Revisions {
+            revisions,
+            instants,
+        })
+    }
+
+    /// The last entry whose instant is at or before `at_ms`, else the first.
+    pub fn in_force(&self, at_ms: i64) -> &T {
+        &self.revisions[in_force_index(&self.instants, at_ms)]
+    }
+
+    pub fn latest(&self) -> &T {
+        &self.revisions[self.revisions.len() - 1]
+    }
+
+    /// The first entry dated after `now_ms` that `in_force` does not answer, held until its instant.
+    pub fn pending(&self, now_ms: i64) -> Option<&T> {
+        self.revisions.get(pending_index(&self.instants, now_ms))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.revisions.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.revisions.len()
+    }
+}
+
+/// The price file's revisions and its source (`shipped`, `file` or `test`). Serializes as the file's one key.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct PriceRevisions {
+    #[serde(flatten)]
+    revisions: Revisions<PriceTable>,
+    #[serde(skip)]
+    pub source: String,
+}
+
+impl std::ops::Deref for PriceRevisions {
+    type Target = Revisions<PriceTable>;
+
+    fn deref(&self) -> &Revisions<PriceTable> {
+        &self.revisions
+    }
+}
+
 impl PriceRevisions {
     /// Sorts, refuses an empty list and two entries dated the same, and computes the instants.
     pub fn new(revisions: Vec<PriceTable>, source: &str) -> Result<PriceRevisions, LedgerError> {
-        let dates: Vec<&str> = revisions.iter().map(|r| r.effective.as_str()).collect();
-        let instants = sorted_instants(&dates).map_err(LedgerError::Yaml)?;
-        let (instants, revisions) = by_instant(instants, revisions);
         Ok(PriceRevisions {
-            revisions,
-            instants,
+            revisions: Revisions::new(revisions, |r| r.effective.as_str(), LedgerError::Yaml)?,
             source: source.into(),
         })
     }
@@ -158,28 +209,6 @@ impl PriceRevisions {
     pub fn shipped() -> PriceRevisions {
         PriceRevisions::from_yaml(SHIPPED_API_PRICES, "shipped")
             .expect("the shipped price file parses")
-    }
-
-    /// The last entry whose instant is at or before `at_ms`, else the first.
-    pub fn in_force(&self, at_ms: i64) -> &PriceTable {
-        &self.revisions[in_force_index(&self.instants, at_ms)]
-    }
-
-    pub fn latest(&self) -> &PriceTable {
-        &self.revisions[self.revisions.len() - 1]
-    }
-
-    /// The first entry dated after `now_ms` that `in_force` does not answer, held until its instant.
-    pub fn pending(&self, now_ms: i64) -> Option<&PriceTable> {
-        self.revisions.get(pending_index(&self.instants, now_ms))
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &PriceTable> {
-        self.revisions.iter()
-    }
-
-    pub fn len(&self) -> usize {
-        self.revisions.len()
     }
 
     /// The dearest listed standard cell of each type in the revision in force at `at_ms` (what `rate_table().fallback`

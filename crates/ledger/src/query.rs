@@ -3237,7 +3237,7 @@ pub fn revision_spans(
         .collect();
     let cost_instants: Vec<i64> = costs
         .into_iter()
-        .flat_map(CostRevisions::iter)
+        .flat_map(|costs| costs.iter())
         .filter_map(|table| effective_instant(&table.effective))
         .collect();
     // Before a list's first entry `in_force` already reads that entry, so only the later entries move a revision.
