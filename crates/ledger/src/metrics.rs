@@ -277,6 +277,7 @@ impl Metrics {
         let mut out = String::new();
         for (name, kind) in FAMILIES.iter().copied() {
             out.push_str(&format!("# TYPE {name} {kind}\n"));
+            let line = |value: u64| format!("{name} {value}\n");
             match name {
                 "phoebis_attempts_total"
                 | "phoebis_keepalive_chain_contradictions_total"
@@ -297,82 +298,58 @@ impl Metrics {
                     }
                 }
                 "phoebis_ledger_behind_refusals_total" => {
-                    out.push_str(&format!(
-                        "phoebis_ledger_behind_refusals_total {}\n",
-                        gauges.ledger_behind_refusals
-                    ));
+                    out.push_str(&line(gauges.ledger_behind_refusals));
                 }
                 "phoebis_ledger_degraded" => {
-                    out.push_str(&format!(
-                        "phoebis_ledger_degraded {}\n",
-                        u8::from(gauges.ledger_degraded)
-                    ));
+                    out.push_str(&line(u64::from(gauges.ledger_degraded)));
                 }
                 "phoebis_ledger_parked_priced_total" => {
-                    out.push_str(&format!(
-                        "phoebis_ledger_parked_priced_total {}\n",
-                        gauges.ledger_parked_priced
-                    ));
+                    out.push_str(&line(gauges.ledger_parked_priced));
                 }
                 "phoebis_ledger_queued" => {
-                    out.push_str(&format!("phoebis_ledger_queued {}\n", gauges.ledger_queued));
+                    out.push_str(&line(gauges.ledger_queued));
                 }
                 "phoebis_pricing_unknown_model_total" => {
-                    out.push_str(&format!(
-                        "phoebis_pricing_unknown_model_total {pricing_unknown}\n"
-                    ));
+                    out.push_str(&line(pricing_unknown));
                 }
                 "phoebis_attention" => {
                     // The kind is one of the reader's own static names, so only the subject needs escaping.
                     for (kind, subject, holds) in &gauges.attention.conditions {
                         out.push_str(&format!(
-                            "phoebis_attention{{kind=\"{kind}\",subject=\"{}\"}} {}\n",
+                            "{name}{{kind=\"{kind}\",subject=\"{}\"}} {}\n",
                             escape(subject),
                             u8::from(*holds)
                         ));
                     }
                 }
-                "phoebis_bus_dropped_total" => {
+                "phoebis_bus_dropped_total" | "phoebis_bus_subscriber_panics_total" => {
                     for (subscriber, stats) in bus {
+                        let counter = match name {
+                            "phoebis_bus_dropped_total" => &stats.dropped,
+                            _ => &stats.panics,
+                        };
                         out.push_str(&format!(
-                            "phoebis_bus_dropped_total{{subscriber=\"{}\"}} {}\n",
+                            "{name}{{subscriber=\"{}\"}} {}\n",
                             escape(subscriber),
-                            stats.dropped.load(std::sync::atomic::Ordering::Relaxed)
+                            counter.load(std::sync::atomic::Ordering::Relaxed)
                         ));
                     }
                 }
                 "phoebis_router_dropped_reports_total" => {
                     for (kind, dropped) in &gauges.dropped_reports {
-                        out.push_str(&format!(
-                            "phoebis_router_dropped_reports_total{{kind=\"{kind}\"}} {dropped}\n"
-                        ));
+                        out.push_str(&format!("{name}{{kind=\"{kind}\"}} {dropped}\n"));
                     }
                 }
                 "phoebis_router_writer_degraded" => {
-                    out.push_str(&format!(
-                        "phoebis_router_writer_degraded {}\n",
-                        u8::from(gauges.writer.degraded)
-                    ));
+                    out.push_str(&line(u64::from(gauges.writer.degraded)));
                 }
                 "phoebis_router_writer_depth" => {
-                    out.push_str(&format!(
-                        "phoebis_router_writer_depth {}\n",
-                        gauges.writer.depth
-                    ));
-                }
-                "phoebis_bus_subscriber_panics_total" => {
-                    for (subscriber, stats) in bus {
-                        out.push_str(&format!(
-                            "phoebis_bus_subscriber_panics_total{{subscriber=\"{}\"}} {}\n",
-                            escape(subscriber),
-                            stats.panics.load(std::sync::atomic::Ordering::Relaxed)
-                        ));
-                    }
+                    out.push_str(&line(gauges.writer.depth as u64));
                 }
                 "phoebis_account_cooldown_seconds" => {
                     for (account, scope, seconds) in &gauges.cooldowns {
                         out.push_str(&format!(
-                            "phoebis_account_cooldown_seconds{{account=\"{}\",scope=\"{}\"}} {seconds}\n",
+                            "{name}{{account=\"{}\",scope=\"{}\"}} {seconds}\n",
                             escape(account),
                             escape(scope)
                         ));
@@ -381,15 +358,14 @@ impl Metrics {
                 "phoebis_account_overage_in_use" => {
                     for (account, in_use) in &gauges.overage {
                         out.push_str(&format!(
-                            "phoebis_account_overage_in_use{{account=\"{}\"}} {}\n",
+                            "{name}{{account=\"{}\"}} {}\n",
                             escape(account),
                             u8::from(*in_use)
                         ));
                     }
                 }
                 "phoebis_account_ratelimit_utilization" => {
-                    if let Some(series) = inner.gauges.get("phoebis_account_ratelimit_utilization")
-                    {
+                    if let Some(series) = inner.gauges.get(name) {
                         for (labels, value) in series {
                             // A deleted account's last reading would otherwise scrape forever; the registry is
                             // the list of accounts that exist.
@@ -401,7 +377,7 @@ impl Metrics {
                                 continue;
                             }
                             out.push_str(&format!(
-                                "phoebis_account_ratelimit_utilization{} {}\n",
+                                "{name}{} {}\n",
                                 render_labels(labels),
                                 render_value(*value)
                             ));
@@ -416,17 +392,12 @@ impl Metrics {
                         ("idle", gauges.keepalive_agents.idle),
                         ("parked", gauges.keepalive_agents.parked),
                     ] {
-                        out.push_str(&format!(
-                            "phoebis_keepalive_agents{{state=\"{state}\"}} {count}\n"
-                        ));
+                        out.push_str(&format!("{name}{{state=\"{state}\"}} {count}\n"));
                     }
                 }
                 "phoebis_pins_active" => {
                     for (pool, count) in &gauges.pins_by_pool {
-                        out.push_str(&format!(
-                            "phoebis_pins_active{{pool=\"{}\"}} {count}\n",
-                            escape(pool)
-                        ));
+                        out.push_str(&format!("{name}{{pool=\"{}\"}} {count}\n", escape(pool)));
                     }
                 }
                 "phoebis_upstream_ttfb_seconds" => {
@@ -436,7 +407,7 @@ impl Metrics {
                         for (i, n) in series.buckets.iter().enumerate() {
                             cumulative += n;
                             out.push_str(&format!(
-                                "phoebis_upstream_ttfb_seconds_bucket{{model=\"{}\",le=\"{}\"}} {cumulative}\n",
+                                "{name}_bucket{{model=\"{}\",le=\"{}\"}} {cumulative}\n",
                                 escape(model),
                                 render_value(edges[i + 1] / 1_000.0)
                             ));
@@ -444,17 +415,17 @@ impl Metrics {
                         let total = cumulative + series.overflow;
                         // The only bound an observation past the last edge is under.
                         out.push_str(&format!(
-                            "phoebis_upstream_ttfb_seconds_bucket{{model=\"{}\",le=\"+Inf\"}} {total}\n",
+                            "{name}_bucket{{model=\"{}\",le=\"+Inf\"}} {total}\n",
                             escape(model),
                         ));
                         out.push_str(&format!(
-                            "phoebis_upstream_ttfb_seconds_sum{{model=\"{}\"}} {}\n",
+                            "{name}_sum{{model=\"{}\"}} {}\n",
                             escape(model),
                             render_value(series.sum)
                         ));
                         out.push_str(&format!(
-                            "phoebis_upstream_ttfb_seconds_count{{model=\"{}\"}} {total}\n",
-                            escape(model),
+                            "{name}_count{{model=\"{}\"}} {total}\n",
+                            escape(model)
                         ));
                     }
                 }
