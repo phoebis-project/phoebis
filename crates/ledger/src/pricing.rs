@@ -877,8 +877,7 @@ mod tests {
             input: 1,
             ..phoebis_routing::PinUsage::default()
         };
-        let prompt =
-            |u: &phoebis_routing::PinUsage| u.input + u.cache_read + u.write_5m + u.write_1h;
+        let prompt = phoebis_routing::PinUsage::prompt_tokens;
         assert_eq!(
             fast.price("claude-opus-5-5", one_input, prompt(&one_input)),
             Some(20.0 / 1_000_000.0)
@@ -1151,8 +1150,7 @@ mod tests {
             pick(&mut usage);
             usage
         };
-        let prompt =
-            |u: &phoebis_routing::PinUsage| u.input + u.cache_read + u.write_5m + u.write_1h;
+        let prompt = phoebis_routing::PinUsage::prompt_tokens;
         let priced = |model: &str, usage: phoebis_routing::PinUsage| {
             rates.price(model, usage, prompt(&usage))
         };
