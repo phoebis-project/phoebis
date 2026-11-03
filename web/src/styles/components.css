@@ -139,9 +139,10 @@
 }
 
 .main {
+  --topbar-h: 52px;
   /* The page's sticky rules dock under the shell's sticky block by this height, which the shell writes from the block's
-     measure: the bar's 52 px while no banner draws. */
-  --main-top: 52px;
+     measure: the bar's height while no banner draws. */
+  --main-top: var(--topbar-h);
   min-width: 0;
 }
 
@@ -168,7 +169,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  height: 52px;
+  height: var(--topbar-h);
   padding: 0 28px;
   background: color-mix(in srgb, var(--page) 88%, transparent);
   backdrop-filter: blur(8px);
@@ -481,8 +482,10 @@
   border-radius: var(--radius-pill);
 }
 
-/* Cards */
+/* Cards. The side inset of an unpadded card's head, which the table card's head, the pool card's sections and the
+   allowance figures under the head share. */
 .card {
+  --card-inset: 18px;
   min-width: 0;
   background: var(--surface);
   border: 1px solid var(--hairline);
@@ -1128,8 +1131,10 @@ textarea.input {
   width: var(--guardrail-trailing);
 }
 
-/* Dialog */
+/* Dialog. The side inset of the head, body and foot, which the cost reference's tab strip mirrors to run its hairline
+   across the dialog. */
 .dialog {
+  --dialog-inset: 22px;
   padding: 0;
   color: var(--ink);
   background: var(--surface);
@@ -1153,7 +1158,7 @@ textarea.input {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  padding: 20px 22px 12px;
+  padding: 20px var(--dialog-inset) 12px;
 }
 
 .dialog__title {
@@ -1184,7 +1189,7 @@ textarea.input {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 6px 22px 18px;
+  padding: 6px var(--dialog-inset) 18px;
   overflow: auto;
 }
 
@@ -1192,7 +1197,7 @@ textarea.input {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
-  padding: 12px 22px 18px;
+  padding: 12px var(--dialog-inset) 18px;
   border-top: 1px solid var(--hairline);
 }
 
@@ -2133,7 +2138,7 @@ textarea.input {
     flex-wrap: wrap;
     row-gap: 8px;
     height: auto;
-    min-height: 52px;
+    min-height: var(--topbar-h);
     padding-top: 9.5px;
     padding-bottom: 9.5px;
   }
