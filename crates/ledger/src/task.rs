@@ -1142,9 +1142,12 @@ async fn land_parked(
     now: i64,
     clock: &Clock,
 ) -> Result<(u64, u64), LedgerError> {
-    let rows = blocking(db, |db| db.parked_rows()).await.inspect_err(|error| {
-        tracing::warn!(%error, "the parked records could not be read, so they wait for the next start or replay");
-    })?;
+    let rows = db
+        .writer_read(WriterRead::ParkedRows, crate::db::parked_rows)
+        .await
+        .inspect_err(|error| {
+            tracing::warn!(%error, "the parked records could not be read, so they wait for the next start or replay");
+        })?;
     if rows.is_empty() {
         return Ok((0, 0));
     }

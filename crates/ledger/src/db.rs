@@ -75,6 +75,7 @@ pub enum WriterRead {
     AnnouncedCrossings,
     MemberSpends,
     ParkedCount,
+    ParkedRows,
 }
 
 /// One `parked_records` row as the start reads it: the row's id and the serialized `ParkedRecord`.
@@ -584,22 +585,6 @@ impl LedgerDb {
         })
     }
 
-    /// Every parked row in the order it was parked, on the writer's connection, which the start runs on.
-    pub(crate) fn parked_rows(&self) -> Result<Vec<ParkedRow>, LedgerError> {
-        self.write(|conn| {
-            let mut stmt = conn.prepare("SELECT id, record FROM parked_records ORDER BY id")?;
-            let rows = stmt
-                .query_map([], |r| {
-                    Ok(ParkedRow {
-                        id: r.get(0)?,
-                        record: r.get(1)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows)
-        })
-    }
-
     /// Records the failure a parked row met at this start's try.
     pub(crate) fn update_parked(&self, id: i64, error: &str, at: i64) -> Result<(), LedgerError> {
         self.write(|conn| {
@@ -738,6 +723,21 @@ pub(crate) fn begin_write(conn: &mut Connection) -> rusqlite::Result<Transaction
 pub(crate) fn delete_parked_in(tx: &Transaction<'_>, id: i64) -> Result<(), LedgerError> {
     tx.execute("DELETE FROM parked_records WHERE id = ?1", params![id])?;
     Ok(())
+}
+
+/// Every parked row in the order it was parked, read through `writer_read` on the writer's connection, which the
+/// start runs on.
+pub(crate) fn parked_rows(conn: &Connection) -> Result<Vec<ParkedRow>, LedgerError> {
+    let mut stmt = conn.prepare("SELECT id, record FROM parked_records ORDER BY id")?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(ParkedRow {
+                id: r.get(0)?,
+                record: r.get(1)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 pub(crate) fn insert_samples_in(
