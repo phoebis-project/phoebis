@@ -15,7 +15,7 @@ import { emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, fmtDate } from '@/lib/format';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
 import { accountStatusOf, planWordLabel } from '@/lib/quota';
-import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER, hoursOfKey, windowKeyId } from '@/lib/windows';
+import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER, hoursOfKey, windowKeyId, windowRank } from '@/lib/windows';
 
 type Rec = Record<string, unknown>;
 const rec = (v: unknown): Rec => (v && typeof v === 'object' ? (v as Rec) : {});
@@ -66,10 +66,8 @@ function decodeWindow(w: Rec): RateLimitWindow | null {
 
 /** The windows in the order the pages draw them, then every other id in the order the route sent it. */
 function drawnOrder(windows: RateLimitWindow[]): RateLimitWindow[] {
-  const known: readonly WindowId[] = WINDOW_ORDER;
-  const rank = (w: RateLimitWindow) => (known.includes(w.id) ? known.indexOf(w.id) : known.length);
   // A stable sort, so the ids the pages do not know keep the route's order.
-  return [...windows].sort((x, y) => rank(x) - rank(y));
+  return [...windows].sort((x, y) => windowRank(x.id) - windowRank(y.id));
 }
 
 /** A usage-based seat's spend window, null on every other account and on a row from a router without the member. */

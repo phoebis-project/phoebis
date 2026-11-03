@@ -35,3 +35,8 @@ const WINDOW_IDS = new Map<string, KnownWindowId>([
 ]);
 /** The UI's id for a window key: a known window's own id, any other key as it is, `null` for no key at all. */
 export const windowKeyId = (id: string): WindowId | null => WINDOW_IDS.get(id) ?? (id === '' ? null : id);
+/** A window key's place in the order the pages draw them, a window the pages do not know after every known one. */
+export const windowRank = (key: string): number => {
+  const at = (WINDOW_ORDER as readonly string[]).indexOf(windowKeyId(key) ?? '');
+  return at === -1 ? WINDOW_ORDER.length : at;
+};

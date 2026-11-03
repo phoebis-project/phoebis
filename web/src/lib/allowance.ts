@@ -6,7 +6,7 @@ import { fmtAbsolute, fmtShare, fmtShortTime, weekShort } from '@/lib/format';
 import { pricedTier } from '@/lib/quota';
 import { DAY } from '@/lib/time';
 import type { WeekPosition } from '@/lib/unit';
-import { WINDOW_LABEL, WINDOW_ORDER, windowKeyId } from '@/lib/windows';
+import { WINDOW_LABEL, windowKeyId, windowRank } from '@/lib/windows';
 
 /** The weeks the Accounts block and the Analytics card read: the latest reset and the three before it. */
 export const ALLOWANCE_WEEKS = 4;
@@ -94,16 +94,10 @@ export function weeksFigure(window: AllowanceWindow, account: Pick<AllowanceAcco
 /** The block's subtitle, which the week control's position leaves alike. */
 export const allowanceSubtitle = (): string => 'Each weekly window left unused when it reset, as a share of the chosen week, the last four weeks';
 
-/** A weekly window's place in the console's order, a week the console does not know after every known one. */
-const rankOf = (window: string): number => {
-  const at = WINDOW_ORDER.findIndex((id) => id === windowKeyId(window));
-  return at === -1 ? WINDOW_ORDER.length : at;
-};
-
 /** The account's weekly windows in the console's order, the 7-day window first and then each model week, a week the
  *  console does not know after the known ones in the answer's order. */
 export function allowanceWindows(account: AllowanceAccount): AllowanceWindow[] {
-  return account.windows.map((w, i) => ({ i, w })).sort((a, b) => rankOf(a.w.window) - rankOf(b.w.window) || a.i - b.i).map(({ w }) => w);
+  return [...account.windows].sort((a, b) => windowRank(a.window) - windowRank(b.window));
 }
 
 /** The weekly windows the Analytics card draws a pair of columns for: the 7-day window and the Fable week always, then
@@ -111,7 +105,7 @@ export function allowanceWindows(account: AllowanceAccount): AllowanceWindow[] {
 export function weeklyKeys(accounts: AllowanceAccount[]): string[] {
   const keys = ['seven_day', 'seven_day_fable'];
   for (const a of accounts) for (const w of a.windows) if (!keys.includes(w.window)) keys.push(w.window);
-  return keys.map((window, i) => ({ i, window })).sort((a, b) => rankOf(a.window) - rankOf(b.window) || a.i - b.i).map(({ window }) => window);
+  return keys.sort((a, b) => windowRank(a) - windowRank(b));
 }
 
 /** A window's word in the card's column heads: "7-day", "Fable", a model week the console does not know by its key. */

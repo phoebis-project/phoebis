@@ -2,7 +2,7 @@ import type { Reconciliation } from '@/api/types';
 import { judged, RATIO_HIGH, RATIO_LOW, ratioOff } from './analytics';
 import { lookup } from './counts';
 import { DAY } from './time';
-import { WINDOW_LABEL, WINDOW_ORDER, windowKeyId } from './windows';
+import { WINDOW_LABEL, windowKeyId, windowRank } from './windows';
 
 export const METER_HINT =
   "Each subscription account's completed windows of the last 30 days, grouped by account and window kind: the rise the upstream's readings showed against the share the router priced for its own requests in it. 1.1 means the meter charged 1.1 times the table. A ratio under 0.8 or over 1.25 after a rise of at least 5% is marked.";
@@ -19,10 +19,6 @@ export function meterWindowWord(window: string): string {
 }
 
 /** The windows' order: the 5-hour window, the 7-day one, the known model week, then any other key by its spelling. */
-const windowRank = (window: string): number => {
-  const at = (WINDOW_ORDER as readonly string[]).indexOf(windowKeyId(window) ?? '');
-  return at === -1 ? WINDOW_ORDER.length : at;
-};
 const byteOrder = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const byWindow = (a: string, b: string) => windowRank(a) - windowRank(b) || byteOrder(a, b);
 const newestFirst = (a: Reconciliation, b: Reconciliation) => Date.parse(b.windowEnd) - Date.parse(a.windowEnd);
