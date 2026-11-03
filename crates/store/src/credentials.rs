@@ -164,15 +164,14 @@ pub(crate) fn api_key_aad(account_id: &str) -> String {
 }
 
 /// Whether the attempt row is there at all, which is what separates a verdict that arrived too late from
-/// one that names an attempt nobody ever opened. `account_id` narrows it where the caller has one to check
-/// against.
+/// one that names an attempt nobody ever opened.
 fn attempt_exists(
     conn: &rusqlite::Connection,
     attempt_id: u64,
-    account_id: Option<&str>,
+    account_id: &str,
 ) -> Result<bool, StoreError> {
     conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM refresh_attempts WHERE id = ?1 AND (?2 IS NULL OR account_id = ?2))",
+        "SELECT EXISTS(SELECT 1 FROM refresh_attempts WHERE id = ?1 AND account_id = ?2)",
         params![attempt_id as i64, account_id],
         |row| row.get(0),
     )
@@ -516,7 +515,7 @@ impl Store {
             // A row that exists but was already settled elsewhere, by a disconnect for instance, leaves the
             // commit alone: the tokens in hand were rotated upstream and losing them to a rollback would
             // strand the account on a refresh token the endpoint has already replaced.
-            if updated == 0 && !attempt_exists(tx, id, Some(account_id))? {
+            if updated == 0 && !attempt_exists(tx, id, account_id)? {
                 return Err(StoreError::AttemptNotFound(id));
             }
         }
