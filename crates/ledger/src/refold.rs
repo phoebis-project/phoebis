@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::{
     begin_write, row_to_attempt, row_to_request, LedgerDb, ATTEMPT_SELECT, REQUEST_SELECT,
 };
+use crate::generations::PAGE;
 use crate::pricing::{
     effective_instant, LongContext, ModelPrice, ModelRow, PriceRevisions, PriceTable,
 };
@@ -394,9 +395,6 @@ pub(crate) fn write_meta(
     )?;
     Ok(())
 }
-
-/// How many requests a page reads: the generation pass's size.
-const PAGE: usize = 1_000;
 
 #[cfg(not(test))]
 pub(crate) fn page_size() -> usize {

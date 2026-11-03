@@ -13,7 +13,7 @@ pub const GENERATIONS_RECONCILED_KEY: &str = "key_generations_reconciled";
 
 /// How many generation-0 rows one transaction holds in memory: the fold reads a page, moves it, and reads the
 /// next from where it left off, so a key with a year of hourly rows never sits in one `Vec`.
-const PAGE: usize = 1_000;
+pub(crate) const PAGE: usize = 1_000;
 
 /// One live key as the startup stamp sees it: the id, its `created_at`, and where its own rows start. `floor`
 /// is `Some(created_at)` for an id in `RegistryLoad.reused_key_ids` (an earlier holder's rows sit at generation
