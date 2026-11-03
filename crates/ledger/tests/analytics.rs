@@ -6285,138 +6285,149 @@ fn a_zero_bucket_seconds_answers_the_range_error_rather_than_panicking() {
         .is_err());
 }
 
+/// The six-hour bucket of the series readers' range cases.
+const SIX_HOURS: i64 = 21_600;
+
+/// What each series reader answers over the empty ledger `db` from the epoch to `to_hour`, in six-hour buckets, with
+/// its points dropped.
+async fn series_readers_over(
+    db: &std::sync::Arc<LedgerDb>,
+    to_hour: i64,
+) -> Vec<(&'static str, Result<(), phoebis_ledger::LedgerError>)> {
+    let from_hour = 0;
+    let filter = SeriesFilter {
+        from: from_hour * 1_000,
+        to: to_hour * 1_000,
+        bucket_seconds: SIX_HOURS,
+        ..SeriesFilter::default()
+    };
+    let live = LiveKeys::default();
+    vec![
+        (
+            "series",
+            series(
+                &[],
+                filter.from,
+                filter.to,
+                SIX_HOURS,
+                GroupBy::All,
+                false,
+                &live,
+                &[],
+                &PRICES,
+                &COSTS,
+                NOW,
+            )
+            .map(drop),
+        ),
+        (
+            "series_paged",
+            series_paged(
+                db,
+                &RollupFilter::default(),
+                &live,
+                filter.from,
+                filter.to,
+                SIX_HOURS,
+                GroupBy::All,
+                &PRICES,
+                &COSTS,
+                NOW,
+            )
+            .await
+            .map(drop),
+        ),
+        (
+            "pool_traffic",
+            pool_traffic(db, "p", from_hour, to_hour, SIX_HOURS, &PRICES, &COSTS, NOW)
+                .await
+                .map(drop),
+        ),
+        (
+            "pools_traffic",
+            db.read_blocking(|c| {
+                pools_traffic(
+                    c,
+                    &["p".to_string()],
+                    from_hour,
+                    to_hour,
+                    SIX_HOURS,
+                    &PRICES,
+                    &COSTS,
+                    NOW,
+                )
+            })
+            .map(drop),
+        ),
+        (
+            "burn_rows",
+            db.read_blocking(|c| burn_rows(c, &filter)).map(drop),
+        ),
+        (
+            "burn_series_over",
+            burn_series_over(&[], &COSTS, &PRICES, &filter, NOW).map(drop),
+        ),
+        (
+            "burn_groups_paged",
+            burn_groups_paged(db, &COSTS, &PRICES, &filter, GroupBy::All, &live, &[], NOW)
+                .await
+                .map(drop),
+        ),
+        (
+            "rewrite_series",
+            db.read_blocking(|c| rewrite_series(c, &filter)).map(drop),
+        ),
+        (
+            "held_series",
+            db.read_blocking(|c| held_series(c, &filter)).map(drop),
+        ),
+        (
+            "moves_by_reason_and_fit",
+            db.read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
+                .map(drop),
+        ),
+        (
+            "session_burn_series",
+            db.read_blocking(|c| {
+                phoebis_ledger::session_burn_series(c, &COSTS, &PRICES, &filter, NOW)
+            })
+            .map(drop),
+        ),
+    ]
+}
+
 /// 10,000 whole six-hour buckets and one hour more: 10,001 points once the trailing partial bucket counts as the
 /// point the readers answer for it, one past `MAX_POINTS`, where a whole-bucket count reads 10,000 and lets it pass.
 #[tokio::test]
 async fn every_series_reader_refuses_a_range_whose_trailing_partial_bucket_is_one_point_too_many() {
-    const BUCKET: i64 = 21_600;
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
-    let (from_hour, to_hour) = (0, 10_000 * BUCKET + 3_600);
-    let filter = SeriesFilter {
-        from: from_hour * 1_000,
-        to: to_hour * 1_000,
-        bucket_seconds: BUCKET,
-        ..SeriesFilter::default()
-    };
-    let live = LiveKeys::default();
-    let refused = |answer: Result<(), phoebis_ledger::LedgerError>| {
-        matches!(answer, Err(phoebis_ledger::LedgerError::Range(_)))
-    };
-    let answers = [
-        (
-            "series",
-            refused(
-                series(
-                    &[],
-                    filter.from,
-                    filter.to,
-                    BUCKET,
-                    GroupBy::All,
-                    false,
-                    &live,
-                    &[],
-                    &PRICES,
-                    &COSTS,
-                    NOW,
-                )
-                .map(drop),
-            ),
-        ),
-        (
-            "series_paged",
-            refused(
-                series_paged(
-                    &db,
-                    &RollupFilter::default(),
-                    &live,
-                    filter.from,
-                    filter.to,
-                    BUCKET,
-                    GroupBy::All,
-                    &PRICES,
-                    &COSTS,
-                    NOW,
-                )
-                .await
-                .map(drop),
-            ),
-        ),
-        (
-            "pool_traffic",
-            refused(
-                pool_traffic(&db, "p", from_hour, to_hour, BUCKET, &PRICES, &COSTS, NOW)
-                    .await
-                    .map(drop),
-            ),
-        ),
-        (
-            "pools_traffic",
-            refused(
-                db.read_blocking(|c| {
-                    pools_traffic(
-                        c,
-                        &["p".to_string()],
-                        from_hour,
-                        to_hour,
-                        BUCKET,
-                        &PRICES,
-                        &COSTS,
-                        NOW,
-                    )
-                })
-                .map(drop),
-            ),
-        ),
-        (
-            "burn_rows",
-            refused(db.read_blocking(|c| burn_rows(c, &filter)).map(drop)),
-        ),
-        (
-            "burn_series_over",
-            refused(burn_series_over(&[], &COSTS, &PRICES, &filter, NOW).map(drop)),
-        ),
-        (
-            "burn_groups_paged",
-            refused(
-                burn_groups_paged(&db, &COSTS, &PRICES, &filter, GroupBy::All, &live, &[], NOW)
-                    .await
-                    .map(drop),
-            ),
-        ),
-        (
-            "rewrite_series",
-            refused(db.read_blocking(|c| rewrite_series(c, &filter)).map(drop)),
-        ),
-        (
-            "held_series",
-            refused(db.read_blocking(|c| held_series(c, &filter)).map(drop)),
-        ),
-        (
-            "moves_by_reason_and_fit",
-            refused(
-                db.read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
-                    .map(drop),
-            ),
-        ),
-        (
-            "session_burn_series",
-            refused(
-                db.read_blocking(|c| {
-                    phoebis_ledger::session_burn_series(c, &COSTS, &PRICES, &filter, NOW)
-                })
-                .map(drop),
-            ),
-        ),
-    ];
-    let accepted: Vec<&str> = answers
-        .iter()
-        .filter(|(_, refused)| !refused)
-        .map(|(reader, _)| *reader)
+    let accepted: Vec<&str> = series_readers_over(&db, 10_000 * SIX_HOURS + 3_600)
+        .await
+        .into_iter()
+        .filter(|(_, answer)| !matches!(answer, Err(phoebis_ledger::LedgerError::Range(_))))
+        .map(|(reader, _)| reader)
         .collect();
     assert_eq!(
         accepted,
         Vec::<&str>::new(),
         "each reader answers the range refusal"
+    );
+}
+
+/// Exactly 10,000 whole six-hour buckets: `MAX_POINTS` points with no trailing partial bucket, the last range the
+/// guard lets through, where a count that rounds a whole bucket up reads 10,001 and refuses it.
+#[tokio::test]
+async fn a_range_of_exactly_the_most_points_answers_from_every_series_reader() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let refused: Vec<(&str, String)> = series_readers_over(&db, 10_000 * SIX_HOURS)
+        .await
+        .into_iter()
+        .filter_map(|(reader, answer)| answer.err().map(|e| (reader, e.to_string())))
+        .collect();
+    assert_eq!(
+        refused,
+        Vec::<(&str, String)>::new(),
+        "each reader answers the range"
     );
 }
 
