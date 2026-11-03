@@ -207,7 +207,7 @@ pub(crate) fn unfold_from_holding_row(
     let Some(mut row) = holding_row(conn, request, delta)? else {
         tracing::warn!(
             request = %request.id,
-            hour = %crate::task::utc_stamp(delta.hour * 1_000),
+            hour = %phoebis_store::utc_stamp(delta.hour * 1_000),
             "no hourly row holds the stored refusal's figures, so they stay where the older fold booked them"
         );
         return Ok(());

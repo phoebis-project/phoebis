@@ -1343,6 +1343,14 @@ pub fn digest_with(key: &[u8; 32], secret: &[u8]) -> [u8; 32] {
     mac.finalize().into_bytes().into()
 }
 
+/// `ms` as `YYYY-MM-DD HH:MM:SS UTC`, the one spelling the ledger's, the keepalive's and the usage poll's log lines
+/// print, or the raw milliseconds for one out of range.
+pub fn utc_stamp(ms: i64) -> String {
+    jiff::Timestamp::from_millisecond(ms)
+        .map(|at| at.strftime("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|_| ms.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -2080,5 +2088,11 @@ mod tests {
         .unwrap();
         prepare(&mut conn, false, &[]).unwrap();
         assert_eq!(raw_markers(&conn), vec!["1".to_string()]);
+    }
+
+    #[test]
+    fn a_log_lines_instant_prints_in_utc_with_the_zone_named_or_raw_when_out_of_range() {
+        assert_eq!(utc_stamp(1_760_961_787_123), "2025-10-20 12:03:07 UTC");
+        assert_eq!(utc_stamp(i64::MAX), i64::MAX.to_string());
     }
 }

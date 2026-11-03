@@ -2069,7 +2069,7 @@ impl Inner {
             tracing::info!(
                 key = %key.0,
                 agent = %agent_id,
-                expires = %phoebis_ledger::utc_stamp(expires),
+                expires = %phoebis_store::utc_stamp(expires),
                 late_ms = now - expires,
                 "a paused keepalive recipe's entry expired, so its prompt was dropped"
             );
@@ -2079,7 +2079,7 @@ impl Inner {
         tracing::info!(
             key = %key.0,
             agent = %agent_id,
-            expires = %phoebis_ledger::utc_stamp(expires),
+            expires = %phoebis_store::utc_stamp(expires),
             late_ms = now - expires,
             "a keepalive recipe lapsed before its probe, so the probe was skipped"
         );

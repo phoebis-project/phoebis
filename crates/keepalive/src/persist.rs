@@ -1292,7 +1292,7 @@ impl Inner {
                     key = %key.0,
                     session = %key.1,
                     agent = %agent_id,
-                    expires = %phoebis_ledger::utc_stamp(expires),
+                    expires = %phoebis_store::utc_stamp(expires),
                     "a keepalive recipe's entry lapsed while the router was down"
                 );
                 self.discard_at_load(

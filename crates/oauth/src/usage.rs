@@ -470,7 +470,7 @@ impl CachedEntry {
         self.last_error = Some(self.hold_message());
         tracing::warn!(
             account = %account_id,
-            next_attempt_at = %utc(self.not_before),
+            next_attempt_at = %phoebis_store::utc_stamp(self.not_before),
             retry_after_ms = ?retry_after,
             "the {endpoint} endpoint rate-limited the account"
         );
@@ -501,13 +501,6 @@ impl CachedEntry {
     fn hold_message(&self) -> String {
         format!("the {} endpoint rate-limited the account", self.held_by)
     }
-}
-
-/// `at_ms` as the UTC time the warning log line names, or the raw milliseconds for one out of range.
-fn utc(at_ms: i64) -> String {
-    jiff::Timestamp::from_millisecond(at_ms)
-        .map(|at| at.strftime("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|_| at_ms.to_string())
 }
 
 /// A transport failure of either endpoint, under the text the snapshot and the profile refresh record for one.
