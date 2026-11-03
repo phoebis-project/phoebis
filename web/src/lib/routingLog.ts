@@ -1514,8 +1514,8 @@ const runwayWord = (c: RecordCandidate) => (c.fit === null ? '-' : c.runwayMs ==
 const spendLines = (w: RecordCandidate['windows'][string], now: number): string[] => [`spend ${fmtPct(w.utilization)}`, w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), ...(w.source === 'estimated' ? ['estimated'] : [])];
 
 /**
- * A candidate's verdict: its badge and the badge's tone, whether the decision chose it, and the one chip that decided it
- * with that chip's tone.
+ * A candidate's verdict: its badge and the badge's tone, whether the decision chose it, and the one chip that decided
+ * it with that chip's tone.
  */
 export function candidateVerdict(c: RecordCandidate, now: number): { badge: string; badgeTone: 'accent' | 'neutral' | 'warning'; chip: Chip | null; chosen: boolean; tone: VerdictTone | null } {
   const atCap = c.verdict === 'out' && (c.partition === 'at_cap' || c.obstacle?.name === 'at_cap');
