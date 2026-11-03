@@ -1304,18 +1304,22 @@
   grid-column: 1 / -1;
 }
 
-.accounts__list {
+.accounts__list,
+.drawer {
   position: sticky;
   top: calc(var(--main-top) + 20px);
   display: flex;
   flex-direction: column;
-  gap: 10px;
   max-height: calc(100vh - var(--main-top) - 44px);
-  padding: 14px;
   overflow: auto;
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
+}
+
+.accounts__list {
+  gap: 10px;
+  padding: 14px;
 }
 
 .account-rows {
@@ -3160,13 +3164,17 @@
   color: var(--critical-ink);
 }
 
-.filter-bar--sticky {
+.filter-bar--sticky,
+.section-bar {
   position: sticky;
   top: var(--main-top);
-  z-index: 5;
   padding: 8px 0;
   background: color-mix(in srgb, var(--page) 92%, transparent);
   backdrop-filter: blur(8px);
+}
+
+.filter-bar--sticky {
+  z-index: 5;
   border-bottom: 1px solid var(--hairline);
 }
 
@@ -3230,18 +3238,6 @@
 
 .pager__nav button:hover:not(:disabled) {
   background: var(--surface-2);
-}
-
-.drawer {
-  position: sticky;
-  top: calc(var(--main-top) + 20px);
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100vh - var(--main-top) - 44px);
-  overflow: auto;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
 }
 
 .drawer__head {
@@ -4593,12 +4589,7 @@
 
 /* Analytics */
 .section-bar {
-  position: sticky;
-  top: var(--main-top);
   z-index: 4;
-  padding: 8px 0;
-  background: color-mix(in srgb, var(--page) 92%, transparent);
-  backdrop-filter: blur(8px);
 }
 
 /* The page's group-by: a 160 px select after its label. */
