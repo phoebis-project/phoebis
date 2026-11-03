@@ -693,7 +693,7 @@ impl SessionMemory {
     }
 
     /// An overlay record for `key` back into the map, dirty under a fresh sequence so the next flush writes it
-    /// with its new `last_seen`; answers whether there was one.
+    /// with its new `last_seen`. Answers whether there was one.
     fn revive_pending(&self, inner: &mut Inner, key: &MemoryKey, now: i64) -> bool {
         let Some((record, _)) = inner.pending.get(key) else {
             return false;
@@ -718,7 +718,7 @@ impl SessionMemory {
         true
     }
 
-    /// Past the cap the least recently seen entry leaves the map; one with an unflushed change goes to the
+    /// Past the cap the least recently seen entry leaves the map. One with an unflushed change goes to the
     /// overlay under its sequence rather than being lost. A key whose store read is in flight is never the one
     /// chosen, so the map may hold a few entries past the cap while those reads run.
     fn evict_if_full(&self, inner: &mut Inner) {
@@ -1103,7 +1103,7 @@ mod tests {
         mem.record_request_id(&b, "acct", "req_b", 2_000).await;
         mem.record_request_id(&c, "acct", "req_c", 3_000).await; // evicts a into the overlay
         mem.record_request_id(&d, "acct", "req_d", 4_000).await; // evicts b into the overlay
-        mem.record_request_id(&e, "acct", "req_e", 5_000).await; // evicts c; the overlay is full, a is dropped
+        mem.record_request_id(&e, "acct", "req_e", 5_000).await; // evicts c. The overlay is full, a is dropped
         let unsaved: std::collections::HashSet<MemoryKey> = mem
             .snapshot_dirty(5_000)
             .into_iter()
@@ -1164,8 +1164,8 @@ mod tests {
         .await;
         // The save is parked with the store answering nothing; evictions keep arriving.
         mem.record_request_id(&b, "acct", "req_b", 2_000).await; // evicts a
-        mem.record_request_id(&c, "acct", "req_c", 3_000).await; // evicts b; the overlay is at the cap, a is shed
-        mem.record_request_id(&d, "acct", "req_d", 4_000).await; // evicts c; b is shed
+        mem.record_request_id(&c, "acct", "req_c", 3_000).await; // evicts b. The overlay is at the cap, a is shed
+        mem.record_request_id(&d, "acct", "req_d", 4_000).await; // evicts c. `b` is shed
                                                                  // Captured before the barrier releases: the parked save thread waits on `gate` for a second party
                                                                  // that must arrive whether or not the assertion below holds, or the runtime's drop hangs forever
                                                                  // joining a blocking thread nothing would release.
@@ -1230,7 +1230,7 @@ mod tests {
         mem.record_request_id(&a, "acct", "req_a", 1_000).await;
         mem.record_request_id(&b, "acct", "req_b", 2_000).await;
         mem.record_request_id(&c, "acct", "req_c", 3_000).await; // evicts a into the overlay
-        mem.record_request_id(&d, "acct", "req_d", 4_000).await; // evicts b into the overlay; the overlay is at the cap
+        mem.record_request_id(&d, "acct", "req_d", 4_000).await; // evicts b into the overlay. The overlay is at the cap
         tokio::time::timeout(Duration::from_secs(5), mem.flush_wanted())
             .await
             .expect("an overlay at the cap asks the flusher for a flush of its own");
