@@ -11,6 +11,7 @@ export { useFollow } from '@/app/useFollow';
 export { AddFilter, PATTERN_GRAMMAR } from '@/components/AddFilter';
 export { AttentionRows } from '@/components/AttentionRows';
 export { BodyViewer, columnsOf } from '@/components/BodyViewer';
+export { CatalogDialog } from '@/components/CatalogDialog';
 export { ChipLine } from '@/components/ChipLine';
 export { ConditionsEditor } from '@/components/ConditionsEditor';
 export { DecisionCard } from '@/components/DecisionCard';

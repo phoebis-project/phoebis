@@ -382,7 +382,8 @@ the last hour. Lifetime counts its rows older than the week from a read made onc
 week that lands late joins the figure within the hour.
 
 "Catalog" opens `Catalog of {label}`: `As of {ago}` with "Refresh", and the models as Model, Name, Released, Input
-tokens, Output tokens and Effort levels, or "The upstream lists no models."
+tokens, Output tokens and Effort levels, or "The upstream lists no models." A failed read draws its failure, and a
+failed Refresh draws it over the list it kept, until a read answers.
 
 "Add account" opens the dialog of that name under "Subscription logins share your Claude.ai quota. API keys bill per
 token against a Console workspace.": the choice "OAuth login" or "API key", Label ("Short name used in pools and
