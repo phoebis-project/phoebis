@@ -576,9 +576,7 @@ impl Store {
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_hold_next_routing_write(&self) -> RoutingWriteHold {
-        let gate = Arc::new(HoldGate::default());
-        *self.hooks.routing_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
-        RoutingWriteHold(gate)
+        arm(&self.hooks.routing_hold)
     }
 
     /// Before the connection's lock, so the store stays readable while the writer waits.
@@ -627,9 +625,7 @@ impl Store {
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_hold_next_credential_read(&self) -> CredentialReadHold {
-        let gate = Arc::new(HoldGate::default());
-        *self.hooks.credential_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
-        CredentialReadHold(gate)
+        arm(&self.hooks.credential_hold)
     }
 
     /// Parks the next OAuth `credentials` read once it has read, after the connection's lock is released, until the
@@ -637,13 +633,7 @@ impl Store {
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_hold_after_next_credential_read(&self) -> CredentialReadHold {
-        let gate = Arc::new(HoldGate::default());
-        *self
-            .hooks
-            .credential_after_hold
-            .lock()
-            .expect(HOLD_POISONED) = Some(gate.clone());
-        CredentialReadHold(gate)
+        arm(&self.hooks.credential_after_hold)
     }
 
     /// Parks the next fenced pool write before its lock until the hold drops, so a test can land another edit
@@ -651,18 +641,14 @@ impl Store {
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_hold_next_pool_write(&self) -> FencedWriteHold {
-        let gate = Arc::new(HoldGate::default());
-        *self.hooks.pool_write_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
-        FencedWriteHold(gate)
+        arm(&self.hooks.pool_write_hold)
     }
 
     /// The key's counterpart of `debug_hold_next_pool_write`.
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_hold_next_key_write(&self) -> FencedWriteHold {
-        let gate = Arc::new(HoldGate::default());
-        *self.hooks.key_write_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
-        FencedWriteHold(gate)
+        arm(&self.hooks.key_write_hold)
     }
 
     /// Before the connection's lock, so the edit the test lands under the hold does not wait on the parked one.
@@ -681,9 +667,7 @@ impl Store {
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_hold_next_load(&self) -> RegistryLoadHold {
-        let gate = Arc::new(HoldGate::default());
-        *self.hooks.load_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
-        RegistryLoadHold(gate)
+        arm(&self.hooks.load_hold)
     }
 
     #[cfg(any(test, feature = "debug-hooks"))]
@@ -735,6 +719,13 @@ impl Store {
 #[cfg(any(test, feature = "debug-hooks"))]
 const HOLD_POISONED: &str = "a test hold's mutex poisoned by a prior panic";
 
+#[cfg(any(test, feature = "debug-hooks"))]
+fn arm(slot: &Mutex<Option<Arc<HoldGate>>>) -> Hold {
+    let gate = Arc::new(HoldGate::default());
+    *slot.lock().expect(HOLD_POISONED) = Some(gate.clone());
+    Hold(gate)
+}
+
 /// Waits on the hold armed in `slot`, if any, until the test releases it; the hold is taken, so it parks one call.
 #[cfg(any(test, feature = "debug-hooks"))]
 fn park_on(slot: &Mutex<Option<Arc<HoldGate>>>) {
@@ -743,11 +734,6 @@ fn park_on(slot: &Mutex<Option<Arc<HoldGate>>>) {
         gate.park();
     }
 }
-
-/// A test's hold on the next `write_routing`, from `Store::debug_hold_next_routing_write`.
-#[cfg(any(test, feature = "debug-hooks"))]
-#[doc(hidden)]
-pub struct RoutingWriteHold(Arc<HoldGate>);
 
 /// The park-until-released seam under every test hold: the held call parks on it until the test opens it. Public
 /// under the feature so another crate's test seam parks on the same gate.
@@ -760,35 +746,25 @@ pub struct HoldGate {
     opened: Condvar,
 }
 
-#[cfg(any(test, feature = "debug-hooks"))]
-impl RoutingWriteHold {
-    /// Whether a `write_routing` waits on the hold; a test polls it before it queues what should land behind.
-    pub fn is_parked(&self) -> bool {
-        self.0.is_parked()
-    }
-
-    pub fn release(self) {
-        drop(self);
-    }
-}
-
-/// Dropping the hold releases it too, so a test that fails with the writer parked does not leave a blocking
-/// thread its runtime waits on at shutdown.
-#[cfg(any(test, feature = "debug-hooks"))]
-impl Drop for RoutingWriteHold {
-    fn drop(&mut self) {
-        self.0.open();
-    }
-}
-
-/// A test's hold on the next credential read, from `Store::debug_hold_next_credential_read`.
+/// A test's hold on the next call its arming names: `RoutingWriteHold` from `Store::debug_hold_next_routing_write`,
+/// `CredentialReadHold` from the two credential read holds, `FencedWriteHold` from the pool and key write holds and
+/// `RegistryLoadHold` from `Store::debug_hold_next_load`.
 #[cfg(any(test, feature = "debug-hooks"))]
 #[doc(hidden)]
-pub struct CredentialReadHold(Arc<HoldGate>);
+pub struct Hold(Arc<HoldGate>);
 
 #[cfg(any(test, feature = "debug-hooks"))]
-impl CredentialReadHold {
-    /// Whether a credential read waits on the hold.
+pub type RoutingWriteHold = Hold;
+#[cfg(any(test, feature = "debug-hooks"))]
+pub type CredentialReadHold = Hold;
+#[cfg(any(test, feature = "debug-hooks"))]
+pub type FencedWriteHold = Hold;
+#[cfg(any(test, feature = "debug-hooks"))]
+pub type RegistryLoadHold = Hold;
+
+#[cfg(any(test, feature = "debug-hooks"))]
+impl Hold {
+    /// Whether the held call waits on the hold; a test polls it before it queues what should land behind.
     pub fn is_parked(&self) -> bool {
         self.0.is_parked()
     }
@@ -798,60 +774,10 @@ impl CredentialReadHold {
     }
 }
 
-/// Released on drop, as `RoutingWriteHold` is.
+/// Dropping the hold releases it too, so a test that fails with the call parked does not leave a blocking thread its
+/// runtime waits on at shutdown.
 #[cfg(any(test, feature = "debug-hooks"))]
-impl Drop for CredentialReadHold {
-    fn drop(&mut self) {
-        self.0.open();
-    }
-}
-
-/// A test's hold on the next fenced pool or key edit, from `Store::debug_hold_next_pool_write` or
-/// `Store::debug_hold_next_key_write`.
-#[cfg(any(test, feature = "debug-hooks"))]
-#[doc(hidden)]
-pub struct FencedWriteHold(Arc<HoldGate>);
-
-#[cfg(any(test, feature = "debug-hooks"))]
-impl FencedWriteHold {
-    /// Whether an edit waits on the hold.
-    pub fn is_parked(&self) -> bool {
-        self.0.is_parked()
-    }
-
-    pub fn release(self) {
-        drop(self);
-    }
-}
-
-/// Released on drop, as `RoutingWriteHold` is.
-#[cfg(any(test, feature = "debug-hooks"))]
-impl Drop for FencedWriteHold {
-    fn drop(&mut self) {
-        self.0.open();
-    }
-}
-
-/// A test's hold on the next registry load, from `Store::debug_hold_next_load`.
-#[cfg(any(test, feature = "debug-hooks"))]
-#[doc(hidden)]
-pub struct RegistryLoadHold(Arc<HoldGate>);
-
-#[cfg(any(test, feature = "debug-hooks"))]
-impl RegistryLoadHold {
-    /// Whether a registry load waits on the hold.
-    pub fn is_parked(&self) -> bool {
-        self.0.is_parked()
-    }
-
-    pub fn release(self) {
-        drop(self);
-    }
-}
-
-/// Released on drop, as `RoutingWriteHold` is.
-#[cfg(any(test, feature = "debug-hooks"))]
-impl Drop for RegistryLoadHold {
+impl Drop for Hold {
     fn drop(&mut self) {
         self.0.open();
     }
