@@ -12,7 +12,7 @@ import { NO_CLASS, NO_EFFORT, foldClassifier, foldEffort, foldRequestClass } fro
 import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { endOf } from '@/lib/quota';
-import { ACCOUNTS, QUOTA_HISTORY, accountById, sharedWindowsOf } from './accounts';
+import { ACCOUNTS, LEDGER_WINDOW, QUOTA_HISTORY, accountById, sharedWindowsOf } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor } from './catalog';
 import { leadOf } from './lead';
@@ -2700,9 +2700,6 @@ export const UNPRICED_REQUEST: RequestLog = (() => {
   return { ...row, ...costFiguresOf(row) };
 })();
 export const UNPRICED_ROLLUPS: HourlyRollup[] = rollups([UNPRICED_REQUEST]);
-
-/** The ledger's id of each window the quota samples carry, which the Accounts cards key an hour's samples by. */
-const LEDGER_WINDOW: Partial<Record<string, string>> = { '5h': 'five_hour', '7d': 'seven_day', '7d_fable': 'seven_day_fable' };
 
 // Hourly account facts: peak utilization per window, time spent ineligible, and
 // pin churn. The last seven days follow the sampled quota history; older hours

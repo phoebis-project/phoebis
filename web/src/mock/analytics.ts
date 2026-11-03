@@ -12,7 +12,7 @@ import { earlierHolderLabel, placementHit } from '@/lib/format';
 import { emptyHistogram, mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import { endOf } from '@/lib/quota';
-import { ACCOUNTS, sharedWindowsOf } from './accounts';
+import { ACCOUNTS, LEDGER_WINDOW, sharedWindowsOf } from './accounts';
 import { keyById } from './pools';
 import { createRng } from './rng';
 import type { EventSeed } from './routingLog';
@@ -826,8 +826,6 @@ export function reconciliationsOf(rows: Reconciliation[], filters: Pick<Analytic
   return { reconciliations: rows.filter((r) => accounts.length === 0 || accounts.includes(r.accountId)).map((r) => ({ ...r })), requestRetentionDays: REQUEST_RETENTION_DAYS };
 }
 
-/** The route's keys of the weekly windows the quota history names by the console's ids. */
-const WEEKLY_KEY: Record<string, string> = { '7d': 'seven_day', '7d_fable': 'seven_day_fable' };
 const isWeekly = (window: string) => window === 'seven_day' || window.startsWith('seven_day_');
 
 /**
@@ -872,7 +870,7 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
       }
       if (ended !== null) {
         for (const h of history) {
-          const window = WEEKLY_KEY[h.windowId] ?? h.windowId;
+          const window = LEDGER_WINDOW[h.windowId] ?? h.windowId;
           if (h.accountId !== a.id || !isWeekly(window)) continue;
           const before = h.samples.filter((x) => Date.parse(x.at) < ended);
           const last = before[before.length - 1];

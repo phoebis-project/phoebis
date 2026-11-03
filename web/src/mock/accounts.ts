@@ -1,7 +1,7 @@
 import { planName } from '@/api/decode';
 import type { Account, PlanWord, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, Subscription, WindowId } from '@/api/types';
 import { endOf } from '@/lib/quota';
-import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey } from '@/lib/windows';
+import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey, windowKeyId } from '@/lib/windows';
 import { leadOf } from './lead';
 import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
@@ -492,16 +492,19 @@ export const ACCOUNTS: Account[] = SEEDS.map((a) => {
 
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 
-/** The two shared windows by the ledger's id and the account view's. */
-const SHARED_WINDOWS = [['five_hour', '5h'], ['seven_day', '7d']] as const;
+/** The ledger's key of each window the account view names, which the samples, the rollups and the routing log read. */
+export const LEDGER_WINDOW: Partial<Record<string, string>> = { '5h': 'five_hour', '7d': 'seven_day', '7d_fable': 'seven_day_fable' };
+
+/** The two shared windows by the ledger's id. */
+const SHARED_WINDOWS = ['five_hour', 'seven_day'] as const;
 /**
  * The shared windows an account's newest clean poll names, as the router holds its window set: the ones its reading
  * carries, and both before any reading names one. The model weeks are no part of the set.
  */
 export function sharedWindowsOf(accountId: string): ('five_hour' | 'seven_day')[] {
   const ids: string[] = accountById.get(accountId)?.windows.map((w) => w.id) ?? [];
-  const held = SHARED_WINDOWS.filter(([, id]) => ids.includes(id)).map(([window]) => window);
-  return held.length === 0 ? SHARED_WINDOWS.map(([window]) => window) : held;
+  const held = SHARED_WINDOWS.filter((w) => ids.includes(windowKeyId(w) ?? ''));
+  return held.length === 0 ? [...SHARED_WINDOWS] : held;
 }
 
 /** The poll block the route answers on a row: none for an API-key account, which the poll never reads. */

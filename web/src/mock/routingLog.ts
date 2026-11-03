@@ -6,7 +6,7 @@ import { shareIn, weightOf } from '@/lib/costs';
 import { placementHit } from '@/lib/format';
 import { endOf } from '@/lib/quota';
 import { compareRows } from '@/lib/routingLog';
-import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN } from './accounts';
+import { ACCOUNTS, LEDGER_WINDOW, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN } from './accounts';
 import { GUARDRAILS } from './guardrails';
 import { leadOf } from './lead';
 import { SESSIONS } from './operations';
@@ -57,7 +57,6 @@ const bodyTokensOf = (r: RequestLog) => r.usage.input + r.usage.cacheRead + r.us
  * decisions read no burn at all, so they book the rewrite alone.
  */
 export const PRIOR_BURN: Record<string, number> = { five_hour: 0.01, seven_day: 0.0012, seven_day_fable: 0.0024 };
-const WINDOW_OF: Record<string, string> = { '5h': 'five_hour', '7d': 'seven_day', '7d_fable': 'seven_day_fable' };
 
 // The in-flight counts draw from a stream of their own, so no other draw of the story moves.
 const inFlightRng = createRng(5_303);
@@ -360,7 +359,7 @@ const ACCOUNT_BURNS = new Map(
     a.id,
     Object.fromEntries(
       [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])].flatMap((w) => {
-        const name = WINDOW_OF[w.id];
+        const name = LEDGER_WINDOW[w.id];
         return name !== undefined && w.burn ? [[name, w.burn]] : [];
       }),
     ) as Record<string, number>,
@@ -491,7 +490,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       const ageMs = head ? 4_000 : 120_000;
       const end = endOf(a, at);
       for (const w of readingsOf(spec, a.id)) {
-        const name = WINDOW_OF[w.id];
+        const name = LEDGER_WINDOW[w.id];
         if (name === undefined || w.utilization === null) continue;
         const ahead = leadOf({ resetsAt: w.resetsAt, utilization: w.utilization }, WINDOW_MS[name], at, end);
         const horizon = horizonOf(name, w.resetsAt, end, at);
@@ -1601,7 +1600,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
     // before the cap, so it takes no hold and is never passed over. The windows are the ones the answering record
     // reads.
     const fast = r.shape.requestedSpeed === 'fast';
-    const spent = (id: string) => r.canonicalModel.includes('fable') && spentForFable((w) => oauthWindows(id, answeredAt, () => OLDER_FACTOR).find((x) => WINDOW_OF[x.id] === w)?.utilization);
+    const spent = (id: string) => r.canonicalModel.includes('fable') && spentForFable((w) => oauthWindows(id, answeredAt, () => OLDER_FACTOR).find((x) => LEDGER_WINDOW[x.id] === w)?.utilization);
     // A spent Fable member stays servable where the pool allows overage and the credits the record reads are unblocked.
     const funded = (id: string) => pool !== undefined && fundedBy(pool, fast ? creditsAt(id, answeredAt) : null);
     const servable = pool === undefined ? [] : pool.members.map((m) => m.accountId).filter((id) => obstacleOf(accountOf.get(id)!, pool, answeredAt, r.canonicalModel, fast, []) === null && (!spent(id) || funded(id)));
@@ -2559,7 +2558,7 @@ function buildEvents(): RoutingEvent[] {
   const announced = new Map<string, number>([[`nightly|five_hour|${iso(nightlyReset)}`, nightlyClear?.at ?? Number.POSITIVE_INFINITY]]);
   for (const { a, at, r } of heads) {
     for (const w of a.windows) {
-      const window = WINDOW_OF[w.id];
+      const window = LEDGER_WINDOW[w.id];
       const edge = `${a.accountId}|${window}|${w.resetsAt}`;
       if ((window !== 'five_hour' && window !== 'seven_day') || (w.utilization ?? 0) < 1 || at < (announced.get(edge) ?? Number.NEGATIVE_INFINITY)) continue;
       announced.set(edge, Number.POSITIVE_INFINITY);
