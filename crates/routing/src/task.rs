@@ -3398,7 +3398,7 @@ impl Task {
                     .samples()
                     .into_iter()
                     .map(|(id, read)| {
-                        let predicted = self.state.predicted_sample(&id, now).unwrap_or(read);
+                        let predicted = self.state.predict_sample(&id, read, now);
                         (id, predicted)
                     })
                     .collect();

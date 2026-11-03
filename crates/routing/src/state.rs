@@ -2506,10 +2506,14 @@ impl RoutingState {
         })
     }
 
-    /// The account's sample with each plan window replaced by its prediction at `now`, the api_key and fast-lane
-    /// buckets as read; what `RouterHandle::samples` answers.
-    pub fn predicted_sample(&self, account_id: &str, now: i64) -> Option<UtilizationSample> {
-        let mut sample = self.samples.get(account_id)?.clone();
+    /// `sample`, the account's stored one, with each plan window replaced by its prediction at `now`, the api_key and
+    /// fast-lane buckets as read: what `RouterHandle::samples` answers.
+    pub fn predict_sample(
+        &self,
+        account_id: &str,
+        mut sample: UtilizationSample,
+        now: i64,
+    ) -> UtilizationSample {
         let plan: Vec<String> = sample
             .windows
             .keys()
@@ -2521,7 +2525,7 @@ impl RoutingState {
                 sample.windows.insert(window, predicted);
             }
         }
-        Some(sample)
+        sample
     }
 
     /// The stored rows of `windows` on the account, for the writer.
