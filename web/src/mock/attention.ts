@@ -194,11 +194,6 @@ function drift(accountId: string): Pick<AttentionItem, 'detail' | 'since'> | nul
 
 const CONDITION_ORDER: AttentionItem['kind'][] = ['meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'];
 
-/**
- * The meter drift and the four routing conditions as the reader builds them, one per subject the fold holds: every
- * OAuth account for the meter drift, the walls, the spent destinations and the slow-downs, every pool for the rounds
- * without runway. The route lists them by kind, then by when each began, then by subject.
- */
 /** The conditions the ledger folds per subscription account, each kind beside its fold. */
 const ACCOUNT_CONDITIONS: [AttentionItem['kind'], (accountId: string) => Pick<AttentionItem, 'detail' | 'since'> | null][] = [
   ['meter_drift', drift],
@@ -207,6 +202,11 @@ const ACCOUNT_CONDITIONS: [AttentionItem['kind'], (accountId: string) => Pick<At
   ['slowed_long', (id) => slowedLongOf(ROUTING_EVENTS, id, NOW)],
 ];
 
+/**
+ * The meter drift and the four routing conditions as the reader builds them, one per subject the fold holds: every
+ * OAuth account for the meter drift, the walls, the spent destinations and the slow-downs, every pool for the rounds
+ * without runway. The route lists them by kind, then by when each began, then by subject.
+ */
 const CONDITIONS: AttentionItem[] = [
   // Built account by account: the sort orders the items by kind, start and subject, and no two share all three.
   ...ACCOUNTS.filter((a) => a.kind === 'oauth').flatMap((a) =>
