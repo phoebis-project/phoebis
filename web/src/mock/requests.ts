@@ -12,7 +12,7 @@ import { NO_CLASS, NO_EFFORT, foldClassifier, foldEffort, foldRequestClass } fro
 import { byteOrder, tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { endOf } from '@/lib/quota';
-import { ACCOUNTS, LEDGER_WINDOW, QUOTA_HISTORY, accountById, isPaidSource, kindTier, sharedWindowsOf } from './accounts';
+import { ACCOUNTS, LEDGER_WINDOW, QUOTA_HISTORY, accountById, isPaidSource, kindTier, sharedWindowsOf, windowsOf } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor, promptOf } from './catalog';
 import { earliest, leadOf, paceHours } from './lead';
@@ -2728,7 +2728,7 @@ function accountRollups(): AccountRollup[] {
   // of zero across the story's accounts.
   const sampledWindows = (account: (typeof ACCOUNTS)[number], t: number): AccountRollup['windows'] => {
     const windows: AccountRollup['windows'] = {};
-    for (const w of [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])]) {
+    for (const w of windowsOf(account)) {
       const key = LEDGER_WINDOW[w.id];
       const sample = lastSample.get(`${account.id}|${w.id}`)?.get(t);
       if (key === undefined || sample === undefined) continue;
@@ -2750,7 +2750,7 @@ function accountRollups(): AccountRollup[] {
     // With no reading `Math.max` answers -Infinity, so such an account holds no hour.
     const since = account.subscription?.since;
     const from = since ? startOfHour(Date.parse(since)) : start;
-    const readings = [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])].map((w) => Date.parse(w.observedAt));
+    const readings = windowsOf(account).map((w) => Date.parse(w.observedAt));
     const until = Math.max(...readings);
     // The ledger reads the 5-hour peak off the heads' 5-hour readings, which an account whose set lacks the window
     // never sends. Its drift is still drawn, so every account after it keeps its stream.

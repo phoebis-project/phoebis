@@ -7,7 +7,7 @@ import { placementHit } from '@/lib/format';
 import { endOf } from '@/lib/quota';
 import { compareRows } from '@/lib/routingLog';
 import { hoursOfKey } from '@/lib/windows';
-import { ACCOUNTS, LEDGER_WINDOW, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN, accountById, isPaidSource, kindTier } from './accounts';
+import { ACCOUNTS, LEDGER_WINDOW, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN, accountById, isPaidSource, kindTier, windowsOf } from './accounts';
 import { promptOf } from './catalog';
 import { GUARDRAILS } from './guardrails';
 import { earliest, leadOf, paceHours } from './lead';
@@ -353,7 +353,7 @@ const ACCOUNT_BURNS = new Map(
   ACCOUNTS.map((a) => [
     a.id,
     Object.fromEntries(
-      [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])].flatMap((w) => {
+      windowsOf(a).flatMap((w) => {
         const name = LEDGER_WINDOW[w.id];
         return name !== undefined && w.burn ? [[name, w.burn]] : [];
       }),

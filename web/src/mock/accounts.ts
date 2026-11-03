@@ -641,11 +641,12 @@ function carryLegacyEdges(account: (typeof ACCOUNTS)[number], w: RateLimitWindow
   });
 }
 
-/** The windows an account's samples are built from: the literal's, since a flagged account answers none. */
-const windowsReadOf = (seed: Seed): RateLimitWindow[] => [...seed.windows, ...(seed.fableWindow ? [seed.fableWindow] : [])];
+/** An account's windows and its Fable week as one list, a seed's or a served account's. */
+export const windowsOf = (a: Pick<Account, 'fableWindow' | 'windows'>): RateLimitWindow[] => [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])];
 
+// The samples are built from the literal's windows, since a flagged account answers none.
 export const QUOTA_HISTORY: QuotaHistory[] = SEEDS.flatMap((seed, i) =>
-  windowsReadOf(seed).map((w) => ({
+  windowsOf(seed).map((w) => ({
     accountId: seed.id,
     windowId: w.id,
     samples: carryLegacyEdges(ACCOUNTS[i], w, sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt ?? ''), w.periodHours * HOUR, w.utilization, samplesEndOf(ACCOUNTS[i]))),
