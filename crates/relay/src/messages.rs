@@ -3246,10 +3246,7 @@ impl Relay {
             .and_then(|b| inspectable_copy(&head, b, cut));
         // A streaming 200 is held until it commits: an error event ahead of `message_start` is a
         // rejection the caller must never see, because the request can still go to another account.
-        let streaming = head.status == 200
-            && head
-                .get("content-type")
-                .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"));
+        let streaming = head.status == 200 && is_event_stream(&head);
         let mut held: Option<Held> = None;
         let mut first_event: Option<Bytes> = None;
         if let (true, Some(reader)) = (streaming, reader.as_mut()) {
@@ -4586,9 +4583,7 @@ impl Relay {
                 return self.unreadable(trace, &error, outcome).await;
             }
         };
-        let event_stream = head
-            .get("content-type")
-            .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"));
+        let event_stream = is_event_stream(head);
         // A held stream was decoded and parsed up to its commit by the hold, so the bus copy goes on from there
         // with the hold's parser.
         let handover = match held {
@@ -5385,6 +5380,13 @@ fn decode_all(decoder: &mut dyn Decoder, raw: &[u8]) -> Result<Bytes, TransportE
             .map_err(|e| e.at_bound(MAX_BUFFERED_BODY))?,
     );
     Ok(Bytes::from(out))
+}
+
+/// A media type compares case-insensitively, so the hold and the bus copy read a stream however the upstream
+/// capitalizes its content type.
+fn is_event_stream(head: &ResponseHead) -> bool {
+    head.get("content-type")
+        .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"))
 }
 
 /// Every coded body is decoded for the forward and `content-encoding` dropped, whatever the caller accepts, so the
