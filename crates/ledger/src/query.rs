@@ -3571,7 +3571,8 @@ pub fn key_request_totals(
 
 /// The priced SQL sum of both totals reads over the hour range: grouped by `group_columns`, the price columns and the
 /// hour, one query per span of `revision_spans`, each group's price columns read from `offset`. `key_of` reads a
-/// group's key before `price_group` runs, so a group it answers `None` for is never priced.
+/// group's key before `price_group` runs, so a group it answers `None` for is never priced. The statement orders the
+/// groups as it groups them, so a key adds its groups' figures in one order whichever plan SQLite picks.
 #[allow(clippy::too_many_arguments)]
 fn grouped_totals(
     conn: &Connection,
@@ -3583,7 +3584,7 @@ fn grouped_totals(
     now: i64,
     key_of: impl Fn(&rusqlite::Row<'_>) -> rusqlite::Result<Option<String>>,
 ) -> Result<BTreeMap<String, Totals>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT {group_columns}, {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} FROM rollups_hourly WHERE kind != 'probe' AND hour >= ?1 AND hour < ?2 GROUP BY {group_columns}, {PRICE_GROUP_COLUMNS}"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {group_columns}, {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} FROM rollups_hourly WHERE kind != 'probe' AND hour >= ?1 AND hour < ?2 GROUP BY {group_columns}, {PRICE_GROUP_COLUMNS} ORDER BY {group_columns}, {PRICE_GROUP_COLUMNS}"))?;
     let mut out: BTreeMap<String, Totals> = BTreeMap::new();
     for span in revision_spans(prices, Some(&costs.revisions), since_hour, to_hour) {
         let rows = stmt.query_map(params![span.from_hour, span.to_hour], |r| {
