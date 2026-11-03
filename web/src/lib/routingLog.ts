@@ -1,7 +1,7 @@
 import { iso, PIN_RELEASE_REASON_VALUES } from '@/api/decode';
 import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { ROUTING_LOG_CODEC, type RangeValue } from './address';
-import { moveLabel, type WeekReading } from './analytics';
+import { FAILOVER_MOVE_REASONS, moveLabel, RULE_MOVE_REASONS, type WeekReading } from './analytics';
 import { compareByModelTier } from './costs';
 import { has, lookup } from './counts';
 import type { ChipText } from './filterBar';
@@ -589,7 +589,7 @@ export function byOf(row: RoutingLogRow, page: readonly RoutingLogRow[] = []): C
 }
 
 /** The moves a failed attempt forced, whose Fact is the answer that attempt got. */
-const FAILOVER_MOVES = new Set(['cooldown', 'fast_lane', 'mark']);
+const FAILOVER_MOVES = new Set<string>(FAILOVER_MOVE_REASONS);
 
 /**
  * The status a failover's failed attempt answered. The move lands in the second of the decision that placed the next
@@ -1751,7 +1751,7 @@ export interface DetailPair {
   table?: { head: string[]; rows: Chip[][] };
 }
 
-const RULE_MOVES = new Set(['drain', 'overage', 'return_to_plan', 'shed', 'spent']);
+const RULE_MOVES = new Set<string>(RULE_MOVE_REASONS);
 /** What an account's new state means for routing, by the state it moved to. */
 const STATE_EFFECT: Record<string, string> = {
   deleted: 'the account left the registry and this is its last row',
