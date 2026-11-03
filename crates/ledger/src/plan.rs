@@ -13,7 +13,7 @@ use jiff::civil::Weekday;
 use jiff::tz::{TimeZone, TimeZoneDatabase};
 use jiff::Timestamp;
 use phoebis_routing::{window_for, BandSegment, PinUsage, RateTable, Rates, FIVE_HOUR, SEVEN_DAY};
-use phoebis_store::PinBurn;
+use phoebis_store::{AccountKind, PinBurn};
 
 use crate::pricing::{Revisions, Speed};
 use crate::rollup::{
@@ -1250,15 +1250,15 @@ pub enum Funding {
 /// The funding of an attempt from its row's four facts: the account's kind, its class, the answer's `speed` and
 /// the head's `overage_in_use`, read in `Funding`'s order.
 pub fn funding_of(
-    account_kind: &str,
+    account_kind: Option<AccountKind>,
     usage_based: bool,
     overage_in_use: Option<bool>,
-    speed: Option<&str>,
+    speed: Speed,
 ) -> Funding {
     Funding::of(
-        account_kind == "api_key",
+        account_kind == Some(AccountKind::ApiKey),
         usage_based,
-        Speed::of(speed),
+        speed,
         overage_in_use,
     )
 }

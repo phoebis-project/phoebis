@@ -8,6 +8,7 @@ use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_ledger::{run_retention, LedgerConfig, Purged, MAX_CAPTURED_BODY, PURGE_SLICE};
+use phoebis_store::AccountKind;
 use tower::ServiceExt;
 
 fn request_id(resp: &axum::http::Response<axum::body::Body>) -> String {
@@ -585,7 +586,7 @@ fn plant_rollup_rows(db: &phoebis_ledger::LedgerDb, account: &str, at: i64, rows
             request_id: id.clone(),
             attempt: 1,
             account_id: account.into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             outcome: "succeeded".into(),
             input_tokens: Some(1),
             ..Default::default()

@@ -2,6 +2,7 @@
 mod common;
 use common::{get, json, login, patch, post, wait_json};
 use phoebis_ledger::{AttemptRecord, BodyRecord, Record, RequestRecord};
+use phoebis_store::AccountKind;
 
 const HOUR: i64 = 3_600_000;
 
@@ -50,7 +51,7 @@ fn attempt(id: &str, account: &str, status: u16) -> AttemptRecord {
         request_id: id.into(),
         attempt: 1,
         account_id: account.into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         started_at: common::NOW,
         upstream_status: Some(status),
         outcome: if status == 200 {

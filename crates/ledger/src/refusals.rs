@@ -302,6 +302,7 @@ mod tests {
     use crate::refold::{FAIL_AFTER_PAGES, TEST_PAGE};
     use crate::rollup::{read_rollups, RollupRow, RollupSelect};
     use crate::test_tables::{api_prices, JANUARY_2026};
+    use phoebis_store::AccountKind;
 
     const HAIKU: &str = "claude-haiku-5-5";
 
@@ -382,7 +383,7 @@ mod tests {
                 request_id: id.into(),
                 attempt: 1,
                 account_id: "a".into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 started_at: received_at,
                 outcome: "succeeded".into(),
                 input_tokens: Some(100),

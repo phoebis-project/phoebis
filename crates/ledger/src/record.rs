@@ -124,7 +124,7 @@ pub struct AttemptRecord {
     pub request_id: String,
     pub attempt: u32,
     pub account_id: String,
-    pub account_kind: String,
+    pub account_kind: AccountKind,
     pub pin_epoch: Option<u64>,
     pub started_at: i64,
     pub finished_at: Option<i64>,

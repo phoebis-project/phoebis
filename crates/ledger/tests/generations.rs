@@ -4,6 +4,7 @@ use phoebis_ledger::{
     read_rollups, reconcile_key_generations, request_by_id, AttemptRecord, KeySelector, LedgerDb,
     LiveKeyLifetime, RequestRecord, RollupSelect,
 };
+use phoebis_store::AccountKind;
 
 const HOUR_MS: i64 = 3_600_000;
 
@@ -60,7 +61,7 @@ fn attempt(id: &str) -> AttemptRecord {
         request_id: id.into(),
         attempt: 1,
         account_id: "a".into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         started_at: 1_000,
         outcome: "succeeded".into(),
         input_tokens: Some(100),

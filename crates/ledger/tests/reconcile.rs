@@ -9,6 +9,7 @@ use phoebis_ledger::{
     RequestRecord, SampleSource, MIN_RISE, RATIO_HIGH, RATIO_LOW,
 };
 use phoebis_routing::{FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
+use phoebis_store::AccountKind;
 
 const MINUTE: i64 = 60_000;
 const HOUR: i64 = 60 * MINUTE;
@@ -87,7 +88,7 @@ fn answered(
             request_id: id.into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: started,
             finished_at: Some(completed),
             outcome: "succeeded".into(),
@@ -123,7 +124,7 @@ fn served_as_classifier(db: &LedgerDb, id: &str, model: &str, completed: i64, in
             request_id: id.into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: started,
             finished_at: Some(completed),
             outcome: "succeeded".into(),

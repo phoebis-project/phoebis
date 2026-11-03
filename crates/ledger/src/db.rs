@@ -1170,6 +1170,7 @@ pub(crate) fn stat1_rows(
 mod tests {
     use super::*;
     use crate::record::*;
+    use phoebis_store::AccountKind;
     use std::future::Future;
     use std::task::Poll;
 
@@ -1252,7 +1253,7 @@ mod tests {
             request_id: id.into(),
             attempt: n,
             account_id: account.into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             pin_epoch: Some(3),
             started_at: 1_000 + n as i64,
             finished_at: Some(1_100),

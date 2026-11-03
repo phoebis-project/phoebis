@@ -2,6 +2,7 @@ mod common;
 use std::time::Duration;
 
 use common::{delete, get, json, login, patch, post, put};
+use phoebis_store::AccountKind;
 
 const HOUR: i64 = 3_600_000;
 
@@ -1033,7 +1034,7 @@ async fn a_request_on_the_hours_first_millisecond_counts_in_the_key_pool_and_acc
             request_id: "on-the-hour".into(),
             attempt: 1,
             account_id: "direct".into(),
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             started_at: hour,
             outcome: "succeeded".into(),
             input_tokens: Some(100),
@@ -1114,7 +1115,7 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
                 request_id: id.into(),
                 attempt: 1,
                 account_id: "direct".into(),
-                account_kind: "api_key".into(),
+                account_kind: AccountKind::ApiKey,
                 started_at: at,
                 outcome: "succeeded".into(),
                 input_tokens: Some(100),
@@ -1210,7 +1211,7 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
             request_id: "p1".into(),
             attempt: 1,
             account_id: "business".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: plan_at,
             outcome: "succeeded".into(),
             input_tokens: Some(usage.input),
@@ -1319,7 +1320,7 @@ async fn the_key_lifetime_walks_the_older_rows_once_an_hour_and_a_key_created_ag
                 request_id: id.into(),
                 attempt: 1,
                 account_id: "direct".into(),
-                account_kind: "api_key".into(),
+                account_kind: AccountKind::ApiKey,
                 started_at: at,
                 outcome: "succeeded".into(),
                 input_tokens: Some(100),
@@ -2368,7 +2369,7 @@ async fn a_pool_accepts_its_affinity_fields_and_a_members_budget() {
             request_id: "r1".into(),
             attempt: 1,
             account_id: "direct".into(),
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             outcome: "succeeded".into(),
             input_tokens: Some(1_000),
             output_tokens: Some(100),
@@ -2721,7 +2722,7 @@ async fn a_member_at_its_budget_reads_ineligible_and_its_lone_pool_reads_exhaust
             request_id: "r1".into(),
             attempt: 1,
             account_id: "direct".into(),
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             outcome: "succeeded".into(),
             input_tokens: Some(1_000),
             output_tokens: Some(100),

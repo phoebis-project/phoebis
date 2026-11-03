@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
+use phoebis_store::AccountKind;
 use rusqlite::{params, params_from_iter};
 
 use crate::bodies::{
@@ -141,7 +142,7 @@ fn seed(db: &LedgerDb) {
             request_id: id.clone(),
             attempt: 1,
             account_id: account.into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: received_at + 10,
             finished_at: Some(received_at + 900),
             upstream_status: Some(200),

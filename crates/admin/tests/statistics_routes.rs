@@ -39,7 +39,7 @@ fn record_at(id: &str, at: i64, model: &str, session: &str, key_generation: i64)
             request_id: id.into(),
             attempt: 1,
             account_id: "business".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: at,
             outcome: "succeeded".into(),
             input_tokens: Some(1_000),
@@ -1363,7 +1363,7 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_nulls_the_p
     }
     // On the plan, a request the cost model weighs and two probes it cannot weigh, one on a null weight and one on a
     // tier of no weighted model. Through the API key account, one probe.
-    let probe = |id: &str, model: &str, account: &str, account_kind: &str| {
+    let probe = |id: &str, model: &str, account: &str, account_kind: AccountKind| {
         let mut row = record(id, at, model, "s1");
         if let Record::Request {
             request, attempts, ..
@@ -1371,7 +1371,7 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_nulls_the_p
         {
             request.kind = "probe".into();
             attempts[0].account_id = account.into();
-            attempts[0].account_kind = account_kind.into();
+            attempts[0].account_kind = account_kind;
         }
         row
     };
@@ -1382,19 +1382,19 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_nulls_the_p
         "probe-null-weight",
         "claude-opus-5",
         "business",
-        "oauth",
+        AccountKind::Oauth,
     ));
     parts.ledger.record(probe(
         "probe-unweighted",
         "claude-mystery-2",
         "business",
-        "oauth",
+        AccountKind::Oauth,
     ));
     parts.ledger.record(probe(
         "probe-billed",
         "claude-sonnet-5-5",
         "direct",
-        "api_key",
+        AccountKind::ApiKey,
     ));
     landed(
         &parts,
@@ -1811,7 +1811,7 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
             request_id: "burn-2".into(),
             attempt: 1,
             account_id: "direct".into(),
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             started_at: now - HOUR,
             outcome: "succeeded".into(),
             input_tokens: Some(1_000),
@@ -3146,7 +3146,7 @@ fn share_rows() -> Vec<Record> {
     let mut direct = record("share-direct", at, "claude-sonnet-5-5", "s2");
     if let Record::Request { attempts, .. } = &mut direct {
         attempts[0].account_id = "direct".into();
-        attempts[0].account_kind = "api_key".into();
+        attempts[0].account_kind = AccountKind::ApiKey;
     }
     vec![cached, probe, direct]
 }
@@ -3166,7 +3166,7 @@ fn funded_rows() -> Vec<Record> {
     let mut direct = record("fund-direct", at, "claude-sonnet-5-5", "s2");
     if let Record::Request { attempts, .. } = &mut direct {
         attempts[0].account_id = "direct".into();
-        attempts[0].account_kind = "api_key".into();
+        attempts[0].account_kind = AccountKind::ApiKey;
     }
     let plan = record("fund-plan", at, "claude-sonnet-5-5", "s1");
     let mut gone = record("fund-gone", at, "claude-sonnet-5-5", "s3");
@@ -3558,11 +3558,10 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
                     attempt: 1,
                     account_id: account.into(),
                     account_kind: if account == "business" {
-                        "oauth"
+                        AccountKind::Oauth
                     } else {
-                        "api_key"
-                    }
-                    .into(),
+                        AccountKind::ApiKey
+                    },
                     started_at: at,
                     outcome: "succeeded".into(),
                     input_tokens: Some(input),
@@ -3990,7 +3989,7 @@ async fn the_burn_route_answers_only_the_twenty_busiest_sessions() {
             request_id: id.into(),
             attempt: 1,
             account_id: "business".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: now - 100,
             outcome: "succeeded".into(),
             input_tokens: Some(input),
@@ -4065,7 +4064,7 @@ async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ra
             request_id: "r-trailing".into(),
             attempt: 1,
             account_id: "business".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: now,
             outcome: "succeeded".into(),
             input_tokens: Some(500),
@@ -4168,7 +4167,7 @@ async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason_and_by_fi
             request_id: "r-rewrite".into(),
             attempt: 1,
             account_id: "business".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: hour_ago,
             outcome: "succeeded".into(),
             cache_write_5m_tokens: Some(500),
@@ -4423,7 +4422,7 @@ async fn a_request_answers_its_class_and_each_attempts_trace_with_skipped_as_nam
             request_id: "r-trace".into(),
             attempt: 1,
             account_id: "business".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: common::NOW,
             outcome: "succeeded".into(),
             selection: Some(
@@ -4564,7 +4563,7 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
     let mut spend = record("r1", common::NOW, "claude-sonnet-5", "s1");
     if let Record::Request { attempts, .. } = &mut spend {
         attempts[0].account_id = "direct".into();
-        attempts[0].account_kind = "api_key".into();
+        attempts[0].account_kind = AccountKind::ApiKey;
     }
     parts.ledger.record(spend);
     let budgets = wait_json(&parts.app, "/admin/analytics/budgets", &cookie, |v| {
@@ -4705,7 +4704,7 @@ async fn placements_route_answers_the_seeded_ledgers_rows_by_rung() {
                 request_id: id.into(),
                 attempt: 1,
                 account_id: "business".into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 outcome: "succeeded".into(),
                 cache_read_tokens: Some(cache_read_tokens),
                 selection: Some(format!(
@@ -5137,7 +5136,7 @@ fn answered(id: &str, at: i64, attempts: &[(u16, Option<u64>)]) -> Record {
                 request_id: id.into(),
                 attempt: n,
                 account_id: "direct".into(),
-                account_kind: "api_key".into(),
+                account_kind: AccountKind::ApiKey,
                 started_at: at,
                 finished_at: Some(at + i64::from(n) * 1_000),
                 upstream_status: Some(*status),

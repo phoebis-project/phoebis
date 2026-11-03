@@ -14,6 +14,7 @@ use phoebis_ledger::{
     AttemptRecord, AttentionGaugeSource, AttentionGauges, LedgerConfig, Metrics, PriceRevisions,
     Pricing, QuotaSampleRecord, RequestRecord, RoutingGauges, SampleSource,
 };
+use phoebis_store::AccountKind;
 use tower::ServiceExt;
 
 fn series_of(text: &str) -> BTreeSet<String> {
@@ -50,7 +51,7 @@ fn ten_thousand_sessions_and_models_leave_the_label_set_bounded() {
             request_id: request.id.clone(),
             attempt: 1,
             account_id: format!("a{}", i % 2),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             outcome: "succeeded".into(),
             input_tokens: Some(10),
             output_tokens: Some(5),
@@ -147,7 +148,7 @@ fn a_response_past_the_last_finite_bucket_is_exported_as_inf_only() {
                 request_id: "r".into(),
                 attempt: 1,
                 account_id: "a".into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 outcome: "succeeded".into(),
                 ttfb_ms: Some(ttfb_ms),
                 ..Default::default()
@@ -535,7 +536,7 @@ fn a_refused_request_lands_in_the_refusals_counter_and_not_in_the_requests_count
             request_id: "r-reselect".into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             outcome: "rate_limited".into(),
             ..Default::default()
         }],
@@ -1071,7 +1072,7 @@ revisions:
                     request_id: id.into(),
                     attempt: 1,
                     account_id: "a".into(),
-                    account_kind: "oauth".into(),
+                    account_kind: AccountKind::Oauth,
                     outcome: "succeeded".into(),
                     input_tokens: Some(10),
                     output_tokens: Some(5),
@@ -1154,7 +1155,7 @@ async fn a_batch_the_file_refused_once_counts_its_request_once_when_its_retry_la
                 request_id: "r1".into(),
                 attempt: 1,
                 account_id: "a".into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 outcome: "succeeded".into(),
                 input_tokens: Some(10),
                 ..Default::default()

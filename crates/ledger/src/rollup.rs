@@ -557,10 +557,10 @@ pub fn deltas_of(
     let funding_word = |a: Option<&AttemptRecord>| {
         a.map_or(PLAN_FUNDING, |a| {
             funding_of(
-                &a.account_kind,
+                Some(a.account_kind),
                 a.usage_based,
                 a.overage_in_use,
-                a.speed.as_deref(),
+                Speed::of(a.speed.as_deref()),
             )
             .rollup_word()
         })
@@ -3163,7 +3163,7 @@ mod tests {
         let answered = AttemptRecord {
             input_tokens: Some(1_000_000),
             speed: None,
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             ..attempt(1, "a", None, None, None)
         };
         db.write(|c| {
@@ -3235,7 +3235,7 @@ mod tests {
         let million = |n: u32, speed: &str| AttemptRecord {
             input_tokens: Some(1_000_000),
             speed: Some(speed.into()),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             ..attempt(n, "a", None, None, None)
         };
         let deltas = deltas_of(

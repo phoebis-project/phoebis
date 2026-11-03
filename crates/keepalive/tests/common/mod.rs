@@ -28,7 +28,7 @@ use phoebis_ledger::{
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::AccountingSource;
-use phoebis_store::{StorageKey, Store};
+use phoebis_store::{AccountKind, StorageKey, Store};
 // Re-exported for every test binary that shares this rig; only some of them, this one included, reach for all
 // of `oauth`, `wait_for`, and `NOW` themselves.
 #[allow(unused_imports)]
@@ -808,7 +808,7 @@ pub fn spend_of(id: &str, now: i64, usd: f64) -> (RequestRecord, AttemptRecord) 
         request_id: id.into(),
         attempt: 1,
         account_id: "a".into(),
-        account_kind: "api_key".into(),
+        account_kind: AccountKind::ApiKey,
         outcome: "succeeded".into(),
         input_tokens: Some((usd / rate * 1_000_000.0).round() as u64),
         ..Default::default()

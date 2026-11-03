@@ -1,5 +1,5 @@
 mod common;
-use phoebis_store::CooldownScope;
+use phoebis_store::{AccountKind, CooldownScope};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -1102,7 +1102,7 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
                 request_id: id.into(),
                 attempt: 1,
                 account_id: "business".into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 started_at: at,
                 outcome: "succeeded".into(),
                 input_tokens: Some(10),
@@ -1261,7 +1261,7 @@ async fn the_account_lifetime_walks_the_older_rows_once_an_hour_and_a_row_landed
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
-    let land = |id: &str, (account, kind): (&str, &str), at: i64| {
+    let land = |id: &str, (account, kind): (&str, AccountKind), at: i64| {
         parts.ledger.record(Record::Request {
             request: RequestRecord {
                 id: id.into(),
@@ -1282,7 +1282,7 @@ async fn the_account_lifetime_walks_the_older_rows_once_an_hour_and_a_row_landed
                 request_id: id.into(),
                 attempt: 1,
                 account_id: account.into(),
-                account_kind: kind.into(),
+                account_kind: kind,
                 started_at: at,
                 outcome: "succeeded".into(),
                 input_tokens: Some(10),
@@ -1292,7 +1292,10 @@ async fn the_account_lifetime_walks_the_older_rows_once_an_hour_and_a_row_landed
             bodies: None,
         });
     };
-    let (business, direct) = (("business", "oauth"), ("direct", "api_key"));
+    let (business, direct) = (
+        ("business", AccountKind::Oauth),
+        ("direct", AccountKind::ApiKey),
+    );
     land("old", business, now - 30 * 24 * HOUR);
     land("new", business, now);
     // An account whose every row is older than the week, so its lifetime comes from the older part alone.

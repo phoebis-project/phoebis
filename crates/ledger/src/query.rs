@@ -9,7 +9,7 @@ use phoebis_bus::{Classifier, Kind};
 use phoebis_routing::{
     window_for, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, REFRESHING_CLASSES, SEVEN_DAY,
 };
-use phoebis_store::BudgetPeriod;
+use phoebis_store::{AccountKind, BudgetPeriod};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -4848,10 +4848,10 @@ pub fn session_burn_series(
                 at: a.completed_at,
                 received_at: a.received_at,
                 funding: funding_of(
-                    &a.account_kind,
+                    AccountKind::parse(&a.account_kind),
                     a.usage_based,
                     a.overage_in_use,
-                    a.speed.as_deref(),
+                    Speed::of(a.speed.as_deref()),
                 ),
                 speed: Speed::of(a.speed.as_deref()),
                 band,

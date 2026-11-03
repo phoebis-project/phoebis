@@ -20,7 +20,7 @@ use phoebis_bus::{
 use phoebis_ledger::{
     AttemptRecord, LedgerDb, LedgerError, Metrics, Record, RequestRecord, READERS,
 };
-use phoebis_store::{AccountState, AttemptOutcome, StateCause};
+use phoebis_store::{AccountKind, AccountState, AttemptOutcome, StateCause};
 use serde_json::json as j;
 use tokio::task::JoinHandle;
 use tower::ServiceExt;
@@ -488,7 +488,7 @@ async fn a_held_model_unpriced_condition_lists_on_the_route_after_every_degraded
                 request_id: "r1".into(),
                 attempt: 1,
                 account_id: "business".into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 outcome: "succeeded".into(),
                 input_tokens: Some(1_000),
                 ..Default::default()

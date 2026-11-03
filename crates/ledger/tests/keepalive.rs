@@ -11,6 +11,7 @@ use phoebis_ledger::{
     LedgerDb, LiveKeys, PlanTables, PriceRevisions, Record, RequestRecord, RollupSelect, Speed,
     UNATTRIBUTED,
 };
+use phoebis_store::AccountKind;
 
 fn delta(at: i64, kind: &str) -> KeepaliveDelta {
     KeepaliveDelta {
@@ -47,7 +48,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
             request_id: "r1".into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             outcome: "succeeded".into(),
             cache_read_tokens: Some(2_000),
             ..Default::default()
@@ -192,7 +193,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
             request_id: "p1".into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             outcome: "succeeded".into(),
             cache_read_tokens: Some(2_000),
             ..Default::default()
@@ -219,7 +220,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
             request_id: "p2".into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             outcome: "rate_limited".into(),
             ..Default::default()
         }],
@@ -326,7 +327,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
             request_id: "r3".into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             outcome: "succeeded".into(),
             ..Default::default()
         }],
@@ -368,7 +369,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
                 request_id: "r3".into(),
                 attempt: 1,
                 account_id: "a".into(),
-                account_kind: "api_key".into(),
+                account_kind: AccountKind::ApiKey,
                 outcome: "rate_limited".into(),
                 ..Default::default()
             },
@@ -376,7 +377,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
                 request_id: "r3".into(),
                 attempt: 2,
                 account_id: "b".into(),
-                account_kind: "api_key".into(),
+                account_kind: AccountKind::ApiKey,
                 outcome: "succeeded".into(),
                 ..Default::default()
             },
@@ -578,7 +579,7 @@ fn a_usage_based_seats_credit_and_wasted_probe_fold_under_usage_based_beside_its
             request_id: "r1".into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             outcome: "succeeded".into(),
             cache_read_tokens: Some(2_000),
             overage_in_use: Some(true),

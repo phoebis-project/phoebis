@@ -19,7 +19,7 @@ use phoebis_ledger::{
 use phoebis_routing::{
     PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
-use phoebis_store::{BudgetPeriod, PoolMember, RegistryLoad, RoutingLoad};
+use phoebis_store::{AccountKind, BudgetPeriod, PoolMember, RegistryLoad, RoutingLoad};
 use rand::{RngExt, SeedableRng};
 
 const DAY_MS: i64 = 86_400_000;
@@ -138,7 +138,7 @@ fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
                 request_id: id.clone(),
                 attempt: n,
                 account_id: accounts[rng.random_range(0..3)].into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 started_at: received_at + n as i64,
                 outcome: if last { "succeeded" } else { "rate_limited" }.into(),
                 input_tokens: last.then(|| rng.random_range(100..5_000)),
@@ -1136,7 +1136,7 @@ fn reading(id: &str, account: &str, utilization: f64) -> AttemptRecord {
         request_id: id.into(),
         attempt: 1,
         account_id: account.into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         started_at: 3_700_000,
         outcome: "succeeded".into(),
         ratelimit_5h_utilization: Some(utilization),
@@ -1277,7 +1277,7 @@ fn plant_stop(
         request_id: id.into(),
         attempt: 1,
         account_id: account.into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         upstream_status: Some(200),
         outcome: "succeeded".into(),
         stop_reason: Some(stop_reason.into()),
@@ -1356,7 +1356,7 @@ fn plant_caller_refusal(
         request_id: id.into(),
         attempt: 1,
         account_id: "a".into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         upstream_status: Some(200),
         outcome: "succeeded".into(),
         stop_reason: Some("refusal".into()),
@@ -1494,7 +1494,7 @@ fn a_rejection_after_an_attempt_folds_as_a_rejected_request_as_before() {
         request_id: "r1".into(),
         attempt: 1,
         account_id: "a".into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         started_at: 3_700_000,
         outcome: "failed".into(),
         ..Default::default()
@@ -1812,7 +1812,7 @@ fn served_at(id: &str, speeds: &[Option<&str>]) -> (RequestRecord, Vec<AttemptRe
                 request_id: id.into(),
                 attempt: i as u32 + 1,
                 account_id: "a".into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 started_at: 3_600_000 + i as i64,
                 upstream_status: Some(if serving { 200 } else { 429 }),
                 outcome: if serving { "succeeded" } else { "rate_limited" }.into(),
@@ -1900,7 +1900,7 @@ fn the_speed_filter_reads_the_serving_attempts_speed() {
 struct ShareRow<'a> {
     id: &'a str,
     account: &'a str,
-    account_kind: &'a str,
+    account_kind: AccountKind,
     kind: &'a str,
     model: &'a str,
     at: i64,
@@ -1918,7 +1918,7 @@ impl Default for ShareRow<'_> {
         ShareRow {
             id: "r",
             account: "a",
-            account_kind: "oauth",
+            account_kind: AccountKind::Oauth,
             kind: "inference",
             model: "claude-fable-5-1",
             at: WEEKDAY_OFF_PEAK,
@@ -1956,7 +1956,7 @@ fn plant_share(db: &LedgerDb, row: ShareRow<'_>) {
             request_id: row.id.into(),
             attempt: 1,
             account_id: row.account.into(),
-            account_kind: row.account_kind.into(),
+            account_kind: row.account_kind,
             started_at: row.at,
             finished_at: Some(row.at + 500),
             outcome: "succeeded".into(),
@@ -1970,7 +1970,7 @@ fn plant_share(db: &LedgerDb, row: ShareRow<'_>) {
             // The landing records no tier for an api_key account, whose rows price in dollars alone.
             tier: row
                 .tier
-                .filter(|_| row.account_kind != "api_key")
+                .filter(|_| row.account_kind != AccountKind::ApiKey)
                 .map(String::from),
             usage_based: row.usage_based,
             ..Default::default()
@@ -2151,10 +2151,28 @@ async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_doll
     let costs = phoebis_ledger::test_tables::subscription_costs();
     let at = phoebis_ledger::test_tables::JANUARY_2026;
     for (id, account, account_kind, model, counts) in [
-        ("r-plan", "a", "oauth", "claude-opus-5-5", usage(10, 1)),
+        (
+            "r-plan",
+            "a",
+            AccountKind::Oauth,
+            "claude-opus-5-5",
+            usage(10, 1),
+        ),
         // Opus 5 has no weight in the test cost model, so it prices nothing whatever its model tier weighs.
-        ("r-unweighted", "c", "oauth", "claude-opus-5", usage(10, 0)),
-        ("r-billed", "b", "api_key", "claude-opus-5-5", usage(20, 0)),
+        (
+            "r-unweighted",
+            "c",
+            AccountKind::Oauth,
+            "claude-opus-5",
+            usage(10, 0),
+        ),
+        (
+            "r-billed",
+            "b",
+            AccountKind::ApiKey,
+            "claude-opus-5-5",
+            usage(20, 0),
+        ),
     ] {
         plant_share(
             &db,
@@ -2456,10 +2474,10 @@ fn the_kept_warm_and_probe_counts_count_what_a_plan_account_served_apart() {
     let db = LedgerDb::open_in_memory().unwrap();
     // Two plan probes and a request on `a`, and a probe through the API key account `k`.
     for (id, account, account_kind, kind) in [
-        ("r-request", "a", "oauth", "inference"),
-        ("r-probe-1", "a", "oauth", "probe"),
-        ("r-probe-2", "a", "oauth", "probe"),
-        ("r-probe-billed", "k", "api_key", "probe"),
+        ("r-request", "a", AccountKind::Oauth, "inference"),
+        ("r-probe-1", "a", AccountKind::Oauth, "probe"),
+        ("r-probe-2", "a", AccountKind::Oauth, "probe"),
+        ("r-probe-billed", "k", AccountKind::ApiKey, "probe"),
     ] {
         plant_share(
             &db,
@@ -2584,7 +2602,7 @@ async fn a_billed_row_with_tokens_adds_nothing_to_the_figure_and_a_billed_only_g
     let billed = || ShareRow {
         id: "r-billed",
         account: "k-account",
-        account_kind: "api_key",
+        account_kind: AccountKind::ApiKey,
         model: "claude-sonnet-5-5",
         ..ShareRow::default()
     };
@@ -2823,7 +2841,7 @@ async fn an_overage_row_and_an_api_key_group_add_to_no_share() {
         ShareRow {
             id: "r-api",
             account: "k",
-            account_kind: "api_key",
+            account_kind: AccountKind::ApiKey,
             ..ShareRow::default()
         },
     );
@@ -2946,7 +2964,7 @@ async fn the_funding_filter_partitions_the_rows() {
         ShareRow {
             id: "r-api",
             account: "k",
-            account_kind: "api_key",
+            account_kind: AccountKind::ApiKey,
             ..ShareRow::default()
         },
     );
@@ -3096,7 +3114,7 @@ async fn an_api_key_account_s_rows_stay_billed_and_tierless_when_its_id_comes_ba
         ShareRow {
             id: "r-api",
             account: "k",
-            account_kind: "api_key",
+            account_kind: AccountKind::ApiKey,
             ..ShareRow::default()
         },
     );
@@ -3166,7 +3184,7 @@ async fn an_oauth_account_s_plan_row_stays_plan_under_its_tier_when_its_id_comes
         &db,
         ShareRow {
             id: "r-api",
-            account_kind: "api_key",
+            account_kind: AccountKind::ApiKey,
             ..ShareRow::default()
         },
     );
@@ -3520,7 +3538,7 @@ async fn the_billed_dollars_and_the_plan_rows_dollars_add_to_the_group_s_cost() 
         ShareRow {
             id: "r-api",
             account: "k",
-            account_kind: "api_key",
+            account_kind: AccountKind::ApiKey,
             usage: usage(4_000, 400),
             ..ShareRow::default()
         },
@@ -4019,45 +4037,54 @@ fn a_classifier_row_reads_zero_in_the_totals_and_session_series_and_its_price_na
 #[test]
 fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_in_dollars() {
     let db = LedgerDb::open_in_memory().unwrap();
-    let plant =
-        |id: &str, account: &str, kind: &str, tier: Option<&str>, cache_read: Option<u64>| {
-            db.insert_request(
-                &RequestRecord {
-                    id: id.into(),
-                    received_at: 3_600_000,
-                    key_id: Some("k".into()),
-                    pool_id: Some("p".into()),
-                    canonical_model: "claude-sonnet-5-5".into(),
-                    model: "claude-sonnet-5-5".into(),
-                    kind: "inference".into(),
-                    origin: "client".into(),
-                    outcome: "succeeded".into(),
-                    attempts: 1,
-                    ..Default::default()
-                },
-                &[AttemptRecord {
-                    request_id: id.into(),
-                    attempt: 1,
-                    account_id: account.into(),
-                    account_kind: kind.into(),
-                    outcome: "succeeded".into(),
-                    input_tokens: Some(1_000),
-                    cache_read_tokens: cache_read,
-                    output_tokens: Some(100),
-                    tier: tier.map(String::from),
-                    ..Default::default()
-                }],
-                None,
-            )
-            .unwrap();
-        };
+    let plant = |id: &str,
+                 account: &str,
+                 kind: AccountKind,
+                 tier: Option<&str>,
+                 cache_read: Option<u64>| {
+        db.insert_request(
+            &RequestRecord {
+                id: id.into(),
+                received_at: 3_600_000,
+                key_id: Some("k".into()),
+                pool_id: Some("p".into()),
+                canonical_model: "claude-sonnet-5-5".into(),
+                model: "claude-sonnet-5-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            &[AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: account.into(),
+                account_kind: kind,
+                outcome: "succeeded".into(),
+                input_tokens: Some(1_000),
+                cache_read_tokens: cache_read,
+                output_tokens: Some(100),
+                tier: tier.map(String::from),
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
+    };
     // Every row folds a nonzero dollar figure from its counts, so a burn that priced every row in dollars instead of
     // by its funding would fail the dollar assertion, and only pricing by funding passes it and the shares.
-    plant("sub", "oauth-a", "oauth", Some(MAX_20X), None);
-    plant("key", "api-b", "api_key", None, None);
+    plant("sub", "oauth-a", AccountKind::Oauth, Some(MAX_20X), None);
+    plant("key", "api-b", AccountKind::ApiKey, None, None);
     // A plan row that recorded no tier prices no share and no dollar, while its tokens and its figure still count,
     // its cache reads included, the one row carrying any so the cached half of the assertion below reads them.
-    plant("tierless", "tierless-c", "oauth", None, Some(500));
+    plant(
+        "tierless",
+        "tierless-c",
+        AccountKind::Oauth,
+        None,
+        Some(500),
+    );
     let tables = PlanTables::shipped();
     let point_of = |accounts: &[&str]| {
         let filter = SeriesFilter {
@@ -4559,7 +4586,7 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_
                 request_id: id.into(),
                 attempt: 1,
                 account_id: "a".into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 outcome: "succeeded".into(),
                 input_tokens: Some(1_000),
                 output_tokens: Some(100),
@@ -4681,7 +4708,7 @@ fn a_bucket_counts_every_token_type_its_rows_carry() {
             request_id: "cold".into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             outcome: "succeeded".into(),
             input_tokens: Some(0),
             cache_write_5m_tokens: Some(3_000),
@@ -4717,7 +4744,7 @@ fn a_bucket_counts_every_token_type_its_rows_carry() {
 fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_its_dollars() {
     let db = LedgerDb::open_in_memory().unwrap();
     // A million Opus 5.5 input tokens per account in one off-band hour.
-    let plant = |account: &str, kind: &str, tier: Option<&str>| {
+    let plant = |account: &str, kind: AccountKind, tier: Option<&str>| {
         let id = format!("r-{account}");
         db.insert_request(
             &RequestRecord {
@@ -4737,7 +4764,7 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
                 request_id: id,
                 attempt: 1,
                 account_id: account.into(),
-                account_kind: kind.into(),
+                account_kind: kind,
                 outcome: "succeeded".into(),
                 input_tokens: Some(1_000_000),
                 tier: tier.map(String::from),
@@ -4748,10 +4775,10 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
         .unwrap();
     };
     // Every row folds dollars from its counts, so only pricing by kind leaves them off the subscription rows.
-    plant("max", "oauth", Some(MAX_20X));
-    plant("pro", "oauth", Some(PRO));
-    plant("tierless", "oauth", None);
-    plant("key", "api_key", None);
+    plant("max", AccountKind::Oauth, Some(MAX_20X));
+    plant("pro", AccountKind::Oauth, Some(PRO));
+    plant("tierless", AccountKind::Oauth, None);
+    plant("key", AccountKind::ApiKey, None);
     let tables = PlanTables::shipped();
     let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
     let point_of = |account: &str| {
@@ -4863,7 +4890,7 @@ fn plant_in_the_off_band_hour(
             request_id: id.into(),
             attempt: 1,
             account_id: account.into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             outcome: if input.is_some() {
                 "succeeded"
             } else {
@@ -5006,7 +5033,7 @@ fn a_session_attempt_weighs_its_five_hour_share_by_the_band_at_its_completion() 
             request_id: "r-edge".into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: started,
             finished_at: Some(finished),
             outcome: "succeeded".into(),
@@ -5110,7 +5137,7 @@ fn a_sessions_fast_attempt_reads_its_dollars_at_a_zero_share() {
                 request_id: id,
                 attempt: 1,
                 account_id: "a".into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 started_at: WEEKDAY_OFF_PEAK,
                 finished_at: Some(WEEKDAY_OFF_PEAK + 500),
                 outcome: "succeeded".into(),
@@ -5344,7 +5371,7 @@ fn plant_burn(db: &LedgerDb, id: &str, account: &str, tier: &str, model: &str, s
             request_id: id.into(),
             attempt: 1,
             account_id: account.into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: WEEKDAY_OFF_PEAK,
             finished_at: Some(WEEKDAY_OFF_PEAK + 500),
             outcome: "succeeded".into(),
@@ -5629,7 +5656,7 @@ fn plant_funded(db: &LedgerDb, id: &str, session: &str, overage: Option<bool>) {
             request_id: id.into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: WEEKDAY_OFF_PEAK,
             finished_at: Some(WEEKDAY_OFF_PEAK + 500),
             outcome: "succeeded".into(),
@@ -6091,7 +6118,7 @@ fn the_held_series_reads_the_slow_down_columns_per_bucket() {
             request_id: id.into(),
             attempt: 1,
             account_id: account_id.into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             outcome: "succeeded".into(),
             output_tokens: Some(5),
             ..Default::default()
@@ -6300,7 +6327,7 @@ fn plant_spend_every_kind(
         request_id: id.into(),
         attempt: 1,
         account_id: account.into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         outcome: "succeeded".into(),
         input_tokens: Some(input_tokens),
         cache_read_tokens: Some(cache_read_tokens),
@@ -6382,7 +6409,7 @@ fn plant_spend(
         request_id: id.into(),
         attempt: 1,
         account_id: account.into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         outcome: "succeeded".into(),
         input_tokens: Some(input_tokens),
         ..Default::default()
@@ -6703,7 +6730,7 @@ fn plant_placement(
         request_id: id.into(),
         attempt: 1,
         account_id: "a".into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         outcome: "succeeded".into(),
         cache_read_tokens: Some(cache_read_tokens),
         selection: Some(format!(
@@ -6776,7 +6803,7 @@ fn plant_retried_placement(
             request_id: id.into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             outcome: "rate_limited".into(),
             selection: Some(trace.clone()),
             ..Default::default()
@@ -6785,7 +6812,7 @@ fn plant_retried_placement(
             request_id: id.into(),
             attempt: 2,
             account_id: "b".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             outcome: "succeeded".into(),
             cache_read_tokens: Some(cache_read_tokens),
             selection: Some(trace),
@@ -6844,7 +6871,7 @@ fn plant_placement_full(
         request_id: id.into(),
         attempt: 1,
         account_id: account.into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         outcome: "succeeded".into(),
         cache_read_tokens: Some(cache_read_tokens),
         selection: Some(format!(
@@ -7536,7 +7563,7 @@ async fn the_dashboard_the_traffic_and_the_totals_split_the_billed_dollars_from_
         ShareRow {
             id: "r-api",
             account: "k",
-            account_kind: "api_key",
+            account_kind: AccountKind::ApiKey,
             model: "claude-opus-5-5",
             usage: usage(3_000, 0),
             ..ShareRow::default()
@@ -7673,7 +7700,7 @@ fn plant_asked_and_refused(db: &LedgerDb) {
             request_id: format!("r{n}"),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: WEEKDAY_OFF_PEAK - 60_000 + n,
             upstream_status: Some(status),
             outcome: if status == 200 { "succeeded" } else { "failed" }.into(),
@@ -7753,7 +7780,7 @@ async fn pools_traffic_answers_every_asked_pool_and_adds_each_rows_figures_into_
             request_id: format!("r{n}"),
             attempt: 1,
             account_id: account.into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: at,
             upstream_status: Some(200),
             outcome: "succeeded".into(),
@@ -7998,7 +8025,7 @@ fn a_members_spend_prices_every_group_from_its_band_rows_counts_exactly() {
             request_id: id.into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             outcome: "succeeded".into(),
             input_tokens: Some(input),
             ..Default::default()
@@ -8096,7 +8123,7 @@ fn a_members_spend_across_a_revision_inside_its_period_prices_each_span_at_its_o
             request_id: id.into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             outcome: "succeeded".into(),
             input_tokens: Some(1_000_000),
             ..Default::default()

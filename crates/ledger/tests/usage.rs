@@ -15,7 +15,7 @@ use phoebis_ledger::{
     key_usage_windows, AttemptRecord, LedgerConfig, LedgerDb, PriceRevisions, RequestRecord,
     KEY_RANGE_PREDICATE,
 };
-use phoebis_store::{ApiKeyRow, RulesMode, Store};
+use phoebis_store::{AccountKind, ApiKeyRow, RulesMode, Store};
 use tower::ServiceExt;
 
 fn used(id: &str) -> AttemptRecord {
@@ -23,7 +23,7 @@ fn used(id: &str) -> AttemptRecord {
         request_id: id.into(),
         attempt: 1,
         account_id: "a".into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         started_at: 1_000,
         outcome: "succeeded".into(),
         input_tokens: Some(100),
@@ -39,7 +39,7 @@ fn unused(id: &str) -> AttemptRecord {
         request_id: id.into(),
         attempt: 1,
         account_id: "a".into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         started_at: 1_000,
         outcome: "failed".into(),
         ..Default::default()

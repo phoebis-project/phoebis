@@ -23,7 +23,7 @@ use crate::db::{
 use crate::events::{spawn_event_mirror, MirrorBaseline};
 use crate::metrics::Metrics;
 use crate::plan::{funding_of, Funding, PlanTables};
-use crate::pricing::{PriceRevisions, Pricing};
+use crate::pricing::{PriceRevisions, Pricing, Speed};
 use crate::query::{member_spends, period_bounds, BudgetedMember};
 use crate::record::{
     AttemptRecord, EventRecord, ParkedRecord, ParkedRows, QuotaSampleRecord, RequestRecord,
@@ -1927,10 +1927,10 @@ fn note_unpriced(
     let plan_funded = attempts.iter().any(|a| {
         a.has_usage()
             && funding_of(
-                &a.account_kind,
+                Some(a.account_kind),
                 a.usage_based,
                 a.overage_in_use,
-                a.speed.as_deref(),
+                Speed::of(a.speed.as_deref()),
             ) == Funding::Plan
     });
     if !plan_funded {
@@ -2298,7 +2298,7 @@ mod tests {
             request_id: id.into(),
             attempt: 1,
             account_id: account.into(),
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             outcome: "succeeded".into(),
             input_tokens: Some(tokens),
             ..Default::default()

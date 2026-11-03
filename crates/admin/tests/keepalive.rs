@@ -2,6 +2,7 @@
 //! sessions, recipes, and overview views the admin API renders from the engine.
 mod common;
 use common::{delete, get, json, login, patch, post};
+use phoebis_store::AccountKind;
 
 #[tokio::test]
 async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
@@ -1246,8 +1247,8 @@ async fn the_overview_counts_the_plan_funded_answered_probes_apart_from_the_bill
     let now = common::NOW;
     // One answered probe on the subscription account's plan and one through the API key account.
     for (id, account, account_kind) in [
-        ("probe-plan", "business", "oauth"),
-        ("probe-billed", "direct", "api_key"),
+        ("probe-plan", "business", AccountKind::Oauth),
+        ("probe-billed", "direct", AccountKind::ApiKey),
     ] {
         parts
             .db
@@ -1270,7 +1271,7 @@ async fn the_overview_counts_the_plan_funded_answered_probes_apart_from_the_bill
                     request_id: id.into(),
                     attempt: 1,
                     account_id: account.into(),
-                    account_kind: account_kind.into(),
+                    account_kind,
                     started_at: now,
                     finished_at: Some(now + 500),
                     outcome: "succeeded".into(),

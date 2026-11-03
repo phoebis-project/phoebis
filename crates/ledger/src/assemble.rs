@@ -12,6 +12,7 @@ use phoebis_bus::{
 use phoebis_oauth::Clock;
 use phoebis_relay::UnifiedHeaders;
 use phoebis_routing::{LoadCounts, MODEL_REJECTED_REASON};
+use phoebis_store::AccountKind;
 use phoebis_transport::response::ResponseHead as WireHead;
 use serde_json::json;
 
@@ -270,7 +271,7 @@ impl Assembler {
                         ..Default::default()
                     }));
                 }
-                if attempt.account_kind == "oauth" {
+                if attempt.account_kind == AccountKind::Oauth {
                     if let Some((unified, wire)) = parsed {
                         let (quota, extra) = samples_from_unified(
                             &attempt.account_id,
@@ -378,7 +379,7 @@ fn attempt_row(selected: &AccountSelected) -> AttemptRecord {
         request_id: selected.request_id.clone(),
         attempt: selected.attempt as u32,
         account_id: selected.account_id.clone(),
-        account_kind: selected.account_kind.clone(),
+        account_kind: AccountKind::parse(&selected.account_kind).unwrap_or_default(),
         usage_based: selected.usage_based,
         pin_epoch: selected.pin_epoch,
         started_at: selected.started_at,

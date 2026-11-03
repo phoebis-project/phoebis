@@ -6,10 +6,10 @@
 use phoebis_ledger::test_tables::{self, JANUARY_2026, SUBSCRIPTION_COSTS};
 use phoebis_ledger::{
     entrypoint_of_client, funding_of, price_equivalent, price_shares, CostRevisions, Funding,
-    LedgerError, PlanTables, SubscriptionCosts, BILLED_FUNDING, FAST_FUNDING,
+    LedgerError, PlanTables, Speed, SubscriptionCosts, BILLED_FUNDING, FAST_FUNDING,
 };
 use phoebis_routing::{PinUsage, Rates, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
-use phoebis_store::PinBurn;
+use phoebis_store::{AccountKind, PinBurn};
 
 /// Monday 2026-09-21 at 14:00 UTC, inside the band while Pacific daylight time holds.
 const SEPTEMBER_AFTERNOON: i64 = 1_789_999_200_000;
@@ -1593,7 +1593,7 @@ fn the_model_serializes_back_to_the_files_keys_in_the_files_order() {
 #[test]
 fn the_funding_reads_the_account_kind_before_the_speed_and_the_overage_flag() {
     assert_eq!(
-        funding_of("api_key", false, Some(true), Some("fast")),
+        funding_of(Some(AccountKind::ApiKey), false, Some(true), Speed::Fast),
         Funding::ApiKey,
         "an api_key attempt is billed in dollars whatever its speed or overage flag"
     );

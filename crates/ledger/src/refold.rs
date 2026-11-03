@@ -437,6 +437,7 @@ mod tests {
     use crate::query::{member_spends, BudgetedMember};
     use crate::record::{AttemptRecord, RequestRecord};
     use crate::rollup::{read_rollups, RollupRow, RollupSelect, LONG_BAND, STANDARD_BAND};
+    use phoebis_store::AccountKind;
 
     const HAIKU: &str = "claude-haiku-5-5";
     const DAY: i64 = 86_400_000;
@@ -482,7 +483,7 @@ mod tests {
                 request_id: id.into(),
                 attempt: 1,
                 account_id: "a".into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 started_at: received_at,
                 outcome: "succeeded".into(),
                 input_tokens: Some(prompt),

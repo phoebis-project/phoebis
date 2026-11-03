@@ -20,7 +20,7 @@ use phoebis_ledger::{
 };
 use phoebis_oauth::PollOutcome;
 use phoebis_store::{
-    AccountState, AttemptOutcome, NewBundle, Secret, StateCause, StorageKey, Store,
+    AccountKind, AccountState, AttemptOutcome, NewBundle, Secret, StateCause, StorageKey, Store,
 };
 use serde_json::json;
 use tower::ServiceExt;
@@ -1791,7 +1791,7 @@ fn priced(id: &str) -> Record {
             request_id: id.into(),
             attempt: 1,
             account_id: "business".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: NOW,
             outcome: "succeeded".into(),
             input_tokens: Some(1_000_000),
@@ -2117,9 +2117,9 @@ fn the_certificate_kinds_rank_among_the_others() {
 /// thousand input tokens: plan-funded on `business`, billed on `direct`.
 fn on_model(id: &str, model: &str, account: &str, at: i64, attempts: u32) -> Record {
     let account_kind = if account == "direct" {
-        "api_key"
+        AccountKind::ApiKey
     } else {
-        "oauth"
+        AccountKind::Oauth
     };
     Record::Request {
         request: RequestRecord {
@@ -2141,7 +2141,7 @@ fn on_model(id: &str, model: &str, account: &str, at: i64, attempts: u32) -> Rec
                 request_id: id.into(),
                 attempt,
                 account_id: account.into(),
-                account_kind: account_kind.into(),
+                account_kind,
                 started_at: at,
                 outcome: "succeeded".into(),
                 input_tokens: Some(1_000),

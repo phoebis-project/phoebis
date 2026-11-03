@@ -42,7 +42,7 @@ fn row_usd(prices: &PriceRevisions, row: &RollupRow) -> f64 {
         .map_or(0.0, |usd| usd.total())
 }
 use phoebis_profile::fixtures::BodyFixture;
-use phoebis_store::{BudgetPeriod, MemberWrite, StorageKey, Store};
+use phoebis_store::{AccountKind, BudgetPeriod, MemberWrite, StorageKey, Store};
 use tower::ServiceExt;
 
 fn request_id(resp: &axum::http::Response<axum::body::Body>) -> String {
@@ -740,7 +740,7 @@ fn the_search_matches_its_text_literally() {
             request_id: id.into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             started_at: 1_000,
             outcome: "failed".into(),
             upstream_message_id: Some(message_id.into()),
@@ -1301,7 +1301,7 @@ fn a_requests_slow_down_waits_count_into_its_hourly_row() {
         request_id: id.into(),
         attempt: 1,
         account_id: "a".into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         outcome: "succeeded".into(),
         output_tokens: Some(5),
         ..Default::default()
@@ -1384,7 +1384,7 @@ fn a_refusal_after_a_slow_down_hold_counts_under_no_held_figure() {
         request_id: "served".into(),
         attempt: 1,
         account_id: "a".into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         outcome: "succeeded".into(),
         output_tokens: Some(5),
         ..Default::default()
@@ -2199,7 +2199,7 @@ fn a_fast_request_whose_answer_named_no_speed_is_listed_under_the_standard_speed
             request_id: "answered".into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             outcome: "succeeded".into(),
             output_tokens: Some(10),
             ..Default::default()
@@ -2260,7 +2260,7 @@ fn plant_trail(db: &LedgerDb, id: &str, received_at: i64, trail: &[(&str, u16, O
             request_id: id.into(),
             attempt,
             account_id: (*account).into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             upstream_status: Some(*status),
             outcome: if *status == 200 {
                 "succeeded"
@@ -2339,7 +2339,7 @@ fn plant_stops(
                 request_id: id.into(),
                 attempt: 1,
                 account_id: "a".into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 upstream_status: Some(429),
                 outcome: "rate_limited".into(),
                 ..Default::default()
@@ -2349,7 +2349,7 @@ fn plant_stops(
             request_id: id.into(),
             attempt: attempts.len() as u32 + 1,
             account_id: account.into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             upstream_status: Some(200),
             outcome: "succeeded".into(),
             stop_reason: Some(stop_reason.into()),
@@ -3869,7 +3869,7 @@ fn an_incomplete_request_counts_in_the_rollups_incomplete_column_and_nowhere_els
             request_id: "r0".into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             outcome: "upstream_error".into(),
             upstream_status: Some(200),
             output_tokens: Some(5),
@@ -4091,7 +4091,7 @@ fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
         request_id: "r1".into(),
         attempt,
         account_id: "a".into(),
-        account_kind: "api_key".into(),
+        account_kind: AccountKind::ApiKey,
         outcome: "succeeded".into(),
         input_tokens: Some(input),
         output_tokens: Some(output),
@@ -4232,17 +4232,21 @@ async fn the_landing_records_the_serving_accounts_tier_as_the_registry_holds_it(
     .await;
     set_tier(&h.store, "a", "default_claude_max_20x");
     h.router.reload().await.unwrap();
-    let on = |id: &str, account: &str, kind: &str| Record::Request {
+    let on = |id: &str, account: &str, kind: AccountKind| Record::Request {
         request: finished_row(id),
         attempts: vec![AttemptRecord {
             account_id: account.into(),
-            account_kind: kind.into(),
+            account_kind: kind,
             ..serving_attempt(id, true)
         }],
         bodies: None,
     };
-    h.ledger.record_request(on("r-oauth", "a", "oauth")).await;
-    h.ledger.record_request(on("r-key", "b", "api_key")).await;
+    h.ledger
+        .record_request(on("r-oauth", "a", AccountKind::Oauth))
+        .await;
+    h.ledger
+        .record_request(on("r-key", "b", AccountKind::ApiKey))
+        .await;
     let tier_of = |id: &'static str| {
         let h = &h;
         async move { ledgered(h, id).await.1[0].tier.clone() }
@@ -4254,7 +4258,9 @@ async fn the_landing_records_the_serving_accounts_tier_as_the_registry_holds_it(
     );
     set_tier(&h.store, "a", "default_claude_max_5x");
     h.router.reload().await.unwrap();
-    h.ledger.record_request(on("r-later", "a", "oauth")).await;
+    h.ledger
+        .record_request(on("r-later", "a", AccountKind::Oauth))
+        .await;
     assert_eq!(
         (tier_of("r-later").await, tier_of("r-oauth").await),
         (
@@ -4351,7 +4357,7 @@ async fn the_landing_records_no_tier_for_a_free_organization_or_a_usage_based_se
                 request: finished_row(id),
                 attempts: vec![AttemptRecord {
                     account_id: account.into(),
-                    account_kind: "oauth".into(),
+                    account_kind: AccountKind::Oauth,
                     // The selection stamps the seat's class, as it does on a request the relay serves.
                     usage_based: account == "seat",
                     ..serving_attempt(id, true)
@@ -4502,7 +4508,7 @@ fn the_first_request_after_a_move_books_its_cache_writes_as_rewrite_tokens_and_t
         request_id: "r1".into(),
         attempt: 1,
         account_id: "b".into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         outcome: "succeeded".into(),
         cache_write_5m_tokens: Some(100),
         cache_write_1h_tokens: Some(50),
@@ -4536,7 +4542,7 @@ fn the_first_request_after_a_move_books_its_cache_writes_as_rewrite_tokens_and_t
             request_id: "r2".into(),
             attempt: 1,
             account_id: "b".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             outcome: "succeeded".into(),
             cache_write_5m_tokens: Some(30),
             selection: Some(unmoved_trace.into()),
@@ -4576,7 +4582,7 @@ fn a_retried_pass_of_a_moved_leg_books_the_attempt_that_carries_the_usage() {
                 request_id: "r1".into(),
                 attempt: 1,
                 account_id: "b".into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 outcome: "transport_error".into(),
                 started_at: 3_600_000,
                 selection: Some(moved_trace.into()),
@@ -4586,7 +4592,7 @@ fn a_retried_pass_of_a_moved_leg_books_the_attempt_that_carries_the_usage() {
                 request_id: "r1".into(),
                 attempt: 2,
                 account_id: "b".into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 outcome: "succeeded".into(),
                 started_at: 3_600_010,
                 cache_write_5m_tokens: Some(100),
@@ -4631,7 +4637,7 @@ fn a_rate_limit_fail_over_whose_destination_writes_cache_books_its_rewrite_token
                 request_id: "r1".into(),
                 attempt: 1,
                 account_id: "a".into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 outcome: "rate_limited".into(),
                 started_at: 3_600_000,
                 cache_write_5m_tokens: Some(999),
@@ -4642,7 +4648,7 @@ fn a_rate_limit_fail_over_whose_destination_writes_cache_books_its_rewrite_token
                 request_id: "r1".into(),
                 attempt: 2,
                 account_id: "b".into(),
-                account_kind: "oauth".into(),
+                account_kind: AccountKind::Oauth,
                 outcome: "succeeded".into(),
                 started_at: 3_600_050,
                 cache_write_5m_tokens: Some(80),
@@ -4713,7 +4719,7 @@ fn plant_spend(db: &phoebis_ledger::LedgerDb, id: &str, at: i64, input_tokens: u
             request_id: id.into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             outcome: "succeeded".into(),
             input_tokens: Some(input_tokens),
             ..Default::default()
@@ -4769,7 +4775,7 @@ fn a_member_with_two_budgets_gets_a_spend_row_per_period() {
 /// attempt served at `speed` with the head's overage reading `overage_in_use`.
 fn plant_funded(
     db: &phoebis_ledger::LedgerDb,
-    (account, kind): (&str, &str),
+    (account, kind): (&str, AccountKind),
     id: &str,
     speed: Option<&str>,
     overage_in_use: Option<bool>,
@@ -4795,7 +4801,7 @@ fn plant_funded(
             request_id: id,
             attempt: 1,
             account_id: account.into(),
-            account_kind: kind.into(),
+            account_kind: kind,
             outcome: "succeeded".into(),
             input_tokens: Some(1_000_000),
             speed: speed.map(String::from),
@@ -4823,7 +4829,7 @@ fn opus_5_million() -> (f64, f64) {
 
 /// The five funding cases on one member in one hour: overage in use, the plan, and three fast answers, one with no
 /// overage reading, one whose head said overage was not in use and one whose head said it was.
-fn plant_every_funding(db: &phoebis_ledger::LedgerDb, member: (&str, &str)) {
+fn plant_every_funding(db: &phoebis_ledger::LedgerDb, member: (&str, AccountKind)) {
     plant_funded(db, member, "overage", None, Some(true));
     plant_funded(db, member, "plan", None, Some(false));
     plant_funded(db, member, "fast", Some("fast"), None);
@@ -4834,7 +4840,7 @@ fn plant_every_funding(db: &phoebis_ledger::LedgerDb, member: (&str, &str)) {
 #[test]
 fn an_attempt_folds_under_fast_overage_or_plan_funding() {
     let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
-    plant_every_funding(&db, ("a", "oauth"));
+    plant_every_funding(&db, ("a", AccountKind::Oauth));
     let mut rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -4858,7 +4864,7 @@ fn an_attempt_folds_under_fast_overage_or_plan_funding() {
 #[test]
 fn an_api_key_account_s_attempt_folds_under_billed_whatever_its_speed_or_overage_flag() {
     let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
-    plant_every_funding(&db, ("b", "api_key"));
+    plant_every_funding(&db, ("b", AccountKind::ApiKey));
     let mut rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -4990,7 +4996,7 @@ fn a_usage_based_seats_attempt_stores_its_class_folds_under_usage_based_and_pric
 #[test]
 fn member_spends_sums_the_metered_rows_alone_when_asked() {
     let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
-    plant_every_funding(&db, ("a", "oauth"));
+    plant_every_funding(&db, ("a", AccountKind::Oauth));
     let spent = |metered_only| {
         db.read_blocking(|c| {
             member_spends(
@@ -5032,8 +5038,8 @@ async fn a_subscription_members_spend_reads_its_metered_rows_alone() {
     .await;
     h.clock.store(ms(2026, 1, 15, 12, 0), Ordering::SeqCst);
     // Planted before the budgets land, so whichever refresh reports both members has read every row.
-    plant_every_funding(&h.db, ("a", "oauth"));
-    plant_every_funding(&h.db, ("b", "api_key"));
+    plant_every_funding(&h.db, ("a", AccountKind::Oauth));
+    plant_every_funding(&h.db, ("b", AccountKind::ApiKey));
     let budgeted = |account_id: &str| MemberWrite {
         account_id: account_id.into(),
         priority: 0,
@@ -5172,7 +5178,7 @@ async fn an_exhausted_monthly_member_changed_to_daily_is_admitted_while_no_membe
             request_id: "seed".into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             outcome: "succeeded".into(),
             input_tokens: Some(1_000_000),
             overage_in_use: Some(true),
@@ -5305,7 +5311,7 @@ async fn the_period_boundary_tick_refreshes_the_spend_without_traffic() {
             request_id: "seed".into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "oauth".into(),
+            account_kind: AccountKind::Oauth,
             outcome: "succeeded".into(),
             input_tokens: Some(51_000_000),
             overage_in_use: Some(true),
@@ -5510,7 +5516,7 @@ fn serving_attempt(id: &str, priced: bool) -> AttemptRecord {
         request_id: id.into(),
         attempt: 1,
         account_id: "a".into(),
-        account_kind: "api_key".into(),
+        account_kind: AccountKind::ApiKey,
         started_at: NOW,
         outcome: "succeeded".into(),
         input_tokens: priced.then_some(1_000_000),
@@ -7016,7 +7022,7 @@ async fn a_budget_reached_at_the_start_lands_behind_the_start_row_and_leaves_its
             request_id: "r1".into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             outcome: "succeeded".into(),
             input_tokens: Some(2_000_000),
             ..Default::default()
@@ -7108,7 +7114,7 @@ async fn over_budget_after_a_run(up: &FakeUpstream) -> (Arc<Store>, Arc<LedgerDb
             request_id: "r1".into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             outcome: "succeeded".into(),
             input_tokens: Some(2_000_000),
             ..Default::default()
@@ -7228,7 +7234,7 @@ async fn a_restart_over_a_ledger_holding_the_period_s_crossing_writes_no_second_
             request_id: "r1".into(),
             attempt: 1,
             account_id: "a".into(),
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             outcome: "succeeded".into(),
             input_tokens: Some(2_000_000),
             ..Default::default()
@@ -7339,7 +7345,7 @@ fn logged_attempt(request_id: &str, attempt: u32, status: u16, read: Option<u64>
         request_id: request_id.into(),
         attempt,
         account_id: "a".into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         started_at: NOW,
         finished_at: Some(NOW + i64::from(attempt) * 1_000),
         upstream_status: Some(status),
@@ -8055,7 +8061,7 @@ fn a_request_with_two_answered_attempts_books_each_at_the_set_its_own_prompt_sel
         request_id: "r1".into(),
         attempt,
         account_id: "a".into(),
-        account_kind: "api_key".into(),
+        account_kind: AccountKind::ApiKey,
         outcome: "succeeded".into(),
         input_tokens: Some(input),
         output_tokens: Some(100),

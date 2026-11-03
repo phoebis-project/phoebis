@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use phoebis_bus::Classifier;
 use phoebis_routing::{window_for, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
+use phoebis_store::AccountKind;
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, Row, Transaction};
 
@@ -552,10 +553,10 @@ fn predicted(
     for attempt in attempts {
         let a = attempt?;
         let funding = funding_of(
-            &a.account_kind,
+            AccountKind::parse(&a.account_kind),
             a.usage_based,
             a.overage_in_use,
-            a.speed.as_deref(),
+            Speed::of(a.speed.as_deref()),
         );
         let classifier = a.classifier.as_deref() == Some(Classifier::Client.as_str());
         // API-key, usage-based, fast and overage answers draw no plan window, so they are no part of the rise either. A

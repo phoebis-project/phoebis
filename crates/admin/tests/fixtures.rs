@@ -363,7 +363,7 @@ fn attempt(id: &str, n: u32, account: &str, status: u16, outcome: &str, at: i64)
         request_id: id.into(),
         attempt: n,
         account_id: account.into(),
-        account_kind: "oauth".into(),
+        account_kind: AccountKind::Oauth,
         started_at: at,
         finished_at: Some(at + 400),
         ttfb_ms: Some(120),
@@ -890,7 +890,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         },
         attempts: vec![
             AttemptRecord {
-                account_kind: "api_key".into(),
+                account_kind: AccountKind::ApiKey,
                 cooldown_scope: Some("account".into()),
                 cooldown_until: Some(now + 1_800_000),
                 selection: Some(placed_json),
@@ -1157,7 +1157,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             )
         },
         attempts: vec![AttemptRecord {
-            account_kind: "api_key".into(),
+            account_kind: AccountKind::ApiKey,
             selection: Some(
                 r#"{"placement":{"rung":"content","depth":2,"prefix_tokens":500}}"#.into(),
             ),

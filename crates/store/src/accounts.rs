@@ -10,8 +10,10 @@ use crate::registry::{
 use crate::{Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
 text_enum! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
     pub enum AccountKind {
+        #[default]
         Oauth => "oauth",
         ApiKey => "api_key",
     }

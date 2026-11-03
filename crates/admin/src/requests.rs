@@ -637,10 +637,10 @@ fn plan_figures(
 ) -> Option<PlanFigures> {
     let a = attempts.last()?;
     if funding_of(
-        &a.account_kind,
+        Some(a.account_kind),
         a.usage_based,
         a.overage_in_use,
-        a.speed.as_deref(),
+        Speed::of(a.speed.as_deref()),
     ) != Funding::Plan
     {
         return None;
@@ -783,7 +783,7 @@ fn attempt_json(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) -
     Attempt {
         index: a.attempt,
         account_id: a.account_id.clone(),
-        account_kind: a.account_kind.clone(),
+        account_kind: a.account_kind.as_str().to_string(),
         outcome: a.outcome.clone(),
         upstream_status: a.upstream_status,
         upstream_request_id: a.upstream_request_id.clone(),
@@ -1180,6 +1180,7 @@ mod tests {
     use super::*;
     use phoebis_ledger::{CostRevisions, PlanTables, RequestRecord};
     use phoebis_routing::PinUsage;
+    use phoebis_store::AccountKind;
     use serde_json::json;
 
     /// Monday 2026-09-21 at 20:00 UTC, past the peak band on a weekday.
@@ -1249,10 +1250,14 @@ revisions:
     }
 
     /// One input token on account `a` under `test_tier`, finished off the band.
-    fn attempt_of(kind: &str, overage_in_use: Option<bool>, speed: Option<&str>) -> AttemptRecord {
+    fn attempt_of(
+        kind: AccountKind,
+        overage_in_use: Option<bool>,
+        speed: Option<&str>,
+    ) -> AttemptRecord {
         AttemptRecord {
             account_id: "a".into(),
-            account_kind: kind.into(),
+            account_kind: kind,
             started_at: WEEKDAY_OFF_PEAK,
             finished_at: Some(WEEKDAY_OFF_PEAK + 400),
             input_tokens: Some(1),
@@ -1285,12 +1290,12 @@ revisions:
         let attempt = AttemptRecord {
             started_at: inside,
             finished_at: Some(outside),
-            ..attempt_of("oauth", None, None)
+            ..attempt_of(AccountKind::Oauth, None, None)
         };
         assert_eq!(
             serde_json::to_value(request_summary(&request, &[attempt], &shares)).unwrap()
                 ["cost_shares"],
-            cost_shares("claude-fable-5-1", attempt_of("oauth", None, None), &shares),
+            cost_shares("claude-fable-5-1", attempt_of(AccountKind::Oauth, None, None), &shares),
             "the attempt's finish prices the share, neither the request's finish nor the attempt's start"
         );
     }
@@ -1378,7 +1383,7 @@ revisions:
         assert_eq!(
             cost_shares(
                 "claude-fable-5-1",
-                attempt_of("api_key", None, None),
+                attempt_of(AccountKind::ApiKey, None, None),
                 &shares
             ),
             Value::Null
@@ -1386,7 +1391,7 @@ revisions:
         assert_eq!(
             cost_shares(
                 "claude-fable-5-1",
-                attempt_of("api_key", Some(true), Some("fast")),
+                attempt_of(AccountKind::ApiKey, Some(true), Some("fast")),
                 &shares
             ),
             Value::Null,
@@ -1406,7 +1411,7 @@ revisions:
             };
             serde_json::to_value(request_summary(
                 &request,
-                &[attempt_of("oauth", None, None)],
+                &[attempt_of(AccountKind::Oauth, None, None)],
                 &shares,
             ))
             .unwrap()
@@ -1438,7 +1443,7 @@ revisions:
         assert_eq!(
             cost_shares(
                 "claude-fable-5-1",
-                attempt_of("oauth", Some(true), None),
+                attempt_of(AccountKind::Oauth, Some(true), None),
                 &shares
             ),
             Value::Null
@@ -1451,7 +1456,7 @@ revisions:
         assert_eq!(
             cost_shares(
                 "claude-fable-5-1",
-                attempt_of("oauth", None, Some("fast")),
+                attempt_of(AccountKind::Oauth, None, Some("fast")),
                 &shares
             ),
             Value::Null
@@ -1461,7 +1466,11 @@ revisions:
     #[test]
     fn a_plan_attempt_of_a_fable_model_reads_three_windows() {
         let shares = shares_of();
-        let got = cost_shares("claude-fable-5-1", attempt_of("oauth", None, None), &shares);
+        let got = cost_shares(
+            "claude-fable-5-1",
+            attempt_of(AccountKind::Oauth, None, None),
+            &shares,
+        );
         assert_eq!(keys(&got), ["five_hour", "seven_day", "seven_day_fable"]);
         assert!(
             keys(&got)
@@ -1472,7 +1481,7 @@ revisions:
         assert_eq!(
             cost_shares(
                 "claude-fable-5-1",
-                attempt_of("oauth", Some(false), Some("standard")),
+                attempt_of(AccountKind::Oauth, Some(false), Some("standard")),
                 &shares
             ),
             got,
@@ -1483,7 +1492,11 @@ revisions:
     #[test]
     fn the_model_week_is_absent_for_a_haiku_model() {
         let shares = shares_of();
-        let got = cost_shares("claude-haiku-4-5", attempt_of("oauth", None, None), &shares);
+        let got = cost_shares(
+            "claude-haiku-4-5",
+            attempt_of(AccountKind::Oauth, None, None),
+            &shares,
+        );
         assert_eq!(keys(&got), ["five_hour", "seven_day"]);
         assert!(
             keys(&got)
@@ -1498,7 +1511,7 @@ revisions:
         let shares = shares_of();
         let untiered = AttemptRecord {
             tier: None,
-            ..attempt_of("oauth", None, None)
+            ..attempt_of(AccountKind::Oauth, None, None)
         };
         assert_eq!(
             cost_shares("claude-fable-5-1", untiered, &shares),
@@ -1509,7 +1522,7 @@ revisions:
             "claude-fable-5-1",
             AttemptRecord {
                 tier: Some("narrow_tier".into()),
-                ..attempt_of("oauth", None, None)
+                ..attempt_of(AccountKind::Oauth, None, None)
             },
             &shares,
         );
@@ -1529,11 +1542,11 @@ revisions:
                 attempt: 1,
                 outcome: "failed".into(),
                 tier: Some("narrow_tier".into()),
-                ..attempt_of("oauth", None, None)
+                ..attempt_of(AccountKind::Oauth, None, None)
             },
             AttemptRecord {
                 attempt: 2,
-                ..attempt_of("oauth", None, None)
+                ..attempt_of(AccountKind::Oauth, None, None)
             },
         ];
         let summary = request_summary(&request_of("claude-fable-5-1"), &attempts, &shares_of());
@@ -1564,7 +1577,7 @@ revisions:
         let shares = shares_of();
         let plan = request_summary(
             &request_of("claude-fable-5-1"),
-            &[attempt_of("oauth", None, None)],
+            &[attempt_of(AccountKind::Oauth, None, None)],
             &shares,
         );
         // One Fable input token is 10 units, over the anchor tier's 1000 on the week.
@@ -1575,7 +1588,7 @@ revisions:
         );
         let billed = serde_json::to_value(request_summary(
             &request_of("claude-fable-5-1"),
-            &[attempt_of("api_key", None, None)],
+            &[attempt_of(AccountKind::ApiKey, None, None)],
             &shares,
         ))
         .unwrap();
@@ -1617,7 +1630,7 @@ revisions:
         let attempt = AttemptRecord {
             started_at: RECEIPT,
             finished_at: Some(COMPLETION),
-            ..attempt_of("oauth", None, None)
+            ..attempt_of(AccountKind::Oauth, None, None)
         };
         let summary = request_summary(&request, &[attempt], &shares);
         let one_input = PinUsage {
@@ -1710,7 +1723,7 @@ revisions:
         let attempt = AttemptRecord {
             started_at: FIRST_FEBRUARY_MINUTE,
             finished_at: Some(FIRST_FEBRUARY_MINUTE + 1_000),
-            ..attempt_of("api_key", None, None)
+            ..attempt_of(AccountKind::ApiKey, None, None)
         };
         let summary = request_summary(&request, &[attempt], &priced_by(TWO_PRICES));
         assert_eq!(
@@ -1729,7 +1742,7 @@ revisions:
         };
         let without_usage = AttemptRecord {
             input_tokens: None,
-            ..attempt_of("api_key", None, None)
+            ..attempt_of(AccountKind::ApiKey, None, None)
         };
         let unlisted = RequestRecord {
             canonical_model: "claude-mystery-1".into(),
@@ -1739,7 +1752,7 @@ revisions:
             (&request, without_usage, "an attempt without usage"),
             (
                 &unlisted,
-                attempt_of("api_key", None, None),
+                attempt_of(AccountKind::ApiKey, None, None),
                 "a model the revision lacks",
             ),
         ] {
