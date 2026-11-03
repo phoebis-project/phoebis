@@ -313,6 +313,7 @@ impl AttachmentIndex {
     }
 
     /// The guardrails with their index off one take of the store, a failed read answered as `store_failure`.
+    #[allow(clippy::result_large_err)]
     pub(crate) fn read(store: &Store) -> Result<(Vec<GuardrailRow>, AttachmentIndex), Response> {
         let read = store.guardrail_index().map_err(store_failure)?;
         let index =
