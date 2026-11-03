@@ -90,9 +90,9 @@ interface ReturnRateProps {
 }
 const BREAK_EVEN_HINT = "The pause length at which the recipe's probes cost one re-write of its prefix, for this pool's funding, cache TTL and models.";
 const SHARE_HINT = "The idle window's probes against one re-write of the prefix, so the bet this window makes is visible per pool.";
-/** A range of seconds through `format`, one figure when both ends read alike. */
-const rangeText = (range: Range, format: (ms: number) => string) => {
-  const [min, max] = [format(range.min * 1_000), format(range.max * 1_000)];
+/** A range's two ends through `format`, one figure when both ends read alike. */
+const rangeText = (range: Range, format: (value: number) => string) => {
+  const [min, max] = [format(range.min), format(range.max)];
   return min === max ? min : `${min} to ${max}`;
 };
 /** The same through `fmtDuration`, each figure kept whole on its line. */
@@ -128,10 +128,9 @@ function AboveBreakEven({ range }: { range: Range }) {
   );
 }
 /** The card's line: the three ceilings the router resolves for the pool, in whole hours. */
-const ceilingsLine = (r: NonNullable<Pool['keepaliveResolved']>) => `idle ${rangeText(r.idleSeconds, fmtHours)} · parked ${rangeText(r.parkedSeconds, fmtHours)} · horizon ${rangeText(r.horizonSeconds, fmtHours)}`;
-const shareText = (share: Range) => {
-  const [min, max] = [fmtPct(share.min), fmtPct(share.max)];
-  return min === max ? min : `${min} to ${max}`;
+const ceilingsLine = (r: NonNullable<Pool['keepaliveResolved']>) => {
+  const hours = (seconds: number) => fmtHours(seconds * 1_000);
+  return `idle ${rangeText(r.idleSeconds, hours)} · parked ${rangeText(r.parkedSeconds, hours)} · horizon ${rangeText(r.horizonSeconds, hours)}`;
 };
 /** A bucket's idle ages: `0 to 5m`, then `5m to 15m` and on to the open-ended `over 32h`. */
 const ageRange = (b: IdleReturnBucket) => {
@@ -2288,7 +2287,7 @@ export function PoolDialog({
                 {resolved && (
                   <span className="keepalive-resolved">
                     <span title={SHARE_HINT}>
-                      Costs {shareText(resolved.idleShare)} of one re-write{shareOf}
+                      Costs {rangeText(resolved.idleShare, fmtPct)} of one re-write{shareOf}
                     </span>
                     {idleAtBreakEven && (
                       <>
