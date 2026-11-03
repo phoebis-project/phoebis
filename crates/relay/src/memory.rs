@@ -259,10 +259,10 @@ impl SessionMemory {
         // write landing on a key evicted moments earlier continues that record rather than racing it to the store
         // with a fresh one.
         if !inner.entries.contains_key(key) {
-            revive_pending(&mut inner, key, now, self.cap, self.retention_ms);
+            self.revive_pending(&mut inner, key, now);
         }
         if !inner.entries.contains_key(key) {
-            evict_if_full(&mut inner, self.cap);
+            self.evict_if_full(&mut inner);
         }
         let entry = inner.entries.entry(key.clone()).or_insert_with(|| Entry {
             last_seen: now,
@@ -295,14 +295,7 @@ impl SessionMemory {
     pub fn record_request_id(&self, key: &MemoryKey, account_id: &str, request_id: &str, now: i64) {
         let mut inner = self.inner.lock().unwrap();
         self.purge_held(&mut inner, now);
-        let account = account_entry(
-            &mut inner,
-            key,
-            account_id,
-            now,
-            self.cap,
-            self.retention_ms,
-        );
+        let account = self.account_entry(&mut inner, key, account_id, now);
         account.request_id = Some(request_id.to_string());
         self.mark_dirty(&mut inner, key);
     }
@@ -317,14 +310,7 @@ impl SessionMemory {
     ) {
         let mut inner = self.inner.lock().unwrap();
         self.purge_held(&mut inner, now);
-        let account = account_entry(
-            &mut inner,
-            key,
-            account_id,
-            now,
-            self.cap,
-            self.retention_ms,
-        );
+        let account = self.account_entry(&mut inner, key, account_id, now);
         account
             .message_ids
             .insert(canonical_model.to_string(), message_id.to_string());
@@ -367,7 +353,7 @@ impl SessionMemory {
     /// Drops entries idle past the configured bound; run by every write on the lock it already holds, at most
     /// once a minute.
     fn purge_held(&self, inner: &mut Inner, now: i64) {
-        purge_locked(inner, now, self.idle_ms, self.cap);
+        self.purge_locked(inner, now);
         self.ask_for_a_flush(inner);
     }
 
@@ -409,9 +395,7 @@ impl SessionMemory {
             let waiter = {
                 let mut inner = self.inner.lock().unwrap();
                 self.purge_held(&mut inner, now);
-                if inner.entries.contains_key(key)
-                    || revive_pending(&mut inner, key, now, self.cap, self.retention_ms)
-                {
+                if inner.entries.contains_key(key) || self.revive_pending(&mut inner, key, now) {
                     return true;
                 }
                 match inner.loading.get(key) {
@@ -446,7 +430,7 @@ impl SessionMemory {
                 Some(entry)
                     if !inner.entries.contains_key(key) && !inner.pending.contains_key(key) =>
                 {
-                    evict_if_full(&mut inner, self.cap);
+                    self.evict_if_full(&mut inner);
                     inner.entries.insert(key.clone(), entry);
                     // Dirty from the install: an eviction before the write that follows then stashes the
                     // entry rather than dropping it, at the cost of one unchanged record in the next flush.
@@ -671,153 +655,148 @@ fn expired(last_seen: i64, now: i64, retention_ms: i64) -> bool {
     last_seen < now.saturating_sub(retention_ms)
 }
 
-/// The entry for `(key, account_id)`, inserting either level fresh when absent.
-fn account_entry<'a>(
-    inner: &'a mut Inner,
-    key: &MemoryKey,
-    account_id: &str,
-    now: i64,
-    cap: usize,
-    retention_ms: i64,
-) -> &'a mut AccountMemory {
-    if !inner.entries.contains_key(key) && !revive_pending(inner, key, now, cap, retention_ms) {
-        evict_if_full(inner, cap);
+impl SessionMemory {
+    /// The entry for `(key, account_id)`, inserting either level fresh when absent.
+    fn account_entry<'a>(
+        &self,
+        inner: &'a mut Inner,
+        key: &MemoryKey,
+        account_id: &str,
+        now: i64,
+    ) -> &'a mut AccountMemory {
+        if !inner.entries.contains_key(key) && !self.revive_pending(inner, key, now) {
+            self.evict_if_full(inner);
+        }
+        let entry = inner.entries.entry(key.clone()).or_insert_with(|| Entry {
+            last_seen: now,
+            prompt_id: None,
+            accounts: HashMap::new(),
+        });
+        // A hook stamped at the head can land after a later write; the newer time stands.
+        entry.last_seen = entry.last_seen.max(now);
+        entry
+            .accounts
+            .entry(account_id.to_string())
+            .or_insert_with(|| AccountMemory {
+                request_id: None,
+                message_ids: HashMap::new(),
+            })
     }
-    let entry = inner.entries.entry(key.clone()).or_insert_with(|| Entry {
-        last_seen: now,
-        prompt_id: None,
-        accounts: HashMap::new(),
-    });
-    // A hook stamped at the head can land after a later write; the newer time stands.
-    entry.last_seen = entry.last_seen.max(now);
-    entry
-        .accounts
-        .entry(account_id.to_string())
-        .or_insert_with(|| AccountMemory {
-            request_id: None,
-            message_ids: HashMap::new(),
-        })
-}
 
-/// An overlay record for `key` back into the map, dirty under a fresh sequence so the next flush writes it
-/// with its new `last_seen`; answers whether there was one.
-fn revive_pending(
-    inner: &mut Inner,
-    key: &MemoryKey,
-    now: i64,
-    cap: usize,
-    retention_ms: i64,
-) -> bool {
-    let Some((record, _)) = inner.pending.get(key) else {
-        return false;
-    };
-    // Judged as the read-through judges a row: an expired record revived here would be written back under
-    // a fresh timestamp, which is what the dirty tier's filter exists to prevent.
-    if expired(record.last_seen, now, retention_ms) {
+    /// An overlay record for `key` back into the map, dirty under a fresh sequence so the next flush writes it
+    /// with its new `last_seen`; answers whether there was one.
+    fn revive_pending(&self, inner: &mut Inner, key: &MemoryKey, now: i64) -> bool {
+        let Some((record, _)) = inner.pending.get(key) else {
+            return false;
+        };
+        // Judged as the read-through judges a row: an expired record revived here would be written back under
+        // a fresh timestamp, which is what the dirty tier's filter exists to prevent.
+        if expired(record.last_seen, now, self.retention_ms) {
+            inner.pending.remove(key);
+            inner.expired_unsaved += 1;
+            return false;
+        }
+        // Decoded before the record leaves the overlay: a payload this build cannot read is an unflushed change
+        // that still belongs on disk, and removing it first would drop it for good.
+        let Some(entry) = Entry::from_record(record, now) else {
+            return false;
+        };
         inner.pending.remove(key);
-        inner.expired_unsaved += 1;
-        return false;
+        self.evict_if_full(inner);
+        inner.entries.insert(key.clone(), entry);
+        inner.sequence += 1;
+        inner.dirty.insert(key.clone(), inner.sequence);
+        true
     }
-    // Decoded before the record leaves the overlay: a payload this build cannot read is an unflushed change
-    // that still belongs on disk, and removing it first would drop it for good.
-    let Some(entry) = Entry::from_record(record, now) else {
-        return false;
-    };
-    inner.pending.remove(key);
-    evict_if_full(inner, cap);
-    inner.entries.insert(key.clone(), entry);
-    inner.sequence += 1;
-    inner.dirty.insert(key.clone(), inner.sequence);
-    true
-}
 
-/// Past the cap the least recently seen entry leaves the map; one with an unflushed change goes to the
-/// overlay under its sequence rather than being lost. A key whose store read is in flight is never the one
-/// chosen, so the map may hold a few entries past the cap while those reads run.
-fn evict_if_full(inner: &mut Inner, cap: usize) {
-    if inner.entries.len() < cap {
-        return;
-    }
-    let plain = inner
-        .entries
-        .iter()
-        .min_by_key(|(_, e)| e.last_seen)
-        .map(|(k, _)| k.clone());
-    // The filtered scan hashes every resident key, so it runs only when the plain minimum is a key whose
-    // read is in flight, which is rare.
-    let oldest = match plain {
-        Some(k) if inner.loading.contains_key(&k) => inner
+    /// Past the cap the least recently seen entry leaves the map; one with an unflushed change goes to the
+    /// overlay under its sequence rather than being lost. A key whose store read is in flight is never the one
+    /// chosen, so the map may hold a few entries past the cap while those reads run.
+    fn evict_if_full(&self, inner: &mut Inner) {
+        if inner.entries.len() < self.cap {
+            return;
+        }
+        let plain = inner
             .entries
             .iter()
-            .filter(|(k, _)| !inner.loading.contains_key(*k))
             .min_by_key(|(_, e)| e.last_seen)
-            .map(|(k, _)| k.clone()),
-        other => other,
-    };
-    let Some(oldest) = oldest else {
-        return;
-    };
-    retire(inner, cap, oldest);
-}
-
-fn purge_locked(inner: &mut Inner, now: i64, idle_ms: i64, cap: usize) {
-    if now - inner.last_purge < PURGE_INTERVAL_MS {
-        return;
+            .map(|(k, _)| k.clone());
+        // The filtered scan hashes every resident key, so it runs only when the plain minimum is a key whose
+        // read is in flight, which is rare.
+        let oldest = match plain {
+            Some(k) if inner.loading.contains_key(&k) => inner
+                .entries
+                .iter()
+                .filter(|(k, _)| !inner.loading.contains_key(*k))
+                .min_by_key(|(_, e)| e.last_seen)
+                .map(|(k, _)| k.clone()),
+            other => other,
+        };
+        let Some(oldest) = oldest else {
+            return;
+        };
+        self.retire(inner, oldest);
     }
-    inner.last_purge = now;
-    let idle: Vec<MemoryKey> = inner
-        .entries
-        .iter()
-        .filter(|(k, e)| now - e.last_seen >= idle_ms && !inner.loading.contains_key(*k))
-        .map(|(k, _)| k.clone())
-        .collect();
-    for key in idle {
-        retire(inner, cap, key);
-    }
-}
 
-/// Takes a resident key out of the map. One with an unflushed change goes to the overlay under the sequence of
-/// its latest write rather than being lost.
-fn retire(inner: &mut Inner, cap: usize, key: MemoryKey) {
-    let entry = inner
-        .entries
-        .remove(&key)
-        .expect("just found under the lock");
-    if let Some(sequence) = inner.dirty.remove(&key) {
-        let record = entry.record();
-        stash_pending(inner, cap, key, record, sequence);
-    }
-}
-
-/// Inserts an overlay record. The overlay is held at `cap` in every regime: whichever record has the smallest
-/// `last_seen` goes, the new arrival included, since that is the one the idle purge would have shed first, and
-/// it is counted so a later flush can say how much was lost. While the store answers, the flusher is asked for
-/// a flush the moment the overlay reaches the cap, so a shed there means a save that hung or failed.
-fn stash_pending(
-    inner: &mut Inner,
-    cap: usize,
-    key: MemoryKey,
-    record: MemoryRecord,
-    sequence: u64,
-) {
-    if inner.pending.len() >= cap {
-        let oldest = inner
-            .pending
+    fn purge_locked(&self, inner: &mut Inner, now: i64) {
+        if now - inner.last_purge < PURGE_INTERVAL_MS {
+            return;
+        }
+        inner.last_purge = now;
+        let idle: Vec<MemoryKey> = inner
+            .entries
             .iter()
-            .min_by_key(|(_, (r, _))| r.last_seen)
-            .map(|(k, (r, _))| (k.clone(), r.last_seen));
-        match oldest {
-            Some((oldest_key, oldest_seen)) if oldest_seen <= record.last_seen => {
-                inner.pending.remove(&oldest_key);
-                inner.dropped_pending += 1;
-            }
-            _ => {
-                inner.dropped_pending += 1;
-                return;
-            }
+            .filter(|(k, e)| now - e.last_seen >= self.idle_ms && !inner.loading.contains_key(*k))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in idle {
+            self.retire(inner, key);
         }
     }
-    inner.pending.insert(key, (record, sequence));
+
+    /// Takes a resident key out of the map. One with an unflushed change goes to the overlay under the sequence of
+    /// its latest write rather than being lost.
+    fn retire(&self, inner: &mut Inner, key: MemoryKey) {
+        let entry = inner
+            .entries
+            .remove(&key)
+            .expect("just found under the lock");
+        if let Some(sequence) = inner.dirty.remove(&key) {
+            let record = entry.record();
+            self.stash_pending(inner, key, record, sequence);
+        }
+    }
+
+    /// Inserts an overlay record. The overlay is held at `cap` in every regime: whichever record has the smallest
+    /// `last_seen` goes, the new arrival included, since that is the one the idle purge would have shed first, and
+    /// it is counted so a later flush can say how much was lost. While the store answers, the flusher is asked for
+    /// a flush the moment the overlay reaches the cap, so a shed there means a save that hung or failed.
+    fn stash_pending(
+        &self,
+        inner: &mut Inner,
+        key: MemoryKey,
+        record: MemoryRecord,
+        sequence: u64,
+    ) {
+        if inner.pending.len() >= self.cap {
+            let oldest = inner
+                .pending
+                .iter()
+                .min_by_key(|(_, (r, _))| r.last_seen)
+                .map(|(k, (r, _))| (k.clone(), r.last_seen));
+            match oldest {
+                Some((oldest_key, oldest_seen)) if oldest_seen <= record.last_seen => {
+                    inner.pending.remove(&oldest_key);
+                    inner.dropped_pending += 1;
+                }
+                _ => {
+                    inner.dropped_pending += 1;
+                    return;
+                }
+            }
+        }
+        inner.pending.insert(key, (record, sequence));
+    }
 }
 
 /// `rand::random`'s own bits, restamped with the version and variant nibbles RFC 4122 fixes for a v4 UUID.
