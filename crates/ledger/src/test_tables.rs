@@ -40,3 +40,46 @@ pub fn first_entry_costs_text() -> String {
 pub fn first_entry_costs() -> CostRevisions {
     CostRevisions::from_yaml(&first_entry_costs_text()).expect("the first cost entry parses alone")
 }
+
+/// The steps of `EXPLAIN QUERY PLAN` for `sql` under `binds` on `db`.
+#[cfg(test)]
+fn explain(db: &crate::LedgerDb, sql: &str, binds: Vec<rusqlite::types::Value>) -> Vec<String> {
+    db.read_blocking(|c| {
+        let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(binds), |r| r.get::<_, String>(3))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })
+    .unwrap()
+}
+
+/// The plan of `sql` under `binds` on an empty ledger.
+#[cfg(test)]
+pub(crate) fn plan_of(sql: &str, binds: Vec<rusqlite::types::Value>) -> Vec<String> {
+    explain(&crate::LedgerDb::open_in_memory().unwrap(), sql, binds)
+}
+
+/// `plan_of` on a ledger whose `sqlite_stat1` holds `rows` as (table, index, stat).
+#[cfg(test)]
+pub(crate) fn plan_under(
+    sql: &str,
+    binds: Vec<rusqlite::types::Value>,
+    rows: &[(&str, &str, &str)],
+) -> Vec<String> {
+    let db = crate::LedgerDb::open_in_memory().unwrap();
+    db.purge(|c| {
+        for (tbl, idx, stat) in rows {
+            c.execute(
+                "INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES (?1, ?2, ?3)",
+                rusqlite::params![tbl, idx, stat],
+            )?;
+        }
+        // A connection keeps the statistics it loaded with its schema, and a row written by hand moves no schema
+        // cookie, so the planner reads the new rows only once `ANALYZE sqlite_schema` reloads them.
+        c.execute_batch("ANALYZE sqlite_schema")?;
+        Ok(())
+    })
+    .unwrap();
+    explain(&db, sql, binds)
+}

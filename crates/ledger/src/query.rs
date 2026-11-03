@@ -5113,47 +5113,7 @@ pub fn session_burn_series(
 mod tests {
     use super::*;
 
-    fn plan_of(sql: &str, binds: Vec<rusqlite::types::Value>) -> Vec<String> {
-        let db = crate::LedgerDb::open_in_memory().unwrap();
-        db.read_blocking(|c| {
-            let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
-            let rows = stmt
-                .query_map(params_from_iter(binds), |r| r.get::<_, String>(3))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows)
-        })
-        .unwrap()
-    }
-
-    /// `plan_of` on a ledger whose `sqlite_stat1` holds `rows` as (table, index, stat).
-    fn plan_under(
-        sql: &str,
-        binds: Vec<rusqlite::types::Value>,
-        rows: &[(&str, &str, &str)],
-    ) -> Vec<String> {
-        let db = crate::LedgerDb::open_in_memory().unwrap();
-        db.purge(|c| {
-            for (tbl, idx, stat) in rows {
-                c.execute(
-                    "INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES (?1, ?2, ?3)",
-                    params![tbl, idx, stat],
-                )?;
-            }
-            // A connection keeps the statistics it loaded with its schema, and a row written by hand moves no schema
-            // cookie, so the planner reads the new rows only once `ANALYZE sqlite_schema` reloads them.
-            c.execute_batch("ANALYZE sqlite_schema")?;
-            Ok(())
-        })
-        .unwrap();
-        db.read_blocking(|c| {
-            let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
-            let rows = stmt
-                .query_map(params_from_iter(binds), |r| r.get::<_, String>(3))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows)
-        })
-        .unwrap()
-    }
+    use crate::test_tables::{plan_of, plan_under};
 
     /// A pool alone binds no leading column the hour range would not serve better: the member index would walk the
     /// pool's whole retention before the hour filter, so the held time's hour range stays the outer search.

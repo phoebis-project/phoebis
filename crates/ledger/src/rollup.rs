@@ -2435,22 +2435,13 @@ mod tests {
     /// index on both rather than walking every row of the range.
     #[test]
     fn the_selecting_read_binds_the_pool_and_account_filters() {
-        let db = crate::LedgerDb::open_in_memory().unwrap();
         let select = RollupSelect {
             pools: vec!["p".into()],
             accounts: vec!["a".into(), "b".into()],
             ..RollupSelect::default()
         };
         let (sql, binds) = select_statement(0, 3_600, &select);
-        let plan: Vec<String> = db
-            .read_blocking(|c| {
-                let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
-                let rows = stmt
-                    .query_map(rusqlite::params_from_iter(binds), |r| r.get::<_, String>(3))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows)
-            })
-            .unwrap();
+        let plan = crate::test_tables::plan_of(&sql, binds);
         assert!(
             plan.iter()
                 .any(|step| step.starts_with("SEARCH rollups_hourly")
@@ -2464,21 +2455,12 @@ mod tests {
     /// pool's whole retention before the hour filter, so the hour range stays the outer search.
     #[test]
     fn the_pool_only_read_searches_the_hour_range_off_the_member_index() {
-        let db = crate::LedgerDb::open_in_memory().unwrap();
         let select = RollupSelect {
             pools: vec!["p".into()],
             ..RollupSelect::default()
         };
         let (sql, binds) = select_statement(0, 3_600, &select);
-        let plan: Vec<String> = db
-            .read_blocking(|c| {
-                let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
-                let rows = stmt
-                    .query_map(rusqlite::params_from_iter(binds), |r| r.get::<_, String>(3))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows)
-            })
-            .unwrap();
+        let plan = crate::test_tables::plan_of(&sql, binds);
         assert!(
             plan.iter()
                 .any(|step| step.starts_with("SEARCH rollups_hourly")
