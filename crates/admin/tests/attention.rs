@@ -10,8 +10,9 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::Request;
-use common::{get, json, login, post};
+use common::{get, json, login, post, Captured};
 use http_body_util::BodyExt;
+use phoebis_attention::{PairFacts, TlsPairs};
 use phoebis_bus::{
     ClientFacts, Event, Kind, Origin, Outcome, RequestComplete, RequestObserved, RequestShape,
     ResponseFacts,
@@ -385,6 +386,47 @@ async fn a_failed_holder_read_answers_500_rather_than_an_empty_list() {
     assert_eq!(json(response).await, j!({ "error": "storage failure" }));
     let response = get(&parts.app, "/admin/attention", Some(&cookie)).await;
     assert_eq!(response.status(), 200, "the next read answers again");
+}
+
+/// Panics where the reader asks for the listener pairs, which it does on its blocking worker, so the worker ends with
+/// no answer.
+struct PanickingPairs;
+
+impl TlsPairs for PanickingPairs {
+    fn pairs(&self) -> Vec<PairFacts> {
+        panic!("the listener pairs could not be read")
+    }
+}
+
+#[tokio::test]
+async fn a_read_whose_blocking_worker_dies_logs_the_failed_read_as_canceled_and_answers_500() {
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(captured.clone())
+        .finish();
+    // The harness drives every request through `oneshot` on this test's own task, so a thread-local subscriber sees
+    // the route's line.
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let parts = common::admin_parts_full_with_pairs(Arc::new(PanickingPairs)).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // Another case of this file can register the line's callsite as unwanted on a thread with no subscriber, so a
+    // rebuild reads every subscriber's interest again.
+    tracing::callsite::rebuild_interest_cache();
+    let response = get(&parts.app, "/admin/attention", Some(&cookie)).await;
+    assert_eq!(
+        response.status(),
+        500,
+        "an empty list would read as the quiet state"
+    );
+    assert_eq!(json(response).await, j!({ "error": "storage failure" }));
+    let text = captured.text();
+    assert!(
+        text.lines().any(|line| line
+            .contains("the attention read failed, so the route answers 500")
+            && line.contains("error=the attention read did not finish")),
+        "{text}"
+    );
 }
 
 #[tokio::test]

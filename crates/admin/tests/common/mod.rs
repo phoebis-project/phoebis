@@ -13,7 +13,7 @@ use phoebis_admin::{
     router, AdminSecrets, AdminState, OldTotals, PairingVault, Readiness, Sessions, SettingsView,
     TlsReload,
 };
-use phoebis_attention::{Attention, AttentionHandles, AttentionParts};
+use phoebis_attention::{Attention, AttentionHandles, AttentionParts, TlsPairs};
 use phoebis_bus::Bus;
 use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits, KeepaliveTiming};
 use phoebis_ledger::{
@@ -151,6 +151,7 @@ pub async fn admin_parts_full_on_disk() -> (tempfile::TempDir, Full) {
         Duration::from_secs(86_400),
         Duration::from_secs(3_600),
         Some(dir.path().join("ledger.sqlite")),
+        None,
     )
     .await;
     (dir, full_from(parts))
@@ -318,6 +319,31 @@ pub async fn admin_parts_full_on_bounded(
             session_expiry,
             non_companion_idle,
             None,
+            None,
+        )
+        .await,
+    )
+}
+
+/// The full harness with the attention reader asking `pairs` for the router's loaded listener pairs, which it does on
+/// its blocking worker, so a case can end that worker without an answer.
+pub async fn admin_parts_full_with_pairs(pairs: Arc<dyn TlsPairs>) -> Full {
+    full_from(
+        build_app_bounded(
+            None,
+            ACCOUNT_UUID,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            RouterConfig::default(),
+            LedgerConfig::default(),
+            Duration::from_secs(86_400),
+            Duration::from_secs(3_600),
+            None,
+            Some(pairs),
         )
         .await,
     )
@@ -996,6 +1022,7 @@ async fn build_app_routed(
         Duration::from_secs(86_400),
         Duration::from_secs(3_600),
         None,
+        None,
     )
     .await
 }
@@ -1017,6 +1044,7 @@ async fn build_app_bounded(
     session_expiry: Duration,
     non_companion_idle: Duration,
     ledger_path: Option<PathBuf>,
+    pairs: Option<Arc<dyn TlsPairs>>,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_310_linux_x64();
@@ -1202,7 +1230,7 @@ async fn build_app_bounded(
         ledger: Some(ledger.clone()),
         router: router_handle.clone(),
         store: store.clone(),
-        tls: None,
+        tls: pairs,
         usage: Some(usage.clone()),
     });
     let settings = Arc::new(SettingsView {
