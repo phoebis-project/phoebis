@@ -584,9 +584,9 @@ export function AnalyticsPage() {
   const modelError = byModel.error ?? byModelFunded.error;
   const poolError = sessionId === null ? (byPool.error ?? fundedByPool.error) : null;
   const billedTotals = useMemo(() => (nativeWarming && !billedBreakdown.stale && billedBreakdown.data !== null ? sumGroups(billedBreakdown.data) : null), [nativeWarming, billedBreakdown.stale, billedBreakdown.data]);
-  const probeTile = probeTileOf(unit, costTotals, billedTotals, figureLoading, sessionId !== null, reading);
-  const savingTile = savingTileOf(unit, costTotals, billedTotals, figureLoading, sessionId !== null, reading);
-  const netTile = netTileOf(unit, costTotals, billedTotals, figureLoading, sessionId !== null, reading);
+  const probeTile = warmingTileOf(unit, costTotals, figureLoading, sessionId !== null, reading, `${fmtInt(probesOf(costTotals))} probes`, probeSidesOf(costTotals, billedTotals, 'cost'), costTotals.probeCostUsd);
+  const savingTile = warmingTileOf(unit, costTotals, figureLoading, sessionId !== null, reading, keptWarmRequests(costTotals), savingSidesOf(costTotals, billedTotals, 'gross'), costTotals.savingUsd);
+  const netTile = warmingTileOf(unit, costTotals, figureLoading, sessionId !== null, reading, 'less the probe cost', savingSidesOf(costTotals, billedTotals, 'net'), netSaving(costTotals.savingUsd, costTotals.probeCostUsd));
   const warmingPoints = useMemo(() => (warmingSeries.stale ? [] : (warmingSeries.data ?? [])), [warmingSeries.stale, warmingSeries.data]);
   const billedWarmingPoints = nativeWarming && !billedWarmingSeries.stale ? billedWarmingSeries.data : null;
   const warmingLoading = warmingSeries.data === null || warmingSeries.stale || (nativeWarming && (billedWarmingSeries.data === null || billedWarmingSeries.stale));
@@ -1173,54 +1173,23 @@ function savingSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | un
   return { billed: paid ? dollars : undefined, equivalent: plan ? equivalent : undefined };
 }
 
-/**
- * The Probe cost tile per position: under native the plan probes' figure in the chosen week of the whole read stacked
- * over the billed probes' dollars of `billed`, the skeleton while the scale is out, and under a dollar position the
- * position's probe dollars. A session view folds request rows, which measure no probe count, so `session` reads the
- * count unmeasured on every path. The tile sums the probes of every account it reads, so it carries no hint.
- */
-function probeTileOf(unit: UnitPosition, totals: AnalyticsGroup, billed: AnalyticsGroup | null, loading: boolean, session: boolean, reading: WeekReading): { note: string; value: ReactNode | null } {
-  const unmeasured = session || totals.fromRequests === true;
-  if (unmeasured) return { note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
-  if (unit === 'native') {
-    const sides = probeSidesOf(totals, billed, 'cost');
-    return { note: `${fmtInt(probesOf(totals))} probes, ${NATIVE_SUBSET}`, value: loading || reading.scale === null ? null : figuresValue(nativeFiguresOf(sides, reading.week, reading.scale).figures) };
-  }
-  return { note: `${fmtInt(probesOf(totals))} probes, ${UNIT_SPLIT[dollarsOf(unit)]}`, value: loading ? null : fmtUsd(totals.probeCostUsd) };
-}
-
 const keptWarmRequests = (g: AnalyticsGroup | null) => `${fmtInt(g?.keptWarm?.requests ?? 0)} requests kept warm`;
 
 /**
- * The saving tile's figures per position, shaped as probeTileOf's: under native the plan rows' figure in the chosen
- * week over the billed dollars, under all the dollars, under usd the billed subset, under equivalent the equivalent.
- * The note leads with the credited requests, and a session view, whose fold carries no credit, reads the figure
- * unmeasured.
+ * A cache-warming tile per position, the Probe cost, Saved by probes and Net saving tiles apart in their side pair,
+ * their dollars and their note's lead. Under native the plan side's figure in the chosen week stacks over the billed
+ * dollars, the skeleton while the scale is out, and a dollar position reads its dollars. A session view folds request
+ * rows, which measure no probe count and carry no credit, so it reads the figure unmeasured on every path. The tile
+ * sums every account it reads, so it carries no hint. `critical` holds while the figure is under zero: under native
+ * the plan side's, the widget's subject, since the billed dollars beside it never tone the tile.
  */
-function savingTileOf(unit: UnitPosition, totals: AnalyticsGroup, billed: AnalyticsGroup | null, loading: boolean, session: boolean, reading: WeekReading): { note: string; value: ReactNode | null } {
-  if (session || totals.fromRequests === true) return { note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
-  if (unit === 'native') {
-    const sides = savingSidesOf(totals, billed, 'gross');
-    return { note: `${keptWarmRequests(totals)}, ${NATIVE_SUBSET}`, value: loading || reading.scale === null ? null : figuresValue(nativeFiguresOf(sides, reading.week, reading.scale).figures) };
-  }
-  return { note: `${keptWarmRequests(totals)}, ${UNIT_SPLIT[dollarsOf(unit)]}`, value: loading ? null : fmtUsd(totals.savingUsd) };
-}
-
-/**
- * The Net saving tile, savingTileOf's shape over the saving less the probe cost per side, `critical` while the figure
- * is under zero. Under native that is the plan side's figure, the widget's subject, and the billed dollars beside it
- * never tone the tile.
- */
-function netTileOf(unit: UnitPosition, totals: AnalyticsGroup, billed: AnalyticsGroup | null, loading: boolean, session: boolean, reading: WeekReading): { critical: boolean; note: string; value: ReactNode | null } {
-  const less = (subset: string) => `less the probe cost, ${subset}`;
+function warmingTileOf(unit: UnitPosition, totals: AnalyticsGroup, loading: boolean, session: boolean, reading: WeekReading, lead: string, sides: ReturnType<typeof probeSidesOf>, usd: number): { critical: boolean; note: string; value: ReactNode | null } {
   if (session || totals.fromRequests === true) return { critical: false, note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
   if (unit === 'native') {
-    const sides = savingSidesOf(totals, billed, 'net');
     const shown = !loading && reading.scale !== null;
-    return { critical: shown && typeof sides.equivalent === 'number' && sides.equivalent < 0, note: less(NATIVE_SUBSET), value: shown && reading.scale !== null ? figuresValue(nativeFiguresOf(sides, reading.week, reading.scale).figures) : null };
+    return { critical: shown && typeof sides.equivalent === 'number' && sides.equivalent < 0, note: `${lead}, ${NATIVE_SUBSET}`, value: shown && reading.scale !== null ? figuresValue(nativeFiguresOf(sides, reading.week, reading.scale).figures) : null };
   }
-  const net = netSaving(totals.savingUsd, totals.probeCostUsd);
-  return { critical: !loading && net < 0, note: less(UNIT_SPLIT[dollarsOf(unit)]), value: loading ? null : fmtUsd(net) };
+  return { critical: !loading && usd < 0, note: `${lead}, ${UNIT_SPLIT[dollarsOf(unit)]}`, value: loading ? null : fmtUsd(usd) };
 }
 
 /** A chart card's plot height, its skeleton's too, so a card keeps its height as the answer lands. */
