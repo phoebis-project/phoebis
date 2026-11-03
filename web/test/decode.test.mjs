@@ -269,11 +269,10 @@ test('an account row decodes its usage block and null for an API-key account', (
     fetchedAt: d.iso(rows.find((r) => r.id === 'business').usage.fetched_at),
     heldUntil: null,
     poll: { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastError: null, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 },
-    status: 'success',
   });
   assert.equal(direct.usage, null, 'the poll never reads an API-key account');
   const spare = d.decodeAccount({ ...rows[0], id: 'spare', usage: { error: 'no credential is stored for this account, so pair it to load quota', fetched_at: null, poll: null } }).usage;
-  assert.deepEqual([spare.accountId, spare.status, spare.fetchedAt, spare.poll], ['spare', 'error', null, null], 'the sentence standing in for a snapshot reads as an error');
+  assert.deepEqual([spare.accountId, spare.error, spare.fetchedAt, spare.poll], ['spare', 'no credential is stored for this account, so pair it to load quota', null, null], 'the sentence standing in for a snapshot reads as an error');
 });
 
 test('an account cooling on its fast lane alone reads ready, and one with an account row beside it reads cooldown', () => {
@@ -2713,14 +2712,14 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
   assert.deepEqual(history.map((h) => h.windowId), ['5h', '7d', '7d_fable', 'seven_day_opus']);
   assert.ok(history.every((h) => h.samples.every((x) => isIso(x.at))));
   const snapshot = d.decodeSnapshot('business', fixture('account_usage'));
-  assert.equal(snapshot.status, 'success');
+  assert.equal(snapshot.error, null);
   const at = new Date(fixture('account_usage').poll.last_attempt_at).toISOString();
   assert.deepEqual(snapshot.poll, { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastError: null, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 }, 'a clean poll');
   const hold = 'the usage endpoint rate-limited the account';
   const held = d.decodeSnapshot('mail', { error: 'usage request rate-limited', fetched_at: 1_000, held_until: 240_000, poll: { backoff_since: 60_000, last_attempt_at: 120_000, last_clean_at: 1_000, last_error: hold, last_outcome: 'rate_limited', next_attempt_at: 240_000, rate_limited_in_a_row: 2 } });
   assert.deepEqual(
-    [held.status, held.heldUntil, held.poll],
-    ['error', '1970-01-01T00:04:00.000Z', { backoffSince: '1970-01-01T00:01:00.000Z', lastAttemptAt: '1970-01-01T00:02:00.000Z', lastCleanAt: '1970-01-01T00:00:01.000Z', lastError: hold, lastOutcome: 'rate_limited', nextAttemptAt: '1970-01-01T00:04:00.000Z', rateLimitedInARow: 2 }],
+    [held.error, held.heldUntil, held.poll],
+    ['usage request rate-limited', '1970-01-01T00:04:00.000Z', { backoffSince: '1970-01-01T00:01:00.000Z', lastAttemptAt: '1970-01-01T00:02:00.000Z', lastCleanAt: '1970-01-01T00:00:01.000Z', lastError: hold, lastOutcome: 'rate_limited', nextAttemptAt: '1970-01-01T00:04:00.000Z', rateLimitedInARow: 2 }],
     'a poll backing off keeps the hold deadline, each instant, the count and the last error',
   );
   assert.equal(d.decodeSnapshot('spare', { error: 'the poll has not read this account yet', fetched_at: null, poll: null }).poll, null, 'no poll before the first ask');

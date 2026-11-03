@@ -1380,7 +1380,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const spare = s.accounts.find((a) => a.id === 'spare');
     // The polls stop with the credential, so the snapshot holds the last reading and no poll's standing.
-    assert.deepEqual([spare.usage.status, spare.usage.error, spare.usage.heldUntil, spare.usage.poll], ['success', null, null, null], "spare's snapshot");
+    assert.deepEqual([spare.usage.error, spare.usage.heldUntil, spare.usage.poll], [null, null, null], "spare's snapshot");
     const read = Date.parse(spare.usage.fetchedAt);
     const history = await s.api.getQuotaHistory('spare');
     assert.deepEqual(

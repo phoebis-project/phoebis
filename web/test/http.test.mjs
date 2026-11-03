@@ -189,8 +189,8 @@ test('the accounts list carries the poll standing and no usage route is read', a
   assert.deepEqual(accounts.map((a) => [a.id, a.usage?.poll?.lastOutcome ?? a.usage]), [
     ['business', 'clean'],
     ['direct', null],
-    ['free-org', { accountId: 'free-org', error: free.error, fetchedAt: null, heldUntil: null, poll: null, status: 'error' }],
-    ['usage-seat', { accountId: 'usage-seat', error: seat.error, fetchedAt: null, heldUntil: null, poll: null, status: 'error' }],
+    ['free-org', { accountId: 'free-org', error: free.error, fetchedAt: null, heldUntil: null, poll: null }],
+    ['usage-seat', { accountId: 'usage-seat', error: seat.error, fetchedAt: null, heldUntil: null, poll: null }],
   ]);
 });
 

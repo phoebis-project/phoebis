@@ -68,7 +68,7 @@ export function QuotaPage() {
   }, [subscriptions, sort, now]);
 
   const total = subscriptions.length;
-  const attention = [...snapById.values()].filter((s) => s.status === 'error' || needsAttention(s.poll)).length;
+  const attention = [...snapById.values()].filter((s) => Boolean(s.error) || needsAttention(s.poll)).length;
 
   const reload = () => accounts.reload();
   // The route reads through the poll's path, so a refresh inside the account's hold changes nothing.
@@ -186,7 +186,6 @@ function ExtraUsageLine({ extra }: { extra: ExtraUsage | null }) {
 }
 
 function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshed }: { account: Account; now: number; onRefreshed: () => void; refreshHint?: string; refreshing: boolean; snapshot?: QuotaSnapshot }) {
-  const status = snapshot?.status ?? 'success';
   const soonest = soonestReset(account, now);
   const [localRefreshing, setLocalRefreshing] = useState(false);
   const busy = refreshing || localRefreshing;
@@ -207,7 +206,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const reading = pollReading(snapshot?.poll ?? null, snapshot?.fetchedAt ?? null, now);
   // Windows the card holds are drawn whatever the last read said. The error takes their place only with none, where a
   // spend reading with neither amounts nor a share counts as none.
-  const failed = status === 'error' && !w5 && !w7 && !account.fableWindow && !hasSpendReading(account.spend);
+  const failed = Boolean(snapshot?.error) && !w5 && !w7 && !account.fableWindow && !hasSpendReading(account.spend);
   return (
     <article className={`qcard ${failed ? 'is-error' : ''}`}>
       <header className="qcard__head">

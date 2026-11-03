@@ -272,8 +272,6 @@ export interface QuotaHistory {
   windowId: WindowId;
 }
 
-export type QuotaFetchStatus = 'error' | 'success';
-
 export const POLL_OUTCOME_VALUES = ['clean', 'failed', 'rate_limited'] as const;
 /** How the usage endpoint answered an account's last attempt. */
 export type PollOutcome = (typeof POLL_OUTCOME_VALUES)[number];
@@ -301,7 +299,6 @@ export interface QuotaSnapshot {
   /** The instant a held answer's next attempt may run, ISO. Null outside a hold. */
   heldUntil: string | null;
   poll: QuotaPoll | null;
-  status: QuotaFetchStatus;
 }
 
 /**
