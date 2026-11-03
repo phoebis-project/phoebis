@@ -342,8 +342,16 @@ pub fn reconcile(
     let Some(earliest) = earliest else {
         return Ok(());
     };
+    // One index seek per account from the one before it, where `DISTINCT` would walk every stored sample.
     let accounts: Vec<String> = tx
-        .prepare("SELECT DISTINCT account_id FROM quota_samples ORDER BY account_id")?
+        .prepare(
+            "WITH RECURSIVE a(id) AS ( \
+               SELECT MIN(account_id) FROM quota_samples \
+               UNION ALL \
+               SELECT (SELECT MIN(account_id) FROM quota_samples WHERE account_id > a.id) FROM a \
+               WHERE a.id IS NOT NULL) \
+             SELECT id FROM a WHERE id IS NOT NULL",
+        )?
         .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     for account in &accounts {

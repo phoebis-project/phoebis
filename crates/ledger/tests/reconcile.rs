@@ -244,6 +244,68 @@ fn a_complete_run_prices_its_attempts_and_writes_the_ratio() {
 }
 
 #[test]
+fn every_account_with_a_reading_reconciles_its_runs() {
+    let reset = SATURDAY + HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    let of = |account: &str, sample: QuotaSampleRecord| QuotaSampleRecord {
+        account_id: account.into(),
+        ..sample
+    };
+    db.insert_samples(
+        &[
+            reading(FIVE_HOUR, SATURDAY, 0.10, reset),
+            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.20, reset),
+            of("b", reading(FIVE_HOUR, SATURDAY, 0.10, reset)),
+            of("b", reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.20, reset)),
+        ],
+        None,
+    )
+    .unwrap();
+    served(&db, "a1", SONNET, SATURDAY + 5 * MINUTE, 10, None);
+    let completed = SATURDAY + 5 * MINUTE;
+    db.insert_request(
+        &RequestRecord {
+            id: "b1".into(),
+            received_at: completed - 30_000,
+            finished_at: Some(completed),
+            model: SONNET.into(),
+            canonical_model: SONNET.into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "b1".into(),
+            attempt: 1,
+            account_id: "b".into(),
+            account_kind: AccountKind::Oauth,
+            started_at: completed - 30_000,
+            finished_at: Some(completed),
+            outcome: "succeeded".into(),
+            input_tokens: Some(10),
+            output_tokens: Some(0),
+            tier: Some(MAX_20X.into()),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    let now = reset + HOUR;
+    fold(&db, now);
+    let rows = rows(&db, now);
+    assert_eq!(
+        rows.iter()
+            .map(|r| r.account_id.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "b"],
+        "each account's run writes its row: {rows:?}"
+    );
+}
+
+#[test]
 fn a_five_point_rise_between_whole_percent_readings_meets_the_least_rise() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
