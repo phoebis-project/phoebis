@@ -14,11 +14,15 @@ pub trait HeaderLookup {
     fn get(&self, name: &str) -> Lookup<'_>;
 }
 
-/// The client's hint headers, under the names the relay reads them by and `HintLookup` answers for, so a guardrail
-/// run over recorded rows reads each hint from the header the live evaluation read it from.
+// The client's hint headers, under the names the relay reads them by and `HintLookup` answers for, so a guardrail
+// run over recorded rows reads each hint from the header the live evaluation read it from.
+/// The hint that names a subagent's type, which the client sends on the subagent's own turns.
 pub const AGENT_TYPE_HEADER: &str = "x-claude-code-agent-type";
+/// The hint the client sends on the summarization request of a compaction.
 pub const COMPACTION_HEADER: &str = "x-claude-code-compaction";
+/// The hint the client sends once, on the first request after a compaction.
 pub const CONTEXT_COMPACTED_HEADER: &str = "x-claude-code-context-compacted";
+/// The hint that names the request's class, such as `compaction`, `main` or `subagent`.
 pub const REQUEST_CLASS_HEADER: &str = "x-claude-code-request-class";
 
 /// The five hints a request row keeps, answering `Unknown` for every other header name.

@@ -1205,11 +1205,16 @@ pub const CEILING_SETTING: &[&str] = &["window_ceiling"];
 pub const WALL_SETTINGS: &[&str] = &["shed_cap", "window_ceiling"];
 pub const SLOW_SETTINGS: &[&str] = &["slow_down_stretch_seconds"];
 
-/// The kind words the fold writes, which the attention reader matches its own kinds against.
+// The kind words the fold writes, which the attention reader matches its own kinds against.
+/// The kind the fold writes for an account that read a window spent within the hour after a move landed on it.
 pub const DESTINATION_SPENT_KIND: &str = "destination_spent";
+/// The kind the fold writes for an account whose newest reconciled window's rise reads off the share the router priced.
 pub const METER_DRIFT_KIND: &str = "meter_drift";
+/// The kind the fold writes for a pool whose shedding round marked nothing for want of a destination with runway.
 pub const SHED_NO_RUNWAY_KIND: &str = "shed_no_runway";
+/// The kind the fold writes for an account slowed in the day past twice its pool's stretch threshold, at least an hour.
 pub const SLOWED_LONG_KIND: &str = "slowed_long";
+/// The kind the fold writes for an account that read a window spent.
 pub const WALL_REACHED_KIND: &str = "wall_reached";
 
 /// How many stretch thresholds of slow-down in the trailing day raise `slowed_long`. The slow-down holds an account
