@@ -27,11 +27,6 @@ import { speedHover } from '@/lib/selection';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
 
 /**
- * A read whose first answer failed holds no data, so its card would wait on a placeholder forever; a refresh that fails
- * with data held keeps the card drawn.
- */
-
-/**
  * The as-of line over the page's reads, each named as its card's error names it: the figures are as old as the oldest
  * answer any card draws, and a read whose refresh failed after an answer is named with its error. A read that never
  * answered is left to its card, which names the error already. Where both the accounts and the settings reads fail
