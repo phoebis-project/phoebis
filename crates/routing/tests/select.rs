@@ -16231,45 +16231,15 @@ fn a_refused_probe_reads_as_a_probe_and_keeps_what_its_request_carried() {
 }
 
 #[test]
-fn the_warmth_cause_and_the_window_source_serialize_as_the_words_they_spell() {
-    for cause in [
-        WarmthCause::Probe,
-        WarmthCause::Count,
-        WarmthCause::Compacted,
-        WarmthCause::LaneChanged,
-        WarmthCause::ClassRefreshes,
-        WarmthCause::ClassAuxiliary,
-        WarmthCause::Chainless,
-        WarmthCause::ContinuesPin,
-        WarmthCause::StaticRestart,
-        WarmthCause::Foreign,
-    ] {
-        // Exhaustive, so a variant added later fails to compile here until the match names it, while the array
-        // above would not.
-        match cause {
-            WarmthCause::Probe
-            | WarmthCause::Count
-            | WarmthCause::Compacted
-            | WarmthCause::LaneChanged
-            | WarmthCause::ClassRefreshes
-            | WarmthCause::ClassAuxiliary
-            | WarmthCause::Chainless
-            | WarmthCause::ContinuesPin
-            | WarmthCause::StaticRestart
-            | WarmthCause::Foreign => {}
-        }
-        assert_eq!(
-            serde_json::to_value(cause).unwrap(),
-            cause.as_str(),
-            "{cause:?}"
-        );
-    }
+fn the_window_source_serializes_as_the_words_it_spells() {
     for source in [
         WindowSource::Head,
         WindowSource::Poll,
         WindowSource::Predicted,
         WindowSource::Stored,
     ] {
+        // Exhaustive, so a variant added later fails to compile here until the match names it, while the array
+        // above would not.
         match source {
             WindowSource::Head
             | WindowSource::Poll

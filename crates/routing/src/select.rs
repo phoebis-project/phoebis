@@ -315,8 +315,7 @@ impl Warmth {
 }
 
 /// The branch of `warmth_of` that decided the verdict, one name per return.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WarmthCause {
     Probe,
     Count,
