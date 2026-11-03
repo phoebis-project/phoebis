@@ -2,7 +2,7 @@ import { type FocusEvent, type KeyboardEvent, type ReactNode, useCallback, useEf
 import { createPortal } from 'react-dom';
 import { ChipView, rowValue } from '@/components/ChipView';
 import { HashChip } from '@/components/EntryChips';
-import { Badge, Described, useDescription } from '@/components/ui/primitives';
+import { Badge, Described, useHostedDescription } from '@/components/ui/primitives';
 import type { StripLayout } from '@/lib/decisionStrip';
 import type { Chip } from '@/lib/routingLog';
 import type { PlanGroup, PlanRow, PlanTable, PopoverPlan, WindowRow } from '@/lib/stripFacts';
@@ -23,17 +23,15 @@ const WINDOW_COLUMNS: { key: keyof WindowRow; label: string; numeric: boolean }[
 
 /** A chip's hover described through the host as a `Badge`'s is. Outside one the title alone describes it. */
 function DescribedChip({ chip, marked }: { chip: Chip; marked?: boolean }) {
-  const described = useDescription(chip.title);
   // A node beside the chip would join the text of the row or the cell that holds it.
-  const hosted = described && !described.sibling ? described.id : undefined;
+  const hosted = useHostedDescription(chip.title);
   return <ChipView chip={chip} describedBy={hosted} marked={marked} />;
 }
 
 /** A table cell's hover, described through the host. Outside one the title alone describes it, as the Pace cell's. */
 function Cell({ children, head = false, numeric, title }: { children: ReactNode; head?: boolean; numeric: boolean; title: string | undefined }) {
-  const described = useDescription(title);
   // A node after the cell would stand in the row, where only cells may.
-  const hosted = described && !described.sibling ? described.id : undefined;
+  const hosted = useHostedDescription(title);
   const Tag = head ? 'th' : 'td';
   return (
     <Tag className={numeric ? 'right' : undefined} title={title} aria-describedby={hosted}>

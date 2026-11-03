@@ -65,6 +65,13 @@ export function useDescription(text: string | undefined): { id: string; sibling:
   return host ? { id: entryId(host.base, text), sibling: false } : { id: own, sibling: true };
 }
 
+/** The id `text` is described by through the card's description host, undefined outside every host, where the
+ *  caller's title alone describes its element. */
+export function useHostedDescription(text: string | undefined): string | undefined {
+  const described = useDescription(text);
+  return described && !described.sibling ? described.id : undefined;
+}
+
 /**
  * Describes the element `children` draws by `text` for a reader: through the card's description host where one
  * stands, else through a hidden node after the element, as the attempt trail's is. `hostedOnly` keeps a chip's hover
@@ -89,9 +96,8 @@ export function Described({ children, hostedOnly = false, text }: { children: (d
 export function Badge({ tone = 'neutral', children, dot = false, title, describe = true }: { children: ReactNode; describe?: boolean; dot?: boolean; title?: string; tone?: BadgeTone }) {
   // A title that only repeats the badge's text would have a reader say it twice under a host, so such a caller keeps
   // the hover and turns the description off.
-  const described = useDescription(describe ? title : undefined);
   // Outside every host the title alone describes the badge: a node beside it would join its parent's text.
-  const hosted = described && !described.sibling ? described.id : undefined;
+  const hosted = useHostedDescription(describe ? title : undefined);
   return (
     <span className={`badge badge--${tone}`} title={title} aria-describedby={hosted}>
       {dot && <span className="badge__dot" aria-hidden />}
@@ -102,8 +108,7 @@ export function Badge({ tone = 'neutral', children, dot = false, title, describe
 
 /** A badge that opens a page: it describes itself through its host as a `Badge` does. */
 export function BadgeLink({ tone = 'neutral', children, title, to }: { children: ReactNode; title?: string; to: string; tone?: BadgeTone }) {
-  const described = useDescription(title);
-  const hosted = described && !described.sibling ? described.id : undefined;
+  const hosted = useHostedDescription(title);
   return (
     <Link to={to} className={`badge badge--${tone}`} title={title} aria-describedby={hosted}>
       {children}

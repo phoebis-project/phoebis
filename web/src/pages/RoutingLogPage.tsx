@@ -11,7 +11,7 @@ import { EventDetail } from '@/components/EventDetail';
 import { FilterBar } from '@/components/FilterBar';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft } from '@/components/ui/icons';
-import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, useDescription } from '@/components/ui/primitives';
+import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, useHostedDescription } from '@/components/ui/primitives';
 import { addressWindow, type LogFilters, ROUTING_LOG_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { tierOrder, weekReadingOf } from '@/lib/costs';
@@ -298,7 +298,7 @@ const modelOf = (row: RoutingLogRow) => {
 
 function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now: number; onToggle: () => void; open: boolean; row: RoutingLogRow; rows: RoutingLogRow[] }) {
   const by = byOf(row, rows);
-  const described = useDescription(by.title);
+  const describedBy = useHostedDescription(by.title);
   const facts = factsOf(row, now, rows);
   const model = modelOf(row);
   const className = ['routing-log__row', isNew && 'is-new', open && 'is-open'].filter(Boolean).join(' ');
@@ -369,7 +369,7 @@ function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now
         )}
       </td>
       <td className="routing-log__by">
-        <ChipView chip={{ ...by, title: by.title ?? by.value }} className="routing-log__chip" describedBy={described && !described.sibling ? described.id : undefined} />
+        <ChipView chip={{ ...by, title: by.title ?? by.value }} className="routing-log__chip" describedBy={describedBy} />
       </td>
       <td className="routing-log__fact">
         {facts.length === 0 ? (

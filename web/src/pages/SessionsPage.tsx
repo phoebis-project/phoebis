@@ -11,7 +11,7 @@ import { CostReferenceLink } from '@/components/ui/CostReference';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useDescription } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useHostedDescription } from '@/components/ui/primitives';
 import { ANALYTICS_CODEC, REQUESTS_CODEC, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { failed } from '@/lib/costs';
@@ -864,8 +864,7 @@ function ForkBadge({
       : relation === null
         ? `Branched from session ${from}${at}. Go to its row`
         : `Branched from session ${from}${at} on ${baseAccount?.label}. Go to its row`;
-  const described = useDescription(title);
-  const hosted = described && !described.sibling ? described.id : undefined;
+  const hosted = useHostedDescription(title);
   // The badge sits under the session id, so it names the relation or the depth alone, and the title the base.
   const words = relation !== null ? `fork, ${relation}` : depth === null ? 'fork' : `fork at ${depth}`;
   if (base === null)
@@ -986,10 +985,10 @@ function AgentLine({ accountById, line, now, requestsTo }: { accountById: Readon
  */
 function LineAccount({ account, id, now }: { account: Account | null; id: string; now: number }) {
   const title = account ? KIND_HINT[account.kind] : undefined;
-  const kind = useDescription(title);
+  const kind = useHostedDescription(title);
   return (
     <span className="agents__account">
-      <Link to={`/accounts/${id}`} title={title} aria-describedby={kind && !kind.sibling ? kind.id : undefined}>
+      <Link to={`/accounts/${id}`} title={title} aria-describedby={kind}>
         {id}
       </Link>
       <SpeedChip {...memberSpeed({ speed: null }, account, now)} />

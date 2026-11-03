@@ -4,7 +4,7 @@ import type { AttemptOutcome } from '@/api/types';
 import { fmtAbsolute } from '@/lib/format';
 import { floatAt } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
-import { useDescription } from './primitives';
+import { Described } from './primitives';
 
 /** The shape of a ledger attempt as the trail draws it. */
 export interface TrailAttempt {
@@ -35,23 +35,19 @@ export const trailLines = (attempts: TrailAttempt[]): string => attempts.map(lin
 /** One badge per attempt in the order they were tried, so a failover reads as "a 429, b 200". */
 export function AttemptTrail({ attempts }: { attempts: TrailAttempt[] }) {
   const title = trailLines(attempts);
-  const described = useDescription(title);
   if (attempts.length === 0) return <span className="muted">none</span>;
   return (
-    <>
-      <span className="trail" title={title} aria-describedby={described?.id}>
-        {attempts.map((a) => (
-          <span key={a.index} className={`trail__step badge badge--${toneOf(a.upstreamStatus)}`}>
-            {a.accountId} <span className="num">{a.upstreamStatus ?? '…'}</span>
-          </span>
-        ))}
-      </span>
-      {described?.sibling && (
-        <span id={described.id} hidden data-descriptions="">
-          {title}
+    <Described text={title}>
+      {(describedBy) => (
+        <span className="trail" title={title} aria-describedby={describedBy}>
+          {attempts.map((a) => (
+            <span key={a.index} className={`trail__step badge badge--${toneOf(a.upstreamStatus)}`}>
+              {a.accountId} <span className="num">{a.upstreamStatus ?? '…'}</span>
+            </span>
+          ))}
         </span>
       )}
-    </>
+    </Described>
   );
 }
 
@@ -68,7 +64,6 @@ export function AttemptCount({ attempts }: { attempts: TrailAttempt[] }) {
   const many = attempts.length >= 2;
   // Under two attempts nothing registers, so the host's entries are the counts drawn and no more.
   const lines = many ? trailLines(attempts) : undefined;
-  const described = useDescription(lines);
   const [at, setAt] = useState<{ left: number; top: number } | null>(null);
   const open = at !== null;
   const countRef = useRef<HTMLSpanElement>(null);
@@ -113,14 +108,13 @@ export function AttemptCount({ attempts }: { attempts: TrailAttempt[] }) {
   if (!many) return null;
   return (
     <>
-      <span ref={countRef} className="trail-count" tabIndex={0} title={lines} aria-describedby={described?.id} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}>
-        {attempts.length} attempts
-      </span>
-      {described?.sibling && (
-        <span id={described.id} hidden data-descriptions="">
-          {lines}
-        </span>
-      )}
+      <Described text={lines}>
+        {(describedBy) => (
+          <span ref={countRef} className="trail-count" tabIndex={0} title={lines} aria-describedby={describedBy} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}>
+            {attempts.length} attempts
+          </span>
+        )}
+      </Described>
       {at !== null &&
         createPortal(
           <span ref={cardRef} className="trail-pop" style={{ left: at.left, top: at.top }}>

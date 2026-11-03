@@ -5,7 +5,7 @@ import type { DecisionRecord, DecisionSummary } from '@/api/types';
 import { ChipView, Chips, chipValue, rowValue } from '@/components/ChipView';
 import { DecisionStrip } from '@/components/DecisionStrip';
 import { EntryChips } from '@/components/EntryChips';
-import { Badge, Button, CopyButton, ErrorState, KeyValue, useDescription } from '@/components/ui/primitives';
+import { Badge, Button, CopyButton, ErrorState, KeyValue, useHostedDescription } from '@/components/ui/primitives';
 import { CHOSEN_VERDICTS } from '@/lib/decisionStrip';
 import { useAsync } from '@/lib/hooks';
 import {
@@ -54,9 +54,8 @@ export const keyValueRows = (rows: CardRow[], expanded = false, setExpanded?: (e
 
 /** A member's Pace score with its hover, described through the page's host as a `Badge` is. */
 function PaceCell({ title, value }: { title: string | null; value: string }) {
-  const described = useDescription(title ?? undefined);
   // Outside every host the title alone describes the cell: a node beside it would join the cell's text.
-  const hosted = described && !described.sibling ? described.id : undefined;
+  const hosted = useHostedDescription(title ?? undefined);
   return (
     <td className="num" title={title ?? undefined} aria-describedby={hosted}>
       {value === '-' ? <span className="muted">-</span> : value}
