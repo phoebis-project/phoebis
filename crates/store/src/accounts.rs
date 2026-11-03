@@ -79,10 +79,18 @@ pub struct AccountRow {
 
 /// The low bits of an edit token, which carry the revision; the incarnation takes the bits above them.
 const EDIT_TOKEN_REVISION_BITS: u32 = 32;
-const EDIT_TOKEN_REVISION_MAX: u64 = (1 << EDIT_TOKEN_REVISION_BITS) - 1;
-/// The token stays below 2^53, the largest integer a JavaScript number holds exactly, so the console sends back the
-/// very value it was given.
-const EDIT_TOKEN_INCARNATION_MAX: u64 = (1 << (53 - EDIT_TOKEN_REVISION_BITS)) - 1;
+
+/// `high` above the low `low_bits` and `low` in them, each part saturating at its share. The token stays below 2^53,
+/// the largest integer a JavaScript number holds exactly, so the console sends back the very value it was given.
+fn pack_token(high: u64, low: u64, low_bits: u32) -> u64 {
+    let low_max = (1 << low_bits) - 1;
+    let high_max = (1 << (53 - low_bits)) - 1;
+    (high.min(high_max) << low_bits) | low.min(low_max)
+}
+
+fn unpack_token(token: u64, low_bits: u32) -> (u64, u64) {
+    (token >> low_bits, token & ((1 << low_bits) - 1))
+}
 
 impl AccountRow {
     /// What an operator's edit sends back to be fenced on: the incarnation and the revision in one integer. An
@@ -90,24 +98,18 @@ impl AccountRow {
     /// let an editor opened before the deletion land on the replacement. A part past its share saturates: the token
     /// then names a row this one is not, so a save sending it back is refused rather than fenced onto another holder.
     pub fn edit_token(&self) -> u64 {
-        (self.incarnation.min(EDIT_TOKEN_INCARNATION_MAX) << EDIT_TOKEN_REVISION_BITS)
-            | self.revision.min(EDIT_TOKEN_REVISION_MAX)
+        pack_token(self.incarnation, self.revision, EDIT_TOKEN_REVISION_BITS)
     }
 
     /// Whether `token` names this row's incarnation and revision both.
     pub fn answers_edit_token(&self, token: u64) -> bool {
-        (
-            token >> EDIT_TOKEN_REVISION_BITS,
-            token & EDIT_TOKEN_REVISION_MAX,
-        ) == (self.incarnation, self.revision)
+        unpack_token(token, EDIT_TOKEN_REVISION_BITS) == (self.incarnation, self.revision)
     }
 }
 
 /// The low bits of a stamp edit token, which carry the `updated_at` millisecond; 42 bits hold every stamp to the
 /// year 2109, and the incarnation takes the bits above them, below 2^53.
-pub(crate) const STAMP_TOKEN_BITS: u32 = 42;
-const STAMP_TOKEN_STAMP_MAX: u64 = (1 << STAMP_TOKEN_BITS) - 1;
-const STAMP_TOKEN_INCARNATION_MAX: u64 = (1 << (53 - STAMP_TOKEN_BITS)) - 1;
+const STAMP_TOKEN_BITS: u32 = 42;
 
 /// What an operator's edit of a pool or a key sends back to be fenced on: the row's incarnation and its `updated_at`
 /// in one integer, so an editor opened before the row was deleted and created again cannot land on the replacement
@@ -115,16 +117,13 @@ const STAMP_TOKEN_INCARNATION_MAX: u64 = (1 << (53 - STAMP_TOKEN_BITS)) - 1;
 /// token then names a row this one is not.
 pub fn stamp_token(incarnation: u64, updated_at: i64) -> u64 {
     let stamp = u64::try_from(updated_at).unwrap_or(0);
-    (incarnation.min(STAMP_TOKEN_INCARNATION_MAX) << STAMP_TOKEN_BITS)
-        | stamp.min(STAMP_TOKEN_STAMP_MAX)
+    pack_token(incarnation, stamp, STAMP_TOKEN_BITS)
 }
 
 /// Whether `token` names a row of this incarnation and this `updated_at` both.
 pub fn answers_stamp_token(incarnation: u64, updated_at: i64, token: u64) -> bool {
-    (
-        token >> STAMP_TOKEN_BITS,
-        (token & STAMP_TOKEN_STAMP_MAX) as i64,
-    ) == (incarnation, updated_at)
+    let (high, stamp) = unpack_token(token, STAMP_TOKEN_BITS);
+    (high, stamp as i64) == (incarnation, updated_at)
 }
 
 /// The one host the relay dials.
