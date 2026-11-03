@@ -80,9 +80,9 @@ pub fn outbound_headers(
         .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-beta"))
         .map(|(_, value)| *value)
         .collect();
-    let has_beta_line = !beta_lines.is_empty();
     let beta_list = match beta_lines.as_slice() {
-        [only] => (*only).to_string(),
+        [] => None,
+        [only] => Some((*only).to_string()),
         lines => {
             let mut tokens: Vec<&str> = Vec::new();
             for token in lines.iter().flat_map(|line| line.split(',')).map(str::trim) {
@@ -90,21 +90,14 @@ pub fn outbound_headers(
                     tokens.push(token);
                 }
             }
-            tokens.join(",")
+            Some(tokens.join(","))
         }
     };
     // An operator's `x-app` replaces the caller's line, so the generated id has no caller line to follow and
     // takes the credential slot instead; a caller that wrote `x-app` twice gets the id after the first.
     let caller_has_app = sent.iter().any(|(n, _)| n.eq_ignore_ascii_case("x-app"));
     let generated = client_request_id.filter(|_| !caller_has_request_id);
-    let effective_beta = has_beta_line.then_some(beta_list.as_str());
-    let (merged_beta, merged_added) = match effective_beta {
-        Some(value) => {
-            let (line, added) = betas(value, kind, inject_betas, drop_betas);
-            (Some(line), added)
-        }
-        None => (None, Vec::new()),
-    };
+    let merged = beta_list.map(|value| betas(&value, kind, inject_betas, drop_betas));
     let mut out: Vec<(String, String)> = Vec::with_capacity(sent.len() + 3);
     let mut injected: Vec<Injected> = Vec::new();
     // A caller may write the same line twice: hyper keeps one value in its map, but the recorded head holds
@@ -133,10 +126,12 @@ pub fn outbound_headers(
                     saw_beta = true;
                     // A drop can empty a list whose only entry it removed; the caller's line then has
                     // nothing left to say, so the header is left out rather than sent empty.
-                    if let Some(line) = merged_beta.as_deref().filter(|line| !line.is_empty()) {
-                        out.push((name.into(), line.to_string()));
+                    if let Some((line, added)) = &merged {
+                        if !line.is_empty() {
+                            out.push((name.into(), line.clone()));
+                        }
+                        injected.extend(added.iter().copied());
                     }
-                    injected.extend(merged_added.iter().copied());
                 }
             }
             // The relay's upstream connection is pooled and independent of the caller's, so it declares its
@@ -195,7 +190,7 @@ pub fn outbound_headers(
     // No line at all to merge into, neither the caller's nor the account's, so nothing above ever ran `betas`;
     // an injected feature still needs a line of its own, but never the OAuth claim, which rides on a list the
     // caller or the operator wrote.
-    if effective_beta.is_none() && !inject_betas.is_empty() {
+    if merged.is_none() && !inject_betas.is_empty() {
         let line = inject_betas
             .iter()
             .map(|item| item.wire_name())
