@@ -20,7 +20,7 @@ use phoebis_routing::RouterHandle;
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::query::{hour_ceil, priced};
+use crate::query::{hour_ceil, priced, PROBE_KIND};
 use crate::rollup::{hour_of, read_rollups_for_key, RollupRow};
 use crate::{LedgerDb, LedgerError, PlanTables, PriceRevisions, Pricing};
 
@@ -120,7 +120,7 @@ fn window<'a>(
     };
     let mut models: std::collections::BTreeMap<String, ModelUsage> = Default::default();
     for row in rows {
-        if row.kind == "probe" {
+        if row.kind == PROBE_KIND {
             continue;
         }
         out.requests += row.requests;
