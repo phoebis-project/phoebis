@@ -330,7 +330,7 @@ pub(crate) fn key_clause(
 
 /// One clause matching any of `patterns` against `column` under the wildcard grammar of `crate::pattern`;
 /// `column` reads as `-` where it is NULL, as the rollup fold already does. No clause when `patterns` is empty.
-fn pattern_any(
+pub(crate) fn pattern_any(
     column: &str,
     patterns: &[String],
     args: &mut Vec<rusqlite::types::Value>,
@@ -1962,7 +1962,7 @@ pub struct RollupFilter {
     /// Patterns under the wildcard grammar; a row matches when any pattern matches its client in full.
     pub clients: Patterns,
     pub include_probes: bool,
-    /// Applied in memory beside the pattern filters, off the key's funding word; `None` keeps every row.
+    /// Applied in memory, off the key's funding word. `None` keeps every row.
     pub funding: Option<FundingFilter>,
 }
 
@@ -1974,9 +1974,10 @@ impl RollupFilter {
         self.include_probes || self.kinds.iter().any(|k| k == Kind::Probe.as_str())
     }
 
-    /// The fixed filters as the read binds them, each key selector resolved as `LiveKeys::selects` reads it: the
-    /// reserved id at any generation, every other selector at the lifetime `lifetime_of` answers. `None` when the
-    /// filter names keys and none of them names a lifetime, which selects no row rather than every row.
+    /// The fixed filters and the pattern filters as the read binds them, each key selector resolved as
+    /// `LiveKeys::selects` reads it: the reserved id at any generation, every other selector at the lifetime
+    /// `lifetime_of` answers. `None` when the filter names keys and none of them names a lifetime, which selects no row
+    /// rather than every row.
     pub fn rollup_select(&self, live: &LiveKeys) -> Option<RollupSelect> {
         let keys = key_selectors(&self.keys, live);
         if !self.keys.is_empty() && keys.is_empty() {
@@ -1988,6 +1989,8 @@ impl RollupFilter {
             kinds: self.kinds.clone(),
             models: self.models.iter().map(|m| canonical_id(m)).collect(),
             keys,
+            clients: self.clients.to_vec(),
+            user_agents: self.user_agents.to_vec(),
             ..RollupSelect::default()
         })
     }
@@ -2199,7 +2202,8 @@ fn label_of(key: &str, by: GroupBy) -> String {
     }
 }
 
-/// Whether a row passes the filter's two pattern filters, which SQL does not express under the wildcard grammar.
+/// Whether a row passes the filter's two pattern filters, as the rollup read's `LIKE` terms pass it.
+#[cfg(any(test, feature = "test-support"))]
 fn passes_patterns(r: &RollupRow, f: &RollupFilter) -> bool {
     (f.user_agents.is_empty()
         || f.user_agents
@@ -2963,7 +2967,7 @@ pub async fn series_paged(
     };
     if let Some(select) = filter.rollup_select(live) {
         read_rollups_paged(db, &select, hour_of(from), last, |row| {
-            if !passes_patterns(row, filter) || !passes_funding(row, filter) {
+            if !passes_funding(row, filter) {
                 return;
             }
             if let Some(sums) = bucket_slot(&mut buckets, first, bucket_seconds, row.hour) {
@@ -3013,7 +3017,7 @@ pub async fn breakdown_paged(
     };
     if let Some(select) = filter.rollup_select(live) {
         read_rollups_paged(db, &select, hour_of(from), hour_ceil(to), |row| {
-            if passes_patterns(row, filter) && passes_funding(row, filter) {
+            if passes_funding(row, filter) {
                 sums.add(&read, row);
             }
         })

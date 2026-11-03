@@ -20,8 +20,8 @@ use crate::histogram::Histogram;
 use crate::plan::{funding_of, Funding, PlanTables};
 use crate::pricing::{PriceRevisions, Speed};
 use crate::query::{
-    in_list, key_clause, pool_term, COOLDOWN_CLEARED, COOLDOWN_SET, OVERAGE_ENDED, PIN_CREATED,
-    PIN_MIGRATED, ROUTER_STARTED, SHEDDING_ROUND, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED,
+    in_list, key_clause, pattern_any, pool_term, COOLDOWN_CLEARED, COOLDOWN_SET, OVERAGE_ENDED,
+    PIN_CREATED, PIN_MIGRATED, ROUTER_STARTED, SHEDDING_ROUND, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED,
     WINDOW_CLEARED, WINDOW_SPENT,
 };
 use crate::reconcile::{newest_rows, ReconciliationRow};
@@ -2075,6 +2075,10 @@ pub struct RollupSelect {
     /// Canonical ids, which the rows carry lowercased.
     pub models: Vec<String>,
     pub keys: Vec<KeySelector>,
+    /// Patterns under the wildcard grammar: a row matches when any of them matches its client in full.
+    pub clients: Vec<String>,
+    /// Patterns under the wildcard grammar: a row matches when any of them matches its agent in full.
+    pub user_agents: Vec<String>,
     /// The probe rows left out in SQL, for a read that never counts them, so it decodes none to drop it.
     pub exclude_probes: bool,
 }
@@ -2103,6 +2107,8 @@ pub(crate) fn select_statement(
     }
     in_list("canonical_model", &select.models, &mut binds, &mut clauses);
     key_clause(&select.keys, false, &mut binds, &mut clauses);
+    pattern_any("user_agent", &select.user_agents, &mut binds, &mut clauses);
+    pattern_any("client", &select.clients, &mut binds, &mut clauses);
     let indexed = if select.pools.is_empty() || select.accounts.is_empty() {
         ""
     } else {
