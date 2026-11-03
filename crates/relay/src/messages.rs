@@ -4695,7 +4695,7 @@ impl Relay {
         let payload = match decoder {
             None => raw.clone(),
             Some(mut decoder) => match decode_all(decoder.as_mut(), &raw) {
-                Ok(payload) => payload,
+                Ok(payload) => Bytes::from(payload),
                 Err(error) => {
                     tracing::warn!(%error, "the upstream response cannot be decoded");
                     guards.ended(Some(TRANSPORT_ERROR));
@@ -5331,7 +5331,7 @@ pub(crate) fn failover_reports(
 
 /// Decoded in pieces under the same bound as the inspection copy, so a small compressed rejection cannot
 /// expand without limit in memory.
-fn decode_all(decoder: &mut dyn Decoder, raw: &[u8]) -> Result<Bytes, TransportError> {
+fn decode_all(decoder: &mut dyn Decoder, raw: &[u8]) -> Result<Vec<u8>, TransportError> {
     let mut out = Vec::new();
     for piece in raw.chunks(DECODE_PIECE) {
         out.extend(
@@ -5345,7 +5345,7 @@ fn decode_all(decoder: &mut dyn Decoder, raw: &[u8]) -> Result<Bytes, TransportE
             .finish_bounded(MAX_BUFFERED_BODY - out.len())
             .map_err(|e| e.at_bound(MAX_BUFFERED_BODY))?,
     );
-    Ok(Bytes::from(out))
+    Ok(out)
 }
 
 /// A media type compares case-insensitively, so the hold and the bus copy read a stream however the upstream
@@ -5419,22 +5419,9 @@ fn inspectable_copy(head: &ResponseHead, raw: &[u8], cut: bool) -> Option<Vec<u8
     match encoding(head) {
         Ok(Encoding::Identity) => Some(raw.to_vec()),
         Ok(coding) if cut => Some(inspectable_prefix(decoder(coding).as_mut(), raw)),
-        Ok(coding) => inspectable(decoder(coding).as_mut(), raw),
+        Ok(coding) => decode_all(decoder(coding).as_mut(), raw).ok(),
         Err(_) => None,
     }
-}
-
-fn inspectable(decoder: &mut dyn Decoder, raw: &[u8]) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    for piece in raw.chunks(DECODE_PIECE) {
-        out.extend(
-            decoder
-                .feed_bounded(piece, MAX_BUFFERED_BODY - out.len())
-                .ok()?,
-        );
-    }
-    out.extend(decoder.finish_bounded(MAX_BUFFERED_BODY - out.len()).ok()?);
-    Some(out)
 }
 
 /// What a cut coded body decodes to, piece by piece until a piece fails or the bound is reached, with no finish:
