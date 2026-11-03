@@ -1041,25 +1041,14 @@ fn canceled() -> TransportError {
     ))
 }
 
-/// The idle bound's error, its own payload type telling it apart from any other timeout.
-#[derive(Debug)]
-struct Stalled;
-
-impl std::fmt::Display for Stalled {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("upstream stopped sending")
-    }
-}
-
-impl std::error::Error for Stalled {}
-
+/// The idle bound's error, a variant of its own so no other timeout reads as it.
 fn stalled() -> TransportError {
-    TransportError::Io(io::Error::new(io::ErrorKind::TimedOut, Stalled))
+    TransportError::Stalled
 }
 
 /// Whether `error` is the idle bound's: the upstream went silent past it.
 pub(crate) fn is_stalled(error: &TransportError) -> bool {
-    matches!(error, TransportError::Io(error) if error.get_ref().is_some_and(|inner| inner.is::<Stalled>()))
+    matches!(error, TransportError::Stalled)
 }
 
 /// Whether `error` is a decoder's refusal: a coding the relay cannot read, or a payload that does not decode.

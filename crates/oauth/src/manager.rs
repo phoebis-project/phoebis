@@ -1277,8 +1277,8 @@ fn account_uuid(account: &AccountRow) -> String {
 /// address for the host, a refused connection, a rejected handshake, a partially written request, and a
 /// timeout that fired before the body went out. `Boring` is a local TLS configuration fault and
 /// `Handshake` can only arise while the connection is being set up, so both join it. What is left,
-/// `Decode`, `Io`, `Response`, and `TooLarge`, can all happen after the request reached the upstream intact, which
-/// makes the response, not the request, the part that went missing.
+/// `Decode`, `Io`, `Response`, `Stalled`, and `TooLarge`, can all happen after the request reached the upstream
+/// intact, which makes the response, not the request, the part that went missing.
 fn transport_before_write(error: &TransportError) -> bool {
     matches!(
         error,

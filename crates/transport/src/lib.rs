@@ -26,6 +26,9 @@ pub enum TransportError {
     Io(#[from] std::io::Error),
     #[error("malformed response: {0}")]
     Response(String),
+    /// The upstream went silent mid-body past the reader's idle bound.
+    #[error("io: upstream stopped sending")]
+    Stalled,
     #[error("response body exceeds {0} bytes")]
     TooLarge(usize),
     /// The request never left intact, so nothing upstream can have acted on it: no address for the host, a
