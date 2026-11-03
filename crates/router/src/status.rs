@@ -554,7 +554,9 @@ fn windows_of(account: &Value) -> BTreeMap<&'static str, &Value> {
         let id = match text(&window["id"]) {
             "5h" | "five_hour" => "5h",
             "7d" | "seven_day" => "7d",
-            "7d_oi" | "fable" | "seven_day_fable" | "seven_day_overage_included" => "fable",
+            "7d_oi" | "fable" | "seven_day_fable" | phoebis_routing::SEVEN_DAY_OVERAGE_INCLUDED => {
+                "fable"
+            }
             _ => continue,
         };
         let newer = windows

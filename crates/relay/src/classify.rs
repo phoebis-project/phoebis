@@ -3,7 +3,7 @@
 
 use phoebis_routing::{
     FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MODEL_REJECTED_REASON, RATE_LIMIT_REASON,
-    RETRY_AFTER_WINDOW,
+    RETRY_AFTER_WINDOW, SEVEN_DAY_OVERAGE_INCLUDED,
 };
 use phoebis_store::{AccountKind, AccountState, StateCause};
 use phoebis_transport::response::ResponseHead;
@@ -349,9 +349,6 @@ fn shared_healthy(window: &UnifiedWindow) -> bool {
     }
 }
 
-/// The overage week's own claim: the window the `7d_oi` status reads, which no model family owns.
-const OVERAGE_INCLUDED_CLAIM: &str = "seven_day_overage_included";
-
 /// Whether the rejection names the request model's own week and nothing shared: both shared windows healthy, the
 /// model's family has a row in the window table, and the representative claim names that row's window, or names
 /// the overage week or no week while the 7d_oi status is rejected. A claim naming another family's week, or one no
@@ -369,7 +366,9 @@ fn model_only(u: &UnifiedHeaders, canonical_model: &str) -> bool {
     match u.representative_claim.as_deref() {
         Some(claim) if claim == own => true,
         // Another family's week, or a week no row names: the account-wide cooldown, whatever `7d_oi` reads.
-        Some(claim) if claim.starts_with("seven_day_") && claim != OVERAGE_INCLUDED_CLAIM => false,
+        Some(claim) if claim.starts_with("seven_day_") && claim != SEVEN_DAY_OVERAGE_INCLUDED => {
+            false
+        }
         _ => u.seven_day_oi.status == Some(WindowStatus::Rejected),
     }
 }

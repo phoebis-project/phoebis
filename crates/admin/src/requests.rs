@@ -15,7 +15,7 @@ use phoebis_ledger::{
     LiveKeys, PlanTables, PriceRevisions, RequestCursor, RequestFilter, RequestRecord, Speed,
     WindowShares, SHARE_REASON_CLIENT_CLASSIFIER,
 };
-use phoebis_routing::UtilizationSample;
+use phoebis_routing::{UtilizationSample, SEVEN_DAY_OVERAGE_INCLUDED};
 use serde_json::Value;
 use utoipa::ToSchema;
 
@@ -768,7 +768,7 @@ fn attempt_json(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) -
             a.ratelimit_7d_reset,
         ),
         window(
-            "seven_day_overage_included",
+            SEVEN_DAY_OVERAGE_INCLUDED,
             a.ratelimit_7d_oi_utilization,
             a.ratelimit_7d_oi_reset,
         ),
