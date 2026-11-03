@@ -517,7 +517,6 @@ export function sharedWindowsOf(accountId: string): ('five_hour' | 'seven_day')[
   return held.length === 0 ? [...SHARED_WINDOWS] : held;
 }
 
-/** The poll block the route answers on a row: none for an API-key account, which the poll never reads. */
 /**
  * A snapshot whose polls failed since its last clean read, whose windows still answer. A declaration, since the
  * account list above reads the snapshots while the module loads.
@@ -533,6 +532,7 @@ function failedSinceClean(accountId: string, cleanAgo: number, lastAttemptAt: st
   };
 }
 
+/** The poll block the route answers on a row: none for an API-key account, which the poll never reads. */
 export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapshot | null {
   if (a.kind === 'api_key') return null;
   // The polls stop with the credential, so the snapshot keeps the reading from before the disconnect and no poll.
