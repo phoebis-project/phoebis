@@ -413,11 +413,11 @@ The view opens on its bar, "Create pool" with the split Refresh button and the c
 when a member hits a rate limit." on a line of its own, then the tiles Pools, Accounts in pools, Keys, "Requests, 24h"
 and "Cost, 24h". Auto reload starts at 5 s and waits while the pool dialog or the Delete pool confirm is open. The
 sessions and the keepalive overview the pool dialog draws are read when it opens on a saved pool and again after a key
-write from it, never at the interval. "Cost, 24h" and each card's Cost 24h read in the top bar's unit: under Native the
-day's subscription traffic as its figure in the chosen week over its billed dollars, a side with no traffic left out and
-the subscription side a dash with the Dashboard's hover where a request of the day priced nothing. A pool sums its
-members' accounts, so its figure carries no hint. Every field's meaning is on [Pools, keys and
-routing](routing.md#pools).
+write from it, the overview also when the return rate's range is picked, never at the interval. "Cost, 24h" and each
+card's Cost 24h read in the top bar's unit: under Native the day's subscription traffic as its figure in the chosen week
+over its billed dollars, a side with no traffic left out and the subscription side a dash with the Dashboard's hover
+where a request of the day priced nothing. A pool sums its members' accounts, so its figure carries no hint. Every
+field's meaning is on [Pools, keys and routing](routing.md#pools).
 
 Each card carries the pool's name, its status badge (active, degraded, disabled or exhausted), its keys as a link ("No
 keys yet", "1 key", `{n} keys`, or "Keys unavailable" when the keys read failed), an edit button and "Delete". A strip
