@@ -228,6 +228,16 @@ export function ErrorState({ title = 'Could not load', body, action }: { action?
   );
 }
 
+/** A refused write or a failed step inside a dialog or an editor, announced the moment it appears. */
+export function Refusal({ children }: { children: ReactNode }) {
+  return (
+    <div className="callout callout--critical" role="alert">
+      <IconWarning size={16} />
+      <div>{children}</div>
+    </div>
+  );
+}
+
 /**
  * A chunk the browser could not fetch. Chromium and Firefox throw a `TypeError` that names the dynamically imported
  * module, while WebKit's reads "Importing a module script failed." without those words, so both are matched.

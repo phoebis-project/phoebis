@@ -14,7 +14,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { MeterRatio } from '@/components/MeterRatio';
 import { SortControl } from '@/components/SortControl';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, Segmented, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, Refusal, Segmented, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { accountHref, ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, METER_CODEC, sortAddressOf, sortDirOf } from '@/lib/address';
@@ -377,20 +377,17 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
   };
   // The two editors' refusal callouts. A stale one offers Reload, which closes the editor and reads the lists again.
   const staleCallout = (message: string, onReload: (() => void) | null) => (
-    <div className="callout callout--critical" role="alert">
-      <IconWarning size={16} />
-      <div>
-        {message}
-        {onReload && (
-          <>
-            {' '}
-            <Button size="sm" variant="ghost" onClick={onReload}>
-              Reload
-            </Button>
-          </>
-        )}
-      </div>
-    </div>
+    <Refusal>
+      {message}
+      {onReload && (
+        <>
+          {' '}
+          <Button size="sm" variant="ghost" onClick={onReload}>
+            Reload
+          </Button>
+        </>
+      )}
+    </Refusal>
   );
 
   return (
@@ -632,12 +629,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
               <Field label={endsLabel} hint={END_HINT}>
                 <Input type="datetime-local" value={endForm.endsAt} disabled={busy} onChange={(e) => setEndForm({ ...endForm, endsAt: e.target.value })} style={{ width: 220 }} aria-label={endsLabel} />
               </Field>
-              {endRefusal && (
-                <div className="callout callout--critical" role="alert">
-                  <IconWarning size={16} />
-                  <div>{endRefusal}</div>
-                </div>
-              )}
+              {endRefusal && <Refusal>{endRefusal}</Refusal>}
               {endRefused &&
                 staleCallout(
                   endRefused.message,
@@ -1128,12 +1120,7 @@ function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds:
         </Field>
       )}
       {kind === 'oauth' && <p className="secondary">Pairing opens the Claude.ai login in your browser and asks you to paste the address it lands on. The router stores the refresh token encrypted and renews the access token on its own.</p>}
-      {error && (
-        <div className="callout callout--critical" role="alert">
-          <IconWarning size={16} />
-          <div>{error}</div>
-        </div>
-      )}
+      {error && <Refusal>{error}</Refusal>}
     </Dialog>
   );
 }
@@ -1324,12 +1311,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
         ))}
       </ol>
 
-      {error && (
-        <div className="callout callout--critical" role="alert">
-          <IconWarning size={16} />
-          <div>{error}</div>
-        </div>
-      )}
+      {error && <Refusal>{error}</Refusal>}
 
       {step === 1 && (
         <div className="stack">

@@ -12,7 +12,7 @@ import { OptionList } from '@/components/ui/OptionList';
 import { Popover } from '@/components/ui/Popover';
 import { figuresValue, Tile } from '@/components/ui/Tile';
 import { IconChevron, IconInfo, IconPlus, IconWarning, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC, type KeysAddress } from '@/lib/address';
 import { nativeFiguresOf, UNPRICED_TITLE, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
@@ -752,13 +752,6 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     }
   };
 
-  const refusalCallout = (text: ReactNode) => (
-    <div className="callout callout--critical" role="alert">
-      <IconWarning size={16} />
-      <div>{text}</div>
-    </div>
-  );
-
   // Keyed by group, so a group without a body fails to compile; `KEY_GROUPS` sets the rail order.
   const bodies: Record<KeyGroup, ReactNode> = {
     key: (
@@ -844,7 +837,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
         >
           <PatternEditor label="Model rules" value={modelRules} onChange={setModelRules} inherited={modelRulesMode === 'extend' ? (pool?.modelRules ?? []) : []} suggestions={suggestions} />
         </Field>
-        {rulesRefusal && refusalCallout(rulesRefusal)}
+        {rulesRefusal && <Refusal>{rulesRefusal}</Refusal>}
         <Expert>
           {/* Field's frame without its label element: a label forwards a click on its text to the first control
               inside, which here would flip the mode. */}
@@ -967,14 +960,13 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
       hold={stale ? null : (first?.group ?? null)}
       held={first !== null || error !== null || stale !== null}
       notice={
-        stale &&
-        refusalCallout(
-          <>
+        stale && (
+          <Refusal>
             {stale}{' '}
             <Button variant="ghost" onClick={onReload}>
               Reload
             </Button>
-          </>,
+          </Refusal>
         )
       }
       footer={

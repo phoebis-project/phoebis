@@ -7,8 +7,8 @@ import { blankCondition, ConditionsEditor } from '@/components/ConditionsEditor'
 import { FilterBar } from '@/components/FilterBar';
 import { OptionList, type Option, walkFocus } from '@/components/ui/OptionList';
 import { Popover } from '@/components/ui/Popover';
-import { IconChevron, IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { IconChevron, IconInfo, IconPlus } from '@/components/ui/icons';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC, requestHref } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
@@ -477,13 +477,6 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
     setTesting(false);
   };
 
-  const refusalCallout = (text: ReactNode) => (
-    <div className="callout callout--critical" role="alert">
-      <IconWarning size={16} />
-      <div>{text}</div>
-    </div>
-  );
-
   const poolName = (id: string) => pools.find((p) => p.id === id)?.name ?? id;
   const poolOptions: Option[] = pools.map((p) => ({ label: p.name, value: p.id }));
   const keyOptions: Option[] = keys.map((k) => ({ label: `${k.name} (${poolName(k.poolId)})`, value: k.id }));
@@ -634,7 +627,7 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
             {testing ? 'Running…' : 'Run test'}
           </Button>
         </div>
-        {testError && refusalCallout(testError)}
+        {testError && <Refusal>{testError}</Refusal>}
         {tested &&
           (tested.result.totals.sampled === 0 ? (
             emptySample(tested)
@@ -694,14 +687,13 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
       hold={stale ? null : (first?.group ?? (rowRefusal ? 'conditions' : null))}
       held={first !== null || error !== null || stale !== null}
       notice={
-        stale &&
-        refusalCallout(
-          <>
+        stale && (
+          <Refusal>
             {stale}{' '}
             <Button variant="ghost" onClick={onClose}>
               Reload
             </Button>
-          </>,
+          </Refusal>
         )
       }
       footer={

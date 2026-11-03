@@ -1,22 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api';
 import type { AccountCatalog } from '@/api/types';
-import { IconRefresh, IconWarning } from '@/components/ui/icons';
-import { Button, Dialog, Skeleton } from '@/components/ui/primitives';
+import { IconRefresh } from '@/components/ui/icons';
+import { Button, Dialog, Refusal, Skeleton } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtDate, fmtInt, fmtRelative, messageOf } from '@/lib/format';
 
 const tokens = (n: number | null) => (n === null ? '-' : fmtInt(n));
 // `created_at` reaches the console as the upstream sent it, which may be empty or not a date at all.
 const released = (createdAt: string) => (Number.isNaN(Date.parse(createdAt)) ? createdAt || '-' : fmtDate(createdAt));
-
-function Failure({ message }: { message: string }) {
-  return (
-    <div className="callout callout--critical" role="alert">
-      <IconWarning size={16} />
-      <div>{message}</div>
-    </div>
-  );
-}
 
 /** An account's live model list as the router last fetched it, read when the dialog opens and again on Refresh. */
 export function CatalogDialog({ accountId, label, now, onClose, open }: { accountId: string; label: string; now: number; onClose: () => void; open: boolean }): JSX.Element {
@@ -83,11 +74,11 @@ export function CatalogDialog({ accountId, label, now, onClose, open }: { accoun
             </Button>
           </div>
           {failure ? (
-            <Failure message={failure} />
+            <Refusal>{failure}</Refusal>
           ) : catalog === null ? (
             <Skeleton height={120} />
           ) : catalog.error ? (
-            <Failure message={catalog.error} />
+            <Refusal>{catalog.error}</Refusal>
           ) : models.length === 0 ? (
             <p className="muted">The upstream lists no models.</p>
           ) : (

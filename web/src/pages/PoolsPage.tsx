@@ -21,7 +21,7 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, KEYS_CODEC } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, UNPRICED_TITLE, equivalentOrDash, moveLabel, nativeFiguresOf, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
@@ -1457,12 +1457,6 @@ export function PoolDialog({
     onSaved(pool === null);
   };
 
-  const refusalCallout = (text: ReactNode) => (
-    <div className="callout callout--critical" role="alert">
-      <IconWarning size={16} />
-      <div>{text}</div>
-    </div>
-  );
   // Keyed by group, so a group without a body fails to compile. `POOL_GROUPS` sets the rail order.
   const bodies: Record<PoolGroup, ReactNode> = {
     identity: (
@@ -1643,12 +1637,11 @@ export function PoolDialog({
             </table>
           </div>
         )}
-        {budgetRefused &&
-          refusalCallout(
-            <>
-              {budgetRefused.label}: {budgetRefused.refusal}
-            </>,
-          )}
+        {budgetRefused && (
+          <Refusal>
+            {budgetRefused.label}: {budgetRefused.refusal}
+          </Refusal>
+        )}
       </div>
     ),
     keys: (
@@ -1718,7 +1711,7 @@ export function PoolDialog({
         >
           <PatternEditor label="Model rules" value={form.modelRules} onChange={(rules) => set('modelRules', rules)} suggestions={suggestions} />
         </Field>
-        {rulesRefusal && refusalCallout(rulesRefusal)}
+        {rulesRefusal && <Refusal>{rulesRefusal}</Refusal>}
       </div>
     ),
     guardrails: (
@@ -1832,7 +1825,7 @@ export function PoolDialog({
             />
           </Field>
         </Expert>
-        {prefixRefusal && refusalCallout(prefixRefusal)}
+        {prefixRefusal && <Refusal>{prefixRefusal}</Refusal>}
       </div>
     ),
     pinning: (
@@ -2433,14 +2426,12 @@ export function PoolDialog({
             <div className="pool-notice">
               {stale && (
                 <StaleNotice>
-                  {refusalCallout(
-                    <>
-                      {stale}{' '}
-                      <Button variant="ghost" onClick={() => onClose(true)}>
-                        Reload
-                      </Button>
-                    </>,
-                  )}
+                  <Refusal>
+                    {stale}{' '}
+                    <Button variant="ghost" onClick={() => onClose(true)}>
+                      Reload
+                    </Button>
+                  </Refusal>
                 </StaleNotice>
               )}
               {warnings.length > 0 && <PoolWarnings warnings={warnings} />}
