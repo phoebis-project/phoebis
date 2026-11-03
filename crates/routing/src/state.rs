@@ -1068,6 +1068,11 @@ pub fn shed_dwell_ms(pool: &PoolRow) -> i64 {
     seconds_ms(pool.shedding.shed_dwell_seconds)
 }
 
+/// Whether `now` is still within the pool's dwell after a round at `round_at`.
+pub(crate) fn round_in_dwell(pool: &PoolRow, round_at: i64, now: i64) -> bool {
+    now - round_at < shed_dwell_ms(pool)
+}
+
 /// Whether the pool runs shedding rounds. Off, the fit gate, the reservations, the projection and the move off a spent
 /// account still run, since the switch turns the round off and nothing else.
 pub fn load_shedding(pool: &PoolRow) -> bool {
@@ -3815,7 +3820,7 @@ impl RoutingState {
         self.shed_rounds.retain(|(pool_id, _), at| {
             snapshot
                 .pool(pool_id)
-                .is_some_and(|pool| now - *at < shed_dwell_ms(pool))
+                .is_some_and(|pool| round_in_dwell(pool, *at, now))
         });
         let affinity_entries = self
             .affinity

@@ -25,11 +25,11 @@ use crate::record::{
 };
 use crate::state::{
     all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, entrypoint_of,
-    load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms, shed_cap, shed_dwell_ms,
-    slow_down, slow_down_hold_ms, slow_down_stretch_ms, warm, BandSegment, BurnUnit, MemberSpend,
-    PinPace, PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier, WindowReading,
-    FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, HOUR_MS, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE,
-    WEEK_MS,
+    load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms, round_in_dwell, shed_cap,
+    shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms, warm, BandSegment, BurnUnit,
+    MemberSpend, PinPace, PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier,
+    WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, HOUR_MS, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY,
+    SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::{paid_source, term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -3933,7 +3933,7 @@ fn move_of<'a>(
         facts.push(Fact::number("excess", trigger.excess * 3_600.0).unit("percent_per_hour"));
         if state
             .last_shed(&pool.id, source)
-            .is_none_or(|at| now - at >= dwell_ms)
+            .is_none_or(|at| !round_in_dwell(pool, at, now))
         {
             let round = shed_round(
                 state,

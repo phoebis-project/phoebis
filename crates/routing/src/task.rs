@@ -30,11 +30,11 @@ use crate::select::{
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
-    entrypoint_of, is_plan_window, mark_holds, plan_windows, shed_dwell_ms, slow_down_hold_ms,
-    spend_reset_estimate, AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight,
-    MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, Recorded, RoutingState, SharePricer,
-    SlowDownEdge, SpendWindow, StateWrite, UtilizationSample, WindowReading, WindowSource,
-    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    entrypoint_of, is_plan_window, mark_holds, plan_windows, round_in_dwell, shed_dwell_ms,
+    slow_down_hold_ms, spend_reset_estimate, AccountTicket, BurnUnit, CreditsState, EvidenceSource,
+    InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, Recorded, RoutingState,
+    SharePricer, SlowDownEdge, SpendWindow, StateWrite, UtilizationSample, WindowReading,
+    WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::{
     model_week, resolve, term, window_length_ms, Candidate, KeyRefusal, Presented, RegistrySnapshot,
@@ -1116,7 +1116,7 @@ impl LoadCounts {
         let within_dwell = |row: &ShedRoundRow| {
             snapshot
                 .pool(&row.pool_id)
-                .is_some_and(|pool| now - row.round_at < shed_dwell_ms(pool))
+                .is_some_and(|pool| round_in_dwell(pool, row.round_at, now))
         };
         LoadCounts {
             pins: load.pins.len(),
