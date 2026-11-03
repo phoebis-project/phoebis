@@ -68,6 +68,7 @@ export default function GroupedDialogFixture() {
       id: `extra-${i + 1}`,
       label,
       parent: 'More',
+      refused: refused.includes(`extra-${i + 1}`),
     };
   });
   const [chosen, setChosen] = useState('identity');
@@ -75,7 +76,7 @@ export default function GroupedDialogFixture() {
     <GroupedDialog
       chosen={chosen}
       footer={<Button variant="primary">Save</Button>}
-      groups={[...groups, ...extra].map((g) => (refused.includes(g.id) ? { ...g, refused: true } : g))}
+      groups={[...groups, ...extra]}
       hold={refused[0] ?? null}
       onChoose={setChosen}
       onClose={() => {}}
