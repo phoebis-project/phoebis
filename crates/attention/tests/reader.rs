@@ -191,8 +191,8 @@ fn chunk(id: &str) -> Event {
 }
 
 /// Both requests are still live when the TTL of the first request passes, and each later event meets them past that
-/// instant: the silent one's completion comes past the TTL of silence, and the streaming one's past the TTL of its
-/// observation but inside the TTL of its last chunk.
+/// instant: the silent one's late chunk and completion come past the TTL of silence, and the streaming one's
+/// completion past the TTL of its observation but inside the TTL of its last chunk.
 #[tokio::test]
 async fn a_completion_past_the_ttl_of_silence_files_nothing_and_a_chunk_inside_it_keeps_the_request(
 ) {
@@ -208,12 +208,13 @@ async fn a_completion_past_the_ttl_of_silence_files_nothing_and_a_chunk_inside_i
     attention.observe(&chunk("streaming"));
     rig.at(NOW + IN_FLIGHT_TTL_MS + 1);
     let at = NOW + IN_FLIGHT_TTL_MS + 1;
+    attention.observe(&chunk("silent"));
     attention.observe(&complete("silent", Outcome::Exhausted, None, None, at));
     assert!(
         !find(&read(&attention, at), Kind::PoolExhausted, "main")
             .unwrap()
             .holds,
-        "a request silent for the TTL is forgotten, so its completion names no pool"
+        "a request silent for the TTL is forgotten: a late chunk does not revive it, and its completion names no pool"
     );
     attention.observe(&complete("streaming", Outcome::Exhausted, None, None, at));
     assert!(
