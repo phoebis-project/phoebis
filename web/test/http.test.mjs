@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { ApiError, HttpApi, SessionNotKept, call, noteBuild, quietly, setBuildHook, setHooks, slug } from './dist/api.js';
+import { ApiError, HttpApi, SessionNotKept, call, fakeClock, installClock, noteBuild, quietly, setBuildHook, setHooks, slug } from './dist/api.js';
 
 const answer = (status, body, headers = {}) => ({ headers: { get: (k) => headers[k.toLowerCase()] ?? null }, ok: status >= 200 && status < 300, status, text: async () => (body === undefined ? '' : JSON.stringify(body)), json: async () => body });
 const stub = (handler) => { const calls = []; globalThis.fetch = async (url, init = {}) => { calls.push({ init, url }); return handler(url, init); }; return calls; };
@@ -447,6 +447,31 @@ test('the session probe raises the status it got and 0 for no answer', async () 
   await assert.rejects(new HttpApi().getSession(), (e) => e instanceof ApiError && e.status === 503);
   stub(() => Promise.reject(new TypeError('fetch failed')));
   await assert.rejects(new HttpApi().getSession(), (e) => e instanceof ApiError && e.status === 0 && e.message === 'fetch failed');
+});
+
+test('a session read with no answer within the deadline fails as a read that never answered, and a 401 inside it still reads as no session', async () => {
+  // The suite has no window, so the clock is frozen before the read arms its timer, and only a tick fires one.
+  const time = fakeClock();
+  time.freeze(0);
+  installClock(time);
+  try {
+    // The head answers at once and the body stalls: it fails as the read's signal aborts, and answers a session once
+    // the clock is past the deadline, so a read that took no signal fails the case rather than hanging it.
+    globalThis.fetch = async (_url, init = {}) => {
+      const body = new Promise((resolve, reject) => {
+        time.setTimeout(() => resolve({ session_id: 's' }), 60_001);
+        init.signal?.addEventListener('abort', () => reject(new DOMException('This operation was aborted', 'AbortError')));
+      });
+      return { headers: { get: () => null }, json: () => body, ok: true, status: 200 };
+    };
+    const read = new HttpApi().getSession();
+    time.tick(60_001);
+    await assert.rejects(read, (e) => e instanceof ApiError && e.status === 0 && e.message === 'no answer within 60 s');
+    stub(() => answer(401, { error: 'no admin session' }));
+    assert.equal(await new HttpApi().getSession(), null);
+  } finally {
+    installClock(null);
+  }
 });
 
 test('a login the router accepted with no cookie kept raises SessionNotKept', async () => {

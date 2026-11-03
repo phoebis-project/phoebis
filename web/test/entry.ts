@@ -13,6 +13,7 @@ export * from '@/lib/buckets';
 export * from '@/lib/cache';
 export * from '@/lib/capture';
 export * from '@/lib/chunks';
+export { installClock } from '@/lib/clock';
 export * from '@/lib/costs';
 export * from '@/lib/decisionStrip';
 export * from '@/lib/dimensions';
@@ -52,3 +53,4 @@ export { partitionsOf, placementFactOf, stretchTriggerOf } from '@/mock/routingL
 export { PRIOR_BURN, rewriteOf, runwayTiesOf } from '@/mock/routingLog';
 export { budgetsAt, obstacleOf } from '@/mock/routingLog';
 export { STORY_PINS } from '@/mock/routingLog';
+export { fakeClock } from '../smoke/clock';

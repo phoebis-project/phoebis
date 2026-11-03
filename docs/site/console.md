@@ -36,9 +36,9 @@ are on [Installation](installation.md#admin)), and no answer `The router did not
 secret and the browser kept no session cookie, the screen says so: `The router accepted the secret, but the browser
 kept no session cookie. The usual causes: a proxy that rewrites the path or drops Set-Cookie, cookies blocked for this
 site, or a Secure cookie served over plain HTTP.` While the router answers the session read with neither a session nor
-a 401, the screen reads `The router did not answer ({status}).`, the status left out when no answer came at all, beside
-a "Retry" button that reads the session again. A session that ends while a view is open returns to the screen with
-`Your session ended, so log in again.`
+a 401, the screen reads `The router did not answer ({status}).`, the status left out when no answer came at all or none
+within a minute, beside a "Retry" button that reads the session again. A session that ends while a view is open returns
+to the screen with `Your session ended, so log in again.`
 
 The sidebar reads the brand "Phoebis Router" over the views in this order: Dashboard, Quota, Accounts, Pools, Keys,
 Guardrails, Requests, Analytics, Sessions, Settings. Under them a group headed "Diagnostics" holds Routing log and

@@ -108,6 +108,23 @@ export const reportRecovery = (path: string) => {
 const READ_DEADLINE_MS = 60_000;
 
 /**
+ * Runs `read` with a signal that aborts it once `READ_DEADLINE_MS` has passed, and fails a read the deadline cut short
+ * with the deadline's own words. Everything `read` waits on, the body included, counts, so a router that sends the head
+ * and stalls the body fails the read the same way.
+ */
+async function withinDeadline<T>(read: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const deadline = new AbortController();
+  const timer = clock.setTimeout(() => deadline.abort(), READ_DEADLINE_MS);
+  try {
+    return await read(deadline.signal);
+  } catch (e) {
+    throw deadline.signal.aborted ? new Error(`no answer within ${READ_DEADLINE_MS / 1_000} s`) : e;
+  } finally {
+    clock.clearTimeout(timer);
+  }
+}
+
+/**
  * `quiet` keeps a failure from the shell's toast for a read that draws its own failed state and repeats on a schedule,
  * which would otherwise toast once per tick, and a 401 still returns the console to the login. `own` runs no hook at
  * all, the 401's included, for the login screen, which draws every refusal of its own call: the shell that would
@@ -116,28 +133,26 @@ const READ_DEADLINE_MS = 60_000;
 export async function call<T = unknown>(method: string, path: string, body?: unknown, { own = false, quiet: asked = false }: { own?: boolean; quiet?: boolean } = {}): Promise<T> {
   // Read before the first await: the quiet window is synchronous, and the report comes after the answer.
   const silent = asked || quiet;
-  // A write gets no deadline: one the router landed after the console gave up would read as failed, and the page
-  // would offer to retry a write that already happened.
-  const deadline = method === 'GET' ? new AbortController() : null;
-  const timer = deadline === null ? null : clock.setTimeout(() => deadline.abort(), READ_DEADLINE_MS);
+  const answer = async (signal?: AbortSignal) => {
+    const response = await fetch(path, { body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin', headers: body === undefined ? {} : { 'content-type': 'application/json' }, method, signal });
+    // Every answer names the router's build, a refusal's and an empty one's among them.
+    noteBuild(response.headers.get('x-phoebis-build'));
+    return { response, text: response.status === 204 ? '' : await response.text() };
+  };
   let response: Response;
   let text: string;
   try {
-    response = await fetch(path, { body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin', headers: body === undefined ? {} : { 'content-type': 'application/json' }, method, signal: deadline?.signal });
-    // Before the 204's return, since every answer names the router's build, a refusal's and an empty one's among them.
-    noteBuild(response.headers.get('x-phoebis-build'));
-    if (response.status === 204) return undefined as T;
-    // Under the deadline too, so a router that sends the head and stalls the body fails the read the same way.
-    text = await response.text();
+    // A write gets no deadline: one the router landed after the console gave up would read as failed, and the page
+    // would offer to retry a write that already happened.
+    ({ response, text } = await (method === 'GET' ? withinDeadline(answer) : answer()));
   } catch (e) {
     // A router that never answered, or not within the deadline: the page below draws its error state, and the hook
     // says which route.
-    const message = deadline?.signal.aborted ? `no answer within ${READ_DEADLINE_MS / 1_000} s` : e instanceof Error ? e.message : String(e);
+    const message = e instanceof Error ? e.message : String(e);
     if (!own && !silent) reportFailure({ message, path, status: 0 });
     throw new ApiError(0, message, null, path);
-  } finally {
-    if (timer !== null) clock.clearTimeout(timer);
   }
+  if (response.status === 204) return undefined as T;
   let parsed: unknown;
   try {
     parsed = text ? JSON.parse(text) : null;
@@ -252,17 +267,19 @@ export class HttpApi implements Api {
     );
   getSession = async (): Promise<SessionInfo | null> => {
     // Read straight through: a missing session is the normal first load, not a lost one for the hook to report.
-    let response: Response;
+    let answer: { body: { persistent?: boolean; session_id: string } | null; status: number };
     try {
-      response = await fetch('/admin/session', { credentials: 'same-origin' });
+      answer = await withinDeadline(async (signal) => {
+        const response = await fetch('/admin/session', { credentials: 'same-origin', signal });
+        return { body: response.ok ? ((await response.json()) as { persistent?: boolean; session_id: string }) : null, status: response.status };
+      });
     } catch (e) {
       // Raised as `call` raises it, so the login screen can tell a router that never answered from "no session".
       throw new ApiError(0, e instanceof Error ? e.message : String(e), null);
     }
-    if (response.status === 401) return null;
-    if (!response.ok) throw new ApiError(response.status, `GET /admin/session answered ${response.status}`, null);
-    const r = (await response.json()) as { persistent?: boolean; session_id: string };
-    return { persistent: r.persistent === true, sessionId: r.session_id };
+    if (answer.status === 401) return null;
+    if (answer.body === null) throw new ApiError(answer.status, `GET /admin/session answered ${answer.status}`, null);
+    return { persistent: answer.body.persistent === true, sessionId: answer.body.session_id };
   };
   getSettings = async () => d.decodeSettings(await call('GET', '/admin/settings'));
   listAccountRollups = async (from: string, to: string) => d.decodeAccountRollups(await call('GET', `/admin/analytics/accounts?range=${range(from, to)}`));
