@@ -78,22 +78,18 @@ pub(crate) enum CarriedVersion<'a> {
     Other,
 }
 
-/// The `cc_version` value of a stamped line, read against `client_version`; `None` for a line with no
-/// `cc_version` field. No free-form splitting: a value is bare when it equals the client's version, suffixed
-/// when it is the client's version, a dot, and three hex characters, and `Other` otherwise.
-pub(crate) fn carried_version<'a>(
-    text: &'a str,
-    client_version: &str,
-) -> Option<CarriedVersion<'a>> {
-    let value = crate::facts::carried_field(text, "cc_version")?;
+/// A stamped line's `cc_version` value, read against `client_version`. No free-form splitting: a value is bare
+/// when it equals the client's version, suffixed when it is the client's version, a dot, and three hex
+/// characters, and `Other` otherwise.
+pub(crate) fn carried_version<'a>(value: &'a str, client_version: &str) -> CarriedVersion<'a> {
     if value == client_version {
-        return Some(CarriedVersion::Bare);
+        return CarriedVersion::Bare;
     }
     let suffix = value
         .strip_prefix(client_version)
         .and_then(|rest| rest.strip_prefix('.'))
         .filter(|tail| tail.len() == 3 && tail.bytes().all(|b| b.is_ascii_hexdigit()));
-    Some(suffix.map_or(CarriedVersion::Other, CarriedVersion::Suffixed))
+    suffix.map_or(CarriedVersion::Other, CarriedVersion::Suffixed)
 }
 
 /// The version half of a `claude-cli/` user agent, accepted only as the client's own spelling of one: digits
@@ -317,6 +313,10 @@ mod tests {
 
     #[test]
     fn a_carried_version_is_read_against_the_clients_own_version() {
+        fn carried_version<'a>(text: &'a str, client_version: &str) -> Option<CarriedVersion<'a>> {
+            crate::facts::carried_field(text, "cc_version")
+                .map(|value| super::carried_version(value, client_version))
+        }
         let line = |v: &str| {
             format!("x-anthropic-billing-header: cc_version={v}; cc_entrypoint=cli; cch=9b244;")
         };

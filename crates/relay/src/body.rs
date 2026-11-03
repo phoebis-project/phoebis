@@ -631,13 +631,14 @@ pub(crate) fn drift(body: &[u8]) -> Result<Option<DriftKind>, RelayError> {
 /// handful of candidates against 4096 values. A resumed body's candidates add the empty prompt, which the client
 /// stamps before it writes the resume placeholder over a message of tool results. A line with no `cc_version`, a
 /// bare version with no suffix, or a version other than the agent's is not this drift: the first two carry nothing
-/// to check, and the third is the hash check's to judge.
-pub(crate) fn version_drift(body: &[u8], check: VersionCheck<'_>) -> Option<DriftKind> {
-    let (start, end) = phoebis_cch::string_member_span(body, &["system", "0", "text"])?;
-    // The span is the JSON token with its quotes and escapes; the billing line is its decoded text.
-    let text = serde_json::from_slice::<String>(&body[start..end]).ok()?;
+/// to check, and the third is the hash check's to judge. `cc_version` is the value as `BodyFacts` reads it off the
+/// tolerant parse, so a line holding a lone surrogate escape, which a strict decoder refuses, is checked all the same.
+pub(crate) fn version_drift(
+    cc_version: Option<&str>,
+    check: VersionCheck<'_>,
+) -> Option<DriftKind> {
     let CarriedVersion::Suffixed(suffix) =
-        crate::billing::carried_version(&text, check.client_version)?
+        crate::billing::carried_version(cc_version?, check.client_version)
     else {
         return None;
     };
@@ -1548,7 +1549,7 @@ mod tests {
         assert_eq!(facts.prompt_units.len(), 5, "one candidate per text block");
         assert_eq!(
             version_drift(
-                &anchored,
+                facts.cc_version.as_deref(),
                 VersionCheck {
                     client_version: "2.1.292",
                     prompt_units: &facts.prompt_units,
@@ -1566,7 +1567,7 @@ mod tests {
         let facts = crate::facts::BodyFacts::read(&foreign);
         assert_eq!(
             version_drift(
-                &foreign,
+                facts.cc_version.as_deref(),
                 VersionCheck {
                     client_version: "2.1.292",
                     prompt_units: &facts.prompt_units,

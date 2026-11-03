@@ -26,6 +26,10 @@ pub struct BodyFacts {
     /// The `cc_entrypoint` token of the billing line under the entrypoint token rule, `None` for a body without a
     /// line, a line that names none, a value outside the rule, and a body no reader parses.
     pub entrypoint: Option<String>,
+    /// The `cc_version` value of the billing line as the tolerant parse reads it, a lone surrogate escape reading as
+    /// the replacement character, so the version check reads a line a strict decoder refuses. `None` for a body
+    /// without a line, a line that names none, and a body no reader parses.
+    pub cc_version: Option<String>,
     /// Whether `system[0]` is an attribution line at all, stamped or reduced: what the restoration fills.
     pub carries_line: bool,
     pub shape: RequestShape,
@@ -78,6 +82,7 @@ impl BodyFacts {
                 resumed: false,
                 turn_origin: None,
                 entrypoint: None,
+                cc_version: None,
                 carries_line: false,
                 shape: RequestShape {
                     safeguards,
@@ -140,6 +145,9 @@ impl BodyFacts {
         let entrypoint = first_system_text
             .and_then(carried_entrypoint)
             .map(String::from);
+        let cc_version = first_system_text
+            .and_then(|text| carried_field(text, "cc_version"))
+            .map(String::from);
         let count = |v: Option<&Value>| v.and_then(Value::as_array).map_or(0, |a| a.len() as u32);
         let text = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_string);
         let thinking = root.get("thinking");
@@ -176,6 +184,7 @@ impl BodyFacts {
             resumed,
             turn_origin,
             entrypoint,
+            cc_version,
             carries_line,
             shape,
             top_level_effort,
@@ -829,7 +838,7 @@ mod tests {
         );
         assert_eq!(
             crate::body::version_drift(
-                body.as_bytes(),
+                facts.cc_version.as_deref(),
                 crate::body::VersionCheck {
                     client_version: "2.1.269",
                     prompt_units: &facts.prompt_units,

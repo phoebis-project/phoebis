@@ -187,8 +187,10 @@ agent names. On a resumed conversation, whose first user message is the client's
 reproduces from the empty prompt, since the client stamps the request over a message of tool results alone and writes
 the placeholder afterwards. The hash goes first. A body carrying only the placeholder `cch=00000` passes, and a line
 with no `cc_version`, a bare version with no suffix, or a version other than the agent's is not the suffix drift: the
-first two carry nothing to check, and the third is the hash check's to judge. Both run once per request, after the key's
-client and model checks and before any account is chosen, so the refusal names no account and no leg ever meets a drift.
+first two carry nothing to check, and the third is the hash check's to judge. The suffix check reads the billing line as
+the tolerant parse carries it, a lone surrogate escape reading as the replacement character, so a line a strict decoder
+refuses is checked all the same. Both run once per request, after the key's client and model checks and before any
+account is chosen, so the refusal names no account and no leg ever meets a drift.
 The contract check runs before both, so a body without the line is a contract refusal and never a drift, and a request
 that fails the contract and a drift check is refused for the contract ([The required set](client.md#the-required-set)).
 

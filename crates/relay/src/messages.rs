@@ -2008,7 +2008,7 @@ impl Relay {
                 prompt_units: &context.prompt_units,
             };
             if matches!(crate::body::carries_a_stamp(&raw), Ok(true)) {
-                if let Some(kind) = crate::body::version_drift(&raw, check) {
+                if let Some(kind) = crate::body::version_drift(facts.cc_version.as_deref(), check) {
                     let refusal = self.drift_refusal(
                         kind,
                         facts.resumed,

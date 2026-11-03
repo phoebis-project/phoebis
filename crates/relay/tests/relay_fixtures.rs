@@ -355,6 +355,20 @@ async fn a_version_suffix_this_build_cannot_reproduce_is_refused() {
     .await;
 }
 
+/// A strict decoder refuses a line holding a lone surrogate escape, which the tolerant parse reads as the
+/// replacement character, so the suffix it carries is checked as any other line's is.
+#[tokio::test]
+async fn a_line_holding_a_lone_surrogate_escape_is_checked_for_its_version_suffix() {
+    a_drifted_stamp_is_refused(
+        resigned(
+            "cc_version=2.1.310.077;",
+            r"cc_version=2.1.310.abc; cc_workload=\udc00;",
+        ),
+        "version_suffix",
+    )
+    .await;
+}
+
 /// A bare version with no suffix has nothing to check and relays.
 #[tokio::test]
 async fn a_bare_version_with_no_suffix_is_not_drift() {
