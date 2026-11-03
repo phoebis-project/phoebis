@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '@/api';
 import type { Account, AccountSlowDown, ExtraUsage, QuotaPoll, QuotaSnapshot, RateLimitWindow, Spend } from '@/api/types';
 import { accountColor, accountSlots } from '@/components/charts/theme';
@@ -473,6 +473,69 @@ function addMonths(ms: number, months: number): number {
 }
 
 /**
+ * A lane: the head with the account's dot, name, period word and chips, then the track with its piece of the day grid,
+ * the bars, an optional end marker and the now line.
+ */
+function Lane({ account, cells, children, chips, color, end, nowPct, period }: { account: Account; cells: { at: number; weekend: boolean }[]; children: ReactNode; chips: ReactNode; color: string; end?: ReactNode; nowPct: number | null; period: string }) {
+  return (
+    <div className="lane" style={{ ['--lane-color' as string]: color }}>
+      <div className="lane__head">
+        <div className="lane__id">
+          <span className="lane__dot" />
+          <span className="lane__name" title={account.email ?? account.label}>
+            {account.label}
+          </span>
+          <span className="lane__period">{period}</span>
+        </div>
+        <div className="lane__chips">{chips}</div>
+      </div>
+      <div className="lane__track">
+        {/* First in the track, so the bars paint over it. */}
+        <span className="lane__raster" aria-hidden>
+          {rasterCells(cells)}
+        </span>
+        {children}
+        {end}
+        {nowPct !== null && <span className="lane__now" style={{ left: `${nowPct}%` }} aria-hidden />}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One window's bar from `start`, drawn to `stop` inside the span and titled to `end`, its reset. A live bar with a
+ * `share` is filled by the window's used share, placed from the window's start up to `usedEnd` and cut to the drawn
+ * part, so a fill past the now line reads as ahead of pace and one short of it as behind, the now line being the
+ * elapsed mark. A bar without a share draws no fill. `extra` closes the title.
+ */
+function LaneBar({ barKey, end, extra = '', label, share, span, stamp, start, state, step, stop, usedEnd, width }: { barKey: string; end: number; extra?: string; label: string; share: string | null; span: { endMs: number; startMs: number }; stamp: (at: number) => string; start: number; state: 'live' | 'next' | 'past'; step: LabelStep; stop: number; usedEnd: number; width: number }) {
+  const from = Math.max(start, span.startMs);
+  const to = Math.min(stop, span.endMs);
+  const filled = state === 'live' && share !== null;
+  const used = filled ? Math.max(0, (Math.min(usedEnd, to) - from) / (to - from)) * 100 : 0;
+  return (
+    <div className={`lane__bar lane__bar--${state}`} style={{ left: `${((from - span.startMs) / width) * 100}%`, width: `${((to - from) / width) * 100}%` }} title={`${label}\n${fmtAbsolute(start)} to ${fmtAbsolute(end)}${filled ? `\n${share}` : ''}${extra}`}>
+      {filled && (
+        <span className="lane__clip">
+          <span className="lane__used" style={{ width: `${used}%` }} />
+        </span>
+      )}
+      {/* A live bar's label falls back to its share alone, and a reset stamp alone straight to the title. */}
+      {filled ? (
+        <span className="lane__label" data-bar={barKey} hidden={step === 2}>
+          {share}
+          <span className="lane__label-reset" hidden={step !== 0}> · {stamp(end)}</span>
+        </span>
+      ) : (
+        <span className="lane__label" data-bar={barKey} hidden={step !== 0}>
+          {stamp(end)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
  * A usage-based seat's lane: one chip for its spend limit and one bar per monthly spend window in the account's color.
  * The current window runs from one calendar month before the reading's reset to the reset, filled by the share spent
  * and labeled as a plan bar is, the upcoming one dashed where the span reaches it. With no limit set the current
@@ -496,59 +559,97 @@ function SpendLane({ account, cells, color, now, nowPct, span, spend, stamp, ste
     }
   }
   return (
-    <div className="lane" style={{ ['--lane-color' as string]: color }}>
-      <div className="lane__head">
-        <div className="lane__id">
-          <span className="lane__dot" />
-          <span className="lane__name" title={account.email ?? account.label}>
-            {account.label}
-          </span>
-          <span className="lane__period">month</span>
-        </div>
-        <div className="lane__chips">
-          <SpendChip spend={spend} />
-        </div>
-      </div>
-      <div className="lane__track">
-        <span className="lane__raster" aria-hidden>
-          {rasterCells(cells)}
-        </span>
-        {bars.map((b) => {
-          const from = Math.max(b.start, span.startMs);
-          const to = Math.min(b.end, span.endMs);
-          const key = `${account.id} ${b.start}`;
-          const step = steps.get(key) ?? 0;
-          const filled = b.state === 'live' && b.current && share !== null;
-          const usedEnd = b.start + Math.min(1, Math.max(0, spend.utilization ?? 0)) * (b.end - b.start);
-          const used = filled ? Math.max(0, (Math.min(usedEnd, to) - from) / (to - from)) * 100 : 0;
-          return (
-            <div
-              key={b.start}
-              className={`lane__bar lane__bar--${b.state}`}
-              style={{ left: `${((from - span.startMs) / width) * 100}%`, width: `${((to - from) / width) * 100}%` }}
-              title={`${account.label}\n${fmtAbsolute(b.start)} to ${fmtAbsolute(b.end)}${filled ? `\n${share}` : ''}`}
-            >
-              {filled && (
-                <span className="lane__clip">
-                  <span className="lane__used" style={{ width: `${used}%` }} />
-                </span>
-              )}
-              {filled ? (
-                <span className="lane__label" data-bar={key} hidden={step === 2}>
-                  {share}
-                  <span className="lane__label-reset" hidden={step !== 0}> · {stamp(b.end)}</span>
-                </span>
-              ) : (
-                <span className="lane__label" data-bar={key} hidden={step !== 0}>
-                  {stamp(b.end)}
-                </span>
-              )}
-            </div>
-          );
-        })}
-        {nowPct !== null && <span className="lane__now" style={{ left: `${nowPct}%` }} aria-hidden />}
-      </div>
-    </div>
+    <Lane account={account} cells={cells} chips={<SpendChip spend={spend} />} color={color} nowPct={nowPct} period="month">
+      {bars.map((b) => {
+        const key = `${account.id} ${b.start}`;
+        return (
+          <LaneBar
+            key={b.start}
+            barKey={key}
+            end={b.end}
+            label={account.label}
+            share={b.current ? share : null}
+            span={span}
+            stamp={stamp}
+            start={b.start}
+            state={b.state}
+            step={steps.get(key) ?? 0}
+            stop={b.end}
+            usedEnd={b.start + Math.min(1, Math.max(0, spend.utilization ?? 0)) * (b.end - b.start)}
+            width={width}
+          />
+        );
+      })}
+    </Lane>
+  );
+}
+
+/**
+ * A plan account's lane at the zoom's window: the three limit chips, and one bar per window projected on from the last
+ * reset, the current one filled by the window's used share. A canceled account's saved end stops the bar that spans
+ * it, opens no window after it and draws the end marker.
+ */
+function PlanLane({ account, cells, color, now, nowPct, period, span, stamp, steps, window: w }: { account: Account; cells: { at: number; weekend: boolean }[]; color: string; now: number; nowPct: number | null; period: string; span: { endMs: number; startMs: number }; stamp: (at: number) => string; steps: ReadonlyMap<string, LabelStep>; window: RateLimitWindow }) {
+  const width = span.endMs - span.startMs;
+  // The bars project the period on from the last reset, but an expired window's share is of the period before it, so
+  // the current bar names no share: the previous window's use would fill a window the sample never read.
+  const share = isExpired(w, now) ? null : `${fmtPct(remainingOf(w))} left`;
+  const windowMs = w.periodHours * HOUR;
+  const resetAt = Date.parse(w.resetsAt ?? '');
+  // A canceled account's saved end: no window opens after it, and the one that spans it stops there.
+  const endsAt = account.canceled ? (account.subscription?.endsAt ?? null) : null;
+  const endMs = endsAt ? Date.parse(endsAt) : Number.POSITIVE_INFINITY;
+  const endPct = endMs >= span.startMs && endMs < span.endMs ? ((endMs - span.startMs) / width) * 100 : null;
+  const bars: { end: number; start: number; state: 'live' | 'next' | 'past'; stop: number }[] = [];
+  let start = resetAt - windowMs;
+  while (start > span.startMs) start -= windowMs;
+  for (; start < span.endMs; start += windowMs) {
+    const end = start + windowMs;
+    const stop = Math.min(end, endMs);
+    // The drawn end decides, so a window that spans the period's start draws nothing once the plan ended at or
+    // before that start.
+    if (stop <= span.startMs) continue;
+    if (start >= endMs) continue;
+    bars.push({ start, end, state: now >= start && now < stop ? 'live' : stop <= now ? 'past' : 'next', stop });
+  }
+  return (
+    <Lane
+      account={account}
+      cells={cells}
+      chips={
+        <>
+          <LaneChip label="5-hour limit" window={windowOf(account, '5h')} now={now} />
+          <LaneChip label="7-day limit" window={windowOf(account, '7d')} now={now} />
+          <LaneChip label="Fable 7-day limit" window={account.fableWindow} now={now} />
+        </>
+      }
+      color={color}
+      end={endPct !== null && <span className="lane__end" style={{ left: `${endPct}%` }} title={`${account.label} ends ${fmtAbsolute(endsAt)}`} aria-hidden />}
+      nowPct={nowPct}
+      period={period}
+    >
+      {bars.map((b) => {
+        const key = `${account.id} ${b.start}`;
+        return (
+          <LaneBar
+            key={b.start}
+            barKey={key}
+            end={b.end}
+            extra={b.stop < b.end ? `\nends ${fmtAbsolute(endsAt)}` : ''}
+            label={account.label}
+            share={share}
+            span={span}
+            stamp={stamp}
+            start={b.start}
+            state={b.state}
+            step={steps.get(key) ?? 0}
+            stop={b.stop}
+            usedEnd={b.start + Math.min(1, w.utilization) * windowMs}
+            width={width}
+          />
+        );
+      })}
+    </Lane>
   );
 }
 
@@ -704,95 +805,13 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
             </div>
           )}
 
-          {lanes.map(({ account, spend, window: w }) => {
-            if (w === null) return spend === null ? null : <SpendLane key={account.id} account={account} cells={cells} color={accountColor(ink, slotOf(account.id))} now={now} nowPct={nowPct} span={span} spend={spend} stamp={stamp} steps={steps} />;
-            // The bars project the period on from the last reset, but an expired window's share is of the period
-            // before it, so the current bar names no share.
-            const share = isExpired(w, now) ? null : `${fmtPct(remainingOf(w))} left`;
-            const period = w.periodHours * HOUR;
-            const resetAt = Date.parse(w.resetsAt ?? '');
-            // A canceled account's saved end: no window opens after it, and the one that spans it stops there.
-            const endsAt = account.canceled ? (account.subscription?.endsAt ?? null) : null;
-            const endMs = endsAt ? Date.parse(endsAt) : Number.POSITIVE_INFINITY;
-            const endPct = endMs >= span.startMs && endMs < span.endMs ? ((endMs - span.startMs) / width) * 100 : null;
-            const bars: { end: number; start: number; state: 'live' | 'next' | 'past'; stop: number }[] = [];
-            let start = resetAt - period;
-            while (start > span.startMs) start -= period;
-            for (; start < span.endMs; start += period) {
-              const end = start + period;
-              const stop = Math.min(end, endMs);
-              // The drawn end decides, so a window that spans the period's start draws nothing once the plan ended
-              // at or before that start.
-              if (stop <= span.startMs) continue;
-              if (start >= endMs) continue;
-              bars.push({ start, end, state: now >= start && now < stop ? 'live' : stop <= now ? 'past' : 'next', stop });
-            }
-            return (
-              <div key={account.id} className="lane" style={{ ['--lane-color' as string]: accountColor(ink, slotOf(account.id)) }}>
-                <div className="lane__head">
-                  <div className="lane__id">
-                    <span className="lane__dot" />
-                    <span className="lane__name" title={account.email ?? account.label}>
-                      {account.label}
-                    </span>
-                    <span className="lane__period">{mode === 'session' ? '5h' : '7d'}</span>
-                  </div>
-                  <div className="lane__chips">
-                    <LaneChip label="5-hour limit" window={windowOf(account, '5h')} now={now} />
-                    <LaneChip label="7-day limit" window={windowOf(account, '7d')} now={now} />
-                    <LaneChip label="Fable 7-day limit" window={account.fableWindow} now={now} />
-                  </div>
-                </div>
-                <div className="lane__track">
-                  {/* First in the track, so the bars paint over it. */}
-                  <span className="lane__raster" aria-hidden>
-                    {rasterCells(cells)}
-                  </span>
-                  {bars.map((b) => {
-                    const from = Math.max(b.start, span.startMs);
-                    const to = Math.min(b.stop, span.endMs);
-                    const wPct = ((to - from) / width) * 100;
-                    const key = `${account.id} ${b.start}`;
-                    const step = steps.get(key) ?? 0;
-                    // The fill is the window's used share placed from the window's start and cut to the drawn part,
-                    // so a fill past the now line reads as ahead of pace and one short of it as behind. It draws only
-                    // while the sample is current: an expired sample's bar is projected past its reset, and the
-                    // previous window's use would fill a window the sample never read. The now line is the elapsed
-                    // mark.
-                    const usedEnd = b.start + Math.min(1, w.utilization) * period;
-                    const used = b.state === 'live' && share !== null ? Math.max(0, (Math.min(usedEnd, to) - from) / (to - from)) * 100 : 0;
-                    return (
-                      <div
-                        key={b.start}
-                        className={`lane__bar lane__bar--${b.state}`}
-                        style={{ left: `${((from - span.startMs) / width) * 100}%`, width: `${wPct}%` }}
-                        title={`${account.label}\n${fmtAbsolute(b.start)} to ${fmtAbsolute(b.end)}${b.state === 'live' && share ? `\n${share}` : ''}${b.stop < b.end ? `\nends ${fmtAbsolute(endsAt)}` : ''}`}
-                      >
-                        {b.state === 'live' && share !== null && (
-                          <span className="lane__clip">
-                            <span className="lane__used" style={{ width: `${used}%` }} />
-                          </span>
-                        )}
-                        {/* A live bar's label falls back to its share alone, and a reset stamp alone straight to the title. */}
-                        {b.state === 'live' && share !== null ? (
-                          <span className="lane__label" data-bar={key} hidden={step === 2}>
-                            {share}
-                            <span className="lane__label-reset" hidden={step !== 0}> · {stamp(b.end)}</span>
-                          </span>
-                        ) : (
-                          <span className="lane__label" data-bar={key} hidden={step !== 0}>
-                            {stamp(b.end)}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })}
-                  {endPct !== null && <span className="lane__end" style={{ left: `${endPct}%` }} title={`${account.label} ends ${fmtAbsolute(endsAt)}`} aria-hidden />}
-                  {nowPct !== null && <span className="lane__now" style={{ left: `${nowPct}%` }} aria-hidden />}
-                </div>
-              </div>
-            );
-          })}
+          {lanes.map(({ account, spend, window: w }) =>
+            w === null ? (
+              spend === null ? null : <SpendLane key={account.id} account={account} cells={cells} color={accountColor(ink, slotOf(account.id))} now={now} nowPct={nowPct} span={span} spend={spend} stamp={stamp} steps={steps} />
+            ) : (
+              <PlanLane key={account.id} account={account} cells={cells} color={accountColor(ink, slotOf(account.id))} now={now} nowPct={nowPct} period={mode === 'session' ? '5h' : '7d'} span={span} stamp={stamp} steps={steps} window={w} />
+            ),
+          )}
         </div>
       </div>
 
