@@ -3,7 +3,7 @@
 //! the requests it summarises.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql, Transaction};
@@ -925,23 +925,23 @@ fn reread_utilization(
     hour: i64,
     account_id: &str,
 ) -> Result<(), LedgerError> {
-    let (five, seven, oi) = tx.query_row(
-        "SELECT MAX(ratelimit_5h_utilization), MAX(ratelimit_7d_utilization), MAX(ratelimit_7d_oi_utilization) \
-         FROM attempts WHERE account_id = ?1 AND started_at >= ?2 AND started_at < ?3",
-        params![account_id, hour * 1_000, (hour + 3_600) * 1_000],
-        |r| {
+    let (five, seven, oi) = tx
+        .prepare_cached(
+            "SELECT MAX(ratelimit_5h_utilization), MAX(ratelimit_7d_utilization), MAX(ratelimit_7d_oi_utilization) \
+             FROM attempts WHERE account_id = ?1 AND started_at >= ?2 AND started_at < ?3",
+        )?
+        .query_row(params![account_id, hour * 1_000, (hour + 3_600) * 1_000], |r| {
             Ok((
                 r.get::<_, Option<f64>>(0)?,
                 r.get::<_, Option<f64>>(1)?,
                 r.get::<_, Option<f64>>(2)?,
             ))
-        },
-    )?;
-    tx.execute(
+        })?;
+    tx.prepare_cached(
         "UPDATE account_rollups_hourly SET utilization_5h_max = ?1, utilization_7d_max = ?2, utilization_7d_oi_max = ?3 \
          WHERE hour = ?4 AND account_id = ?5",
-        params![five, seven, oi, hour, account_id],
-    )?;
+    )?
+    .execute(params![five, seven, oi, hour, account_id])?;
     Ok(())
 }
 
@@ -1004,14 +1004,12 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
     if let Some(id) = &delta.kept_warm_request_id {
         // The engine credits at completion while the writer batches, so the request's own row may land after
         // this mark; the insert consults the marks table for exactly that case.
-        tx.execute(
-            "UPDATE requests SET kept_warm = 1 WHERE id = ?1",
-            params![id],
-        )?;
-        tx.execute(
+        tx.prepare_cached("UPDATE requests SET kept_warm = 1 WHERE id = ?1")?
+            .execute(params![id])?;
+        tx.prepare_cached(
             "INSERT OR IGNORE INTO kept_warm_marks (request_id, marked_at) VALUES (?1, ?2)",
-            params![id, delta.at],
-        )?;
+        )?
+        .execute(params![id, delta.at])?;
     }
     Ok(())
 }
@@ -1199,10 +1197,12 @@ fn newest_round(
 ) -> Result<Option<serde_json::Value>, LedgerError> {
     let length = window_length_ms(window);
     Ok(tx
-        .query_row(
+        .prepare_cached(
             "SELECT detail FROM events WHERE kind = ?5 AND account_id = ?1 \
              AND at >= ?2 AND at <= ?3 AND json_extract(detail, '$.window') = ?4 \
              ORDER BY at DESC, rowid DESC LIMIT 1",
+        )?
+        .query_row(
             params![account, at - length, at, window, SHEDDING_ROUND],
             |r| r.get::<_, Option<String>>(0),
         )
@@ -1675,12 +1675,11 @@ fn account_row(
     hour: i64,
     account_id: &str,
 ) -> Result<AccountRollupRow, LedgerError> {
+    static STATEMENT: LazyLock<String> =
+        LazyLock::new(|| format!("{ACCOUNT_SELECT} WHERE hour = ?1 AND account_id = ?2"));
     Ok(tx
-        .query_row(
-            &format!("{ACCOUNT_SELECT} WHERE hour = ?1 AND account_id = ?2"),
-            params![hour, account_id],
-            row_to_account,
-        )
+        .prepare_cached(&STATEMENT)?
+        .query_row(params![hour, account_id], row_to_account)
         .optional()?
         .unwrap_or_else(|| AccountRollupRow {
             hour,
@@ -1690,16 +1689,16 @@ fn account_row(
 }
 
 fn write_account(tx: &Transaction<'_>, row: &AccountRollupRow) -> Result<(), LedgerError> {
-    tx.execute(
+    tx.prepare_cached(
         "INSERT OR REPLACE INTO account_rollups_hourly (hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json, wall_early_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        params![
+    )?
+    .execute(params![
             row.hour, row.account_id, row.utilization_5h_max, row.utilization_7d_max, row.utilization_7d_oi_max,
             row.overage_seconds as i64, row.cooldown_seconds as i64, row.pins_created as i64, row.pins_migrated_in as i64,
             row.pins_migrated_out as i64, row.rewrite_tokens as i64,
             counts_json(&row.migrations),
             row.wall_early_ms as i64,
-        ],
-    )?;
+        ])?;
     Ok(())
 }
 
@@ -1735,11 +1734,8 @@ fn read_span(
     scope: &str,
 ) -> Result<Option<i64>, LedgerError> {
     Ok(tx
-        .query_row(
-            "SELECT until FROM cooldown_spans WHERE account_id = ?1 AND scope = ?2",
-            params![account_id, scope],
-            |r| r.get(0),
-        )
+        .prepare_cached("SELECT until FROM cooldown_spans WHERE account_id = ?1 AND scope = ?2")?
+        .query_row(params![account_id, scope], |r| r.get(0))
         .optional()?)
 }
 
@@ -1751,10 +1747,10 @@ fn write_span(
     scope: &str,
     until: i64,
 ) -> Result<(), LedgerError> {
-    tx.execute(
+    tx.prepare_cached(
         "INSERT OR REPLACE INTO cooldown_spans (account_id, scope, hour, until) VALUES (?1, ?2, 0, ?3)",
-        params![account_id, scope, until],
-    )?;
+    )?
+    .execute(params![account_id, scope, until])?;
     Ok(())
 }
 
@@ -1765,10 +1761,8 @@ fn take_span(
 ) -> Result<Option<i64>, LedgerError> {
     let span = read_span(tx, account_id, scope)?;
     if span.is_some() {
-        tx.execute(
-            "DELETE FROM cooldown_spans WHERE account_id = ?1 AND scope = ?2",
-            params![account_id, scope],
-        )?;
+        tx.prepare_cached("DELETE FROM cooldown_spans WHERE account_id = ?1 AND scope = ?2")?
+            .execute(params![account_id, scope])?;
     }
     Ok(span)
 }
@@ -1782,11 +1776,11 @@ fn add_segment(
     hour: i64,
     seconds: u64,
 ) -> Result<(), LedgerError> {
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO cooldown_segments (account_id, scope, hour, seconds) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(account_id, scope, hour) DO UPDATE SET seconds = seconds + excluded.seconds",
-        params![account_id, scope, hour, seconds as i64],
-    )?;
+    )?
+    .execute(params![account_id, scope, hour, seconds as i64])?;
     Ok(())
 }
 
@@ -1797,7 +1791,7 @@ fn take_segments(
     scope: &str,
 ) -> Result<Vec<(i64, u64)>, LedgerError> {
     let segments = {
-        let mut stmt = tx.prepare(
+        let mut stmt = tx.prepare_cached(
             "SELECT hour, seconds FROM cooldown_segments WHERE account_id = ?1 AND scope = ?2",
         )?;
         let rows = stmt.query_map(params![account_id, scope], |r| {
@@ -1805,10 +1799,8 @@ fn take_segments(
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
-    tx.execute(
-        "DELETE FROM cooldown_segments WHERE account_id = ?1 AND scope = ?2",
-        params![account_id, scope],
-    )?;
+    tx.prepare_cached("DELETE FROM cooldown_segments WHERE account_id = ?1 AND scope = ?2")?
+        .execute(params![account_id, scope])?;
     Ok(segments)
 }
 
@@ -1848,36 +1840,84 @@ pub(crate) fn read_rollup(
     conn: &Connection,
     key: &RollupRow,
 ) -> Result<Option<RollupRow>, LedgerError> {
+    static STATEMENT: LazyLock<String> =
+        LazyLock::new(|| format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_MATCH}"));
     Ok(conn
-        .prepare_cached(&format!(
-            "SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_MATCH}"
-        ))?
+        .prepare_cached(&STATEMENT)?
         .query_row(key_params(key), row_to_rollup)
         .optional()?)
 }
 
 pub(crate) fn delete_rollup(conn: &Connection, key: &RollupRow) -> Result<(), LedgerError> {
-    conn.prepare_cached(&format!("DELETE FROM rollups_hourly WHERE {KEY_MATCH}"))?
-        .execute(key_params(key))?;
+    static STATEMENT: LazyLock<String> =
+        LazyLock::new(|| format!("DELETE FROM rollups_hourly WHERE {KEY_MATCH}"));
+    conn.prepare_cached(&STATEMENT)?.execute(key_params(key))?;
     Ok(())
 }
 
 pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), LedgerError> {
-    conn.prepare_cached(
-        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58)"),
-    )?
-    .execute(params![
-        r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.client, r.effort, r.request_class, r.speed, r.funding, r.band, r.tier,
-        r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
-        r.exhausted as i64, r.rejected as i64, r.attempts as i64, r.failovers as i64, r.cache_hits as i64, r.cache_misses as i64, r.uncached_requests as i64,
-        r.input_tokens as i64, r.cache_read_tokens as i64, r.cache_write_5m_tokens as i64, r.cache_write_1h_tokens as i64, r.output_tokens as i64,
-        r.thinking_tokens as i64, r.web_search_requests as i64, r.web_fetch_requests as i64,
-        r.kept_warm_requests as i64, r.kept_warm_5m_tokens as i64, r.probe_migrated as i64, r.wasted_probes as i64, counts_json(&r.wasted_probe_reasons),
-        r.probes_skipped as i64, r.wasted_input_tokens as i64, r.wasted_cache_read_tokens as i64, r.wasted_cache_write_5m_tokens as i64,
-        r.wasted_cache_write_1h_tokens as i64, r.wasted_output_tokens as i64,
-        r.ttfb_hist.to_le_bytes(), r.ttfc_hist.to_le_bytes(), r.duration_hist.to_le_bytes(), r.output_tps_hist.to_le_bytes(), counts_json(&r.errors), counts_json(&r.cache_miss_reasons),
-        r.incomplete as i64, r.probes_held as i64, r.slow_down_held_ms as i64, r.slow_down_held as i64,
-        r.kept_warm_1h_tokens as i64, r.classifier, counts_json(&r.refusals),
+    static STATEMENT: LazyLock<String> = LazyLock::new(|| {
+        format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58)")
+    });
+    conn.prepare_cached(&STATEMENT)?.execute(params![
+        r.hour,
+        r.key_id,
+        r.key_generation,
+        r.pool_id,
+        r.account_id,
+        r.canonical_model,
+        r.kind,
+        r.user_agent,
+        r.client,
+        r.effort,
+        r.request_class,
+        r.speed,
+        r.funding,
+        r.band,
+        r.tier,
+        r.requests as i64,
+        r.succeeded as i64,
+        r.rate_limited as i64,
+        r.failed as i64,
+        r.exhausted as i64,
+        r.rejected as i64,
+        r.attempts as i64,
+        r.failovers as i64,
+        r.cache_hits as i64,
+        r.cache_misses as i64,
+        r.uncached_requests as i64,
+        r.input_tokens as i64,
+        r.cache_read_tokens as i64,
+        r.cache_write_5m_tokens as i64,
+        r.cache_write_1h_tokens as i64,
+        r.output_tokens as i64,
+        r.thinking_tokens as i64,
+        r.web_search_requests as i64,
+        r.web_fetch_requests as i64,
+        r.kept_warm_requests as i64,
+        r.kept_warm_5m_tokens as i64,
+        r.probe_migrated as i64,
+        r.wasted_probes as i64,
+        counts_json(&r.wasted_probe_reasons),
+        r.probes_skipped as i64,
+        r.wasted_input_tokens as i64,
+        r.wasted_cache_read_tokens as i64,
+        r.wasted_cache_write_5m_tokens as i64,
+        r.wasted_cache_write_1h_tokens as i64,
+        r.wasted_output_tokens as i64,
+        r.ttfb_hist.to_le_bytes(),
+        r.ttfc_hist.to_le_bytes(),
+        r.duration_hist.to_le_bytes(),
+        r.output_tps_hist.to_le_bytes(),
+        counts_json(&r.errors),
+        counts_json(&r.cache_miss_reasons),
+        r.incomplete as i64,
+        r.probes_held as i64,
+        r.slow_down_held_ms as i64,
+        r.slow_down_held as i64,
+        r.kept_warm_1h_tokens as i64,
+        r.classifier,
+        counts_json(&r.refusals),
     ])?;
     Ok(())
 }
@@ -2054,7 +2094,8 @@ pub(crate) fn visit_rollups(
     mut visit: impl FnMut(RollupRow),
 ) -> Result<(), LedgerError> {
     let (sql, binds) = select_statement(from_hour, to_hour, select);
-    let mut stmt = conn.prepare(&sql)?;
+    // A page loop reads one text a page, so a connection that served it once reuses the compiled statement.
+    let mut stmt = conn.prepare_cached(&sql)?;
     for row in stmt.query_map(params_from_iter(binds), row_to_rollup)? {
         visit(row?);
     }
