@@ -5,7 +5,7 @@ import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey, windowKeyId } from '@/lib/windo
 import { leadOf } from './lead';
 import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
-import { DAY, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, ago, ahead, clock, iso } from './time';
+import { DAY, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, ago, ahead, clock, endOfMonth, iso } from './time';
 
 /** The windows the router projects, the 5-hour, the 7-day and the 7-day Fable window, as the route serves them. */
 const PROJECTED: readonly string[] = ['5h', '7d', '7d_fable'];
@@ -73,7 +73,7 @@ export const SUNSET_FLAGGED_AGO = 4 * HOUR;
 export const SUNSET_WEEK_RESETS_IN = 4 * DAY - SUNSET_END_AGO;
 
 /** The reset the router estimates while no head has named the spend window's: 00:00 UTC on the first of next month. */
-const SPEND_RESET_ESTIMATE = Date.UTC(new Date(NOW).getUTCFullYear(), new Date(NOW).getUTCMonth() + 1, 1);
+const SPEND_RESET_ESTIMATE = endOfMonth(NOW);
 
 /** A story account as written: the account view's shape, its subscription's plan word left to the final map. */
 type Seed = Omit<Account, 'subscription'> & { subscription: Omit<Subscription, 'plan'> | null };

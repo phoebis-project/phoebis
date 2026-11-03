@@ -12,6 +12,10 @@ export const ahead = (ms: number) => iso(NOW + ms);
 export const hoursAgo = (h: number) => ago(h * HOUR);
 export const daysAgo = (d: number) => ago(d * DAY);
 export const startOfHour = (ms: number) => Math.floor(ms / HOUR) * HOUR;
+/** The UTC calendar edges a budget's spend period runs between, as the ledger reads them. */
+export const startOfDay = (at: number) => Math.floor(at / DAY) * DAY;
+export const startOfMonth = (at: number) => { const d = new Date(at); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1); };
+export const endOfMonth = (at: number) => { const d = new Date(at); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1); };
 
 /**
  * The story's wall-clock time on its pinned day, 2026-09-16 at 14:30 UTC, as an offset from the instant the mock loads

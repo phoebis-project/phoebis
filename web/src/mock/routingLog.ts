@@ -14,7 +14,7 @@ import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
 import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, PLAN_WINDOWS, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, cooldownOf, failsOver, holds, oauthWindows, requestById } from './requests';
 import { createRng } from './rng';
 import { TABLES } from './samples';
-import { DAY, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, RESEARCH_BUDGET_AT, clock, iso } from './time';
+import { DAY, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, RESEARCH_BUDGET_AT, clock, endOfMonth, iso, startOfDay, startOfMonth } from './time';
 
 /** Why a move rule fired, as the trace's `moved` names it. A failover's reasons move the pin from the task instead. */
 const RULES = ['spent', 'overage', 'return_to_plan', 'drain', 'shed'] as const;
@@ -264,10 +264,6 @@ const cooldownRows: CooldownRow[] = [
 ];
 // A story attempt set the row its account carries now, so one cooldown is listed once.
 const COOLDOWNS: CooldownRow[] = [...new Map(cooldownRows.map((c) => [`${c.accountId}|${c.scope}|${c.until}`, c])).values()];
-
-const startOfDay = (at: number) => Math.floor(at / DAY) * DAY;
-const startOfMonth = (at: number) => { const d = new Date(at); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1); };
-const endOfMonth = (at: number) => { const d = new Date(at); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1); };
 
 /** A member's spend as the ledger reported it at `at`: research crossed its day's budget at 12:41:07. */
 export function budgetsAt(pool: PoolSeed, accountId: string, at: number): RecordBudget[] {

@@ -4,7 +4,7 @@ import { endOf } from '@/lib/quota';
 import { accountById } from './accounts';
 import { earliest, paceHours } from './lead';
 import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
-import { DAY, DELETED_HOLDER_END, MINUTE, NOW, ago, ahead, clock, daysAgo, iso } from './time';
+import { DAY, DELETED_HOLDER_END, MINUTE, NOW, ago, ahead, clock, daysAgo, endOfMonth, iso, startOfDay } from './time';
 
 /**
  * A member as the story seeds it. The mock reads its kind, its eligibility, its burn, its Pace score and its speed off
@@ -45,8 +45,7 @@ const unbudgeted = (accountId: string, priority: number): MemberSeed => ({ accou
 
 /** The next UTC calendar boundary after `now`, which is where the ledger's spend period ends. */
 function periodEndAfter(period: BudgetPeriod, now: number): string {
-  const d = new Date(now);
-  return iso(period === 'day' ? Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) : Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
+  return iso(period === 'day' ? startOfDay(now) + DAY : endOfMonth(now));
 }
 
 /** The instant the ci key was revoked, on the story's pinned day at 14:17:30. */
