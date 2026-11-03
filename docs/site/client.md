@@ -308,9 +308,9 @@ or spelled with an escape), a `cache_control` marker the pool's cache TTL policy
 path spelled with an escape), a billing stamp the relay can neither check nor restamp (a key on its path, the billing
 line's header name or its `cch=` spelled with an escape, or a second stamped `text` in the first `system` block), and
 a body without the `metadata.user_id` an account is bound into. Each is refused before anything reaches the upstream,
-whether or not the request needs an edit. A billing line the strict decoder cannot read, as one holding a lone
-surrogate escape, is refused before anything reaches the upstream too, on a request whose line the relay restores. A
-body that nests deeper than the relay reads, or is not a JSON object, is `invalid_body` instead.
+whether or not the request needs an edit. A billing line the strict decoder refuses for a lone surrogate escape is
+refused before anything reaches the upstream too, on a request whose line the relay restores. A body that nests deeper
+than the relay reads, or is not a JSON object, is `invalid_body` instead.
 
 Four rows rest on the proxy listener's bounds ([proxy](installation.md#proxy)). A body that does not finish arriving
 within `proxy.body_read_seconds` of its authentication (60 by default) is `request_timeout`. A body past
