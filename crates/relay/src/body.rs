@@ -182,9 +182,10 @@ impl BodyMember {
         }
     }
 
-    /// `RelayError::BodyShape`'s `Display` text: a billing stamp the restamp cannot reach, a `cache_control`
-    /// marker the rewrite cannot place, a repeated member, or a `safeguards` member the cut cannot place, was found
-    /// rather than absent, so none reads like the other two variants' "has no ... member to edit".
+    /// `RelayError::BodyShape`'s `Display` text: a billing line the restoration cannot decode, a billing stamp the
+    /// restamp cannot reach, a `cache_control` marker the rewrite cannot place, a repeated member, or a `safeguards`
+    /// member the cut cannot place, was found rather than absent, so none reads like the other two variants'
+    /// "has no ... member to edit".
     pub(crate) fn shape_message(self) -> String {
         match self {
             BodyMember::BillingLine => {
