@@ -185,6 +185,13 @@ text_enum! {
     }
 }
 
+/// An account's staged cancellation: off, which carries no end, or on with the end it stages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cancellation {
+    Off,
+    On { ends_at: Option<i64> },
+}
+
 /// The pin and placement knobs of a pool beside `affinity_ttl_seconds`; `Default` is the shipped preset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Affinity {
@@ -598,8 +605,8 @@ pub struct AccountUpdate<'a> {
     pub actor: &'a str,
     /// The staged `enabled` flag; `None` leaves it.
     pub enabled: Option<bool>,
-    /// The staged cancellation, the flag with its end; `None` leaves both.
-    pub cancellation: Option<(bool, Option<i64>)>,
+    /// The staged cancellation; `None` leaves the flag and the end both.
+    pub cancellation: Option<Cancellation>,
 }
 
 /// The routing key of a served model: lowercase with one trailing `[1m]` removed, the same fold the relay applies
@@ -1404,15 +1411,19 @@ impl Store {
         let absent = || StoreError::AccountNotFound(u.id.to_string());
         let before = crate::accounts::account_in(&tx, u.id)?.ok_or_else(absent)?;
         let term = crate::accounts::subscription_term_in(&tx, u.id)?.ok_or_else(absent)?;
-        let canceled = u.cancellation.map(|(canceled, _)| canceled);
-        let ends_at = u.cancellation.and_then(|(_, ends_at)| ends_at);
+        let canceled = u
+            .cancellation
+            .map(|cancellation| matches!(cancellation, Cancellation::On { .. }));
+        let ends_at = match u.cancellation {
+            Some(Cancellation::On { ends_at }) => ends_at,
+            Some(Cancellation::Off) | None => None,
+        };
         let (state, cause) = u.state.unzip();
-        // The end goes with the flag, as `set_canceled` writes them: dropped the moment the flag is off.
         let updated = tx.execute(
             "UPDATE accounts SET label = ?2, state = COALESCE(?3, state), \
              state_cause = COALESCE(?11, state_cause), enabled = COALESCE(?7, enabled), \
              canceled = COALESCE(?8, canceled), \
-             subscription_ends_at = CASE WHEN ?8 IS NULL THEN subscription_ends_at WHEN ?8 THEN ?9 ELSE NULL END, \
+             subscription_ends_at = CASE WHEN ?8 IS NULL THEN subscription_ends_at ELSE ?9 END, \
              revision = revision + 1, updated_at = ?4 \
              WHERE id = ?1 AND incarnation = ?10 AND lifecycle_generation = ?5 AND revision = ?6",
             params![
@@ -2197,11 +2208,10 @@ fn key_fields(row: &ApiKeyRow) -> serde_json::Value {
 /// The account's pairs over the five editable fields, `secret_replaced` beside them when a secret was staged. The
 /// row holds the label, the state and the switch, and the term row the flag and the end.
 fn account_pairs(before: &AccountRow, u: &AccountUpdate<'_>, term: &SubscriptionTerm) -> String {
-    // As the update's `CASE` writes them: the end goes with the flag, dropped the moment the flag is off.
     let (canceled, ends_at) = match u.cancellation {
         None => (term.canceled, term.ends_at),
-        Some((true, ends_at)) => (true, ends_at),
-        Some((false, _)) => (false, None),
+        Some(Cancellation::On { ends_at }) => (true, ends_at),
+        Some(Cancellation::Off) => (false, None),
     };
     let old = serde_json::json!({
         "label": before.label,

@@ -2,9 +2,9 @@ use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode, Operator, Se
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, AccountUpdate,
     Affinity, AffinityChain, AffinityMode, ApiKeyRow, AttachmentSubject, BudgetPeriod, CanaryRead,
-    Failover, GuardrailAttachment, GuardrailRow, Identity, MemberWrite, MemoryKey, MemoryRecord,
-    MemoryStore, ModelRule, NewBundle, OveragePolicy, PinBurn, PinMark, PinRow, PoolRow,
-    PresetStamp, ReturnToPlan, RulesMode, Secret, SessionPlacement, SlowDown, StateCause,
+    Cancellation, Failover, GuardrailAttachment, GuardrailRow, Identity, MemberWrite, MemoryKey,
+    MemoryRecord, MemoryStore, ModelRule, NewBundle, OveragePolicy, PinBurn, PinMark, PinRow,
+    PoolRow, PresetStamp, ReturnToPlan, RulesMode, Secret, SessionPlacement, SlowDown, StateCause,
     StorageKey, Store, StoreError, Strategy, SubagentPlacement, SubscriptionRow, WarmSessions,
     WindowRow,
 };
@@ -2320,7 +2320,9 @@ fn a_stale_account_update_carrying_enabled_and_a_cancellation_writes_nothing() {
         at: 5,
         actor: "admin",
         enabled: Some(false),
-        cancellation: Some((true, Some(9_000))),
+        cancellation: Some(Cancellation::On {
+            ends_at: Some(9_000),
+        }),
     };
     assert!(matches!(
         store.commit_account_update(&stale),
@@ -3288,7 +3290,9 @@ fn an_account_edit_of_the_label_and_the_end_records_two_pairs_and_no_secret_flag
     store.set_canceled("plan", true, Some(1_000)).unwrap();
     store
         .commit_account_update(&AccountUpdate {
-            cancellation: Some((true, Some(2_000))),
+            cancellation: Some(Cancellation::On {
+                ends_at: Some(2_000),
+            }),
             ..account_edit(&store, "plan", "Plan")
         })
         .unwrap();
@@ -3312,10 +3316,10 @@ fn an_uncancel_records_the_end_the_update_drops_as_null() {
         .insert_account(&account("plan", AccountKind::Oauth))
         .unwrap();
     store.set_canceled("plan", true, Some(2_000)).unwrap();
-    // The admin route stages an uncancel with the stored end, and the update drops it with the flag.
+    // The admin route drops the stored end with the flag when it stages an uncancel.
     store
         .commit_account_update(&AccountUpdate {
-            cancellation: Some((false, Some(2_000))),
+            cancellation: Some(Cancellation::Off),
             ..account_edit(&store, "plan", "plan")
         })
         .unwrap();

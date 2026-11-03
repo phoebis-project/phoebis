@@ -11,8 +11,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_relay::DiscoveryError;
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AccountUpdate, CooldownScope, Secret, StateCause,
-    StoreError,
+    AccountKind, AccountRow, AccountState, AccountUpdate, Cancellation, CooldownScope, Secret,
+    StateCause, StoreError,
 };
 use serde_json::Value;
 use utoipa::ToSchema;
@@ -294,8 +294,8 @@ pub(crate) async fn patch(
         if canceled && row.kind == AccountKind::ApiKey {
             return failure(StatusCode::BAD_REQUEST, "only an oauth account is canceled");
         }
-        // The stored end alone never trips this: a write drops it the moment the flag goes off, so only an end
-        // this patch itself asked for can conflict with an uncancel it also asked for.
+        // The stored end alone never trips this: an uncancel drops it below, so only an end this patch itself asked
+        // for can conflict with an uncancel it also asked for.
         if !canceled && input.subscription_ends_at.flatten().is_some() {
             return failure(
                 StatusCode::BAD_REQUEST,
@@ -308,7 +308,11 @@ pub(crate) async fn patch(
                 "canceled needs subscription_ends_at",
             );
         }
-        Some((canceled, ends_at))
+        Some(if canceled {
+            Cancellation::On { ends_at }
+        } else {
+            Cancellation::Off
+        })
     } else {
         None
     };
