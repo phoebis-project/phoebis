@@ -1526,7 +1526,7 @@ export function candidateVerdict(c: RecordCandidate, now: number): { badge: stri
  * gate read, the slots, the Pace score with its hover, the prefix entry and the verdict with the one chip that decided
  * it. A chip that names the destination's fit carries its tone.
  */
-export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: number): { account: Chip; inFlight: string; pace: string; paceTitle: string | null; plan: string; prefix: { hash: PrefixEntry | null; until: string | null }; projection: string[]; projectionTitle: string | null; runway: string; tier: string; verdict: { badge: string; chip: Chip | null; tone: VerdictTone | null }; windows: string[][] } {
+export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: number): { account: Chip; inFlight: string; pace: string; paceTitle: string | null; plan: string; prefix: { hash: PrefixEntry | null; until: string | null }; projection: string[]; projectionTitle: string | null; runway: string; tier: string; verdict: ReturnType<typeof candidateVerdict>; windows: string[][] } {
   // A seat whose share lapsed carries no spend entry, so it reads as an OAuth candidate with no window at any tier.
   const spend = hasSpendEntry(c);
   const windows =
