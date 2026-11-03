@@ -2118,7 +2118,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
                 state.ledger.db().read(move |c| {
                     phoebis_ledger::request_totals(
                         c,
-                        "account_id",
+                        phoebis_ledger::TotalsBy::Account,
                         i64::MIN,
                         week_start,
                         &prices,
@@ -2139,7 +2139,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
                     phoebis_ledger::latest_extra_usage_share(c, now)?,
                     phoebis_ledger::request_totals(
                         c,
-                        "account_id",
+                        phoebis_ledger::TotalsBy::Account,
                         day_start,
                         to,
                         &prices,
@@ -2148,7 +2148,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
                     )?,
                     phoebis_ledger::request_totals(
                         c,
-                        "account_id",
+                        phoebis_ledger::TotalsBy::Account,
                         week_start,
                         day_start,
                         &prices,

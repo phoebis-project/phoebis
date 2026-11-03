@@ -1393,7 +1393,15 @@ pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, Stor
         .db()
         .read(move |c| {
             Ok((
-                phoebis_ledger::request_totals(c, "pool_id", day_start, to, &prices, &tables, now)?,
+                phoebis_ledger::request_totals(
+                    c,
+                    phoebis_ledger::TotalsBy::Pool,
+                    day_start,
+                    to,
+                    &prices,
+                    &tables,
+                    now,
+                )?,
                 phoebis_ledger::pools_traffic(
                     c, &pool_ids, day_start, to, 3_600, &prices, &tables, now,
                 )?,

@@ -13,8 +13,8 @@ use phoebis_ledger::{
     BudgetedMember, CostRevisions, EventRecord, FundingFilter, GroupRow, Histogram, KeepaliveDelta,
     LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlanTables, PriceRevisions,
     PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter,
-    SharePricing, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING,
-    PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
+    SharePricing, Speed, TotalsBy, WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS,
+    OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 use phoebis_routing::{
     PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
@@ -2568,7 +2568,7 @@ async fn shared_sums(
     let (pools, keys) = db
         .read_blocking(|c| {
             Ok((
-                request_totals(c, "pool_id", hour, hour + 3_600, &PRICES, costs, NOW)?,
+                request_totals(c, TotalsBy::Pool, hour, hour + 3_600, &PRICES, costs, NOW)?,
                 key_request_totals(c, hour, hour + 3_600, &live, &PRICES, costs, NOW)?,
             ))
         })
@@ -3940,7 +3940,15 @@ fn a_classifier_row_reads_zero_in_the_totals_and_session_series_and_its_price_na
     let hour = hour_of(WEEKDAY_OFF_PEAK);
     let totals = db
         .read_blocking(|c| {
-            request_totals(c, "account_id", hour, hour + 3_600, &PRICES, &tables, NOW)
+            request_totals(
+                c,
+                TotalsBy::Account,
+                hour,
+                hour + 3_600,
+                &PRICES,
+                &tables,
+                NOW,
+            )
         })
         .unwrap();
     let (marked, plain) = (totals["a"].equivalent, totals["b"].equivalent);
@@ -7443,8 +7451,16 @@ fn a_lifetime_total_prices_every_row_as_a_read_from_the_earliest_hour_does() {
     let (lifetime, since, key_lifetime, key_since) = db
         .read_blocking(|c| {
             Ok((
-                request_totals(c, "account_id", i64::MIN, to, &PRICES, &COSTS, NOW)?,
-                request_totals(c, "account_id", hour_of(first), to, &PRICES, &COSTS, NOW)?,
+                request_totals(c, TotalsBy::Account, i64::MIN, to, &PRICES, &COSTS, NOW)?,
+                request_totals(
+                    c,
+                    TotalsBy::Account,
+                    hour_of(first),
+                    to,
+                    &PRICES,
+                    &COSTS,
+                    NOW,
+                )?,
                 key_request_totals(c, i64::MIN, to, &live, &PRICES, &COSTS, NOW)?,
                 key_request_totals(c, hour_of(first), to, &live, &PRICES, &COSTS, NOW)?,
             ))
@@ -7509,7 +7525,15 @@ fn a_cost_revision_inside_a_price_span_moves_the_totals_equivalent_at_its_own_bo
     let (accounts, keys) = db
         .read_blocking(|c| {
             Ok((
-                request_totals(c, "account_id", from_hour, to_hour, &prices, &costs, NOW)?,
+                request_totals(
+                    c,
+                    TotalsBy::Account,
+                    from_hour,
+                    to_hour,
+                    &prices,
+                    &costs,
+                    NOW,
+                )?,
                 key_request_totals(c, from_hour, to_hour, &live, &prices, &costs, NOW)?,
             ))
         })
@@ -7588,7 +7612,7 @@ fn a_peak_hour_beside_a_quiet_one_prices_the_totals_equivalent_at_each_hours_fac
         .read_blocking(|c| {
             request_totals(
                 c,
-                "account_id",
+                TotalsBy::Account,
                 hour_of(quiet),
                 hour_of(peak) + 3_600,
                 &prices,
@@ -7638,7 +7662,15 @@ fn a_group_mixing_two_clients_prices_each_rows_regime() {
     let (totals, points) = db
         .read_blocking(|c| {
             Ok((
-                request_totals(c, "account_id", from_hour, to_hour, &prices, &costs, NOW)?,
+                request_totals(
+                    c,
+                    TotalsBy::Account,
+                    from_hour,
+                    to_hour,
+                    &prices,
+                    &costs,
+                    NOW,
+                )?,
                 burn_series(c, &costs, &prices, &filter, NOW)?,
             ))
         })
@@ -7747,7 +7779,9 @@ async fn the_dashboard_the_traffic_and_the_totals_split_the_billed_dollars_from_
         "the pool's bucket",
     );
     let totals = db
-        .read_blocking(|c| request_totals(c, "pool_id", hour, hour + 3_600, &PRICES, &COSTS, NOW))
+        .read_blocking(|c| {
+            request_totals(c, TotalsBy::Pool, hour, hour + 3_600, &PRICES, &COSTS, NOW)
+        })
         .unwrap();
     read(
         totals["p"].billed_usd,

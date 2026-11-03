@@ -3378,6 +3378,22 @@ impl Totals {
     }
 }
 
+/// The column `request_totals` groups by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TotalsBy {
+    Account,
+    Pool,
+}
+
+impl TotalsBy {
+    pub fn column(self) -> &'static str {
+        match self {
+            TotalsBy::Account => "account_id",
+            TotalsBy::Pool => "pool_id",
+        }
+    }
+}
+
 /// Request, token, and cost totals per pool or account over `[since_hour, to_hour)`, probe rows left out. One
 /// aggregate query per span of `revision_spans` rather than a rollup read, because the account list asks three times
 /// per call. Grouped by the column, the price columns and the hour, each group priced in Rust at its own hour. A
@@ -3385,33 +3401,23 @@ impl Totals {
 /// instant, whose anchor row divides the Pro-week figure.
 pub fn request_totals(
     conn: &Connection,
-    column: &str,
+    by: TotalsBy,
     since_hour: i64,
     to_hour: i64,
     prices: &PriceRevisions,
     costs: &PlanTables,
     now: i64,
 ) -> Result<BTreeMap<String, Totals>, LedgerError> {
-    // The column is one of the two identifiers this function names, never a caller's string.
-    assert!(
-        matches!(column, "account_id" | "pool_id"),
-        "request_totals column"
-    );
-    let mut stmt = conn.prepare(&format!("SELECT {column}, {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} FROM rollups_hourly WHERE kind != 'probe' AND hour >= ?1 AND hour < ?2 GROUP BY {column}, {PRICE_GROUP_COLUMNS}"))?;
-    let mut out: BTreeMap<String, Totals> = BTreeMap::new();
-    for span in revision_spans(prices, Some(&costs.revisions), since_hour, to_hour) {
-        let rows = stmt.query_map(params![span.from_hour, span.to_hour], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                price_group(r, 1, prices, costs, now)?,
-            ))
-        })?;
-        for row in rows {
-            let (id, totals) = row?;
-            out.entry(id).or_default().add(&totals);
-        }
-    }
-    Ok(out)
+    grouped_totals(
+        conn,
+        by.column(),
+        1,
+        (since_hour, to_hour),
+        prices,
+        costs,
+        now,
+        |r| r.get(0).map(Some),
+    )
 }
 
 /// Request, token, and cost totals per live key over `[since_hour, to_hour)`, probe rows left out: the pair is
@@ -3427,20 +3433,47 @@ pub fn key_request_totals(
     costs: &PlanTables,
     now: i64,
 ) -> Result<BTreeMap<String, Totals>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT key_id, key_generation, {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} FROM rollups_hourly WHERE kind != 'probe' AND hour >= ?1 AND hour < ?2 GROUP BY key_id, key_generation, {PRICE_GROUP_COLUMNS}"))?;
+    grouped_totals(
+        conn,
+        "key_id, key_generation",
+        2,
+        (since_hour, to_hour),
+        prices,
+        costs,
+        now,
+        |r| {
+            let id: String = r.get(0)?;
+            let generation: i64 = r.get(1)?;
+            Ok((live.0.get(&id) == Some(&generation)).then_some(id))
+        },
+    )
+}
+
+/// The priced SQL sum of both totals reads over the hour range: grouped by `group_columns`, the price columns and the
+/// hour, one query per span of `revision_spans`, each group's price columns read from `offset`. `key_of` reads a
+/// group's key before `price_group` runs, so a group it answers `None` for is never priced.
+#[allow(clippy::too_many_arguments)]
+fn grouped_totals(
+    conn: &Connection,
+    group_columns: &str,
+    offset: usize,
+    (since_hour, to_hour): (i64, i64),
+    prices: &PriceRevisions,
+    costs: &PlanTables,
+    now: i64,
+    key_of: impl Fn(&rusqlite::Row<'_>) -> rusqlite::Result<Option<String>>,
+) -> Result<BTreeMap<String, Totals>, LedgerError> {
+    let mut stmt = conn.prepare(&format!("SELECT {group_columns}, {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} FROM rollups_hourly WHERE kind != 'probe' AND hour >= ?1 AND hour < ?2 GROUP BY {group_columns}, {PRICE_GROUP_COLUMNS}"))?;
     let mut out: BTreeMap<String, Totals> = BTreeMap::new();
     for span in revision_spans(prices, Some(&costs.revisions), since_hour, to_hour) {
         let rows = stmt.query_map(params![span.from_hour, span.to_hour], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, i64>(1)?,
-                price_group(r, 2, prices, costs, now)?,
-            ))
+            key_of(r)?
+                .map(|key| Ok((key, price_group(r, offset, prices, costs, now)?)))
+                .transpose()
         })?;
         for row in rows {
-            let (id, generation, totals) = row?;
-            if live.0.get(&id) == Some(&generation) {
-                out.entry(id).or_default().add(&totals);
+            if let Some((key, totals)) = row? {
+                out.entry(key).or_default().add(&totals);
             }
         }
     }
