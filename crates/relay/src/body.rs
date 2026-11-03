@@ -653,7 +653,7 @@ fn replace_model(body: &mut Vec<u8>, upstream_model: &str) -> Spliced {
     Spliced::Replaced
 }
 
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+pub(crate) fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)

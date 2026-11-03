@@ -136,7 +136,7 @@ pub(crate) fn answer_from_json(body: &[u8], path: &[&str], named: bool) -> Answe
 
 /// A `content_block_delta` whose delta is tool input, which is what the keepalive view counts as tool use.
 pub(crate) fn is_tool_use_delta(data: &[u8]) -> bool {
-    data.windows(18).any(|w| w == br#""input_json_delta""#)
+    crate::body::find(data, br#""input_json_delta""#).is_some()
 }
 
 /// The message id of a Messages answer: `message.id` under `path` (`["message"]` for `message_start`, empty for a
