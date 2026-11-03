@@ -6093,9 +6093,21 @@ fn rank<'a>(
     fallback_ms: i64,
     own: Option<&PinKey>,
 ) -> Option<Ranked<'a>> {
-    let key_of = |c: &Candidate| tier_of(state, snapshot, pool, c, spent_model, now, fallback_ms);
-    let tier = set.iter().map(|c| key_of(c)).min()?;
-    let members: Vec<&'a Candidate> = set.iter().copied().filter(|c| key_of(c) == tier).collect();
+    let keyed: Vec<(&'a Candidate, Tier)> = set
+        .iter()
+        .map(|c| {
+            (
+                *c,
+                tier_of(state, snapshot, pool, c, spent_model, now, fallback_ms),
+            )
+        })
+        .collect();
+    let tier = keyed.iter().map(|(_, key)| *key).min()?;
+    let members: Vec<&'a Candidate> = keyed
+        .iter()
+        .filter(|(_, key)| *key == tier)
+        .map(|(c, _)| *c)
+        .collect();
     let (scores, burns, ties, turn) = match pool.strategy {
         Strategy::Pace => {
             let paces: Vec<PaceFacts> = members
