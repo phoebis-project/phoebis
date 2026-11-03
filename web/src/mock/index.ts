@@ -172,16 +172,6 @@ const subjectsTwice = (input: Pick<Partial<GuardrailInput>, 'keys' | 'pools'>): 
   return key === null ? null : `keys lists ${key} twice`;
 };
 
-/** The account a member list names twice, which the routes refuse with 409 before any other member check. */
-const repeatedMember = (members: PoolInput['members']): string | null => {
-  const seen = new Set<string>();
-  for (const m of members) {
-    if (seen.has(m.accountId)) return m.accountId;
-    seen.add(m.accountId);
-  }
-  return null;
-};
-
 /** The route's 409 for a member another pool holds, since an account belongs to one pool. */
 const heldElsewhere = (members: PoolInput['members'], pools: { id: string; members: { accountId: string }[] }[], poolId: string): string | null => {
   for (const m of members) {
@@ -939,7 +929,7 @@ export class MockApi implements Api {
     const refusal = poolRefusal(input);
     if (refusal) throw new ApiError(400, refusal, null);
     if (input.bodyCaptureHours > this.settings.retention.bodyCaptureMaxHours) throw new ApiError(400, 'body_capture_hours exceeds stats.body_capture_max_hours', null);
-    const repeated = repeatedMember(input.members);
+    const repeated = repeatedId(input.members.map((m) => m.accountId));
     if (repeated) throw new ApiError(409, `members name account ${repeated} twice`, null);
     const members = memberRefusal(input.members);
     if (members) throw new ApiError(400, members, null);
@@ -1535,7 +1525,7 @@ export class MockApi implements Api {
     }
     // The route refuses a repeat and a budget before the store looks any member up, and the store checks every member
     // inside the one transaction that writes the pool, so a refusal stores nothing.
-    const repeated = repeatedMember(input.members);
+    const repeated = repeatedId(input.members.map((m) => m.accountId));
     if (repeated) return Promise.reject(new ApiError(409, `members name account ${repeated} twice`, null));
     const members = memberRefusal(input.members);
     if (members) return Promise.reject(new ApiError(400, members, null));
