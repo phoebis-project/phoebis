@@ -1,5 +1,6 @@
-import type { Condition, ConditionOperator, ConditionSubject, Guardrail, GuardrailPresetState, GuardrailTestResult, MessageSelector, RequestLog } from '@/api/types';
+import type { Condition, ConditionOperator, ConditionSubject, Guardrail, GuardrailMode, GuardrailPresetState, GuardrailTestResult, MessageSelector, RequestLog } from '@/api/types';
 import type { Option } from '@/components/ui/OptionList';
+import type { BadgeTone } from './quota';
 
 /** The route's bounds: the conditions one guardrail holds and the characters of one pattern. */
 export const MAX_CONDITIONS = 16;
@@ -206,3 +207,7 @@ export function presetBadges(preset: GuardrailPresetState | null): string[] {
   if (preset === null) return [];
   return [...(preset.customized ? ['customized'] : []), ...(preset.version < preset.currentVersion ? ['update available'] : [])];
 }
+/** A preset badge's tone: the operator's own edit neutral, a shipped update the accent. */
+export const presetBadgeTone = (word: string): BadgeTone => (word === 'customized' ? 'neutral' : 'accent');
+/** A mode badge's tone, an enforcing guardrail's the warning, on every view that draws one. */
+export const MODE_TONE: Record<GuardrailMode, BadgeTone> = { enforce: 'warning', observe: 'neutral' };

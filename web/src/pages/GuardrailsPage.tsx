@@ -14,7 +14,7 @@ import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtInt, messageOf, noun } from '@/lib/format';
 import { derivedId, refusalsView, sameMembers, sameValues, saveStatus } from '@/lib/forms';
-import { guardrailRefusals, presetBadges, verdictWords } from '@/lib/guardrails';
+import { guardrailRefusals, MODE_TONE, presetBadges, presetBadgeTone, verdictWords } from '@/lib/guardrails';
 import { useAsync } from '@/lib/hooks';
 
 const LEAD = 'A guardrail checks each request against its conditions before any account is selected. Observe records the matches, enforce refuses them with a 403.';
@@ -182,7 +182,7 @@ export function GuardrailsPage(): JSX.Element {
                 )}
               </td>
               <td className="col-fit">
-                <Badge tone={g.mode === 'enforce' ? 'warning' : 'neutral'}>{g.mode}</Badge>
+                <Badge tone={MODE_TONE[g.mode]}>{g.mode}</Badge>
               </td>
               <td className="col-fit">{g.enabled ? 'on' : <span className="muted">off</span>}</td>
               <td className="col-fit" title={nowhere ? undefined : names}>
@@ -206,7 +206,7 @@ export function GuardrailsPage(): JSX.Element {
                     {presetName}
                     {presetBadges(g.preset).map((word) => (
                       <span key={word} className="sub">
-                        <Badge tone={word === 'customized' ? 'neutral' : 'accent'}>{word}</Badge>
+                        <Badge tone={presetBadgeTone(word)}>{word}</Badge>
                       </span>
                     ))}
                   </>
@@ -498,7 +498,7 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
             <p>
               From the preset {stampedPreset?.name ?? stamp.id} v{stamp.version}
               {presetBadges(stamp).map((word) => (
-                <Badge key={word} tone={word === 'customized' ? 'neutral' : 'accent'}>
+                <Badge key={word} tone={presetBadgeTone(word)}>
                   {word}
                 </Badge>
               ))}

@@ -24,6 +24,7 @@ import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd, messageOf, noun, plural } from '@/lib/format';
 import { guardrailsChange, KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, refusalsView, sameValues, saveStatus, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
+import { MODE_TONE } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { scrollToElement } from '@/lib/scroll';
 import type { UnitPosition } from '@/lib/unit';
@@ -507,7 +508,7 @@ function GuardrailWords({ guardrail: g }: { guardrail: ListedGuardrail }) {
     <>
       <span className="pattern-editor__pattern">{g.name}</span>
       {!g.enabled && <span className="muted">off</span>}
-      {g.mode !== null && <Badge tone={g.mode === 'enforce' ? 'warning' : 'neutral'}>{g.mode}</Badge>}
+      {g.mode !== null && <Badge tone={MODE_TONE[g.mode]}>{g.mode}</Badge>}
     </>
   );
 }
