@@ -646,6 +646,49 @@ fn json_column<T: serde::de::DeserializeOwned>(
     })
 }
 
+/// The binds `?1` to `?33` the pool insert and the pool update share, in their column order, then each statement's
+/// own tail.
+macro_rules! pool_params {
+    ($row:ident, $($tail:expr),+ $(,)?) => {
+        params![
+            $row.id,
+            $row.label,
+            $row.enabled,
+            $row.strategy,
+            $row.affinity_ttl_seconds as i64,
+            $row.overage_policy,
+            $row.window_ceiling,
+            serde_json::to_string(&$row.model_rules)?,
+            $row.keepalive_json,
+            $row.body_capture_hours,
+            $row.prefer_subscription,
+            $row.shedding.shed_cap,
+            $row.shedding.burn_average_seconds as i64,
+            $row.shedding.shed_dwell_seconds as i64,
+            $row.shedding.load_shedding,
+            $row.shedding.migrate_when_spent,
+            $row.shedding.warm_sessions,
+            $row.failover.retry_in_place_seconds as i64,
+            $row.failover.in_flight_cap,
+            $row.failover.overage_move_grace_minutes,
+            $row.failover.wind_down_minutes,
+            $row.cache_ttl_json,
+            $row.cache_diagnostics,
+            $row.affinity.mode,
+            $row.affinity.subagent_placement,
+            $row.affinity.session_placement,
+            $row.affinity.min_shared_prefix_tokens as i64,
+            $row.auto_mode_server,
+            $row.slow_down.slow_down,
+            $row.slow_down.slow_down_stretch_seconds,
+            $row.slow_down.slow_down_hold_seconds,
+            $row.failover.return_to_plan,
+            $row.failover.return_to_plan_dwell_seconds,
+            $($tail),+
+        ]
+    };
+}
+
 impl Store {
     pub fn load_registry(&self) -> Result<RegistryLoad, StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
@@ -747,43 +790,7 @@ impl Store {
         tx.execute(
             "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, window_ceiling, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, shed_cap, burn_average_seconds, shed_dwell_seconds, load_shedding, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, slow_down, slow_down_stretch_seconds, slow_down_hold_seconds, return_to_plan, return_to_plan_dwell_seconds, created_at, updated_at, incarnation) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?34, ?35)",
-            params![
-                row.id,
-                row.label,
-                row.enabled,
-                row.strategy,
-                row.affinity_ttl_seconds as i64,
-                row.overage_policy,
-                row.window_ceiling,
-                serde_json::to_string(&row.model_rules)?,
-                row.keepalive_json,
-                row.body_capture_hours,
-                row.prefer_subscription,
-                row.shedding.shed_cap,
-                row.shedding.burn_average_seconds as i64,
-                row.shedding.shed_dwell_seconds as i64,
-                row.shedding.load_shedding,
-                row.shedding.migrate_when_spent,
-                row.shedding.warm_sessions,
-                row.failover.retry_in_place_seconds as i64,
-                row.failover.in_flight_cap,
-                row.failover.overage_move_grace_minutes,
-                row.failover.wind_down_minutes,
-                row.cache_ttl_json,
-                row.cache_diagnostics,
-                row.affinity.mode,
-                row.affinity.subagent_placement,
-                row.affinity.session_placement,
-                row.affinity.min_shared_prefix_tokens as i64,
-                row.auto_mode_server,
-                row.slow_down.slow_down,
-                row.slow_down.slow_down_stretch_seconds,
-                row.slow_down.slow_down_hold_seconds,
-                row.failover.return_to_plan,
-                row.failover.return_to_plan_dwell_seconds,
-                now,
-                incarnation as i64
-            ],
+            pool_params!(row, now, incarnation as i64),
         )
         .map_err(|error| create_failure(&tx, "pools", &row.id, error))?;
         record_change(&tx, now, actor, "pool_created", &row.id, &pool_diff(row))?;
@@ -886,44 +893,7 @@ impl Store {
         let at = stamp_past(self.now_ms(), expected_updated_at);
         let updated = tx.execute(
             "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, window_ceiling = ?7, model_rules_json = ?8, keepalive_json = ?9, body_capture_hours = ?10, prefer_subscription = ?11, shed_cap = ?12, burn_average_seconds = ?13, shed_dwell_seconds = ?14, load_shedding = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, overage_move_grace_minutes = ?20, wind_down_minutes = ?21, cache_ttl_json = ?22, cache_diagnostics = ?23, affinity_mode = ?24, subagent_placement = ?25, session_placement = ?26, min_shared_prefix_tokens = ?27, auto_mode_server = ?28, slow_down = ?29, slow_down_stretch_seconds = ?30, slow_down_hold_seconds = ?31, return_to_plan = ?32, return_to_plan_dwell_seconds = ?33, updated_at = ?34 WHERE id = ?1 AND updated_at = ?35 AND incarnation = ?36",
-            params![
-                row.id,
-                row.label,
-                row.enabled,
-                row.strategy,
-                row.affinity_ttl_seconds as i64,
-                row.overage_policy,
-                row.window_ceiling,
-                serde_json::to_string(&row.model_rules)?,
-                row.keepalive_json,
-                row.body_capture_hours,
-                row.prefer_subscription,
-                row.shedding.shed_cap,
-                row.shedding.burn_average_seconds as i64,
-                row.shedding.shed_dwell_seconds as i64,
-                row.shedding.load_shedding,
-                row.shedding.migrate_when_spent,
-                row.shedding.warm_sessions,
-                row.failover.retry_in_place_seconds as i64,
-                row.failover.in_flight_cap,
-                row.failover.overage_move_grace_minutes,
-                row.failover.wind_down_minutes,
-                row.cache_ttl_json,
-                row.cache_diagnostics,
-                row.affinity.mode,
-                row.affinity.subagent_placement,
-                row.affinity.session_placement,
-                row.affinity.min_shared_prefix_tokens as i64,
-                row.auto_mode_server,
-                row.slow_down.slow_down,
-                row.slow_down.slow_down_stretch_seconds,
-                row.slow_down.slow_down_hold_seconds,
-                row.failover.return_to_plan,
-                row.failover.return_to_plan_dwell_seconds,
-                at,
-                expected_updated_at,
-                row.incarnation as i64
-            ],
+            pool_params!(row, at, expected_updated_at, row.incarnation as i64),
         )?;
         // The row stands, read above, so a fence that matched nothing means another write moved it.
         if updated == 0 {
