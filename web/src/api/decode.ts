@@ -15,7 +15,7 @@ import { emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, fmtDate } from '@/lib/format';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
 import { accountStatusOf, planWordLabel } from '@/lib/quota';
-import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER, hoursOfKey, windowKeyId, windowRank } from '@/lib/windows';
+import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey, windowKeyId, windowRank } from '@/lib/windows';
 
 type Rec = Record<string, unknown>;
 export const rec = (v: unknown): Rec => (v && typeof v === 'object' ? (v as Rec) : {});
@@ -50,12 +50,6 @@ export const isoOrNull = (ms: unknown): string | null => (typeof ms === 'number'
 const isoOr = (ms: unknown, fallback: string): string => isoOrNull(ms) ?? fallback;
 const epoch = '1970-01-01T00:00:00.000Z';
 
-/** The known windows in the order the pages draw them, then every other id in the order it was first seen. */
-function inDrawnOrder<T>(byId: Map<WindowId, T>): T[] {
-  const known: readonly WindowId[] = WINDOW_ORDER;
-  return [...WINDOW_ORDER.flatMap((id) => byId.get(id) ?? []), ...[...byId].filter(([id]) => !known.includes(id)).map(([, value]) => value)];
-}
-
 function decodeWindow(w: Rec): RateLimitWindow | null {
   const id = windowKeyId(str(w.id));
   if (id === null) return null;
@@ -65,10 +59,10 @@ function decodeWindow(w: Rec): RateLimitWindow | null {
   };
 }
 
-/** The windows in the order the pages draw them, then every other id in the order the route sent it. */
-function drawnOrder(windows: RateLimitWindow[]): RateLimitWindow[] {
-  // A stable sort, so the ids the pages do not know keep the route's order.
-  return [...windows].sort((x, y) => windowRank(x.id) - windowRank(y.id));
+/** The windows in the order the pages draw them, then every other id in the order it arrived. */
+function drawnOrder<T>(items: T[], idOf: (item: T) => WindowId): T[] {
+  // A stable sort, so the ids the pages do not know keep their arrival order.
+  return [...items].sort((x, y) => windowRank(idOf(x)) - windowRank(idOf(y)));
 }
 
 /** A usage-based seat's spend window, null on every other account and on a row from a router without the member. */
@@ -169,7 +163,7 @@ export function decodeAccount(v: unknown): Account {
   const a = rec(v);
   const cooldowns = list(a.cooldowns).map(rec);
   const decodedCooldowns = cooldowns.map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowKeyId(str(c.window)) }));
-  const windows = drawnOrder(list(a.windows).map(rec).map(decodeWindow).filter((w): w is RateLimitWindow => w !== null));
+  const windows = drawnOrder(list(a.windows).map(rec).map(decodeWindow).filter((w): w is RateLimitWindow => w !== null), (w) => w.id);
   const profile = orNull(a.profile, (r) => r);
   const sub = orNull(a.subscription, (r) => r);
   const identity = rec(a.identity);
@@ -250,7 +244,7 @@ export function decodeQuotaHistory(v: unknown): QuotaHistory[] {
     // A window the header and the poll both sampled is one series, whatever each called it.
     byId.set(id, seen ? { ...seen, samples: [...seen.samples, ...samples].sort((x, y) => x.at.localeCompare(y.at)) } : { accountId: str(q.account_id), samples, windowId: id });
   }
-  return inDrawnOrder(byId);
+  return drawnOrder([...byId.values()], (h) => h.windowId);
 }
 
 
