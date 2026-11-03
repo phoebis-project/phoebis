@@ -788,12 +788,12 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
         (Some(id), None) => Definition::Saved(id),
         (None, Some(views)) => Definition::Unsaved(views),
     };
-    let (side, subject_id) = match (input.pool_id, input.key_id) {
+    let subject = match (input.pool_id, input.key_id) {
         (Some(_), Some(_)) => {
             return failure(StatusCode::BAD_REQUEST, "pool_id and key_id are exclusive")
         }
-        (Some(id), None) => (Side::Pool, id),
-        (None, Some(id)) => (Side::Key, id),
+        (Some(id), None) => AttachmentSubject::Pool(id),
+        (None, Some(id)) => AttachmentSubject::Key(id),
         (None, None) => return failure(StatusCode::BAD_REQUEST, "pool_id or key_id is required"),
     };
     let limit = input.limit.unwrap_or(200);
@@ -823,13 +823,18 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
         Ok(compiled) => Arc::new(compiled),
         Err(error) => return failure(StatusCode::BAD_REQUEST, &error.to_string()),
     };
-    let known = match side {
-        Side::Key => state.store.api_key(&subject_id).map(|key| key.is_some()),
-        Side::Pool => state.store.pool(&subject_id).map(|pool| pool.is_some()),
+    let known = match &subject {
+        AttachmentSubject::Key(id) => state.store.api_key(id).map(|key| key.is_some()),
+        AttachmentSubject::Pool(id) => state.store.pool(id).map(|pool| pool.is_some()),
     };
     match known {
         Ok(true) => {}
-        Ok(false) => return failure(StatusCode::NOT_FOUND, side.missing()),
+        Ok(false) => {
+            return failure(
+                StatusCode::NOT_FOUND,
+                &format!("no such {}", subject.kind().as_str()),
+            )
+        }
         Err(error) => return store_failure(error),
     }
     // A definition with no body or message condition reads no body, so its sample parses none.
@@ -851,7 +856,7 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
         let page = SAMPLE_PAGE;
         let room = limit_rows - sampled.len();
         let compiled = Arc::clone(&compiled);
-        let subject_id = subject_id.clone();
+        let subject = subject.clone();
         let after = cursor.take();
         let read = state
             .ledger
@@ -859,7 +864,7 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
             .read(move |c| {
                 let (rows, next) = guardrail_sample_page(
                     c,
-                    side.subject(&subject_id),
+                    sample_subject(&subject),
                     since,
                     after.as_ref(),
                     page,
@@ -940,9 +945,9 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
             }
         })
         .collect();
-    let (pool_id, key_id) = match side {
-        Side::Key => (None, Some(subject_id)),
-        Side::Pool => (Some(subject_id), None),
+    let (pool_id, key_id) = match subject {
+        AttachmentSubject::Key(id) => (None, Some(id)),
+        AttachmentSubject::Pool(id) => (Some(id), None),
     };
     Json(GuardrailTestResult {
         sample: GuardrailTestSample {
@@ -957,26 +962,12 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
     .into_response()
 }
 
-/// The side a dry run samples, owned apart from its id so each page's closure carries both onto the blocking worker.
-#[derive(Clone, Copy)]
-enum Side {
-    Key,
-    Pool,
-}
-
-impl Side {
-    fn subject(self, id: &str) -> SampleSubject<'_> {
-        match self {
-            Side::Key => SampleSubject::Key(id),
-            Side::Pool => SampleSubject::Pool(id),
-        }
-    }
-
-    fn missing(self) -> &'static str {
-        match self {
-            Side::Key => "no such key",
-            Side::Pool => "no such pool",
-        }
+/// The ledger's sample subject for the pool or key a dry run samples, which each page's closure carries onto the
+/// blocking worker as an owned clone.
+fn sample_subject(subject: &AttachmentSubject) -> SampleSubject<'_> {
+    match subject {
+        AttachmentSubject::Key(id) => SampleSubject::Key(id),
+        AttachmentSubject::Pool(id) => SampleSubject::Pool(id),
     }
 }
 
