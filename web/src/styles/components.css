@@ -802,6 +802,7 @@ textarea.input {
   margin-bottom: 4px;
 }
 
+.add-filter__row,
 .mselect__option,
 .menu__list button {
   display: flex;
@@ -815,6 +816,7 @@ textarea.input {
   border-radius: 4px;
 }
 
+.add-filter__row:hover,
 .mselect__option:hover,
 .menu__list button:hover {
   background: var(--surface-2);
@@ -944,18 +946,9 @@ textarea.input {
 }
 
 .add-filter__row {
-  display: flex;
   gap: 12px;
-  align-items: center;
-  width: 100%;
-  padding: 7px 8px;
-  text-align: left;
-  background: none;
-  border: 0;
-  border-radius: 4px;
 }
 
-.add-filter__row:hover,
 .add-filter__row:focus-visible {
   background: var(--surface-2);
 }
