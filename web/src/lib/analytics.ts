@@ -6,6 +6,7 @@ import { earlierHolderLabel, fmtCompact, fmtInt, fmtPct, fmtShare, fmtUsd, fmtWe
 import { planLabel, pricedTier } from '@/lib/quota';
 import { ageWord } from '@/lib/time';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
+import { WINDOW_KEYS } from '@/lib/windows';
 
 /** Why a session's pin moved, as the pool card's moves tile, the rewrites legend and the routing log word it. */
 export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
@@ -439,13 +440,11 @@ export function slotIndex(keys: readonly string[], key: string): number {
 }
 
 const HOUR_MS = 3_600_000;
-/** The windows the router reads, which the Accounts cards always offer, in the console's order. */
-const BASE_WINDOWS = ['five_hour', 'seven_day', 'seven_day_fable'];
 /** The extra-usage week, offered only while a row holds a sample of it, since the heads alone write it. */
 const EXTRA_USAGE_WINDOW = 'seven_day_overage_included';
 /** The window ids the Accounts cards offer, in order, the extra-usage week only while a row holds it. */
 export function sampledWindows(rollups: AccountRollup[]): string[] {
-  return rollups.some((r) => r.windows[EXTRA_USAGE_WINDOW] !== undefined) ? [...BASE_WINDOWS, EXTRA_USAGE_WINDOW] : [...BASE_WINDOWS];
+  return rollups.some((r) => r.windows[EXTRA_USAGE_WINDOW] !== undefined) ? [...WINDOW_KEYS, EXTRA_USAGE_WINDOW] : [...WINDOW_KEYS];
 }
 
 /**

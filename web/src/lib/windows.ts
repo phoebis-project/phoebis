@@ -7,6 +7,8 @@ export const WINDOW_HOURS: ByWindow<number> = { '5h': 5, '7d': 168, '7d_fable': 
 export const WINDOW_LABEL: ByWindow<string> = { '5h': '5-hour', '7d': '7-day', '7d_fable': '7-day Fable' };
 /** The order the pages draw the windows in: the two shared windows, then the model-scoped one. */
 export const WINDOW_ORDER: KnownWindowId[] = ['5h', '7d', '7d_fable'];
+/** The wire keys of the three windows the router reads, in the order the pages draw them. */
+export const WINDOW_KEYS: readonly string[] = ['five_hour', 'seven_day', 'seven_day_fable'];
 
 /** The period of a window the pages do not know, read from its key's family: a week, five hours, or none. */
 export function hoursOfKey(id: WindowId): number {

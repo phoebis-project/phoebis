@@ -9,6 +9,7 @@ import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, ins
 import { PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL } from './quota';
 import { speedWord } from './selection';
 import { ageWord, HOUR, MINUTE, span } from './time';
+import { WINDOW_KEYS } from './windows';
 
 export { ageWord };
 
@@ -1234,7 +1235,7 @@ const ttlWord = (ttlMs: number) => (ttlMs >= HOUR ? '1h' : '5 min');
 
 /** A share of each plan window in the console's order, `5h 10.4%`, then any other window under its key. */
 function shareChips(shares: Record<string, unknown>): Chip[] {
-  const keys = [...WINDOWS.filter((w) => has(shares, w)), ...Object.keys(shares).filter((w) => !WINDOWS.includes(w))];
+  const keys = [...WINDOW_KEYS.filter((w) => has(shares, w)), ...Object.keys(shares).filter((w) => !WINDOW_KEYS.includes(w))];
   return keys.flatMap((w) => {
     const v = num(shares[w]);
     return v === null ? [] : [plain(fmtShare(v), wordOf(WINDOW_WORD, w))];
@@ -1278,7 +1279,7 @@ export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip
   }
   if (o.kind === 'held' && o.hold?.reason === 'rewrite') chips.push(plain('held for the rewrite in flight'));
   // The chip names the first plan window the booking holds a share of, the 5-hour one wherever it does.
-  const booked = o.reservation === null ? undefined : WINDOWS.find((w) => num(o.reservation?.rewrite[w]) !== null);
+  const booked = o.reservation === null ? undefined : WINDOW_KEYS.find((w) => num(o.reservation?.rewrite[w]) !== null);
   if ((o.kind === 'moved' || o.kind === 'placed') && o.reservation !== null && booked !== undefined) chips.push(plain(`reserved ${fmtShare(o.reservation.rewrite[booked])} of ${WINDOW_WORD[booked]}`));
   if (record.pin?.found === 'live' && record.pin.warmth) chips.push(plain(wordOf(WARMTH_WORD, record.pin.warmth), 'pin'));
   const c = o.completion;
@@ -1292,7 +1293,6 @@ export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip
   return chips;
 }
 
-const WINDOWS = ['five_hour', 'seven_day', 'seven_day_fable'];
 const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`;
 const VERDICT_BADGE: Record<string, string> = { held_on: 'held on', not_needed: 'not needed' };
 const PARTITION_WORD: Record<string, string> = { above_ceiling: 'above the ceiling', at_cap: 'at its cap', floor: 'at the Pace floor', spent: 'window spent', winding_down: 'winding down' };
@@ -1391,7 +1391,7 @@ function verdictChipOf(c: RecordCandidate, now: number): { chip: Chip | null; to
 function placementChipOf(c: RecordCandidate): Chip | null {
   if (c.verdict === 'destination') return plain('not placed');
   if (c.verdict === 'source') {
-    const spent = WINDOWS.find((w) => has(c.windows, w) && c.windows[w].utilization >= 1);
+    const spent = WINDOW_KEYS.find((w) => has(c.windows, w) && c.windows[w].utilization >= 1);
     return spent === undefined ? null : plain(`${WINDOW_WORD[spent]} spent`);
   }
   return null;
@@ -1469,7 +1469,7 @@ function paceTitle(c: RecordCandidate, record: DecisionRecord, now: number): str
 function projectionLines(c: RecordCandidate, record: DecisionRecord, now: number): string[] {
   if (c.fit === null) return ['-'];
   const at = Date.parse(record.request.at);
-  const lines = WINDOWS.flatMap((name) => {
+  const lines = WINDOW_KEYS.flatMap((name) => {
     const w = lookup(c.windows, name);
     if (w === undefined || w.projection === null) return [];
     const horizon = w.horizon === null ? null : Date.parse(w.horizon);
@@ -1512,7 +1512,7 @@ export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: 
       ? [[has(c.windows, 'worst_bucket') ? `worst bucket ${fmtPct(c.windows.worst_bucket.utilization)}` : 'not reported']]
       : spend
         ? [spendLines(c.windows.spend, now)]
-        : WINDOWS.map((name) => {
+        : WINDOW_KEYS.map((name) => {
             if (!has(c.windows, name)) return ['not reported'];
             const w = c.windows[name];
             return [fmtPct(w.utilization), w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), `${w.source} ${ageWord(w.ageMs)}`];
