@@ -5,16 +5,15 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::header::{
-    ACCEPT, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS,
-};
-use axum::http::{HeaderValue, Request, StatusCode};
+use axum::http::header::{ACCEPT, CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
+use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use phoebis_oauth::Clock;
 use phoebis_relay::{
-    anthropic_error, auth_error_response, key_refusal_response, new_request_id, presented_key,
+    anthropic_error, auth_error_response, key_refusal_response, new_request_id, no_store,
+    presented_key,
 };
 use phoebis_routing::{RouterHandle, DAY_MS};
 use rusqlite::Connection;
@@ -190,13 +189,6 @@ pub fn usage_router(
             router,
             tables,
         }))
-}
-
-fn no_store(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
 }
 
 async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> Response {

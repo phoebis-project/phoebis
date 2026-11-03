@@ -5,12 +5,14 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::Router;
-use phoebis_relay::{auth_error_response, key_refusal_response, new_request_id, presented_key};
+use phoebis_relay::{
+    auth_error_response, key_refusal_response, new_request_id, no_store, presented_key,
+};
 
 use crate::engine::Engine;
 use crate::events::{decode_json_event, err, EventError};
@@ -38,14 +40,6 @@ fn authenticate(engine: &Engine, request: &Request<Body>) -> Result<(String, i64
         .authenticate(presented, engine.now())
         .map(|(key, _)| (key.id.clone(), key.created_at))
         .map_err(|refusal| no_store(key_refusal_response(&refusal, &request_id)))
-}
-
-fn no_store(mut response: Response) -> Response {
-    response.headers_mut().insert(
-        CACHE_CONTROL,
-        axum::http::HeaderValue::from_static("no-store"),
-    );
-    response
 }
 
 fn json(status: StatusCode, body: String) -> Response {

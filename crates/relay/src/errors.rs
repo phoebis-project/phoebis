@@ -456,6 +456,14 @@ pub fn key_refusal_response(refusal: &KeyRefusal, request_id: &str) -> Response 
     key_refusal(refusal).response(request_id)
 }
 
+/// Sets `Cache-Control: no-store`, which every answer of a side route behind a key carries, its refusals included.
+pub fn no_store(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
 /// The account the request was bound to went away while it was in flight, so its credential is gone and no
 /// answer about it can be trusted.
 pub(crate) const ACCOUNT_CANCELED: Failure = Failure {

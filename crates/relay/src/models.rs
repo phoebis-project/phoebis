@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::{Path, Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
+use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::response::Response;
 use futures::future::join_all;
 use phoebis_routing::listing::{find, listing, page, CatalogRow};
@@ -15,8 +15,8 @@ use phoebis_store::{AccountRow, AccountState, ModelRule};
 use serde_json::json;
 
 use crate::{
-    anthropic_error, auth_error_response, key_refusal_response, new_request_id, presented_key,
-    Relay,
+    anthropic_error, auth_error_response, key_refusal_response, new_request_id, no_store,
+    presented_key, Relay,
 };
 
 /// The default `limit`, and the bounds a query outside them is refused for.
@@ -30,13 +30,6 @@ struct Access {
     accounts: Vec<AccountRow>,
     long_context_twins: bool,
     processed: Vec<ProcessedRule>,
-}
-
-fn no_store(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
 }
 
 fn query_of(uri: &Uri) -> HashMap<String, String> {
