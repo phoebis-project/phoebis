@@ -688,7 +688,7 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.deepEqual(chosen.windows, [['62%', '16:44', 'head 4 s'], ['41%', 'Sep 19 20:10', 'head 4 s'], ['12%', 'Sep 19 20:10', 'head 4 s']]);
   assert.equal(chosen.inFlight, '3 of 16');
   assert.equal(chosen.pace, '0.76 %/h');
-  assert.deepEqual(chosen.verdict, { badge: 'chosen', chip: null, tone: null });
+  assert.deepEqual(chosen.verdict, { badge: 'chosen', badgeTone: 'accent', chip: null, chosen: true, tone: null });
   assert.deepEqual(cell({ windows: { five_hour: window5h(1, ms(15, 42), 'poll', 120_000), seven_day: window5h(0.88, null, 'poll', 120_000) } }).windows, [['100%', '15:42', 'poll 2 min'], ['88%', 'no reset', 'poll 2 min'], ['not reported']]);
   const key = cell({ accountId: 'overflow', kind: 'api_key', pace: { deadline: null, end: null, hours: null, remaining: 0.96, reset: null, score: 0.96 }, planTier: null, priority: 1, tier: [2, 1, 0], windows: { worst_bucket: window5h(0.04, ms(14, 28, 8)) } });
   assert.deepEqual([key.plan, key.tier, key.windows, key.pace], ['API key', 'keys P1', [['worst bucket 4%']], '96% left']);
@@ -725,10 +725,10 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.deepEqual(verdict({ fit: 'rewrite_only', inFlight: 16, verdict: 'held_on' }), ['held on', 'at its cap', null], 'the cap explains a hold whatever the member fit');
   // A destination the gate found short names its fit in the tone the card draws, a fitting one keeps its own chip.
   assert.deepEqual(['least_bad', 'rewrite_only', 'ending', 'fits'].map((fit) => cell({ fit, verdict: 'destination' }).verdict), [
-    { badge: 'destination', chip: { value: 'least bad' }, tone: 'warning' },
-    { badge: 'destination', chip: { value: 'rewrite only' }, tone: 'warning' },
-    { badge: 'destination', chip: { value: 'ending' }, tone: 'neutral' },
-    { badge: 'destination', chip: { value: 'not placed' }, tone: null },
+    { badge: 'destination', badgeTone: 'neutral', chip: { value: 'least bad' }, chosen: false, tone: 'warning' },
+    { badge: 'destination', badgeTone: 'neutral', chip: { value: 'rewrite only' }, chosen: false, tone: 'warning' },
+    { badge: 'destination', badgeTone: 'neutral', chip: { value: 'ending' }, chosen: false, tone: 'neutral' },
+    { badge: 'destination', badgeTone: 'neutral', chip: { value: 'not placed' }, chosen: false, tone: null },
   ]);
   assert.deepEqual(verdict({ verdict: 'destination' }), ['destination', 'not placed', null]);
   assert.deepEqual(verdict({ rank: 2, verdict: 'ranked' }), ['ranked 2nd', null, null]);

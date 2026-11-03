@@ -1513,11 +1513,15 @@ const runwayWord = (c: RecordCandidate) => (c.fit === null ? '-' : c.runwayMs ==
 /** A spend window's lines: the share over the reset, and the estimate's word where no head has named the reset yet. */
 const spendLines = (w: RecordCandidate['windows'][string], now: number): string[] => [`spend ${fmtPct(w.utilization)}`, w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), ...(w.source === 'estimated' ? ['estimated'] : [])];
 
-/** A candidate's verdict: its badge, and the one chip that decided it with that chip's tone. */
-export function candidateVerdict(c: RecordCandidate, now: number): { badge: string; chip: Chip | null; tone: VerdictTone | null } {
+/**
+ * A candidate's verdict: its badge and the badge's tone, whether the decision chose it, and the one chip that decided it
+ * with that chip's tone.
+ */
+export function candidateVerdict(c: RecordCandidate, now: number): { badge: string; badgeTone: 'accent' | 'neutral' | 'warning'; chip: Chip | null; chosen: boolean; tone: VerdictTone | null } {
   const atCap = c.verdict === 'out' && (c.partition === 'at_cap' || c.obstacle?.name === 'at_cap');
   const badge = c.verdict === 'ranked' && c.rank !== null ? `ranked ${ordinal(c.rank)}` : atCap ? 'at cap' : wordOf(VERDICT_BADGE, c.verdict);
-  return { badge, ...verdictChipOf(c, now) };
+  const chosen = CHOSEN_VERDICTS.has(c.verdict);
+  return { badge, badgeTone: chosen ? 'accent' : c.verdict === 'out' ? 'warning' : 'neutral', chosen, ...verdictChipOf(c, now) };
 }
 
 /**
@@ -1556,6 +1560,8 @@ export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: 
   };
 }
 
+/** The verdicts that mark the candidate the decision chose, the strip's leaf and the card's tinted row alike. */
+const CHOSEN_VERDICTS = new Set(['chosen', 'held_on', 'renewed']);
 const VERDICT_ORDER: Record<string, number> = { chosen: 0, renewed: 1, held_on: 2, source: 3, destination: 4, ranked: 5, eligible: 6, out: 7, not_needed: 7 };
 
 /**

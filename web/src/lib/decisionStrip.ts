@@ -159,8 +159,6 @@ const terminusOf = (outcome: DecisionRecord['outcome']): TerminusKind => {
   const reason = outcome.kind === 'held' ? outcome.hold?.reason : undefined;
   return reason !== undefined && has(HELD_FOR, reason) ? HELD_FOR[reason] : TERMINUS_OF[outcome.kind];
 };
-/** The verdicts that mark the candidate the decision chose, the strip's leaf and the card's tinted row alike. */
-export const CHOSEN_VERDICTS = new Set(['chosen', 'held_on', 'renewed']);
 const MAX_LEAVES = 8;
 const UNKNOWN_KIND: StationKind = { group: null, renderer: 'chips', stub: null };
 
@@ -421,8 +419,7 @@ function hostOf(record: DecisionRecord, stations: Station[], shape: StripShape, 
 function leavesOf(record: DecisionRecord, now: number): Leaf[] {
   const all: Leaf[] = record.candidates.map((c) => {
     const verdict = candidateVerdict(c, now);
-    const chosen = CHOSEN_VERDICTS.has(c.verdict);
-    return { accountId: c.accountId, badge: verdict.badge, chip: verdict.chip, chosen, more: 0, tone: chosen ? 'accent' : c.verdict === 'out' ? 'warning' : 'neutral' };
+    return { accountId: c.accountId, badge: verdict.badge, chip: verdict.chip, chosen: verdict.chosen, more: 0, tone: verdict.badgeTone };
   });
   if (all.length <= MAX_LEAVES) return all;
   const shown = all.slice(0, MAX_LEAVES);

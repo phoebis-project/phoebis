@@ -6,7 +6,6 @@ import { ChipView, Chips, chipValue, rowValue } from '@/components/ChipView';
 import { DecisionStrip } from '@/components/DecisionStrip';
 import { EntryChips } from '@/components/EntryChips';
 import { Badge, Button, CopyButton, ErrorState, KeyValue, useHostedDescription } from '@/components/ui/primitives';
-import { CHOSEN_VERDICTS } from '@/lib/decisionStrip';
 import { useAsync } from '@/lib/hooks';
 import {
   aroundRequest,
@@ -130,9 +129,8 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
               <tbody>
                 {rankCandidates(record.candidates).map((c) => {
                   const cells = candidateCells(c, record, now);
-                  const tinted = CHOSEN_VERDICTS.has(c.verdict);
                   return (
-                    <tr key={c.accountId} className={tinted ? 'is-chosen' : undefined}>
+                    <tr key={c.accountId} className={cells.verdict.chosen ? 'is-chosen' : undefined}>
                       <td>
                         <Link to={entityHref('account', c.accountId)}>{c.accountId}</Link>
                         <span className="sub">{cells.plan}</span>
@@ -170,7 +168,7 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
                       <PaceCell title={cells.paceTitle} value={cells.pace} />
                       <td className="decision-card__prefix">{cells.prefix.hash ? <EntryChips entry={cells.prefix.hash} now={now} /> : <span className="muted">-</span>}</td>
                       <td className="decision-card__judged">
-                        <Badge tone={c.verdict === 'out' ? 'warning' : tinted ? 'accent' : 'neutral'}>{cells.verdict.badge}</Badge>
+                        <Badge tone={cells.verdict.badgeTone}>{cells.verdict.badge}</Badge>
                         {cells.verdict.chip && (
                           <span className="decision-card__why">
                             {/* A destination's fit carries the verdict's tone, which a badge draws and a chip has no member for. */}
