@@ -637,15 +637,19 @@ fn each_first_block_member<'a>(
 /// bytes, as `find_cch` reads every line, so this count never falls below the raw walk's.
 fn reads_as_a_stamp(token: &[u8]) -> bool {
     const PREFIX: &str = "x-anthropic-billing-header:";
-    let decoded = serde_json::from_slice::<String>(token).or_else(|refused| {
-        lone_surrogates_mapped(token).map_or(Err(refused), |mapped| {
-            serde_json::from_slice::<String>(&mapped)
-        })
-    });
-    match decoded {
-        Ok(line) => line.starts_with(PREFIX) && line.contains("cch="),
-        Err(_) => token[1..].starts_with(PREFIX.as_bytes()) && find(token, b"cch=").is_some(),
+    match decode_tolerant::<String>(token) {
+        Some(line) => line.starts_with(PREFIX) && line.contains("cch="),
+        None => token[1..].starts_with(PREFIX.as_bytes()) && find(token, b"cch=").is_some(),
     }
+}
+
+/// The strict decode of `bytes`, else the decode of the reading copy `lone_surrogates_mapped` makes, so the relay's
+/// body read and the stamp count read a client's cut string through one mapping. `None` where neither decodes.
+pub fn decode_tolerant<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Option<T> {
+    serde_json::from_slice(bytes).ok().or_else(|| {
+        let copy = lone_surrogates_mapped(bytes)?;
+        serde_json::from_slice(&copy).ok()
+    })
 }
 
 /// A reading copy of `body` in which every lone surrogate escape inside a string token, a `\uD800` to `\uDFFF`
