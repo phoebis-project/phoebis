@@ -1587,7 +1587,6 @@ fn run(
         if eligible.is_empty() { "none" } else { "match" },
         standing,
     );
-    let in_set = |set: &[&Candidate], id: &str| set.iter().any(|c| c.account_id == id);
     // A fallback credit token is good on the organization that issued it alone, so the body carrying one goes to that
     // account ahead of the moves and the strategy, which would place it where the upstream refuses the token. The
     // client's classifier call goes to the account of the turn it judges the same way, since the upstream charges it
@@ -1680,7 +1679,7 @@ fn run(
 
     // Step 3: a non-portable request is bound to its pin.
     if let (false, Some((current, warmth))) = (request.portable, pin.as_ref().zip(warmth)) {
-        if in_set(&eligible, &current.account_id) {
+        if candidate_in(&eligible, &current.account_id).is_some() {
             if let Some(hold) = rewrite_answer(state, pool, request, current) {
                 return (
                     SelectResult::Held {
@@ -1873,7 +1872,7 @@ fn run(
     // A slowed pin waits before it renews. A pin whose account left the set takes the placement path below, whatever
     // deadline stands on it.
     if let Some((current, warmth)) = pin.as_ref().zip(warmth) {
-        if in_set(&eligible, &current.account_id) {
+        if candidate_in(&eligible, &current.account_id).is_some() {
             if let Some(hold) = rewrite_answer(state, pool, request, current) {
                 return (
                     SelectResult::Held {
@@ -5476,7 +5475,7 @@ fn narrow<'a>(
     }
     let mut dropped = 0;
     for c in selection_set.iter() {
-        if !kept.iter().any(|k| k.account_id == c.account_id) {
+        if candidate_in(&kept, &c.account_id).is_none() {
             skipped.push(Skipped {
                 account_id: c.account_id.clone(),
                 obstacle: label,
@@ -5502,8 +5501,13 @@ fn admits(
     account_id: &str,
     now: i64,
 ) -> bool {
-    allowed.iter().any(|c| c.account_id == account_id)
+    candidate_in(allowed, account_id).is_some()
         && holds_allowance(state, snapshot, account_id, window, now)
+}
+
+/// The candidate of `set` for `account_id`, `None` for an account the set does not hold.
+fn candidate_in<'a>(set: &[&'a Candidate], account_id: &str) -> Option<&'a Candidate> {
+    set.iter().copied().find(|c| c.account_id == account_id)
 }
 
 /// What keeps placement off an affinity entry, `None` for one it may land on: `lane` (written on another lane than
@@ -5694,8 +5698,6 @@ fn placement_of<'a>(
         return None;
     }
     let now = request.now;
-    let candidate_of =
-        |account_id: &str| allowed.iter().copied().find(|c| c.account_id == account_id);
 
     let content = affinity.walk(&request.canonical_model, &request.boundaries, |e| {
         entry_refusal(state, snapshot, request, allowed, window, e)
@@ -5703,7 +5705,7 @@ fn placement_of<'a>(
     record_lookups(rec, &content, now, true);
     let matched = content.matched.map(|i| &content.visited[i]);
     if let Some((visited, candidate)) =
-        matched.and_then(|v| candidate_of(&v.entry.account_id).map(|c| (v, c)))
+        matched.and_then(|v| candidate_in(allowed, &v.entry.account_id).map(|c| (v, c)))
     {
         rec.step("rung:content", "match", rung_facts(visited));
         rec.step("rung:with_main", "not_run", Vec::new());
@@ -5759,7 +5761,7 @@ fn placement_of<'a>(
             None
         };
         let placed = match refusal {
-            None => candidate_of(&pin.account_id),
+            None => candidate_in(allowed, &pin.account_id),
             Some(_) => None,
         };
         let Some(candidate) = placed else {
@@ -5833,7 +5835,7 @@ fn placement_of<'a>(
         none(rec, "rung:static", "no_entry");
         return None;
     };
-    let Some(candidate) = candidate_of(&visited.entry.account_id) else {
+    let Some(candidate) = candidate_in(allowed, &visited.entry.account_id) else {
         none(rec, "rung:static", "not_admitted");
         return None;
     };
@@ -5913,7 +5915,7 @@ fn any_agent_pin<'a>(
         })?
         .account_id
         .clone();
-    let found = allowed.iter().copied().find(|c| c.account_id == account_id);
+    let found = candidate_in(allowed, &account_id);
     if found.is_some() {
         rec.hold_place = Some("session_pin");
     }
@@ -5946,10 +5948,7 @@ fn subagent_cohort<'a>(
             e.prefix_tokens > 0
                 && entry_refusal(state, snapshot, request, allowed, window, e).is_none()
         })?;
-    let found = allowed
-        .iter()
-        .copied()
-        .find(|c| c.account_id == entry.account_id);
+    let found = candidate_in(allowed, &entry.account_id);
     if found.is_some() {
         rec.hold_place = Some("cohort");
     }
