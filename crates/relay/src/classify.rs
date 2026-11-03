@@ -437,18 +437,22 @@ fn closing_quote(raw: &str) -> usize {
     raw.len()
 }
 
-/// The error body's `error.type`. A complete body parses directly, which is what keeps a `"type"` string that
-/// happens to appear inside an upstream `message` from being mistaken for the real type. A prefix cut
-/// mid-document fails to parse, so the type is then located textually through `textual_member`.
-pub(crate) fn error_type(body: &[u8]) -> Option<String> {
-    if let Ok(value) = serde_json::from_slice::<Value>(body) {
-        return value
-            .get("error")
-            .and_then(|e| e.get("type"))
+/// The error body's member at `pointer`. A complete body parses directly, which is what keeps a `"type"` string
+/// that happens to appear inside an upstream `message` from being mistaken for the real member. A prefix cut
+/// mid-document fails to parse, so the member is then located textually by its `key` through `textual_member`.
+fn error_member(body: &[u8], pointer: &str, key: &str) -> Option<String> {
+    match serde_json::from_slice::<Value>(body) {
+        Ok(value) => value
+            .pointer(pointer)
             .and_then(Value::as_str)
-            .map(str::to_string);
+            .map(str::to_string),
+        Err(_) => textual_member(valid_text(body), key).map(str::to_string),
     }
-    textual_member(valid_text(body), "type").map(str::to_string)
+}
+
+/// The error body's `error.type`.
+pub(crate) fn error_type(body: &[u8]) -> Option<String> {
+    error_member(body, "/error/type", "type")
 }
 
 /// `body` up to its first byte that is not UTF-8: a prefix cut at the buffer bound can end inside a multi-byte
@@ -467,23 +471,15 @@ fn names_credit_balance(body: &[u8]) -> bool {
         .contains("credit balance")
 }
 
-/// The body's `error.message`: read off the parsed document when it is complete, and textually as far as the cut
-/// when the body was read only up to the buffer bound.
+/// The body's `error.message`, read as far as the cut when the body was read only up to the buffer bound.
 pub(crate) fn error_message(body: &[u8]) -> Option<String> {
-    match serde_json::from_slice::<Value>(body) {
-        Ok(value) => value["error"]["message"].as_str().map(str::to_string),
-        Err(_) => textual_member(valid_text(body), "message").map(str::to_string),
-    }
+    error_member(body, "/error/message", "message")
 }
 
-/// Whether the body names the upstream's own monthly spend-cap code: a complete body reads
-/// `error.details.error_code`, a body cut mid-document falls back to `textual_member`.
+/// Whether the body names the upstream's own monthly spend-cap code in `error.details.error_code`.
 fn names_spend_limit(body: &[u8]) -> bool {
-    if let Ok(value) = serde_json::from_slice::<Value>(body) {
-        return value["error"]["details"]["error_code"].as_str()
-            == Some("enforced_spend_limit_reached");
-    }
-    textual_member(valid_text(body), "error_code") == Some("enforced_spend_limit_reached")
+    error_member(body, "/error/details/error_code", "error_code").as_deref()
+        == Some("enforced_spend_limit_reached")
 }
 
 /// Whether `error.message` names `wire_model` as a whole token: the byte before and after each occurrence are
