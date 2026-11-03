@@ -1506,14 +1506,9 @@ mod tests {
         a.observe(head("r11", 2, 200, AttemptOutcome::Succeeded, 1_250));
         let records = a.observe(complete("r11", 2, Some("b"), Outcome::Succeeded, 200, None));
         assert_eq!(records.len(), 2, "the request and a gap");
-        let Record::Event(gap) = &records[0] else {
-            panic!()
-        };
-        let detail: serde_json::Value =
-            serde_json::from_str(gap.detail.as_deref().unwrap()).unwrap();
         assert_eq!(
-            (detail["request_id"].as_str(), detail["reason"].as_str()),
-            (Some("r11"), Some("attempt_missing"))
+            gap_detail(&records[0]),
+            Some(("r11".to_string(), "attempt_missing".to_string()))
         );
         let Record::Request {
             request, attempts, ..
@@ -1543,14 +1538,9 @@ mod tests {
             Some("client_not_allowed"),
         ));
         assert_eq!(records.len(), 2, "the request and a gap");
-        let Record::Event(gap) = &records[0] else {
-            panic!()
-        };
-        let detail: serde_json::Value =
-            serde_json::from_str(gap.detail.as_deref().unwrap()).unwrap();
         assert_eq!(
-            (detail["request_id"].as_str(), detail["reason"].as_str()),
-            (Some("r12"), Some("attempt_missing"))
+            gap_detail(&records[0]),
+            Some(("r12".to_string(), "attempt_missing".to_string()))
         );
         let Record::Request {
             request, attempts, ..
@@ -1581,11 +1571,9 @@ mod tests {
             (gap.kind.as_str(), gap.request_id.as_deref()),
             ("ledger_gap", Some("r9"))
         );
-        let detail: serde_json::Value =
-            serde_json::from_str(gap.detail.as_deref().unwrap()).unwrap();
         assert_eq!(
-            (detail["request_id"].as_str(), detail["reason"].as_str()),
-            (Some("r9"), Some("attempt_missing"))
+            gap_detail(&records[0]),
+            Some(("r9".to_string(), "attempt_missing".to_string()))
         );
         let Record::Request {
             request, attempts, ..
@@ -1609,8 +1597,9 @@ mod tests {
         a.observe(head("r10", 1, 200, AttemptOutcome::Succeeded, 1_060));
         assert!(a.observe(chunk("r10", 0)).is_empty());
         let gaps = a.observe(chunk("r10", 2));
-        assert!(
-            matches!(gaps.as_slice(), [Record::Event(e)] if e.kind == "ledger_gap" && e.detail.as_deref().unwrap().contains("chunk_skipped"))
+        assert_eq!(
+            gaps.iter().map(gap_detail).collect::<Vec<_>>(),
+            [Some(("r10".to_string(), "chunk_skipped".to_string()))]
         );
         assert!(a.observe(chunk("r10", 3)).is_empty(), "one gap per request");
         let Some(Record::Request {
