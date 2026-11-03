@@ -83,21 +83,7 @@ fn walk_to_last_segment(s: &mut Scanner<'_>, path: &[&str]) -> Option<bool> {
     for (depth, key) in path.iter().enumerate() {
         let last = depth + 1 == path.len();
         if let Ok(index) = key.parse::<usize>() {
-            if s.body.get(s.pos) != Some(&b'[') {
-                return None;
-            }
-            // Counted until the scanner is dropped, since the rest of the path and the caller's read stand inside
-            // this array.
-            s.enter().ok()?;
-            s.pos += 1;
-            for _ in 0..index {
-                s.value(false).ok()?;
-                s.ws();
-                if !s.eat(b',') {
-                    return None;
-                }
-            }
-            s.ws();
+            enter_element(s, index)?;
         } else {
             scan_object(s, |member| member == key.as_bytes())?;
         }
@@ -107,6 +93,27 @@ fn walk_to_last_segment(s: &mut Scanner<'_>, path: &[&str]) -> Option<bool> {
         s.ws();
     }
     Some(false)
+}
+
+/// Steps into the array at `s` and past its first `index` elements, `s` left at the element's value. The one
+/// array-index step of the path walk and the span helpers that read inside an array.
+fn enter_element(s: &mut Scanner<'_>, index: usize) -> Option<()> {
+    if s.body.get(s.pos) != Some(&b'[') {
+        return None;
+    }
+    // Counted until the scanner is dropped, since the rest of the path and the caller's read stand inside this
+    // array.
+    s.enter().ok()?;
+    s.pos += 1;
+    for _ in 0..index {
+        s.value(false).ok()?;
+        s.ws();
+        if !s.eat(b',') {
+            return None;
+        }
+    }
+    s.ws();
+    Some(())
 }
 
 /// Walks the object at `s`'s current position (its opening `{` not yet eaten), calling `matches` with each
@@ -154,12 +161,7 @@ fn scan_object(s: &mut Scanner<'_>, mut matches: impl FnMut(&[u8]) -> bool) -> O
 /// never a decoded copy). Values are skipped by the scanner the span helpers walk, so a body a strict decoder
 /// refuses as a whole (a lone surrogate escape in a string value) is still read to its end.
 fn visit_top_level_keys(body: &[u8], mut visit: impl FnMut(&str) -> bool) -> Result<(), CchError> {
-    let mut s = Scanner {
-        body,
-        pos: 0,
-        depth: 0,
-        edits: Vec::new(),
-    };
+    let mut s = Scanner::new(body);
     s.ws();
     if !s.eat(b'{') {
         return Err(CchError::Json(s.pos));
@@ -219,12 +221,7 @@ pub fn repeated_member_within(
     parent: &str,
     names: &[&'static str],
 ) -> Result<Option<&'static str>, CchError> {
-    let mut s = Scanner {
-        body,
-        pos: 0,
-        depth: 0,
-        edits: Vec::new(),
-    };
+    let mut s = Scanner::new(body);
     let mut repeated = None;
     s.ws();
     each_decoded_member(&mut s, |s, key| {
@@ -259,15 +256,7 @@ pub fn top_level_member_count(body: &[u8], name: &str) -> Result<usize, CchError
 /// Raw span, quotes included, of the string value at `path` from the top-level object. Array indexes are decimal
 /// strings. The relay uses this for its body edits so only one JSON scanner exists in the workspace.
 pub fn string_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
-    let mut s = Scanner {
-        body,
-        pos: 0,
-        depth: 0,
-        edits: Vec::new(),
-    };
-    if !walk_to_last_segment(&mut s, path)? {
-        return None;
-    }
+    let mut s = Scanner::at_path(body, path)?;
     if s.body.get(s.pos) != Some(&b'"') {
         return None;
     }
@@ -278,15 +267,7 @@ pub fn string_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> 
 /// `string_member_span` does: a member of the same name inside a nested value is skipped with that value, so a
 /// tool schema cannot stand in for the request's own flag.
 pub fn bool_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
-    let mut s = Scanner {
-        body,
-        pos: 0,
-        depth: 0,
-        edits: Vec::new(),
-    };
-    if !walk_to_last_segment(&mut s, path)? {
-        return None;
-    }
+    let s = Scanner::at_path(body, path)?;
     let start = s.pos;
     for literal in [&b"true"[..], &b"false"[..]] {
         if s.body[start..].starts_with(literal) {
@@ -304,15 +285,7 @@ pub fn bool_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
 /// Raw span of the number literal at `path`, walked as `bool_member_span` walks. The keepalive replay edits
 /// `max_tokens` in place, and the hash view excludes that member, so the edit must not touch anything else.
 pub fn number_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
-    let mut s = Scanner {
-        body,
-        pos: 0,
-        depth: 0,
-        edits: Vec::new(),
-    };
-    if !walk_to_last_segment(&mut s, path)? {
-        return None;
-    }
+    let s = Scanner::at_path(body, path)?;
     let start = s.pos;
     let mut end = start;
     while end < body.len() && matches!(body[end], b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E') {
@@ -328,28 +301,8 @@ pub fn number_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> 
 /// segment already does, and `Scanner::value(false)` reads the element's own span. A caller deletes the span
 /// itself and its trailing comma.
 pub fn array_member_span(body: &[u8], path: &[&str], index: usize) -> Option<(usize, usize)> {
-    let mut s = Scanner {
-        body,
-        pos: 0,
-        depth: 0,
-        edits: Vec::new(),
-    };
-    if !walk_to_last_segment(&mut s, path)? {
-        return None;
-    }
-    if s.body.get(s.pos) != Some(&b'[') {
-        return None;
-    }
-    s.enter().ok()?;
-    s.pos += 1;
-    for _ in 0..index {
-        s.value(false).ok()?;
-        s.ws();
-        if !s.eat(b',') {
-            return None;
-        }
-    }
-    s.ws();
+    let mut s = Scanner::at_path(body, path)?;
+    enter_element(&mut s, index)?;
     let start = s.pos;
     s.value(false).ok()?;
     Some((start, s.pos))
@@ -360,22 +313,9 @@ pub fn array_member_span(body: &[u8], path: &[&str], index: usize) -> Option<(us
 /// `array_member_span` already covers an array with at least one element, and this is the empty case it has nothing
 /// to return for.
 pub fn empty_array_member_end(body: &[u8], path: &[&str]) -> Option<usize> {
-    let mut s = Scanner {
-        body,
-        pos: 0,
-        depth: 0,
-        edits: Vec::new(),
-    };
-    if !walk_to_last_segment(&mut s, path)? {
-        return None;
-    }
-    if s.body.get(s.pos) != Some(&b'[') {
-        return None;
-    }
+    let mut s = Scanner::at_path(body, path)?;
     // An empty array is a container like any other, so the 128th answers `None` where `value` refuses the body.
-    s.enter().ok()?;
-    s.pos += 1;
-    s.ws();
+    enter_element(&mut s, 0)?;
     let end = (s.body.get(s.pos) == Some(&b']')).then_some(s.pos);
     s.leave();
     end
@@ -385,12 +325,7 @@ pub fn empty_array_member_end(body: &[u8], path: &[&str]) -> Option<usize> {
 /// Walked as `walk_to_last_segment` walks: a decoy sharing the key's bytes inside an earlier string, or nested
 /// under another object, is skipped as part of the value it sits in rather than matched.
 pub fn object_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
-    let mut s = Scanner {
-        body,
-        pos: 0,
-        depth: 0,
-        edits: Vec::new(),
-    };
+    let mut s = Scanner::new(body);
     let key = path.last()?;
     walk_to_last_segment(&mut s, &path[..path.len() - 1])?;
     let member_start = scan_object(&mut s, |member| member == key.as_bytes())?;
@@ -459,12 +394,7 @@ fn key_name(body: &[u8], ks: usize, ke: usize, keys: Keys) -> Cow<'_, [u8]> {
 }
 
 fn cache_control_walk(body: &[u8], keys: Keys) -> Result<Vec<(usize, usize)>, CchError> {
-    let mut s = Scanner {
-        body,
-        pos: 0,
-        depth: 0,
-        edits: Vec::new(),
-    };
+    let mut s = Scanner::new(body);
     let mut spans = Vec::new();
     s.ws();
     if !s.eat(b'{') {
@@ -679,12 +609,7 @@ fn message_object(
 /// the body is well formed and counts what it passed, as `string_member_span` finds a member ahead of a syntax
 /// error.
 pub fn decoded_stamp_count(body: &[u8]) -> usize {
-    let mut s = Scanner {
-        body,
-        pos: 0,
-        depth: 0,
-        edits: Vec::new(),
-    };
+    let mut s = Scanner::new(body);
     let mut count = 0;
     s.ws();
     let _ = each_decoded_member(&mut s, |s, key| {
@@ -708,12 +633,7 @@ pub fn decoded_stamp_count(body: &[u8]) -> usize {
 /// top-level spelling of `system` walked. An error means the scan stopped before the body's end, so a caller
 /// refusing on the count does not admit a body on what was read ahead of the stop.
 pub fn first_system_block_member_count(body: &[u8], name: &str) -> Result<usize, CchError> {
-    let mut s = Scanner {
-        body,
-        pos: 0,
-        depth: 0,
-        edits: Vec::new(),
-    };
+    let mut s = Scanner::new(body);
     let mut count = 0;
     s.ws();
     each_decoded_member(&mut s, |s, key| {
@@ -822,12 +742,7 @@ fn reads_as_a_stamp(token: &[u8]) -> bool {
 /// alone, which a strict decoder refuses: the copy is what the router reads such a body through, and never what
 /// it sends. The two escapes are the same length, so every offset in the copy is the body's own.
 pub fn lone_surrogates_mapped(body: &[u8]) -> Option<Vec<u8>> {
-    let mut s = Scanner {
-        body,
-        pos: 0,
-        depth: 0,
-        edits: Vec::new(),
-    };
+    let mut s = Scanner::new(body);
     let mut lone = Vec::new();
     each_string_token(&mut s, &mut |start, end| {
         lone_surrogate_escapes(&body[start..end], start, &mut lone)
@@ -973,12 +888,7 @@ fn excluded_key(key: &[u8]) -> bool {
 pub fn normalize(body: &[u8]) -> Result<Vec<u8>, CchError> {
     serde_json::from_slice::<serde::de::IgnoredAny>(body)
         .map_err(|e| CchError::Json(e.column()))?;
-    let mut s = Scanner {
-        body,
-        pos: 0,
-        depth: 0,
-        edits: Vec::new(),
-    };
+    let mut s = Scanner::new(body);
     s.value(true)?;
     s.ws();
     if s.pos != body.len() {
@@ -999,6 +909,19 @@ pub fn normalize(body: &[u8]) -> Result<Vec<u8>, CchError> {
 }
 
 impl<'a> Scanner<'a> {
+    fn new(body: &'a [u8]) -> Self {
+        Scanner {
+            body,
+            pos: 0,
+            depth: 0,
+            edits: Vec::new(),
+        }
+    }
+    /// A scanner at the value `path` names, `None` where the walk does not reach the path's last segment.
+    fn at_path(body: &'a [u8], path: &[&str]) -> Option<Self> {
+        let mut s = Scanner::new(body);
+        walk_to_last_segment(&mut s, path)?.then_some(s)
+    }
     fn ws(&mut self) {
         while self.pos < self.body.len()
             && matches!(self.body[self.pos], b' ' | b'\t' | b'\r' | b'\n')
@@ -1308,10 +1231,9 @@ mod tests {
 
     fn scanner_at(body: &[u8], bracket: usize, depth: usize) -> Scanner<'_> {
         Scanner {
-            body,
             pos: bracket,
             depth,
-            edits: Vec::new(),
+            ..Scanner::new(body)
         }
     }
 
