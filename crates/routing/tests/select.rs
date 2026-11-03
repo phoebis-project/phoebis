@@ -13842,15 +13842,7 @@ fn a_pin_on_a_model_the_share_table_does_not_list_burns_nothing_and_is_never_mar
         ..BurnRates::default()
     });
     over_a_fitting_b(&mut st, T - 500);
-    let (pins, sum) = st.burn_of(
-        "a",
-        &|_| true,
-        BurnUnit::WindowShare,
-        st.rates(),
-        FIVE_HOUR,
-        T,
-        HOUR,
-    );
+    let (pins, sum) = st.burn_of("a", &|_| true, BurnUnit::WindowShare, FIVE_HOUR, T, HOUR);
     let unlisted = pins
         .iter()
         .find(|(p, _)| p.model == "claude-opus-4-8")
@@ -17498,15 +17490,7 @@ fn a_pin_whose_last_prompt_was_over_the_threshold_prices_its_burn_at_the_long_co
         seven_day: RegimeRates::unit(),
         fast: RateTable::unit(),
     });
-    let (pins, sum) = st.burn_of(
-        "a",
-        &|_| true,
-        BurnUnit::Usd,
-        st.rates(),
-        FIVE_HOUR,
-        T,
-        HOUR,
-    );
+    let (pins, sum) = st.burn_of("a", &|_| true, BurnUnit::Usd, FIVE_HOUR, T, HOUR);
     let burn = |session: &str| {
         pins.iter()
             .find(|(p, _)| p.session_id == session)
@@ -17570,7 +17554,7 @@ fn a_pins_fast_usage_prices_at_the_fast_cells_in_the_round_and_counts_toward_no_
         fast: input_prices(&[("claude-sonnet-5", Some(3.0))]),
     });
     let burn = |unit| {
-        let (pins, sum) = st.burn_of("a", &|_| true, unit, st.rates(), FIVE_HOUR, T, HOUR);
+        let (pins, sum) = st.burn_of("a", &|_| true, unit, FIVE_HOUR, T, HOUR);
         let of = |session: &str| {
             pins.iter()
                 .find(|(p, _)| p.session_id == session)

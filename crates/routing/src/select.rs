@@ -4803,15 +4803,7 @@ fn shed_round(
             .collect(),
         BurnUnit::Usd => {
             state
-                .burn_of(
-                    account_id,
-                    &in_pool,
-                    unit,
-                    state.rates(),
-                    trigger.window,
-                    now,
-                    average_ms,
-                )
+                .burn_of(account_id, &in_pool, unit, trigger.window, now, average_ms)
                 .0
         }
     };

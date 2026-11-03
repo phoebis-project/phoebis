@@ -3104,20 +3104,18 @@ impl RoutingState {
         }
     }
 
-    /// The pins of `account_id` that `keep` admits, each priced in `unit` through `rates` and decayed to `now`, and
-    /// the sum over the priced pins. `keep` is the account's current pool, built by the caller from the snapshot
-    /// this state does not hold, so a pin a former pool left on the account is outside the round. Under
+    /// The pins of `account_id` that `keep` admits, each priced in `unit` through the state's tables and decayed to
+    /// `now`, and the sum over the priced pins. `keep` is the account's current pool, built by the caller from the
+    /// snapshot this state does not hold, so a pin a former pool left on the account is outside the round. Under
     /// `WindowShare` a burn is the subscription cost model's anchor share of `window` per second, and on a model week
     /// the Pro-week figure through the 7-day row, since no caller asks for the week's own share. Under `Usd` the pin's
     /// fast usage and the usage of the client's own classifier calls count beside its row's copy, as
     /// `BurnRates::price_pin` sums them, whatever `window` names. `None` for a pin burning a type its row cannot price.
-    #[allow(clippy::too_many_arguments)]
     pub fn burn_of(
         &self,
         account_id: &str,
         keep: &dyn Fn(&PinRow) -> bool,
         unit: BurnUnit,
-        rates: &BurnRates,
         window: &str,
         now: i64,
         window_ms: i64,
@@ -3130,7 +3128,8 @@ impl RoutingState {
                 // Every type decays by the same factor, so decaying the price equals pricing the decayed rates.
                 // The pin's last prompt selects the set, so a long-prompt pin ranks at the rates it burns, and a
                 // pin never renewed with usage carries zero and prices at the standard rates.
-                let burn = rates
+                let burn = self
+                    .rates
                     .price_pin(unit, p, window)
                     .map(|priced| burn_decayed(priced, p.burn_at, now, window_ms));
                 (p.clone(), burn)
