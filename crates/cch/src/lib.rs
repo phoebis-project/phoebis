@@ -217,7 +217,13 @@ fn visit_top_level_keys(body: &[u8], mut visit: impl FnMut(&str) -> bool) -> Res
             return Ok(());
         }
         let (ks, ke) = s.string()?;
-        let key: String = serde_json::from_slice(&body[ks..ke]).map_err(|_| CchError::Json(ks))?;
+        let raw = &body[ks + 1..ke - 1];
+        // A key with no escape and no control byte is its own decoded text, so it is read in place. Every other key
+        // goes through serde, which refuses a raw control byte and invalid UTF-8 as the walk must.
+        let key: Cow<'_, str> = match std::str::from_utf8(raw) {
+            Ok(key) if !raw.iter().any(|&b| b == b'\\' || b < 0x20) => Cow::Borrowed(key),
+            _ => Cow::Owned(serde_json::from_slice(&body[ks..ke]).map_err(|_| CchError::Json(ks))?),
+        };
         if visit(&key) {
             return Ok(());
         }
@@ -1827,6 +1833,16 @@ mod tests {
             .unwrap(),
             2
         );
+    }
+
+    /// A raw control byte inside a key is no JSON string, so the walk refuses it as a decoder would rather than read
+    /// the key past it.
+    #[test]
+    fn a_top_level_key_holding_a_raw_control_byte_is_refused() {
+        assert!(matches!(
+            top_level_member_count(b"{\"safe\x01guards\":[]}", "safeguards"),
+            Err(CchError::Json(_))
+        ));
     }
 
     #[test]
