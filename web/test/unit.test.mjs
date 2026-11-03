@@ -12,6 +12,8 @@ globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
 const { act, createElement: h, createRoot, UnitLegend } = await import('./dist/ui.js');
+// The legend's box stands at the end of the body, outside the container its button renders in.
+const legend = () => document.querySelector('[role="dialog"][aria-label="What the units mean"]');
 
 test('native reads both sides of one answer and every other position its funding side', () => {
   assert.ok(Object.hasOwn(d.UNIT_FUNDING, 'native'), 'native is a position of the map');
@@ -36,12 +38,12 @@ test('the legend takes the focus as it opens and hands it back to its button on 
     // jsdom's click moves no focus, so the button takes it first as a press on it would.
     act(() => button.focus());
     act(() => button.click());
-    const box = container.querySelector('[role="dialog"][aria-label="What the units mean"]');
+    const box = legend();
     assert.ok(box, 'the button opens the legend');
     assert.ok(box.contains(document.activeElement), `the open legend holds the focus, not ${document.activeElement?.tagName}`);
     act(() => document.activeElement.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' })));
     // Booleans, since a failed read of two jsdom elements hands the reporter the whole window to serialize.
-    assert.ok(container.querySelector('[role="dialog"]') === null, 'Escape closes the legend');
+    assert.ok(legend() === null, 'Escape closes the legend');
     assert.ok(document.activeElement === button, 'Escape hands the focus back to the button');
   } finally {
     act(() => root.unmount());
@@ -49,7 +51,7 @@ test('the legend takes the focus as it opens and hands it back to its button on 
   }
 });
 
-test('Escape closes the legend and leaves the focus on a control outside it', () => {
+test('the legend closes as the focus leaves it for a control outside, and the focus stays on that control', () => {
   const container = document.body.appendChild(document.createElement('div'));
   const outside = document.body.appendChild(document.createElement('button'));
   const root = createRoot(container);
@@ -58,13 +60,11 @@ test('Escape closes the legend and leaves the focus on a control outside it', ()
     const button = container.querySelector('button[aria-label="What the units mean"]');
     act(() => button.focus());
     act(() => button.click());
-    assert.ok(container.querySelector('[role="dialog"]'), 'the button opens the legend');
-    // Tab moves the focus past the box to a later control, and the legend stays open behind it.
+    assert.ok(legend() !== null, 'the button opens the legend');
+    // Tab moves the focus past the box to a later control.
     act(() => outside.focus());
-    assert.ok(container.querySelector('[role="dialog"]') !== null, 'the legend stays open as the focus leaves it');
-    act(() => document.activeElement.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' })));
     // Booleans, since a failed read of two jsdom elements hands the reporter the whole window to serialize.
-    assert.ok(container.querySelector('[role="dialog"]') === null, 'Escape closes the legend');
+    assert.ok(legend() === null, 'the legend closes as the focus leaves it');
     assert.ok(document.activeElement === outside, `the focus stays on the control outside the legend, not ${document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName}`);
   } finally {
     act(() => root.unmount());
@@ -82,12 +82,13 @@ test('a press outside the legend closes it and leaves the focus on the control t
     const button = container.querySelector('button[aria-label="What the units mean"]');
     act(() => button.focus());
     act(() => button.click());
-    assert.ok(container.querySelector('[role="dialog"]') !== null, 'the button opens the legend');
-    // A press dispatches its pointerdown and then focuses the control under it, which jsdom's events leave to the case.
-    act(() => outside.dispatchEvent(new window.Event('pointerdown', { bubbles: true })));
-    act(() => outside.focus());
+    assert.ok(legend() !== null, 'the button opens the legend');
+    // A press dispatches its mousedown and then focuses the control under it, which jsdom's events leave to the case.
+    // The legend is read between the two, since the focus leaving it closes it too.
+    act(() => outside.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true })));
     // Booleans, as above.
-    assert.ok(container.querySelector('[role="dialog"]') === null, 'the press closes the legend');
+    assert.ok(legend() === null, 'the press closes the legend');
+    act(() => outside.focus());
     assert.ok(document.activeElement === outside, `the focus stays on the pressed control, not ${document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName}`);
   } finally {
     act(() => root.unmount());

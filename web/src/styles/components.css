@@ -215,11 +215,6 @@
   opacity: 0.5;
 }
 
-.unit-legend__anchor {
-  position: relative;
-  display: inline-flex;
-}
-
 .unit-legend__button {
   display: inline-flex;
   align-items: center;
@@ -240,32 +235,20 @@
   background: var(--surface-3);
 }
 
-.unit-legend {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  z-index: 20;
+/* Two classes, since `.popover` sets its own padding later in this file at one class. */
+.popover.unit-legend {
   width: 360px;
   max-width: calc(100vw - 32px);
   padding: 12px 14px;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
 }
 
-.unit-legend:focus {
-  outline: none;
-}
-
-/* Two classes, since the Settings row's `.setting-row p` comes later in pages.css at one class and an element. */
-.unit-legend .unit-legend__line {
+.unit-legend__line {
   margin: 0;
   font-size: 12px;
   color: var(--ink-2);
 }
 
-.unit-legend .unit-legend__line + .unit-legend__line {
+.unit-legend__line + .unit-legend__line {
   margin-top: 6px;
 }
 
@@ -280,12 +263,6 @@
   flex-wrap: nowrap;
   gap: 8px;
   align-items: center;
-}
-
-/* The sticky block is a stacking context at the Analytics filter bar's z-index, and that bar sticks under it later in
-   the page, so the open legend clears it only while the block stands one above. */
-.main__top:has(.unit-legend) {
-  z-index: 6;
 }
 
 .topbar__menu {
@@ -2255,7 +2232,7 @@ textarea.input {
     gap: 5px;
   }
 
-  .topbar .unit-legend__anchor {
+  .topbar .unit-legend__button {
     display: none;
   }
 
@@ -2294,30 +2271,11 @@ textarea.input {
     display: none;
   }
 
-  /* On a phone the popover is about as wide as the page, so hung from the Settings row's button it would run off the
-     left side. It hangs from the whole row instead. */
-  .setting-row:has(> .unit-setting) {
-    position: relative;
-  }
-
-  .unit-setting .unit-legend__anchor {
-    position: static;
-  }
-
   /* The two selects keep their long labels, and with the button they outgrow a phone's card on one line, so the
      controls wrap inside the card. */
   .unit-setting {
     flex-wrap: wrap;
     max-width: 100%;
-  }
-
-  /* The row ends on the controls' last line, wherever the button lands, so the popover hangs from the row's bottom. */
-  .unit-setting .unit-legend {
-    top: 100%;
-    right: 0;
-    left: 0;
-    width: auto;
-    max-width: none;
   }
 }
 

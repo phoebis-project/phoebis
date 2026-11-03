@@ -1049,6 +1049,12 @@ async function topbarHeights(theme) {
 }
 
 /**
+ * Whether a popover hangs from its button: it spans the button's width and stands under it, or over it where the
+ * window's foot leaves no room below.
+ */
+const anchoredOn = (box, button) => button !== null && box.left <= button.left && box.right >= button.right && (box.top >= button.bottom || box.bottom <= button.top);
+
+/**
  * The week control beside the unit switch. At 1280 by 800 and 1440 by 900 the Week select sits in the bar's right
  * group after the Unit select and before the legend's button, its three long labels whole in its text box, in the Unit
  * select's height, top edge, type and ink. At 900 by 800 and 360 by 800 it reads the three short labels whole, on the
@@ -1057,7 +1063,8 @@ async function topbarHeights(theme) {
  * again enabled with none. On the Settings page's Unit row at 1280, 400 and 360 px the position select, the week
  * select and the legend's button stand inside the Appearance card's content box, at 1280 and 400 the week select on
  * the position select's line to its right, and at 400 and 360 the controls under the row's label, as the row's other
- * controls. The pass's viewport and Native stand again after.
+ * controls, the legend's button among them. At each width the legend's popover hangs from its button inside the
+ * viewport. The pass's viewport and Native stand again after.
  */
 async function weekControl(theme) {
   const LONG = ['Pro week', 'Max week', 'Ultra week'];
@@ -1174,7 +1181,21 @@ async function weekControl(theme) {
       const middle = (b) => (b.top + b.bottom) / 2;
       if (width !== 360 && (Math.abs(middle(row.unit) - middle(row.week)) > 2 || row.week.left < row.unit.right)) say(`the week select ${JSON.stringify(row.week)} is not on the position select's line to its right ${JSON.stringify(row.unit)}`);
       // A pixel of slack, as the Appearance rows' read allows a label over its control.
-      if (width !== 1280 && (row.label === null || row.label.bottom > Math.min(row.unit.top, row.week.top) + 1)) say(`the week and position selects ${JSON.stringify([row.unit, row.week])} are not under the row's label ${JSON.stringify(row.label)}`);
+      if (width !== 1280 && (row.label === null || row.label.bottom > Math.min(row.unit.top, row.week.top, row.legend.top) + 1)) say(`the week select, the position select and the legend button ${JSON.stringify([row.unit, row.week, row.legend])} are not under the row's label ${JSON.stringify(row.label)}`);
+      await page.locator('.settings').getByRole('button', { name: 'What the units mean', exact: true }).click();
+      await settle();
+      const popover = await page.evaluate(() => {
+        const b = document.querySelector('[role="dialog"][aria-label="What the units mean"]')?.getBoundingClientRect();
+        return b === undefined ? null : { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top), width: document.documentElement.clientWidth };
+      });
+      measurements.push(`${theme} /settings unit legend at ${width} px ${JSON.stringify(popover)}`);
+      if (popover === null) say('the legend button opens no popover');
+      else {
+        if (!anchoredOn(popover, row.legend)) say(`the legend popover ${JSON.stringify(popover)} does not hang under or over its button ${JSON.stringify(row.legend)}`);
+        if (popover.left < 0 || popover.right > popover.width) say(`the legend popover ${JSON.stringify(popover)} leaves the ${popover.width} px viewport`);
+      }
+      await page.keyboard.press('Escape');
+      await settle();
     }
   } finally {
     await page.setViewportSize({ height: 800, width: 1280 });
@@ -7479,10 +7500,10 @@ async function stickyStrip(theme, chipped = false) {
 
 /**
  * The Settings page's Unit row at 1280 and 400 px, the one way to the legend on a phone, where the top bar gives its
- * button up: the legend's button sits on the select's line to its right, its popover opens inside the viewport's width
- * with its top at or below the button's bottom, its two top corners and its middle uncovered and its lines in the
- * legend's 12 px type, and Escape closes it. At 400 px each of the Appearance card's Theme, Time format and Unit rows
- * puts its control under its label.
+ * button up: the legend's button sits on the select's line to its right, its popover opens inside the viewport's width,
+ * under its button or over it where the window's foot is near, with its two top corners and its middle uncovered and
+ * its lines in the legend's 12 px type, and Escape closes it. At 400 px each of the Appearance card's Theme, Time
+ * format and Unit rows puts its control under its label.
  */
 async function settingsUnitLegend(theme) {
   const LEGEND = 'What the units mean';
@@ -7526,7 +7547,8 @@ async function settingsUnitLegend(theme) {
       await page.locator('.settings').getByRole('button', { name: LEGEND, exact: true }).click();
       await settle();
       const popover = await page.evaluate((legend) => {
-        const el = document.querySelector(`.settings [role="dialog"][aria-label="${legend}"]`);
+        // The box stands at the end of the body, outside the Settings view.
+        const el = document.querySelector(`[role="dialog"][aria-label="${legend}"]`);
         if (!el) return null;
         const b = el.getBoundingClientRect();
         const opener = document.querySelector(`.settings button[aria-label="${legend}"]`)?.getBoundingClientRect();
@@ -7538,7 +7560,7 @@ async function settingsUnitLegend(theme) {
         ];
         return {
           box: { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) },
-          buttonBottom: opener ? Math.round(opener.bottom) : null,
+          button: opener ? { bottom: Math.round(opener.bottom), left: Math.round(opener.left), right: Math.round(opener.right), top: Math.round(opener.top) } : null,
           covered: points.filter(([x, y]) => !el.contains(document.elementFromPoint(x, y))).map(([x, y]) => [Math.round(x), Math.round(y)]),
           sizes: [...new Set([...el.querySelectorAll('p')].map((line) => getComputedStyle(line).fontSize))],
           width: document.documentElement.clientWidth,
@@ -7548,13 +7570,13 @@ async function settingsUnitLegend(theme) {
       if (popover === null) say('the legend button opens no popover');
       else {
         if (popover.box.left < 0 || popover.box.right > popover.width || popover.box.top < 0) say(`the legend popover ${JSON.stringify(popover.box)} leaves the ${popover.width} px viewport`);
-        if (popover.buttonBottom !== null && popover.box.top + 1 < popover.buttonBottom) say(`the legend popover's top ${popover.box.top} stands above its button's bottom ${popover.buttonBottom}`);
+        if (!anchoredOn(popover.box, popover.button)) say(`the legend popover ${JSON.stringify(popover.box)} does not hang under or over its button ${JSON.stringify(popover.button)}`);
         if (popover.covered.length > 0) say(`the legend popover is covered at ${JSON.stringify(popover.covered)}`);
         if (JSON.stringify(popover.sizes) !== '["12px"]') say(`the legend's lines draw at ${JSON.stringify(popover.sizes)}, not the legend's 12px`);
       }
       await page.keyboard.press('Escape');
       await settle();
-      if (await page.locator(`.settings [role="dialog"][aria-label="${LEGEND}"]`).count()) say('Escape leaves the legend popover open');
+      if (await page.locator(`[role="dialog"][aria-label="${LEGEND}"]`).count()) say('Escape leaves the legend popover open');
     }
   } finally {
     await page.setViewportSize({ height: 800, width: 1280 });
@@ -7657,7 +7679,7 @@ async function unitLegendLines(theme) {
   await button.click();
   await settle();
   const lines = await page.evaluate((legend) =>
-    [...document.querySelectorAll(`.topbar [role="dialog"][aria-label="${legend}"] .unit-legend__line`)].map((p) => {
+    [...document.querySelectorAll(`[role="dialog"][aria-label="${legend}"] .unit-legend__line`)].map((p) => {
       const s = getComputedStyle(p);
       const label = p.querySelector('b');
       return { color: s.color, family: s.fontFamily, label: label?.textContent?.trim() ?? null, labelWeight: label ? getComputedStyle(label).fontWeight : null, size: s.fontSize, text: p.textContent?.replace(/\s+/g, ' ').trim() ?? '' };
@@ -7753,7 +7775,7 @@ async function unitControl(theme) {
       await page.locator('.topbar').getByRole('button', { name: LEGEND, exact: true }).click();
       await settle();
       const popover = await page.evaluate((legend) => {
-        const el = document.querySelector(`.topbar [role="dialog"][aria-label="${legend}"]`);
+        const el = document.querySelector(`[role="dialog"][aria-label="${legend}"]`);
         if (!el) return null;
         const b = el.getBoundingClientRect();
         // Five points inside the popover: a point another element paints over answers that element.
@@ -7780,7 +7802,7 @@ async function unitControl(theme) {
       }
       await page.keyboard.press('Escape');
       await settle();
-      if (await page.locator(`.topbar [role="dialog"][aria-label="${LEGEND}"]`).count()) failures.push(`${theme} /analytics: Escape leaves the legend popover open`);
+      if (await page.locator(`[role="dialog"][aria-label="${LEGEND}"]`).count()) failures.push(`${theme} /analytics: Escape leaves the legend popover open`);
     }
   } finally {
     await page.setViewportSize({ height: 800, width: 1280 });

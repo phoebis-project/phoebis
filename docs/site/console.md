@@ -60,8 +60,8 @@ own words and a Reload button.
 
 The "Unit" switch sets the unit the Dashboard, Pools, Keys, Requests and Analytics views price a request in, stored
 under `phoebis.unit` (`native` until you pick one). Its button "What the units mean" opens the legend, which takes the
-focus, closes on Escape or a click outside it, and hands the focus back to its button on Escape, with one line per
-position in the switch's order:
+focus, closes on Escape, a click outside it or the focus leaving it, and hands the focus back to its button on Escape,
+with one line per position in the switch's order:
 
 - Native: "Each request in the unit its funding pays in: a subscription request as a share of the week the week control
   names, an API key, fast-mode, overage or usage-based request in dollars."

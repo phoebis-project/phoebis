@@ -26211,22 +26211,23 @@ m.unmount();
   const legendIn = async (host) => {
     const page = await mount(host === '.topbar' ? '/' : '/settings');
     const button = page.container.querySelector(`${host} button[aria-label="${LEGEND}"]`);
-    const dialog = () => page.container.querySelector(`${host} [role="dialog"][aria-label="${LEGEND}"]`);
+    // The box stands at the end of the body, outside the host and the page's container.
+    const dialog = () => document.querySelector(`[role="dialog"][aria-label="${LEGEND}"]`);
     const closed = dialog() === null;
     button?.click();
     await page.settle(50);
     const text = (dialog()?.textContent ?? '').replace(/\s+/g, ' ');
     const lines = [...(dialog()?.querySelectorAll('p') ?? [])].map((p) => (p.textContent ?? '').replace(/\s+/g, ' ').trim());
     const expanded = button?.getAttribute('aria-expanded') ?? null;
-    dialog()?.querySelector('p')?.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+    dialog()?.querySelector('p')?.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
     await page.settle(50);
     const keptOnInside = dialog() !== null;
-    document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }));
+    dialog()?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }));
     await page.settle(50);
     const closedOnEscape = dialog() === null;
     button?.click();
     await page.settle(50);
-    page.container.querySelector('main.content')?.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+    page.container.querySelector('main.content')?.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
     await page.settle(50);
     const closedOnOutside = dialog() === null;
     page.unmount();

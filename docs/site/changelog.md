@@ -172,8 +172,9 @@ Diagnostics group ([The shell](console.md#the-shell)). The login screen offers "
 logged in for 30 days from the last visit, across a router restart, until a secret rotation or a logout of a kept login,
 which ends every kept login ([The shell](console.md#the-shell)). The top bar wraps a view title it cannot hold beside
 its controls onto a second line at a phone's width, so the Routing log page fits the window's width ([The
-shell](console.md#the-shell)). The unit legend takes the focus when it opens and hands it back to its button when it
-closes on Escape, and the Settings view's Appearance rows wrap their controls under their labels at a phone's width
+shell](console.md#the-shell)). The unit legend hangs from its button as the console's other popovers do, takes the focus
+when it opens, closes on Escape, a click outside it or the focus leaving it, and hands the focus back to its button when
+it closes on Escape, and the Settings view's Appearance rows wrap their controls under their labels at a phone's width
 ([The shell](console.md#the-shell), [Settings](console.md#settings)). A key's processed rules are read on
 `GET /admin/keys/{id}/models` and in the key dialog, and the Model unpriced attention item opens no page ([API
 reference](api-reference.md)). Each `GET /admin/sessions` row reads from the main agent's conversation pin, or the
