@@ -14,18 +14,39 @@ const PREFIX: &str = "anthropic-ratelimit-unified-";
 const BUCKET_PREFIX: &str = "anthropic-ratelimit-";
 const FAST_PREFIX: &str = "anthropic-fast-";
 
+/// A unified window's status word, read by exact match on the trimmed value: a word in another case reads as
+/// `Other`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowStatus {
+    Allowed,
+    AllowedWarning,
+    Rejected,
+    Other,
+}
+
+impl WindowStatus {
+    fn parse(text: &str) -> WindowStatus {
+        match text {
+            "allowed" => WindowStatus::Allowed,
+            "allowed_warning" => WindowStatus::AllowedWarning,
+            "rejected" => WindowStatus::Rejected,
+            _ => WindowStatus::Other,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UnifiedHeaders {
-    pub status: Option<String>,
+    pub status: Option<WindowStatus>,
     pub reset: Option<i64>,
     pub representative_claim: Option<String>,
-    pub five_hour_status: Option<String>,
+    pub five_hour_status: Option<WindowStatus>,
     pub five_hour_reset: Option<i64>,
     pub five_hour_utilization: Option<f64>,
-    pub seven_day_status: Option<String>,
+    pub seven_day_status: Option<WindowStatus>,
     pub seven_day_reset: Option<i64>,
     pub seven_day_utilization: Option<f64>,
-    pub seven_day_oi_status: Option<String>,
+    pub seven_day_oi_status: Option<WindowStatus>,
     pub seven_day_oi_reset: Option<i64>,
     pub seven_day_oi_utilization: Option<f64>,
     pub overage_in_use: Option<bool>,
@@ -51,6 +72,7 @@ impl UnifiedHeaders {
                 .find(|(n, _)| n.eq_ignore_ascii_case(&name))
                 .map(|(_, v)| v.trim().to_string())
         };
+        let status = |suffix: &str| text(suffix).as_deref().map(WindowStatus::parse);
         let secs = |suffix: &str| text(suffix).as_deref().and_then(epoch_millis);
         let float = |suffix: &str| {
             text(suffix)
@@ -58,16 +80,16 @@ impl UnifiedHeaders {
                 .filter(|f| f.is_finite())
         };
         Some(UnifiedHeaders {
-            status: text("status"),
+            status: status("status"),
             reset: secs("reset"),
             representative_claim: text("representative-claim"),
-            five_hour_status: text("5h-status"),
+            five_hour_status: status("5h-status"),
             five_hour_reset: secs("5h-reset"),
             five_hour_utilization: float("5h-utilization"),
-            seven_day_status: text("7d-status"),
+            seven_day_status: status("7d-status"),
             seven_day_reset: secs("7d-reset"),
             seven_day_utilization: float("7d-utilization"),
-            seven_day_oi_status: text("7d_oi-status"),
+            seven_day_oi_status: status("7d_oi-status"),
             seven_day_oi_reset: secs("7d_oi-reset"),
             seven_day_oi_utilization: float("7d_oi-utilization"),
             overage_in_use: text("overage-in-use").map(|v| v.eq_ignore_ascii_case("true")),
@@ -408,40 +430,48 @@ mod tests {
         );
         let u = UnifiedHeaders::parse(&h).unwrap();
         assert_eq!(
+            (u.status, u.reset, u.representative_claim.as_deref()),
             (
-                u.status.as_deref(),
-                u.reset,
-                u.representative_claim.as_deref()
-            ),
-            (
-                Some("rejected"),
+                Some(WindowStatus::Rejected),
                 Some(1_700_000_100_000),
                 Some("seven_day_opus")
             )
         );
         assert_eq!(
             (
-                u.five_hour_status.as_deref(),
+                u.five_hour_status,
                 u.five_hour_reset,
                 u.five_hour_utilization
             ),
-            (Some("allowed"), Some(1_700_000_300_000), Some(0.42))
+            (
+                Some(WindowStatus::Allowed),
+                Some(1_700_000_300_000),
+                Some(0.42)
+            )
         );
         assert_eq!(
             (
-                u.seven_day_status.as_deref(),
+                u.seven_day_status,
                 u.seven_day_reset,
                 u.seven_day_utilization
             ),
-            (Some("allowed"), Some(1_700_000_400_000), Some(0.13))
+            (
+                Some(WindowStatus::Allowed),
+                Some(1_700_000_400_000),
+                Some(0.13)
+            )
         );
         assert_eq!(
             (
-                u.seven_day_oi_status.as_deref(),
+                u.seven_day_oi_status,
                 u.seven_day_oi_reset,
                 u.seven_day_oi_utilization
             ),
-            (Some("rejected"), Some(1_700_000_200_000), Some(0.91))
+            (
+                Some(WindowStatus::Rejected),
+                Some(1_700_000_200_000),
+                Some(0.91)
+            )
         );
         assert_eq!(
             (
@@ -743,7 +773,7 @@ mod tests {
         ])
         .expect("a mixed-case unified name opens the read");
         assert_eq!(parsed.overage_in_use, Some(true));
-        assert_eq!(parsed.status.as_deref(), Some("allowed"));
+        assert_eq!(parsed.status, Some(WindowStatus::Allowed));
     }
 
     #[test]
