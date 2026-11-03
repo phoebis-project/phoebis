@@ -50,7 +50,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::billing::Restore;
-use crate::body::{tier_ttls, uniform_ttl, AccountUuidEdit, RepeatedMember, VersionCheck};
+use crate::body::{marker_ttls, AccountUuidEdit, RepeatedMember, VersionCheck};
 use crate::budget::{BodyBudget, BodyReads};
 use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
@@ -2807,6 +2807,7 @@ impl Relay {
                 account,
                 admitted,
                 attempt: *attempt,
+                body: &edited,
                 auth_marked: false,
                 cache_ttl_ms: cache_ttl_ms(ttl),
                 can_retry_in_place: !retried_in_place,
@@ -2832,8 +2833,6 @@ impl Relay {
                 replayed,
                 seq,
                 ticket,
-                tier_ttls: tier_ttls(&edited),
-                uniform_ttl_ms: uniform_ttl(&edited),
             };
             let request = RawRequest {
                 method: "POST",
@@ -3727,6 +3726,7 @@ impl Relay {
         // the key shares, so an entry under it would read the next session's probe as a fork of this one. Its
         // static boundaries still land, a cache of their own the next probe of the same shape reads.
         let auxiliary = ctx.admitted.auxiliary;
+        let ttls = marker_ttls(ctx.body);
         Some(AffinityFacts {
             router: self.router.clone(),
             pending: self.pending_reports.clone(),
@@ -3755,9 +3755,9 @@ impl Relay {
                 .filter(|_| !auxiliary)
                 .map(|c| c.message_boundaries.clone())
                 .unwrap_or_default(),
-            static_ttl_ms: ctx.tier_ttls.0,
-            message_ttl_ms: ctx.tier_ttls.1,
-            uniform_ttl_ms: ctx.uniform_ttl_ms,
+            static_ttl_ms: ttls.tiers.0,
+            message_ttl_ms: ttls.tiers.1,
+            uniform_ttl_ms: ttls.uniform,
             request_id: ctx.admitted.trace.request_id.clone(),
             seq: ctx.seq,
             attempt: u32::from(ctx.attempt),
@@ -4709,6 +4709,9 @@ struct Responding<'a> {
     /// What admission read about the request, which every pass of every leg shares.
     admitted: &'a Admitted<'a>,
     attempt: u8,
+    /// The body as this pass sends it upstream, after the TTL rewrite, whose markers a committed answer's affinity
+    /// report reads.
+    body: &'a [u8],
     /// Whether this pass marked the account `reauth_required`, carried back to the attempt loop through
     /// `Next::FailOver` and read by a probe's own answer.
     auth_marked: bool,
@@ -4748,10 +4751,6 @@ struct Responding<'a> {
     seq: u32,
     /// This pass's account ticket, which a committed stream takes into its body.
     ticket: Option<AccountTicket>,
-    /// `tier_ttls` of the body as this pass sends it upstream, after the TTL rewrite.
-    tier_ttls: (Option<i64>, Option<i64>),
-    /// `uniform_ttl` of the same body.
-    uniform_ttl_ms: Option<i64>,
 }
 
 impl Responding<'_> {

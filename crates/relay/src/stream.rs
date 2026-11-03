@@ -265,10 +265,10 @@ pub(crate) struct AffinityFacts {
     pub static_boundaries: Arc<[String]>,
     pub static_sizes: Vec<u64>,
     pub message_boundaries: Arc<[String]>,
-    /// `tier_ttls` of the body as this pass sent it upstream.
+    /// `MarkerTtls::tiers` of the body as this pass sent it upstream.
     pub static_ttl_ms: Option<i64>,
     pub message_ttl_ms: Option<i64>,
-    /// `uniform_ttl` of the same body.
+    /// `MarkerTtls::uniform` of the same body.
     pub uniform_ttl_ms: Option<i64>,
     /// The request, the decision that selected the account and the wire attempt that answered, so the rows the
     /// report writes reach the selecting decision's row.

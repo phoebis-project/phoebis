@@ -484,13 +484,27 @@ fn add_top_level_cache_control(body: &mut Vec<u8>, ttl: CacheTtl) {
     }
 }
 
-/// The lifetime of the deepest marker on each tier of an edited body, `(static, message)` in ms: a marker inside
-/// `tools[]` or `system[]` is the static tier's, one inside `messages[]` the message tier's, a top-level member
-/// both; `None` for a tier without a marker.
-pub fn tier_ttls(body: &[u8]) -> (Option<i64>, Option<i64>) {
-    let Ok(spans) = phoebis_cch::cache_control_spans(body) else {
-        return (None, None);
+/// The marker TTLs in ms of a body as it was sent, read in one walk of its markers.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct MarkerTtls {
+    /// The lifetime of the deepest marker on each tier, `(static, message)`: a marker inside `tools[]` or `system[]`
+    /// is the static tier's, one inside `messages[]` the message tier's, a top-level member both. `None` for a
+    /// tier without a marker.
+    pub tiers: (Option<i64>, Option<i64>),
+    /// The TTL every marker carries, `None` for a body without a marker or with markers at both TTLs.
+    pub uniform: Option<i64>,
+}
+
+/// Each marker's TTL is parsed once, and a body without a marker answers before the walks for its containers.
+pub(crate) fn marker_ttls(body: &[u8]) -> MarkerTtls {
+    let spans = match phoebis_cch::cache_control_spans(body) {
+        Ok(spans) if !spans.is_empty() => spans,
+        _ => return MarkerTtls::default(),
     };
+    let ttls: Vec<i64> = spans.iter().map(|&span| span_ttl_ms(body, span)).collect();
+    // Every marker rather than the deepest per tier: two tiers whose deepest markers agree can still hold a
+    // marker at the other TTL further up, and the cache writes that prefix at that TTL.
+    let uniform = ttls.iter().all(|&ttl| ttl == ttls[0]).then_some(ttls[0]);
     let tools = phoebis_cch::object_member_span(body, &["tools"]);
     let system = phoebis_cch::object_member_span(body, &["system"]);
     let messages = phoebis_cch::object_member_span(body, &["messages"]);
@@ -499,11 +513,11 @@ pub fn tier_ttls(body: &[u8]) -> (Option<i64>, Option<i64>) {
     };
     // The deepest marker per tier, the tail the pin's warmth reads. The static tier ranks by the cached prefix's
     // own order (tools, then system, then a top-level marker) before the offset within a tier, so a body that
-    // serializes `system` ahead of `tools` reads the same; the message tier is one array, whose body order is
+    // serializes `system` ahead of `tools` reads the same. The message tier is one array, whose body order is
     // its prefix order. A marker inside no container is a top-level member and counts for both tiers.
-    let mut static_marker: Option<((u8, usize), (usize, usize))> = None;
-    let mut message_marker = None;
-    for (start, end) in spans {
+    let mut static_marker: Option<((u8, usize), i64)> = None;
+    let mut message_marker: Option<(usize, i64)> = None;
+    for (&(start, _), &ttl) in spans.iter().zip(&ttls) {
         let is_message = within(messages, start);
         let static_rank = if within(tools, start) {
             Some(0)
@@ -517,29 +531,20 @@ pub fn tier_ttls(body: &[u8]) -> (Option<i64>, Option<i64>) {
         let is_top_level = static_rank == Some(2);
         if let Some(rank) = static_rank {
             if static_marker.is_none_or(|(deepest, _)| (rank, start) > deepest) {
-                static_marker = Some(((rank, start), (start, end)));
+                static_marker = Some(((rank, start), ttl));
             }
         }
         if (is_message || is_top_level) && message_marker.is_none_or(|(s, _)| start > s) {
-            message_marker = Some((start, end));
+            message_marker = Some((start, ttl));
         }
     }
-    let static_marker = static_marker.map(|(_, span)| span);
-    (
-        static_marker.map(|span| span_ttl_ms(body, span)),
-        message_marker.map(|span| span_ttl_ms(body, span)),
-    )
-}
-
-/// The TTL every `cache_control` marker of an edited body carries, read off every marker `cache_control_spans`
-/// lists; `None` for a body without a marker or with markers at both TTLs.
-pub fn uniform_ttl(body: &[u8]) -> Option<i64> {
-    // Every marker rather than the deepest per tier: two tiers whose deepest markers agree can still hold a
-    // marker at the other TTL further up, and the cache writes that prefix at that TTL.
-    let spans = phoebis_cch::cache_control_spans(body).ok()?;
-    let mut ttls = spans.into_iter().map(|span| span_ttl_ms(body, span));
-    let first = ttls.next()?;
-    ttls.all(|ttl| ttl == first).then_some(first)
+    MarkerTtls {
+        tiers: (
+            static_marker.map(|(_, ttl)| ttl),
+            message_marker.map(|(_, ttl)| ttl),
+        ),
+        uniform,
+    }
 }
 
 fn span_ttl_ms(body: &[u8], (start, end): (usize, usize)) -> i64 {
@@ -1143,6 +1148,14 @@ mod tests {
             br#"{"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral"},"cache_control":{"type":"ephemeral"}}],"messages":[]}"#,
             "whichever spelling a parser keeps carries the policy's TTL"
         );
+    }
+
+    fn tier_ttls(body: &[u8]) -> (Option<i64>, Option<i64>) {
+        marker_ttls(body).tiers
+    }
+
+    fn uniform_ttl(body: &[u8]) -> Option<i64> {
+        marker_ttls(body).uniform
     }
 
     #[test]
