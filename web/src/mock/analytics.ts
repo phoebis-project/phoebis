@@ -13,6 +13,7 @@ import { emptyHistogram, mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import { endOf } from '@/lib/quota';
 import { ACCOUNTS, LEDGER_WINDOW, sharedWindowsOf } from './accounts';
+import { earliest } from './lead';
 import { keyById } from './pools';
 import { createRng } from './rng';
 import type { EventSeed } from './routingLog';
@@ -833,9 +834,8 @@ const isWeekly = (window: string) => window === 'seven_day' || window.startsWith
  * plan-ended flag where it comes first, so a trial end that passed while the plan carried on ends no week.
  */
 function termEndOf(a: Account, at: number): number | null {
-  const end = endOf(a, at);
   const flagged = a.planEndedAt === null ? null : Date.parse(a.planEndedAt);
-  return end === null ? flagged : flagged === null ? end : Math.min(end, flagged);
+  return earliest(endOf(a, at), flagged);
 }
 
 /**

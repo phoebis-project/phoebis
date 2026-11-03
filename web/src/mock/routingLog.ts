@@ -8,7 +8,7 @@ import { endOf } from '@/lib/quota';
 import { compareRows } from '@/lib/routingLog';
 import { ACCOUNTS, LEDGER_WINDOW, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN } from './accounts';
 import { GUARDRAILS } from './guardrails';
-import { leadOf } from './lead';
+import { earliest, leadOf, paceHours } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
 import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, PLAN_WINDOWS, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, cooldownOf, failsOver, holds, oauthWindows, requestById } from './requests';
@@ -531,8 +531,8 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     const reading = a.kind === 'api_key' ? windows.worst_bucket : paid ? undefined : windows[windowName];
     const remaining = reading === undefined ? 1 : Math.max(0, 1 - reading.utilization);
     const reset = paid ? null : (reading?.reset ?? null);
-    const deadlineMs = paid ? null : [reset ? Date.parse(reset) : null, endsAt].filter((x): x is number => x !== null).reduce<number | null>((min, x) => (min === null || x < min ? x : min), null);
-    const hours = paid ? null : deadlineMs === null ? 168 : Math.max(1, (deadlineMs - at) / HOUR);
+    const deadlineMs = paid ? null : earliest(reset ? Date.parse(reset) : null, endsAt);
+    const hours = paid ? null : paceHours(deadlineMs, at);
     const paceBurn = paid ? 0 : (burn[windowName] ?? 0);
     return {
       accountId: a.id,
@@ -1792,8 +1792,7 @@ function storySpecs(): Spec[] {
   const spareOf = (id: string): number => {
     const week = oauthWindows(id, tieAt, () => OLDER_FACTOR).find((w) => w.id === '7d');
     const end = endOf(accountOf.get(id)!, tieAt);
-    const deadline = Math.min(...[week?.resetsAt ? Date.parse(week.resetsAt) : null, end].filter((x): x is number => x !== null));
-    return Math.max(0, 1 - (week?.utilization ?? 0)) / Math.max(1, (deadline - tieAt) / HOUR);
+    return Math.max(0, 1 - (week?.utilization ?? 0)) / paceHours(earliest(week?.resetsAt ? Date.parse(week.resetsAt) : null, end), tieAt);
   };
   const TIE_SCORE = 0.006;
   const tieBurns = { nightly: { five_hour: 0.02, seven_day: spareOf('nightly') - TIE_SCORE }, primary: { five_hour: 0.03, seven_day: spareOf('primary') - TIE_SCORE } };

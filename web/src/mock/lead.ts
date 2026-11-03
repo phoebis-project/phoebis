@@ -1,3 +1,14 @@
+import { HOUR } from '@/lib/time';
+
+/** The earliest of the instants given, null where none is. */
+export const earliest = (...at: (number | null)[]): number | null => at.reduce<number | null>((min, x) => (x === null || (min !== null && min <= x) ? min : x), null);
+
+/**
+ * The hours the router's Pace score spreads a window's share left over: to the deadline, the earlier of the reset and
+ * the account's end, at least one, and a week where neither is read.
+ */
+export const paceHours = (deadline: number | null, at: number): number => (deadline === null ? 168 : Math.max(1, (deadline - at) / HOUR));
+
 /**
  * The router's lead over pace, as the account answer carries it, computed by the mock in the router's place: the
  * window's utilization less the share of it elapsed from its start to the earlier of its reset and the account's end

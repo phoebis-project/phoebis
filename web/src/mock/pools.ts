@@ -2,8 +2,9 @@ import { CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, POOL_AFFINITY_DEFAULTS } from '
 import type { AccountKind, ApiKey, BudgetPeriod, CacheTtl, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, Range } from '@/api/types';
 import { endOf } from '@/lib/quota';
 import { accountById } from './accounts';
+import { earliest, paceHours } from './lead';
 import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
-import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, ago, ahead, clock, daysAgo, iso } from './time';
+import { DAY, DELETED_HOLDER_END, MINUTE, NOW, ago, ahead, clock, daysAgo, iso } from './time';
 
 /**
  * A member as the story seeds it. The mock reads its kind, its eligibility, its burn, its Pace score and its speed off
@@ -29,8 +30,7 @@ export function servedFigures(accountId: string, now: number, slowDown: boolean)
   if (week === undefined) return { burn: null, paceScore: null, speed };
   const end = endOf(account, now);
   const reset = week.resetsAt === null ? null : Date.parse(week.resetsAt);
-  const deadline = [reset, end].filter((x): x is number => x !== null).reduce<number | null>((min, x) => (min === null || x < min ? x : min), null);
-  const hours = deadline === null ? 168 : Math.max(1, (deadline - now) / HOUR);
+  const hours = paceHours(earliest(reset, end), now);
   const burn = week.burn ?? 0;
   return { burn: week.burn, paceScore: Math.round(((1 - week.utilization) / hours - burn) * 100_000) / 100_000, speed };
 }

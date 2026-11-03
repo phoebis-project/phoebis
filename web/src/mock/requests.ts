@@ -15,7 +15,7 @@ import { endOf } from '@/lib/quota';
 import { ACCOUNTS, LEDGER_WINDOW, QUOTA_HISTORY, accountById, sharedWindowsOf } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor } from './catalog';
-import { leadOf } from './lead';
+import { earliest, leadOf, paceHours } from './lead';
 import { keyById, poolById, type PoolSeed } from './pools';
 import { createRng, type Rng } from './rng';
 import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES } from './samples';
@@ -367,8 +367,7 @@ function countOrder(ids: string[], poolId: string, atMs: number, model: string, 
     if (kindOf(id) === 'api_key') return 0;
     const reading = oauthWindows(id, atMs, () => SERVED_FACTOR).find((w) => w.id === windowId && w.utilization !== null);
     const deadlines = [reading?.resetsAt, accountById.get(id)?.subscription?.endsAt].flatMap((x) => (x ? [Date.parse(x)] : []));
-    const hours = deadlines.length ? Math.max(1, (Math.min(...deadlines) - atMs) / HOUR) : 168;
-    return Math.max(0, 1 - (reading?.utilization ?? 0)) / hours;
+    return Math.max(0, 1 - (reading?.utilization ?? 0)) / paceHours(earliest(...deadlines), atMs);
   };
   const ranked = ids.map((id) => ({ id, score: scoreOf(id), tier: tierOf(id) }));
   ranked.sort((x, y) => {
