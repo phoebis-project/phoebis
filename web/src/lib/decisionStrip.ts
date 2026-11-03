@@ -149,6 +149,7 @@ const SHORT_ENDS = new Set(['admission', 'probe', 'selection']);
 const SLOT_OF: Record<DecisionKind, string> = { exhausted: 'exhausted', held: 'hold', moved: 'pick', placed: 'pick', refused: 'exhausted', renewed: 'pick' };
 const TERMINUS_OF: Record<DecisionKind, TerminusKind> = { exhausted: 'refused', held: 'held', moved: 'chosen', placed: 'chosen', refused: 'refused', renewed: 'chosen' };
 const HELD_FOR: Record<string, TerminusKind> = { reset: 'held_reset', rewrite: 'held_rewrite', slow_down: 'held_slow_down' };
+/** The holds with a terminus of their own, read off `HELD_FOR` so a new hold reason draws without a second edit. */
 const HELD_TERMINI: ReadonlySet<TerminusKind> = new Set(Object.values(HELD_FOR));
 /**
  * The terminus an outcome names: a hold for the window's reset is the fourth way out, a hold for the slow-down the
