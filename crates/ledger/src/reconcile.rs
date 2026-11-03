@@ -316,7 +316,7 @@ fn drop_faulty_dips(
 /// folds the routing conditions, so `meter_drift` reads the windows the same tick closed.
 ///
 /// A run is complete once a later reset appears or its reset lies behind `now`, and one a later reset closed while its
-/// own lay ahead by more than the reset tolerance slid rather than ended, so it writes no row. A run splits into parts
+/// own lay ahead by more than the reset slack slid rather than ended, so it writes no row. A run splits into parts
 /// at each fall except a reversed dip the attempts between its ends cannot explain, which leaves the run, and the row
 /// is the parts' `run_sum`. The row is skipped where `run_sum` answers none or its first end is older than the oldest
 /// retained request, whose rise the router's own requests would explain only in part. The ledger reads no registry:
@@ -355,7 +355,7 @@ pub fn reconcile(
             let newest = newest.get(window).copied();
             // A run the table already holds names a reset at or before its window's newest row, and a window that ended
             // before the cutoff would leave with the next purge, while every reading of a run past both names a reset
-            // past them less the tolerance, so older readings need not be read at all.
+            // past them less the slack, so older readings need not be read at all.
             let floor = newest.unwrap_or(i64::MIN).max(cutoff) - RESET_SLACK_MS;
             for mut run in runs(&readings_of(tx, account, window, floor, length)?) {
                 let key = run.key();
@@ -363,7 +363,7 @@ pub fn reconcile(
                 if !complete || key < cutoff || newest.is_some_and(|n| key <= n) {
                     continue;
                 }
-                // The reset slid rather than ended. The margin is the reset tolerance: the key rounds a fractional poll
+                // The reset slid rather than ended. The margin is the reset slack: the key rounds a fractional poll
                 // reset up by as much as half a second and a router clock that lags moves the closing instant earlier,
                 // so a run its own reset closed can read just short of its key, while a live slide moves the reset by
                 // whole 10-minute steps.
