@@ -393,14 +393,11 @@ impl Store {
     /// Opens (creating if needed) the on-disk registry at `db_path`: the directory holding it at mode 0700,
     /// the process lock beside it, then the database file at mode 0600.
     pub fn open(db_path: &Path, key: &StorageKey) -> Result<Store, StoreError> {
-        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        use std::os::unix::fs::OpenOptionsExt;
 
         let dir = permissions::data_dir_of(db_path);
         let dir_existed = dir.exists();
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)?;
+        permissions::create_private_dir(dir)?;
         if dir_existed {
             for warning in permissions::check_private_dir(dir) {
                 tracing::warn!("{warning}");
