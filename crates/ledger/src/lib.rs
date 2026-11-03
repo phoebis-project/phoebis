@@ -35,19 +35,15 @@ pub use bodies::{
 };
 pub use db::{LedgerDb, WriterRead, READERS};
 pub use events::{
-    catalog_changed, event_of, plan_ended, plan_restored, poll_backoff, poll_failed,
-    spawn_event_mirror, MirrorBaseline,
+    catalog_changed, event_of, plan_ended, plan_restored, poll_backoff, poll_failed, MirrorBaseline,
 };
 pub use generations::{reconcile_key_generations, LiveKeyLifetime, GENERATIONS_RECONCILED_KEY};
-pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};
+pub use histogram::{bucket_index, Histogram};
 pub use metrics::{
     gather, metrics_router, AttentionGaugeSource, AttentionGauges, KeepaliveAgents,
     KeepaliveGaugeSource, Metrics, RoutingGauges, FAMILIES,
 };
-pub use pattern::{
-    matches as pattern_matches, to_like as pattern_to_like,
-    within_bounds as patterns_within_bounds, MAX_PATTERNS, MAX_PATTERN_CHARS, PATTERNS_TOO_LONG,
-};
+pub use pattern::{within_bounds as patterns_within_bounds, PATTERNS_TOO_LONG};
 pub use plan::{
     entrypoint_of_client, free_equivalent, free_shares, funding_of, price_equivalent, price_shares,
     Capacity, CostRevisions, Funding, ModelWindow, Override, Peak, PerWindow, PlanTables, Regime,
@@ -96,7 +92,7 @@ pub use record::{
     GuardrailMatchRecord, KeepaliveDelta, ParkedRecord, QuotaSampleRecord, RequestRecord,
     SampleSource,
 };
-pub use refold::{refold_bands, PRICE_BANDS_KEY, PRICE_BANDS_REFOLD_KEY};
+pub use refold::refold_bands;
 pub use refusals::{
     is_refusal, refold_refusals, REFUSALS_BACKFILL_CURSOR_KEY, REFUSALS_BACKFILL_KEY, REFUSAL_CODES,
 };
