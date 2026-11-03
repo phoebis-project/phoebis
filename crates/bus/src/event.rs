@@ -92,10 +92,13 @@ impl DiagnosticsSource {
 /// record the `BodyShape` standing, so both crates read the one spelling rather than each writing its own.
 pub const BODY_SHAPE_ERROR_CODE: &str = "body_shape";
 
-/// The relay's error codes for a request the bound account's removal, the client's leaving or the router's shutdown cut
-/// short. The ledger files a headless attempt that ends under one as canceled, so both crates read these spellings.
+// The ledger files a headless attempt that ends under one of these codes as canceled, so both crates read these
+// spellings.
+/// The relay's error code for a request the bound account's removal cut short.
 pub const ACCOUNT_CANCELED_CODE: &str = "account_canceled";
+/// The relay's error code for a request the client's leaving cut short.
 pub const CLIENT_GONE_CODE: &str = "client_gone";
+/// The relay's error code for a request the router's shutdown cut short.
 pub const ROUTER_SHUTDOWN_CODE: &str = "router_shutdown";
 
 /// Token counts as the upstream reported them. A field the upstream did not send stays `None`, never zero,
