@@ -2832,17 +2832,10 @@ impl Task {
     fn refuse(
         &self,
         request: &SelectRequest,
-        snapshot: &RegistrySnapshot,
         refusal: Refusal,
         reply: oneshot::Sender<SelectAnswer>,
     ) {
-        let (record, summary) =
-            DecisionRecord::refused(&RefusedRequest::from(request), snapshot, &refusal.facts());
-        self.emit(RouterEvent::Decision {
-            summary: Arc::new(summary),
-            record: Arc::new(record),
-            at: request.now,
-        });
+        self.record_refusal(&RefusedRequest::from(request), &refusal.facts());
         let _ = reply.send(SelectAnswer {
             result: SelectResult::Refused(refusal),
             cancel: CancellationToken::new(),
@@ -2903,7 +2896,7 @@ impl Task {
                             request.revision = snapshot.revision;
                         }
                         Err(refusal) => {
-                            self.refuse(&request, &snapshot, refusal, reply);
+                            self.refuse(&request, refusal, reply);
                             return;
                         }
                     }
