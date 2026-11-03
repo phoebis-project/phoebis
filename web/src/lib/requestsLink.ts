@@ -155,7 +155,7 @@ export interface Widening {
  * on either view. A request without a session or an account omits that link, and one still running reads as a moment.
  * Each window's end is capped at `now`, or at the request's end where that is later.
  */
-export function requestsWiden(request: Pick<RequestLog, 'accountId' | 'at' | 'durationMs' | 'id' | 'sessionId'>, now: number, rows: string): Widening[] {
+export function requestsWiden(request: Pick<RequestLog, 'accountId' | 'at' | 'durationMs' | 'id' | 'sessionId'>, now: number, rows: number): Widening[] {
   const at = Date.parse(request.at);
   const finished = request.durationMs === null ? null : at + request.durationMs;
   // A row the list read after the page's clock sample is newer than it, and a window capped there would leave the

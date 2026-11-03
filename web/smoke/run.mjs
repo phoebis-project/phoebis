@@ -14419,7 +14419,7 @@ m.unmount();
     const line = page.container.querySelector('.drawer__head .drawer__widen');
     const links = [...(line?.querySelectorAll('a') ?? [])];
     const drawn = links.map((a) => ({ href: a.getAttribute('href'), label: a.textContent?.trim(), title: a.getAttribute('title') }));
-    const wanted = requestsWiden(subject, CLOCK_ORIGIN, '50').map((w) => ({ href: w.href, label: w.label, title: w.title }));
+    const wanted = requestsWiden(subject, CLOCK_ORIGIN, 50).map((w) => ({ href: w.href, label: w.label, title: w.title }));
     const session = links.find((a) => a.textContent?.trim() === 'this session');
     session?.click();
     await page.settle(700);

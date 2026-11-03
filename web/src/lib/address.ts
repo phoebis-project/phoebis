@@ -1,5 +1,5 @@
-import { iso, REQUEST_KIND_VALUES } from '@/api/decode';
-import type { Account, BurnGroup, KeyStatus, RequestKind } from '@/api/types';
+import { iso, REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES } from '@/api/decode';
+import type { Account, BurnGroup, KeyStatus, RequestKind, RequestOutcome } from '@/api/types';
 import { clock } from './clock';
 import { ACCOUNT_STATUSES } from './quota';
 import { DAY, HOUR } from './time';
@@ -30,10 +30,12 @@ export interface RangeValue {
 export type KeySpec =
   /** A value outside `values` reads as the default. */
   | { kind: 'choice'; default: string; name: string; values: readonly string[] }
+  /** A number among `values`, written as its digits. A value outside them reads as the default. */
+  | { kind: 'count'; default: number; name: string; values: readonly number[] }
   /** Written as `1`, read as true on `1`. */
   | { kind: 'flag'; name: string }
-  /** Comma-joined ids. */
-  | { kind: 'list'; name: string }
+  /** Comma-joined ids. An entry `accepts` refuses leaves the list, so it leaves the address on the next write. */
+  | { accepts?: (value: string) => boolean; kind: 'list'; name: string }
   /** Patterns joined by a newline, as the wire joins them, so a comma inside one rides. */
   | { kind: 'patterns'; name: string }
   /** The keys `range`, `from` and `to`. */
@@ -92,11 +94,16 @@ function readKey(key: KeySpec, params: URLSearchParams, now: number): unknown {
       const value = params.get(key.name);
       return value !== null && key.values.includes(value) ? value : key.default;
     }
+    case 'count': {
+      const value = params.get(key.name);
+      return key.values.find((v) => String(v) === value) ?? key.default;
+    }
     case 'flag':
       return params.get(key.name) === '1';
     case 'list':
+      return (params.get(key.name) ?? '').split(',').filter((v) => v !== '' && (key.accepts?.(v) ?? true));
     case 'patterns':
-      return (params.get(key.name) ?? '').split(key.kind === 'list' ? ',' : '\n').filter(Boolean);
+      return (params.get(key.name) ?? '').split('\n').filter(Boolean);
     case 'range': {
       const from = instantOf(params.get('from'));
       const asked = instantOf(params.get('to'));
@@ -117,6 +124,9 @@ function writeKey(key: KeySpec, value: unknown, params: URLSearchParams): void {
   switch (key.kind) {
     case 'choice':
       if (value !== key.default) params.set(key.name, value as string);
+      return;
+    case 'count':
+      if (value !== key.default) params.set(key.name, String(value));
       return;
     case 'flag':
       if (value === true) params.set(key.name, '1');
@@ -191,7 +201,7 @@ export interface RequestsAddress {
   keys: string[];
   kind: '' | RequestKind;
   models: string[];
-  outcomes: string[];
+  outcomes: RequestOutcome[];
   pools: string[];
   range: RangeValue;
   /** The serving attempt's refusal category, `-` for none. */
@@ -199,7 +209,7 @@ export interface RequestsAddress {
   request: string;
   requestClasses: string[];
   /** The page size. */
-  rows: string;
+  rows: number;
   search: string;
   session: string;
   speeds: string[];
@@ -208,6 +218,11 @@ export interface RequestsAddress {
   stopReasons: string[];
   turnOrigins: string[];
 }
+
+/** The ledger's words for an outcome, so one the address carries that names none leaves it. */
+const isOutcome = (value: string): boolean => REQUEST_OUTCOME_VALUES.some((o) => o === value);
+/** A status code is digits alone. */
+const isStatus = (value: string): boolean => /^\d+$/.test(value);
 
 const REQUEST_KINDS: readonly ('' | RequestKind)[] = ['', ...REQUEST_KIND_VALUES];
 
@@ -229,14 +244,14 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   pools: list('pools'),
   accounts: list('accounts'),
   models: list('models'),
-  statuses: list('statuses'),
-  outcomes: list('outcomes'),
+  statuses: { accepts: isStatus, kind: 'list', name: 'statuses' },
+  outcomes: { accepts: isOutcome, kind: 'list', name: 'outcomes' },
   cacheMissReasons: list('cache_miss_reasons'),
   guardrails: list('guardrails'),
   refusalCategories: list('refusal_categories'),
   stopReasons: list('stop_reasons'),
   kind: { default: '', kind: 'choice', name: 'kind', values: REQUEST_KINDS },
-  rows: { default: '25', kind: 'choice', name: 'rows', values: ['10', '25', '50', '100'] },
+  rows: { default: 25, kind: 'count', name: 'rows', values: [10, 25, 50, 100] },
   range: { default: '24h', kind: 'range' },
 });
 export const requestsHref = (address: RequestsAddress): string => `/requests?${REQUESTS_CODEC.toParams(address)}`;

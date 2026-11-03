@@ -19,7 +19,7 @@ import { IconChevronLeft, IconChevronRight, IconX } from '@/components/ui/icons'
 import { PagerNav } from '@/components/ui/PagerNav';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, Select, Skeleton } from '@/components/ui/primitives';
-import { accountHref, addressWindow, requestHref, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
+import { accountHref, addressWindow, requestHref, REQUESTS_CODEC } from '@/lib/address';
 import { shareHint, shareHintLines, type WeekReading } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
 import { bodyLines, bodyText, findHits } from '@/lib/bodies';
@@ -84,8 +84,6 @@ const statusOptions = (rows: RequestLog[], selected: string[]) => {
   const codes = new Set([...named.keys(), ...rows.flatMap((r) => (r.status === null ? [] : [r.status])), ...selected.map(Number)]);
   return [...codes].sort((a, b) => a - b).map((code) => ({ label: named.has(code) ? `${code} ${named.get(code)}` : String(code), value: String(code) }));
 };
-/** The words the ledger records an outcome under; one the address carries that names no outcome is dropped. */
-const outcomesOf = (values: string[]): RequestOutcome[] => values.flatMap((v) => REQUEST_OUTCOME_VALUES.filter((o) => o === v));
 /**
  * The known reasons in their reading order, then every other name the loaded rows' serving attempts or the address
  * carry, alphabetically, so a link naming a reason the console has no label for still shows as chosen.
@@ -109,11 +107,6 @@ const requestClassOptions = (rows: RequestLog[], selected: string[]) => {
   return [...[...classes].sort().map((c) => ({ label: c, value: c })), { label: 'unattributed', value: NO_CLASS }, { label: OTHER_DIMENSION, value: OTHER_DIMENSION }];
 };
 
-/**
- * Every filter, the range and the page size, which the page's address holds so a reload or a shared link keeps them,
- * with the page size as a number and the outcomes and status codes the page could have written.
- */
-type Filters = Omit<RequestsAddress, 'outcomes' | 'rows'> & { outcomes: RequestOutcome[]; rows: number };
 
 /** Keyed by every outcome the ledger records, so one it gains is a type error until it is named here. */
 const REQUEST_OUTCOME_LABEL: Record<RequestOutcome, string> = {
@@ -280,8 +273,7 @@ export function RequestsPage() {
   const costs = settings.data?.subscriptionCosts ?? null;
   const context: CostContext = { accounts: accounts.data, costs, ...weekReadingOf(costs, settings.error, week) };
 
-  const { address, filters: read, replace } = useQueryFilters(REQUESTS_CODEC);
-  const filters = useMemo<Filters>(() => ({ ...read, outcomes: outcomesOf(read.outcomes), rows: Number(read.rows), statuses: read.statuses.filter((code) => /^\d+$/.test(code)) }), [read]);
+  const { address, filters, replace, update } = useQueryFilters(REQUESTS_CODEC);
   const [visible, setVisible] = useState<Set<ColumnId>>(() => new Set(COLUMNS.map((c) => c.id).filter((id) => !HIDDEN_BY_DEFAULT.includes(id))));
   // Under a preset a cursor page here reads to the router's clock, as the poll under the watermark does, so only the
   // first page and a custom range read an end.
@@ -293,10 +285,6 @@ export function RequestsPage() {
   const [intervalMs, setIntervalMs] = useState(0);
   const { cause: holdCause, host } = useHoldHost();
   const rangeTakenAt = useRangeTakenAt(filters.range);
-  const update = (patch: Partial<Filters>) => {
-    const next = { ...filters, ...patch };
-    replace({ ...next, rows: String(next.rows) });
-  };
 
   // A custom range names its own window, which Refresh reads again rather than moving it to now.
   const custom = filters.range.preset === 'custom';
@@ -333,7 +321,7 @@ export function RequestsPage() {
     settings.reload();
   };
   // The page size is how the operator reads the log rather than what it narrows to, so Reset filters keeps it.
-  const reset = () => replace({ ...REQUESTS_CODEC.defaults, rows: read.rows });
+  const reset = () => replace({ ...REQUESTS_CODEC.defaults, rows: filters.rows });
   const options: Record<string, Option[]> = {
     accounts: (accounts.data ?? []).map((a) => ({ label: a.label, value: a.id })),
     agentTypes: AGENT_TYPES.map((v) => ({ label: v, value: v })),
@@ -548,7 +536,7 @@ export function RequestsPage() {
 
         {requestId && (
           <Descriptions>
-            <RequestDrawer context={context} request={selected} requestId={requestId} guardrails={guardrails.data} now={now} rows={read.rows} settings={settings.data} unit={unit} onClose={() => navigate({ pathname: '/requests', search: location.search })} />
+            <RequestDrawer context={context} request={selected} requestId={requestId} guardrails={guardrails.data} now={now} rows={filters.rows} settings={settings.data} unit={unit} onClose={() => navigate({ pathname: '/requests', search: location.search })} />
           </Descriptions>
         )}
       </div>
@@ -556,7 +544,7 @@ export function RequestsPage() {
   );
 }
 
-function RequestDrawer({ context, guardrails, request, requestId, now, onClose, rows, settings, unit }: { context: CostContext; guardrails: Guardrail[] | null; now: number; onClose: () => void; request: RequestLog | null; requestId: string; rows: string; settings: Settings | null; unit: UnitPosition }) {
+function RequestDrawer({ context, guardrails, request, requestId, now, onClose, rows, settings, unit }: { context: CostContext; guardrails: Guardrail[] | null; now: number; onClose: () => void; request: RequestLog | null; requestId: string; rows: number; settings: Settings | null; unit: UnitPosition }) {
   // The drawer reads the request on every open, and draws the list's own row whenever the page holds it.
   const detail = useAsync(() => api.getRequest(requestId), [requestId]);
   // A load that is pending or has failed leaves the answer to the request before it in hand, so only an answer

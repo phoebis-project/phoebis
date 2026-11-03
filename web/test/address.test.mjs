@@ -17,7 +17,7 @@ const FILLED = {
   METER_CODEC: { accounts: ['primary', 'secondary'] },
   POOLS_CODEC: {},
   QUOTA_CODEC: {},
-  REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentId: 'main', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], classifiers: ['client', '-'], client: 'claude-code/*', efforts: ['high', 'low'], guardrails: ['large-auxiliary', '-'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), refusalCategories: ['cyber', '-'], request: 'req_f8085653', requestClasses: ['conversation', 'title'], rows: '50', search: 'req_1d9c3e55', session: '407dd39b-dd60', speeds: ['fast', 'standard'], statuses: ['200', '429'], stopReasons: ['refusal', '-'], turnOrigins: ['agent', 'user'] },
+  REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentId: 'main', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], classifiers: ['client', '-'], client: 'claude-code/*', efforts: ['high', 'low'], guardrails: ['large-auxiliary', '-'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), refusalCategories: ['cyber', '-'], request: 'req_f8085653', requestClasses: ['conversation', 'title'], rows: 50, search: 'req_1d9c3e55', session: '407dd39b-dd60', speeds: ['fast', 'standard'], statuses: ['200', '429'], stopReasons: ['refusal', '-'], turnOrigins: ['agent', 'user'] },
   ROUTING_LOG_CODEC: { accounts: ['primary', 'secondary'], agentId: 'main', keys: ['desktop', 'laptop'], kinds: ['exhausted', 'moved'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], range: preset('6h'), request: 'req_1d9c3e55', session: '407dd39b-dd60' },
   SESSIONS_CODEC: { companion: true, dir: 'asc', finished: true, released: true, sort: 'activity' },
 };
@@ -170,7 +170,7 @@ test('an integer past the dates a Date holds reads as empty without a throw', ()
 test('a value outside a choice reads as the default', () => {
   assert.equal(read(d.KEYS_CODEC, 'status=lost').status, 'all');
   assert.equal(read(d.REQUESTS_CODEC, 'kind=bogus').kind, '');
-  assert.equal(read(d.REQUESTS_CODEC, 'rows=7').rows, '25');
+  assert.equal(read(d.REQUESTS_CODEC, 'rows=7').rows, 25);
   assert.equal(read(d.ANALYTICS_CODEC, 'by=all').by, 'key');
   assert.equal(read(d.ANALYTICS_CODEC, 'by=session').by, 'session', "the group-by takes the Burn section's own session grouping");
   assert.equal(read(d.ANALYTICS_CODEC, 'burn=session').by, 'key', 'and no grouping of its own travels for the Burn section');

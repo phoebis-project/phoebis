@@ -190,7 +190,7 @@ const NOW = at('2026-09-16T14:30:00Z');
 const ROW = { accountId: 'primary', at: '2026-09-16T14:20:20.500Z', durationMs: 4_000, id: 'req_1', sessionId: SESSION };
 
 test("the drawer's three widenings write a fresh Requests address each, in the order this minute, this session, this account, with the page size kept", () => {
-  const widened = d.requestsWiden(ROW, NOW, '50');
+  const widened = d.requestsWiden(ROW, NOW, 50);
   assert.deepEqual(
     widened.map((w) => [w.label, w.title]),
     [
@@ -208,14 +208,14 @@ test("the drawer's three widenings write a fresh Requests address each, in the o
     ],
   );
   assert.deepEqual(
-    d.requestsWiden(ROW, NOW, '25').map((w) => target(w.href).rows),
+    d.requestsWiden(ROW, NOW, 25).map((w) => target(w.href).rows),
     [undefined, undefined, undefined],
     'the default page size leaves the address',
   );
 });
 
 test('a request without a session omits this session, and one without an account omits this account', () => {
-  const labels = (over) => d.requestsWiden({ ...ROW, ...over }, NOW, '25').map((w) => w.label);
+  const labels = (over) => d.requestsWiden({ ...ROW, ...over }, NOW, 25).map((w) => w.label);
   assert.deepEqual(labels({ sessionId: null }), ['this minute', 'this account']);
   assert.deepEqual(labels({ accountId: null }), ['this minute', 'this session']);
   assert.deepEqual(labels({ accountId: null, sessionId: null }), ['this minute']);
@@ -223,7 +223,7 @@ test('a request without a session omits this session, and one without an account
 
 test('a running request widens to its account from its start', () => {
   const early = { ...ROW, at: '2026-09-16T13:00:00.000Z' };
-  const account = (row) => target(d.requestsWiden(row, NOW, '25')[2].href);
+  const account = (row) => target(d.requestsWiden(row, NOW, 25)[2].href);
   assert.deepEqual([account({ ...early, durationMs: null }).from, account({ ...early, durationMs: null }).to], ['2026-09-16T12:45:00.000Z', '2026-09-16T13:15:00.000Z']);
   assert.equal(account({ ...early, durationMs: 120_000 }).to, '2026-09-16T13:17:00.000Z', 'a finished request widens to the quarter hour after its finish');
 });
@@ -233,7 +233,7 @@ test("a request newer than the page's clock sample keeps its own instant inside 
   // next clock minute.
   const fresh = { ...ROW, at: '2026-09-16T14:20:05.000Z' };
   const sample = at('2026-09-16T14:19:55Z');
-  const widened = d.requestsWiden(fresh, sample, '25').map((w) => target(w.href));
+  const widened = d.requestsWiden(fresh, sample, 25).map((w) => target(w.href));
   const arrived = Date.parse(fresh.at);
   assert.equal(widened.length, 3);
   for (const read of widened) {
