@@ -28,7 +28,7 @@ import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, readEnd, spanEnded } from '@/lib/follow';
 import { SESSION_CHARS, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
-import { useAsync, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
+import { useAsync, useHashSection, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
 import { readWindows } from '@/lib/quota';
 import { REFUSED_TITLE } from '@/lib/requests';
 import { CLIENT_PATTERNS_PLAIN, linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
@@ -239,16 +239,7 @@ export function AnalyticsPage() {
   const rangeTakenAt = useRangeTakenAt(a.range);
   const location = useLocation();
   const navigate = useNavigate();
-  // The hash is the tab: a link or a reload lands on the section it names, and a change replaces the entry with the
-  // search kept, so a session filter survives and Back leaves the page rather than walking the tabs.
-  const tab = useMemo<SectionId>(() => {
-    const id = location.hash.slice(1);
-    return SECTIONS.some((s) => s.id === id) ? (id as SectionId) : 'traffic';
-  }, [location.hash]);
-  const chooseTab = (id: SectionId) => {
-    navigate({ hash: `#${id}`, pathname: location.pathname, search: location.search }, { replace: true });
-    scroller()?.scrollTo?.({ top: 0 });
-  };
+  const [tab, chooseTab] = useHashSection(SECTIONS, 'traffic');
   // A session id is one session per key lifetime, so a drill-down from a session row names the lifetime too. A session
   // without one reads unscoped.
   const sessionKey = a.session && a.key ? a.key : null;
@@ -1151,9 +1142,6 @@ const SECTIONS = [
   { id: 'accounts', label: 'Accounts' },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]['id'];
-
-/** The element the page scrolls; jsdom implements no `scrollTo` on it, so a caller guards the call. */
-const scroller = (): Element | null => document.scrollingElement;
 
 /** `metaTitle` is the meta line's hover text, such as the estimate's sentence for a marked figure. */
 function Section({ id, title, meta, metaTitle, controls, shown = true, children }: { children: ReactNode; controls?: ReactNode; id: SectionId; meta?: string; metaTitle?: string; shown?: boolean; title: string }) {

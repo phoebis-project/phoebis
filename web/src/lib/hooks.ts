@@ -356,6 +356,25 @@ export function useQueryFilters<F>(codec: Codec<F>): { address: string; filters:
 }
 
 /**
+ * A sectioned view's shown section, read from the hash: a link or a reload lands on the section it names, else on
+ * `fallback`. A choice replaces the entry with the search kept, so a filter survives and Back leaves the page rather
+ * than walking the sections, and scrolls to the top, a call jsdom does not implement and so guarded.
+ */
+export function useHashSection<T extends string>(sections: readonly { id: T }[], fallback: T): [T, (id: T) => void] {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const shown = useMemo(() => {
+    const id = location.hash.slice(1);
+    return sections.find((s) => s.id === id)?.id ?? fallback;
+  }, [fallback, location.hash, sections]);
+  const choose = (id: T) => {
+    navigate({ hash: `#${id}`, pathname: location.pathname, search: location.search }, { replace: true });
+    document.scrollingElement?.scrollTo?.({ top: 0 });
+  };
+  return [shown, choose];
+}
+
+/**
  * The instant the page took its range, read again only when the range moves: another preset, or a span with another
  * `from` or `to`. A link capped at now ends its span at the clock it was made on, so this instant tells it from a span
  * that has ended, and a chip, the search or a view control, which leave the range as it stands, keep it reading on.

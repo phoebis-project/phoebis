@@ -1,5 +1,4 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, AccountSlowDown, ExtraUsage, QuotaPoll, QuotaSnapshot, RateLimitWindow, Spend } from '@/api/types';
 import { accountColor, accountSlots } from '@/components/charts/theme';
@@ -10,7 +9,7 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, upperFirst } from '@/lib/format';
-import { useAsync, useNow, useResizeObserver } from '@/lib/hooks';
+import { useAsync, useHashSection, useNow, useResizeObserver } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, sortByPace, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 import { DAY, HOUR } from '@/lib/time';
@@ -21,7 +20,6 @@ const QUOTA_SECTIONS = [
   { id: 'accounts', label: 'Accounts' },
   { id: 'quota-windows', label: 'Quota windows' },
 ] as const;
-type QuotaSectionId = (typeof QUOTA_SECTIONS)[number]['id'];
 
 export function QuotaPage() {
   const [intervalMs, setIntervalMs] = useState(5_000);
@@ -30,19 +28,7 @@ export function QuotaPage() {
   const now = useNow();
   const [sort, setSort] = useState<Sort>('default');
   const [refreshing, setRefreshing] = useState(false);
-  const location = useLocation();
-  const navigate = useNavigate();
-  // The hash is the section, as on the Analytics page: a link or a reload lands on the one it names, and a choice
-  // replaces the entry with the search kept, so Back leaves the page rather than walking the sections.
-  const shown = useMemo<QuotaSectionId>(() => {
-    const id = location.hash.slice(1);
-    return QUOTA_SECTIONS.some((s) => s.id === id) ? (id as QuotaSectionId) : 'accounts';
-  }, [location.hash]);
-  const choose = (id: QuotaSectionId) => {
-    navigate({ hash: `#${id}`, pathname: location.pathname, search: location.search }, { replace: true });
-    // jsdom implements no `scrollTo`, so the call is guarded.
-    document.scrollingElement?.scrollTo?.({ top: 0 });
-  };
+  const [shown, choose] = useHashSection(QUOTA_SECTIONS, 'accounts');
 
   // An API-key account carries no quota window, and an account disconnected or awaiting re-authentication reports none,
   // so the page reads the other subscription accounts alone, whatever windows such a row still carries.
