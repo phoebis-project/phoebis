@@ -1505,7 +1505,7 @@ mod tests {
     /// the restamp fails after it zeroed the digits.
     #[test]
     fn a_restamp_whose_view_cannot_be_built_hands_back_the_body_with_its_digits() {
-        let body = br#"{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.220.test; cch=abcde;"}],"stream":tru}"#;
+        let body = br#"{"system":[{"type":"text","text":"x-anthropic-billing-header: cch=abcde;"}],"stream":tru}"#;
         let mut restamped = body.to_vec();
         assert!(matches!(
             restamp_if_present(&mut restamped),
