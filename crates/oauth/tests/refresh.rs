@@ -496,6 +496,53 @@ async fn a_repeated_backoff_failure_leaves_the_credentials_last_error_row_untouc
     up.shutdown().await;
 }
 
+/// `acquire_for` records the failure from a blocking thread, a path of its own beside `acquire`'s inline write.
+#[tokio::test]
+async fn a_backoff_through_acquire_for_shows_up_as_the_credentials_last_error() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Json {
+            status: 503,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    };
+    let (mgr, store, up) = manager_with(vec![rule], now).await;
+    store
+        .commit_credentials(
+            "a",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("old"),
+                refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: 0,
+                expires_at: 1,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    let row = store.account("a").unwrap().unwrap();
+
+    assert!(mgr.acquire_for(&row, None).await.is_err());
+    // The 503 armed a backoff the manager's clock never moves past, so this acquire opens no attempt.
+    assert!(mgr.acquire_for(&row, None).await.is_err());
+    assert_eq!(
+        store
+            .credential_metadata("a")
+            .unwrap()
+            .unwrap()
+            .last_error
+            .as_deref(),
+        Some("refresh is waiting out a backoff")
+    );
+    up.shutdown().await;
+}
+
 fn token_answer() -> Respond {
     Respond::Json {
         status: 200,
