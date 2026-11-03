@@ -227,12 +227,12 @@ pub fn repeated_member_within(
     let mut s = Scanner::new(body);
     let mut repeated = None;
     s.ws();
-    each_decoded_member(&mut s, |s, key| {
+    each_member(&mut s, Keys::Decoded, |s, key| {
         if key != parent.as_bytes() || s.body.get(s.pos) != Some(&b'{') {
             return s.value(false);
         }
         let mut seen: Vec<&'static str> = Vec::new();
-        each_decoded_member(s, |s, key| {
+        each_member(s, Keys::Decoded, |s, key| {
             if let Some(name) = names.iter().copied().find(|n| n.as_bytes() == key) {
                 if seen.contains(&name) {
                     repeated.get_or_insert(name);
@@ -400,43 +400,18 @@ fn cache_control_walk(body: &[u8], keys: Keys) -> Result<Vec<(usize, usize)>, Cc
     let mut s = Scanner::new(body);
     let mut spans = Vec::new();
     s.ws();
-    if !s.eat(b'{') {
-        return Err(CchError::Json(s.pos));
-    }
-    s.inside(|s| {
-        s.ws();
-        if s.eat(b'}') {
-            return Ok(spans);
+    each_member(&mut s, keys, |s, key| match key {
+        b"cache_control" => {
+            let start = s.pos;
+            s.value(false)?;
+            spans.push((start, s.pos));
+            Ok(())
         }
-        loop {
-            s.ws();
-            let (ks, ke) = s.string()?;
-            s.ws();
-            if !s.eat(b':') {
-                return Err(CchError::Json(s.pos));
-            }
-            s.ws();
-            match key_name(body, ks, ke, keys).as_ref() {
-                b"cache_control" => {
-                    let start = s.pos;
-                    s.value(false)?;
-                    spans.push((start, s.pos));
-                }
-                b"system" | b"tools" => block_array(s, &mut spans, false, keys)?,
-                b"messages" => message_array(s, &mut spans, keys)?,
-                _ => s.value(false)?,
-            }
-            s.ws();
-            if s.eat(b',') {
-                continue;
-            }
-            if !s.eat(b'}') {
-                return Err(CchError::Json(s.pos));
-            }
-            break;
-        }
-        Ok(spans)
-    })
+        b"system" | b"tools" => block_array(s, &mut spans, false, keys),
+        b"messages" => message_array(s, &mut spans, keys),
+        _ => s.value(false),
+    })?;
+    Ok(spans)
 }
 
 /// The array behind `system` or `tools`, or a `messages[]` element's `content`: each object entry's own
@@ -449,35 +424,7 @@ fn block_array(
     inner: bool,
     keys: Keys,
 ) -> Result<(), CchError> {
-    s.ws();
-    if s.body.get(s.pos) != Some(&b'[') {
-        return s.value(false);
-    }
-    s.enter()?;
-    s.pos += 1;
-    s.ws();
-    if s.eat(b']') {
-        s.leave();
-        return Ok(());
-    }
-    loop {
-        s.ws();
-        if s.body.get(s.pos) == Some(&b'{') {
-            block_object(s, spans, inner, keys)?;
-        } else {
-            s.value(false)?;
-        }
-        s.ws();
-        if s.eat(b',') {
-            continue;
-        }
-        if !s.eat(b']') {
-            return Err(CchError::Json(s.pos));
-        }
-        break;
-    }
-    s.leave();
-    Ok(())
+    each_object_element(s, |s| block_object(s, spans, inner, keys))
 }
 
 /// One `system[]`, `tools[]`, or content-block object: its own `cache_control` member is recorded; its `content`
@@ -489,44 +436,18 @@ fn block_object(
     inner: bool,
     keys: Keys,
 ) -> Result<(), CchError> {
-    s.enter()?;
-    s.pos += 1;
-    s.ws();
-    if s.eat(b'}') {
-        s.leave();
-        return Ok(());
-    }
-    loop {
-        s.ws();
-        let (ks, ke) = s.string()?;
-        s.ws();
-        if !s.eat(b':') {
-            return Err(CchError::Json(s.pos));
+    each_member(s, keys, |s, key| match key {
+        b"cache_control" => {
+            let start = s.pos;
+            s.value(false)?;
+            spans.push((start, s.pos));
+            Ok(())
         }
-        s.ws();
-        let body = s.body;
-        match key_name(body, ks, ke, keys).as_ref() {
-            b"cache_control" => {
-                let start = s.pos;
-                s.value(false)?;
-                spans.push((start, s.pos));
-            }
-            // A `tool_result` is the one block the API gives a `content` array of blocks, and its `type` may
-            // follow `content` in body order, so the member is read on its name alone and one level only.
-            b"content" if !inner => block_array(s, spans, true, keys)?,
-            _ => s.value(false)?,
-        }
-        s.ws();
-        if s.eat(b',') {
-            continue;
-        }
-        if !s.eat(b'}') {
-            return Err(CchError::Json(s.pos));
-        }
-        break;
-    }
-    s.leave();
-    Ok(())
+        // A `tool_result` is the one block the API gives a `content` array of blocks, and its `type` may
+        // follow `content` in body order, so the member is read on its name alone and one level only.
+        b"content" if !inner => block_array(s, spans, true, keys),
+        _ => s.value(false),
+    })
 }
 
 /// `messages[]`: each object element's `content` is walked as `block_array` walks `system` and `tools`, when it
@@ -535,6 +456,29 @@ fn message_array(
     s: &mut Scanner<'_>,
     spans: &mut Vec<(usize, usize)>,
     keys: Keys,
+) -> Result<(), CchError> {
+    each_object_element(s, |s| message_object(s, spans, keys))
+}
+
+fn message_object(
+    s: &mut Scanner<'_>,
+    spans: &mut Vec<(usize, usize)>,
+    keys: Keys,
+) -> Result<(), CchError> {
+    each_member(s, keys, |s, key| {
+        if key == b"content" {
+            block_array(s, spans, false, keys)
+        } else {
+            s.value(false)
+        }
+    })
+}
+
+/// Walks the array at `s`, handing `element` each object element with `s` at its `{` and skipping every other
+/// element whole. A value at that position that is not an array is skipped whole too.
+fn each_object_element<'a>(
+    s: &mut Scanner<'a>,
+    mut element: impl FnMut(&mut Scanner<'a>) -> Result<(), CchError>,
 ) -> Result<(), CchError> {
     s.ws();
     if s.body.get(s.pos) != Some(&b'[') {
@@ -550,7 +494,7 @@ fn message_array(
     loop {
         s.ws();
         if s.body.get(s.pos) == Some(&b'{') {
-            message_object(s, spans, keys)?;
+            element(s)?;
         } else {
             s.value(false)?;
         }
@@ -559,44 +503,6 @@ fn message_array(
             continue;
         }
         if !s.eat(b']') {
-            return Err(CchError::Json(s.pos));
-        }
-        break;
-    }
-    s.leave();
-    Ok(())
-}
-
-fn message_object(
-    s: &mut Scanner<'_>,
-    spans: &mut Vec<(usize, usize)>,
-    keys: Keys,
-) -> Result<(), CchError> {
-    s.enter()?;
-    s.pos += 1;
-    s.ws();
-    if s.eat(b'}') {
-        s.leave();
-        return Ok(());
-    }
-    loop {
-        s.ws();
-        let (ks, ke) = s.string()?;
-        s.ws();
-        if !s.eat(b':') {
-            return Err(CchError::Json(s.pos));
-        }
-        s.ws();
-        if key_name(s.body, ks, ke, keys).as_ref() == b"content" {
-            block_array(s, spans, false, keys)?;
-        } else {
-            s.value(false)?;
-        }
-        s.ws();
-        if s.eat(b',') {
-            continue;
-        }
-        if !s.eat(b'}') {
             return Err(CchError::Json(s.pos));
         }
         break;
@@ -615,7 +521,7 @@ pub fn decoded_stamp_count(body: &[u8]) -> usize {
     let mut s = Scanner::new(body);
     let mut count = 0;
     s.ws();
-    let _ = each_decoded_member(&mut s, |s, key| {
+    let _ = each_member(&mut s, Keys::Decoded, |s, key| {
         if key != b"system" {
             return s.value(false);
         }
@@ -639,7 +545,7 @@ pub fn first_system_block_member_count(body: &[u8], name: &str) -> Result<usize,
     let mut s = Scanner::new(body);
     let mut count = 0;
     s.ws();
-    each_decoded_member(&mut s, |s, key| {
+    each_member(&mut s, Keys::Decoded, |s, key| {
         if key != b"system" {
             return s.value(false);
         }
@@ -651,45 +557,48 @@ pub fn first_system_block_member_count(body: &[u8], name: &str) -> Result<usize,
     Ok(count)
 }
 
-/// Walks the object at `s` (its `{` not yet eaten), handing `member` each member's decoded key with `s` at the
-/// value, which `member` reads.
-fn each_decoded_member<'a>(
+/// Walks the object at `s` (its `{` not yet eaten), handing `member` each member's key as `keys` reads it with `s` at
+/// the value, which `member` reads. The object counts toward the depth bound while the walk stands inside it.
+fn each_member<'a>(
     s: &mut Scanner<'a>,
+    keys: Keys,
     mut member: impl FnMut(&mut Scanner<'a>, &[u8]) -> Result<(), CchError>,
 ) -> Result<(), CchError> {
-    if !s.eat(b'{') {
+    if s.body.get(s.pos) != Some(&b'{') {
         return Err(CchError::Json(s.pos));
     }
-    s.inside(|s| {
+    s.enter()?;
+    s.pos += 1;
+    s.ws();
+    if s.eat(b'}') {
+        s.leave();
+        return Ok(());
+    }
+    loop {
         s.ws();
-        if s.eat(b'}') {
-            return Ok(());
+        let (ks, ke) = s.string()?;
+        s.ws();
+        if !s.eat(b':') {
+            return Err(CchError::Json(s.pos));
         }
-        loop {
-            s.ws();
-            let (ks, ke) = s.string()?;
-            s.ws();
-            if !s.eat(b':') {
-                return Err(CchError::Json(s.pos));
-            }
-            s.ws();
-            let body = s.body;
-            member(s, key_name(body, ks, ke, Keys::Decoded).as_ref())?;
-            s.ws();
-            if s.eat(b',') {
-                continue;
-            }
-            if !s.eat(b'}') {
-                return Err(CchError::Json(s.pos));
-            }
-            return Ok(());
+        s.ws();
+        let body = s.body;
+        member(s, key_name(body, ks, ke, keys).as_ref())?;
+        s.ws();
+        if s.eat(b',') {
+            continue;
         }
-    })
+        if !s.eat(b'}') {
+            return Err(CchError::Json(s.pos));
+        }
+        break;
+    }
+    s.leave();
+    Ok(())
 }
 
 /// A `system` value: when it is an array whose first element is an object, `member` is handed each of that object's
-/// members as `each_decoded_member` hands them; every other element, and a `system` of another shape, is skipped
-/// whole.
+/// members as `each_member` hands them; every other element, and a `system` of another shape, is skipped whole.
 fn each_first_block_member<'a>(
     s: &mut Scanner<'a>,
     member: impl FnMut(&mut Scanner<'a>, &[u8]) -> Result<(), CchError>,
@@ -705,7 +614,7 @@ fn each_first_block_member<'a>(
             return Ok(());
         }
         if s.body.get(s.pos) == Some(&b'{') {
-            each_decoded_member(s, member)?;
+            each_member(s, Keys::Decoded, member)?;
         } else {
             s.value(false)?;
         }
