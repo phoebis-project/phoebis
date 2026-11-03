@@ -192,6 +192,16 @@ pub enum Cancellation {
     On { ends_at: Option<i64> },
 }
 
+impl Cancellation {
+    /// The `canceled` flag and the `subscription_ends_at` value the row stores for it.
+    pub(crate) fn stored_pair(self) -> (bool, Option<i64>) {
+        match self {
+            Cancellation::On { ends_at } => (true, ends_at),
+            Cancellation::Off => (false, None),
+        }
+    }
+}
+
 /// The pin and placement knobs of a pool beside `affinity_ttl_seconds`; `Default` is the shipped preset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Affinity {
@@ -1411,13 +1421,7 @@ impl Store {
         let absent = || StoreError::AccountNotFound(u.id.to_string());
         let before = crate::accounts::account_in(&tx, u.id)?.ok_or_else(absent)?;
         let term = crate::accounts::subscription_term_in(&tx, u.id)?.ok_or_else(absent)?;
-        let canceled = u
-            .cancellation
-            .map(|cancellation| matches!(cancellation, Cancellation::On { .. }));
-        let ends_at = match u.cancellation {
-            Some(Cancellation::On { ends_at }) => ends_at,
-            Some(Cancellation::Off) | None => None,
-        };
+        let (canceled, ends_at) = u.cancellation.map(Cancellation::stored_pair).unzip();
         let (state, cause) = u.state.unzip();
         let updated = tx.execute(
             "UPDATE accounts SET label = ?2, state = COALESCE(?3, state), \
@@ -1435,7 +1439,7 @@ impl Store {
                 u.expected_revision as i64,
                 u.enabled,
                 canceled,
-                ends_at,
+                ends_at.flatten(),
                 u.incarnation as i64,
                 cause,
             ],
@@ -2208,11 +2212,9 @@ fn key_fields(row: &ApiKeyRow) -> serde_json::Value {
 /// The account's pairs over the five editable fields, `secret_replaced` beside them when a secret was staged. The
 /// row holds the label, the state and the switch, and the term row the flag and the end.
 fn account_pairs(before: &AccountRow, u: &AccountUpdate<'_>, term: &SubscriptionTerm) -> String {
-    let (canceled, ends_at) = match u.cancellation {
-        None => (term.canceled, term.ends_at),
-        Some(Cancellation::On { ends_at }) => (true, ends_at),
-        Some(Cancellation::Off) => (false, None),
-    };
+    let (canceled, ends_at) = u
+        .cancellation
+        .map_or((term.canceled, term.ends_at), Cancellation::stored_pair);
     let old = serde_json::json!({
         "label": before.label,
         "enabled": before.enabled,

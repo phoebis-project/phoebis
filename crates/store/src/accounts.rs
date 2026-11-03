@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 
 use rusqlite::{params, OptionalExtension, Row};
 
-use crate::registry::{organization_type_of, plan_of, usage_based_of, SubscriptionTerm};
+use crate::registry::{
+    organization_type_of, plan_of, usage_based_of, Cancellation, SubscriptionTerm,
+};
 use crate::{Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
 text_enum! {
@@ -538,10 +540,15 @@ impl Store {
         canceled: bool,
         ends_at: Option<i64>,
     ) -> Result<(), StoreError> {
+        let cancellation = if canceled {
+            Cancellation::On { ends_at }
+        } else {
+            Cancellation::Off
+        };
+        let (canceled, ends_at) = cancellation.stored_pair();
         let conn = self.conn.lock().expect(LOCK_POISONED);
         if conn.execute(
-            "UPDATE accounts SET canceled = ?2, \
-             subscription_ends_at = CASE WHEN ?2 THEN ?3 ELSE NULL END, \
+            "UPDATE accounts SET canceled = ?2, subscription_ends_at = ?3, \
              revision = revision + 1, updated_at = ?4 WHERE id = ?1",
             params![id, canceled, ends_at, self.now_ms()],
         )? == 0
