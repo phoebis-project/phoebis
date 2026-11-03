@@ -76,11 +76,7 @@ pub fn fold_user_agent(raw: &str) -> String {
     let part = |s: &str| !s.is_empty() && s.bytes().all(|b| b != b'/' && identifier_byte(b));
     match token.split_once('/') {
         Some((name, version)) if part(name) && part(version) => {
-            let mut end = token.len().min(DIMENSION_MAX_BYTES);
-            while !token.is_char_boundary(end) {
-                end -= 1;
-            }
-            token[..end].to_string()
+            token[..token.floor_char_boundary(DIMENSION_MAX_BYTES)].to_string()
         }
         _ => OTHER_DIMENSION.into(),
     }

@@ -575,11 +575,7 @@ pub const USER_AGENT_MAX_BYTES: usize = 256;
 
 /// `value` cut to `USER_AGENT_MAX_BYTES` at a character boundary: the one rule the row and the live step apply.
 pub fn user_agent_cut(value: &str) -> &str {
-    let mut end = value.len().min(USER_AGENT_MAX_BYTES);
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    &value[..end]
+    &value[..value.floor_char_boundary(USER_AGENT_MAX_BYTES)]
 }
 
 pub fn user_agent_of(headers: &[(String, String)]) -> Option<String> {
