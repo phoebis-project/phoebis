@@ -6235,6 +6235,143 @@ fn a_zero_bucket_seconds_answers_the_range_error_rather_than_panicking() {
         .is_err());
 }
 
+/// 10,000 whole six-hour buckets and one hour more: 10,001 points once the trailing partial bucket counts as the
+/// point the readers answer for it, one past `MAX_POINTS`, where a whole-bucket count reads 10,000 and lets it pass.
+#[tokio::test]
+async fn every_series_reader_refuses_a_range_whose_trailing_partial_bucket_is_one_point_too_many() {
+    const BUCKET: i64 = 21_600;
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (from_hour, to_hour) = (0, 10_000 * BUCKET + 3_600);
+    let filter = SeriesFilter {
+        from: from_hour * 1_000,
+        to: to_hour * 1_000,
+        bucket_seconds: BUCKET,
+        ..SeriesFilter::default()
+    };
+    let live = LiveKeys::default();
+    let refused = |answer: Result<(), phoebis_ledger::LedgerError>| {
+        matches!(answer, Err(phoebis_ledger::LedgerError::Yaml(_)))
+    };
+    let answers = [
+        (
+            "series",
+            refused(
+                series(
+                    &[],
+                    filter.from,
+                    filter.to,
+                    BUCKET,
+                    "all",
+                    false,
+                    &live,
+                    &[],
+                    None,
+                    &PRICES,
+                    &COSTS,
+                    NOW,
+                )
+                .map(drop),
+            ),
+        ),
+        (
+            "series_paged",
+            refused(
+                series_paged(
+                    &db,
+                    &RollupFilter::default(),
+                    &live,
+                    filter.from,
+                    filter.to,
+                    BUCKET,
+                    "all",
+                    None,
+                    &PRICES,
+                    &COSTS,
+                    NOW,
+                )
+                .await
+                .map(drop),
+            ),
+        ),
+        (
+            "pool_traffic",
+            refused(
+                pool_traffic(&db, "p", from_hour, to_hour, BUCKET, &PRICES, &COSTS, NOW)
+                    .await
+                    .map(drop),
+            ),
+        ),
+        (
+            "pools_traffic",
+            refused(
+                db.read_blocking(|c| {
+                    pools_traffic(
+                        c,
+                        &["p".to_string()],
+                        from_hour,
+                        to_hour,
+                        BUCKET,
+                        &PRICES,
+                        &COSTS,
+                        NOW,
+                    )
+                })
+                .map(drop),
+            ),
+        ),
+        (
+            "burn_rows",
+            refused(db.read_blocking(|c| burn_rows(c, &filter)).map(drop)),
+        ),
+        (
+            "burn_series_over",
+            refused(burn_series_over(&[], &COSTS, &PRICES, &filter, NOW).map(drop)),
+        ),
+        (
+            "burn_groups_paged",
+            refused(
+                burn_groups_paged(&db, &COSTS, &PRICES, &filter, "all", &live, &[], NOW)
+                    .await
+                    .map(drop),
+            ),
+        ),
+        (
+            "rewrite_series",
+            refused(db.read_blocking(|c| rewrite_series(c, &filter)).map(drop)),
+        ),
+        (
+            "held_series",
+            refused(db.read_blocking(|c| held_series(c, &filter)).map(drop)),
+        ),
+        (
+            "moves_by_reason_and_fit",
+            refused(
+                db.read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
+                    .map(drop),
+            ),
+        ),
+        (
+            "session_burn_series",
+            refused(
+                db.read_blocking(|c| {
+                    phoebis_ledger::session_burn_series(c, &COSTS, &PRICES, &filter, NOW)
+                })
+                .map(drop),
+            ),
+        ),
+    ];
+    let accepted: Vec<&str> = answers
+        .iter()
+        .filter(|(_, refused)| !refused)
+        .map(|(reader, _)| *reader)
+        .collect();
+    assert_eq!(
+        accepted,
+        Vec::<&str>::new(),
+        "each reader answers the range refusal"
+    );
+}
+
 /// A UTC instant, for a period bound the test states independently of `member_spends`'s own arithmetic.
 fn ms(y: i16, m: i8, d: i8, h: i8, mi: i8) -> i64 {
     jiff::civil::date(y, m, d)

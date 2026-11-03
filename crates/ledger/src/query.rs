@@ -2736,14 +2736,8 @@ pub fn series(
 ) -> Result<Vec<SeriesPoint>, LedgerError> {
     // The rows come with no filter, so only the account grouping holds one account's rows per group.
     let pricing = pricing.filter(|_| holds_one_account(group_by, &[]));
-    let first = (from / 1_000).div_euclid(bucket_seconds) * bucket_seconds;
     let last = hour_ceil(to);
-    let count = (last - first).checked_div(bucket_seconds).unwrap_or(0);
-    if !(0..=MAX_POINTS).contains(&count) {
-        return Err(LedgerError::Yaml(format!(
-            "the range needs {count} points, and the most a chart carries is {MAX_POINTS}"
-        )));
-    }
+    let first = first_edge(from / 1_000, last, bucket_seconds)?;
     let mut points = Vec::new();
     let mut at = first;
     while at < last {
@@ -2816,7 +2810,8 @@ pub async fn series_paged(
     now: i64,
 ) -> Result<Vec<SeriesPoint>, LedgerError> {
     let last = hour_ceil(to);
-    let (first, starts) = aligned_starts(from / 1_000, last, bucket_seconds)?;
+    let first = first_edge(from / 1_000, last, bucket_seconds)?;
+    let starts: Vec<i64> = bucket_starts(first, last, bucket_seconds).collect();
     let mut buckets: Vec<GroupSums> = starts.iter().map(|_| GroupSums::default()).collect();
     let probes_counted = filter.probes_counted();
     let pricing = pricing.filter(|_| holds_one_account(group_by, &filter.accounts));
@@ -3949,9 +3944,8 @@ impl<'a> TrafficFold<'a> {
         costs: &'a PlanTables,
         now: i64,
     ) -> Result<Self, LedgerError> {
-        let (first, starts) = aligned_starts(from_hour, to_hour, bucket_seconds)?;
-        let zero = starts
-            .into_iter()
+        let first = first_edge(from_hour, to_hour, bucket_seconds)?;
+        let zero = bucket_starts(first, to_hour, bucket_seconds)
             .map(|at| TrafficBucket {
                 at: at * 1_000,
                 requests: 0,
@@ -4006,47 +4000,31 @@ pub struct SeriesFilter {
     pub request_classes: Vec<String>,
 }
 
-/// The first bucket's edge at or below `start` and every bucket start below `end`, in seconds: the bucket must be
-/// positive, and the whole buckets between the edge and `end` at most `MAX_POINTS`.
-fn aligned_starts(
-    start: i64,
-    end: i64,
-    bucket_seconds: i64,
-) -> Result<(i64, Vec<i64>), LedgerError> {
+/// The first bucket's edge at or below `start`, in seconds, once the range up to `end` passes the guard every series
+/// reader shares: the bucket must be positive, and the points from the edge to `end` at most `MAX_POINTS`.
+fn first_edge(start: i64, end: i64, bucket_seconds: i64) -> Result<i64, LedgerError> {
+    // Checked before the division below it: `div_euclid` panics on a zero bucket, which `SeriesFilter::default()`
+    // carries, rather than answering a range the guard below could still refuse.
     if bucket_seconds <= 0 {
         return Err(LedgerError::Yaml(
             "bucket_seconds must be positive".to_string(),
         ));
     }
     let first = start.div_euclid(bucket_seconds) * bucket_seconds;
-    let count = (end - first).checked_div(bucket_seconds).unwrap_or(0);
+    // The ceiling: the readers answer a trailing partial bucket as a point of its own.
+    let count = (end - first).saturating_add(bucket_seconds - 1) / bucket_seconds;
     if !(0..=MAX_POINTS).contains(&count) {
         return Err(LedgerError::Yaml(format!(
             "the range needs {count} points, and the most a chart carries is {MAX_POINTS}"
         )));
     }
-    Ok((first, bucket_starts(first, end, bucket_seconds).collect()))
+    Ok(first)
 }
 
-/// The bucket edges a `SeriesFilter` reads over, and the `MAX_POINTS` guard every series function shares.
+/// The bucket edges a `SeriesFilter` reads over, past the guard every series reader shares.
 fn bucket_range(filter: &SeriesFilter) -> Result<(i64, i64), LedgerError> {
-    // Checked before the division below it: `SeriesFilter::default()` carries `bucket_seconds: 0`, and
-    // `div_euclid` panics on that rather than answering a range the guard below could still refuse.
-    if filter.bucket_seconds <= 0 {
-        return Err(LedgerError::Yaml(
-            "bucket_seconds must be positive".to_string(),
-        ));
-    }
-    let first = (filter.from / 1_000).div_euclid(filter.bucket_seconds) * filter.bucket_seconds;
     let last = hour_ceil(filter.to);
-    // The ceiling: the series answer a trailing partial bucket as a point of its own.
-    let count = (last - first).saturating_add(filter.bucket_seconds - 1) / filter.bucket_seconds;
-    if !(0..=MAX_POINTS).contains(&count) {
-        return Err(LedgerError::Yaml(format!(
-            "the range needs {count} points, and the most a chart carries is {MAX_POINTS}"
-        )));
-    }
-    Ok((first, last))
+    Ok((first_edge(filter.from / 1_000, last, filter.bucket_seconds)?, last))
 }
 
 /// Every bucket start of `[first, last)`, a trailing partial bucket included. The bucket must be positive.
