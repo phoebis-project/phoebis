@@ -231,11 +231,6 @@ impl Assembler {
                     return Vec::new();
                 };
                 entry.seen_at = now;
-                let key_id = entry.observed.key_id.clone();
-                let session_id = entry.observed.session_id.clone();
-                let canonical_model = entry.observed.canonical_model.clone();
-                let wire_model = entry.observed.wire_model.clone();
-                let source_request_id = entry.observed.request_id.clone();
                 let Some(attempt) = entry
                     .attempts
                     .iter_mut()
@@ -251,23 +246,24 @@ impl Assembler {
                     .is_some_and(|c| c.reason == MODEL_REJECTED_REASON)
                 {
                     entry.rejected_by.push(attempt.account_id.clone());
+                    let observed = &entry.observed;
                     records.push(Record::Event(EventRecord {
                         at: head.observed_at,
                         kind: MODEL_REJECTED.into(),
                         account_id: Some(attempt.account_id.clone()),
-                        key_id,
-                        session_id,
-                        model: Some(canonical_model),
+                        key_id: observed.key_id.clone(),
+                        session_id: observed.session_id.clone(),
+                        model: Some(observed.canonical_model.clone()),
                         detail: Some(
                             json!({
                                 "attempt": head.attempt,
                                 "request_id": attempt.upstream_request_id,
-                                "source_request_id": source_request_id,
-                                "wire_model": wire_model,
+                                "source_request_id": head.request_id,
+                                "wire_model": observed.wire_model,
                             })
                             .to_string(),
                         ),
-                        request_id: Some(source_request_id),
+                        request_id: Some(head.request_id.clone()),
                         ..Default::default()
                     }));
                 }
