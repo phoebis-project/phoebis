@@ -93,16 +93,12 @@ impl Bus {
     /// Never waits: one clone per live subscriber, `try_send`, and a drop counted where the queue is full.
     pub fn publish(&self, event: Event) {
         let mut slots = self.slots.lock().expect(LOCK_POISONED);
-        slots.retain(|slot| match slot.events.try_send(event.clone()) {
-            Ok(()) => true,
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                slot.stats.dropped.fetch_add(1, Ordering::Relaxed);
-                true
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
+        slots.retain(|slot| {
+            let open = offer(slot, event.clone());
+            if !open {
                 tracing::debug!(subscriber = slot.name, "a bus subscriber went away");
-                false
             }
+            open
         });
     }
 
@@ -121,14 +117,7 @@ impl Bus {
         for slot in slots {
             let gone = match slot.delivery {
                 Delivery::Durable => slot.events.send(event.clone()).await.is_err(),
-                Delivery::BestEffort => match slot.events.try_send(event.clone()) {
-                    Ok(()) => false,
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        slot.stats.dropped.fetch_add(1, Ordering::Relaxed);
-                        false
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => true,
-                },
+                Delivery::BestEffort => !offer(&slot, event.clone()),
             };
             if gone {
                 closed.push(slot.name);
@@ -140,6 +129,19 @@ impl Bus {
                 .expect(LOCK_POISONED)
                 .retain(|slot| !closed.contains(&slot.name));
         }
+    }
+}
+
+/// The best-effort send: a full queue counts a drop and keeps the slot, so a slow consumer loses events rather than
+/// holding the publisher. Answers whether the slot is still open.
+fn offer(slot: &Slot, event: Event) -> bool {
+    match slot.events.try_send(event) {
+        Ok(()) => true,
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            slot.stats.dropped.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => false,
     }
 }
 
