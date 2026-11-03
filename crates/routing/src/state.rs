@@ -3523,7 +3523,7 @@ impl RoutingState {
         if let Some(current) = self.resolutions.get(spelling) {
             // A caller whose own bookkeeping of the last move it saw was lost (its future dropped between
             // this state moving and its own record of the move landing) can resubmit a snapshot older than
-            // what already stands; walking pins and cooldowns back to it would be a real regression, so the
+            // what already stands. Walking pins and cooldowns back to it would be a real regression, so the
             // move is ignored and the mapping is reasserted as it already stands.
             if snapshot_date(dated_id) <= snapshot_date(current) {
                 return (empty(current), merged_away);
