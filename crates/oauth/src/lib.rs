@@ -14,7 +14,7 @@ pub use exchange::{
     control_request, exchange_body, parse_profile, parse_token_response, refresh_body, ControlKind,
     OauthError, ProfileResponse, TokenAccount, TokenOrg, TokenResponse,
 };
-pub use identity::{identity_matches, IdentityClaims};
+pub use identity::identity_matches;
 pub use manager::{
     refresh_cause, AccessToken, AcquireError, Backoff, Clock, CredentialManager, LandedMark,
 };

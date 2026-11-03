@@ -1947,18 +1947,7 @@ async fn exchange(
         organization_uuid: profile.organization_uuid.clone(),
     };
     let now = (state.clock)();
-    let bundle = NewBundle {
-        access_token: token.access_token,
-        refresh_token: token.refresh_token,
-        issued_at: now,
-        expires_at: now.saturating_add(token.expires_in.saturating_mul(1_000)),
-        refresh_expires_at: token
-            .refresh_token_expires_in
-            .map(|seconds| now.saturating_add(seconds.saturating_mul(1_000))),
-        scopes: token
-            .scope
-            .unwrap_or_else(|| state.profile.control.default_login_scopes.to_string()),
-    };
+    let bundle = token.into_bundle(now, state.profile.control.default_login_scopes);
     Ok((identity, bundle, profile))
 }
 

@@ -9,8 +9,8 @@ use futures::future::{BoxFuture, FutureExt, Shared};
 use futures::stream::{FuturesUnordered, StreamExt};
 use phoebis_profile::Profile;
 use phoebis_store::{
-    AccountRow, AccountState, AttemptOutcome, CredentialBundle, NewBundle, Secret, StateCause,
-    Store, StoreError,
+    AccountRow, AccountState, AttemptOutcome, CredentialBundle, Secret, StateCause, Store,
+    StoreError,
 };
 use phoebis_transport::control::ControlClient;
 use phoebis_transport::response::ResponseHead;
@@ -19,7 +19,7 @@ use serde_json::Value;
 use tracing::Instrument;
 
 use crate::exchange::{control_request, parse_token_response, refresh_body, ControlKind};
-use crate::identity::{identity_matches, IdentityClaims};
+use crate::identity::identity_matches;
 use crate::usage::Refused;
 
 // A poisoned manager mutex means a prior panic happened while the refresh map was being mutated, so the
@@ -753,11 +753,7 @@ impl Inner {
         if bundle.lifecycle_generation != account.lifecycle_generation {
             return true;
         }
-        let lineage = Lineage {
-            incarnation: account.incarnation,
-            lifecycle_generation: bundle.lifecycle_generation,
-            generation: bundle.generation,
-        };
+        let lineage = Lineage::of(account, bundle.generation);
         if let Some(refused) = slot.refused.filter(|refused| refused.of_row(account)) {
             if lineage.generation <= refused.generation {
                 return false;
@@ -891,17 +887,12 @@ impl Inner {
         tracing::debug!(attempt, "refresh attempt opened");
 
         let Some(refresh_token) = &bundle.refresh_token else {
-            self.resolve(
+            return Err(self.refused_for_good(
                 attempt,
-                account.incarnation,
-                AttemptOutcome::Failed("no refresh token".into()),
-            );
-            let mark = self.mark_reauth(
-                &account.id,
-                StateCause::RefreshFailed,
-                Lineage::of(&account, bundle.generation),
-            );
-            return Err(RefreshFailure::ReauthRequired(mark));
+                &account,
+                &bundle,
+                "no refresh token".into(),
+            ));
         };
         let scopes = if bundle.scopes.is_empty() {
             self.profile.control.refresh_fallback_scopes
@@ -930,17 +921,16 @@ impl Inner {
                 );
             }
             Err(error) => {
-                self.resolve(
-                    attempt,
-                    account.incarnation,
-                    AttemptOutcome::Uncertain(format!("refresh response lost: {error}")),
-                );
                 // The write happened and the answer did not: the endpoint may hold a rotated token, the one
                 // fact every uncertain outcome shares. Waiting out the floor before one retry with the stored
                 // token keeps a valid token serving and lets the retry settle the attempt either way; a restart
                 // in between still quarantines it.
-                self.arm_backoff(account_id, SERVER_ERROR_BACKOFF_MS, Armed::Uncertain);
-                return self.stored_or(&account, &bundle, RefreshFailure::Quarantined);
+                return self.uncertain(
+                    attempt,
+                    &account,
+                    &bundle,
+                    format!("refresh response lost: {error}"),
+                );
             }
         };
         let code = error_code(&payload);
@@ -955,13 +945,7 @@ impl Inner {
             if head.status == 401
                 || (head.status == 400 && code.as_deref() == Some("invalid_grant"))
             {
-                self.resolve(attempt, account.incarnation, AttemptOutcome::Failed(detail));
-                let mark = self.mark_reauth(
-                    &account.id,
-                    StateCause::RefreshFailed,
-                    Lineage::of(&account, bundle.generation),
-                );
-                return Err(RefreshFailure::ReauthRequired(mark));
+                return Err(self.refused_for_good(attempt, &account, &bundle, detail));
             }
             // A rejected request never got far enough to rotate anything, so the stored refresh token is
             // still the live one and the only thing to do is wait. A 5xx is the one status where that is not
@@ -992,47 +976,30 @@ impl Inner {
             // A 200 that cannot be read may still have rotated the refresh token upstream, which is the
             // same uncertainty as a lost response rather than something a retry can fix.
             Err(_) => {
-                self.resolve(
+                return self.uncertain(
                     attempt,
-                    account.incarnation,
-                    AttemptOutcome::Uncertain("refresh response could not be read".into()),
+                    &account,
+                    &bundle,
+                    "refresh response could not be read".into(),
                 );
-                self.arm_backoff(account_id, SERVER_ERROR_BACKOFF_MS, Armed::Uncertain);
-                return self.stored_or(&account, &bundle, RefreshFailure::Quarantined);
             }
         };
 
         // A slot must never start serving a different upstream account than the one it was paired to, so a
         // foreign bundle is dropped rather than committed.
         if let Some(stored) = &account.identity {
-            if !identity_matches(stored, &IdentityClaims::from_token(&token)) {
-                self.resolve(
+            if !identity_matches(stored, token.account.as_ref().map(|a| a.uuid.as_str())) {
+                return Err(self.refused_for_good(
                     attempt,
-                    account.incarnation,
-                    AttemptOutcome::Failed("identity mismatch".into()),
-                );
-                let mark = self.mark_reauth(
-                    &account.id,
-                    StateCause::RefreshFailed,
-                    Lineage::of(&account, bundle.generation),
-                );
-                return Err(RefreshFailure::ReauthRequired(mark));
+                    &account,
+                    &bundle,
+                    "identity mismatch".into(),
+                ));
             }
         }
 
         let now = (self.clock)();
-        let fresh = NewBundle {
-            access_token: token.access_token,
-            refresh_token: token.refresh_token,
-            issued_at: now,
-            // Saturating, because the lifetimes are upstream-controlled numbers and an overflow here would
-            // panic the refresh task rather than reject the response.
-            expires_at: now.saturating_add(token.expires_in.saturating_mul(1000)),
-            refresh_expires_at: token
-                .refresh_token_expires_in
-                .map(|seconds| now.saturating_add(seconds.saturating_mul(1000))),
-            scopes: token.scope.unwrap_or_else(|| bundle.scopes.clone()),
-        };
+        let fresh = token.into_bundle(now, &bundle.scopes);
         match self.store.commit_credentials(
             account_id,
             account.incarnation,
@@ -1058,14 +1025,11 @@ impl Inner {
                     generation,
                     lifecycle_generation: account.lifecycle_generation,
                 });
+                let token = access_token(&account, &committed);
                 if !self.remember(&account, committed, epoch) {
                     return self.stored_now(&account);
                 }
-                Ok(AccessToken {
-                    secret: Secret::new(fresh.access_token.expose()),
-                    generation,
-                    account_uuid: account_uuid(&account),
-                })
+                Ok(token)
             }
             // The lifecycle or the incarnation moved while this refresh was in flight, so the slot was
             // disconnected or replaced; a generation race between two commits reads the same to a refresh,
@@ -1081,18 +1045,49 @@ impl Inner {
             // The rotation happened upstream and could not be stored, so the stored refresh token is likely
             // dead even though nothing about the exchange was uncertain: it is recorded, spaced and answered as
             // the lost response is, so a caller reads one class whichever uncertain arm it met.
-            Err(error) => {
-                self.resolve(
-                    attempt,
-                    account.incarnation,
-                    AttemptOutcome::Uncertain(format!(
-                        "commit failed after a rotated response: {error}"
-                    )),
-                );
-                self.arm_backoff(account_id, SERVER_ERROR_BACKOFF_MS, Armed::Uncertain);
-                self.stored_or(&account, &bundle, RefreshFailure::Quarantined)
-            }
+            Err(error) => self.uncertain(
+                attempt,
+                &account,
+                &bundle,
+                format!("commit failed after a rotated response: {error}"),
+            ),
         }
+    }
+
+    /// The ending of a refresh whose refresh token is gone for good: the attempt failed, and the slot is marked for
+    /// re-pairing at the bundle generation the refresh read.
+    fn refused_for_good(
+        &self,
+        attempt: u64,
+        account: &AccountRow,
+        bundle: &CredentialBundle,
+        detail: String,
+    ) -> RefreshFailure {
+        self.resolve(attempt, account.incarnation, AttemptOutcome::Failed(detail));
+        let mark = self.mark_reauth(
+            &account.id,
+            StateCause::RefreshFailed,
+            Lineage::of(account, bundle.generation),
+        );
+        RefreshFailure::ReauthRequired(mark)
+    }
+
+    /// The ending of a refresh that may have rotated the token upstream: the attempt is uncertain, the floor is
+    /// armed before one retry, and the stored token serves while it is unexpired.
+    fn uncertain(
+        &self,
+        attempt: u64,
+        account: &AccountRow,
+        bundle: &CredentialBundle,
+        detail: String,
+    ) -> Result<AccessToken, RefreshFailure> {
+        self.resolve(
+            attempt,
+            account.incarnation,
+            AttemptOutcome::Uncertain(detail),
+        );
+        self.arm_backoff(&account.id, SERVER_ERROR_BACKOFF_MS, Armed::Uncertain);
+        self.stored_or(account, bundle, RefreshFailure::Quarantined)
     }
 
     /// Serves the stored access token while it is still unexpired, because an unfinished rotation must not
@@ -1320,7 +1315,7 @@ mod tests {
 
     use fake_upstream::{FakeUpstream, Respond, Rule};
     use phoebis_profile::fixtures::{control_response, ControlFixture};
-    use phoebis_store::{AccountKind, Identity, StorageKey};
+    use phoebis_store::{AccountKind, Identity, NewBundle, StorageKey};
     use phoebis_transport::control::{ResolveFuture, Resolver};
     use phoebis_transport::{connector_builder, Plane};
 

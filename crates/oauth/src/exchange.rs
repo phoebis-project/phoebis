@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use phoebis_profile::Profile;
-use phoebis_store::{Secret, SubscriptionRow};
+use phoebis_store::{NewBundle, Secret, SubscriptionRow};
 use phoebis_transport::request::RawRequest;
 use serde_json::{Map, Value};
 use url::Url;
@@ -150,10 +150,27 @@ pub struct TokenResponse {
     pub organization: Option<TokenOrg>,
 }
 
+impl TokenResponse {
+    /// The bundle the response stores, issued at `now`, with `fallback_scopes` where the response grants none.
+    pub fn into_bundle(self, now: i64, fallback_scopes: &str) -> NewBundle {
+        NewBundle {
+            access_token: self.access_token,
+            refresh_token: self.refresh_token,
+            issued_at: now,
+            // Saturating, because the lifetimes are upstream-controlled numbers and an overflow here would
+            // panic the caller rather than reject the response.
+            expires_at: now.saturating_add(self.expires_in.saturating_mul(1000)),
+            refresh_expires_at: self
+                .refresh_token_expires_in
+                .map(|seconds| now.saturating_add(seconds.saturating_mul(1000))),
+            scopes: self.scope.unwrap_or_else(|| fallback_scopes.to_string()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct TokenAccount {
     pub uuid: String,
-    pub email_address: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
