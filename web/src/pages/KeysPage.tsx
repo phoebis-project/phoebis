@@ -14,7 +14,7 @@ import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { IconChevron, IconInfo, IconPlus, IconWarning, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC, type KeysAddress } from '@/lib/address';
-import { dollarsUnder, nativeSidesOf, sidesLine, UNPRICED_TITLE, type FundedSum, type WeekReading } from '@/lib/analytics';
+import { dollarsUnder, nativeSidesOf, sidesLine, sumFunded, UNPRICED_TITLE, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { effectiveCaptureHours } from '@/lib/capture';
 import { clock } from '@/lib/clock';
@@ -209,12 +209,7 @@ export function KeysPage() {
         keys: keys.data.length,
         active: keys.data.filter((k) => k.status === 'active').length,
         requests: keys.data.reduce((s, k) => s + k.lifetime.requests, 0),
-        lifetime: {
-          billedUsd: keys.data.reduce((s, k) => s + k.lifetime.billedUsd, 0),
-          cost: keys.data.reduce((s, k) => s + k.lifetime.cost, 0),
-          // A key that priced nothing nulls the total, since the priced keys alone would read as the whole.
-          equivalent: keys.data.reduce<number | null>((s, k) => (s === null || k.lifetime.equivalent === null ? null : s + k.lifetime.equivalent), 0),
-        },
+        lifetime: sumFunded(keys.data.map((k) => k.lifetime)),
       }
     : null;
   const lifetimeTile = totals ? sumTileOf(unit, totals.lifetime, reading) : null;

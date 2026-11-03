@@ -23,7 +23,7 @@ import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, KEYS_CODEC } from '@/lib/address';
-import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, dollarsUnder, moveLabel, nativeSidesOf, sidesLine, type FundedSum, type WeekReading } from '@/lib/analytics';
+import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, dollarsUnder, moveLabel, nativeSidesOf, sidesLine, sumFunded, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
 import { fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, messageOf, shortModel } from '@/lib/format';
@@ -331,12 +331,7 @@ export function PoolsPage() {
         // Null until the key list is read, so the tile waits as the cards' Keys tiles do rather than reading 0.
         keys: keysRead === 'loaded' && keys.data ? keys.data.length : null,
         requests: pools.data.reduce((s, p) => s + p.requests24h, 0),
-        day: {
-          billedUsd: pools.data.reduce((s, p) => s + p.billed24h, 0),
-          cost: pools.data.reduce((s, p) => s + p.cost24h, 0),
-          // A pool that priced nothing nulls the total, since the priced pools alone would read as the whole.
-          equivalent: pools.data.reduce<number | null>((s, p) => (s === null || p.equivalent24h === null ? null : s + p.equivalent24h), 0),
-        },
+        day: sumFunded(pools.data.map(dayOf)),
       }
     : null;
   const dayTile = totals ? sumTileOf(unit, totals.day, reading) : null;

@@ -410,6 +410,12 @@ export const nativeSidesOf = (s: FundedSum): { billed: number | undefined; equiv
   billed: s.billedUsd > 0 ? s.billedUsd : undefined,
   equivalent: s.equivalent === null || s.equivalent > 0 ? s.equivalent : undefined,
 });
+/** Several sums as one. One that priced nothing nulls the total, since the priced ones alone would read as the whole. */
+export const sumFunded = (sums: readonly FundedSum[]): FundedSum => ({
+  billedUsd: sums.reduce((s, x) => s + x.billedUsd, 0),
+  cost: sums.reduce((s, x) => s + x.cost, 0),
+  equivalent: sums.reduce<number | null>((s, x) => (s === null || x.equivalent === null ? null : s + x.equivalent), 0),
+});
 /**
  * The Cost by chart's note on the groups it draws as gaps: one label ("research unpriced in 3 buckets, drawn as gaps",
  * "1 bucket, drawn as a gap"), up to three joined by middle dots, a count past three ("5 groups unpriced in 12 buckets,
