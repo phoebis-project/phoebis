@@ -1,6 +1,7 @@
 import type { AttentionItem, Reconciliation, RoutingEvent } from '@/api/types';
 import { MIN_RISE, ratioOff } from '@/lib/analytics';
 import { tokensTotal, undatedModel } from '@/lib/format';
+import { hoursOfKey } from '@/lib/windows';
 import { ACCOUNTS, accountById } from './accounts';
 import { RECONCILIATIONS } from './analytics';
 import { KEYS, POOLS, poolById } from './pools';
@@ -65,7 +66,7 @@ function walls(accountId: string): Pick<AttentionItem, 'detail' | 'since'> | nul
   if (!newest) return null;
   const window = String(newest.detail.window);
   const wallAt = Date.parse(newest.at);
-  const length = window === 'five_hour' ? 5 * HOUR : 7 * DAY;
+  const length = hoursOfKey(window) * HOUR;
   const round = ROUTING_EVENTS.filter((e) => e.kind === 'shedding_round' && e.accountId === accountId && e.detail.window === window && Date.parse(e.at) <= wallAt && wallAt - Date.parse(e.at) <= length).pop();
   // A slow-down round's projection is the demand's at a moved horizon and measures nothing at the reset.
   const slowed = round?.detail.trigger === 'slow_down';

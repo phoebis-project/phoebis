@@ -6,6 +6,7 @@ import { shareIn, weightOf } from '@/lib/costs';
 import { placementHit } from '@/lib/format';
 import { endOf } from '@/lib/quota';
 import { compareRows } from '@/lib/routingLog';
+import { hoursOfKey } from '@/lib/windows';
 import { ACCOUNTS, LEDGER_WINDOW, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN, accountById, isPaidSource, kindTier } from './accounts';
 import { promptOf } from './catalog';
 import { GUARDRAILS } from './guardrails';
@@ -345,7 +346,6 @@ const entry = (boundary: string, o: { at: number; depth: number; prefixTokens: n
 });
 
 const NO_PREFIX: RecordCandidate['prefix'] = { content: null, contentMatch: null, static: null, staticMatch: null, withMain: false };
-const WINDOW_MS: Record<string, number> = { five_hour: 5 * HOUR, seven_day: 7 * DAY, seven_day_fable: 7 * DAY };
 
 /** The burn per hour the account routes answer on each plan window of an account. */
 const ACCOUNT_BURNS = new Map(
@@ -486,7 +486,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       for (const w of readingsOf(spec, a.id)) {
         const name = LEDGER_WINDOW[w.id];
         if (name === undefined || w.utilization === null) continue;
-        const ahead = leadOf({ resetsAt: w.resetsAt, utilization: w.utilization }, WINDOW_MS[name], at, end);
+        const ahead = leadOf({ resetsAt: w.resetsAt, utilization: w.utilization }, hoursOfKey(name) * HOUR, at, end);
         const horizon = horizonOf(name, w.resetsAt, end, at);
         windows[name] = {
           ageMs, ahead: name === 'seven_day_fable' ? null : round3(ahead),

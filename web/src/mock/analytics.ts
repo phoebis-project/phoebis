@@ -12,6 +12,7 @@ import { earlierHolderLabel, placementHit } from '@/lib/format';
 import { emptyHistogram, mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import { endOf } from '@/lib/quota';
+import { hoursOfKey } from '@/lib/windows';
 import { ACCOUNTS, LEDGER_WINDOW, accountById, sharedWindowsOf } from './accounts';
 import { earliest } from './lead';
 import { keyById } from './pools';
@@ -786,7 +787,7 @@ function drawHistories(): Reconciliation[] {
   const rng = createRng(0x6d65_7465);
   return HISTORIES.flatMap((h) => {
     const weekly = h.window !== 'five_hour';
-    const period = weekly ? WEEK : FIVE_HOURS;
+    const period = hoursOfKey(h.window) * HOUR;
     const rows: Reconciliation[] = [];
     for (let end = h.newestEnd, place = 0; end >= SPAN_START; place += 1) {
       const quiet = h.quiet?.includes(place) ?? false;
