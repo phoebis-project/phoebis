@@ -1,6 +1,6 @@
 //! One struct per ledger table, its fields in the table's column order but for a few members kept beside the ones they
-//! belong with: `RequestRecord`'s two truncation flags follow `bodies_captured`, `client_contract` follows
-//! `client_drift` and `classifier` follows `auto_mode`, and `row_to_request` reads each by its column's index.
+//! belong with: `RequestRecord`'s truncation flag follows `bodies_captured`, `client_contract` follows `client_drift`
+//! and `classifier` follows `auto_mode`, and `row_to_request` reads each by its column's index.
 //! `RequestRecord::guardrails` is the one member no column holds: its rows live in the child table
 //! `request_guardrails`.
 
@@ -47,10 +47,9 @@ pub struct RequestRecord {
     pub client_contract: Option<String>,
     pub kept_warm: bool,
     pub bodies_captured: bool,
-    /// Whether the captured body is shorter than what the relay saw; false when nothing was captured. The
-    /// assembler's own verdict, stored on this row: a stream cut by a chunk lost after the last one that
-    /// arrived never shows up in a length comparison against the bodies table, so the row has to carry it.
-    pub request_truncated: bool,
+    /// Whether the captured response is shorter than what the relay saw, false when nothing was captured. The
+    /// assembler's own verdict, stored on this row: a stream cut by a chunk lost after the last one that arrived
+    /// never shows up in a length comparison against the bodies table, so the row has to carry it.
     pub response_truncated: bool,
     /// The caller's `User-Agent` as it was sent, `None` when it sent none.
     pub user_agent: Option<String>,

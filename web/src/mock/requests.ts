@@ -640,7 +640,6 @@ function buildRequests(): RequestLog[] {
         toolCount: rng.int(8, 30),
       },
       // Only the laptop key captures bodies here, and every seventh of its rows drew an answer past the cap.
-      requestTruncated: false,
       responseTruncated: lane.keyId === 'laptop' && i % 7 === 0,
     });
     if (chainFrom < tried.length) CHAIN_FROM.set(id, chainFrom);
@@ -1080,7 +1079,6 @@ function storyRow(seed: StorySeed): RequestLog {
     prevToolMs: null,
     refused: seed.refused ?? false,
     requestClass: seed.requestClass,
-    requestTruncated: false,
     responseTruncated: false,
     sessionId,
     shape: { ...REQUEST_SAMPLE.shape, requestedSpeed: fast ? 'fast' : null },
@@ -2873,7 +2871,7 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
   // itself, so the capture holds the request alone.
   if (request.errorCode === 'guardrail_blocked') {
     const requestBytes = byteLength(bodies.request);
-    return { ...bodies, response: null, requestBytesSeen: requestBytes, requestBytesStored: requestBytes, requestTruncated: false, responseBytesSeen: 0, responseBytesStored: 0, responseTruncated: false };
+    return { ...bodies, response: null, requestBytesSeen: requestBytes, requestBytesStored: requestBytes, responseBytesSeen: 0, responseBytesStored: 0, responseTruncated: false };
   }
   // A stream is stored as the text of its events, the way the ledger keeps the bytes it saw, and a JSON answer as
   // its object. The opening frame carries the message with its usage, no content and no stop reason, as the
@@ -2906,7 +2904,6 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
     response: stored,
     requestBytesSeen: requestBytes,
     requestBytesStored: requestBytes,
-    requestTruncated: request.requestTruncated,
     responseBytesSeen: responseBytes + (request.responseTruncated ? DROPPED_BYTES : 0),
     responseBytesStored: responseBytes,
     responseTruncated: request.responseTruncated,

@@ -824,7 +824,7 @@ function RequestDrawer({ context, guardrails, request, requestId, now, onClose, 
             ) : bodies.data ? (
               <div className="bodies">
                 {/* Keyed on the request, so the next request's block starts with its dialog closed. */}
-                <BodyBlock key={`request ${r.id}`} label="Request" requestId={r.id} value={bodies.data.request} dropped={bodies.data.requestTruncated ? bytesDropped(bodies.data.requestBytesSeen, bodies.data.requestBytesStored) : undefined} />
+                <BodyBlock key={`request ${r.id}`} label="Request" requestId={r.id} value={bodies.data.request} />
                 {bodies.data.response === null ? (
                   // A capture without a response byte has nothing to open or copy, so the block says why there is none.
                   // A request no account was tried for was answered by the router itself.

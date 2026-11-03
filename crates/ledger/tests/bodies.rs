@@ -104,7 +104,7 @@ async fn a_pool_with_capture_stores_both_bodies_for_a_key_without_an_override() 
     .await;
     let (id, body) = one_request(&h).await;
     let (row, _) = ledgered(&h, &id).await;
-    assert!(row.bodies_captured && !row.request_truncated);
+    assert!(row.bodies_captured);
     let bodies =
         h.db.bodies(&id, clock_of(&h)())
             .await
@@ -146,10 +146,7 @@ async fn a_capture_past_the_cap_says_how_much_it_dropped() {
     .await;
     let (id, _) = one_request(&h).await;
     let (row, _) = ledgered(&h, &id).await;
-    assert!(
-        row.response_truncated && !row.request_truncated,
-        "the response ran past the cap; the request body never does"
-    );
+    assert!(row.response_truncated, "the response ran past the cap");
     let bodies =
         h.db.bodies(&id, clock_of(&h)())
             .await

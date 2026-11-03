@@ -265,7 +265,10 @@ drawer's Error row ([Requests](console.md#requests)). An auto reload on a custom
 inside the range and written after an earlier read, as a preset range does ([Requests](console.md#requests)). Each
 captured body block in the request drawer has a find field that counts the lines holding a term, opens the wide window
 on a hit, marks every occurrence on the drawn rows and walks the hits with Enter and Shift+Enter
-([Requests](console.md#requests)). On the Requests view a custom range's late row that lands below the rows shown draws
+([Requests](console.md#requests)). A request row of `GET /admin/requests` and a request's captured bodies carry no
+request truncation flag, since the router stores a captured request whole, and the bodies' byte counts say what a cut
+dropped ([API reference](api-reference.md), [Requests](console.md#requests)).
+On the Requests view a custom range's late row that lands below the rows shown draws
 on the next auto reload read ([Requests](console.md#requests)). On the Requests view and the Routing log the list's late
 answer replaces the page an auto reload poll stood in for it, and Next past an overrun under a preset reads to the
 router's clock ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The pressed range pill names

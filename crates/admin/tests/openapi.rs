@@ -1268,7 +1268,7 @@ async fn a_captured_body_outside_a_json_object_answers_as_captured_and_the_docum
         expires_at: now + 3_600_000,
     };
     let sse = br#"{"model":"claude-sonnet-5","messages":[]}"#;
-    for (id, body, truncated) in [
+    for (id, body) in [
         (
             "r-sse",
             capture(
@@ -1277,24 +1277,20 @@ async fn a_captured_body_outside_a_json_object_answers_as_captured_and_the_docum
                 Some(b"event: message_stop\ndata: {}\n\n".as_slice()),
                 sse.len() as u64,
             ),
-            false,
         ),
         (
             "r-cut",
             capture("r-cut", br#"{"model":"claude-son"#, None, sse.len() as u64),
-            true,
         ),
         (
             "r-scalar",
             capture("r-scalar", b"42", Some(b"\"ok\"".as_slice()), 2),
-            false,
         ),
     ] {
         let row = RequestRecord {
             id: id.into(),
             received_at: now,
             bodies_captured: true,
-            request_truncated: truncated,
             ..Default::default()
         };
         parts.db.insert_request(&row, &[], Some(&body)).unwrap();
@@ -1313,12 +1309,8 @@ async fn a_captured_body_outside_a_json_object_answers_as_captured_and_the_docum
     );
     let cut = json(get(&parts.app, "/admin/requests/r-cut/bodies", Some(&cookie)).await).await;
     assert_eq!(
-        (
-            cut["request"].as_str(),
-            cut["response"].is_null(),
-            cut["request_truncated"].as_bool()
-        ),
-        (Some(r#"{"model":"claude-son"#), true, Some(true)),
+        (cut["request"].as_str(), cut["response"].is_null()),
+        (Some(r#"{"model":"claude-son"#), true),
         "a capture cut short answers as a string"
     );
     let scalar =

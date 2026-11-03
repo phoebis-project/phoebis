@@ -644,7 +644,6 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         client_contract: complete.client_contract.clone(),
         kept_warm: false,
         bodies_captured: bodies.is_some(),
-        request_truncated: false,
         // A gap or a short trail only means something for a key that captures: a non-capturing key
         // never had bytes to lose, so it must not read truncated when the bus merely dropped a chunk.
         response_truncated: bodies.as_ref().is_some_and(|b| {

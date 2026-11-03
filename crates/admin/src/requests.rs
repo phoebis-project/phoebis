@@ -74,9 +74,9 @@ pub(crate) struct RequestList {
     pub landed_through: i64,
 }
 
-/// One client request with its attempt trail. `request_truncated` and `response_truncated` say whether the captured
-/// body is shorter than what the relay saw. `agent_type`, `compaction` and `context_compacted` are the gateway hint
-/// headers as the client sent them, null when it sent none.
+/// One client request with its attempt trail. `response_truncated` says whether the captured response is shorter than
+/// what the relay saw. `agent_type`, `compaction` and `context_compacted` are the gateway hint headers as the client
+/// sent them, null when it sent none.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RequestSummary {
@@ -137,7 +137,6 @@ pub(crate) struct RequestSummary {
     pub response_bytes: Option<u64>,
     pub kept_warm: bool,
     pub captured_bodies: bool,
-    pub request_truncated: bool,
     pub response_truncated: bool,
     pub user_agent: Option<String>,
     /// The class the router derived at admission: `claude-code/<entrypoint>` from a Claude Code user agent, else
@@ -473,9 +472,8 @@ pub(crate) struct Event {
 
 /// A side whose bytes parse as JSON answers as that value, and any other side, an SSE stream or a capture cut short
 /// among them, as a string. The four byte counts are the bytes each side stored and the bytes it ran to, and the
-/// difference is what was dropped. `request_truncated` and `response_truncated` are the request's own flags, as
-/// `GET /admin/requests` answers them, so a capture whose last chunks never reached the ledger reads truncated even
-/// where the two byte counts agree.
+/// difference is what was dropped. `response_truncated` is the request's own flag, as `GET /admin/requests` answers it,
+/// so a capture whose last chunks never reached the ledger reads truncated even where the two byte counts agree.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Bodies {
@@ -488,7 +486,6 @@ pub(crate) struct Bodies {
     pub request_bytes_seen: u64,
     pub response_bytes_stored: u64,
     pub response_bytes_seen: u64,
-    pub request_truncated: bool,
     pub response_truncated: bool,
     pub expires_at: i64,
 }
@@ -533,7 +530,6 @@ pub(crate) fn request_summary(
         response_bytes: r.response_bytes,
         kept_warm: r.kept_warm,
         captured_bodies: r.bodies_captured,
-        request_truncated: r.request_truncated,
         response_truncated: r.response_truncated,
         user_agent: r.user_agent.clone(),
         client: r.client.clone(),
@@ -1147,12 +1143,10 @@ pub(crate) async fn bodies(
         Ok(None) => return failure(StatusCode::NOT_FOUND, "no captured bodies for this request"),
         Err(e) => return ledger_failure(e),
     };
-    // The request row's flags know what the stored lengths cannot: a chunk the bus dropped is missing from both
+    // The request row's flag knows what the stored lengths cannot: a chunk the bus dropped is missing from both
     // the capture and its seen count, so only the assembler, which saw the chunk count fall short, can tell.
-    let (request_cut, response_cut) = match db.request(&id).await {
-        Ok(row) => row.map_or((false, false), |(r, _)| {
-            (r.request_truncated, r.response_truncated)
-        }),
+    let response_cut = match db.request(&id).await {
+        Ok(row) => row.is_some_and(|(r, _)| r.response_truncated),
         Err(e) => return ledger_failure(e),
     };
     // The byte counts are read off the raw vectors before rendering: a re-encoded JSON string adds quotes and
@@ -1165,7 +1159,6 @@ pub(crate) async fn bodies(
         request_bytes_seen: b.request_len_seen,
         response_bytes_stored: b.response_body.as_ref().map_or(0, Vec::len) as u64,
         response_bytes_seen: b.response_len_seen,
-        request_truncated: request_cut || (b.request_body.len() as u64) < b.request_len_seen,
         response_truncated: response_cut
             || b.response_body
                 .as_ref()

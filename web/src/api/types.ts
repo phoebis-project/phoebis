@@ -823,7 +823,6 @@ export interface RequestLog {
   refused: boolean;
   /** `x-claude-code-request-class` as the client sent it, and `null` when it sent none. */
   requestClass: string | null;
-  requestTruncated: boolean;
   responseTruncated: boolean;
   /** The client's own session, the one its companion registers under. */
   sessionId: string | null;
@@ -852,7 +851,6 @@ export interface CapturedBodies {
   requestBytesSeen: number;
   requestBytesStored: number;
   requestId: string;
-  requestTruncated: boolean;
   response: unknown;
   responseBytesSeen: number;
   responseBytesStored: number;

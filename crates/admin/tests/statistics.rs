@@ -1916,7 +1916,6 @@ async fn a_bodies_route_answers_the_bytes_each_side_stored_and_saw() {
             bodies["request_bytes_seen"].as_u64(),
             bodies["response_bytes_stored"].as_u64(),
             bodies["response_bytes_seen"].as_u64(),
-            bodies["request_truncated"].as_bool(),
             bodies["response_truncated"].as_bool(),
         ),
         (
@@ -1924,7 +1923,6 @@ async fn a_bodies_route_answers_the_bytes_each_side_stored_and_saw() {
             Some(request_len),
             Some(1_000),
             Some(1_010),
-            Some(false),
             Some(true)
         ),
         "bytes measured on the raw vectors, not the rendered JSON or a character count"
@@ -2080,14 +2078,7 @@ async fn a_capture_the_bus_cut_short_reads_truncated_on_the_bodies_route() {
         .expect("the capture landed");
         // Neither the stored bytes nor the seen count include a chunk the bus dropped, so only the request
         // row knows the capture is short.
-        assert_eq!(
-            (
-                bodies["request_truncated"].as_bool(),
-                bodies["response_truncated"].as_bool()
-            ),
-            (Some(false), Some(true)),
-            "{id}"
-        );
+        assert_eq!(bodies["response_truncated"].as_bool(), Some(true), "{id}");
     }
 }
 
