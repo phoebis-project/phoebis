@@ -78,11 +78,6 @@ export function streakFailed(streak: Streak, err: unknown, failing = true): void
 }
 
 /**
- * A ref to the value of the latest render, for an effect, a listener or a timer that outlives renders. A layout effect
- * writes it, since the hooks lint forbids writing a ref during render, so it is current before the passive effects and
- * the layout effects declared after the call.
- */
-/**
  * An editable list's rows with keys that travel with them, so a row moved up or down keeps its node and its button
  * keeps the focus. Rows the value gains from outside take fresh keys, and rows it drops give theirs up. A row `add`
  * appends takes the focus once it is drawn, on the element its row gives the id `idOf(key)`, so the operator fills it
@@ -144,6 +139,11 @@ export function useResizeObserver(ref: RefObject<Element>, onResize: () => void,
   }, [enabled, latest, ref]);
 }
 
+/**
+ * A ref to the value of the latest render, for an effect, a listener or a timer that outlives renders. A layout effect
+ * writes it, since the hooks lint forbids writing a ref during render, so it is current before the passive effects and
+ * the layout effects declared after the call.
+ */
 export function useLatest<T>(value: T): MutableRefObject<T> {
   const ref = useRef(value);
   useLayoutEffect(() => {

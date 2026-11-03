@@ -601,10 +601,11 @@ export const compareByModelTier = (tiers: ModelTiers, a: string, b: string): num
 /** The models in the cost model's tier order, a model of no tier last, inside a tier by version descending then id. */
 export const tierOrder = (models: string[], costs: ModelTiers): string[] => [...models].sort((a, b) => compareByModelTier(costs, a, b));
 
-/** The same models grouped by tier in that order: each group's first model is the shown row, the rest fold. An id of
- *  no tier is a group of its own, so it never folds as an older model of another. */
 /** Each tier group's newest model, and the older models a model table folds under a row of their own. */
 export const newestAndOlder = (groups: { models: string[] }[]): { newest: string[]; older: string[] } => ({ newest: groups.map((g) => g.models[0]), older: groups.flatMap((g) => g.models.slice(1)) });
+
+/** The same models grouped by tier in that order: each group's first model is the shown row, the rest fold. An id of
+ *  no tier is a group of its own, so it never folds as an older model of another. */
 export const tierGroups = (models: string[], costs: ModelTiers): { models: string[]; tier: string | null }[] => {
   const groups: { models: string[]; tier: string | null }[] = [];
   for (const model of tierOrder(models, costs)) {

@@ -945,14 +945,6 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, body, cancelLab
   );
 }
 
-const IN_FLOW: MenuPlacement = { kind: 'down' };
-const CLIPPING = new Set(['auto', 'clip', 'hidden', 'scroll']);
-
-/**
- * A row's actions behind a trigger. `align` names the trigger edge the list lines up with: a menu in a row's
- * first column opens rightward, since a list aligned to its right edge would run past the table wrap's left edge,
- * which clips it.
- */
 /**
  * Calls `onOutside` on a mouse press outside every node `inside` names, while `active` holds. Both are read when the
  * press lands, so a caller passes fresh functions each render and the listener stays put.
@@ -1002,6 +994,14 @@ const movedFrom = (target: RefObject<HTMLElement>, rest: RefObject<{ left: numbe
   return !at || !rest.current || at.top !== rest.current.top || at.left !== rest.current.left;
 };
 
+const IN_FLOW: MenuPlacement = { kind: 'down' };
+const CLIPPING = new Set(['auto', 'clip', 'hidden', 'scroll']);
+
+/**
+ * A row's actions behind a trigger. `align` names the trigger edge the list lines up with: a menu in a row's
+ * first column opens rightward, since a list aligned to its right edge would run past the table wrap's left edge,
+ * which clips it.
+ */
 export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }: { align?: MenuAlign; items: { danger?: boolean; disabled?: boolean; label: string; onClick: () => void; title?: string }[]; label?: string; onOpenChange?: (open: boolean) => void }) {
   const [open, setOpen] = useState(false);
   // A page that holds its refresh while a menu is open counts the open ones, so a closed menu says nothing as it
