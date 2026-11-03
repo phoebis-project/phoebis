@@ -11,8 +11,9 @@ use crate::{LedgerDb, LedgerError};
 /// The `meta` key that says the generation-0 rows were stamped once.
 pub const GENERATIONS_RECONCILED_KEY: &str = "key_generations_reconciled";
 
-/// How many generation-0 rows one transaction holds in memory: the fold reads a page, moves it, and reads the
-/// next from where it left off, so a key with a year of hourly rows never sits in one `Vec`.
+/// How many rows one transaction holds in memory, in the generation pass over a key's generation-0 rollup rows and in
+/// the band refold over the requests: each reads a page, moves it, and reads the next from where it left off, so a year
+/// of hourly rows or requests never sits in one `Vec`.
 pub(crate) const PAGE: usize = 1_000;
 
 /// One live key as the startup stamp sees it: the id, its `created_at`, and whether its own rows start there.
