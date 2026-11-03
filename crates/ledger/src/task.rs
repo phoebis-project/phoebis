@@ -1171,24 +1171,16 @@ async fn land_parked(
             },
         };
         let id = row.id;
-        let settled = match outcome {
+        let error = match outcome {
             Landed::Written => {
                 landed += 1;
-                Ok(())
+                continue;
             }
-            Landed::Refused { error, .. } => {
-                kept += 1;
-                blocking(db, move |db| db.update_parked(id, &error, now)).await
-            }
-            Landed::Lost => {
-                kept += 1;
-                blocking(db, move |db| {
-                    db.update_parked(id, "the write panicked", now)
-                })
-                .await
-            }
+            Landed::Refused { error, .. } => error,
+            Landed::Lost => "the write panicked".to_string(),
         };
-        if let Err(error) = settled {
+        kept += 1;
+        if let Err(error) = blocking(db, move |db| db.update_parked(id, &error, now)).await {
             tracing::warn!(%error, id, "a parked record's row could not be updated");
         }
     }
