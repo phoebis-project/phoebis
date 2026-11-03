@@ -899,7 +899,10 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
 /// cascade holds whatever order a backlog writes in. `delete_pin`, `RoutingTx::delete_pin` and
 /// `rekey_resolution_on` pass `None`, so a replacement keeps them.
 fn delete_pin_on(conn: &Connection, key: &PinKey, ended: Option<i64>) -> Result<bool, StoreError> {
-    let deleted = conn.prepare_cached("DELETE FROM pins WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4")?.execute(params![key.key_id, key.session_id, key.agent_id, key.model])? > 0;
+    let mut stmt = conn.prepare_cached(
+        "DELETE FROM pins WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4",
+    )?;
+    let deleted = stmt.execute(params![key.key_id, key.session_id, key.agent_id, key.model])? > 0;
     if let Some(ended) = ended {
         end_first_seen_on(conn, &key.key_id, &key.session_id, ended)?;
     }
@@ -912,7 +915,11 @@ fn end_first_seen_on(
     session_id: &str,
     ended: i64,
 ) -> Result<usize, StoreError> {
-    Ok(conn.prepare_cached("DELETE FROM session_first_seen WHERE key_id = ?1 AND session_id = ?2 AND first_seen_at <= ?3")?.execute(params![key_id, session_id, ended])?)
+    let mut stmt = conn.prepare_cached(
+        "DELETE FROM session_first_seen \
+         WHERE key_id = ?1 AND session_id = ?2 AND first_seen_at <= ?3",
+    )?;
+    Ok(stmt.execute(params![key_id, session_id, ended])?)
 }
 
 fn sweep_first_seen_on(conn: &Connection) -> Result<usize, StoreError> {
@@ -923,7 +930,16 @@ fn sweep_first_seen_on(conn: &Connection) -> Result<usize, StoreError> {
 }
 
 fn insert_first_seen_on(conn: &Connection, row: &FirstSeenRow) -> Result<(), StoreError> {
-    conn.prepare_cached("INSERT OR REPLACE INTO session_first_seen (key_id, session_id, agent_id, first_seen_at) VALUES (?1, ?2, ?3, ?4)")?.execute(params![row.key_id, row.session_id, row.agent_id, row.first_seen_at])?;
+    let mut stmt = conn.prepare_cached(
+        "INSERT OR REPLACE INTO session_first_seen (key_id, session_id, agent_id, first_seen_at) \
+         VALUES (?1, ?2, ?3, ?4)",
+    )?;
+    stmt.execute(params![
+        row.key_id,
+        row.session_id,
+        row.agent_id,
+        row.first_seen_at
+    ])?;
     Ok(())
 }
 
@@ -1103,7 +1119,11 @@ fn replace_shed_round_on(
     incarnation: u64,
     round_at: i64,
 ) -> Result<(), StoreError> {
-    conn.prepare_cached("INSERT OR REPLACE INTO shed_rounds (pool_id, account_id, incarnation, round_at) VALUES (?1, ?2, ?3, ?4)")?.execute(params![pool_id, account_id, incarnation as i64, round_at])?;
+    let mut stmt = conn.prepare_cached(
+        "INSERT OR REPLACE INTO shed_rounds (pool_id, account_id, incarnation, round_at) \
+         VALUES (?1, ?2, ?3, ?4)",
+    )?;
+    stmt.execute(params![pool_id, account_id, incarnation as i64, round_at])?;
     Ok(())
 }
 
