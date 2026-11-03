@@ -62,6 +62,7 @@ const SERVED_REFRESHED_POISONED: &str = "catalog served-refresh map poisoned by 
 const MISMATCHED_POISONED: &str = "catalog mismatched-triple set poisoned by a prior panic";
 const LISTINGS_POISONED: &str = "catalog previous-listing map poisoned by a prior panic";
 const ON_CHANGE_POISONED: &str = "catalog change hook poisoned by a prior panic";
+const WARMTH_POISONED: &str = "catalog warmth poisoned by a prior panic";
 
 /// The sink reports the room left in the call it refused; the caller's own bound is the number worth telling.
 fn at_models_bound(error: TransportError) -> TransportError {
@@ -160,7 +161,7 @@ pub struct CatalogService {
     /// Held across the whole of `publish`, so two fills landing together derive, hand to the router, and insert
     /// one after the other rather than racing each other's read of `published`.
     publishing: tokio::sync::Mutex<()>,
-    warmth: watch::Sender<Warmth>,
+    warmth: Mutex<Warmth>,
     fills_in_flight: watch::Sender<usize>,
     startup_bound: Duration,
     /// The clock reading of each account's last served-model refresh, rate-limiting `note_served`.
@@ -228,7 +229,7 @@ impl CatalogService {
             published: Mutex::new(published),
             listed: Mutex::new(HashSet::new()),
             publishing: tokio::sync::Mutex::new(()),
-            warmth: watch::Sender::new(Warmth::Cold),
+            warmth: Mutex::new(Warmth::Cold),
             fills_in_flight: watch::Sender::new(0),
             startup_bound,
             served_refreshed: Mutex::new(HashMap::new()),
@@ -366,13 +367,7 @@ impl CatalogService {
                     tracing::warn!(%error, "a catalog publication task did not finish cleanly");
                 }
                 if reread.as_ref().is_some_and(|row| row.enabled) {
-                    self.warmth.send_if_modified(|w| match w {
-                        Warmth::Warm => false,
-                        other => {
-                            *other = Warmth::Warm;
-                            true
-                        }
-                    });
+                    *self.warmth.lock().expect(WARMTH_POISONED) = Warmth::Warm;
                 }
             }
         }
@@ -630,7 +625,7 @@ impl CatalogService {
     }
 
     pub fn warmth(&self) -> Warmth {
-        *self.warmth.borrow()
+        *self.warmth.lock().expect(WARMTH_POISONED)
     }
 
     /// One `fetch` per enabled `Ready` account, concurrently, awaited up to the startup bound; a fetch still
@@ -783,13 +778,10 @@ impl CatalogService {
     /// The count leaves zero: `Filling` opens unless the cache is already `Warm`.
     fn raise_in_flight(&self) {
         self.fills_in_flight.send_modify(|n| *n += 1);
-        self.warmth.send_if_modified(|w| match w {
-            Warmth::Cold => {
-                *w = Warmth::Filling;
-                true
-            }
-            _ => false,
-        });
+        let mut warmth = self.warmth.lock().expect(WARMTH_POISONED);
+        if *warmth == Warmth::Cold {
+            *warmth = Warmth::Filling;
+        }
     }
 
     /// The count returns to zero: `Cold` resumes unless a landed publication already made the cache `Warm`.
@@ -800,13 +792,10 @@ impl CatalogService {
             at_zero = *n == 0;
         });
         if at_zero {
-            self.warmth.send_if_modified(|w| match w {
-                Warmth::Warm => false,
-                other => {
-                    *other = Warmth::Cold;
-                    true
-                }
-            });
+            let mut warmth = self.warmth.lock().expect(WARMTH_POISONED);
+            if *warmth != Warmth::Warm {
+                *warmth = Warmth::Cold;
+            }
         }
     }
 
