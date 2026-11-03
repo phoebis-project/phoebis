@@ -575,26 +575,7 @@ impl Store {
             return Ok(CanaryRead::NoRegistry);
         }
         let conn = open_read_only(db_path, BUSY_TIMEOUT)?;
-        let mismatch = || StoreError::KeyMismatch {
-            path: db_path.to_path_buf(),
-        };
-        let stored = if has_table(&conn, "meta")? {
-            stored_canary(&conn)?
-        } else {
-            None
-        };
-        if let Some(value) = stored {
-            return if canary_matches(key, &value) {
-                Ok(CanaryRead::Matches)
-            } else {
-                Err(mismatch())
-            };
-        }
-        match sealed_rows_open_under(&conn, key)? {
-            None => Ok(CanaryRead::Absent),
-            Some(true) => Ok(CanaryRead::SealedRowMatches),
-            Some(false) => Err(mismatch()),
-        }
+        prove_key(&conn, key, db_path)
     }
 
     /// The registry's `meta.schema_version` through a read-only connection, taking no lock, as `read_canary`
@@ -1001,11 +982,7 @@ impl RecoveryStore {
     /// than discarding the rows it opens. A registry holding nothing sealed differs, so its recovery discards nothing
     /// and seals its canary.
     pub fn key_matches(&self, key: &StorageKey) -> Result<KeyMatch, StoreError> {
-        let canary = if has_table(&self.conn, "meta")? {
-            stored_canary(&self.conn)?
-        } else {
-            None
-        };
+        let canary = stored_canary(&self.conn)?;
         if canary
             .as_deref()
             .is_some_and(|value| canary_matches(key, value))
@@ -1124,20 +1101,30 @@ fn check_or_seal_canary(
     key: &StorageKey,
     path: &Path,
 ) -> Result<(), StoreError> {
+    if prove_key(conn, key, path)? == CanaryRead::Matches {
+        return Ok(());
+    }
+    insert_canary(conn, key)
+}
+
+/// Proves `key` against the open registry at `path`: by its canary, else by its sealed rows, a registry sealed
+/// before the canary existed. `KeyMismatch` names `path`.
+fn prove_key(conn: &Connection, key: &StorageKey, path: &Path) -> Result<CanaryRead, StoreError> {
     let mismatch = || StoreError::KeyMismatch {
         path: path.to_path_buf(),
     };
     if let Some(value) = stored_canary(conn)? {
         return if canary_matches(key, &value) {
-            Ok(())
+            Ok(CanaryRead::Matches)
         } else {
             Err(mismatch())
         };
     }
-    if sealed_rows_open_under(conn, key)? == Some(false) {
-        return Err(mismatch());
+    match sealed_rows_open_under(conn, key)? {
+        None => Ok(CanaryRead::Absent),
+        Some(true) => Ok(CanaryRead::SealedRowMatches),
+        Some(false) => Err(mismatch()),
     }
-    insert_canary(conn, key)
 }
 
 /// Seals the canary under `key` in its own transaction, keeping a canary another writer sealed first.
@@ -1152,7 +1139,11 @@ fn insert_canary(conn: &mut Connection, key: &StorageKey) -> Result<(), StoreErr
     Ok(())
 }
 
+/// `None` for a registry without the row, or without `meta` at all.
 fn stored_canary(conn: &Connection) -> Result<Option<String>, StoreError> {
+    if !has_table(conn, "meta")? {
+        return Ok(None);
+    }
     Ok(conn
         .query_row(
             "SELECT value FROM meta WHERE key = 'storage_key_canary'",
