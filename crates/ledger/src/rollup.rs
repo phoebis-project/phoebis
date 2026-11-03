@@ -8,7 +8,7 @@ use std::sync::{Arc, LazyLock};
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql, Transaction};
 
-use phoebis_bus::Kind;
+use phoebis_bus::{Classifier, Kind};
 use phoebis_relay::EFFORT_LEVELS;
 use phoebis_routing::{window_length_ms, PinUsage, WEEK_MS};
 use phoebis_store::AccountKind;
@@ -341,6 +341,21 @@ impl RollupRow {
         add_counts(&mut self.errors, &o.errors);
         add_counts(&mut self.refusals, &o.refusals);
         add_counts(&mut self.cache_miss_reasons, &o.cache_miss_reasons);
+    }
+
+    /// Who paid for the row, its funding word read as `Funding::of_rollup` reads it, so every reader takes one rule.
+    pub(crate) fn funding_kind(&self) -> Funding {
+        Funding::of_rollup(&self.funding)
+    }
+
+    /// The account tier the row recorded, `None` for `UNATTRIBUTED`.
+    pub(crate) fn tier_of(&self) -> Option<&str> {
+        (self.tier != UNATTRIBUTED).then_some(self.tier.as_str())
+    }
+
+    /// Whether the row is the client's own classifier call.
+    pub(crate) fn is_classifier(&self) -> bool {
+        self.classifier == Classifier::Client.as_str()
     }
 
     /// The row's counts as the five-count usage `price_row` takes.

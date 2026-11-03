@@ -34,7 +34,7 @@ use crate::rollup::{
     add_counts, detail_json, fold_identifier, fold_user_agent, hour_of, migration_reason,
     read_account_rollups, read_rollups_paged, visit_rollups, CostSplit, KeySelector, RollupRow,
     RollupSelect, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS, NO_CLASS, NO_EFFORT, OTHER_DIMENSION,
-    PLAN_FUNDING, UNATTRIBUTED,
+    UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -1841,7 +1841,7 @@ fn shared_figures(
 ) -> (f64, f64, Option<f64>) {
     shared_of(
         &priced(row, prices, costs, now),
-        Funding::of_rollup(&row.funding),
+        row.funding_kind(),
         row.usage(),
     )
 }
@@ -2217,8 +2217,8 @@ fn passes_patterns(r: &RollupRow, f: &RollupFilter) -> bool {
 fn passes_funding(r: &RollupRow, f: &RollupFilter) -> bool {
     match f.funding {
         None => true,
-        Some(FundingFilter::Billed) => r.funding != PLAN_FUNDING,
-        Some(FundingFilter::Plan) => r.funding == PLAN_FUNDING,
+        Some(FundingFilter::Billed) => r.funding_kind() != Funding::Plan,
+        Some(FundingFilter::Plan) => r.funding_kind() == Funding::Plan,
     }
 }
 
@@ -2237,11 +2237,11 @@ pub(crate) fn row_key(row: &RollupRow, now: i64) -> RowKey<'_> {
         model: &row.canonical_model,
         speed: Speed::of(Some(row.speed.as_str())),
         band: Band::of_rollup(&row.band),
-        funding: Funding::of_rollup(&row.funding),
+        funding: row.funding_kind(),
         kind: row.kind.as_str(),
-        tier: (row.tier != UNATTRIBUTED).then_some(row.tier.as_str()),
+        tier: row.tier_of(),
         entrypoint: entrypoint_of_client(&row.client),
-        classifier: row.classifier == Classifier::Client.as_str(),
+        classifier: row.is_classifier(),
         at: row.hour * 1_000,
         band_at: None,
         now,
