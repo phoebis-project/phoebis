@@ -247,7 +247,6 @@ export function decodeQuotaHistory(v: unknown): QuotaHistory[] {
   return drawnOrder([...byId.values()], (h) => h.windowId);
 }
 
-
 function decodePoll(v: unknown): QuotaPoll | null {
   return orNull(v, (p) => ({
     backoffSince: isoOrNull(p.backoff_since),
@@ -265,7 +264,6 @@ export function decodeSnapshot(accountId: string, v: unknown): QuotaSnapshot {
   const u = rec(v);
   return { accountId, error: strOrNull(u.error), fetchedAt: isoOrNull(u.fetched_at), heldUntil: isoOrNull(u.held_until), poll: decodePoll(u.poll) };
 }
-
 
 export function decodeAttention(v: unknown): AttentionItem {
   const a = rec(v);
@@ -986,7 +984,7 @@ const must = <T>(ok: boolean, v: T): T => {
   if (!ok) throw new Malformed();
   return v;
 };
-const map =(v: unknown): Rec => must(isMap(v), v as Rec);
+const map = (v: unknown): Rec => must(isMap(v), v as Rec);
 const finite = (v: unknown): number => must(typeof v === 'number' && Number.isFinite(v), v as number);
 const finiteOrNull = (v: unknown): number | null => (v === null ? null : finite(v));
 const text = (v: unknown): string => must(typeof v === 'string', v as string);
@@ -1117,7 +1115,6 @@ export const encodePool = (i: PoolInput) => ({
 
 // The guardrails' shapes, read as leniently as the rows above: a word outside its set folds to a named default, and
 // the lists read in their `position` order, which a detach can leave with a gap, so a position is never an index.
-
 
 // `observe` is the route's own default for a guardrail created without a mode.
 const guardrailMode = (v: unknown): GuardrailMode => oneOf(GUARDRAIL_MODE_VALUES, v) ?? 'observe';

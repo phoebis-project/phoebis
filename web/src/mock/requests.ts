@@ -2196,7 +2196,6 @@ function incompleteCodesOf(rows: RequestLog[]): Record<string, number> {
   return codes;
 }
 
-
 export function rollups(rows: RequestLog[]): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();

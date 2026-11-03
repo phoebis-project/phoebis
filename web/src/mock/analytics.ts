@@ -197,7 +197,6 @@ function costSharesOf(counted: HourlyRollup[]): Record<string, number> {
  *  together the read the requests paid instead. */
 const keptUsageOf = (r: HourlyRollup): Usage => ({ cacheRead: r.keptWarm.tokens1h + r.keptWarm.tokens5m, cacheWrite1h: r.keptWarm.tokens1h, cacheWrite5m: r.keptWarm.tokens5m, input: 0, output: 0 });
 
-
 const TOKEN_KINDS: Record<keyof CostSplit, (u: Usage) => Usage> = {
   cacheRead: (u) => ({ cacheRead: u.cacheRead, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }),
   cacheWrite: (u) => ({ cacheRead: 0, cacheWrite1h: u.cacheWrite1h, cacheWrite5m: u.cacheWrite5m, input: 0, output: 0 }),
