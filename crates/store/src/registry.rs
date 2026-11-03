@@ -968,11 +968,7 @@ impl Store {
             "DELETE FROM guardrail_attachments WHERE subject_kind = ?1 AND subject_id = ?2",
             params!["pool", id],
         )?;
-        tx.execute(
-            "INSERT INTO pool_tombstones (id, incarnation) VALUES (?1, ?2) \
-             ON CONFLICT(id) DO UPDATE SET incarnation = max(pool_tombstones.incarnation, excluded.incarnation)",
-            params![id, incarnation],
-        )?;
+        crate::accounts::bury_in(&tx, "pool_tombstones", id, incarnation)?;
         record_change(&tx, self.now_ms(), actor, "pool_deleted", id, "{}")?;
         tx.commit()?;
         Ok(())
@@ -1249,11 +1245,7 @@ impl Store {
             "DELETE FROM guardrail_attachments WHERE subject_kind = ?1 AND subject_id = ?2",
             params!["key", id],
         )?;
-        tx.execute(
-            "INSERT INTO api_key_tombstones (id, incarnation) VALUES (?1, ?2) \
-             ON CONFLICT(id) DO UPDATE SET incarnation = max(api_key_tombstones.incarnation, excluded.incarnation)",
-            params![id, incarnation],
-        )?;
+        crate::accounts::bury_in(&tx, "api_key_tombstones", id, incarnation)?;
         tx.execute("DELETE FROM pins WHERE key_id = ?1", params![id])?;
         tx.execute(
             "DELETE FROM session_first_seen WHERE key_id = ?1",
@@ -1642,11 +1634,7 @@ impl Store {
             ("api_keys", guardrail_subjects(&tx, id, "key")?),
         ];
         tx.execute("DELETE FROM guardrails WHERE id = ?1", params![id])?;
-        tx.execute(
-            "INSERT INTO guardrail_tombstones (id, incarnation) VALUES (?1, ?2) \
-             ON CONFLICT(id) DO UPDATE SET incarnation = max(guardrail_tombstones.incarnation, excluded.incarnation)",
-            params![id, incarnation],
-        )?;
+        crate::accounts::bury_in(&tx, "guardrail_tombstones", id, incarnation)?;
         for (table, subject_ids) in &subjects {
             for subject_id in subject_ids {
                 stamp_subject(&tx, table, subject_id, now)?;

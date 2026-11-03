@@ -426,11 +426,7 @@ impl Store {
             &format!("DELETE FROM refresh_attempts WHERE account_id = ?1 AND ({PENDING_WHERE})"),
             params![id],
         )?;
-        tx.execute(
-            "INSERT INTO account_tombstones (id, incarnation) VALUES (?1, ?2) \
-             ON CONFLICT(id) DO UPDATE SET incarnation = max(account_tombstones.incarnation, excluded.incarnation)",
-            params![id, incarnation],
-        )?;
+        bury_in(&tx, "account_tombstones", id, incarnation)?;
         crate::registry::record_change(&tx, now, actor, "account_deleted", id, "{}")?;
         tx.commit()?;
         Ok(())
@@ -653,6 +649,24 @@ pub(crate) fn next_incarnation(conn: &rusqlite::Connection, id: &str) -> Result<
 }
 
 /// The incarnation a fresh row under `id` takes in the `tombstones` table: one past what held the id before, 1 when new.
+/// Leaves the id's incarnation behind in `tombstones`, never lowering one a later holder left, so the next holder's
+/// incarnation from `next_incarnation_in` goes past every earlier one.
+pub(crate) fn bury_in(
+    conn: &rusqlite::Connection,
+    tombstones: &str,
+    id: &str,
+    incarnation: i64,
+) -> Result<(), StoreError> {
+    conn.execute(
+        &format!(
+            "INSERT INTO {tombstones} (id, incarnation) VALUES (?1, ?2) \
+             ON CONFLICT(id) DO UPDATE SET incarnation = max({tombstones}.incarnation, excluded.incarnation)"
+        ),
+        params![id, incarnation],
+    )?;
+    Ok(())
+}
+
 pub(crate) fn next_incarnation_in(
     conn: &rusqlite::Connection,
     tombstones: &str,
