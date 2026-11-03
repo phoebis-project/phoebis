@@ -22,12 +22,12 @@ answer is decoded and forwarded as identity with `content-encoding` dropped, the
 zstd, and any other coding answers `502` `upstream_undecodable` before any byte reaches the client
 ([The edits toward the client](relay.md#the-edits-toward-the-client)). A resumed conversation's version suffix
 reproduces over the empty prompt the client stamps, and a refusal on a resumed conversation names the resume
-([Client drift](relay.md#client-drift)). A billing line the strict decoder refuses, as one holding a lone surrogate
-escape, is checked for its version suffix on the tolerant read and refused as `version_suffix` drift when the suffix
-does not reproduce ([Client drift](relay.md#client-drift)). A session that switches model between its turns names no
-previous message in its cache diagnostics on its first request to another account, like any move
-([The body edits](relay.md#the-body-edits)). A billing line the strict decoder cannot read, as one holding a lone
-surrogate escape, is refused for its shape as `400` `body_shape` on a request whose line the relay restores
+([Client drift](relay.md#client-drift)). A billing line the strict decoder refuses for a lone surrogate escape is
+checked for its version suffix on the tolerant read and refused as `version_suffix` drift when the suffix does not
+reproduce ([Client drift](relay.md#client-drift)). A session that switches model between its turns names no previous
+message in its cache diagnostics on its first request to another account, like any move
+([The body edits](relay.md#the-body-edits)). A billing line the strict decoder refuses for a lone surrogate escape is
+refused for its shape as `400` `body_shape` on a request whose line the relay restores
 ([The body edits](relay.md#the-body-edits), [Refusal codes](client.md#refusal-codes)).
 A body carrying a fallback credit token from a refusal is placed on the account that issued it, the relay keeping the
 issuer under the token's digest in memory for an hour ([Admission](relay.md#admission)).
