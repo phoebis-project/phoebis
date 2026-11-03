@@ -1813,17 +1813,7 @@ fn run(
             // pin renews in place then.
             if let MoveVerdict::Wait { until } = moved {
                 state.pace_held_until(&current.key(), until);
-                let hold = HoldFacts {
-                    account_id: current.account_id.clone(),
-                    cohort: None,
-                    held_ms: 0,
-                    attempt: request.attempt,
-                    seq: request.seq,
-                    ran_out: false,
-                    reason: "reset",
-                    until: Some(until),
-                    waits_for: None,
-                };
+                let hold = hold_facts(request, &current.account_id, "reset", Some(until), None);
                 return (
                     SelectResult::Held {
                         account_id: current.account_id.clone(),
@@ -2225,30 +2215,15 @@ fn run(
                     window,
                     rec,
                 );
-                // The wait and whether its bound ran out are the relay's to read, once it has waited.
-                let hold = match cohort {
-                    Some(c) => HoldFacts {
-                        account_id: c.account_id.clone(),
-                        cohort: Some(c.account_id.clone()),
-                        held_ms: 0,
-                        attempt: request.attempt,
-                        seq: request.seq,
-                        ran_out: false,
-                        reason: "cap",
-                        until: None,
-                        waits_for: None,
-                    },
-                    None => HoldFacts {
-                        account_id: strategy_choice.account_id.clone(),
-                        cohort: None,
-                        held_ms: 0,
-                        attempt: request.attempt,
-                        seq: request.seq,
-                        ran_out: false,
-                        reason: "cap",
-                        until: None,
-                        waits_for: None,
-                    },
+                let hold = HoldFacts {
+                    cohort: cohort.map(|c| c.account_id.clone()),
+                    ..hold_facts(
+                        request,
+                        &cohort.unwrap_or(strategy_choice).account_id,
+                        "cap",
+                        None,
+                        None,
+                    )
                 };
                 let place = *rec.hold_place.get_or_insert("strategy_pick");
                 rec.step(
@@ -4250,17 +4225,13 @@ fn rewrite_answer(
     if until - request.now < SLOW_DOWN_MIN_HOLD_MS {
         return None;
     }
-    Some(HoldFacts {
-        account_id: current.account_id.clone(),
-        cohort: None,
-        held_ms: 0,
-        attempt: request.attempt,
-        seq: request.seq,
-        ran_out: false,
-        reason: "rewrite",
-        until: Some(until),
-        waits_for: Some(mark.request_id.clone()),
-    })
+    Some(hold_facts(
+        request,
+        &current.account_id,
+        "rewrite",
+        Some(until),
+        Some(mark.request_id.clone()),
+    ))
 }
 
 /// Step 5's slow-down hold for a pin step 4 left in place on an eligible account, `None` where the pin renews. Only a
@@ -4301,19 +4272,37 @@ fn slow_down_answer(
     if let Some(pin) = rec.pin.as_mut() {
         pin.slow_down_until = Some(plan.until);
     }
-    let hold = HoldFacts {
-        account_id: current.account_id.clone(),
+    let hold = hold_facts(
+        request,
+        &current.account_id,
+        "slow_down",
+        Some(plan.until),
+        None,
+    );
+    rec.hold_plan = Some(plan);
+    Some(hold)
+}
+
+/// A hold on `account_id` as the selector answers it. The wait and whether its bound ran out are the relay's to read,
+/// once it has waited.
+fn hold_facts(
+    request: &SelectRequest,
+    account_id: &str,
+    reason: &'static str,
+    until: Option<i64>,
+    waits_for: Option<String>,
+) -> HoldFacts {
+    HoldFacts {
+        account_id: account_id.to_string(),
         cohort: None,
         held_ms: 0,
         attempt: request.attempt,
         seq: request.seq,
         ran_out: false,
-        reason: "slow_down",
-        until: Some(plan.until),
-        waits_for: None,
-    };
-    rec.hold_plan = Some(plan);
-    Some(hold)
+        reason,
+        until,
+        waits_for,
+    }
 }
 
 /// The holds of the account's pins with a cycle at `factor` under the cap, and the speed every kept pin realizes
