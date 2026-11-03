@@ -386,9 +386,7 @@ impl Store {
                     auxiliary_only: r.get(45)?, effort: r.get(46)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
-            resolutions: tx.prepare("SELECT spelling, dated_id, resolved_at FROM model_resolutions ORDER BY spelling")?
-                .query_map([], |r| Ok(ResolutionRow { spelling: r.get(0)?, dated_id: r.get(1)?, resolved_at: r.get(2)? }))?
-                .collect::<rusqlite::Result<Vec<_>>>()?,
+            resolutions: all_resolutions(&tx)?,
             affinity: tx.prepare(&format!("SELECT {AFFINITY_COLUMNS} FROM affinity ORDER BY model, hash"))?
                 .query_map([], affinity_of)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
@@ -606,20 +604,22 @@ impl Store {
     /// The persisted map on its own: the accessor seeds the catalog cache's published map at start.
     pub fn resolutions(&self) -> Result<Vec<ResolutionRow>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let rows = conn
-            .prepare(
-                "SELECT spelling, dated_id, resolved_at FROM model_resolutions ORDER BY spelling",
-            )?
-            .query_map([], |r| {
-                Ok(ResolutionRow {
-                    spelling: r.get(0)?,
-                    dated_id: r.get(1)?,
-                    resolved_at: r.get(2)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
+        all_resolutions(&conn)
     }
+}
+
+fn all_resolutions(conn: &Connection) -> Result<Vec<ResolutionRow>, StoreError> {
+    let rows = conn
+        .prepare("SELECT spelling, dated_id, resolved_at FROM model_resolutions ORDER BY spelling")?
+        .query_map([], |r| {
+            Ok(ResolutionRow {
+                spelling: r.get(0)?,
+                dated_id: r.get(1)?,
+                resolved_at: r.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 /// The routing writes on one open transaction; each is the inner form of the public method of the same name.

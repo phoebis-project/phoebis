@@ -179,6 +179,21 @@ fn open_tokens(
     Ok(serde_json::from_slice(&plaintext)?)
 }
 
+// The columns `id, account_id, started_at, resolved_at, outcome, detail, lifecycle_generation,
+// credential_generation` of `refresh_attempts`, in that order.
+fn row_to_resolved_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<ResolvedAttempt> {
+    Ok(ResolvedAttempt {
+        id: r.get::<_, i64>(0)? as u64,
+        account_id: r.get(1)?,
+        started_at: r.get(2)?,
+        resolved_at: r.get(3)?,
+        outcome: r.get(4)?,
+        detail: r.get(5)?,
+        lifecycle_generation: r.get::<_, i64>(6)? as u64,
+        credential_generation: r.get::<_, i64>(7)? as u64,
+    })
+}
+
 pub(crate) fn api_key_aad(account_id: &str) -> String {
     format!("{account_id}:api_key")
 }
@@ -626,18 +641,10 @@ impl Store {
              WHERE (resolved_at > ?1 OR (resolved_at = ?1 AND id > ?2)) AND outcome IS NOT NULL \
              ORDER BY resolved_at, id LIMIT ?3",
         )?;
-        let rows = stmt.query_map(params![resolved_at, id as i64, limit as i64], |r| {
-            Ok(ResolvedAttempt {
-                id: r.get::<_, i64>(0)? as u64,
-                account_id: r.get(1)?,
-                started_at: r.get(2)?,
-                resolved_at: r.get(3)?,
-                outcome: r.get(4)?,
-                detail: r.get(5)?,
-                lifecycle_generation: r.get::<_, i64>(6)? as u64,
-                credential_generation: r.get::<_, i64>(7)? as u64,
-            })
-        })?;
+        let rows = stmt.query_map(
+            params![resolved_at, id as i64, limit as i64],
+            row_to_resolved_attempt,
+        )?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(StoreError::from)
     }
@@ -851,18 +858,10 @@ impl Store {
              WHERE account_id = ?1 AND incarnation = ?2 AND outcome IS NOT NULL \
              ORDER BY resolved_at DESC, id DESC LIMIT ?3",
         )?;
-        let rows = stmt.query_map(params![account_id, incarnation as i64, limit as i64], |r| {
-            Ok(ResolvedAttempt {
-                id: r.get::<_, i64>(0)? as u64,
-                account_id: r.get(1)?,
-                started_at: r.get(2)?,
-                resolved_at: r.get(3)?,
-                outcome: r.get(4)?,
-                detail: r.get(5)?,
-                lifecycle_generation: r.get::<_, i64>(6)? as u64,
-                credential_generation: r.get::<_, i64>(7)? as u64,
-            })
-        })?;
+        let rows = stmt.query_map(
+            params![account_id, incarnation as i64, limit as i64],
+            row_to_resolved_attempt,
+        )?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(StoreError::from)
     }

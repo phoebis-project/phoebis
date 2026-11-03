@@ -158,13 +158,17 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<AccountRow> {
 }
 
 /// Shared by `Store::account` and the account edit, which reads the row it changes inside its own transaction.
+// The columns `row_to_account` reads, in its order.
+const ACCOUNT_SELECT: &str =
+    "SELECT id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, \
+     revision, state, state_cause FROM accounts";
+
 pub(crate) fn account_in(
     conn: &rusqlite::Connection,
     id: &str,
 ) -> Result<Option<AccountRow>, StoreError> {
     conn.query_row(
-        "SELECT id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, \
-         state_cause FROM accounts WHERE id = ?1",
+        &format!("{ACCOUNT_SELECT} WHERE id = ?1"),
         params![id],
         row_to_account,
     )
@@ -175,10 +179,7 @@ pub(crate) fn account_in(
 /// Shared by `Store::accounts` and `load_registry`, so the registry snapshot can read the account list
 /// inside its own transaction instead of through the store's connection lock.
 pub(crate) fn all_accounts(conn: &rusqlite::Connection) -> Result<Vec<AccountRow>, StoreError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, \
-         state_cause FROM accounts ORDER BY id",
-    )?;
+    let mut stmt = conn.prepare(&format!("{ACCOUNT_SELECT} ORDER BY id"))?;
     let rows = stmt.query_map([], row_to_account)?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(StoreError::from)
@@ -573,35 +574,40 @@ pub(crate) fn subscription_term_in(
     id: &str,
 ) -> Result<Option<SubscriptionTerm>, StoreError> {
     conn.query_row(
-        "SELECT id, subscription_since, trial_ends_at, canceled, subscription_ends_at, \
-         subscription_tier, kind, profile_json, plan_ended_at FROM accounts WHERE id = ?1",
+        &format!("{TERM_SELECT} WHERE id = ?1"),
         params![id],
-        |row| {
-            let tier: Option<String> = row.get(5)?;
-            let profile_json: Option<String> = row.get(7)?;
-            let usage_based = row.get::<_, AccountKind>(6)? == AccountKind::Oauth
-                && usage_based_of(tier.as_deref(), profile_json.as_deref());
-            let plan = plan_of(
-                organization_type_of(profile_json.as_deref()).as_deref(),
-                tier.as_deref(),
-                usage_based,
-            )
-            .map(String::from);
-            Ok(SubscriptionTerm {
-                account_id: row.get(0)?,
-                since: row.get(1)?,
-                trial_ends_at: row.get(2)?,
-                canceled: row.get(3)?,
-                ends_at: row.get(4)?,
-                tier,
-                usage_based,
-                plan,
-                plan_ended_at: row.get(8)?,
-            })
-        },
+        row_to_term,
     )
     .optional()
     .map_err(StoreError::from)
+}
+
+// The columns `row_to_term` reads, in its order.
+pub(crate) const TERM_SELECT: &str = "SELECT id, subscription_since, trial_ends_at, canceled, \
+     subscription_ends_at, subscription_tier, kind, profile_json, plan_ended_at FROM accounts";
+
+pub(crate) fn row_to_term(row: &Row<'_>) -> rusqlite::Result<SubscriptionTerm> {
+    let tier: Option<String> = row.get(5)?;
+    let profile_json: Option<String> = row.get(7)?;
+    let usage_based = row.get::<_, AccountKind>(6)? == AccountKind::Oauth
+        && usage_based_of(tier.as_deref(), profile_json.as_deref());
+    let plan = plan_of(
+        organization_type_of(profile_json.as_deref()).as_deref(),
+        tier.as_deref(),
+        usage_based,
+    )
+    .map(String::from);
+    Ok(SubscriptionTerm {
+        account_id: row.get(0)?,
+        since: row.get(1)?,
+        trial_ends_at: row.get(2)?,
+        canceled: row.get(3)?,
+        ends_at: row.get(4)?,
+        tier,
+        usage_based,
+        plan,
+        plan_ended_at: row.get(8)?,
+    })
 }
 
 // Beside the read that resolves the term's plan, since the rule reads that word: `SubscriptionRow.plan` holds the

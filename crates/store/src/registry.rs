@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::credentials::store_api_key_secret;
 use crate::{
-    AccountKind, AccountRow, AccountState, NewBundle, Secret, StateCause, Store, StoreError,
-    SubscriptionRow, LOCK_POISONED,
+    AccountRow, AccountState, NewBundle, Secret, StateCause, Store, StoreError, SubscriptionRow,
+    LOCK_POISONED,
 };
 
 text_enum! {
@@ -670,15 +670,7 @@ impl Store {
             keys: all_keys(&tx)?,
             members: tx
                 .prepare("SELECT pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd FROM pool_members ORDER BY pool_id, account_id")?
-                .query_map([], |r| {
-                    Ok(PoolMember {
-                        pool_id: r.get(0)?,
-                        account_id: r.get(1)?,
-                        priority: r.get(2)?,
-                        budget_daily_usd: r.get(3)?,
-                        budget_monthly_usd: r.get(4)?,
-                    })
-                })?
+                .query_map([], row_to_member)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             pools: all_pools(&tx)?,
             retired_secrets: tx
@@ -711,33 +703,8 @@ impl Store {
                 .query_map([], |r| r.get(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             terms: tx
-                .prepare(
-                    "SELECT id, subscription_since, trial_ends_at, canceled, subscription_ends_at, \
-                     subscription_tier, kind, profile_json, plan_ended_at FROM accounts ORDER BY id",
-                )?
-                .query_map([], |r| {
-                    let tier: Option<String> = r.get(5)?;
-                    let profile_json: Option<String> = r.get(7)?;
-                    let usage_based = r.get::<_, AccountKind>(6)? == AccountKind::Oauth
-                        && usage_based_of(tier.as_deref(), profile_json.as_deref());
-                    let plan = plan_of(
-                        organization_type_of(profile_json.as_deref()).as_deref(),
-                        tier.as_deref(),
-                        usage_based,
-                    )
-                    .map(String::from);
-                    Ok(SubscriptionTerm {
-                        account_id: r.get(0)?,
-                        since: r.get(1)?,
-                        trial_ends_at: r.get(2)?,
-                        canceled: r.get(3)?,
-                        ends_at: r.get(4)?,
-                        tier,
-                        usage_based,
-                        plan,
-                        plan_ended_at: r.get(8)?,
-                    })
-                })?
+                .prepare(&format!("{} ORDER BY id", crate::accounts::TERM_SELECT))?
+                .query_map([], crate::accounts::row_to_term)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         };
         tx.commit()?;
@@ -1015,15 +982,7 @@ impl Store {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let mut stmt =
             conn.prepare("SELECT pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd FROM pool_members WHERE pool_id = ?1 ORDER BY priority, account_id")?;
-        let rows = stmt.query_map(params![pool_id], |r| {
-            Ok(PoolMember {
-                pool_id: r.get(0)?,
-                account_id: r.get(1)?,
-                priority: r.get(2)?,
-                budget_daily_usd: r.get(3)?,
-                budget_monthly_usd: r.get(4)?,
-            })
-        })?;
+        let rows = stmt.query_map(params![pool_id], row_to_member)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(StoreError::from)
     }
@@ -2128,6 +2087,16 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         },
         auto_mode_server: r.get(29)?,
         incarnation: r.get::<_, i64>(30)? as u64,
+    })
+}
+
+fn row_to_member(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolMember> {
+    Ok(PoolMember {
+        pool_id: r.get(0)?,
+        account_id: r.get(1)?,
+        priority: r.get(2)?,
+        budget_daily_usd: r.get(3)?,
+        budget_monthly_usd: r.get(4)?,
     })
 }
 
