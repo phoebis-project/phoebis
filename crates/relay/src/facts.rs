@@ -132,8 +132,8 @@ impl BodyFacts {
             .and_then(|blocks| blocks.first())
             .and_then(|block| block.get("text"))
             .and_then(Value::as_str);
-        let carries_line =
-            first_system_text.is_some_and(|text| text.starts_with("x-anthropic-billing-header: "));
+        let carries_line = first_system_text
+            .is_some_and(|text| text.starts_with(crate::billing::ATTRIBUTION_PREFIX));
         let turn_origin = first_system_text
             .and_then(carried_turn_origin)
             .map(String::from);
@@ -270,12 +270,11 @@ fn tool_ms_sum(value: &str) -> Option<i64> {
 /// The value of `<name>=` on the attribution line at `system[0]`, whatever its spelling; the caller applies the
 /// charset and bound its own field carries, since a separator let through by the wrong rule would become a
 /// field of its own once the value is restored onto a line this build later signs.
-fn carried_field<'a>(text: &'a str, name: &str) -> Option<&'a str> {
-    let prefix = format!("{name}=");
+pub(crate) fn carried_field<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     let value = text
-        .strip_prefix("x-anthropic-billing-header: ")?
+        .strip_prefix(crate::billing::ATTRIBUTION_PREFIX)?
         .split("; ")
-        .find_map(|field| field.strip_prefix(prefix.as_str()))?
+        .find_map(|field| field.strip_prefix(name)?.strip_prefix('='))?
         .trim_end_matches(';');
     Some(value)
 }

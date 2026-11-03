@@ -25,6 +25,10 @@ pub const FIELD_ORDER: [&str; 13] = [
     "cc_project_src",
 ];
 
+/// The attribution line's decoded text up to its first field. `BILLING_BLOCK` stops at the colon on the raw JSON
+/// token, the looser test the stamp checks use.
+pub(crate) const ATTRIBUTION_PREFIX: &str = "x-anthropic-billing-header: ";
+
 pub struct Restore<'a> {
     pub prompt_id: Option<&'a str>,
     pub prev_req: Option<&'a str>,
@@ -80,11 +84,7 @@ pub(crate) fn carried_version<'a>(
     text: &'a str,
     client_version: &str,
 ) -> Option<CarriedVersion<'a>> {
-    let value = text
-        .strip_prefix("x-anthropic-billing-header: ")?
-        .split("; ")
-        .find_map(|field| field.strip_prefix("cc_version="))?
-        .trim_end_matches(';');
+    let value = crate::facts::carried_field(text, "cc_version")?;
     if value == client_version {
         return Some(CarriedVersion::Bare);
     }
@@ -201,7 +201,7 @@ fn patch_line(
     // The dispatch above matched `BILLING_BLOCK`, which stops right after the colon; a line that carries no
     // space after it, or nothing at all past the prefix, is not a shape this build ever writes, and splicing a
     // field into it under the assumption that it is would double the prefix or leave a stray separator behind.
-    let Some(rest) = decoded.strip_prefix("x-anthropic-billing-header: ") else {
+    let Some(rest) = decoded.strip_prefix(ATTRIBUTION_PREFIX) else {
         return Ok(Vec::new());
     };
     let rest = rest.trim_end_matches(';');
@@ -218,7 +218,7 @@ fn patch_line(
     if injected.is_empty() {
         return Ok(Vec::new());
     }
-    let line = format!("x-anthropic-billing-header: {};", fields.join("; "));
+    let line = format!("{ATTRIBUTION_PREFIX}{};", fields.join("; "));
     let encoded = serde_json::to_string(&line).expect("a string always encodes as JSON");
     body.splice(start..end, encoded.bytes());
     Ok(injected)

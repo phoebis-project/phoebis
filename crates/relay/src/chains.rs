@@ -7,12 +7,13 @@ use std::sync::Arc;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::billing::ATTRIBUTION_PREFIX;
+
 /// Seeds the two chains so they never collide: an MCP server joining mid-session changes the tools array and
 /// every static boundary, and leaves every message boundary equal, which only holds when the two chains start
 /// from different bytes.
 const STATIC_SEED: &[u8] = b"phoebis-static-chain-v1";
 const MESSAGE_SEED: &[u8] = b"phoebis-message-chain-v1";
-const ATTRIBUTION_PREFIX: &str = "x-anthropic-billing-header: ";
 
 type Link = sha2::digest::Output<Sha256>;
 
