@@ -79,7 +79,7 @@ use crate::observe::{answer_from_json, published_headers, wants_stream};
 use crate::ratelimit::{head_sample, retry_after, upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
-    drain_bounded, relay_body, AffinityFacts, Checkin, Cut, Drained, HeldText, OnError,
+    drain_bounded, relay_body, AffinityFacts, BodyRead, Checkin, Cut, Drained, HeldText, OnError,
     OnMessageId, Publish, Relayed, Renewal, Waiting, MAX_BUFFERED_BODY,
 };
 use crate::{
@@ -4430,11 +4430,14 @@ impl Relay {
                 incarnation,
                 catalog: self.catalog.clone(),
                 credits: self.credits.clone(),
-                parser,
+                read: match parser {
+                    Some(parser) => BodyRead::Events(parser),
+                    // A committed JSON answer is inspected for its usage block, and a rejection is not.
+                    None if head.status == 200 => BodyRead::Json(Vec::new()),
+                    None => BodyRead::Unread,
+                },
                 held,
                 on_error,
-                // A committed JSON answer is inspected for its usage block; a rejection or a stream is not.
-                json: (!event_stream && head.status == 200).then(Vec::new),
                 json_bound: self.limits.max_request_bytes,
                 usage: Usage::default(),
                 response: ResponseFacts::default(),

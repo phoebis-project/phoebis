@@ -120,6 +120,19 @@ impl Waiting {
 
 /// What the body task tells the bus as the body goes by: every decoded piece as a chunk, the SSE phases it
 /// carries, and the completion once the body has ended one way or another.
+/// What the bus copy reads of a body, one of three exclusive ways.
+pub(crate) enum BodyRead {
+    /// Parses an event stream for phases. The parser skips an event past its bound and keeps parsing, so an oversized
+    /// event costs a bounded buffer and its own phase while the events after it still reach the completion. A held
+    /// stream's is the hold's own, already past the held events.
+    Events(SseParser),
+    /// The decoded copy of a committed body that is not an event stream, kept up to the request bound so its usage
+    /// block can be read at the end.
+    Json(Vec<u8>),
+    /// Nothing is read: a rejection that is no event stream, or a JSON answer past the bound.
+    Unread,
+}
+
 pub(crate) struct Publish {
     pub trace: Trace,
     pub clock: Clock,
@@ -133,17 +146,12 @@ pub(crate) struct Publish {
     /// Where a refusal's fallback credit token is recorded for the serving account, which the selection of the body
     /// carrying the token reads.
     pub credits: Arc<CreditStore>,
-    /// Parses the decoded copy for phases on an event stream, and is `None` for any other body. It skips an event
-    /// past its bound and keeps parsing, so an oversized event costs a bounded buffer and its own phase while the
-    /// events after it still reach the completion. A held stream's is the hold's own, already past the held events.
-    pub parser: Option<SseParser>,
+    /// What the copy reads of the decoded body.
+    pub read: BodyRead,
     /// The held bytes' text and events when the hold handed its parser over, taken by the prefix.
     pub held: Option<HeldText>,
     /// Fired once, on the first `error` event after the commit; `None` for a stream nothing watches.
     pub on_error: Option<OnError>,
-    /// The decoded copy of a committed body that is not an event stream, kept up to the request bound so its
-    /// usage block can be read at the end; `None` for a stream or once the bound is passed.
-    pub json: Option<Vec<u8>>,
     /// `Limits.max_request_bytes`, so the usage of any answer the router would accept as a request is read.
     pub json_bound: usize,
     pub usage: Usage,
@@ -412,10 +420,10 @@ impl Publish {
     async fn chunk(&mut self, piece: &Bytes, waiting: &mut Waiting) {
         self.bytes += piece.len() as u64;
         let text = piece.clone();
-        if let Some(json) = self.json.as_mut() {
+        if let BodyRead::Json(json) = &mut self.read {
             if json.len() + text.len() > self.json_bound {
                 // Past the bound nothing is read; the usage stays unknown rather than half parsed.
-                self.json = None;
+                self.read = BodyRead::Unread;
             } else {
                 json.extend_from_slice(&text);
             }
@@ -447,27 +455,29 @@ impl Publish {
     }
 
     fn phases(&mut self, text: &[u8], waiting: &mut Waiting) -> Vec<Phase> {
-        let Some(parser) = self.parser.as_mut() else {
+        let BodyRead::Events(parser) = &mut self.read else {
             return Vec::new();
         };
-        if parser.feed(text).is_err() {
-            self.parser = None;
-            return Vec::new();
-        }
+        // `stream` builds a skipping parser alone, and a skipping parser never answers `Overflow`.
+        let _ = parser.feed(text);
         self.parsed(waiting)
     }
 
     /// The phases of the complete events the parser holds.
     fn parsed(&mut self, waiting: &mut Waiting) -> Vec<Phase> {
         // Taken out while `phase_of` borrows the whole struct, and put back once the parser holds no complete event.
-        let Some(mut parser) = self.parser.take() else {
-            return Vec::new();
+        let mut parser = match std::mem::replace(&mut self.read, BodyRead::Unread) {
+            BodyRead::Events(parser) => parser,
+            other => {
+                self.read = other;
+                return Vec::new();
+            }
         };
         let mut phases = Vec::new();
         while let Some(event) = parser.next_event() {
             phases.extend(self.phase_of(&event, waiting));
         }
-        self.parser = Some(parser);
+        self.read = BodyRead::Events(parser);
         phases
     }
 
@@ -545,13 +555,19 @@ impl Publish {
     async fn finish(mut self, end: &BodyEnd, waiting: &mut Waiting) -> bool {
         // A stream cut off after its last event never sent the empty line that would close it, so the event, an
         // error among them, can still be sitting in the parser.
-        let last = self.parser.as_mut().and_then(|parser| parser.finish());
+        let last = match &mut self.read {
+            BodyRead::Events(parser) => parser.finish(),
+            BodyRead::Json(_) | BodyRead::Unread => None,
+        };
         if let Some(event) = last {
             if let Some(phase) = self.phase_of(&event, waiting) {
                 self.emit(Bytes::new(), Some(phase));
             }
         }
-        let (skipped, largest) = self.parser.as_ref().map_or((0, 0), SseParser::skipped);
+        let (skipped, largest) = match &self.read {
+            BodyRead::Events(parser) => parser.skipped(),
+            BodyRead::Json(_) | BodyRead::Unread => (0, 0),
+        };
         if skipped > 0 {
             tracing::warn!(
                 request_id = %self.trace.request_id,
@@ -561,8 +577,13 @@ impl Publish {
                 "stream events past the parser's bound were skipped"
             );
         }
-        if let Some(json) = self.json.take() {
-            let answer = answer_from_json(&json, &[], self.outcome.diagnostics_named);
+        let answer = match &self.read {
+            BodyRead::Json(json) => {
+                Some(answer_from_json(json, &[], self.outcome.diagnostics_named))
+            }
+            BodyRead::Events(_) | BodyRead::Unread => None,
+        };
+        if let Some(answer) = answer {
             self.usage.merge(&answer.usage);
             self.response.merge(&answer.response);
             // A JSON answer is whole only at the body's end.
@@ -584,9 +605,9 @@ impl Publish {
         }
         self.fire_pending_hook().await;
         // `incomplete` is a 200 whose message ended short: a cut, a stall, or a clean end before which a live
-        // parser saw no stop and no error, which a success count would hide. A dropped parser proves nothing and
-        // keeps the head's word. Any other status answered no message to cut short, so it stays `failed`, and a cut
-        // or a stall still names its cause.
+        // parser saw no stop and no error, which a success count would hide. A body read for no events proves nothing
+        // and keeps the head's word. Any other status answered no message to cut short, so it stays `failed`, and a
+        // cut or a stall still names its cause.
         let committed = self.status == 200;
         let stream_error = self.stream_error.take();
         // The error's own words for a body the upstream or the account's cancel ended short. A stream that carried an
@@ -597,7 +618,9 @@ impl Publish {
             _ => None,
         };
         let outcome = match (end, stream_error) {
-            (BodyEnd::Complete, None) if committed && self.parser.is_some() && !self.saw_stop => {
+            (BodyEnd::Complete, None)
+                if committed && matches!(self.read, BodyRead::Events(_)) && !self.saw_stop =>
+            {
                 Some((Outcome::Incomplete, Some(STREAM_INCOMPLETE.into())))
             }
             (BodyEnd::Complete, None) => None,
