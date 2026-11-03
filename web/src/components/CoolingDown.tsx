@@ -2,12 +2,11 @@ import { type ReactNode, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Button, Card } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
+import { MODEL_SCOPE_PREFIX } from '@/lib/quota';
 import { entityHref } from '@/lib/routingLog';
 
 /** One scope an account cools under: an account's own cooldown row with its id. */
 export type CoolingRow = { accountId: string; reason: string; scope: string; until: string };
-
-const MODEL_SCOPE_PREFIX = 'model:';
 
 /** `Whole account` for the account scope, `Fast mode` and `Fast mode credits` for the fast lane's rate limit and
  *  usage-credits refusal, the model id for `model:<id>`. An identifier, the model id or a scope this build does not

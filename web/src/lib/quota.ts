@@ -200,6 +200,8 @@ export const planEndedSentence = (planEndedAt: string, now: number, compact = fa
 /** The fast lane's two cooldown scopes, its rate limit's and its usage-credits refusal's: each holds fast-mode
  *  requests alone, so neither cools the account's standard traffic. */
 export const isFastScope = (scope: string) => scope === 'fast' || scope === 'fast_credits';
+/** The router's spelling of a cooldown scoped to one model, `model:<id>`. */
+export const MODEL_SCOPE_PREFIX = 'model:';
 
 /** The row that cools the account: the first on a scope beyond the fast lane's, null where none does. */
 export const accountCooldown = (cooldowns: Cooldown[]): Cooldown | null => cooldowns.find((c) => !isFastScope(c.scope)) ?? null;

@@ -15,7 +15,7 @@ import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReas
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
-import { accountCooldown, accountStatusOf } from '@/lib/quota';
+import { MODEL_SCOPE_PREFIX, accountCooldown, accountStatusOf } from '@/lib/quota';
 import { compareRequests } from '@/lib/requests';
 import { ACCOUNTS, QUOTA_HISTORY, usageOf } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, unusedAllowanceOf } from './analytics';
@@ -229,8 +229,6 @@ const poolRefusal = (input: PoolInput): string | null => {
 // The registered redirect is a loopback port on the machine running Claude Code,
 // so the callback the operator pastes carries both halves of the exchange.
 const PAIRING_REDIRECT_URI = 'http://localhost:54545/callback';
-
-const MODEL_SCOPE_PREFIX = 'model:';
 
 /**
  * The signed-in mark, which outlives a reload the way the router's session cookie does: the smoke runner writes

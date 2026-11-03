@@ -6,7 +6,7 @@ import { tierOrder } from './costs';
 import { has, lookup } from './counts';
 import type { ChipText } from './filterBar';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, listed, plural, shortModel, weekShort } from './format';
-import { PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL } from './quota';
+import { MODEL_SCOPE_PREFIX, PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL } from './quota';
 import { speedWord } from './selection';
 import { ageWord, HOUR, MINUTE, span } from './time';
 import { WINDOW_KEYS, WINDOW_LABEL, windowKeyId, windowLabelOf } from './windows';
@@ -473,7 +473,7 @@ function cooldownBy(e: RoutingEvent): string {
   const d = e.detail;
   const scope = str(d.scope) ?? '';
   if (scope === 'fast') return 'fast lane 429';
-  if (scope.startsWith('model:')) return `404 on ${shortModel(scope.slice('model:'.length))}`;
+  if (scope.startsWith(MODEL_SCOPE_PREFIX)) return `404 on ${shortModel(scope.slice(MODEL_SCOPE_PREFIX.length))}`;
   const reason = str(d.reason) ?? '';
   const window = str(d.window) ?? '';
   if (reason !== 'rate_limit') return words(reason);
@@ -1887,7 +1887,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
     case 'cooldown_cleared':
     case 'cooldown_set': {
       const scope = str(d.scope) ?? '';
-      add('Scope', scope.startsWith('model:') ? modelChip(scope.slice('model:'.length), 'model') : plain(scope === 'fast' ? 'fast lane' : words(scope || 'account')));
+      add('Scope', scope.startsWith(MODEL_SCOPE_PREFIX) ? modelChip(scope.slice(MODEL_SCOPE_PREFIX.length), 'model') : plain(scope === 'fast' ? 'fast lane' : words(scope || 'account')));
       if (row.kind === 'cooldown_cleared') {
         add('Cleared', text(d.cause, CLEARED_WORD));
         break;
