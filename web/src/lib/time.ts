@@ -1,5 +1,6 @@
 export const MINUTE = 60_000;
 export const HOUR = 3_600_000;
+export const DAY = 24 * HOUR;
 
 /** A span the way the Fact cell reads one: `2.0 s`, `2 min 41 s`, `1 h 2 min`, `1 d 4 h`. */
 export function span(ms: number): string {

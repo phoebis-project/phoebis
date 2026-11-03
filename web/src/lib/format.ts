@@ -1,5 +1,6 @@
 import type { Placement } from '@/api/types';
 import { lookup } from '@/lib/counts';
+import { DAY, HOUR, MINUTE } from '@/lib/time';
 import { WEEK_LABEL, type WeekPosition } from '@/lib/unit';
 import { type ByWindow, WINDOW_LABEL, windowKeyId } from '@/lib/windows';
 
@@ -149,7 +150,7 @@ export function fmtRelative(isoTime: string | null, now: number): string {
 export function fmtEndsIn(at: string, now: number): string {
   const delta = Date.parse(at) - now;
   const abs = Math.abs(delta);
-  const [n, unit]: [number, string] = abs >= 86_400_000 ? [Math.floor(abs / 86_400_000), 'day'] : abs >= 3_600_000 ? [Math.floor(abs / 3_600_000), 'hour'] : [Math.max(1, Math.floor(abs / 60_000)), 'minute'];
+  const [n, unit]: [number, string] = abs >= DAY ? [Math.floor(abs / DAY), 'day'] : abs >= HOUR ? [Math.floor(abs / HOUR), 'hour'] : [Math.max(1, Math.floor(abs / MINUTE)), 'minute'];
   const span = `${n} ${unit}${n === 1 ? '' : 's'}`;
   return delta > 0 ? `ends in ${span}` : `ended ${span} ago`;
 }
@@ -232,7 +233,7 @@ export function cellsFit(widthPx: number, cycle: TimeFormat): number {
  */
 export function instant(ms: number, now: number): string {
   const at = new Date(ms).toISOString();
-  if (Math.abs(ms - now) < 86_400_000) return fmtShortTime(at);
+  if (Math.abs(ms - now) < DAY) return fmtShortTime(at);
   return `${new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${fmtShortTime(at)}`;
 }
 
@@ -250,7 +251,7 @@ export function fmtDated(ms: number): string {
  */
 export function fmtDatedTime(isoTime: string, now: number): string {
   const ms = Date.parse(isoTime);
-  if (Math.abs(ms - now) < 86_400_000) return fmtTime(isoTime);
+  if (Math.abs(ms - now) < DAY) return fmtTime(isoTime);
   return `${new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${fmtTime(isoTime)}`;
 }
 

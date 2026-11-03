@@ -3,6 +3,7 @@ import { lookup } from './counts';
 import { fmtDuration, instant, percentText } from './format';
 import { endOf, minuteSpan, windowOf } from './quota';
 import { speedWord, windingDown } from './selection';
+import { HOUR } from './time';
 
 export type SheddingPreset = 'balanced' | 'conservative' | 'custom' | 'fast';
 
@@ -81,7 +82,6 @@ function burnDecayed(burn: number, burnAt: string | null, now: number, windowMs:
   return burn * Math.exp(-Math.max(now - Date.parse(burnAt), 0) / Math.max(windowMs, 1));
 }
 
-const HOUR_MS = 3_600_000;
 
 /**
  * The 5-hour window's start: the reset less five hours while the reset is ahead, the reset itself once it has passed
@@ -90,7 +90,7 @@ const HOUR_MS = 3_600_000;
 const windowStart = (w: RateLimitWindow, now: number): number | null => {
   if (w.resetsAt === null) return null;
   const reset = Date.parse(w.resetsAt);
-  return reset > now ? reset - 5 * HOUR_MS : reset;
+  return reset > now ? reset - 5 * HOUR : reset;
 };
 
 /** A plan window the trigger reads, in the order the router's round walks them: the shared windows, then the week. */
@@ -248,7 +248,7 @@ export function shedPreview(
       continue;
     }
     // A horizon at or behind `now` reads as a minute away, so the excess stays finite.
-    const excess = (fired.projection - ceiling) / Math.max((fired.horizon - now) / HOUR_MS, 1 / 60);
+    const excess = (fired.projection - ceiling) / Math.max((fired.horizon - now) / HOUR, 1 / 60);
     hot.push({ excess, horizon: fired.horizon, id: account.id, label: account.label, projection: fired.projection, window: fired.id });
     if (!pool.loadShedding) continue;
     // The served burn is a pin's share of the window its `burnWindow` names: the 5-hour window, or the 7-day one on an

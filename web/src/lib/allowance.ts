@@ -4,18 +4,18 @@ import { anchorTier, pricedWindow, tierCapacity, weekScale, weekUnpricedTitle } 
 import { lookup } from '@/lib/counts';
 import { fmtAbsolute, fmtShare, fmtShortTime, weekShort } from '@/lib/format';
 import { pricedTier } from '@/lib/quota';
+import { DAY } from '@/lib/time';
 import type { WeekPosition } from '@/lib/unit';
 import { WINDOW_LABEL, WINDOW_ORDER, windowKeyId } from '@/lib/windows';
 
 /** The weeks the Accounts block and the Analytics card read: the latest reset and the three before it. */
 export const ALLOWANCE_WEEKS = 4;
 
-const DAY_MS = 86_400_000;
 
 /** The span the block and the card read: 29 days behind now to now, 28 days and a day of slack so the fourth weekly
  *  reset is never cut by the hour of the week or by a clock-walk reading up to a poll interval old. */
 export function allowanceSpan(now: number): { from: string; to: string } {
-  return { from: new Date(now - (7 * ALLOWANCE_WEEKS + 1) * DAY_MS).toISOString(), to: new Date(now).toISOString() };
+  return { from: new Date(now - (7 * ALLOWANCE_WEEKS + 1) * DAY).toISOString(), to: new Date(now).toISOString() };
 }
 
 /** The newest `weeks` resets of a window with their total and count: the answer's figures where it lists that many or

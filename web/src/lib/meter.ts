@@ -1,15 +1,15 @@
 import type { Reconciliation } from '@/api/types';
 import { judged, RATIO_HIGH, RATIO_LOW, ratioOff } from './analytics';
 import { lookup } from './counts';
+import { DAY } from './time';
 import { WINDOW_LABEL, WINDOW_ORDER, windowKeyId } from './windows';
 
 export const METER_HINT =
   "Each subscription account's completed windows of the last 30 days, grouped by account and window kind: the rise the upstream's readings showed against the share the router priced for its own requests in it. 1.1 means the meter charged 1.1 times the table. A ratio under 0.8 or over 1.25 after a rise of at least 5% is marked.";
 export const UNJUDGED_TITLE = 'the rise or the priced share is under 5%, so the band does not judge this ratio';
 
-const DAY_MS = 86_400_000;
 /** The span the route answers and the spark draws: the trailing 30 days. */
-const SPAN_MS = 30 * DAY_MS;
+const SPAN_MS = 30 * DAY;
 
 /** "7-day", "Fable", "5-hour", a window the console does not know under its key. */
 export function meterWindowWord(window: string): string {

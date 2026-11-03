@@ -4,6 +4,7 @@ import { slug } from '@/api/http';
 import type { Account, ApiKey, GuardrailRef, ModelRule, ModelRulesMode, Pool, PoolKeepalive, PoolWarning } from '@/api/types';
 import { fmtInt, toLocalInput, viewingZone } from './format';
 import { checkPattern } from './patterns';
+import { DAY } from './time';
 
 export type NumericKeepaliveKey = { [K in keyof PoolKeepalive]-?: PoolKeepalive[K] extends number | null ? K : never }[keyof PoolKeepalive];
 
@@ -334,7 +335,7 @@ export function keyInputOf(form: KeyForm, now: number): KeyInput {
     autoModeServer: form.autoModeServer === 'inherit' ? null : form.autoModeServer === 'on',
     bodyCaptureHours: form.captureMode === 'inherit' ? null : form.captureMode === 'off' ? 0 : Number(form.captureHours),
     enabled: form.enabled,
-    expiresAt: form.expiry === 'keep' ? undefined : form.expiry === 'never' ? null : iso(now + Number(form.expiry) * 86_400_000),
+    expiresAt: form.expiry === 'keep' ? undefined : form.expiry === 'never' ? null : iso(now + Number(form.expiry) * DAY),
     keepaliveOptOut: form.optOut,
     longContextTwins: form.longContextTwins,
     modelRules: form.modelRules,

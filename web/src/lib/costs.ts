@@ -3,6 +3,7 @@ import type { WeekReading } from '@/lib/analytics';
 import { has, lookup } from '@/lib/counts';
 import { listWords, undatedModel } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
+import { DAY, HOUR, MINUTE } from '@/lib/time';
 import { WEEK_TIER, type WeekPosition } from '@/lib/unit';
 
 /**
@@ -282,9 +283,6 @@ export interface BandSpan { end: number; start: number }
 /** The peak zone, which this browser cannot read. */
 export interface Unresolved { unresolved: string }
 
-const MINUTE = 60_000;
-const HOUR = 3_600_000;
-const DAY = 86_400_000;
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 // Calendar dates are `YYYY-MM-DD`, stepped and counted as UTC days, which have no clock changes.
 const dayStart = (date: string): number => Date.parse(`${date}T00:00:00Z`);

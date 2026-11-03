@@ -4,6 +4,7 @@ import { type RangeValue, REQUESTS_CODEC, type RequestsAddress } from './address
 import { OTHER_DIMENSION, foldRequestClass } from './dimensions';
 import { matchesPattern } from './pattern';
 import { aroundRequest, aroundSubject, clockMinute, type LogWindow } from './routingLog';
+import { HOUR } from './time';
 
 export interface RequestsLinkInput {
   /** The reason the count is under, any name the beta sent. */
@@ -36,8 +37,6 @@ export interface RequestsLinkTarget {
   /** Why the count links, or why it stays plain. */
   title: string;
 }
-
-const HOUR = 3_600_000;
 
 /** The rollups file a request under the hour it arrived in, and the breakdown reads the hours before the hour ceiling
  * of the end, so an end exactly on the hour leaves that hour out. The end is capped at now, since the route's `to` is

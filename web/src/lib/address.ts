@@ -2,9 +2,7 @@ import { iso, REQUEST_KIND_VALUES } from '@/api/decode';
 import type { BurnGroup, KeyStatus, RequestKind } from '@/api/types';
 import { clock } from './clock';
 import { ACCOUNT_STATUSES } from './quota';
-
-const HOUR = 3_600_000;
-const DAY = 24 * HOUR;
+import { DAY, HOUR } from './time';
 
 /** One preset of the range control's one table: the name the address carries, the width and the label. */
 export interface RangePreset {

@@ -1,4 +1,4 @@
-const HOUR = 3_600_000;
+import { HOUR } from './time';
 
 /**
  * The bucket width the analytics routes answer a range in (`bucket_seconds` in the ledger's query module), so a

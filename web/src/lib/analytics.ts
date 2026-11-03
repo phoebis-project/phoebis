@@ -4,7 +4,7 @@ import { MODEL_WEEK_TIERS, tierCapacity, type CostWindow } from '@/lib/costs';
 import { has, lookup } from '@/lib/counts';
 import { earlierHolderLabel, fmtCompact, fmtInt, fmtPct, fmtShare, fmtUsd, fmtWeek, weekShort } from '@/lib/format';
 import { planLabel, pricedTier } from '@/lib/quota';
-import { ageWord } from '@/lib/time';
+import { ageWord, HOUR } from '@/lib/time';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
 import { WINDOW_KEYS } from '@/lib/windows';
 
@@ -439,7 +439,6 @@ export function slotIndex(keys: readonly string[], key: string): number {
   return Math.min(7, i < 0 ? 7 : i);
 }
 
-const HOUR_MS = 3_600_000;
 /** The extra-usage week, offered only while a row holds a sample of it, since the heads alone write it. */
 const EXTRA_USAGE_WINDOW = 'seven_day_overage_included';
 /** The window ids the Accounts cards offer, in order, the extra-usage week only while a row holds it. */
@@ -455,7 +454,7 @@ export function sampledWindows(rollups: AccountRollup[]): string[] {
  */
 export const paceScoreOf = (sample: WindowSample): number | null => {
   if (sample.resetsAt === null || sample.utilization === null) return null;
-  const hours = (Date.parse(sample.resetsAt) - Date.parse(sample.sampledAt)) / HOUR_MS;
+  const hours = (Date.parse(sample.resetsAt) - Date.parse(sample.sampledAt)) / HOUR;
   return hours > 0 ? Math.max(1 - sample.utilization, 0) / hours : null;
 };
 
@@ -521,7 +520,7 @@ export function peakLines(rollups: AccountRollup[], accounts: string[], span: { 
 
 /** Each value weighed by its weight, so a bucket counts for the part of its width it covers. */
 const weighedMean = (pairs: { value: number; weight: number }[]) => pairs.reduce((n, p) => n + p.value * p.weight, 0) / pairs.reduce((n, p) => n + p.weight, 0);
-const hourCeil = (ms: number) => Math.ceil(ms / 3_600_000) * 3_600_000;
+const hourCeil = (ms: number) => Math.ceil(ms / HOUR) * HOUR;
 /** The share of its width a bucket covers before it sets the axis and the peak: 6 minutes of an hour, 36 of six. */
 const SCALE_FLOOR = 0.1;
 
