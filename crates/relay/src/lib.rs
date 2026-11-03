@@ -46,6 +46,7 @@ pub use chains::Chains;
 pub use classify::{
     classify, next_month_start, Cooldown, HeadContext, Scope, Verdict, SPEND_CAP_REASON,
 };
+pub use drift::DriftKind;
 pub use errors::{
     anthropic_error, auth_error_response, key_refusal_response, no_store, ERROR_CODE_HEADER,
     LEDGER_BEHIND,
@@ -106,8 +107,8 @@ pub enum RelayError {
     /// The cure is a re-pin to the client that moved. `resumed` marks a body whose first user message is the
     /// client's resume placeholder, a body the client stamped over a prompt the wire no longer carries, so the
     /// version suffix refusal's words name the resume apart.
-    #[error("request body carries a billing hash this build's rules do not reproduce ({kind})")]
-    ClientDrift { kind: &'static str, resumed: bool },
+    #[error("request body carries a billing hash this build's rules do not reproduce ({})", .kind.as_str())]
+    ClientDrift { kind: DriftKind, resumed: bool },
     #[error("the router admits Claude Code clients only")]
     ClientRefused,
     #[error("blocked by guardrail \"{name}\"")]

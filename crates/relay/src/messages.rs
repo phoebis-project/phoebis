@@ -85,9 +85,9 @@ use crate::stream::{
     STREAM_CUT, STREAM_STALLED, STREAM_UNDECODABLE,
 };
 use crate::{
-    edit_body, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy, Markerless,
-    NativeEdit, RelayError, SafeguardsEdit, TtlBranch, UpstreamGzip, DANGEROUS_TOOL_USE_BETA,
-    EXTENDED_TTL_BETA,
+    edit_body, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy, DriftKind,
+    Markerless, NativeEdit, RelayError, SafeguardsEdit, TtlBranch, UpstreamGzip,
+    DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
 };
 
 /// How often the session memory's changes reach the store; a crash loses at most this much of it, and the
@@ -4158,7 +4158,7 @@ impl Relay {
             0,
             attempt,
             false,
-            client_drift.map(str::to_string),
+            client_drift.map(|kind| kind.as_str().to_string()),
             client_contract.map(str::to_string),
             client_version.map(str::to_string),
             Some(failure.code),
@@ -4184,7 +4184,7 @@ impl Relay {
     #[allow(clippy::too_many_arguments)]
     fn drift_refusal(
         &self,
-        kind: &'static str,
+        kind: DriftKind,
         resumed: bool,
         headers: &HeaderMap,
         trace: &Trace,
@@ -4193,7 +4193,7 @@ impl Relay {
         client_version: Option<&str>,
     ) -> LocalRefusal {
         tracing::warn!(
-            drift = %kind,
+            drift = %kind.as_str(),
             user_agent = %user_agent(headers),
             profile = %self.profile_name,
             resume = resumed,
@@ -4223,7 +4223,7 @@ impl Relay {
             RefusalFacts {
                 kind: "client",
                 code: "drift",
-                reason: kind.to_string(),
+                reason: kind.as_str().to_string(),
             },
         );
         LocalRefusal {
@@ -5214,7 +5214,7 @@ enum Next {
 /// `None` for every other refusal.
 struct LocalRefusal {
     failure: Failure,
-    client_drift: Option<&'static str>,
+    client_drift: Option<DriftKind>,
     client_contract: Option<&'static str>,
 }
 

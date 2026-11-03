@@ -9,7 +9,7 @@ use axum::response::Response;
 use phoebis_routing::{exhaustion_status, Exhaustion, KeyRefusal};
 
 use crate::auth::AuthError;
-use crate::{BodyMember, RelayError};
+use crate::{BodyMember, DriftKind, RelayError};
 
 /// Carries the adapter's own failure code, which is finer grained than the Anthropic error type a downstream
 /// client reads, so an operator can tell two failures apart without a log line.
@@ -349,7 +349,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
         // suffix already reproduces over the empty prompt the client stamps, so its refusal is a moved client too,
         // and the words name the resume apart so the client and the operator see which conversation it was.
         RelayError::ClientDrift {
-            kind: "version_suffix",
+            kind: DriftKind::VersionSuffix,
             resumed: true,
         } => Failure {
             status: StatusCode::FORBIDDEN,
@@ -362,7 +362,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             no_retry: true,
         },
         RelayError::ClientDrift {
-            kind: "version_suffix",
+            kind: DriftKind::VersionSuffix,
             resumed: false,
         } => Failure {
             status: StatusCode::FORBIDDEN,
@@ -373,7 +373,10 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             retry_after: None,
             no_retry: true,
         },
-        RelayError::ClientDrift { .. } => Failure {
+        RelayError::ClientDrift {
+            kind: DriftKind::Hash,
+            ..
+        } => Failure {
             status: StatusCode::FORBIDDEN,
             error_type: "permission_error",
             code: "client_drift",
@@ -570,13 +573,13 @@ mod tests {
     #[test]
     fn a_client_drift_message_names_the_kind_that_failed() {
         let hash = relay_failure(&RelayError::ClientDrift {
-            kind: "hash",
+            kind: DriftKind::Hash,
             resumed: false,
         });
         assert_eq!(hash.code, "client_drift");
         assert!(hash.message.contains("billing hash"), "{}", hash.message);
         let suffix = relay_failure(&RelayError::ClientDrift {
-            kind: "version_suffix",
+            kind: DriftKind::VersionSuffix,
             resumed: false,
         });
         assert_eq!(suffix.code, "client_drift");
@@ -700,21 +703,21 @@ mod tests {
             ),
             (
                 RelayError::ClientDrift {
-                    kind: "hash",
+                    kind: DriftKind::Hash,
                     resumed: false,
                 },
                 "client_drift",
             ),
             (
                 RelayError::ClientDrift {
-                    kind: "version_suffix",
+                    kind: DriftKind::VersionSuffix,
                     resumed: false,
                 },
                 "client_drift",
             ),
             (
                 RelayError::ClientDrift {
-                    kind: "version_suffix",
+                    kind: DriftKind::VersionSuffix,
                     resumed: true,
                 },
                 "client_drift",
@@ -818,9 +821,9 @@ mod tests {
         assert_eq!(contract.headers()[SHOULD_RETRY_HEADER], "false");
         assert_eq!(contract.headers()[ERROR_CODE_HEADER], "client_contract");
         for (kind, resumed) in [
-            ("hash", false),
-            ("version_suffix", false),
-            ("version_suffix", true),
+            (DriftKind::Hash, false),
+            (DriftKind::VersionSuffix, false),
+            (DriftKind::VersionSuffix, true),
         ] {
             let drift = relay_failure(&RelayError::ClientDrift { kind, resumed }).response("r-1");
             assert_eq!(
@@ -829,7 +832,8 @@ mod tests {
                     .get(SHOULD_RETRY_HEADER)
                     .and_then(|value| value.to_str().ok()),
                 Some("false"),
-                "{kind} resumed {resumed}"
+                "{} resumed {resumed}",
+                kind.as_str()
             );
             assert_eq!(drift.headers()[ERROR_CODE_HEADER], "client_drift");
         }

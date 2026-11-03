@@ -7,6 +7,23 @@ use axum::http::HeaderMap;
 
 use crate::identity::{user_agent_of, CLAUDE_CLI_PREFIX};
 
+/// Which client property a drift refusal names. The request row, the refusal's record and the warn line carry its
+/// word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DriftKind {
+    Hash,
+    VersionSuffix,
+}
+
+impl DriftKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            DriftKind::Hash => "hash",
+            DriftKind::VersionSuffix => "version_suffix",
+        }
+    }
+}
+
 /// The version out of a `claude-cli/` user agent, or `None` for a caller that is not one.
 pub(crate) fn client_version(headers: &HeaderMap) -> Option<String> {
     Some(

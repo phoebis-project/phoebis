@@ -6,7 +6,7 @@ use phoebis_cch::Stamp;
 use crate::billing::{restore_billing_line, CarriedVersion, Restore};
 use crate::identity::is_valid_id;
 use crate::memory::Injected;
-use crate::{CacheTtl, RelayError};
+use crate::{CacheTtl, DriftKind, RelayError};
 
 #[derive(Debug)]
 pub struct BodyEdits {
@@ -544,16 +544,16 @@ fn detach_diagnostics(body: &mut Vec<u8>) -> bool {
 /// `find_cch` reads lowercase hex only, so a client stamping uppercase digits leaves a stamp that scanner
 /// cannot read at all; that counts as drift rather than as a body carrying no hash. Errs as `carries_a_stamp`
 /// errs, on a stamp only the decoded walk reaches.
-pub(crate) fn drift(body: &[u8]) -> Result<Option<&'static str>, RelayError> {
+pub(crate) fn drift(body: &[u8]) -> Result<Option<DriftKind>, RelayError> {
     let location = match stamp_of(body)? {
         Stamp::None | Stamp::Placeholder(_) => return Ok(None),
-        Stamp::Unreadable => return Ok(Some("hash")),
+        Stamp::Unreadable => return Ok(Some(DriftKind::Hash)),
         Stamp::Hash(location) => location,
     };
     let digits = location.digits_start..location.digits_start + CCH_DIGITS;
     let mut signed = body.to_vec();
     phoebis_cch::sign_at(&mut signed, &location)?;
-    Ok((signed[digits.clone()] != body[digits]).then_some("hash"))
+    Ok((signed[digits.clone()] != body[digits]).then_some(DriftKind::Hash))
 }
 
 /// Whether the version suffix the client stamped reproduces from a text block of the body's first user message
@@ -563,7 +563,7 @@ pub(crate) fn drift(body: &[u8]) -> Result<Option<&'static str>, RelayError> {
 /// stamps before it writes the resume placeholder over a message of tool results. A line with no `cc_version`, a
 /// bare version with no suffix, or a version other than the agent's is not this drift: the first two carry nothing
 /// to check, and the third is the hash check's to judge.
-pub(crate) fn version_drift(body: &[u8], check: VersionCheck<'_>) -> Option<&'static str> {
+pub(crate) fn version_drift(body: &[u8], check: VersionCheck<'_>) -> Option<DriftKind> {
     let (start, end) = phoebis_cch::string_member_span(body, &["system", "0", "text"])?;
     // The span is the JSON token with its quotes and escapes; the billing line is its decoded text.
     let text = serde_json::from_slice::<String>(&body[start..end]).ok()?;
@@ -578,7 +578,7 @@ pub(crate) fn version_drift(body: &[u8], check: VersionCheck<'_>) -> Option<&'st
             .next()
             == Some(suffix)
     });
-    (!reproduced).then_some("version_suffix")
+    (!reproduced).then_some(DriftKind::VersionSuffix)
 }
 
 /// Whether the billing block claims a hash, as the raw walk the restamp edits through reads `system[0].text`, erring
@@ -1501,7 +1501,7 @@ mod tests {
                     prompt_units: &facts.prompt_units,
                 }
             ),
-            Some("version_suffix"),
+            Some(DriftKind::VersionSuffix),
             "a suffix no block reproduces is drift"
         );
     }
@@ -1604,13 +1604,13 @@ mod tests {
     #[test]
     fn a_placeholder_behind_a_stamp_find_cch_cannot_read_is_drift() {
         let body = a_line_stamped("cch=9B244; cch=00000;");
-        assert!(matches!(drift(&body), Ok(Some("hash"))));
+        assert!(matches!(drift(&body), Ok(Some(DriftKind::Hash))));
     }
 
     /// The second stamp would travel unverified behind a placeholder honoured as the line's only one.
     #[test]
     fn a_placeholder_ahead_of_a_second_stamp_is_drift() {
         let body = a_line_stamped("cch=00000; cch=abcde;");
-        assert!(matches!(drift(&body), Ok(Some("hash"))));
+        assert!(matches!(drift(&body), Ok(Some(DriftKind::Hash))));
     }
 }
