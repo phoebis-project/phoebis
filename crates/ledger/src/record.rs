@@ -443,9 +443,9 @@ pub struct KeepaliveDelta {
     /// does not price, files under `-`.
     pub tier: Option<String>,
     /// The prompt-length band the row's counts price at: a settled probe's, read at its exchange, or a credited
-    /// request's own, read off its usage against the revision in force at its arrival. `None` (standard) for a probe
-    /// row or a skip.
-    pub band: Option<crate::pricing::Band>,
+    /// request's own, read off its usage against the revision in force at its arrival. Standard for a probe row or a
+    /// skip.
+    pub band: crate::pricing::Band,
     /// The serving account's kind as the engine read it, which files an api_key account's row under `billed` beside
     /// its request row. Set on every delta the savings code records (the migration mark, the kept-warm credit, the
     /// settlement and the skip), `None` there where the registry no longer holds the account, and `None` on a delta
@@ -456,12 +456,11 @@ pub struct KeepaliveDelta {
     pub usage_based: bool,
     /// Whether the serving answer reported overage in use, the fact its request row files under, so the row keys the
     /// same funding. Set on every delta the savings code records (the migration mark, the kept-warm credit, the
-    /// settlement and the skip), and `None` on a delta built by default.
-    pub overage_in_use: Option<bool>,
+    /// settlement and the skip), and false on a delta built by default.
+    pub overage_in_use: bool,
     /// The speed that keys the credit row, the recipe's for a credit, a skip or a migration mark and the probe answer's
-    /// for a settlement: `fast` for `Some(Speed::Fast)`, `standard` otherwise, so the derived `Default`'s `None` files
-    /// standard.
-    pub speed: Option<crate::pricing::Speed>,
+    /// for a settlement, standard on a delta built by default.
+    pub speed: crate::pricing::Speed,
 }
 
 #[cfg(test)]

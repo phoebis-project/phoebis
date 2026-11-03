@@ -128,7 +128,7 @@ fn delta(
         canonical_model: canonical_model.to_string(),
         kind: kind.to_string(),
         client: UNATTRIBUTED.to_string(),
-        speed: fast.then_some(Speed::Fast),
+        speed: if fast { Speed::Fast } else { Speed::Standard },
         ..Default::default()
     }
 }
@@ -157,7 +157,7 @@ impl Engine {
         );
         d.account_kind = record.kind;
         d.usage_based = record.usage_based;
-        d.overage_in_use = Some(record.in_overage);
+        d.overage_in_use = record.in_overage;
         d.probe_migrated = 1;
         self.parts.ledger.record(Record::Keepalive(d));
     }
@@ -211,10 +211,10 @@ impl Engine {
             d.kept_warm_5m_tokens = tokens;
         }
         d.tier = tier;
-        d.band = Some(band);
+        d.band = band;
         d.account_kind = kind;
         d.usage_based = usage_based;
-        d.overage_in_use = Some(in_overage);
+        d.overage_in_use = in_overage;
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
@@ -242,10 +242,10 @@ impl Engine {
         d.wasted_output_tokens = counts.output;
         d.wasted_probe_reasons = BTreeMap::from([(settlement.label.as_str().to_string(), 1)]);
         d.tier = settlement.tier;
-        d.band = Some(settlement.band);
+        d.band = settlement.band;
         d.account_kind = settlement.kind;
         d.usage_based = settlement.usage_based;
-        d.overage_in_use = Some(settlement.in_overage);
+        d.overage_in_use = settlement.in_overage;
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
@@ -263,7 +263,7 @@ impl Engine {
         d.probes_skipped = 1;
         d.account_kind = skip.kind;
         d.usage_based = skip.usage_based;
-        d.overage_in_use = Some(skip.in_overage);
+        d.overage_in_use = skip.in_overage;
         self.parts.ledger.record(Record::Keepalive(d));
         self.parts
             .metrics

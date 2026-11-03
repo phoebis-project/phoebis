@@ -592,7 +592,7 @@ fn a_usage_based_seats_credit_and_wasted_probe_fold_under_usage_based_beside_its
     let on_the_seat = |d: KeepaliveDelta| KeepaliveDelta {
         account_kind: Some(phoebis_store::AccountKind::Oauth),
         usage_based: true,
-        overage_in_use: Some(true),
+        overage_in_use: true,
         ..d
     };
     db.write(|c| {
@@ -665,7 +665,7 @@ fn a_fast_recipes_credit_files_under_speed_fast() {
             &KeepaliveDelta {
                 kept_warm_requests: 1,
                 kept_warm_5m_tokens: 5_000,
-                speed: Some(Speed::Fast),
+                speed: Speed::Fast,
                 ..delta(at, "inference")
             },
         )?;

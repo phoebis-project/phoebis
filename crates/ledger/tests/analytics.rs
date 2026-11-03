@@ -2495,10 +2495,10 @@ fn the_kept_warm_and_probe_counts_count_what_a_plan_account_served_apart() {
     db.write(|c| {
         let tx = c.transaction()?;
         for (account, account_kind, overage, five_minutes, hour) in [
-            ("a", None, None, 1_000, 0),
-            ("a", None, None, 0, 400),
-            ("a", None, Some(true), 200, 0),
-            ("k", Some(phoebis_store::AccountKind::ApiKey), None, 300, 0),
+            ("a", None, false, 1_000, 0),
+            ("a", None, false, 0, 400),
+            ("a", None, true, 200, 0),
+            ("k", Some(phoebis_store::AccountKind::ApiKey), false, 300, 0),
         ] {
             fold_keepalive(
                 &tx,
@@ -3246,7 +3246,7 @@ async fn an_overage_probe_s_cost_files_under_billed_and_its_settlement_rides_und
         fold_keepalive(
             &tx,
             &KeepaliveDelta {
-                overage_in_use: Some(true),
+                overage_in_use: true,
                 probe_migrated: 1,
                 ..delta()
             },
@@ -3342,8 +3342,8 @@ fn a_fast_recipe_s_credit_files_under_fast_whatever_its_overage_flag() {
                 canonical_model: "claude-fable-5-1".into(),
                 kind: "probe".into(),
                 probe_migrated: 1,
-                overage_in_use: Some(true),
-                speed: Some(Speed::Fast),
+                overage_in_use: true,
+                speed: Speed::Fast,
                 ..Default::default()
             },
         )?;

@@ -27,9 +27,10 @@ pub struct ModelPrice {
 
 /// Which cells price an answer: the ones its reported `usage.speed` selects. `Copy`, so a record that carries a
 /// speed holds this rather than a `String`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Speed {
     Fast,
+    #[default]
     Standard,
 }
 
@@ -52,8 +53,9 @@ impl Speed {
 }
 
 /// Which cells a prompt's length selects on a row that carries a long-context block.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Band {
+    #[default]
     Standard,
     LongContext,
 }

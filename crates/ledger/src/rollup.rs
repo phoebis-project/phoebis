@@ -17,7 +17,7 @@ use crate::db::LedgerDb;
 use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
 use crate::plan::{funding_of, Funding, PlanTables};
-use crate::pricing::{Band, PriceRevisions, Speed};
+use crate::pricing::{PriceRevisions, Speed};
 use crate::query::{
     COOLDOWN_CLEARED, COOLDOWN_SET, OVERAGE_ENDED, PIN_CREATED, PIN_MIGRATED, ROUTER_STARTED,
     SHEDDING_ROUND, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED, WINDOW_CLEARED, WINDOW_SPENT,
@@ -982,7 +982,6 @@ fn reread_utilization(
 /// tier, so a settlement filed after its probe sits in the probe's hour and prices at the cells and the revision the
 /// probe ran at.
 pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<(), LedgerError> {
-    let speed = delta.speed.unwrap_or(Speed::Standard);
     let key = RollupRow::key(
         hour_of(delta.at),
         &delta.key_id,
@@ -1001,7 +1000,7 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         },
         NO_EFFORT,
         NO_CLASS,
-        speed.as_str(),
+        delta.speed.as_str(),
         // A credit files beside its probe's request row, under the tier the router prices by as that row does (none
         // for a free organization or a usage-based seat), and in the order `Funding::of` reads an attempt: `billed` on
         // an api_key account, `usage_based` on a usage-based seat, `fast` for a fast delta (a fast answer's request
@@ -1010,11 +1009,11 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         Funding::of(
             delta.account_kind == Some(AccountKind::ApiKey),
             delta.usage_based,
-            speed,
-            delta.overage_in_use,
+            delta.speed,
+            Some(delta.overage_in_use),
         )
         .rollup_word(),
-        delta.band.map_or(STANDARD_BAND, Band::as_str),
+        delta.band.as_str(),
         delta.tier.as_deref().unwrap_or(UNATTRIBUTED),
         NO_CLASS,
     );
@@ -2193,6 +2192,7 @@ pub fn read_account_rollups(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pricing::Band;
     use crate::record::*;
 
     /// The test price list. The requests here arrive before its first date, so each prices at its first entry.
@@ -3381,13 +3381,13 @@ mod tests {
             wasted_cache_write_1h_tokens: 4,
             wasted_output_tokens: 5,
             tier: Some("default_claude_max_20x".into()),
-            band: Some(Band::LongContext),
+            band: Band::LongContext,
             ..Default::default()
         };
         let skipped = KeepaliveDelta {
             probes_skipped: 1,
             tier: None,
-            band: None,
+            band: Band::Standard,
             ..settled.clone()
         };
         db.write(|c| {
