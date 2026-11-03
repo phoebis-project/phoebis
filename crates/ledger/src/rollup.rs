@@ -566,42 +566,16 @@ pub fn deltas_of(
             .map_or_else(|| NO_CLASS.into(), fold_identifier),
     );
     let mut deltas: Vec<RollupRow> = Vec::new();
-    let mut delta_for = |band: &str, speed: &str, funding: &str| -> usize {
-        deltas
-            .iter()
-            .position(|d| d.band == band && d.speed == speed && d.funding == funding)
-            .unwrap_or_else(|| {
-                deltas.push(RollupRow {
-                    band: band.into(),
-                    speed: speed.into(),
-                    funding: funding.into(),
-                    ..base.clone()
-                });
-                deltas.len() - 1
-            })
-    };
     // Every answered attempt adds its own counts at the cells its own prompt, speed and funding selected, so the row
     // prices them as the attempt was charged, and an attempt with no usage has no count to add.
-    let mut placed = Vec::with_capacity(attempts.len());
     for a in attempts.iter().filter(|a| a.has_usage()) {
-        placed.push((
-            delta_for(band_of(a), answered_speed(a), funding_word(Some(a))),
-            a,
-        ));
-    }
-    // A fast request refused before any attempt served (the fast lane spent, the credits unavailable, a local
-    // refusal) still asked for fast: its counters file under that speed, while its funding reads the served answer,
-    // which spent nothing.
-    let serving = match last.filter(|a| a.has_usage()) {
-        Some(a) => delta_for(band_of(a), answered_speed(a), funding_word(Some(a))),
-        None => delta_for(
-            STANDARD_BAND,
-            unanswered_speed(last, request.requested_speed.as_deref()),
-            funding_word(last),
-        ),
-    };
-    for (index, a) in placed {
-        let d = &mut deltas[index];
+        let d = delta_for(
+            &mut deltas,
+            &base,
+            band_of(a),
+            answered_speed(a),
+            funding_word(Some(a)),
+        );
         d.attempts += 1;
         d.input_tokens += a.input_tokens.unwrap_or(0);
         d.cache_read_tokens += a.cache_read_tokens.unwrap_or(0);
@@ -612,7 +586,25 @@ pub fn deltas_of(
         d.web_search_requests += a.web_search_requests.unwrap_or(0);
         d.web_fetch_requests += a.web_fetch_requests.unwrap_or(0);
     }
-    let d = &mut deltas[serving];
+    // A fast request refused before any attempt served (the fast lane spent, the credits unavailable, a local
+    // refusal) still asked for fast: its counters file under that speed, while its funding reads the served answer,
+    // which spent nothing.
+    let d = match last.filter(|a| a.has_usage()) {
+        Some(a) => delta_for(
+            &mut deltas,
+            &base,
+            band_of(a),
+            answered_speed(a),
+            funding_word(Some(a)),
+        ),
+        None => delta_for(
+            &mut deltas,
+            &base,
+            STANDARD_BAND,
+            unanswered_speed(last, request.requested_speed.as_deref()),
+            funding_word(last),
+        ),
+    };
     // The attempts that never answered count beside the request's other counters, so a request's attempts sum to
     // every attempt it made whichever rows its answers landed in.
     d.attempts += attempts.iter().filter(|a| !a.has_usage()).count() as u64;
@@ -698,6 +690,32 @@ pub fn deltas_of(
         }
     }
     deltas
+}
+
+/// The delta of `deltas` at `band`, `speed` and `funding`, pushed as `base` at those cells where none is yet.
+fn delta_for<'d>(
+    deltas: &'d mut Vec<RollupRow>,
+    base: &RollupRow,
+    band: &str,
+    speed: &str,
+    funding: &str,
+) -> &'d mut RollupRow {
+    let index = match deltas
+        .iter()
+        .position(|d| d.band == band && d.speed == speed && d.funding == funding)
+    {
+        Some(index) => index,
+        None => {
+            deltas.push(RollupRow {
+                band: band.into(),
+                speed: speed.into(),
+                funding: funding.into(),
+                ..base.clone()
+            });
+            deltas.len() - 1
+        }
+    };
+    &mut deltas[index]
 }
 
 /// The request's slow-down waits summed off its `held` JSON, `None` for a request with none. The JSON is the routing
