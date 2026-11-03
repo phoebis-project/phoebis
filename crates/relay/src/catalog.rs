@@ -661,11 +661,7 @@ impl CatalogService {
         for (account, mut handle) in handles {
             match tokio::time::timeout_at(deadline, &mut handle).await {
                 Ok(Ok(catalog)) if catalog.error.is_none() => out.landed += 1,
-                Ok(Ok(_)) => {
-                    out.failed += 1;
-                    self.spawn_retry(account);
-                }
-                Ok(Err(_)) => {
+                Ok(_) => {
                     out.failed += 1;
                     self.spawn_retry(account);
                 }
