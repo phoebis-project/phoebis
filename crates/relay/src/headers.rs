@@ -39,8 +39,8 @@ pub struct OutboundHead {
 
 /// `inject_betas` names beta items by their `wire_name`; each one absent from the caller's list is appended to
 /// the merged line, and when the caller sent no `anthropic-beta` line at all and the list is non-empty, a line
-/// holding exactly the injected entries is inserted after `anthropic-version` (else right before the credential
-/// slot, else at the tail ahead of the relay's own `Host`); with nothing to inject a missing line stays missing.
+/// holding exactly the injected entries is inserted after `anthropic-version`, else right before the credential
+/// slot. With nothing to inject a missing line stays missing.
 /// `drop_betas` entries are removed from the caller's list, whether the caller sent them or an earlier attempt
 /// injected them. An `anthropic-beta` line that ends up empty emits no header at all, whether the caller sent it
 /// empty or a drop emptied it: the list is what the line says, and a line saying nothing is left out.
@@ -205,10 +205,6 @@ pub fn outbound_headers(
                     name.eq_ignore_ascii_case("authorization")
                         || name.eq_ignore_ascii_case("x-api-key")
                 })
-            })
-            .or_else(|| {
-                out.iter()
-                    .position(|(name, _)| name.eq_ignore_ascii_case("host"))
             })
             .unwrap_or(out.len());
         out.insert(at, ("anthropic-beta".into(), line));
