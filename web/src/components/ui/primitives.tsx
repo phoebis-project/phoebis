@@ -1017,9 +1017,6 @@ const movedFrom = (target: RefObject<HTMLElement>, rest: RefObject<{ left: numbe
   return !at || !rest.current || at.top !== rest.current.top || at.left !== rest.current.left;
 };
 
-const IN_FLOW: MenuPlacement = { kind: 'down' };
-const CLIPPING = new Set(['auto', 'clip', 'hidden', 'scroll']);
-
 /**
  * An expandable row's handlers: a click opens the row unless it lands on a link or a button inside it, which follows,
  * and Enter or Space opens it while the row itself has the focus, not a control inside it.
@@ -1034,6 +1031,9 @@ export const toggleRow = (onToggle: () => void): { onClick: (e: ReactMouseEvent<
     onToggle();
   },
 });
+
+const IN_FLOW: MenuPlacement = { kind: 'down' };
+const CLIPPING = new Set(['auto', 'clip', 'hidden', 'scroll']);
 
 /**
  * A row's actions behind a trigger. `align` names the trigger edge the list lines up with: a menu in a row's
