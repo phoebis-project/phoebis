@@ -317,13 +317,10 @@ fn drop_faulty_dips(
 ///
 /// A run is complete once a later reset appears or its reset lies behind `now`, and one a later reset closed while its
 /// own lay ahead by more than the reset tolerance slid rather than ended, so it writes no row. A run splits into parts
-/// at each fall except a reversed dip the attempts between its ends cannot explain, which leaves the run. The row sums
-/// each part's rise between its two ends of one source against the attempts priced between them, a part without two
-/// such ends or without a priced attempt adding nothing. The row is skipped when no part adds, when its first end is
-/// older than the oldest retained request, whose rise the router's own requests would explain only in part, or when a
-/// part holds a plan-funded attempt carrying tokens that the tables price to no share on the window, whose draw the
-/// rise holds and the sum would miss. The ledger reads no registry: every account with a reading is read, and an
-/// account whose attempts draw no plan window writes no row.
+/// at each fall except a reversed dip the attempts between its ends cannot explain, which leaves the run, and the row
+/// is the parts' `run_sum`. The row is skipped where `run_sum` answers none or its first end is older than the oldest
+/// retained request, whose rise the router's own requests would explain only in part. The ledger reads no registry:
+/// every account with a reading is read, and an account whose attempts draw no plan window writes no row.
 pub fn reconcile(
     tx: &Transaction<'_>,
     prices: &PriceRevisions,
@@ -360,7 +357,7 @@ pub fn reconcile(
             // before the cutoff would leave with the next purge, while every reading of a run past both names a reset
             // past them less the tolerance, so older readings need not be read at all.
             let floor = newest.unwrap_or(i64::MIN).max(cutoff) - RESET_SLACK_MS;
-            'runs: for mut run in runs(&readings_of(tx, account, window, floor, length)?) {
+            for mut run in runs(&readings_of(tx, account, window, floor, length)?) {
                 let key = run.key();
                 let complete = run.closed_at.is_some() || key < now;
                 if !complete || key < cutoff || newest.is_some_and(|n| key <= n) {
@@ -377,36 +374,12 @@ pub fn reconcile(
                     continue;
                 }
                 drop_faulty_dips(tx, prices, tables, account, window, &mut run)?;
-                let (mut first_at, mut last_at) = (None, 0);
-                let (mut rise, mut share, mut requests) = (0.0, 0.0, 0u32);
-                for part in &run.parts {
-                    let Some((first, last)) = part.ends() else {
-                        continue;
-                    };
-                    let (from, to) = (first.at, last.at);
-                    match predicted(tx, prices, tables, account, window, from, to)? {
-                        Prediction::Unpriced => continue 'runs,
-                        Prediction::Empty => {}
-                        Prediction::Priced {
-                            share: part_share,
-                            requests: part_requests,
-                        } => {
-                            first_at.get_or_insert(from);
-                            last_at = to;
-                            // A fall inside the sources' gap is the head's truncation and no drop, so it reads as none.
-                            rise += rounded(last.utilization - first.utilization).max(0.0);
-                            share += part_share;
-                            requests += part_requests;
-                        }
-                    }
-                }
-                let Some(first_at) = first_at else {
+                let Some(sum) = run_sum(tx, prices, tables, account, window, &run)? else {
                     continue;
                 };
-                if first_at < earliest {
+                if sum.first_at < earliest {
                     continue;
                 }
-                let rise = rounded(rise);
                 tx.execute(
                     &format!(
                         "INSERT OR IGNORE INTO window_reconciliations ({COLUMNS}) \
@@ -416,12 +389,12 @@ pub fn reconcile(
                         account,
                         window,
                         key,
-                        first_at,
-                        last_at,
-                        rise,
-                        share,
-                        rise / share,
-                        requests,
+                        sum.first_at,
+                        sum.last_at,
+                        sum.rise,
+                        sum.share,
+                        sum.rise / sum.share,
+                        sum.requests,
                         now
                     ],
                 )?;
@@ -429,6 +402,59 @@ pub fn reconcile(
         }
     }
     Ok(())
+}
+
+/// A run's priced parts summed: the first part's first end, the last part's last end, the rises, the shares and the
+/// attempts priced.
+struct RunSum {
+    first_at: i64,
+    last_at: i64,
+    rise: f64,
+    share: f64,
+    requests: u32,
+}
+
+/// Each part's rise between its two ends of one source against the attempts priced between them, a part without two
+/// such ends or without a priced attempt adding nothing, the rise rounded once over the sum. `None` where no part
+/// adds, or where a part holds a plan-funded attempt carrying tokens that the tables price to no share on the window,
+/// whose draw the rise holds and the sum would miss.
+fn run_sum(
+    tx: &Transaction<'_>,
+    prices: &PriceRevisions,
+    tables: &PlanTables,
+    account: &str,
+    window: &str,
+    run: &Run,
+) -> Result<Option<RunSum>, LedgerError> {
+    let mut sum: Option<RunSum> = None;
+    for part in &run.parts {
+        let Some((first, last)) = part.ends() else {
+            continue;
+        };
+        let (from, to) = (first.at, last.at);
+        match predicted(tx, prices, tables, account, window, from, to)? {
+            Prediction::Unpriced => return Ok(None),
+            Prediction::Empty => {}
+            Prediction::Priced { share, requests } => {
+                let sum = sum.get_or_insert(RunSum {
+                    first_at: from,
+                    last_at: to,
+                    rise: 0.0,
+                    share: 0.0,
+                    requests: 0,
+                });
+                sum.last_at = to;
+                // A fall inside the sources' gap is the head's truncation and no drop, so it reads as none.
+                sum.rise += rounded(last.utilization - first.utilization).max(0.0);
+                sum.share += share;
+                sum.requests += requests;
+            }
+        }
+    }
+    Ok(sum.map(|sum| RunSum {
+        rise: rounded(sum.rise),
+        ..sum
+    }))
 }
 
 /// The newest `window_end` the table holds per window of the account.
