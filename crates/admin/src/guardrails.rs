@@ -323,7 +323,7 @@ impl AttachmentIndex {
 
     /// The index of the guardrails, their attachments and the subjects' labels, as `Store::guardrail_index` reads
     /// them for a list that needs no other part of the registry.
-    pub(crate) fn from_parts(
+    fn from_parts(
         guardrails: &[GuardrailRow],
         attachments: &[GuardrailAttachment],
         labels: impl IntoIterator<Item = (AttachmentSubject, String)>,
