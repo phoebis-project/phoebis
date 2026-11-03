@@ -127,9 +127,10 @@ async function withinDeadline<T>(read: (signal: AbortSignal) => Promise<T>): Pro
 
 /**
  * `quiet` keeps a failure from the shell's toast for a read that draws its own failed state and repeats on a schedule,
- * which would otherwise toast once per tick, and a 401 still returns the console to the login. `own` runs no hook at
- * all, the 401's included, for the login screen, which draws every refusal of its own call: the shell that would
- * toast one mounts only after the next login succeeds, where it would report a failure the operator has already read.
+ * which would otherwise toast once per tick, and a 401 still returns the console to the login. `own` runs none of the
+ * failure hooks, the 401's included, for the login screen, which draws every refusal of its own call: the shell that
+ * would toast one mounts only after the next login succeeds, where it would report a failure the operator has already
+ * read.
  */
 export async function call<T = unknown>(method: string, path: string, body?: unknown, { own = false, quiet: asked = false }: { own?: boolean; quiet?: boolean } = {}): Promise<T> {
   // Read before the first await: the quiet window is synchronous, and the report comes after the answer.
