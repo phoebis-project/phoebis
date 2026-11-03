@@ -4078,7 +4078,7 @@ fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
         table
             .estimate("claude-opus-5-5", speed, input, 0, 0, 0, output)
             .expect("the shipped list carries the model")
-            .0
+            .total()
     };
     assert!(
         (estimate(Speed::Fast) - 12.0).abs() < 1e-9,
@@ -8067,7 +8067,6 @@ fn a_request_with_two_answered_attempts_books_each_at_the_set_its_own_prompt_sel
         table
             .estimate("claude-haiku-5-5", Speed::Standard, input, 0, 0, 0, 100)
             .expect("the test list carries the model")
-            .1
     };
     let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
     let (under, over) = (estimate(1_000), estimate(1_001));

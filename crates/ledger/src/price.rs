@@ -71,7 +71,6 @@ pub fn price_row(
     let usd = prices
         .in_force(key.at)
         .estimate_banded(key.model, key.speed, key.band, counts)
-        .map(|(_, split)| split)
         .or_else(|| (key.kind == PROBE_KIND).then(|| dearest(prices, key.at, counts)));
     if key.funding != Funding::Plan {
         return Priced {

@@ -3728,13 +3728,13 @@ pub fn member_spends(
                 let (model, speed, band, usage) = row?;
                 // A model the revision cannot price contributes nothing: the analytics already read such a row as
                 // unpriced, and a budget must not be tripped by a sum it cannot itself account for.
-                if let Some((usd, _)) = table.estimate_banded(
+                if let Some(split) = table.estimate_banded(
                     &model,
                     Speed::of(Some(&speed)),
                     Band::of_rollup(&band),
                     usage,
                 ) {
-                    spent_usd += usd;
+                    spent_usd += split.total();
                 }
             }
         }

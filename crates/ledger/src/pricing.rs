@@ -365,10 +365,10 @@ impl PriceTable {
         speed: Speed,
         band: Band,
         counts: phoebis_routing::PinUsage,
-    ) -> Option<(f64, CostSplit)> {
+    ) -> Option<CostSplit> {
         let (_, row) = self.entry(canonical_model)?;
         let p = cells(row, speed, band);
-        let split = split_of(
+        Some(split_of(
             counts,
             [
                 p.input,
@@ -378,8 +378,7 @@ impl PriceTable {
                 p.output,
             ],
             |tokens, price| tokens as f64 * price / 1_000_000.0,
-        );
-        Some((split.total(), split))
+        ))
     }
 
     /// The metrics label: a priced model reads as the table key that priced it, everything else is one bucket,
@@ -465,7 +464,7 @@ impl PriceTable {
         write_5m: u64,
         write_1h: u64,
         output: u64,
-    ) -> Option<(f64, CostSplit)> {
+    ) -> Option<CostSplit> {
         let band = self.band_of(model, prompt_tokens(input, cache_read, write_5m, write_1h));
         let counts = phoebis_routing::PinUsage {
             input,
@@ -829,7 +828,7 @@ mod tests {
     fn an_estimate_is_the_list_price_per_million_tokens_of_each_type() {
         let revisions = crate::test_tables::api_prices();
         let table = revisions.in_force(JANUARY_2026);
-        let (usd, split) = table
+        let split = table
             .estimate(
                 "claude-sonnet-5-5",
                 Speed::Standard,
@@ -840,6 +839,7 @@ mod tests {
                 10_000,
             )
             .unwrap();
+        let usd = split.total();
         assert!(
             (split.input_usd - 3.0).abs() < 1e-9
                 && (split.cache_read_usd - 0.15).abs() < 1e-9
@@ -869,7 +869,7 @@ mod tests {
             table
                 .estimate(model, speed, 1_000_000, 0, 0, 0, 0)
                 .unwrap()
-                .0
+                .total()
         };
         assert_eq!(input("claude-opus-5-5", Speed::Standard), 10.0);
         assert_eq!(input("claude-opus-5-5", Speed::Fast), 20.0);
@@ -1000,7 +1000,8 @@ mod tests {
                 .unwrap()
         };
         let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
-        let (usd, split) = at(250);
+        let split = at(250);
+        let usd = split.total();
         assert!(
             close(split.input_usd, 250e-6)
                 && close(split.cache_read_usd, 25e-6)
@@ -1009,7 +1010,8 @@ mod tests {
             "{split:?}"
         );
         assert!(close(usd, 1_587.5e-6), "{usd}");
-        let (usd, split) = at(251);
+        let split = at(251);
+        let usd = split.total();
         assert!(
             close(split.input_usd, 1_255e-6)
                 && close(split.cache_read_usd, 125e-6)
@@ -1083,10 +1085,7 @@ mod tests {
         let usd = |model: &str, speed: Speed, band: Band| {
             table
                 .estimate_banded(model, speed, band, input(1_000_000))
-                .map(|(usd, split)| {
-                    assert_eq!(usd, split.total());
-                    split.input_usd
-                })
+                .map(|split| split.input_usd)
         };
         assert_eq!(
             usd("claude-opus-5-5", Speed::Fast, Band::Standard),

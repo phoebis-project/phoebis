@@ -747,7 +747,7 @@ fn attempt_usd(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) ->
             usage.write_1h,
             usage.output,
         )
-        .map(|(usd, _)| usd)
+        .map(|split| split.total())
 }
 
 fn attempt_json(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) -> Attempt {

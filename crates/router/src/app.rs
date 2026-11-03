@@ -1545,7 +1545,7 @@ mod tests {
                 .is_some_and(|usd| usd > 0.0),
             "the dollar table keeps its dearest-price fallback"
         );
-        let (usd, _) = prices
+        let usd = prices
             .estimate(
                 "claude-sonnet-5",
                 phoebis_ledger::Speed::Standard,
@@ -1555,7 +1555,8 @@ mod tests {
                 200,
                 500,
             )
-            .unwrap();
+            .unwrap()
+            .total();
         assert!(
             (config
                 .rates
@@ -1567,7 +1568,7 @@ mod tests {
                 < 1e-12,
             "the dollar table prices a usage as the price table estimates it"
         );
-        let (fast_usd, _) = prices
+        let fast_usd = prices
             .estimate(
                 "claude-opus-5-5",
                 phoebis_ledger::Speed::Fast,
@@ -1577,7 +1578,8 @@ mod tests {
                 200,
                 500,
             )
-            .unwrap();
+            .unwrap()
+            .total();
         assert!(
             (config
                 .rates

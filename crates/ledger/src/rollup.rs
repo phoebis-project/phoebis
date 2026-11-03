@@ -3226,7 +3226,7 @@ mod tests {
                 0,
             )
             .expect("the test list carries the model")
-            .0;
+            .total();
         assert!(
             (usd - standard).abs() < 1e-9 && (usd - attempt_usd).abs() < 1e-9,
             "{usd} against the standard input cell {standard} and the attempt's own price {attempt_usd}"

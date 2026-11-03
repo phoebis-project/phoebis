@@ -78,7 +78,7 @@ fn shipped_usd(at: i64, model: &str, speed: Speed, counts: PinUsage) -> f64 {
             counts.output,
         )
         .expect("the shipped list carries the model")
-        .0
+        .total()
 }
 
 fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
@@ -8018,7 +8018,7 @@ fn a_members_spend_prices_every_group_from_its_band_rows_counts_exactly() {
             .in_force(phoebis_ledger::test_tables::JANUARY_2026)
             .estimate(model, Speed::Standard, input, 0, 0, 0, 0)
             .expect("the test list carries the model")
-            .0
+            .total()
     };
     let table = prices.in_force(phoebis_ledger::test_tables::JANUARY_2026);
     let long = input_usd(&prices, "claude-haiku-5-5", 1_001);

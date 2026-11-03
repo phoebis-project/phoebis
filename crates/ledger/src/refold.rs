@@ -829,7 +829,7 @@ mod tests {
                 .in_force(now)
                 .estimate_banded(HAIKU, Speed::Standard, band, usage)
                 .expect("the list prices Haiku 5.5")
-                .0
+                .total()
         };
         assert_ne!(
             at_band(Band::Standard),

@@ -2313,10 +2313,11 @@ async fn fast_probe_served(served: &str, speed: phoebis_ledger::Speed) -> (Rig, 
     r.advance_attended(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
-    let (cost, _) = phoebis_ledger::PriceRevisions::shipped()
+    let cost = phoebis_ledger::PriceRevisions::shipped()
         .in_force(r.now())
         .estimate(FAST_PRICED, speed, 0, 2_000, 0, 0, 0)
-        .expect("a priced model");
+        .expect("a priced model")
+        .total();
     (r, cost)
 }
 
@@ -2326,7 +2327,7 @@ async fn fast_probe_served(served: &str, speed: phoebis_ledger::Speed) -> (Rig, 
 #[tokio::test]
 async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_funded_account() {
     let (r, fast) = fast_probe_served("fast", phoebis_ledger::Speed::Fast).await;
-    let (standard, _) = phoebis_ledger::PriceRevisions::shipped()
+    let standard = phoebis_ledger::PriceRevisions::shipped()
         .in_force(r.now())
         .estimate(
             FAST_PRICED,
@@ -2337,7 +2338,8 @@ async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_fun
             0,
             0,
         )
-        .unwrap();
+        .unwrap()
+        .total();
     assert!(
         fast > standard,
         "the fast cells are dearer: {fast} against {standard}"
