@@ -3390,6 +3390,19 @@ const PRICE_GROUP_COLUMNS: &str = "canonical_model, speed, band, funding, client
 const PRICE_GROUP_SUMS: &str = "SUM(requests), SUM(input_tokens), SUM(cache_read_tokens), \
      SUM(cache_write_5m_tokens), SUM(cache_write_1h_tokens), SUM(output_tokens)";
 
+/// The five summed token counts read from column `at` on, input, cache read, both writes and output, each clamped at
+/// zero.
+fn summed_usage(r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<PinUsage> {
+    let count = |i: usize| -> rusqlite::Result<u64> { Ok(r.get::<_, i64>(at + i)?.max(0) as u64) };
+    Ok(PinUsage {
+        input: count(0)?,
+        cache_read: count(1)?,
+        write_5m: count(2)?,
+        write_1h: count(3)?,
+        output: count(4)?,
+    })
+}
+
 /// One group of a priced SQL sum read from `offset`: its requests, its five counts and its dollars, priced through
 /// `price_row` at the group's own hour as an inference row (the sums keep their `kind != 'probe'` clause), so the
 /// revision is the span's and the peak factor the hour's, the Pro-week figure against the anchor row at `now`.
@@ -3409,13 +3422,7 @@ fn price_group(
     let client: String = r.get(offset + 4)?;
     let classifier: String = r.get(offset + 5)?;
     let hour: i64 = r.get(offset + 6)?;
-    let usage = PinUsage {
-        input: count(8)?,
-        cache_read: count(9)?,
-        write_5m: count(10)?,
-        write_1h: count(11)?,
-        output: count(12)?,
-    };
+    let usage = summed_usage(r, offset + 8)?;
     let key = RowKey {
         model: &model,
         speed: Speed::of(Some(&speed)),
@@ -3827,20 +3834,11 @@ pub fn member_spends(
                     metered_only
                 ],
                 |r| {
-                    let count = |i: usize| -> rusqlite::Result<u64> {
-                        Ok(r.get::<_, i64>(i)?.max(0) as u64)
-                    };
                     Ok((
                         r.get::<_, String>(0)?,
                         r.get::<_, String>(1)?,
                         r.get::<_, String>(2)?,
-                        PinUsage {
-                            input: count(3)?,
-                            cache_read: count(4)?,
-                            write_5m: count(5)?,
-                            write_1h: count(6)?,
-                            output: count(7)?,
-                        },
+                        summed_usage(r, 3)?,
                     ))
                 },
             )?;
