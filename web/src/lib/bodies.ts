@@ -111,6 +111,10 @@ function lowered(text: string): string {
   return out;
 }
 
+// The find field searches again on every keystroke over lines that stay the same while the drawer shows the body, so
+// each body's lines are lowered once, keyed by the one array `linesOf` hands back per body.
+const loweredLines = new WeakMap<readonly string[], readonly string[]>();
+
 /**
  * The indexes of the lines that hold `term` as case-insensitive plain text, in order and one per line. An empty term
  * has none.
@@ -118,9 +122,14 @@ function lowered(text: string): string {
 export function findHits(lines: readonly string[], term: string): number[] {
   if (term === '') return [];
   const needle = lowered(term);
+  let low = loweredLines.get(lines);
+  if (low === undefined) {
+    low = lines.map(lowered);
+    loweredLines.set(lines, low);
+  }
   const hits: number[] = [];
-  lines.forEach((line, i) => {
-    if (lowered(line).includes(needle)) hits.push(i);
+  low.forEach((line, i) => {
+    if (line.includes(needle)) hits.push(i);
   });
   return hits;
 }
