@@ -198,17 +198,6 @@
   min-width: 150px;
 }
 
-/* Under a dollar position the week waits on the unit, so its select stays drawn and reads as waiting. */
-.week-switch:disabled {
-  color: var(--ink-3);
-  cursor: not-allowed;
-  background: var(--surface-2);
-}
-
-.select:has(> .week-switch:disabled) > svg {
-  opacity: 0.5;
-}
-
 .unit-legend__button {
   display: inline-flex;
   align-items: center;
@@ -645,13 +634,7 @@
 }
 
 /* Forms */
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-
+.field,
 .field__control {
   display: flex;
   flex-direction: column;
@@ -1463,14 +1446,17 @@ textarea.input {
   color: var(--ink-2);
 }
 
-/* A control that waits on a switch or a preset stays drawn, so it reads as waiting rather than as editable. */
-.dialog-group .input:disabled {
+/* A control that waits on a switch or a preset, as the week select waits on the unit under a dollar position, stays
+   drawn, so it reads as waiting rather than as editable. */
+.dialog-group .input:disabled,
+.week-switch:disabled {
   color: var(--ink-3);
   cursor: not-allowed;
   background: var(--surface-2);
 }
 
-.dialog-group .select:has(select:disabled) > svg {
+.dialog-group .select:has(select:disabled) > svg,
+.select:has(> .week-switch:disabled) > svg {
   opacity: 0.5;
 }
 
@@ -1651,8 +1637,7 @@ textarea.input {
   background: var(--accent-soft);
 }
 
-.table .right,
-.table th.right {
+.table .right {
   text-align: right;
 }
 
@@ -1949,12 +1934,8 @@ textarea.input {
   color: var(--ink);
 }
 
+.donut__label,
 .recharts-cartesian-axis-tick text {
-  font-size: 11px;
-  fill: var(--ink-2);
-}
-
-.donut__label {
   font-size: 11px;
   fill: var(--ink-2);
 }
