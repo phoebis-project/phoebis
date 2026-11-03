@@ -404,6 +404,9 @@ last read failed ([The console](console.md)). Auto reload's read at once, when a
 full interval after the last answer, also waits for a read still in flight and leaves the read to the next tick ([The
 console](console.md)). An account's Cooling down table draws a model scope's id and a scope the console does not know
 in the mono face and Whole account, Fast mode and Fast mode credits in the text face ([Accounts](console.md#accounts)).
+The Routing log draws an id that links to its account, key, model or pool in the mono face where the chip asks for it,
+as it draws a session's or a request's link, so a decision's Request facts read the Key row's id in the face of the
+Session row's ([Routing log](console.md#routing-log)).
 
 Every finished request lands in the ledger as one row for the client request, one per attempt and one per routing
 decision, folded into the hourly rollup the analytics read ([Statistics](statistics.md#the-ledger)). Each attempt

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
 import type { DecisionRecord, DecisionSummary } from '@/api/types';
-import { ChipView, Chips, rowValue } from '@/components/ChipView';
+import { ChipView, Chips, chipValue, rowValue } from '@/components/ChipView';
 import { DecisionStrip } from '@/components/DecisionStrip';
 import { EntryChips } from '@/components/EntryChips';
 import { Badge, Button, CopyButton, ErrorState, KeyValue, useDescription } from '@/components/ui/primitives';
@@ -99,17 +99,7 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
         <Badge tone={DECISION_KIND_TONE[row.kind]}>{DECISION_KIND_LABEL[row.kind]}</Badge>
         <span className="decision-card__sentence">
           {verdictSentence(record, row).map((c, i) => (
-            <span key={i}>
-              {c.entity ? (
-                <Link to={entityHref(c.entity.kind, c.entity.id)}>{c.value}</Link>
-              ) : c.href ? (
-                <Link to={c.href} className={c.mono ? 'mono' : undefined}>
-                  {c.value}
-                </Link>
-              ) : (
-                c.value
-              )}
-            </span>
+            <span key={i}>{chipValue(c)}</span>
           ))}
         </span>
         <Chips chips={verdictChips(record, row)} />
