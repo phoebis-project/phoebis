@@ -20,7 +20,8 @@ pub use condition::{
 };
 pub use evaluate::{
     evaluate, evaluate_all, texts, Evaluation, HeaderLookup, HintLookup, Lookup, Match,
-    RequestFacts, Verdict,
+    RequestFacts, Verdict, AGENT_TYPE_HEADER, COMPACTION_HEADER, CONTEXT_COMPACTED_HEADER,
+    REQUEST_CLASS_HEADER,
 };
 pub use name::client_phrase;
 pub use path::{BodyPath, PathError, Segment, PATH_MAX_CHARS, PATH_MAX_SEGMENTS};

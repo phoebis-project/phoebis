@@ -273,7 +273,8 @@ pub(crate) fn contract_gap(
     {
         return Some(ITEM_AGENT_ID_HEADER);
     }
-    if class == "compaction" && header_id(headers, "x-claude-code-compaction").is_none() {
+    if class == "compaction" && header_id(headers, phoebis_guardrails::COMPACTION_HEADER).is_none()
+    {
         return Some(ITEM_COMPACTION_HEADER);
     }
     None

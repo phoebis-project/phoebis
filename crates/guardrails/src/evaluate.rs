@@ -14,6 +14,13 @@ pub trait HeaderLookup {
     fn get(&self, name: &str) -> Lookup<'_>;
 }
 
+/// The client's hint headers, under the names the relay reads them by and `HintLookup` answers for, so a guardrail
+/// run over recorded rows reads each hint from the header the live evaluation read it from.
+pub const AGENT_TYPE_HEADER: &str = "x-claude-code-agent-type";
+pub const COMPACTION_HEADER: &str = "x-claude-code-compaction";
+pub const CONTEXT_COMPACTED_HEADER: &str = "x-claude-code-context-compacted";
+pub const REQUEST_CLASS_HEADER: &str = "x-claude-code-request-class";
+
 /// The five hints a request row keeps, answering `Unknown` for every other header name.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HintLookup<'a> {
@@ -27,11 +34,11 @@ pub struct HintLookup<'a> {
 impl HeaderLookup for HintLookup<'_> {
     fn get(&self, name: &str) -> Lookup<'_> {
         let hint = match name {
-            "x-claude-code-request-class" => self.request_class,
-            "x-claude-code-agent-type" => self.agent_type,
+            REQUEST_CLASS_HEADER => self.request_class,
+            AGENT_TYPE_HEADER => self.agent_type,
             "user-agent" => self.user_agent,
-            "x-claude-code-compaction" => self.compaction,
-            "x-claude-code-context-compacted" => self.context_compacted,
+            COMPACTION_HEADER => self.compaction,
+            CONTEXT_COMPACTED_HEADER => self.context_compacted,
             _ => return Lookup::Unknown,
         };
         hint.map_or(Lookup::Absent, Lookup::Value)

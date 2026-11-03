@@ -1726,7 +1726,7 @@ impl Relay {
             }
         }
         let request_class =
-            crate::identity::header_id(&parts.headers, "x-claude-code-request-class");
+            crate::identity::header_id(&parts.headers, phoebis_guardrails::REQUEST_CLASS_HEADER);
         climb(
             &mut identity,
             &key,
@@ -1754,7 +1754,8 @@ impl Relay {
                 .get(header::USER_AGENT)
                 .and_then(|v| v.to_str().ok())
                 .map(phoebis_bus::user_agent_cut);
-            let agent_type = crate::identity::header_id(&parts.headers, "x-claude-code-agent-type");
+            let agent_type =
+                crate::identity::header_id(&parts.headers, phoebis_guardrails::AGENT_TYPE_HEADER);
             let request = RequestFacts {
                 kind: trace.kind.as_str(),
                 request_class: request_class.as_deref(),
@@ -3921,7 +3922,8 @@ impl Relay {
         // the key shares, so an entry under it would read the next session's probe as a fork of this one. Its
         // static boundaries still land, a cache of their own the next probe of the same shape reads.
         let auxiliary = crate::identity::is_auxiliary(
-            crate::identity::header_id(ctx.caller, "x-claude-code-request-class").as_deref(),
+            crate::identity::header_id(ctx.caller, phoebis_guardrails::REQUEST_CLASS_HEADER)
+                .as_deref(),
         );
         Some(AffinityFacts {
             router: self.router.clone(),

@@ -218,12 +218,12 @@ fn markers_ttl_ms(root: &Value) -> Option<i64> {
 impl ClientHints {
     pub fn read(headers: &HeaderMap) -> ClientHints {
         ClientHints {
-            agent_type: crate::identity::header_id(headers, "x-claude-code-agent-type"),
+            agent_type: crate::identity::header_id(headers, phoebis_guardrails::AGENT_TYPE_HEADER),
             classifier_beta: carries_beta(headers, crate::body::CLASSIFIER_BETA),
-            compaction: crate::identity::header_id(headers, "x-claude-code-compaction"),
+            compaction: crate::identity::header_id(headers, phoebis_guardrails::COMPACTION_HEADER),
             context_compacted: crate::identity::header_id(
                 headers,
-                "x-claude-code-context-compacted",
+                phoebis_guardrails::CONTEXT_COMPACTED_HEADER,
             ),
             per_turn_effort: carries_beta(headers, crate::lane::PER_TURN_BETA),
             prev_tool_ms: headers
@@ -231,7 +231,10 @@ impl ClientHints {
                 .and_then(|v| v.to_str().ok())
                 .and_then(tool_ms_sum),
             prompt_id: header_prompt_id(headers),
-            request_class: crate::identity::header_id(headers, "x-claude-code-request-class"),
+            request_class: crate::identity::header_id(
+                headers,
+                phoebis_guardrails::REQUEST_CLASS_HEADER,
+            ),
         }
     }
 }
