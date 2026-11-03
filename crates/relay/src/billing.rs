@@ -59,12 +59,13 @@ pub fn restore_billing_line(
 /// four-byte character, and a lone surrogate becomes U+FFFD.
 pub fn cc_version(cli_version: &str, prompt_units: [u16; 3]) -> String {
     use sha2::{Digest, Sha256};
-    let mut input = String::from("59cf53e54c78");
-    input.push_str(&String::from_utf16_lossy(&prompt_units));
-    input.push_str(cli_version);
-    let digest = Sha256::digest(input.as_bytes());
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    format!("{cli_version}.{}", &hex[0..3])
+    let mut hasher = Sha256::new();
+    hasher.update("59cf53e54c78");
+    hasher.update(String::from_utf16_lossy(&prompt_units));
+    hasher.update(cli_version);
+    let digest = hasher.finalize();
+    // The digest's `LowerHex` reads the precision as the digit count, so this is the first three hex digits.
+    format!("{cli_version}.{digest:.3x}")
 }
 
 /// How a stamped line's `cc_version` relates to the version the user agent names: the client's own version
