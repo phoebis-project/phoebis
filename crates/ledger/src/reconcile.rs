@@ -5,20 +5,15 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use phoebis_bus::Classifier;
-use phoebis_routing::{
-    window_for, PinUsage, FIVE_HOUR, HOUR_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
-};
-use phoebis_store::AccountKind;
+use phoebis_routing::{window_for, FIVE_HOUR, HOUR_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS};
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, Row, Transaction};
 
-use crate::plan::{entrypoint_of_client, funding_of, Funding, PlanTables};
-use crate::price::RowKey;
-use crate::pricing::{prompt_tokens, PriceRevisions, Speed};
-use crate::query::{price_usage, BurnSums};
+use crate::plan::{Funding, PlanTables};
+use crate::pricing::PriceRevisions;
+use crate::query::{price_usage, BurnSums, PricedAttempt, PRICED_ATTEMPT_COLUMNS};
 use crate::record::SampleSource;
-use crate::rollup::{bucket_of, UNATTRIBUTED};
+use crate::rollup::bucket_of;
 use crate::LedgerError;
 
 /// The band a completed window's ratio must lie in for `meter_drift` to read it as agreement: symmetric in log terms
@@ -515,99 +510,28 @@ fn predicted(
     from: i64,
     to: i64,
 ) -> Result<Prediction, LedgerError> {
-    struct Attempt {
-        model: String,
-        tokens: [u64; 5],
-        completed: i64,
-        received_at: i64,
-        speed: Option<String>,
-        account_kind: String,
-        usage_based: bool,
-        overage_in_use: Option<bool>,
-        kind: String,
-        tier: Option<String>,
-        client: Option<String>,
-        classifier: Option<String>,
-    }
-    let mut stmt = conn.prepare(
-        "SELECT r.canonical_model, a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, \
-         a.cache_write_1h_tokens, a.output_tokens, COALESCE(a.finished_at, r.finished_at, a.started_at) AS completed, \
-         r.received_at, a.speed, a.account_kind, a.overage_in_use, r.kind, a.tier, r.client, \
-         r.classifier, a.usage_based \
-         FROM attempts a JOIN requests r ON r.id = a.request_id \
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {PRICED_ATTEMPT_COLUMNS} FROM attempts a JOIN requests r ON r.id = a.request_id \
          WHERE a.account_id = ?1 AND a.started_at > ?2 - ?4 AND a.started_at <= ?3 \
-         AND completed > ?2 AND completed <= ?3",
-    )?;
-    let tokens = |r: &Row, i: usize| -> rusqlite::Result<u64> {
-        Ok(r.get::<_, Option<i64>>(i)?.unwrap_or(0).max(0) as u64)
-    };
+         AND completed > ?2 AND completed <= ?3"
+    ))?;
     let attempts = stmt.query_map(params![account, from, to, LONGEST_ATTEMPT_MS], |r| {
-        Ok(Attempt {
-            model: r.get(0)?,
-            tokens: [
-                tokens(r, 1)?,
-                tokens(r, 2)?,
-                tokens(r, 3)?,
-                tokens(r, 4)?,
-                tokens(r, 5)?,
-            ],
-            completed: r.get(6)?,
-            received_at: r.get(7)?,
-            speed: r.get(8)?,
-            account_kind: r.get(9)?,
-            overage_in_use: r.get(10)?,
-            kind: r.get(11)?,
-            tier: r.get(12)?,
-            client: r.get(13)?,
-            classifier: r.get(14)?,
-            usage_based: r.get(15)?,
-        })
+        PricedAttempt::read(r, 0)
     })?;
     let (mut share, mut requests) = (0.0, 0u32);
     for attempt in attempts {
-        let a = attempt?;
-        let funding = funding_of(
-            AccountKind::parse(&a.account_kind),
-            a.usage_based,
-            a.overage_in_use,
-            Speed::of(a.speed.as_deref()),
-        );
-        let classifier = a.classifier.as_deref() == Some(Classifier::Client.as_str());
+        let attempt = attempt?;
+        // The prediction reads the shares alone, which take no anchor row, so the part's end stands in for the read's
+        // instant.
+        let (key, usage) = attempt.usage(prices, to);
         // API-key, usage-based, fast and overage answers draw no plan window, so they are no part of the rise either. A
         // classifier call draws no plan window either.
-        if funding != Funding::Plan
-            || (window == SEVEN_DAY_FABLE && window_for(&a.model) != SEVEN_DAY_FABLE)
-            || classifier
+        if key.funding != Funding::Plan
+            || (window == SEVEN_DAY_FABLE && window_for(key.model) != SEVEN_DAY_FABLE)
+            || key.classifier
         {
             continue;
         }
-        let [input, cache_read, write_5m, write_1h, output] = a.tokens;
-        let band = prices.in_force(a.received_at).band_of(
-            &a.model,
-            prompt_tokens(input, cache_read, write_5m, write_1h),
-        );
-        let key = RowKey {
-            model: &a.model,
-            speed: Speed::of(a.speed.as_deref()),
-            band,
-            funding,
-            kind: &a.kind,
-            tier: a.tier.as_deref(),
-            entrypoint: entrypoint_of_client(a.client.as_deref().unwrap_or(UNATTRIBUTED)),
-            classifier,
-            at: a.received_at,
-            band_at: Some(a.completed),
-            // The prediction reads the shares alone, which take no anchor row, so the part's end stands in for the
-            // read's instant.
-            now: to,
-        };
-        let usage = PinUsage {
-            input,
-            cache_read,
-            write_5m,
-            write_1h,
-            output,
-        };
         let mut sums = BurnSums::default();
         price_usage(&mut sums, prices, tables, key, usage, true);
         let point = sums.point();

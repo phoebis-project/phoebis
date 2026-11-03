@@ -11,7 +11,7 @@ use phoebis_routing::{
     window_for, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS, REFRESHING_CLASSES, SEVEN_DAY,
 };
 use phoebis_store::{canonical_id, AccountKind, BudgetPeriod};
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -4825,13 +4825,16 @@ fn top_sessions_by_tokens(
         .map_err(LedgerError::from)
 }
 
-/// One attempt's tokens toward a session's burn series: the rollups carry no session dimension, so this reads
-/// the request and attempt rows directly, for the given sessions alone.
-struct SessionAttempt {
-    session_id: String,
-    account_id: String,
-    /// Milliseconds, `attempts.started_at`: the bucket the attempt lands in.
-    at: i64,
+/// The columns of `attempts a JOIN requests r` an attempt is priced from, in the order `PricedAttempt::read` reads
+/// them. The completion is aliased `completed`, so a statement's `WHERE` can bound it.
+pub(crate) const PRICED_ATTEMPT_COLUMNS: &str =
+    "COALESCE(a.finished_at, r.finished_at, a.started_at) AS completed, r.canonical_model, \
+     a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, a.output_tokens, \
+     r.received_at, a.speed, a.account_kind, a.overage_in_use, r.kind, a.tier, r.client, r.classifier, \
+     a.usage_based";
+
+/// One attempt's facts toward the share and the dollars it is priced at, read off its attempt and request rows.
+pub(crate) struct PricedAttempt {
     /// Milliseconds: the attempt's completion, `attempts.finished_at`, else the request's, where the meter charges
     /// it; the band that prices it is read here.
     completed_at: i64,
@@ -4857,6 +4860,74 @@ struct SessionAttempt {
     classifier: Option<String>,
 }
 
+impl PricedAttempt {
+    /// The attempt from `PRICED_ATTEMPT_COLUMNS` read from column `first` on, a missing or negative token count read
+    /// as zero.
+    pub(crate) fn read(row: &Row, first: usize) -> rusqlite::Result<PricedAttempt> {
+        let tokens = |i: usize| -> rusqlite::Result<u64> {
+            Ok(row.get::<_, Option<i64>>(first + i)?.unwrap_or(0).max(0) as u64)
+        };
+        Ok(PricedAttempt {
+            completed_at: row.get(first)?,
+            canonical_model: row.get(first + 1)?,
+            usage: PinUsage {
+                input: tokens(2)?,
+                cache_read: tokens(3)?,
+                write_5m: tokens(4)?,
+                write_1h: tokens(5)?,
+                output: tokens(6)?,
+            },
+            received_at: row.get(first + 7)?,
+            speed: row.get(first + 8)?,
+            account_kind: row.get(first + 9)?,
+            overage_in_use: row.get(first + 10)?,
+            kind: row.get(first + 11)?,
+            tier: row.get(first + 12)?,
+            client: row.get(first + 13)?,
+            classifier: row.get(first + 14)?,
+            usage_based: row.get(first + 15)?,
+        })
+    }
+
+    /// The key and the usage `price_usage` prices the attempt at, `now` the read's instant. The attempt's revision is
+    /// its request's, and its band the completion's, where the meter charges it.
+    pub(crate) fn usage(&self, prices: &PriceRevisions, now: i64) -> (RowKey<'_>, PinUsage) {
+        let band = prices
+            .in_force(self.received_at)
+            .band_of(&self.canonical_model, self.usage.prompt_tokens());
+        let speed = Speed::of(self.speed.as_deref());
+        let key = RowKey {
+            model: &self.canonical_model,
+            speed,
+            band,
+            funding: funding_of(
+                AccountKind::parse(&self.account_kind),
+                self.usage_based,
+                self.overage_in_use,
+                speed,
+            ),
+            kind: &self.kind,
+            tier: self.tier.as_deref(),
+            entrypoint: entrypoint_of_client(self.client.as_deref().unwrap_or(UNATTRIBUTED)),
+            classifier: self.classifier.as_deref() == Some(Classifier::Client.as_str()),
+            at: self.received_at,
+            band_at: Some(self.completed_at),
+            now,
+        };
+        (key, self.usage)
+    }
+}
+
+/// One attempt toward a session's burn series: the rollups carry no session dimension, so this reads the request and
+/// attempt rows directly, for the given sessions alone.
+struct SessionAttempt {
+    session_id: String,
+    account_id: String,
+    /// Milliseconds, `attempts.started_at`: the bucket the attempt lands in.
+    at: i64,
+    priced: PricedAttempt,
+}
+
 /// `read_session_attempts`' statement for `sessions` ids and its binds, spelled once so the plan test explains the
 /// statement the read runs. A request is admitted within an hour of any attempt's start, so the request's own index
 /// carries the range.
@@ -4867,11 +4938,7 @@ pub(crate) fn session_attempts_statement(
 ) -> (String, Vec<rusqlite::types::Value>) {
     let placeholders = sessions.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!(
-        "SELECT r.session_id, a.account_id, a.started_at, \
-         COALESCE(a.finished_at, r.finished_at, a.started_at), r.canonical_model, \
-         a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, \
-         a.output_tokens, r.received_at, a.speed, a.account_kind, a.overage_in_use, r.kind, a.tier, r.client, \
-         r.classifier, a.usage_based \
+        "SELECT r.session_id, a.account_id, a.started_at, {PRICED_ATTEMPT_COLUMNS} \
          FROM attempts a JOIN requests r ON r.id = a.request_id \
          WHERE r.session_id IN ({placeholders}) AND a.started_at >= ? AND a.started_at < ? \
          AND r.received_at >= ? AND r.received_at < ?"
@@ -4898,30 +4965,12 @@ fn read_session_attempts(
     }
     let (sql, bind) = session_attempts_statement(from, to, sessions);
     let mut stmt = conn.prepare(&sql)?;
-    let tokens = |v: Option<i64>| v.unwrap_or(0).max(0) as u64;
     let rows = stmt.query_map(params_from_iter(bind), |row| {
         Ok(SessionAttempt {
             session_id: row.get(0)?,
             account_id: row.get(1)?,
             at: row.get(2)?,
-            completed_at: row.get(3)?,
-            canonical_model: row.get(4)?,
-            usage: PinUsage {
-                input: tokens(row.get(5)?),
-                cache_read: tokens(row.get(6)?),
-                write_5m: tokens(row.get(7)?),
-                write_1h: tokens(row.get(8)?),
-                output: tokens(row.get(9)?),
-            },
-            received_at: row.get(10)?,
-            speed: row.get(11)?,
-            account_kind: row.get(12)?,
-            overage_in_use: row.get(13)?,
-            kind: row.get(14)?,
-            tier: row.get(15)?,
-            client: row.get(16)?,
-            classifier: row.get(17)?,
-            usage_based: row.get(18)?,
+            priced: PricedAttempt::read(row, 3)?,
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>()
@@ -4977,30 +5026,8 @@ pub fn session_burn_series(
         let Some(point) = bucket_slot(series, first, filter.bucket_seconds, bucket_at) else {
             continue;
         };
-        let band = prices
-            .in_force(a.received_at)
-            .band_of(&a.canonical_model, a.usage.prompt_tokens());
-        let speed = Speed::of(a.speed.as_deref());
-        // The attempt's revision is its request's, and its band the completion's, where the meter charges it.
-        let key = RowKey {
-            model: &a.canonical_model,
-            speed,
-            band,
-            funding: funding_of(
-                AccountKind::parse(&a.account_kind),
-                a.usage_based,
-                a.overage_in_use,
-                speed,
-            ),
-            kind: &a.kind,
-            tier: a.tier.as_deref(),
-            entrypoint: entrypoint_of_client(a.client.as_deref().unwrap_or(UNATTRIBUTED)),
-            classifier: a.classifier.as_deref() == Some(Classifier::Client.as_str()),
-            at: a.received_at,
-            band_at: Some(a.completed_at),
-            now,
-        };
-        price_usage(point, prices, tables, key, a.usage, shares);
+        let (key, usage) = a.priced.usage(prices, now);
+        price_usage(point, prices, tables, key, usage, shares);
     }
     Ok(sessions
         .into_iter()
