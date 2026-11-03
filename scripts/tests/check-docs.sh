@@ -431,6 +431,58 @@ sed -i '/refusal-codes: end/i | `made_up` | 400 | `x` | `y` | z |' "$tmp/codes/c
 out=$(python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/client.md" 2>&1) && fail "a table naming a code no file answers passed"
 echo "$out" | grep -q "client.md lists made_up, which the proxy listener does not answer" || fail "the stray code did not report: $out"
 sed -i '/`made_up`/d' "$tmp/codes/client.md"
+# A code passed through a local. Each case sits in a file of its own beside an errors.rs with no finding yet, so the
+# check's exit comes from that case alone.
+cat > "$tmp/codes/unbound.rs" <<'RS'
+fn refuse(id: &str) -> Response {
+    anthropic_error(StatusCode::SERVICE_UNAVAILABLE, "api_error", code, "m", id)
+}
+RS
+out=$(python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/unbound.rs" "$tmp/codes/client.md" 2>&1) && fail "a code local with no binding passed"
+echo "$out" | grep -q "unbound.rs:2: code code resolves to no const or binding in the files read" || fail "the local with no binding did not report: $out"
+cat > "$tmp/codes/twice.rs" <<'RS'
+fn refuse(kind: u8, id: &str) -> Response {
+    let code = pick(kind);
+    anthropic_error(StatusCode::BAD_REQUEST, "invalid_request_error", code, "m", id)
+}
+fn pick(kind: u8) -> &'static str {
+    match kind {
+        _ => "body_shape",
+    }
+}
+fn pick(kind: u8) -> &'static str {
+    match kind {
+        _ => "body_shape",
+    }
+}
+RS
+out=$(python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/twice.rs" "$tmp/codes/client.md" 2>&1) && fail "a code bound to a function held twice passed"
+echo "$out" | grep -q "twice.rs:3: code code binds fn pick, found 2 times in the files read" || fail "the function held twice did not report: $out"
+cat > "$tmp/codes/if_else.rs" <<'RS'
+fn refuse(kind: u8, id: &str) -> Response {
+    let code = pick(kind);
+    anthropic_error(StatusCode::BAD_REQUEST, "invalid_request_error", code, "m", id)
+}
+fn pick(kind: u8) -> &'static str {
+    if kind == 0 { "body_shape" } else { "raw_code" }
+}
+RS
+out=$(python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/if_else.rs" "$tmp/codes/client.md" 2>&1) && fail "a code bound to a function that is no match passed"
+echo "$out" | grep -q "if_else.rs:5: fn pick is no single match the check reads" || fail "the function that is no match did not report: $out"
+cat > "$tmp/codes/arm.rs" <<'RS'
+fn refuse(kind: Kind, id: &str) -> Response {
+    let code = pick(kind);
+    anthropic_error(StatusCode::BAD_REQUEST, "invalid_request_error", code, "m", id)
+}
+fn pick(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Shape => "body_shape",
+        Kind::Other => format!("a"),
+    }
+}
+RS
+out=$(python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/arm.rs" "$tmp/codes/client.md" 2>&1) && fail "a code bound to an arm the check cannot read passed"
+echo "$out" | grep -qF 'arm.rs:8: arm format!("a") of fn pick is no code the check reads' || fail "the arm the check cannot read did not report: $out"
 echo 'Failure { code: NOWHERE, message: "q" }' >> "$tmp/codes/errors.rs"
 out=$(python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/client.md" 2>&1) && fail "a code that resolves to no const passed"
 echo "$out" | grep -q "errors.rs:9: code NOWHERE resolves to no const in the files read" || fail "the unresolved code did not report: $out"
