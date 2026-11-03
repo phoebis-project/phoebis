@@ -2470,7 +2470,8 @@ struct EquivalentSums {
 impl EquivalentSums {
     /// Folds one plan row in, its own usage at `whole`, the figure `price_row` answered on its counts, so only the
     /// cache halves, the wasted counts and the kept-warm counts are priced again, at the row's hour and under the
-    /// regime its `client` names, against the anchor row in force at `now`.
+    /// regime its `client` names, against the anchor row in force at `now`. Answers the cache halves' figures where it
+    /// priced them, for a counted row with tokens.
     fn add_equivalent(
         &mut self,
         row: &RollupRow,
@@ -2479,13 +2480,13 @@ impl EquivalentSums {
         counted: bool,
         whole: Option<f64>,
         now: i64,
-    ) {
+    ) -> Option<CacheHalves> {
         self.add_priced(row, counted, whole, |usage| {
             if key.classifier {
                 return Some(free_equivalent());
             }
             price_equivalent(costs, key.entrypoint, key.model, usage, key.at, key.at, now)
-        });
+        })
     }
 
     /// `add_equivalent` with the pricer passed in, so a test can count the pricings a row costs.
@@ -2495,7 +2496,7 @@ impl EquivalentSums {
         counted: bool,
         whole: Option<f64>,
         price: impl Fn(PinUsage) -> Option<f64>,
-    ) {
+    ) -> Option<CacheHalves> {
         let usage = row.usage();
         if row.kind == Kind::Probe.as_str() {
             let wasted = row.wasted_usage();
@@ -2520,18 +2521,21 @@ impl EquivalentSums {
         // charged nothing and leaves the sums as they stand.
         let tokens = tokens_of(usage);
         if tokens == 0 {
-            return;
+            return None;
         }
-        if counted {
+        let halves = counted.then(|| {
             self.cost.add(whole, Funding::Plan, tokens);
             let (read, write) = cache_parts(usage);
+            let halves = (price(read), price(write));
             // Both halves read the one model, so a row that priced nothing latches both, whatever tokens each carries.
-            self.cache_read.add(price(read), Funding::Plan, tokens);
-            self.cache_write.add(price(write), Funding::Plan, tokens);
-        }
+            self.cache_read.add(halves.0, Funding::Plan, tokens);
+            self.cache_write.add(halves.1, Funding::Plan, tokens);
+            halves
+        });
         if row.kind == Kind::Probe.as_str() {
             self.probe_cost.add(whole, Funding::Plan, tokens);
         }
+        halves
     }
 
     fn finish(self, split: SplitSum) -> GroupEquivalent {
@@ -2556,6 +2560,9 @@ impl EquivalentSums {
     }
 }
 
+/// A plan row's cache read and cache write halves in the Pro-week figure, as `EquivalentSums` priced them.
+type CacheHalves = (Option<f64>, Option<f64>);
+
 /// The plan rows' Pro-week figure by token kind, latched as the figure is: a row that priced nothing leaves the split
 /// `None`, as it leaves `cost_equivalent`.
 #[derive(Default)]
@@ -2570,7 +2577,8 @@ struct SplitSum {
 impl SplitSum {
     /// `free` for a classifier call's row, whose every part reads zero with no pricing call, so a model the cost
     /// model cannot price marks nothing unpriced for a charge of nothing. A rollup row keeps no completion, so its
-    /// hour `at` is its band instant too.
+    /// hour `at` is its band instant too. The cache parts are the halves `EquivalentSums` priced for the row, which
+    /// carry the free path too, so only the input and output parts are priced here.
     #[allow(clippy::too_many_arguments)]
     fn add(
         &mut self,
@@ -2579,6 +2587,7 @@ impl SplitSum {
         entrypoint: Option<&str>,
         canonical_model: &str,
         usage: PinUsage,
+        (read_part, write_part): CacheHalves,
         at: i64,
         now: i64,
     ) {
@@ -2588,14 +2597,13 @@ impl SplitSum {
             }
             costs.equivalent_at(SEVEN_DAY, entrypoint, canonical_model, usage, at, at, now)
         };
-        let (read_part, write_part) = cache_parts(usage);
         let parts = [
             week(PinUsage {
                 input: usage.input,
                 ..PinUsage::default()
             }),
-            week(read_part),
-            week(write_part),
+            read_part,
+            write_part,
             week(PinUsage {
                 output: usage.output,
                 ..PinUsage::default()
@@ -2655,19 +2663,18 @@ impl PlanSums {
             self.requests += row.requests;
             self.output_tokens += row.output_tokens;
         }
-        self.equivalent
-            .add_equivalent(row, key, costs, counted, priced.equivalent, now);
-        let usage = row.usage();
-        if tokens_of(usage) == 0 {
-            return;
-        }
-        if counted {
+        let halves =
+            self.equivalent
+                .add_equivalent(row, key, costs, counted, priced.equivalent, now);
+        // The halves are priced for a counted row with tokens alone, the rows the split takes.
+        if let Some(halves) = halves {
             self.split.add(
                 key.classifier,
                 costs,
                 key.entrypoint,
                 key.model,
-                usage,
+                row.usage(),
+                halves,
                 key.at,
                 now,
             );
@@ -5496,6 +5503,59 @@ mod tests {
             Some(sentinel),
             "the sums read the priced row's figure"
         );
+    }
+
+    /// The split reads the cache halves the equivalent fold priced for the row, so the figures the fold's pricer
+    /// answered for the two halves read back from the split's cache parts.
+    #[test]
+    fn the_split_takes_the_cache_halves_the_equivalent_fold_priced() {
+        let costs = crate::test_tables::subscription_costs();
+        let model = "claude-sonnet-5-5";
+        let mut row = RollupRow::key(
+            HOUR,
+            "k",
+            0,
+            "p",
+            "a",
+            model,
+            "inference",
+            "-",
+            "-",
+            "-",
+            "-",
+            "standard",
+            "plan",
+            "standard",
+            "-",
+            "-",
+        );
+        row.requests = 1;
+        row.input_tokens = 1_000;
+        row.cache_read_tokens = 500;
+        row.cache_write_5m_tokens = 300;
+        row.output_tokens = 100;
+        let at = HOUR * 1_000;
+        // Figures no pricing of the halves answers, so a split that priced them for itself reads others.
+        let (read, write) = (0.375, 0.625);
+        let mut sums = EquivalentSums::default();
+        let halves = sums
+            .add_priced(&row, true, Some(0.0625), |part| {
+                Some(if part.cache_read > 0 { read } else { write })
+            })
+            .expect("a counted row with tokens prices its halves");
+        let mut split = SplitSum::default();
+        split.add(
+            false,
+            &costs,
+            entrypoint_of_client(&row.client),
+            model,
+            row.usage(),
+            halves,
+            at,
+            at,
+        );
+        let split = split.finish().expect("every part prices");
+        assert_eq!((split["cache_read"], split["cache_write"]), (read, write));
     }
 
     /// The hour of a date's midnight, in seconds.
