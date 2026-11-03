@@ -539,6 +539,23 @@ mod tests {
         assert_ne!(max.shares, team.shares);
     }
 
+    // `at` and `now` both in January: one Opus 5.5 input token is 2 units at January's weight over January's Pro week
+    // of 50, out of band (factor 1) and on the 7-day window itself (divisor 1), so 0.04 to the bit, where the row's
+    // 5-hour share reads 2 / 5.
+    #[test]
+    fn a_pro_row_priced_inside_one_revision_reads_the_equivalent_it_would_have_priced() {
+        let priced = price(
+            &RowKey {
+                tier: Some(PRO),
+                at: JANUARY_2026,
+                now: BEFORE_MIDNIGHT,
+                ..plan_row()
+            },
+            input(1),
+        );
+        assert_eq!(priced.equivalent, Some(0.04), "{priced:?}");
+    }
+
     // Opus 5 carries a null weight, so it prices nothing on any window though Opus 5.5 weighs its model tier, and its
     // dollars read its own row.
     #[test]
