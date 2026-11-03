@@ -73,10 +73,11 @@ pub use query::{
     session_burn_series, session_identities, BudgetedMember, BurnPoint, CacheEquivalent,
     CacheFacts, Dashboard, DecisionListRow, EventListRow, FundingFilter, GroupBy, GroupRow,
     GuardrailCountRow, HourlyWindowSample, LiveKeys, ParkedSummary, PlacementRow, ProbeCounts,
-    ProbeEquivalent, RequestFilter, RollupFilter, RoutingCondition, RoutingLogCursor,
-    RoutingLogFilter, RoutingLogPage, RoutingLogRow, SeriesFilter, SeriesPoint, SessionActivity,
-    SessionIdentity, Span, Totals, TotalsBy, TrafficBucket, DECISION_KINDS, EVENT_KINDS, GROUP_BYS,
-    GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL, MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
+    ProbeEquivalent, RequestCursor, RequestFilter, RollupFilter, RoutingCondition,
+    RoutingLogCursor, RoutingLogFilter, RoutingLogPage, RoutingLogRow, SeriesFilter, SeriesPoint,
+    SessionActivity, SessionIdentity, Span, Totals, TotalsBy, TrafficBucket, DECISION_KINDS,
+    EVENT_KINDS, GROUP_BYS, GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL, MAX_POINTS,
+    MAX_RANGE_MS, PROBE_KIND,
 };
 pub use query::{guardrail_sample_page, request_body, SampleRow, SampleSubject};
 pub use query::{list_request_page, refusal_categories, RequestPage};

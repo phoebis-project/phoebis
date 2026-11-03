@@ -14,8 +14,8 @@ use phoebis_bus::{
 use phoebis_ledger::{
     guardrail_counts, guardrail_sample_page, list_requests, request_body, request_by_id,
     run_retention, BodyRecord, GuardrailCountRow, GuardrailMatchRecord, LedgerConfig, LedgerDb,
-    LiveKeys, RequestFilter, RequestRecord, SampleRow, SampleSubject, GUARDRAIL_BLOCKED_BYTES_SQL,
-    GUARDRAIL_COUNTS_SQL,
+    LiveKeys, RequestCursor, RequestFilter, RequestRecord, SampleRow, SampleSubject,
+    GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL,
 };
 
 const DAY_MS: i64 = 86_400_000;
@@ -409,10 +409,14 @@ fn sample_ids(
     cursor: Option<&str>,
     limit: usize,
 ) -> (Vec<String>, Option<String>) {
+    let cursor = cursor.map(|c| RequestCursor::parse(c).expect("a page's own cursor"));
     let (rows, next) = db
-        .read_blocking(|c| guardrail_sample_page(c, subject, since, cursor, limit))
+        .read_blocking(|c| guardrail_sample_page(c, subject, since, cursor.as_ref(), limit))
         .unwrap();
-    (rows.into_iter().map(|row| row.id).collect(), next)
+    (
+        rows.into_iter().map(|row| row.id).collect(),
+        next.map(|cursor| cursor.encode()),
+    )
 }
 
 /// A pool's sample reads both of its keys and a key's sample the one key, newest first, each leaving out a probe, an

@@ -12,8 +12,8 @@ use phoebis_bus::Classifier;
 use phoebis_ledger::{
     entrypoint_of_client, free_equivalent, free_shares, funding_of, list_request_page,
     price_equivalent, price_shares, request_by_id, request_events, AttemptRecord, Funding,
-    LiveKeys, PlanTables, PriceRevisions, RequestFilter, RequestRecord, Speed, WindowShares,
-    SHARE_REASON_CLIENT_CLASSIFIER,
+    LiveKeys, PlanTables, PriceRevisions, RequestCursor, RequestFilter, RequestRecord, Speed,
+    WindowShares, SHARE_REASON_CLIENT_CLASSIFIER,
 };
 use phoebis_routing::UtilizationSample;
 use serde_json::Value;
@@ -994,20 +994,18 @@ pub(crate) async fn list(
         },
     }
     .clamp(1, MAX_LIMIT);
-    let cursor = q.get("cursor").cloned();
-    if cursor.as_deref().is_some_and(|c| {
-        c.split_once(':')
-            .is_none_or(|(at, _)| at.parse::<i64>().is_err())
-    }) {
-        return failure(StatusCode::BAD_REQUEST, "cursor is <received_at>:<id>");
-    }
+    let cursor = match q.get("cursor").map(|c| RequestCursor::parse(c)) {
+        None => None,
+        Some(Some(cursor)) => Some(cursor),
+        Some(None) => return failure(StatusCode::BAD_REQUEST, "cursor is <received_at>:<id>"),
+    };
     let shares = ShareContext::read(&state);
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
     let reported = reported_samples(&state).await;
     match state
         .ledger
         .db()
-        .read(move |c| list_request_page(c, &filter, &live, cursor.as_deref(), limit))
+        .read(move |c| list_request_page(c, &filter, &live, cursor.as_ref(), limit))
         .await
     {
         Ok(page) => Json(RequestList {

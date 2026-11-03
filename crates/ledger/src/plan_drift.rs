@@ -552,7 +552,7 @@ fn the_request_list_by_key_keeps_its_plan_under_statistics() {
         ..RequestFilter::default()
     };
     let live = LiveKeys(BTreeMap::from([("main".into(), KEY_GENERATION)]));
-    let (sql, args) = list_requests_statement(&filter, &live, None, 50).unwrap();
+    let (sql, args) = list_requests_statement(&filter, &live, None, 50);
     let steps = plan(&db, &sql, params_from_iter(args));
     assert!(
         seeks(&steps, "requests_key", &["key_id=?"]) && !walks(&steps, &["requests"]),
@@ -567,7 +567,7 @@ fn the_request_list_by_session_keeps_its_plan_under_statistics() {
         session: Some("s007".into()),
         ..RequestFilter::default()
     };
-    let (sql, args) = list_requests_statement(&filter, &LiveKeys::default(), None, 50).unwrap();
+    let (sql, args) = list_requests_statement(&filter, &LiveKeys::default(), None, 50);
     let steps = plan(&db, &sql, params_from_iter(args));
     assert!(
         seeks(&steps, "requests_session", &["session_id=?"]) && !walks(&steps, &["requests"]),

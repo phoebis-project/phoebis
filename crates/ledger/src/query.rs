@@ -545,20 +545,14 @@ fn filter_clauses(
 pub(crate) fn list_requests_statement(
     filter: &RequestFilter,
     live: &LiveKeys,
-    cursor: Option<&str>,
+    cursor: Option<&RequestCursor>,
     limit: usize,
-) -> Result<(String, Vec<rusqlite::types::Value>), LedgerError> {
+) -> (String, Vec<rusqlite::types::Value>) {
     let (mut args, mut clauses) = filter_clauses(filter, live);
     if let Some(cursor) = cursor {
-        let (at, id) = cursor
-            .split_once(':')
-            .ok_or_else(|| LedgerError::Yaml("cursor is <received_at>:<id>".into()))?;
-        let at: i64 = at
-            .parse()
-            .map_err(|_| LedgerError::Yaml("cursor is <received_at>:<id>".into()))?;
-        args.push(at.into());
+        args.push(cursor.received_at.into());
         let n = args.len();
-        args.push(id.to_string().into());
+        args.push(cursor.id.clone().into());
         clauses.push(format!(
             "(received_at < ?{n} OR (received_at = ?{n} AND id < ?{}))",
             n + 1
@@ -576,7 +570,7 @@ pub(crate) fn list_requests_statement(
         "{REQUEST_SELECT}{where} ORDER BY received_at DESC, id DESC LIMIT ?{}",
         args.len()
     );
-    Ok((sql, args))
+    (sql, args)
 }
 
 /// The request log's page under `filter`, newest first, from `cursor` on.
@@ -584,10 +578,10 @@ pub fn list_requests(
     conn: &Connection,
     filter: &RequestFilter,
     live: &LiveKeys,
-    cursor: Option<&str>,
+    cursor: Option<&RequestCursor>,
     limit: usize,
 ) -> Result<(Vec<RequestWithAttempts>, Option<String>), LedgerError> {
-    let (sql, args) = list_requests_statement(filter, live, cursor, limit)?;
+    let (sql, args) = list_requests_statement(filter, live, cursor, limit);
     let mut stmt = conn.prepare(&sql)?;
     let mut requests = stmt
         .query_map(params_from_iter(args), row_to_request)?
@@ -600,8 +594,13 @@ pub fn list_requests(
     }
     let next = more
         .then(|| {
-            out.last()
-                .map(|(r, _)| format!("{}:{}", r.received_at, r.id))
+            out.last().map(|(r, _)| {
+                RequestCursor {
+                    id: r.id.clone(),
+                    received_at: r.received_at,
+                }
+                .encode()
+            })
         })
         .flatten();
     Ok((out, next))
@@ -626,7 +625,7 @@ pub fn list_request_page(
     conn: &Connection,
     filter: &RequestFilter,
     live: &LiveKeys,
-    cursor: Option<&str>,
+    cursor: Option<&RequestCursor>,
     limit: usize,
 ) -> Result<RequestPage, LedgerError> {
     // A read hands a shared connection, which only the unchecked form opens a transaction on.
@@ -841,9 +840,9 @@ pub fn guardrail_sample_page(
     conn: &Connection,
     subject: SampleSubject<'_>,
     since: i64,
-    cursor: Option<&str>,
+    cursor: Option<&RequestCursor>,
     limit: usize,
-) -> Result<(Vec<SampleRow>, Option<String>), LedgerError> {
+) -> Result<(Vec<SampleRow>, Option<RequestCursor>), LedgerError> {
     // The pool's walk takes `requests_received` and the key's `requests_key`, both bounded below by the capture
     // window, so a pool or a key whose capture is off scans no months of rows before it answers an empty page.
     let (base, id) = match subject {
@@ -853,14 +852,8 @@ pub fn guardrail_sample_page(
     let mut args: Vec<rusqlite::types::Value> = vec![id.to_string().into(), since.into()];
     let mut after = "";
     if let Some(cursor) = cursor {
-        let (at, id) = cursor
-            .split_once(':')
-            .ok_or_else(|| LedgerError::Yaml("cursor is <received_at>:<id>".into()))?;
-        let at: i64 = at
-            .parse()
-            .map_err(|_| LedgerError::Yaml("cursor is <received_at>:<id>".into()))?;
-        args.push(at.into());
-        args.push(id.to_string().into());
+        args.push(cursor.received_at.into());
+        args.push(cursor.id.clone().into());
         after = GUARDRAIL_SAMPLE_CURSOR_SQL;
     }
     // One row past the page says whether a next page exists, as `list_requests` reads it.
@@ -886,7 +879,12 @@ pub fn guardrail_sample_page(
     let more = rows.len() > limit;
     rows.truncate(limit);
     let next = more
-        .then(|| rows.last().map(|r| format!("{}:{}", r.received_at, r.id)))
+        .then(|| {
+            rows.last().map(|r| RequestCursor {
+                id: r.id.clone(),
+                received_at: r.received_at,
+            })
+        })
         .flatten();
     Ok((rows, next))
 }
@@ -1026,6 +1024,29 @@ pub struct RoutingLogFilter {
     /// `None` is every decision and event kind, the probe decisions among them. `Some` is exactly the kinds named,
     /// `probe` the pseudo-kind for a probe decision of any kind.
     pub kinds: Option<Vec<String>>,
+}
+
+/// `<received_at>:<id>`, the request list's and the guardrail sample's cursor: the page after it starts below that
+/// row in the `received_at DESC, id DESC` order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RequestCursor {
+    pub id: String,
+    pub received_at: i64,
+}
+
+impl RequestCursor {
+    /// The id may hold a `:` of its own, so the instant is read off the first.
+    pub fn parse(s: &str) -> Option<RequestCursor> {
+        let (received_at, id) = s.split_once(':')?;
+        Some(RequestCursor {
+            id: id.to_string(),
+            received_at: received_at.parse().ok()?,
+        })
+    }
+
+    pub fn encode(&self) -> String {
+        format!("{}:{}", self.received_at, self.id)
+    }
 }
 
 /// `<at>:<rank>:<id>`: rank 1 for a decision (`id` is `<request_id>/<seq>`), 0 for an event (`id` its rowid).

@@ -14,7 +14,7 @@ use phoebis_guardrails::{
     evaluate, parse_body, CompiledGuardrail, Condition, ConditionWords, GuardrailAction,
     GuardrailMode, HintLookup, Preset, RequestFacts, Verdict, MAX_CONDITIONS,
 };
-use phoebis_ledger::{guardrail_sample_page, request_body, SampleSubject};
+use phoebis_ledger::{guardrail_sample_page, request_body, RequestCursor, SampleSubject};
 use phoebis_store::{
     stamp_token, AttachmentSubject, GuardrailRow, PresetStamp, RegistryLoad, StoreError,
     SubjectKind, GUARDRAIL_BOUND,
@@ -215,11 +215,14 @@ pub const SAMPLE_PAGE: usize = 50;
 /// issue.
 fn sample_cursor(
     last_consumed: Option<(i64, &str)>,
-    next: Option<String>,
+    next: Option<RequestCursor>,
     stopped_early: bool,
-) -> Option<String> {
+) -> Option<RequestCursor> {
     match last_consumed {
-        Some((received_at, id)) if stopped_early => Some(format!("{received_at}:{id}")),
+        Some((received_at, id)) if stopped_early => Some(RequestCursor {
+            id: id.to_string(),
+            received_at,
+        }),
         _ => next,
     }
 }
@@ -823,7 +826,7 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
     let since = now - i64::from(window_hours) * 3_600_000;
     let limit_rows = limit as usize;
     let mut sampled: Vec<(String, i64, Verdict)> = Vec::new();
-    let mut cursor: Option<String> = None;
+    let mut cursor: Option<RequestCursor> = None;
     // One `read` per page, so the read holds a reader connection for one page at a time and a console read waits for
     // one page at most. A page stays full rather than sized to the room left: a row whose body aged out takes no room,
     // and with room-sized pages a sample one short of its limit would walk the rest of the window in pages of one. Each
@@ -842,7 +845,7 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
                     c,
                     side.subject(&subject_id),
                     since,
-                    after.as_deref(),
+                    after.as_ref(),
                     page,
                 )?;
                 let mut out = Vec::with_capacity(rows.len().min(room));
@@ -1125,13 +1128,17 @@ mod tests {
     #[test]
     fn sample_cursor_names_the_last_consumed_row_where_the_read_stopped_early_and_the_pages_next_otherwise(
     ) {
+        let cursor = |received_at: i64, id: &str| RequestCursor {
+            id: id.to_string(),
+            received_at,
+        };
         assert_eq!(
-            sample_cursor(Some((5, "r5")), Some("1:r1".to_string()), true),
-            Some("5:r5".to_string())
+            sample_cursor(Some((5, "r5")), Some(cursor(1, "r1")), true),
+            Some(cursor(5, "r5"))
         );
         assert_eq!(
-            sample_cursor(Some((5, "r5")), Some("1:r1".to_string()), false),
-            Some("1:r1".to_string())
+            sample_cursor(Some((5, "r5")), Some(cursor(1, "r1")), false),
+            Some(cursor(1, "r1"))
         );
         assert_eq!(sample_cursor(None, None, false), None);
     }

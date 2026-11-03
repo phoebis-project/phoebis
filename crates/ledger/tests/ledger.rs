@@ -17,9 +17,9 @@ use phoebis_ledger::{
     apply_filter, breakdown, list_requests, member_spends, parked_count, parked_summary,
     read_rollups, run_retention, Assembler, AttemptRecord, AttentionGauges, BodyRecord,
     BudgetedMember, CacheMapWrite, DecisionRow, EventRecord, LedgerConfig, LedgerDb, LedgerError,
-    LiveKeys, ParkedSummary, PlanTables, PriceRevisions, Purged, Record, Replayed, RequestFilter,
-    RequestRecord, RollupFilter, RollupRow, RollupSelect, Speed, WriterRead, BATCH_RETRY_DELAYS,
-    BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH, UNATTRIBUTED,
+    LiveKeys, ParkedSummary, PlanTables, PriceRevisions, Purged, Record, Replayed, RequestCursor,
+    RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, Speed, WriterRead,
+    BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH, UNATTRIBUTED,
 };
 
 /// A rollup row's dollars, its counts priced through `price_row` at its own key on `prices`.
@@ -2100,8 +2100,9 @@ fn sonnet_page(
         models: vec!["claude-sonnet-5".into()],
         ..Default::default()
     };
+    let cursor = cursor.map(|c| RequestCursor::parse(c).expect("a page's own cursor"));
     let (rows, next) = db
-        .read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), cursor, limit))
+        .read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), cursor.as_ref(), limit))
         .unwrap();
     (rows.into_iter().map(|(r, _)| r.id).collect(), next)
 }
@@ -2529,7 +2530,15 @@ fn a_list_from_a_stamp_answers_the_rows_written_after_it_and_the_newest_stamp() 
     let db = LedgerDb::open_in_memory().unwrap();
     let page = |filter: &RequestFilter, cursor: Option<&str>, limit: usize| {
         db.read_blocking(|c| {
-            phoebis_ledger::list_request_page(c, filter, &LiveKeys::default(), cursor, limit)
+            phoebis_ledger::list_request_page(
+                c,
+                filter,
+                &LiveKeys::default(),
+                cursor
+                    .map(|c| RequestCursor::parse(c).expect("a page's own cursor"))
+                    .as_ref(),
+                limit,
+            )
         })
         .unwrap()
     };
