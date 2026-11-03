@@ -9,6 +9,7 @@ use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql, Transaction};
 
 use phoebis_bus::Kind;
+use phoebis_relay::EFFORT_LEVELS;
 use phoebis_routing::{window_length_ms, PinUsage, WEEK_MS};
 use phoebis_store::AccountKind;
 
@@ -70,8 +71,6 @@ pub const LONG_BAND: &str = "long";
 pub const OTHER_DIMENSION: &str = phoebis_bus::OTHER_CLIENT;
 /// The longest identifier or user-agent token the hour row keeps.
 pub const DIMENSION_MAX_BYTES: usize = 64;
-/// The API's five effort levels and `NO_EFFORT`; any other effort files under `OTHER_DIMENSION`.
-pub const EFFORTS: &[&str] = &["high", "low", "max", "medium", "none", "xhigh"];
 
 /// The charset the relay reads a request class and a client hint with.
 fn identifier_byte(b: u8) -> bool {
@@ -110,11 +109,11 @@ fn fold_speed(raw: Option<&str>) -> &'static str {
     Speed::of(raw).as_str()
 }
 
-/// One of `EFFORTS`, `NO_EFFORT` for a request that asked for none, else `OTHER_DIMENSION`.
+/// One of `EFFORT_LEVELS`, `NO_EFFORT` for a request that asked for none, else `OTHER_DIMENSION`.
 pub fn fold_effort(raw: Option<&str>) -> &'static str {
     match raw {
-        None => NO_EFFORT,
-        Some(effort) => EFFORTS
+        None | Some(NO_EFFORT) => NO_EFFORT,
+        Some(effort) => EFFORT_LEVELS
             .iter()
             .find(|level| **level == effort)
             .copied()
@@ -2322,7 +2321,7 @@ mod tests {
         let long = "x".repeat(300);
         assert_eq!(fold_effort(Some(&long)), OTHER_DIMENSION);
         assert_eq!(fold_effort(Some("HIGH")), OTHER_DIMENSION);
-        for level in EFFORTS {
+        for level in EFFORT_LEVELS.iter().chain(&[NO_EFFORT]) {
             assert_eq!(fold_effort(Some(level)), *level);
         }
         assert_eq!(fold_effort(None), NO_EFFORT);

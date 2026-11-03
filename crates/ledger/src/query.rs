@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 use phoebis_bus::{Classifier, Kind};
+use phoebis_relay::EFFORT_LEVELS;
 use phoebis_routing::{
     window_for, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS, REFRESHING_CLASSES, SEVEN_DAY,
 };
@@ -32,8 +33,8 @@ use crate::record::{
 use crate::rollup::{
     add_counts, detail_json, fold_identifier, fold_user_agent, hour_of, migration_reason,
     read_account_rollups, read_rollups_paged, visit_rollups, CostSplit, KeySelector, RollupRow,
-    RollupSelect, DIMENSION_MAX_BYTES, EFFORTS, EXPIRED_BETWEEN_TURNS, NO_CLASS, NO_EFFORT,
-    OTHER_DIMENSION, PLAN_FUNDING, UNATTRIBUTED,
+    RollupSelect, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS, NO_CLASS, NO_EFFORT, OTHER_DIMENSION,
+    PLAN_FUNDING, UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -226,7 +227,8 @@ fn sql_list(values: &[&str]) -> String {
 
 /// `column` folded as `fold_effort` folds a request's effort, in SQL.
 pub(crate) fn effort_fold_sql(column: &str) -> String {
-    let levels = sql_list(EFFORTS);
+    let levels: Vec<&str> = EFFORT_LEVELS.into_iter().chain([NO_EFFORT]).collect();
+    let levels = sql_list(&levels);
     format!("CASE WHEN {column} IS NULL THEN '{NO_EFFORT}' WHEN {column} IN ({levels}) THEN {column} ELSE '{OTHER_DIMENSION}' END")
 }
 

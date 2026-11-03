@@ -1020,7 +1020,7 @@ fn parse_models(body: &[u8]) -> Result<Discovered, DiscoveryError> {
 }
 
 /// The API's own effort order, which a row's levels are shown in; a name outside it follows, as listed.
-const EFFORT_ORDER: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+pub const EFFORT_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// The effort levels a listing row says its model supports. The Models API reference shows `capabilities.effort` as
 /// an object of levels, each an object with its own `supported`, beside the effort object's own `supported` flag;
@@ -1050,7 +1050,7 @@ fn effort_levels(entry: &serde_json::Value) -> Vec<String> {
         }
         _ => Vec::new(),
     };
-    let mut out: Vec<String> = EFFORT_ORDER
+    let mut out: Vec<String> = EFFORT_LEVELS
         .iter()
         .filter(|level| listed.contains(level))
         .map(|level| level.to_string())
