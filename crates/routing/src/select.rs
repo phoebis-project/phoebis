@@ -5506,15 +5506,21 @@ fn admits(
         && holds_allowance(state, snapshot, account_id, window, now)
 }
 
-fn account_ok(
+/// What keeps placement off an affinity entry, `None` for one it may land on: `lane` (written on another lane than
+/// the request's), then what `account_refusal` answers at the request's instant.
+fn entry_refusal(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
+    request: &SelectRequest,
     allowed: &[&Candidate],
     window: &str,
-    now: i64,
     entry: &AffinityEntry,
-) -> bool {
-    account_refusal(state, snapshot, allowed, window, now, entry).is_none()
+) -> Option<&'static str> {
+    if same_lane(&entry.lane, &request.lane) {
+        account_refusal(state, snapshot, allowed, window, request.now, entry)
+    } else {
+        Some("lane")
+    }
 }
 
 /// What keeps placement off an affinity entry's account, `None` for one it may land on: `expired` (not live),
@@ -5690,15 +5696,10 @@ fn placement_of<'a>(
     let now = request.now;
     let candidate_of =
         |account_id: &str| allowed.iter().copied().find(|c| c.account_id == account_id);
-    let entry_gate = |e: &AffinityEntry| {
-        if same_lane(&e.lane, &request.lane) {
-            account_refusal(state, snapshot, allowed, window, now, e)
-        } else {
-            Some("lane")
-        }
-    };
 
-    let content = affinity.walk(&request.canonical_model, &request.boundaries, entry_gate);
+    let content = affinity.walk(&request.canonical_model, &request.boundaries, |e| {
+        entry_refusal(state, snapshot, request, allowed, window, e)
+    });
     record_lookups(rec, &content, now, true);
     let matched = content.matched.map(|i| &content.visited[i]);
     if let Some((visited, candidate)) =
@@ -5813,7 +5814,7 @@ fn placement_of<'a>(
         None => fresh_prior(state, snapshot, pool, now),
     };
     let walk = affinity.walk(&request.canonical_model, &request.static_boundaries, |e| {
-        entry_gate(e)
+        entry_refusal(state, snapshot, request, allowed, window, e)
             .or_else(|| (!size_gate(e)).then_some("size_gate"))
             .or_else(|| {
                 blocked(
@@ -5942,9 +5943,8 @@ fn subagent_cohort<'a>(
     }
     let (_, entry) =
         affinity.deepest(&request.canonical_model, &request.static_boundaries, |e| {
-            same_lane(&e.lane, &request.lane)
-                && e.prefix_tokens > 0
-                && account_ok(state, snapshot, allowed, window, request.now, e)
+            e.prefix_tokens > 0
+                && entry_refusal(state, snapshot, request, allowed, window, e).is_none()
         })?;
     let found = allowed
         .iter()
