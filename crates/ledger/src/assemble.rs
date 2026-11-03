@@ -627,8 +627,8 @@ fn finish(entry: InFlight, mut complete: RequestComplete, now: i64) -> Vec<Recor
     // The ledger's reading of the row's own facts, as the drift and the contract members are: the relay's outcome and
     // the bus's completion carry no flag.
     let refused = crate::refusals::is_refusal(
-        observed.kind.as_str(),
-        complete.outcome.as_str(),
+        observed.kind,
+        complete.outcome,
         complete.error_code.as_deref(),
         attempt_count,
     );

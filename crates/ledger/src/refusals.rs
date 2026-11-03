@@ -5,6 +5,8 @@
 //! `body_budget_exhausted`, `key_body_reads`, `ledger_behind` and `router_unavailable`, since the router's own standing
 //! caused them, and `accounts_exhausted`, `model_rejected` and every upstream code, since an account was asked.
 
+use phoebis_bus::{Kind, Outcome};
+
 macro_rules! refusal_codes {
     ($first:literal $(, $rest:literal)* $(,)?) => {
         /// The codes that flag a rejected request with no attempt as refused, alphabetical.
@@ -37,9 +39,9 @@ refusal_codes!(
 /// `REFUSAL_CODES` and an attempt count of zero, the count the row stores. An `auth_unknown` or a `model_not_allowed`
 /// answered at a reselect after an attempt stays a rejected request, also where the bus lost that attempt's selection
 /// event and the trail holds no row, and a probe the registry refused stays on its probe row.
-pub fn is_refusal(kind: &str, outcome: &str, error_code: Option<&str>, attempts: u32) -> bool {
-    kind != "probe"
-        && outcome == "rejected"
+pub fn is_refusal(kind: Kind, outcome: Outcome, error_code: Option<&str>, attempts: u32) -> bool {
+    kind != Kind::Probe
+        && outcome == Outcome::Rejected
         && attempts == 0
         && error_code.is_some_and(|code| REFUSAL_CODES.contains(&code))
 }
@@ -51,32 +53,56 @@ mod tests {
     #[test]
     fn is_refusal_flags_a_rejected_client_request_with_a_listed_code_and_no_attempt_and_nothing_else(
     ) {
-        let cases: [(&str, &str, Option<&str>, u32, bool); 7] = [
-            ("inference", "rejected", Some("guardrail_blocked"), 0, true),
-            ("count_tokens", "rejected", Some("auth_missing"), 0, true),
-            ("probe", "rejected", Some("auth_unknown"), 0, false),
+        let cases: [(Kind, Outcome, Option<&str>, u32, bool); 7] = [
             (
-                "inference",
-                "rejected",
+                Kind::Inference,
+                Outcome::Rejected,
+                Some("guardrail_blocked"),
+                0,
+                true,
+            ),
+            (
+                Kind::CountTokens,
+                Outcome::Rejected,
+                Some("auth_missing"),
+                0,
+                true,
+            ),
+            (
+                Kind::Probe,
+                Outcome::Rejected,
+                Some("auth_unknown"),
+                0,
+                false,
+            ),
+            (
+                Kind::Inference,
+                Outcome::Rejected,
                 Some("client_not_allowed"),
                 1,
                 false,
             ),
             (
-                "inference",
-                "rejected",
+                Kind::Inference,
+                Outcome::Rejected,
                 Some("accounts_unavailable"),
                 0,
                 false,
             ),
-            ("inference", "failed", Some("guardrail_blocked"), 0, false),
-            ("inference", "rejected", None, 0, false),
+            (
+                Kind::Inference,
+                Outcome::Failed,
+                Some("guardrail_blocked"),
+                0,
+                false,
+            ),
+            (Kind::Inference, Outcome::Rejected, None, 0, false),
         ];
         for (kind, outcome, code, attempts, want) in cases {
             assert_eq!(
                 is_refusal(kind, outcome, code, attempts),
                 want,
-                "a {kind} request {outcome} with {code:?} after {attempts} attempts"
+                "a {kind:?} request {outcome:?} with {code:?} after {attempts} attempts"
             );
         }
     }
