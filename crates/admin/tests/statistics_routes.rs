@@ -4449,6 +4449,33 @@ async fn a_request_answers_its_class_and_each_attempts_trace_with_skipped_as_nam
     );
 }
 
+/// The view's bar sends an emptied field as an empty value, which the route reads as absent, so the list narrows
+/// nothing where the ledger, which applies a filter as given, would keep only a request stored under the empty id.
+#[tokio::test]
+async fn an_empty_agent_id_on_the_request_log_lists_every_request() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for (id, agent_id, age) in [("e-main", Some("main"), 1), ("e-none", None, 2)] {
+        let mut row = record(id, common::NOW - age * 1_000, "claude-sonnet-5", "s1");
+        if let Record::Request { request, .. } = &mut row {
+            request.agent_id = agent_id.map(String::from);
+        }
+        parts.ledger.record(row);
+    }
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        parts.db.request("e-none").await.unwrap()
+    })
+    .await;
+    let body = json(get(&parts.app, "/admin/requests?agent_id=", Some(&cookie)).await).await;
+    let ids: Vec<&str> = body["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["id"].as_str())
+        .collect();
+    assert_eq!(ids, ["e-main", "e-none"], "{body}");
+}
+
 #[tokio::test]
 async fn the_request_log_answers_the_diagnostics_source_and_narrows_by_reason_effort_and_class() {
     let parts = common::admin_parts_full().await;

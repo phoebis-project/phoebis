@@ -945,12 +945,13 @@ pub(crate) async fn list(
     let Ok(statuses) = statuses else {
         return failure(StatusCode::BAD_REQUEST, "statuses are numbers");
     };
+    // An emptied field in the view's bar narrows nothing, as an absent one.
+    let value = |name: &str| q.get(name).filter(|v| !v.is_empty()).cloned();
     let filter = RequestFilter {
-        text: q.get("text").cloned(),
-        // An empty value narrows nothing, as an absent one, since the ledger drops it as it drops an empty `text`.
-        request: q.get("request").cloned(),
-        session: q.get("session").cloned(),
-        agent_id: q.get("agent_id").cloned(),
+        text: value("text"),
+        request: value("request"),
+        session: value("session"),
+        agent_id: value("agent_id"),
         landed_after,
         keys: list_param(&q, "keys"),
         pools: list_param(&q, "pools"),
@@ -959,8 +960,8 @@ pub(crate) async fn list(
         kinds: list_param(&q, "kinds"),
         statuses,
         outcomes: list_param(&q, "outcomes"),
-        user_agent: q.get("user_agent").cloned(),
-        client: q.get("client").cloned(),
+        user_agent: value("user_agent"),
+        client: value("client"),
         clients: Vec::new(),
         user_agents: Vec::new(),
         agent_types: list_param(&q, "agent_types"),

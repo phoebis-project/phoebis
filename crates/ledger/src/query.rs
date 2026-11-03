@@ -367,20 +367,20 @@ fn filter_clauses(
 ) -> (Vec<rusqlite::types::Value>, Vec<String>) {
     let mut args: Vec<rusqlite::types::Value> = Vec::new();
     let mut clauses: Vec<String> = Vec::new();
-    if let Some(text) = filter.text.as_deref().filter(|t| !t.is_empty()) {
+    if let Some(text) = filter.text.as_deref() {
         args.push(format!("%{}%", literal_like(text)).into());
         let n = args.len();
         clauses.push(format!("(id LIKE ?{n} ESCAPE '{ESCAPE}' OR session_id LIKE ?{n} ESCAPE '{ESCAPE}' OR key_id LIKE ?{n} ESCAPE '{ESCAPE}' OR model LIKE ?{n} ESCAPE '{ESCAPE}' OR error_code LIKE ?{n} ESCAPE '{ESCAPE}' OR EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id AND (a.account_id LIKE ?{n} ESCAPE '{ESCAPE}' OR a.upstream_request_id LIKE ?{n} ESCAPE '{ESCAPE}' OR a.upstream_message_id LIKE ?{n} ESCAPE '{ESCAPE}')))"));
     }
-    if let Some(request) = filter.request.as_deref().filter(|r| !r.is_empty()) {
+    if let Some(request) = filter.request.as_deref() {
         args.push(request.to_string().into());
         clauses.push(format!("id = ?{}", args.len()));
     }
-    if let Some(session) = filter.session.as_deref().filter(|s| !s.is_empty()) {
+    if let Some(session) = filter.session.as_deref() {
         args.push(session.to_string().into());
         clauses.push(format!("session_id = ?{}", args.len()));
     }
-    if let Some(agent_id) = filter.agent_id.as_deref().filter(|a| !a.is_empty()) {
+    if let Some(agent_id) = filter.agent_id.as_deref() {
         args.push(agent_id.to_string().into());
         clauses.push(format!("agent_id = ?{}", args.len()));
     }
@@ -478,28 +478,11 @@ fn filter_clauses(
     // coalesce keeps a nullable column from excluding such a row from both the wildcard and the exact marker.
     pattern_any(
         "user_agent",
-        &Vec::from_iter(
-            filter
-                .user_agent
-                .as_deref()
-                .filter(|a| !a.is_empty())
-                .map(String::from),
-        ),
+        filter.user_agent.as_slice(),
         &mut args,
         &mut clauses,
     );
-    pattern_any(
-        "client",
-        &Vec::from_iter(
-            filter
-                .client
-                .as_deref()
-                .filter(|c| !c.is_empty())
-                .map(String::from),
-        ),
-        &mut args,
-        &mut clauses,
-    );
+    pattern_any("client", filter.client.as_slice(), &mut args, &mut clauses);
     in_list("agent_type", &filter.agent_types, &mut args, &mut clauses);
     in_list("turn_origin", &filter.turn_origins, &mut args, &mut clauses);
     if !filter.guardrails.is_empty() {

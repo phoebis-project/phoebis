@@ -2508,8 +2508,8 @@ fn the_request_log_keeps_one_agents_requests_under_agent_id() {
     );
     assert_eq!(
         listed(""),
-        ["from-main", "from-agent", "from-none"],
-        "an empty value narrows nothing, as an absent one"
+        Vec::<String>::new(),
+        "the ledger applies the filter as given, and no request stored an empty agent id"
     );
 }
 
