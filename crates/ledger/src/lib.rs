@@ -43,7 +43,7 @@ pub use metrics::{
     gather, metrics_router, AttentionGaugeSource, AttentionGauges, KeepaliveAgents,
     KeepaliveGaugeSource, Metrics, RoutingGauges, FAMILIES,
 };
-pub use pattern::{within_bounds as patterns_within_bounds, PATTERNS_TOO_LONG};
+pub use pattern::{literal_like, within_bounds as patterns_within_bounds, PATTERNS_TOO_LONG};
 pub use plan::{
     entrypoint_of_client, free_equivalent, free_shares, funding_of, price_equivalent, price_shares,
     Capacity, CostRevisions, Funding, ModelWindow, Override, Peak, PerWindow, PlanTables, Regime,
@@ -63,7 +63,7 @@ pub use query::{
     breakdown_paged, bucket_seconds, burn_groups_paged, burn_series_over, dashboard_on,
     decision_record, group_of, guardrail_counts, held_series, hour_ceil, hourly_window_samples,
     key_request_totals, latest_extra_usage, latest_extra_usage_polled, latest_extra_usage_share,
-    latest_quota, list_requests, list_routing_log, literal_like, member_spends, moves_by_reason,
+    latest_quota, list_requests, list_routing_log, member_spends, moves_by_reason,
     moves_by_reason_and_fit, names_one_account, parked_count, parked_summary, parse_range,
     pin_migrations_by_account_and_reason, placements, pool_traffic, pools_traffic,
     recent_events_of_kind, recent_gaps, request_by_id, request_events, request_totals,

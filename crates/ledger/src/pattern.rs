@@ -2,38 +2,48 @@
 //! backslash to quote either. The request log hands `to_like` to SQLite; the analytics test rollup rows in
 //! memory with `matches`, so the two views cannot drift apart on what a pattern means.
 
-/// The escape character `to_like` names. A backslash rather than SQLite's absent default, since a backslash is
-/// what the grammar itself uses and no measured user agent carries one.
-const ESCAPE: char = '\\';
+/// The escape character every `LIKE` pattern of the ledger names, written into the statement as `ESCAPE '\'`. A
+/// backslash rather than SQLite's absent default, since a backslash is what the grammar itself uses and no measured
+/// user agent carries one.
+pub(crate) const ESCAPE: char = '\\';
 
-/// The `LIKE` pattern and the escape character to pass as `ESCAPE`: `*` becomes `%`, `?` becomes `_`, and a
-/// literal `%`, `_`, or the escape character itself is escaped, so a pattern with no wildcard matches its own
-/// text alone.
-pub fn to_like(pattern: &str) -> (String, char) {
+/// Pushes `c` onto a `LIKE` pattern as itself, escaped where `LIKE` would read it as a wildcard or as the escape.
+pub(crate) fn push_literal(out: &mut String, c: char) {
+    if matches!(c, '%' | '_' | ESCAPE) {
+        out.push(ESCAPE);
+    }
+    out.push(c);
+}
+
+/// `text` with `\`, `%` and `_` escaped for `LIKE .. ESCAPE '\'`, so every typed character matches itself.
+pub fn literal_like(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        push_literal(&mut out, c);
+    }
+    out
+}
+
+/// The `LIKE` pattern to pass with `ESCAPE`: `*` becomes `%`, `?` becomes `_`, and a literal `%`, `_`, or the escape
+/// character itself is escaped, so a pattern with no wildcard matches its own text alone.
+pub fn to_like(pattern: &str) -> String {
     let mut out = String::with_capacity(pattern.len() + 4);
     let mut chars = pattern.chars();
     while let Some(c) = chars.next() {
         match c {
             '*' => out.push('%'),
             '?' => out.push('_'),
-            '\\' => match chars.next() {
-                // A quoted character reaches SQLite as itself, escaped where `LIKE` would read it as a wildcard.
-                Some(next @ ('%' | '_' | '\\')) => {
-                    out.push(ESCAPE);
-                    out.push(next);
+            // A quoted character reaches SQLite as itself. A trailing backslash quotes nothing and matches nothing
+            // more.
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    push_literal(&mut out, next);
                 }
-                Some(next) => out.push(next),
-                // A trailing backslash quotes nothing and matches nothing more.
-                None => {}
-            },
-            '%' | '_' => {
-                out.push(ESCAPE);
-                out.push(c);
             }
-            other => out.push(other),
+            other => push_literal(&mut out, other),
         }
     }
-    (out, ESCAPE)
+    out
 }
 
 /// The longest pattern and the longest pattern list a route accepts. The matcher below is linear per star
@@ -219,23 +229,20 @@ mod tests {
 
     #[test]
     fn the_like_form_maps_the_grammar_onto_sqlite_and_escapes_its_own_wildcards() {
-        assert_eq!(to_like("claude-cli/*"), ("claude-cli/%".into(), '\\'));
-        assert_eq!(
-            to_like("claude-cli/2.1.2??"),
-            ("claude-cli/2.1.2__".into(), '\\')
-        );
-        assert_eq!(to_like("100%_sure"), (r"100\%\_sure".into(), '\\'));
+        assert_eq!(to_like("claude-cli/*"), "claude-cli/%");
+        assert_eq!(to_like("claude-cli/2.1.2??"), "claude-cli/2.1.2__");
+        assert_eq!(to_like("100%_sure"), r"100\%\_sure");
         assert_eq!(
             to_like(r"a\*b"),
-            ("a*b".into(), '\\'),
+            "a*b",
             "a quoted star is a plain star to LIKE"
         );
         assert_eq!(
             to_like(r"a\\b"),
-            (r"a\\b".into(), '\\'),
+            r"a\\b",
             "a quoted backslash is escaped for LIKE"
         );
-        assert_eq!(to_like(CLI), (CLI.into(), '\\'), "no wildcard, no change");
+        assert_eq!(to_like(CLI), CLI, "no wildcard, no change");
     }
 
     /// The two halves agree: what `matches` accepts, SQLite's `LIKE ... ESCAPE` accepts too.
@@ -266,12 +273,12 @@ mod tests {
             "curl/8.5.?",
         ];
         for pattern in patterns {
-            let (like, escape) = to_like(pattern);
+            let like = to_like(pattern);
             for value in values {
                 let sql: bool = conn
                     .query_row(
-                        "SELECT ?1 LIKE ?2 ESCAPE ?3",
-                        rusqlite::params![value, like, escape.to_string()],
+                        &format!("SELECT ?1 LIKE ?2 ESCAPE '{ESCAPE}'"),
+                        rusqlite::params![value, like],
                         |r| r.get(0),
                     )
                     .unwrap();

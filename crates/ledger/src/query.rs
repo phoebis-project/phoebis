@@ -19,6 +19,7 @@ use crate::db::{
     row_to_request, with_attempts, LedgerDb, REQUEST_SELECT,
 };
 use crate::histogram::Histogram;
+use crate::pattern::{literal_like, ESCAPE};
 use crate::plan::{
     entrypoint_of_client, free_equivalent, free_shares, funding_of, price_equivalent, price_shares,
     CostRevisions, Funding, PlanTables,
@@ -264,18 +265,6 @@ fn key_lifetimes(
     });
 }
 
-/// `text` with `\`, `%` and `_` escaped for `LIKE .. ESCAPE '\'`, so every typed character matches itself.
-pub fn literal_like(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        if matches!(c, '\\' | '%' | '_') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
-}
-
 /// One clause matching any of `patterns` against `column` under the wildcard grammar of `crate::pattern`;
 /// `column` reads as `-` where it is NULL, as the rollup fold already does. No clause when `patterns` is empty.
 fn pattern_any(
@@ -290,13 +279,10 @@ fn pattern_any(
     let parts: Vec<String> = patterns
         .iter()
         .map(|p| {
-            let (like, escape) = crate::pattern::to_like(p);
-            args.push(Box::new(like));
-            let at_like = args.len();
-            args.push(Box::new(escape.to_string()));
+            args.push(Box::new(crate::pattern::to_like(p)));
             format!(
-                "COALESCE({column}, '-') LIKE ?{at_like} ESCAPE ?{}",
-                at_like + 1
+                "COALESCE({column}, '-') LIKE ?{} ESCAPE '{ESCAPE}'",
+                args.len()
             )
         })
         .collect();
@@ -312,7 +298,7 @@ fn filter_clauses(filter: &RequestFilter, live: &LiveKeys) -> (Vec<Box<dyn ToSql
     if let Some(text) = filter.text.as_deref().filter(|t| !t.is_empty()) {
         args.push(Box::new(format!("%{}%", literal_like(text))));
         let n = args.len();
-        clauses.push(format!("(id LIKE ?{n} ESCAPE '\\' OR session_id LIKE ?{n} ESCAPE '\\' OR key_id LIKE ?{n} ESCAPE '\\' OR model LIKE ?{n} ESCAPE '\\' OR error_code LIKE ?{n} ESCAPE '\\' OR EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id AND (a.account_id LIKE ?{n} ESCAPE '\\' OR a.upstream_request_id LIKE ?{n} ESCAPE '\\' OR a.upstream_message_id LIKE ?{n} ESCAPE '\\')))"));
+        clauses.push(format!("(id LIKE ?{n} ESCAPE '{ESCAPE}' OR session_id LIKE ?{n} ESCAPE '{ESCAPE}' OR key_id LIKE ?{n} ESCAPE '{ESCAPE}' OR model LIKE ?{n} ESCAPE '{ESCAPE}' OR error_code LIKE ?{n} ESCAPE '{ESCAPE}' OR EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id AND (a.account_id LIKE ?{n} ESCAPE '{ESCAPE}' OR a.upstream_request_id LIKE ?{n} ESCAPE '{ESCAPE}' OR a.upstream_message_id LIKE ?{n} ESCAPE '{ESCAPE}')))"));
     }
     if let Some(request) = filter.request.as_deref().filter(|r| !r.is_empty()) {
         args.push(Box::new(request.to_string()));
@@ -1182,7 +1168,7 @@ impl LogStatement {
             let exact = args.len();
             args.push(Box::new(format!("{}%", literal_like(session))));
             clauses.push(format!(
-                "({alias}.session_id = ?{exact} OR {alias}.session_id LIKE ?{} ESCAPE '\\')",
+                "({alias}.session_id = ?{exact} OR {alias}.session_id LIKE ?{} ESCAPE '{ESCAPE}')",
                 exact + 1
             ));
         }
