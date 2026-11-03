@@ -17,7 +17,8 @@ pub mod windows;
 
 pub use affinity::{
     AffinityChain, AffinityEntry, AffinityMap, AffinityReport, AffinityRow, ConversationLookup,
-    ConversationMatch, ConversationQuery, PredecessorQuery, PurgedEntry,
+    ConversationMatch, ConversationQuery, PredecessorQuery, PurgedEntry, FIVE_MINUTES_MS,
+    ONE_HOUR_MS,
 };
 pub use guardrails::CompiledGuardrails;
 pub use phoebis_store::canonical_id as canonical_model;

@@ -25,8 +25,8 @@ impl CacheTtl {
     /// The TTL in milliseconds.
     pub const fn ms(self) -> i64 {
         match self {
-            CacheTtl::FiveMinutes => 300_000,
-            CacheTtl::OneHour => 3_600_000,
+            CacheTtl::FiveMinutes => phoebis_routing::FIVE_MINUTES_MS,
+            CacheTtl::OneHour => phoebis_routing::ONE_HOUR_MS,
         }
     }
 }

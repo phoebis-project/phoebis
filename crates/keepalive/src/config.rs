@@ -5,8 +5,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-pub const FIVE_MINUTES_MS: i64 = 300_000;
-pub const ONE_HOUR_MS: i64 = 3_600_000;
+pub use phoebis_routing::{FIVE_MINUTES_MS, ONE_HOUR_MS};
 
 /// A probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on
 /// the account the probe warmed.

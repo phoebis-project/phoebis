@@ -12,7 +12,9 @@ use phoebis_store::{
 };
 use rand::{Rng, RngExt};
 
-use crate::affinity::{AffinityEntry, AffinityMap, RungWalk, Visited};
+use crate::affinity::{
+    AffinityEntry, AffinityMap, RungWalk, Visited, FIVE_MINUTES_MS, ONE_HOUR_MS,
+};
 use crate::record::{
     key_fact, settings_of, BudgetFacts, By, CandidateFacts, CooldownFacts, CreditsFacts,
     DecisionRecord, DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue, HoldOutcome,
@@ -779,9 +781,9 @@ pub(crate) fn rewrite_write(request: &SelectRequest, pin: Option<&PinRow>) -> Pi
     // round prices the request's own body there, zero for a classifier request.
     let (tokens, ttl_ms) = match pin {
         Some(pin) => (prompt_size(pin, request), pin.cache_ttl_ms),
-        None => (body, 300_000),
+        None => (body, FIVE_MINUTES_MS),
     };
-    if ttl_ms >= 3_600_000 {
+    if ttl_ms >= ONE_HOUR_MS {
         PinUsage {
             write_1h: tokens,
             ..PinUsage::default()
@@ -2473,7 +2475,7 @@ fn fresh_pin(
         last_classifier,
         // A fresh pin has no cache to be cold about, and its TTL is the default until the first report.
         last_refresh_at: request.now,
-        cache_ttl_ms: 300_000,
+        cache_ttl_ms: FIVE_MINUTES_MS,
         // A shed move and a failover's landing remember the source for the dwell, so no round sends the session
         // straight back, and the word the status page and the record name the stamp by. Every other move clears it.
         shed: shed.map(|(from, reason)| ShedStamp {

@@ -68,6 +68,10 @@ pub(crate) struct RungWalk<'a> {
     pub visited: Vec<Visited<'a>>,
 }
 
+/// The prompt cache's two lifetimes in milliseconds: the default and the hour a marker can ask for.
+pub const FIVE_MINUTES_MS: i64 = 300_000;
+pub const ONE_HOUR_MS: i64 = 3_600_000;
+
 /// What a completed inference or probe answer reports: its conversation's links always, and the cache facts
 /// per tier when the response carries any.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -297,8 +301,8 @@ impl AffinityMap {
         let written = match (five, hour) {
             // The split object always carries the 1-hour member, so its absence is the older total-only shape,
             // which names no TTL.
-            (Some(five), Some(0)) if five > 0 => Some(300_000),
-            (Some(0) | None, Some(hour)) if hour > 0 => Some(3_600_000),
+            (Some(five), Some(0)) if five > 0 => Some(FIVE_MINUTES_MS),
+            (Some(0) | None, Some(hour)) if hour > 0 => Some(ONE_HOUR_MS),
             _ => None,
         };
         let written = written.filter(|w| report.uniform_ttl_ms.is_some_and(|t| t != *w));
