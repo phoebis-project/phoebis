@@ -934,7 +934,7 @@ impl CatalogService {
             };
             let (mut conn, _) = self
                 .pool
-                .checkout(key.clone(), addr)
+                .checkout(&key, addr)
                 .await
                 .map_err(|e| DiscoveryError::Unreachable(e.to_string()))?;
             let (status, body, reusable) = exchange(&mut conn, &request).await?;

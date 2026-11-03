@@ -21,10 +21,10 @@ async fn checkout_reports_whether_the_connection_came_from_the_idle_list() {
     };
 
     let pool = Pool::new(connector(), 4, Duration::from_secs(60));
-    let (conn, reused) = pool.checkout(key.clone(), up.addr()).await.unwrap();
+    let (conn, reused) = pool.checkout(&key, up.addr()).await.unwrap();
     assert!(!reused, "the first checkout has to open a connection");
     pool.checkin(key.clone(), conn);
-    let (conn, reused) = pool.checkout(key.clone(), up.addr()).await.unwrap();
+    let (conn, reused) = pool.checkout(&key, up.addr()).await.unwrap();
     assert!(reused, "an idle connection comes back marked as reused");
     assert_eq!(up.connections(), 1, "both checkouts shared one connection");
     drop(conn);
@@ -32,9 +32,9 @@ async fn checkout_reports_whether_the_connection_came_from_the_idle_list() {
     // An entry past its TTL is dropped rather than served, so the caller must be told it got a new connection
     // and not one that has been sitting idle.
     let expiring = Pool::new(connector(), 4, Duration::from_millis(0));
-    let (conn, _) = expiring.checkout(key.clone(), up.addr()).await.unwrap();
+    let (conn, _) = expiring.checkout(&key, up.addr()).await.unwrap();
     expiring.checkin(key.clone(), conn);
-    let (conn, reused) = expiring.checkout(key.clone(), up.addr()).await.unwrap();
+    let (conn, reused) = expiring.checkout(&key, up.addr()).await.unwrap();
     assert!(!reused, "an expired entry is not a reused connection");
     assert_eq!(
         up.connections(),

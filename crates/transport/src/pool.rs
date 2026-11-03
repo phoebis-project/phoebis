@@ -40,12 +40,12 @@ impl Pool {
     /// so has to be failed rather than sent again.
     pub async fn checkout(
         &self,
-        key: PoolKey,
+        key: &PoolKey,
         addr: SocketAddr,
     ) -> Result<(Conn, bool), TransportError> {
         let reused = {
             let mut idle = self.idle.lock().unwrap();
-            idle.get_mut(&key).and_then(|v| {
+            idle.get_mut(key).and_then(|v| {
                 while let Some((c, at)) = v.pop() {
                     if at.elapsed() < self.ttl && alive(&c) {
                         return Some(c);

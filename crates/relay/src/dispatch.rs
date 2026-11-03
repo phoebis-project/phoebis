@@ -78,11 +78,7 @@ pub(crate) async fn attempt(
             let (conn, reused) = if fresh {
                 (checkout_fresh(&relay.pool, key, addr).await?, false)
             } else {
-                relay
-                    .pool
-                    .checkout(key.clone(), addr)
-                    .await
-                    .map_err(unsent)?
+                relay.pool.checkout(key, addr).await.map_err(unsent)?
             };
             if !reused {
                 relay.note_opened();
@@ -172,7 +168,7 @@ async fn checkout_fresh(
     addr: SocketAddr,
 ) -> Result<Conn, AttemptFailure> {
     loop {
-        let (conn, reused) = pool.checkout(key.clone(), addr).await.map_err(unsent)?;
+        let (conn, reused) = pool.checkout(key, addr).await.map_err(unsent)?;
         if !reused {
             return Ok(conn);
         }
