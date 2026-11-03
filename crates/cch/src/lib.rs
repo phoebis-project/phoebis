@@ -752,7 +752,7 @@ pub fn sign(body: &[u8]) -> Result<Vec<u8>, CchError> {
         return Ok(body.to_vec());
     };
     let mut out = body.to_vec();
-    out[loc.digits_start..loc.digits_start + LEN].copy_from_slice(b"00000");
+    out[loc.digits_start..loc.digits_start + LEN].copy_from_slice(PLACEHOLDER);
     let view = normalize(&out)?;
     let h = xxh64(&view, SEED) & 0xF_FFFF;
     out[loc.digits_start..loc.digits_start + LEN].copy_from_slice(format!("{h:05x}").as_bytes());
