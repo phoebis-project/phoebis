@@ -643,12 +643,6 @@ pub fn deltas_of(
             _ => {}
         }
     }
-    if counted {
-        if let Some(held_ms) = slow_down_held_ms(request.held.as_deref()) {
-            d.slow_down_held_ms = held_ms;
-            d.slow_down_held = 1;
-        }
-    }
     // A 401 replay and an unsent retry both run again on the account the request was already on, so only a
     // move between accounts counts.
     d.failovers = attempts
@@ -658,17 +652,6 @@ pub fn deltas_of(
     let read = last.and_then(|a| a.cache_read_tokens).unwrap_or(0);
     let wrote = last.and_then(|a| a.cache_write_5m_tokens).unwrap_or(0)
         + last.and_then(|a| a.cache_write_1h_tokens).unwrap_or(0);
-    // A held probe and a refused request reached no cache and no account, so neither counts under a request figure
-    // or a timing below.
-    if counted {
-        if read > 0 {
-            d.cache_hits = 1
-        } else if wrote > 0 {
-            d.cache_misses = 1
-        } else {
-            d.uncached_requests = 1
-        }
-    }
     if let Some(reason) = last.and_then(|a| a.cache_miss_reason.as_ref()) {
         *d.cache_miss_reasons.entry(reason.clone()).or_default() += 1;
         if reason == "none" && read == 0 {
@@ -677,7 +660,20 @@ pub fn deltas_of(
                 .or_default() += 1;
         }
     }
+    // A held probe and a refused request asked no account and reached no cache, so neither counts under a request
+    // figure, a timing or an error code the rate should count.
     if counted {
+        if let Some(held_ms) = slow_down_held_ms(request.held.as_deref()) {
+            d.slow_down_held_ms = held_ms;
+            d.slow_down_held = 1;
+        }
+        if read > 0 {
+            d.cache_hits = 1
+        } else if wrote > 0 {
+            d.cache_misses = 1
+        } else {
+            d.uncached_requests = 1
+        }
         if let Some(t) = request.ttfb_ms {
             d.ttfb_hist.record(t as f64);
         }
@@ -697,9 +693,6 @@ pub fn deltas_of(
                 d.output_tps_hist.record(out as f64 / span_s);
             }
         }
-    }
-    // A held probe and a refused request asked no account, so neither code names a failure the rate should count.
-    if counted {
         if let Some(code) = &request.error_code {
             *d.errors.entry(code.clone()).or_default() += 1;
         }
