@@ -17,7 +17,7 @@ use tokio::time::Instant;
 use crate::affinity::{AffinityMap, PurgedEntry};
 use crate::listing::{row_for, snapshot_date};
 use crate::select::{
-    affinity_ttl_ms, lane_parts, seconds_ms, Banded, SlowDownRead, RATE_LIMIT_REASON,
+    affinity_ttl_ms, lane_key, lane_parts, seconds_ms, Banded, SlowDownRead, RATE_LIMIT_REASON,
     RETRY_AFTER_WINDOW, SLOW_DOWN_WAIT_MS,
 };
 use crate::task::BurnRates;
@@ -3945,12 +3945,11 @@ impl RoutingState {
 /// A moved pin's lane under the dated id: the relay composes the next request's lane from the model it admits,
 /// which is the dated id from now on, so a lane still spelling the old model would read as another cache.
 fn relaned(lane: &str, spelling: &str, dated_id: &str) -> String {
-    match lane
-        .strip_prefix(spelling)
-        .filter(|rest| rest.starts_with('|'))
-    {
-        Some(rest) => format!("{dated_id}{rest}"),
-        None => lane.to_string(),
+    match lane_parts(lane) {
+        [Some(effort), Some(thinking), Some(speed), Some(model)] if model == spelling => {
+            lane_key(dated_id, speed, thinking, effort)
+        }
+        _ => lane.to_string(),
     }
 }
 
