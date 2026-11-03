@@ -405,13 +405,9 @@ fn sessions_on_retired_secret(
 pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     match state.store.api_keys() {
         Ok(rows) => {
-            let index = match state.store.guardrail_index() {
-                Ok(read) => AttachmentIndex::from_parts(
-                    &read.guardrails,
-                    &read.guardrail_attachments,
-                    read.labels,
-                ),
-                Err(error) => return store_failure(error),
+            let (_, index) = match AttachmentIndex::read(&state.store) {
+                Ok(read) => read,
+                Err(response) => return response,
             };
             let (week, lifetime) = totals(&state).await;
             let now = (state.clock)();
@@ -518,13 +514,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     // The row exists from here on, so every answer, a refusal included, names it to the mutation log.
     let mut response = match reload_or_refuse(&state).await {
         Err(refusal) => refusal,
-        Ok(()) => match state.store.guardrail_index() {
-            Ok(read) => {
-                let index = AttachmentIndex::from_parts(
-                    &read.guardrails,
-                    &read.guardrail_attachments,
-                    read.labels,
-                );
+        Ok(()) => match AttachmentIndex::read(&state.store) {
+            Ok((_, index)) => {
                 let (week, lifetime) = totals(&state).await;
                 // A key this route just created has never rotated, so no session can present a retired secret of it.
                 let key = key_json(&state.router.snapshot(), &row, &week, &lifetime, 0, &index);
@@ -532,7 +523,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
                 v["secret"] = json!(secret);
                 (StatusCode::CREATED, Json(v)).into_response()
             }
-            Err(error) => store_failure(error),
+            Err(response) => response,
         },
     };
     response.extensions_mut().insert(CreatedId(row.id));
@@ -618,11 +609,9 @@ pub(crate) async fn patch(
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;
     }
-    let index = match state.store.guardrail_index() {
-        Ok(read) => {
-            AttachmentIndex::from_parts(&read.guardrails, &read.guardrail_attachments, read.labels)
-        }
-        Err(error) => return store_failure(error),
+    let (_, index) = match AttachmentIndex::read(&state.store) {
+        Ok(read) => read,
+        Err(response) => return response,
     };
     let (week, lifetime) = totals(&state).await;
     let now = (state.clock)();
@@ -682,13 +671,9 @@ pub(crate) async fn rotate(
     }
     match state.store.api_key(&id) {
         Ok(Some(row)) => {
-            let index = match state.store.guardrail_index() {
-                Ok(read) => AttachmentIndex::from_parts(
-                    &read.guardrails,
-                    &read.guardrail_attachments,
-                    read.labels,
-                ),
-                Err(error) => return store_failure(error),
+            let (_, index) = match AttachmentIndex::read(&state.store) {
+                Ok(read) => read,
+                Err(response) => return response,
             };
             let (week, lifetime) = totals(&state).await;
             let activity = recent_activity(&state, now).await;

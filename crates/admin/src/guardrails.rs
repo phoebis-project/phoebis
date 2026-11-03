@@ -18,7 +18,7 @@ use phoebis_guardrails::{
 use phoebis_ledger::{guardrail_sample_page, request_body, RequestCursor, SampleSubject};
 use phoebis_store::{
     stamp_token, AttachmentSubject, GuardrailAttachment, GuardrailRow, PresetStamp, RegistryLoad,
-    StoreError, SubjectKind, GUARDRAIL_BOUND,
+    Store, StoreError, SubjectKind, GUARDRAIL_BOUND,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -312,6 +312,14 @@ impl AttachmentIndex {
         AttachmentIndex::from_parts(&load.guardrails, &load.guardrail_attachments, labels)
     }
 
+    /// The guardrails with their index off one take of the store, a failed read answered as `store_failure`.
+    pub(crate) fn read(store: &Store) -> Result<(Vec<GuardrailRow>, AttachmentIndex), Response> {
+        let read = store.guardrail_index().map_err(store_failure)?;
+        let index =
+            AttachmentIndex::from_parts(&read.guardrails, &read.guardrail_attachments, read.labels);
+        Ok((read.guardrails, index))
+    }
+
     /// The index of the guardrails, their attachments and the subjects' labels, as `Store::guardrail_index` reads
     /// them for a list that needs no other part of the registry.
     pub(crate) fn from_parts(
@@ -579,13 +587,11 @@ async fn publish(state: &AdminState, id: &str, status: StatusCode) -> Response {
 
 /// The guardrail as the registry holds it, with its attachments, answered under `status`.
 fn read_back(state: &AdminState, id: &str, status: StatusCode) -> Response {
-    let read = match state.store.guardrail_index() {
+    let (guardrails, index) = match AttachmentIndex::read(&state.store) {
         Ok(read) => read,
-        Err(error) => return store_failure(error),
+        Err(response) => return response,
     };
-    let index =
-        AttachmentIndex::from_parts(&read.guardrails, &read.guardrail_attachments, read.labels);
-    match read.guardrails.iter().find(|row| row.id == id) {
+    match guardrails.iter().find(|row| row.id == id) {
         Some(row) => (status, Json(guardrail_json(row, &index))).into_response(),
         None => failure(StatusCode::NOT_FOUND, "guardrail not found"),
     }
@@ -603,21 +609,15 @@ fn read_back(state: &AdminState, id: &str, status: StatusCode) -> Response {
     ),
 )]
 pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
-    match state.store.guardrail_index() {
-        Ok(read) => {
-            let index = AttachmentIndex::from_parts(
-                &read.guardrails,
-                &read.guardrail_attachments,
-                read.labels,
-            );
-            let guardrails = read
-                .guardrails
+    match AttachmentIndex::read(&state.store) {
+        Ok((guardrails, index)) => {
+            let guardrails = guardrails
                 .iter()
                 .map(|row| guardrail_json(row, &index))
                 .collect();
             Json(GuardrailList { guardrails }).into_response()
         }
-        Err(error) => store_failure(error),
+        Err(response) => response,
     }
 }
 
