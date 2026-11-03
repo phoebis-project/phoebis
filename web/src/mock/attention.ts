@@ -199,26 +199,25 @@ const CONDITION_ORDER: AttentionItem['kind'][] = ['meter_drift', 'wall_reached',
  * OAuth account for the meter drift, the walls, the spent destinations and the slow-downs, every pool for the rounds
  * without runway. The route lists them by kind, then by when each began, then by subject.
  */
+/** The conditions the ledger folds per subscription account, each kind beside its fold. */
+const ACCOUNT_CONDITIONS: [AttentionItem['kind'], (accountId: string) => Pick<AttentionItem, 'detail' | 'since'> | null][] = [
+  ['meter_drift', drift],
+  ['wall_reached', walls],
+  ['destination_spent', spentDestination],
+  ['slowed_long', (id) => slowedLongOf(ROUTING_EVENTS, id, NOW)],
+];
+
 const CONDITIONS: AttentionItem[] = [
-  ...ACCOUNTS.filter((a) => a.kind === 'oauth').flatMap((a) => {
-    const held = drift(a.id);
-    return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), ...held, kind: 'meter_drift' as const }] : [];
-  }),
-  ...ACCOUNTS.filter((a) => a.kind === 'oauth').flatMap((a) => {
-    const held = walls(a.id);
-    return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), ...held, kind: 'wall_reached' as const }] : [];
-  }),
-  ...ACCOUNTS.filter((a) => a.kind === 'oauth').flatMap((a) => {
-    const held = spentDestination(a.id);
-    return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), ...held, kind: 'destination_spent' as const }] : [];
-  }),
+  // Built account by account: the sort orders the items by kind, start and subject, and no two share all three.
+  ...ACCOUNTS.filter((a) => a.kind === 'oauth').flatMap((a) =>
+    ACCOUNT_CONDITIONS.flatMap(([kind, fold]) => {
+      const held = fold(a.id);
+      return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), ...held, kind }] : [];
+    }),
+  ),
   ...POOLS.flatMap((p) => {
     const held = roundsWithoutRunway(p.id);
     return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...held, kind: 'shed_no_runway' as const, link: { id: p.id, page: 'pools' as const }, pools: [p.id], subject: { id: p.id, label: p.name, type: 'pool' as const } }] : [];
-  }),
-  ...ACCOUNTS.filter((a) => a.kind === 'oauth').flatMap((a) => {
-    const held = slowedLongOf(ROUTING_EVENTS, a.id, NOW);
-    return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), ...held, kind: 'slowed_long' as const }] : [];
   }),
 ].sort((x, y) => CONDITION_ORDER.indexOf(x.kind) - CONDITION_ORDER.indexOf(y.kind) || Date.parse(x.since) - Date.parse(y.since) || x.subject.id.localeCompare(y.subject.id));
 
