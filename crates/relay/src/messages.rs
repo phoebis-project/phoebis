@@ -3521,7 +3521,7 @@ impl Relay {
                         let model_rejection_ms = self.limits.model_rejection.as_millis() as i64;
                         let fast = ctx.admitted.fast;
                         // Two spellings captured for two purposes that diverge once a resolution lands: the
-                        // canonical id is the cooldown's scope and `report_failover`'s model, the folded
+                        // canonical id is the cooldown's scope and the failover reports' model, the folded
                         // spelling is the wire model `classify`'s rejection arm matches the upstream's own
                         // words against.
                         let (
@@ -3642,8 +3642,7 @@ impl Relay {
         // A non-portable request keeps its pin: the answer goes back to the client on the account that holds
         // its state, and only the cooldown is recorded. So does one about to retry in place: the row is there
         // for the siblings, and the pin stays where the retry lands.
-        report_failover(
-            &self.router,
+        for report in failover_reports(
             &ctx.account.id,
             &ctx.admitted.identity.canonical_model,
             cooldown,
@@ -3654,8 +3653,9 @@ impl Relay {
             &ctx.admitted.trace.request_id,
             generations,
             arrived,
-        )
-        .await;
+        ) {
+            self.router.report(report).await;
+        }
         if let Some(delay) = retry_in_place {
             drop(reader);
             return Next::RetryInPlace(delay);
@@ -5267,41 +5267,14 @@ enum Leg {
     Respond(Response),
 }
 
-/// `generations` is the attempt's (incarnation, lifecycle, credential) triple, which fences the mark: a
-/// verdict about a credential that was replaced, or a holder the id lost, while the request was in flight
-/// lands nowhere. Awaited where it stands: between legs no client byte has gone out yet.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn report_failover(
-    router: &RouterHandle,
-    account_id: &str,
-    canonical_model: &str,
-    cooldown: Option<Cooldown>,
-    mark: Option<Mark>,
-    pin: Option<PinRef>,
-    request_id: &str,
-    generations: (u64, u64, u64),
-    set_at: i64,
-) {
-    for report in failover_reports(
-        account_id,
-        canonical_model,
-        cooldown,
-        mark,
-        pin,
-        request_id,
-        generations,
-        set_at,
-    ) {
-        router.report(report).await;
-    }
-}
-
 /// The state a verdict marks its account with, who moved it as its mark site names it, and the upstream error's
 /// message where the verdict read one.
 pub(crate) type Mark = (AccountState, StateCause, Option<String>);
 
 /// What a failover verdict tells the router, in order: the cooldown, or without one the end of the pin, then the
-/// mark.
+/// mark. `generations` is the attempt's (incarnation, lifecycle, credential) triple, which fences the mark: a verdict
+/// about a credential that was replaced, or a holder the id lost, while the request was in flight lands nowhere.
+/// Between legs no client byte has gone out yet, so the response half awaits each report where it stands.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn failover_reports(
     account_id: &str,
