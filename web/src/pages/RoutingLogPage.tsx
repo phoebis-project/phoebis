@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
+import { Fragment, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
@@ -12,7 +12,7 @@ import { FilterBar } from '@/components/FilterBar';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevronRight } from '@/components/ui/icons';
 import { PagerNav } from '@/components/ui/PagerNav';
-import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, useHostedDescription } from '@/components/ui/primitives';
+import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, toggleRow, useHostedDescription } from '@/components/ui/primitives';
 import { addressWindow, type LogFilters, ROUTING_LOG_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { tierOrder, weekReadingOf } from '@/lib/costs';
@@ -279,23 +279,8 @@ function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now
   const facts = factsOf(row, now, rows);
   const model = modelOf(row);
   const className = ['routing-log__row', isNew && 'is-new', open && 'is-open'].filter(Boolean).join(' ');
-  // A click on a link or a button inside the row follows it, and anywhere else opens the row.
-  const click = (e: MouseEvent<HTMLTableRowElement>) => {
-    if (!(e.target as Element).closest('a, button')) onToggle();
-  };
   return (
-    <tr
-      className={className}
-      data-row={identityOf(row)}
-      tabIndex={0}
-      aria-expanded={open}
-      onClick={click}
-      onKeyDown={(e) => {
-        if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
-        e.preventDefault();
-        onToggle();
-      }}
-    >
+    <tr className={className} data-row={identityOf(row)} tabIndex={0} aria-expanded={open} {...toggleRow(onToggle)}>
       <td className="routing-log__chevron" aria-hidden>
         <IconChevronRight size={14} />
       </td>

@@ -1,11 +1,11 @@
-import { Fragment, useMemo, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
 import { FilterBar } from '@/components/FilterBar';
 import { MeterRatio } from '@/components/MeterRatio';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevron } from '@/components/ui/icons';
-import { Button, Card, ErrorState, Skeleton } from '@/components/ui/primitives';
+import { Button, Card, ErrorState, Skeleton, toggleRow } from '@/components/ui/primitives';
 import { accountHref, METER_CODEC, type MeterAddress } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { METER_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
@@ -89,16 +89,8 @@ function GroupWindows({ group, now, onMore, shown }: { group: MeterGroup; now: n
 function GroupLine({ group, newest, onToggle, open }: { group: MeterGroup; newest: number; onToggle: () => void; open: boolean }) {
   const { latest } = group;
   // A click on the account link follows it, and anywhere else on the line opens the group.
-  const click = (e: MouseEvent<HTMLTableRowElement>) => {
-    if (!(e.target as Element).closest('a, button')) onToggle();
-  };
-  const key = (e: KeyboardEvent<HTMLTableRowElement>) => {
-    if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
-    e.preventDefault();
-    onToggle();
-  };
   return (
-    <tr className={`srow meter-row${open ? ' is-open' : ''}`} aria-expanded={open} tabIndex={0} onClick={click} onKeyDown={key}>
+    <tr className={`srow meter-row${open ? ' is-open' : ''}`} aria-expanded={open} tabIndex={0} {...toggleRow(onToggle)}>
       <td className="meter-table__gutter">
         <span className="srow__chevron" aria-hidden>
           <IconChevron size={14} />
