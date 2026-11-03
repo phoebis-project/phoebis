@@ -82,6 +82,23 @@ export function walkRows(e: KeyboardEvent<HTMLElement>, list: HTMLElement): void
   walkFocus(e, walked, e.target);
 }
 
+/** A row that selects a set of options: on with every one, mixed with some, its mark a check or a dash. */
+function TriStateRow({ children, mixed, modifier, on, onClick }: { children: ReactNode; mixed: boolean; modifier: 'all' | 'preset'; on: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      role="option"
+      aria-selected={on}
+      aria-checked={mixed ? 'mixed' : undefined}
+      className={`mselect__option mselect__option--${modifier} ${on ? 'is-on' : mixed ? 'is-mixed' : ''}`}
+      onClick={onClick}
+    >
+      <span className="mselect__check">{on ? <IconCheck size={14} /> : mixed ? <span className="mselect__mixed" aria-hidden="true" /> : null}</span>
+      {children}
+    </button>
+  );
+}
+
 /** A one-choice row with the lists' check mark, the radio rows `ROWS` walks. */
 export function RadioRow({ checked, children, onClick }: { checked: boolean; children: ReactNode; onClick: () => void }) {
   return (
@@ -117,17 +134,9 @@ export function OptionList({ autoFocus = false, everyByDefault = false, label, m
       {searchable && <input className="input mselect__search" placeholder={`Search ${label.toLowerCase()}`} value={query} onChange={(e) => setQuery(e.target.value)} />}
       {visible.length === 0 && shownPresets.length === 0 && <div className="mselect__empty">No matches</div>}
       {visible.length > 0 && (
-        <button
-          type="button"
-          role="option"
-          aria-selected={allOn}
-          aria-checked={someOn && !allOn ? 'mixed' : undefined}
-          className={`mselect__option mselect__option--all ${allOn ? 'is-on' : someOn ? 'is-mixed' : ''}`}
-          onClick={toggleAll}
-        >
-          <span className="mselect__check">{allOn ? <IconCheck size={14} /> : someOn ? <span className="mselect__mixed" aria-hidden="true" /> : null}</span>
+        <TriStateRow mixed={someOn && !allOn} modifier="all" on={allOn} onClick={toggleAll}>
           Select all
-        </button>
+        </TriStateRow>
       )}
       {shownPresets.length > 0 && (
         <div className="mselect__group" role="presentation">
@@ -138,18 +147,9 @@ export function OptionList({ autoFocus = false, everyByDefault = false, label, m
         const on = p.members.every((m) => value.includes(m));
         const some = !on && p.members.some((m) => value.includes(m));
         return (
-          <button
-            key={p.label}
-            type="button"
-            role="option"
-            aria-selected={on}
-            aria-checked={some ? 'mixed' : undefined}
-            className={`mselect__option mselect__option--preset ${on ? 'is-on' : some ? 'is-mixed' : ''}`}
-            onClick={() => togglePreset(p.members)}
-          >
-            <span className="mselect__check">{on ? <IconCheck size={14} /> : some ? <span className="mselect__mixed" aria-hidden="true" /> : null}</span>
+          <TriStateRow key={p.label} mixed={some} modifier="preset" on={on} onClick={() => togglePreset(p.members)}>
             {p.label}
-          </button>
+          </TriStateRow>
         );
       })}
       {visible.map((o, i) => {
