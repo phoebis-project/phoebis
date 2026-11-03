@@ -5249,14 +5249,11 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
     };
     match write {
         StateWrite::AccountState {
-            account_id,
-            state,
+            ref account_id,
             incarnation,
             lifecycle_generation,
             credential_generation,
-            cause,
-            detail,
-            marked_ordinal,
+            ..
         } => one(
             DeferredKey::AccountState {
                 account_id: account_id.clone(),
@@ -5264,16 +5261,7 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
                 lifecycle_generation,
                 credential_generation,
             },
-            StateWrite::AccountState {
-                account_id,
-                state,
-                incarnation,
-                lifecycle_generation,
-                credential_generation,
-                cause,
-                detail,
-                marked_ordinal,
-            },
+            write,
         ),
         StateWrite::DeleteAffinity(keys) => Ok(keys
             .into_iter()
@@ -5295,31 +5283,23 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             one(DeferredKey::Pin(key.clone()), StateWrite::DeletePin(key))
         }
         StateWrite::DeleteWindow {
-            account_id,
-            window,
-            incarnation,
+            ref account_id,
+            ref window,
+            ..
         } => one(
             DeferredKey::Window {
                 account_id: account_id.clone(),
                 window: window.clone(),
             },
-            StateWrite::DeleteWindow {
-                account_id,
-                window,
-                incarnation,
-            },
+            write,
         ),
         StateWrite::EndFirstSeen {
-            key_id,
-            session_id,
-            ended,
+            ref key_id,
+            ref session_id,
+            ..
         } => one(
             DeferredKey::SessionEnd(key_id.clone(), session_id.clone()),
-            StateWrite::EndFirstSeen {
-                key_id,
-                session_id,
-                ended,
-            },
+            write,
         ),
         StateWrite::EndPin(key, ended) => {
             let session_end = ended.map(|ended| {
@@ -5357,21 +5337,15 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
         ),
         StateWrite::Rekey(rekey) => Err(Box::new(rekey)),
         StateWrite::ShedRound {
-            pool_id,
-            account_id,
-            incarnation,
-            round_at,
+            ref pool_id,
+            ref account_id,
+            ..
         } => one(
             DeferredKey::ShedRound {
                 pool_id: pool_id.clone(),
                 account_id: account_id.clone(),
             },
-            StateWrite::ShedRound {
-                pool_id,
-                account_id,
-                incarnation,
-                round_at,
-            },
+            write,
         ),
         StateWrite::UpsertAffinity(rows) => Ok(rows
             .into_iter()
