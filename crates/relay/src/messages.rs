@@ -3812,10 +3812,7 @@ impl Relay {
         ctx.pin.map(|pin| Renewal {
             router: self.router.clone(),
             pin: pin.clone(),
-            origin: match ctx.admitted.trace.kind {
-                Kind::Probe => "keepalive",
-                Kind::CountTokens | Kind::Inference => "client",
-            },
+            origin: ctx.admitted.trace.origin.as_str(),
             cache_ttl_ms: ctx
                 .cache_ttl_ms
                 .or(ctx.admitted.markers_ttl_ms)
