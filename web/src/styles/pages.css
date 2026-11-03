@@ -3313,15 +3313,22 @@
   gap: 6px;
 }
 
+.probe-bar,
+.token-bar__track,
 .waterfall__bar {
   display: flex;
   gap: 2px;
-  height: 18px;
   overflow: hidden;
+}
+
+.waterfall__bar {
+  height: 18px;
   background: var(--surface-3);
   border-radius: 4px;
 }
 
+.probe-bar__seg,
+.token-bar__seg,
 .waterfall__seg {
   min-width: 2px;
   height: 100%;
@@ -3348,6 +3355,7 @@
   font-style: italic;
 }
 
+.token-bar__key,
 .waterfall__key {
   width: 12px;
   height: 8px;
@@ -3368,25 +3376,10 @@
 }
 
 .token-bar__track {
-  display: flex;
   flex: 1;
-  gap: 2px;
   height: 10px;
-  overflow: hidden;
   background: var(--surface-3);
   border-radius: 5px;
-}
-
-.token-bar__seg {
-  display: block;
-  min-width: 2px;
-  height: 100%;
-}
-
-.token-bar__key {
-  width: 12px;
-  height: 8px;
-  border-radius: 2px;
 }
 
 .bodies {
@@ -3498,16 +3491,8 @@
 }
 
 .probe-bar {
-  display: flex;
-  gap: 2px;
   height: 10px;
-  overflow: hidden;
   border-radius: 5px;
-}
-
-.probe-bar__seg {
-  display: block;
-  min-width: 2px;
 }
 
 .probe-bar__seg--ok {
