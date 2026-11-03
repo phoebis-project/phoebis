@@ -193,6 +193,13 @@ const totalsOf = (groups: AnalyticsGroup[]) => {
   return { ...summed, tokens: withPlainOutput(summed.tokens) };
 };
 const bucketsOf = (points: AnalyticsPoint[]): Bucket[] => points.map((p) => ({ at: Date.parse(p.at), ...totalsOf(p.groups) }));
+/**
+ * A side read's load: only the tab that draws it reads, so a hidden tab answers null without a request and the read
+ * runs once its tab is chosen, and a session view answers an empty list for the log fold to fill.
+ */
+function sideRead<T>(open: boolean, sessionId: string | null, read: () => Promise<T[]>): Promise<T[] | null> {
+  return open && sessionId === null ? read() : Promise.resolve(sessionId === null ? null : []);
+}
 
 /**
  * Every key the range holds on one dimension, read once per range so a filter never hides its own options. With no
@@ -327,9 +334,8 @@ export function AnalyticsPage() {
   // A session view answers every section from the request log, so the rollup reads stay home while one is set.
   const series = useAsync(() => (sessionId === null ? api.getAnalyticsSeries(query) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId, generation], reload);
   const breakdown = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown(query) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId, generation], reload);
-  // A read only a hidden tab draws answers null without a request, and runs once its tab is chosen.
-  const byModel = useAsync(() => (tab === 'cache' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation], reload);
-  const byPool = useAsync(() => (tab === 'cache-warming' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'pool' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation], reload);
+  const byModel = useAsync(() => sideRead(tab === 'cache', sessionId, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'model' })), [query, sessionId, tab, generation], reload);
+  const byPool = useAsync(() => sideRead(tab === 'cache-warming', sessionId, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'pool' })), [query, sessionId, tab, generation], reload);
   // The log's last answer with the deps it answers, so an auto reload of the same deps reads the first page alone and
   // the later pages stand as the walk loaded them. Other deps walk the pages again. The ref names the current deps from
   // the moment a read starts, so a read under earlier deps that settles later keeps nothing.
@@ -391,8 +397,8 @@ export function AnalyticsPage() {
   // The counts route reads the range alone, which the card's subtitle says, since it carries no filter.
   const guardrailCounts = useAsync(() => (tab === 'traffic' ? api.getAnalyticsGuardrails({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
   // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
-  const bySpeed = useAsync(() => ((tab === 'traffic' || tab === 'cost') && sessionId === null ? api.getAnalyticsSeries({ ...query, groupBy: 'speed' }) : Promise.resolve<AnalyticsPoint[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation], reload);
-  const byEffort = useAsync(() => (tab === 'traffic' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation], reload);
+  const bySpeed = useAsync(() => sideRead(tab === 'traffic' || tab === 'cost', sessionId, () => api.getAnalyticsSeries({ ...query, groupBy: 'speed' })), [query, sessionId, tab, generation], reload);
+  const byEffort = useAsync(() => sideRead(tab === 'traffic', sessionId, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' })), [query, sessionId, tab, generation], reload);
   // A dollar side narrows the three cost-bearing sections to the rows that side paid for, a filter the page's reads
   // cannot carry (Traffic, Latency and the Cache token charts read every row), so those sections read a second query
   // while one of them shows. The whole reads the page's own.
@@ -436,7 +442,7 @@ export function AnalyticsPage() {
     reload,
   );
   const placements = useAsync(
-    () => (tab === 'cache' && sessionId === null ? api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso }) : Promise.resolve<PlacementRow[] | null>(sessionId === null ? null : [])),
+    () => sideRead(tab === 'cache', sessionId, () => api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso })),
     [fromIso, toIso, filters.keyId, filters.poolId, sessionId, tab, generation],
     reload,
   );
