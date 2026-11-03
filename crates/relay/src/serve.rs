@@ -4,11 +4,8 @@
 //! stream can be wrapped in a [`HeadRecorder`]: the caller's original header spelling and order exist nowhere
 //! else by the time a handler runs.
 
-use std::io;
-use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, PoisonError, RwLock};
-use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::http::Request;
@@ -17,11 +14,11 @@ use boring::ssl::SslAcceptor;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::GracefulShutdown;
 use hyper_util::service::TowerToHyperService;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, Semaphore};
 use tokio::task::JoinSet;
 use tokio_boring::SslStream;
+use tokio_util::either::Either;
 
 use crate::casing::{head_queue, HeadQueue, HeadRecorder};
 use crate::messages::{router, Relay, ShutdownMark};
@@ -66,69 +63,9 @@ impl LiveAcceptor {
     }
 }
 
-/// An accepted connection after its handshake, one type for both loops so hyper is built once per listener.
-pub enum Accepted {
-    Plain(TcpStream),
-    Tls(SslStream<TcpStream>),
-}
-
-impl AsyncRead for Accepted {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        match self.get_mut() {
-            Accepted::Plain(stream) => Pin::new(stream).poll_read(cx, buf),
-            Accepted::Tls(stream) => Pin::new(stream).poll_read(cx, buf),
-        }
-    }
-}
-
-impl AsyncWrite for Accepted {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        match self.get_mut() {
-            Accepted::Plain(stream) => Pin::new(stream).poll_write(cx, buf),
-            Accepted::Tls(stream) => Pin::new(stream).poll_write(cx, buf),
-        }
-    }
-
-    fn poll_write_vectored(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        bufs: &[io::IoSlice<'_>],
-    ) -> Poll<io::Result<usize>> {
-        match self.get_mut() {
-            Accepted::Plain(stream) => Pin::new(stream).poll_write_vectored(cx, bufs),
-            Accepted::Tls(stream) => Pin::new(stream).poll_write_vectored(cx, bufs),
-        }
-    }
-
-    fn is_write_vectored(&self) -> bool {
-        match self {
-            Accepted::Plain(stream) => stream.is_write_vectored(),
-            Accepted::Tls(stream) => stream.is_write_vectored(),
-        }
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        match self.get_mut() {
-            Accepted::Plain(stream) => Pin::new(stream).poll_flush(cx),
-            Accepted::Tls(stream) => Pin::new(stream).poll_flush(cx),
-        }
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        match self.get_mut() {
-            Accepted::Plain(stream) => Pin::new(stream).poll_shutdown(cx),
-            Accepted::Tls(stream) => Pin::new(stream).poll_shutdown(cx),
-        }
-    }
-}
+/// An accepted connection after its handshake, one type for both loops so hyper is built once per listener:
+/// `Left` a plain stream, `Right` a TLS one.
+pub type Accepted = Either<TcpStream, SslStream<TcpStream>>;
 
 /// Why a connection ended before hyper saw it.
 #[derive(Debug, thiserror::Error)]
@@ -147,13 +84,13 @@ pub async fn handshake(
     bound: Duration,
 ) -> Result<Accepted, HandshakeError> {
     let Some(acceptor) = acceptor else {
-        return Ok(Accepted::Plain(stream));
+        return Ok(Either::Left(stream));
     };
     // hyper's header read timeout starts at its first poll, after this returns, so the handshake has a bound of
     // its own: a peer that opens a socket and sends no ClientHello holds a slot for the same time a peer that
     // sends no head does, and no longer.
     match tokio::time::timeout(bound, tokio_boring::accept(acceptor, stream)).await {
-        Ok(Ok(tls)) => Ok(Accepted::Tls(tls)),
+        Ok(Ok(tls)) => Ok(Either::Right(tls)),
         Ok(Err(error)) => Err(HandshakeError::Failed(error.to_string())),
         Err(_) => Err(HandshakeError::TimedOut(bound)),
     }
