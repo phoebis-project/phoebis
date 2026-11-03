@@ -595,6 +595,7 @@ async fn writer(
         clock: clock.clone(),
         event_poll: config.event_poll,
         revision: router.snapshot().revision,
+        due: None,
         budgets: Budgets::default(),
         pending: Vec::new(),
     };
@@ -613,7 +614,7 @@ async fn writer(
     .await;
     // The start's budget rows wait for the first batch and follow its records: the start row `spawn` recorded is the
     // channel's first record, and it dates the gap from the newest row before it, which must be the previous run's.
-    let mut spend_due = spends.start().await;
+    spends.start().await;
     // A batch whose transaction failed: while it is held the loop takes no new record, so order holds and the
     // channel fills behind it, which is what moves admission's mark before more money is spent.
     let mut held: Option<Held> = None;
@@ -648,7 +649,7 @@ async fn writer(
                     if let Some(landed) = start_landed.take() {
                         let _ = landed.send(());
                     }
-                    spend_due = spends.refresh(spend_due, &[]).await;
+                    spends.refresh(&[]).await;
                 }
             }
             continue;
@@ -656,7 +657,7 @@ async fn writer(
         // Checked on every round, whatever woke it: a member's budget or period edited under the writer,
         // with no flush of its own, still recomputes without waiting on the next request or period boundary.
         if router.snapshot().revision != spends.revision {
-            spend_due = spends.refresh(spend_due, &[]).await;
+            spends.refresh(&[]).await;
         }
         let first = tokio::select! {
             // `recv` on a closed channel still yields what was queued before the close, then `None`.
@@ -698,7 +699,7 @@ async fn writer(
                         // table before the caller hears the counts, so a selection after a replay that crossed a
                         // budget is refused. The budget rows it crosses wait for the next batch or flush, as the
                         // start's own do, so a replay on the writer's first turn lands none ahead of the start row.
-                        spend_due = spends.read(spend_due, &[]).await;
+                        spends.read(&[]).await;
                         let remaining = db
                             .writer_read(WriterRead::ParkedCount, crate::query::parked_count)
                             .await;
@@ -727,8 +728,8 @@ async fn writer(
             }
             // Re-armed after every run: the boundary a budgeted member's period ends on, so a pool whose
             // traffic never touches this writer still turns over its spend at the period's edge.
-            _ = sleep_until(spend_due, &clock) => {
-                spend_due = spends.refresh(spend_due, &[]).await;
+            _ = sleep_until(spends.due, &clock) => {
+                spends.refresh(&[]).await;
                 continue;
             }
         };
@@ -759,7 +760,7 @@ async fn writer(
             // A degraded ledger reads the spend after any batch that lands, since that read is what clears it.
             Landed::Written => {
                 if !priced.is_empty() || stats.degraded.load(Ordering::Relaxed) {
-                    spend_due = spends.refresh(spend_due, &priced).await;
+                    spends.refresh(&priced).await;
                 }
             }
             Landed::Refused { .. } => {
@@ -1406,6 +1407,8 @@ struct Spends {
     /// The registry revision the last read priced its members under, which the writer compares the router's against
     /// to recompute after a budget or period edited under it.
     revision: u64,
+    /// When the boundary tick fires next, as the last read armed it.
+    due: Option<i64>,
     budgets: Budgets,
     pending: Vec<EventRecord>,
 }
@@ -1414,7 +1417,7 @@ impl Spends {
     /// The writer's first read, after taking the crossings the ledger holds since the current month began (every
     /// period starts in it). A crossing without a row, such as one a budget set while the router was down made, is
     /// announced.
-    async fn start(&mut self) -> Option<i64> {
+    async fn start(&mut self) {
         let (from, _) = period_bounds(BudgetPeriod::Month, (self.clock)());
         match self
             .db
@@ -1429,14 +1432,14 @@ impl Spends {
                 "the ledger's budget crossings could not be read, so a member over its budget is announced again"
             ),
         }
-        self.read(None, &[]).await
+        self.read(&[]).await
     }
 
     /// Runs `refresh_member_spends` and settles the ledger's standing on it. The writer calls this with nothing held,
     /// so a read that succeeded and reached the router clears `degraded`. One that did not, while degraded, runs again
     /// one `event_poll` later rather than at the period's end, since every budgeted member waits on it. The budget
     /// rows the read crosses wait in `pending`.
-    async fn read(&mut self, current: Option<i64>, priced: &[PricedAttempt]) -> Option<i64> {
+    async fn read(&mut self, priced: &[PricedAttempt]) {
         let now = (self.clock)();
         let degraded = self.stats.degraded.load(Ordering::Relaxed);
         let snapshot = self.router.snapshot();
@@ -1447,7 +1450,7 @@ impl Spends {
             &self.router,
             &snapshot,
             now,
-            current,
+            self.due,
             self.event_poll,
             degraded,
             priced,
@@ -1461,20 +1464,21 @@ impl Spends {
             if self.stats.degraded.swap(false, Ordering::Relaxed) {
                 tracing::info!("the ledger caught up, so budgeted members are placed on again");
             }
-            return spend.due;
+            self.due = spend.due;
+            return;
         }
         if !degraded {
-            return spend.due;
+            self.due = spend.due;
+            return;
         }
         let retry = now + self.event_poll.as_millis() as i64;
-        Some(spend.due.map_or(retry, |due| due.min(retry)))
+        self.due = Some(spend.due.map_or(retry, |due| due.min(retry)));
     }
 
     /// `read`, then the pending budget rows landed.
-    async fn refresh(&mut self, current: Option<i64>, priced: &[PricedAttempt]) -> Option<i64> {
-        let due = self.read(current, priced).await;
+    async fn refresh(&mut self, priced: &[PricedAttempt]) {
+        self.read(priced).await;
         self.flush().await;
-        due
     }
 
     /// Lands the pending budget rows as a batch of their own, as the gap report lands its row.
@@ -2218,6 +2222,7 @@ mod tests {
             clock: Arc::new(move || clock.load(Ordering::SeqCst)),
             event_poll: Duration::from_secs(5),
             revision: 0,
+            due: None,
             budgets: Budgets::default(),
             pending: Vec::new(),
         };
@@ -2283,11 +2288,11 @@ mod tests {
         let clock = Arc::new(AtomicI64::new(1_000));
         let (mut spends, _) = spends_over(&[("a", 10.0)], clock.clone());
         let under = spend(&spends, "r1", "a", 100, 6);
-        spends.refresh(None, &priced_attempts(&[under])).await;
+        spends.refresh(&priced_attempts(&[under])).await;
         assert!(budget_rows(&spends).await.is_empty(), "6 of 10 spent");
         let over = spend(&spends, "r2", "a", 200, 6);
-        spends.refresh(None, &priced_attempts(&[over])).await;
-        spends.refresh(None, &[]).await;
+        spends.refresh(&priced_attempts(&[over])).await;
+        spends.refresh(&[]).await;
         let rows = budget_rows(&spends).await;
         assert_eq!(rows.len(), 1, "two refreshes over the budget write one row");
         let (kind, account, request, detail) = &rows[0];
@@ -2316,10 +2321,10 @@ mod tests {
             spend(&spends, "ra", "a", 100, 12),
             spend(&spends, "rb", "b", 200, 1),
         ];
-        spends.refresh(None, &priced_attempts(&batch)).await;
+        spends.refresh(&priced_attempts(&batch)).await;
         // `b` crosses on spend the timer's refresh finds, with no batch behind it.
         spend(&spends, "rb2", "b", 300, 10);
-        spends.refresh(None, &[]).await;
+        spends.refresh(&[]).await;
         let named: Vec<(Option<String>, Option<String>, serde_json::Value)> = budget_rows(&spends)
             .await
             .into_iter()
@@ -2342,12 +2347,12 @@ mod tests {
         let clock = Arc::new(AtomicI64::new(1_000));
         let (mut spends, _) = spends_over(&[("a", 10.0)], clock.clone());
         let over = spend(&spends, "r1", "a", 100, 12);
-        spends.refresh(None, &priced_attempts(&[over])).await;
+        spends.refresh(&priced_attempts(&[over])).await;
         // The first of February 1970, the next monthly period.
         let february = 2_678_400_000_i64;
         clock.store(february + 1_000, Ordering::SeqCst);
-        spends.refresh(None, &[]).await;
-        spends.refresh(None, &[]).await;
+        spends.refresh(&[]).await;
+        spends.refresh(&[]).await;
         let rows = budget_rows(&spends).await;
         assert_eq!(
             rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
@@ -2372,9 +2377,9 @@ mod tests {
         let clock = Arc::new(AtomicI64::new(1_000));
         let (mut spends, _) = spends_over(&[("a", 10.0)], clock.clone());
         let under = spend(&spends, "r1", "a", 100, 6);
-        spends.refresh(None, &priced_attempts(&[under])).await;
+        spends.refresh(&priced_attempts(&[under])).await;
         clock.store(2_678_400_000 + 1_000, Ordering::SeqCst);
-        spends.refresh(None, &[]).await;
+        spends.refresh(&[]).await;
         assert!(budget_rows(&spends).await.is_empty());
     }
 
@@ -2383,7 +2388,7 @@ mod tests {
         let clock = Arc::new(AtomicI64::new(1_000));
         let (mut spends, store) = spends_over(&[("a", 10.0)], clock.clone());
         let under = spend(&spends, "r1", "a", 100, 6);
-        spends.refresh(None, &priced_attempts(&[under])).await;
+        spends.refresh(&priced_attempts(&[under])).await;
         store
             .set_pool_members(
                 "p",
@@ -2397,8 +2402,8 @@ mod tests {
             )
             .unwrap();
         spends.router.reload().await.unwrap();
-        spends.refresh(None, &[]).await;
-        spends.refresh(None, &[]).await;
+        spends.refresh(&[]).await;
+        spends.refresh(&[]).await;
         let rows = budget_rows(&spends).await;
         assert_eq!(
             rows.iter()
