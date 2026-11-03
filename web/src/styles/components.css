@@ -133,17 +133,6 @@
   cursor: pointer;
 }
 
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--ink-3);
-}
-
-.status-dot--good {
-  background: var(--good);
-}
-
 .main {
   /* The page's sticky rules dock under the shell's sticky block by this height, which the shell writes from the block's
      measure: the bar's 52 px while no banner draws. */
@@ -2026,12 +2015,6 @@ textarea.input {
   margin-bottom: 18px;
 }
 
-.page-head__title {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-}
-
 .page-head__meta {
   margin-top: 4px;
   font-size: 13px;
@@ -2077,11 +2060,6 @@ textarea.input {
   font-size: 13px;
   font-weight: 600;
   color: var(--ink-2);
-}
-
-.mono-id {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
 }
 
 @media (max-width: 760px) {

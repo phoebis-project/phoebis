@@ -14,7 +14,6 @@ const INK3_ALLOWED = new Set([
   '.dialog-group .input:disabled',
   '.icon-btn',
   '.input::placeholder',
-  '.ldot',
   '.meter-spark__line',
   '.pct-label',
   ".refresh-control[data-state='paused'] .refresh-control__part",
@@ -22,7 +21,6 @@ const INK3_ALLOWED = new Set([
   '.search > svg',
   '.select > svg',
   '.srow__chevron',
-  '.status-dot',
   '.week-switch:disabled',
 ]);
 
