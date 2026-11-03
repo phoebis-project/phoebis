@@ -595,6 +595,17 @@ pub struct RegistryLoad {
     pub terms: Vec<SubscriptionTerm>,
 }
 
+/// The guardrails, their attachments and the pools' and keys' labels: what a list rendering attachments reads, off
+/// one transaction so the four agree, without the rest of the registry load.
+#[derive(Clone, Debug, Default)]
+pub struct GuardrailIndex {
+    /// Ordered as `RegistryLoad::guardrail_attachments`.
+    pub guardrail_attachments: Vec<GuardrailAttachment>,
+    pub guardrails: Vec<GuardrailRow>,
+    /// Each pool's and key's label.
+    pub labels: Vec<(AttachmentSubject, String)>,
+}
+
 /// Everything an account edit changes, staged so the admin route can run discovery and then commit every field in
 /// one transaction.
 #[derive(Clone, Copy, Debug)]
@@ -807,6 +818,30 @@ impl Store {
         };
         tx.commit()?;
         Ok(load)
+    }
+
+    pub fn guardrail_index(&self) -> Result<GuardrailIndex, StoreError> {
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction()?;
+        let mut labels = Vec::new();
+        for (table, subject) in [
+            (
+                "pools",
+                AttachmentSubject::Pool as fn(String) -> AttachmentSubject,
+            ),
+            ("api_keys", AttachmentSubject::Key),
+        ] {
+            let mut stmt = tx.prepare(&format!("SELECT id, label FROM {table}"))?;
+            let rows = stmt.query_map([], |r| Ok((subject(r.get(0)?), r.get(1)?)))?;
+            labels.extend(rows.collect::<rusqlite::Result<Vec<_>>>()?);
+        }
+        let index = GuardrailIndex {
+            guardrail_attachments: all_guardrail_attachments(&tx)?,
+            guardrails: all_guardrails(&tx)?,
+            labels,
+        };
+        tx.commit()?;
+        Ok(index)
     }
 
     pub fn pools(&self) -> Result<Vec<PoolRow>, StoreError> {
