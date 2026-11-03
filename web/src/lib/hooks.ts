@@ -83,10 +83,10 @@ export function streakFailed(streak: Streak, err: unknown, failing = true): void
  * the layout effects declared after the call.
  */
 /**
- * An editable list's rows with keys that travel with them, so a row moved up or down keeps its node and its button keeps
- * the focus. Rows the value gains from outside take fresh keys, and rows it drops give theirs up. A row `add` appends
- * takes the focus once it is drawn, on the element its row gives the id `idOf(key)`, so the operator fills it straight
- * away.
+ * An editable list's rows with keys that travel with them, so a row moved up or down keeps its node and its button
+ * keeps the focus. Rows the value gains from outside take fresh keys, and rows it drops give theirs up. A row `add`
+ * appends takes the focus once it is drawn, on the element its row gives the id `idOf(key)`, so the operator fills it
+ * straight away.
  */
 export function useKeyedRows<T>(value: T[], onChange: (next: T[]) => void, blank: () => T) {
   const rowId = useId();

@@ -1023,7 +1023,8 @@ export interface Score {
 }
 
 export interface Exhaustion { deadline: string | null; kind: string; obstacle: string | null; reason: string | null; window: string | null }
-/** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift` or `contract`) beside its sentence. */
+/** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift` or `contract`) beside its
+ *  sentence. */
 export interface Refusal { code: string; kind: string; reason: string }
 
 /** A decision row of the routing log: the summary the router wrote, with the facts of the attempt that completed it. */
