@@ -84,7 +84,7 @@ struct Invalidated {
 /// How far apart two readings' resets may lie and still name one reset: a head names its resets in whole seconds and
 /// the poll in milliseconds, so the two sources disagree about one reset by under a second, while a window's next
 /// reset lands hours after the last.
-const RESET_SLACK_MS: i64 = 60_000;
+pub const RESET_SLACK_MS: i64 = 60_000;
 
 /// How far under 1.0 a reading may land over a stored reading at the wall and still read the wall. A poll reads the
 /// endpoint's whole percent and a head the utilization's float, so near a wall a head lands up to a point under the

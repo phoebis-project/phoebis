@@ -5,7 +5,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use phoebis_routing::{window_for, FIVE_HOUR, HOUR_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS};
+use phoebis_routing::{
+    window_for, FIVE_HOUR, HOUR_MS, RESET_SLACK_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+};
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, Row, Transaction};
 
@@ -24,10 +26,6 @@ pub const RATIO_HIGH: f64 = 1.25;
 /// the readings come in whole percents, so a smaller rise is a few of the meter's quanta and one reading step over a
 /// smaller priced share reads far off.
 pub const MIN_RISE: f64 = 0.05;
-
-/// Two readings whose resets differ by more than this name different windows. Within it they are one reset as the
-/// head's whole seconds and the endpoint's timestamp spell it.
-pub(crate) const RESET_TOLERANCE_MS: i64 = 60_000;
 
 /// How long a reconciled window is kept, by its `window_end`: the fold's purge and the route's trailing read share it,
 /// so the two agree at the edge.
@@ -189,7 +187,7 @@ fn runs(readings: &[Reading]) -> Vec<Run> {
     let mut out: Vec<Run> = Vec::new();
     for reading in readings {
         match out.last_mut() {
-            Some(run) if (reading.reset - run.first().reset).abs() <= RESET_TOLERANCE_MS => {
+            Some(run) if (reading.reset - run.first().reset).abs() <= RESET_SLACK_MS => {
                 run.push(*reading);
             }
             // A window's reset only moves forward: a reading naming an earlier one is a stale answer.
@@ -361,7 +359,7 @@ pub fn reconcile(
             // A run the table already holds names a reset at or before its window's newest row, and a window that ended
             // before the cutoff would leave with the next purge, while every reading of a run past both names a reset
             // past them less the tolerance, so older readings need not be read at all.
-            let floor = newest.unwrap_or(i64::MIN).max(cutoff) - RESET_TOLERANCE_MS;
+            let floor = newest.unwrap_or(i64::MIN).max(cutoff) - RESET_SLACK_MS;
             'runs: for mut run in runs(&readings_of(tx, account, window, floor, length)?) {
                 let key = run.key();
                 let complete = run.closed_at.is_some() || key < now;
@@ -374,7 +372,7 @@ pub fn reconcile(
                 // whole 10-minute steps.
                 if run
                     .closed_at
-                    .is_some_and(|closed_at| key > closed_at + RESET_TOLERANCE_MS)
+                    .is_some_and(|closed_at| key > closed_at + RESET_SLACK_MS)
                 {
                     continue;
                 }
