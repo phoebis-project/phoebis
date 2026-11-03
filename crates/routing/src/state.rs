@@ -736,6 +736,19 @@ pub struct Rates {
     pub output: Option<f64>,
 }
 
+impl Rates {
+    /// Every token type at `rate`.
+    pub fn flat(rate: f64) -> Rates {
+        Rates {
+            input: Some(rate),
+            cache_read: Some(rate),
+            write_5m: Some(rate),
+            write_1h: Some(rate),
+            output: Some(rate),
+        }
+    }
+}
+
 /// The rates of a model's prompts longer than `over` tokens.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LongContextRates {
@@ -768,13 +781,7 @@ impl RateTable {
         RateTable {
             rows: HashMap::new(),
             long_context: HashMap::new(),
-            fallback: Rates {
-                input: Some(1.0),
-                cache_read: Some(1.0),
-                write_5m: Some(1.0),
-                write_1h: Some(1.0),
-                output: Some(1.0),
-            },
+            fallback: Rates::flat(1.0),
         }
     }
 
@@ -4652,13 +4659,6 @@ mod tests {
 
     #[test]
     fn a_dated_model_id_prices_at_its_undated_row_and_an_unlisted_one_at_the_fallback() {
-        let flat = |r: f64| Rates {
-            input: Some(r),
-            cache_read: Some(r),
-            write_5m: Some(r),
-            write_1h: Some(r),
-            output: Some(r),
-        };
         let table = RateTable {
             rows: [
                 (
@@ -4685,7 +4685,7 @@ mod tests {
             .into_iter()
             .collect(),
             long_context: HashMap::new(),
-            fallback: flat(1.0),
+            fallback: Rates::flat(1.0),
         };
         let usage = PinUsage {
             input: 10,
@@ -4714,28 +4714,21 @@ mod tests {
 
     #[test]
     fn a_long_context_row_prices_a_prompt_over_its_threshold_at_its_own_rates() {
-        let flat = |r: f64| Rates {
-            input: Some(r),
-            cache_read: Some(r),
-            write_5m: Some(r),
-            write_1h: Some(r),
-            output: Some(r),
-        };
         // An undated row with a long-context set beside an exact dated row without one: the dated snapshot is
         // priced its own way.
         let table = RateTable {
             rows: HashMap::from([
-                ("claude-haiku-5-5".to_string(), flat(1.0)),
-                ("claude-haiku-5-5-20260101".to_string(), flat(2.0)),
+                ("claude-haiku-5-5".to_string(), Rates::flat(1.0)),
+                ("claude-haiku-5-5-20260101".to_string(), Rates::flat(2.0)),
             ]),
             long_context: HashMap::from([(
                 "claude-haiku-5-5".to_string(),
                 LongContextRates {
                     over: 1_000,
-                    rates: flat(5.0),
+                    rates: Rates::flat(5.0),
                 },
             )]),
-            fallback: flat(10.0),
+            fallback: Rates::flat(10.0),
         };
         let one = PinUsage {
             input: 1,

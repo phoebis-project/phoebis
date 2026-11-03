@@ -6883,13 +6883,7 @@ fn quarter_dollar_rates() -> BurnRates {
 /// Every token of every model at `rate`.
 fn flat_rates(rate: f64) -> RateTable {
     let mut table = RateTable::unit();
-    table.fallback = Rates {
-        input: Some(rate),
-        cache_read: Some(rate),
-        write_5m: Some(rate),
-        write_1h: Some(rate),
-        output: Some(rate),
-    };
+    table.fallback = Rates::flat(rate);
     table
 }
 
@@ -7475,20 +7469,15 @@ fn classifier_renewal(pin: PinRef, now: i64, input: u64) -> Report {
 /// Every token of every model at `rate`, with Sonnet 5's own row at `rate` and its long-context rates at `long`
 /// over 1,000 prompt tokens.
 fn long_context_rates(rate: f64, long: f64) -> RateTable {
-    let flat = |r: f64| Rates {
-        input: Some(r),
-        cache_read: Some(r),
-        write_5m: Some(r),
-        write_1h: Some(r),
-        output: Some(r),
-    };
     let mut table = flat_rates(rate);
-    table.rows.insert("claude-sonnet-5".into(), flat(rate));
+    table
+        .rows
+        .insert("claude-sonnet-5".into(), Rates::flat(rate));
     table.long_context.insert(
         "claude-sonnet-5".into(),
         LongContextRates {
             over: 1_000,
-            rates: flat(long),
+            rates: Rates::flat(long),
         },
     );
     table

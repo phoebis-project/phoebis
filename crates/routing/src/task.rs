@@ -5441,15 +5441,8 @@ mod tests {
 
     #[test]
     fn regime_rates_answer_the_regimes_table_for_a_listed_entrypoint_and_the_base_otherwise() {
-        let half = crate::state::Rates {
-            input: Some(0.5),
-            cache_read: Some(0.5),
-            write_5m: Some(0.5),
-            write_1h: Some(0.5),
-            output: Some(0.5),
-        };
         let desk = RateTable {
-            fallback: half,
+            fallback: crate::state::Rates::flat(0.5),
             ..RateTable::unit()
         };
         let rates = RegimeRates {
@@ -5486,13 +5479,7 @@ mod tests {
     #[test]
     fn a_pins_price_adds_its_rows_fast_usage_under_usd_and_leaves_it_out_under_window_share() {
         let flat = |rate: f64| RateTable {
-            fallback: crate::state::Rates {
-                input: Some(rate),
-                cache_read: Some(rate),
-                write_5m: Some(rate),
-                write_1h: Some(rate),
-                output: Some(rate),
-            },
+            fallback: crate::state::Rates::flat(rate),
             ..RateTable::unit()
         };
         let rates = BurnRates {
