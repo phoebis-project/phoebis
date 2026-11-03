@@ -336,30 +336,25 @@ pub struct Store {
     key: StorageKey,
     _lock: Option<lock::ProcessLock>,
     #[cfg(any(test, feature = "debug-hooks"))]
+    hooks: DebugHooks,
+}
+
+/// The test seams' state: each field's default is the state both constructors start it in.
+#[cfg(any(test, feature = "debug-hooks"))]
+#[derive(Default)]
+struct DebugHooks {
     credential_after_hold: Mutex<Option<Arc<HoldGate>>>,
-    #[cfg(any(test, feature = "debug-hooks"))]
     credential_hold: Mutex<Option<Arc<HoldGate>>>,
-    #[cfg(any(test, feature = "debug-hooks"))]
     credential_reads: AtomicU64,
-    #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_credential_commit: AtomicBool,
-    #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_load: AtomicBool,
-    #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_refresh_read: AtomicBool,
-    #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_schema_version: AtomicBool,
-    #[cfg(any(test, feature = "debug-hooks"))]
     key_write_hold: Mutex<Option<Arc<HoldGate>>>,
-    #[cfg(any(test, feature = "debug-hooks"))]
     load_hold: Mutex<Option<Arc<HoldGate>>>,
-    #[cfg(any(test, feature = "debug-hooks"))]
     loads: AtomicU64,
-    #[cfg(any(test, feature = "debug-hooks"))]
     pool_write_hold: Mutex<Option<Arc<HoldGate>>>,
-    #[cfg(any(test, feature = "debug-hooks"))]
     routing_commits: AtomicU64,
-    #[cfg(any(test, feature = "debug-hooks"))]
     routing_hold: Mutex<Option<Arc<HoldGate>>>,
 }
 
@@ -388,6 +383,17 @@ impl<T> CountedMutex<T> {
 }
 
 impl Store {
+    fn from_parts(conn: Connection, key: &StorageKey, lock: Option<lock::ProcessLock>) -> Store {
+        Store {
+            clock: Mutex::new(Arc::new(|| jiff::Timestamp::now().as_millisecond())),
+            conn: CountedMutex::new(conn),
+            key: key.clone(),
+            _lock: lock,
+            #[cfg(any(test, feature = "debug-hooks"))]
+            hooks: DebugHooks::default(),
+        }
+    }
+
     /// Opens (creating if needed) the on-disk registry at `db_path`: the directory holding it at mode 0700,
     /// the process lock beside it, then the database file at mode 0600.
     pub fn open(db_path: &Path, key: &StorageKey) -> Result<Store, StoreError> {
@@ -421,38 +427,7 @@ impl Store {
         let mut conn = Connection::open(db_path)?;
         prepare(&mut conn, true, schema::MIGRATIONS)?;
         check_or_seal_canary(&mut conn, key, db_path)?;
-        Ok(Store {
-            clock: Mutex::new(Arc::new(|| jiff::Timestamp::now().as_millisecond())),
-            conn: CountedMutex::new(conn),
-            key: key.clone(),
-            _lock: Some(process_lock),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            credential_after_hold: Mutex::new(None),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            credential_hold: Mutex::new(None),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            credential_reads: AtomicU64::new(0),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            fail_next_credential_commit: AtomicBool::new(false),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            fail_next_load: AtomicBool::new(false),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            fail_next_refresh_read: AtomicBool::new(false),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            fail_next_schema_version: AtomicBool::new(false),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            key_write_hold: Mutex::new(None),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            load_hold: Mutex::new(None),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            loads: AtomicU64::new(0),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            pool_write_hold: Mutex::new(None),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            routing_commits: AtomicU64::new(0),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            routing_hold: Mutex::new(None),
-        })
+        Ok(Store::from_parts(conn, key, Some(process_lock)))
     }
 
     /// Opens an in-memory registry for tests: no directory, no lock, no on-disk file.
@@ -460,38 +435,7 @@ impl Store {
         let mut conn = Connection::open_in_memory()?;
         prepare(&mut conn, false, schema::MIGRATIONS)?;
         check_or_seal_canary(&mut conn, key, Path::new(":memory:"))?;
-        Ok(Store {
-            clock: Mutex::new(Arc::new(|| jiff::Timestamp::now().as_millisecond())),
-            conn: CountedMutex::new(conn),
-            key: key.clone(),
-            _lock: None,
-            #[cfg(any(test, feature = "debug-hooks"))]
-            credential_after_hold: Mutex::new(None),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            credential_hold: Mutex::new(None),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            credential_reads: AtomicU64::new(0),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            fail_next_credential_commit: AtomicBool::new(false),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            fail_next_load: AtomicBool::new(false),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            fail_next_refresh_read: AtomicBool::new(false),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            fail_next_schema_version: AtomicBool::new(false),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            key_write_hold: Mutex::new(None),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            load_hold: Mutex::new(None),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            loads: AtomicU64::new(0),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            pool_write_hold: Mutex::new(None),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            routing_commits: AtomicU64::new(0),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            routing_hold: Mutex::new(None),
-        })
+        Ok(Store::from_parts(conn, key, None))
     }
 
     /// Every stamp written from here on reads `clock`. The admin fixture capture sets it before it seeds the
@@ -506,7 +450,11 @@ impl Store {
 
     pub fn schema_version(&self) -> Result<u32, StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
-        if self.fail_next_schema_version.swap(false, Ordering::SeqCst) {
+        if self
+            .hooks
+            .fail_next_schema_version
+            .swap(false, Ordering::SeqCst)
+        {
             return Err(StoreError::Io(std::io::Error::other(
                 "injected schema version read failure",
             )));
@@ -547,14 +495,16 @@ impl Store {
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_fail_next_load(&self) {
-        self.fail_next_load.store(true, Ordering::SeqCst);
+        self.hooks.fail_next_load.store(true, Ordering::SeqCst);
     }
 
     /// The next holder read errors, so the attention reader's failure path has a test.
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_fail_next_refresh_read(&self) {
-        self.fail_next_refresh_read.store(true, Ordering::SeqCst);
+        self.hooks
+            .fail_next_refresh_read
+            .store(true, Ordering::SeqCst);
     }
 
     /// Fails the next `schema_version`, so a test reaches the readiness answer's dead store without a broken
@@ -562,7 +512,9 @@ impl Store {
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_fail_next_schema_version(&self) {
-        self.fail_next_schema_version.store(true, Ordering::SeqCst);
+        self.hooks
+            .fail_next_schema_version
+            .store(true, Ordering::SeqCst);
     }
 
     /// Reads the canary through a read-only connection: no process lock, no `prepare`, no migration, no write,
@@ -616,7 +568,7 @@ impl Store {
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_routing_commits(&self) -> u64 {
-        self.routing_commits.load(Ordering::SeqCst)
+        self.hooks.routing_commits.load(Ordering::SeqCst)
     }
 
     /// Parks the next `write_routing` before its transaction until the hold is released, so a test can queue a
@@ -625,14 +577,14 @@ impl Store {
     #[doc(hidden)]
     pub fn debug_hold_next_routing_write(&self) -> RoutingWriteHold {
         let gate = Arc::new(HoldGate::default());
-        *self.routing_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
+        *self.hooks.routing_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
         RoutingWriteHold(gate)
     }
 
     /// Before the connection's lock, so the store stays readable while the writer waits.
     #[cfg(any(test, feature = "debug-hooks"))]
     fn park_on_routing_hold(&self) {
-        park_on(&self.routing_hold);
+        park_on(&self.hooks.routing_hold);
     }
 
     /// Sets the connection's busy timeout, so a test that holds the write lock from a second connection waits out a
@@ -658,7 +610,7 @@ impl Store {
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_load_count(&self) -> u64 {
-        self.loads.load(Ordering::SeqCst)
+        self.hooks.loads.load(Ordering::SeqCst)
     }
 
     /// Reads of an account row, its revision, an API key or an OAuth bundle since start: the reads a
@@ -667,7 +619,7 @@ impl Store {
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_credential_reads(&self) -> u64 {
-        self.credential_reads.load(Ordering::SeqCst)
+        self.hooks.credential_reads.load(Ordering::SeqCst)
     }
 
     /// Parks the next `api_key_credential` or `credentials` read before its lock until the hold drops, the shape of
@@ -676,7 +628,7 @@ impl Store {
     #[doc(hidden)]
     pub fn debug_hold_next_credential_read(&self) -> CredentialReadHold {
         let gate = Arc::new(HoldGate::default());
-        *self.credential_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
+        *self.hooks.credential_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
         CredentialReadHold(gate)
     }
 
@@ -686,7 +638,11 @@ impl Store {
     #[doc(hidden)]
     pub fn debug_hold_after_next_credential_read(&self) -> CredentialReadHold {
         let gate = Arc::new(HoldGate::default());
-        *self.credential_after_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
+        *self
+            .hooks
+            .credential_after_hold
+            .lock()
+            .expect(HOLD_POISONED) = Some(gate.clone());
         CredentialReadHold(gate)
     }
 
@@ -696,7 +652,7 @@ impl Store {
     #[doc(hidden)]
     pub fn debug_hold_next_pool_write(&self) -> FencedWriteHold {
         let gate = Arc::new(HoldGate::default());
-        *self.pool_write_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
+        *self.hooks.pool_write_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
         FencedWriteHold(gate)
     }
 
@@ -705,19 +661,19 @@ impl Store {
     #[doc(hidden)]
     pub fn debug_hold_next_key_write(&self) -> FencedWriteHold {
         let gate = Arc::new(HoldGate::default());
-        *self.key_write_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
+        *self.hooks.key_write_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
         FencedWriteHold(gate)
     }
 
     /// Before the connection's lock, so the edit the test lands under the hold does not wait on the parked one.
     #[cfg(any(test, feature = "debug-hooks"))]
     pub(crate) fn park_on_pool_write_hold(&self) {
-        park_on(&self.pool_write_hold);
+        park_on(&self.hooks.pool_write_hold);
     }
 
     #[cfg(any(test, feature = "debug-hooks"))]
     pub(crate) fn park_on_key_write_hold(&self) {
-        park_on(&self.key_write_hold);
+        park_on(&self.hooks.key_write_hold);
     }
 
     /// Parks the next `load_registry` before its lock until the hold drops, so a test can ask the router for
@@ -726,31 +682,31 @@ impl Store {
     #[doc(hidden)]
     pub fn debug_hold_next_load(&self) -> RegistryLoadHold {
         let gate = Arc::new(HoldGate::default());
-        *self.load_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
+        *self.hooks.load_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
         RegistryLoadHold(gate)
     }
 
     #[cfg(any(test, feature = "debug-hooks"))]
     fn count_credential_read(&self) {
-        self.credential_reads.fetch_add(1, Ordering::SeqCst);
+        self.hooks.credential_reads.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Before the connection's lock, so a write the test makes under the hold does not wait on the parked read.
     #[cfg(any(test, feature = "debug-hooks"))]
     fn park_on_credential_hold(&self) {
-        park_on(&self.credential_hold);
+        park_on(&self.hooks.credential_hold);
     }
 
     #[cfg(any(test, feature = "debug-hooks"))]
     fn park_after_credential_read(&self) {
-        park_on(&self.credential_after_hold);
+        park_on(&self.hooks.credential_after_hold);
     }
 
     /// Counted and parked before the connection's lock, so the store stays writable while the load waits.
     #[cfg(any(test, feature = "debug-hooks"))]
     fn enter_load(&self) {
-        self.loads.fetch_add(1, Ordering::SeqCst);
-        park_on(&self.load_hold);
+        self.hooks.loads.fetch_add(1, Ordering::SeqCst);
+        park_on(&self.hooks.load_hold);
     }
 
     /// Stamps `meta.schema_version`, so a test can stand for a registry a newer build wrote.

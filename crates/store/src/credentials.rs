@@ -389,6 +389,7 @@ impl Store {
     pub(crate) fn fail_injected_commit(&self) -> Result<(), StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
         if self
+            .hooks
             .fail_next_credential_commit
             .swap(false, std::sync::atomic::Ordering::SeqCst)
         {
@@ -693,7 +694,8 @@ impl Store {
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_fail_next_credential_commit(&self) {
-        self.fail_next_credential_commit
+        self.hooks
+            .fail_next_credential_commit
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
@@ -842,7 +844,11 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<ResolvedAttempt>, StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
-        if self.fail_next_refresh_read.swap(false, Ordering::SeqCst) {
+        if self
+            .hooks
+            .fail_next_refresh_read
+            .swap(false, Ordering::SeqCst)
+        {
             return Err(StoreError::Io(std::io::Error::other(
                 "injected refresh read failure",
             )));

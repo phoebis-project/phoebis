@@ -454,7 +454,8 @@ impl Store {
         }
         let value = result?;
         #[cfg(any(test, feature = "debug-hooks"))]
-        self.routing_commits
+        self.hooks
+            .routing_commits
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(value)
     }

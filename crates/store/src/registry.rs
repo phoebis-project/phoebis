@@ -653,7 +653,7 @@ impl Store {
         #[cfg(any(test, feature = "debug-hooks"))]
         self.enter_load();
         #[cfg(any(test, feature = "debug-hooks"))]
-        if self.fail_next_load.swap(false, Ordering::SeqCst) {
+        if self.hooks.fail_next_load.swap(false, Ordering::SeqCst) {
             return Err(StoreError::Io(std::io::Error::other(
                 "injected load failure",
             )));
