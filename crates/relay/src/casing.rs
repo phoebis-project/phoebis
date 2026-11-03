@@ -157,39 +157,50 @@ impl<S> HeadRecorder<S> {
     }
 
     fn observe(&mut self, data: &[u8]) {
-        // Each head found hands back whatever followed it in the same read, so a keep-alive connection whose
-        // next head arrived in the same segment is picked up without recursing per request.
-        let mut pending = self.feed(data);
-        while let Some(rest) = pending {
-            pending = self.feed(&rest);
+        // Each head found hands back how far into the read it ended, so a keep-alive connection whose next head
+        // arrived in the same segment is picked up without recursing per request.
+        let mut at = 0;
+        while let Some(consumed) = self.feed(&data[at..]) {
+            at += consumed;
         }
     }
 
-    /// Consumes `data` up to and including the next head, returning the bytes after it.
-    fn feed(&mut self, mut data: &[u8]) -> Option<Vec<u8>> {
+    /// Consumes `data` up to and including the next head, returning how many of its bytes that took.
+    fn feed(&mut self, data: &[u8]) -> Option<usize> {
+        let mut at = 0;
         loop {
             match self.state {
                 Recording::Off => return None,
                 Recording::Body(remaining) => {
-                    let take = remaining.min(data.len() as u64);
-                    data = &data[take as usize..];
+                    let take = remaining.min((data.len() - at) as u64);
+                    at += take as usize;
                     self.state = if take == remaining {
                         Recording::Head
                     } else {
                         Recording::Body(remaining - take)
                     };
-                    if data.is_empty() {
+                    if at == data.len() {
                         return None;
                     }
                 }
                 Recording::Head => {
                     // A head may straddle two reads, so every read re-parses what the connection has sent so
                     // far: the boundary has to be the parser's, not a search of its own, or the recorder and
-                    // hyper end the head in different places and the next request travels under this one.
-                    self.head.extend_from_slice(data);
-                    let (head, used) = match scan(&self.head) {
+                    // hyper end the head in different places and the next request travels under this one. A
+                    // read that starts a head is scanned where it lies and copied only when the head runs on.
+                    let held = self.head.len();
+                    let scanned = if held == 0 {
+                        scan(&data[at..])
+                    } else {
+                        self.head.extend_from_slice(&data[at..]);
+                        scan(&self.head)
+                    };
+                    let (head, used) = match scanned {
                         Parsed::Complete(head, used) => (head, used),
                         Parsed::Partial => {
+                            if held == 0 {
+                                self.head.extend_from_slice(&data[at..]);
+                            }
                             if self.head.len() > MAX_HEAD {
                                 self.stop();
                             }
@@ -204,7 +215,6 @@ impl<S> HeadRecorder<S> {
                         self.stop();
                         return None;
                     }
-                    let rest = self.head.split_off(used);
                     self.state = match declared_body(&head) {
                         Some(body) => {
                             self.queue
@@ -219,7 +229,8 @@ impl<S> HeadRecorder<S> {
                         None => Recording::Off,
                     };
                     self.head.clear();
-                    return Some(rest);
+                    // The held bytes came before this read, so the head ends `used - held` bytes into it.
+                    return Some(at + used - held);
                 }
             }
         }
