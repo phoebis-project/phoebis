@@ -1696,17 +1696,17 @@ impl Relay {
                 }
             }
         }
-        let request_class =
-            crate::identity::header_id(&parts.headers, phoebis_guardrails::REQUEST_CLASS_HEADER);
+        // Read once, ahead of the climb that reads the request class, and reused on every attempt of this request.
+        let hints = ClientHints::read(&parts.headers);
         climb(
             &mut identity,
             &key,
             boundaries,
-            request_class.as_deref(),
+            hints.request_class.as_deref(),
             &self.router,
         );
-        let auxiliary = crate::identity::is_auxiliary(request_class.as_deref());
-        let turn = matches!(request_class.as_deref(), Some("main" | "subagent"));
+        let auxiliary = crate::identity::is_auxiliary(hints.request_class.as_deref());
+        let turn = matches!(hints.request_class.as_deref(), Some("main" | "subagent"));
         crate::facts::note_entrypoint_disagreement(
             &trace.request_id,
             identity.entrypoint.as_deref(),
@@ -1722,12 +1722,10 @@ impl Relay {
             let headers = HeaderMapLookup(&parts.headers);
             let user_agent =
                 crate::identity::user_agent_of(&parts.headers).map(phoebis_bus::user_agent_cut);
-            let agent_type =
-                crate::identity::header_id(&parts.headers, phoebis_guardrails::AGENT_TYPE_HEADER);
             let request = RequestFacts {
                 kind: trace.kind.as_str(),
-                request_class: request_class.as_deref(),
-                agent_type: agent_type.as_deref(),
+                request_class: hints.request_class.as_deref(),
+                agent_type: hints.agent_type.as_deref(),
                 client: identity.client.as_str(),
                 model: &identity.canonical_model,
                 user_agent,
@@ -1808,7 +1806,7 @@ impl Relay {
                     agent_id: identity.agent_id.clone(),
                     parent_agent_id: None,
                     session_id: identity.session_id.clone(),
-                    request_class: request_class.clone(),
+                    request_class: hints.request_class.clone(),
                     canonical_model: identity.canonical_model.clone(),
                     lane: LaneFacts::default(),
                     flags: RequestFlags {
@@ -1869,7 +1867,7 @@ impl Relay {
             &parts.headers,
             &identity,
             &facts,
-            request_class.as_deref(),
+            hints.request_class.as_deref(),
             client_version.as_deref(),
             trace.kind,
         ) {
@@ -1879,7 +1877,7 @@ impl Relay {
                 &trace,
                 &key,
                 &identity,
-                request_class.as_deref(),
+                hints.request_class.as_deref(),
                 client_version.as_deref(),
             );
             return self
@@ -1908,9 +1906,6 @@ impl Relay {
             }),
             _ => None,
         };
-        // Read once, ahead of the restoration that takes its prompt id from the header, and reused on every
-        // attempt of this request.
-        let hints = ClientHints::read(&parts.headers);
         // The one store read of the request path, ahead of the entry's write: a miss after a restart or an
         // eviction is filled from tier 2 here, on the blocking pool, so no worker blocks on SQLite for it, and the
         // write lands on the restored entry, so the leg's lookup of the previous request id finds it. A probe and
@@ -1921,7 +1916,7 @@ impl Relay {
         {
             self.memory.restore(key, received_at).await;
         }
-        let prev_req = restores_prev_req(request_class.as_deref(), &parts.headers);
+        let prev_req = restores_prev_req(hints.request_class.as_deref(), &parts.headers);
         // Claude Code's own inference requests alone: a probe replays what the client sent, a token count has no
         // line to fill, and a body without the block is relayed as sent and gets no client request id either. The
         // contract admitted the version, so it lands in the line as the client spelled it.
@@ -3860,13 +3855,7 @@ impl Relay {
         // An auxiliary request leaves no content entry: the client's quota probe has one message every probe of
         // the key shares, so an entry under it would read the next session's probe as a fork of this one. Its
         // static boundaries still land, a cache of their own the next probe of the same shape reads.
-        let auxiliary = crate::identity::is_auxiliary(
-            crate::identity::header_id(
-                ctx.admitted.caller,
-                phoebis_guardrails::REQUEST_CLASS_HEADER,
-            )
-            .as_deref(),
-        );
+        let auxiliary = ctx.admitted.auxiliary;
         Some(AffinityFacts {
             router: self.router.clone(),
             pending: self.pending_reports.clone(),
