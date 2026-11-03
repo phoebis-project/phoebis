@@ -95,16 +95,6 @@ pub(crate) async fn attempt(
             })??;
         send_and_read(conn, request, &sending, &relay.clock).await
     };
-    bounded(relay, cancel, &sending, once).await
-}
-
-/// The head timeout and the account's cancellation, which bound an attempt on either plane.
-async fn bounded<T>(
-    relay: &Relay,
-    cancel: &CancellationToken,
-    sending: &AtomicBool,
-    once: impl Future<Output = Result<T, AttemptFailure>>,
-) -> Result<T, AttemptFailure> {
     let work = tokio::time::timeout(relay.limits.head_timeout, once);
     tokio::select! {
         result = work => match result {
