@@ -1114,7 +1114,7 @@ const SECTIONS = [
 type SectionId = (typeof SECTIONS)[number]['id'];
 
 /** `metaTitle` is the meta line's hover text, such as the estimate's sentence for a marked figure. */
-function Section({ id, title, meta, metaTitle, controls, shown = true, children }: { children: ReactNode; controls?: ReactNode; id: SectionId; meta?: string; metaTitle?: string; shown?: boolean; title: string }) {
+function Section({ id, title, meta, metaTitle, shown = true, children }: { children: ReactNode; id: SectionId; meta?: string; metaTitle?: string; shown?: boolean; title: string }) {
   if (!shown) return null;
   return (
     <section className="analytics-section" id={id} role="tabpanel" aria-labelledby={`tab-${id}`}>
@@ -1125,7 +1125,6 @@ function Section({ id, title, meta, metaTitle, controls, shown = true, children 
             {meta}
           </span>
         )}
-        {controls}
       </header>
       {children}
     </section>
@@ -1222,6 +1221,9 @@ function netTileOf(unit: UnitPosition, totals: AnalyticsGroup, billed: Analytics
   return { critical: !loading && net < 0, note: less(UNIT_SPLIT[dollarsOf(unit)]), value: loading ? null : fmtUsd(net) };
 }
 
+/** A chart card's plot height, its skeleton's too, so a card keeps its height as the answer lands. */
+const CHART_HEIGHT = 220;
+
 function ChartCard({
   title,
   subtitle,
@@ -1231,7 +1233,6 @@ function ChartCard({
   failure = null,
   footer,
   legend,
-  height = 220,
   actions,
 }: {
   /** Drawn in the card's header beside the title: a control the chart reads. */
@@ -1243,7 +1244,6 @@ function ChartCard({
    *  the week reading's unpriced sentence, which no retry clears. */
   failure?: WeekReading['failure'];
   footer?: ReactNode;
-  height?: number;
   legend?: { color: string; dashed?: boolean; hollow?: boolean; label: string; shape?: 'line' | 'rect'; title?: string; value?: ReactNode }[];
   loading: boolean;
   subtitle?: ReactNode;
@@ -1254,12 +1254,12 @@ function ChartCard({
       {failure !== null ? (
         <ErrorState title={failureHead(failure, title.toLowerCase())} body={failure.text} />
       ) : loading ? (
-        <Skeleton height={height} />
+        <Skeleton height={CHART_HEIGHT} />
       ) : empty ? (
         <p className="muted">{empty}</p>
       ) : (
         <>
-          <ResponsiveContainer width="100%" height={height}>
+          <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
             {children as never}
           </ResponsiveContainer>
           {legend && <Legend items={legend} />}
@@ -1802,15 +1802,15 @@ function KeepaliveByPool({ failure, funded, groups, loading, reading, unit }: { 
 
 /**
  * One ring of the cost by token kind. `format` prints each kind's figure in the ring's unit and the center's total
- * unless `center` prints it shorter, `label` names the ring at its center, and `title` is the ring's hover text.
- * `figureTitle` is a kind's figure's own hover text, which masks `title` over the figure.
+ * unless `center` prints it shorter, and `label` names the ring at its center. `figureTitle` is a kind's figure's own
+ * hover text.
  */
-function CostDonut({ center, cost, figureTitle, format = fmtUsd, label = 'cost', title }: { center?: (v: number) => string; cost: CostSplit; figureTitle?: (v: number) => string; format?: (v: number) => string; label?: string; title?: string }) {
+function CostDonut({ center, cost, figureTitle, format = fmtUsd, label = 'cost' }: { center?: (v: number) => string; cost: CostSplit; figureTitle?: (v: number) => string; format?: (v: number) => string; label?: string }) {
   const ink = useChartInk();
   const [hover, setHover] = useState<string | null>(null);
   const total = COST_PARTS.reduce((s, p) => s + cost[p.key], 0);
   return (
-    <div className="split-row" title={title}>
+    <div className="split-row">
       <Donut slices={COST_PARTS.map((p) => ({ id: p.key, label: p.label, value: cost[p.key], color: ink.series[p.slot] }))} total={total} centerLabel={label} centerValue={(center ?? format)(total)} onHover={setHover} />
       <ul className="remaining__list">
         {COST_PARTS.map((p) => (
