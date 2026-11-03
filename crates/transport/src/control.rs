@@ -3,17 +3,15 @@
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use boring::ssl::SslConnector;
 use bytes::{Bytes, BytesMut};
 use phoebis_profile::Profile;
-use tokio::io::AsyncWriteExt;
 
 use crate::decode::{decoder, encoding};
-use crate::request::{serialize_head, RawRequest};
+use crate::request::{write_request, ProgressCell, RawRequest, WriteProgress};
 use crate::response::{framing, read_head, BodyReader, ResponseHead};
 use crate::{connect_tls, TransportError};
 
@@ -55,12 +53,14 @@ impl ControlClient {
             )));
         };
         // Read by the timeout arm below, which cannot see how far `send_once` got on its own.
-        let sent = Arc::new(AtomicBool::new(false));
-        match tokio::time::timeout(timeout, self.send_once(req, host, addr, &sent)).await {
+        let progress = ProgressCell::default();
+        match tokio::time::timeout(timeout, self.send_once(req, host, addr, &progress)).await {
             Ok(result) => result,
-            Err(_) if !sent.load(Ordering::SeqCst) => Err(TransportError::Unreachable(format!(
-                "timed out before the request to {host} was sent"
-            ))),
+            Err(_) if progress.get() != WriteProgress::BodyWritten => {
+                Err(TransportError::Unreachable(format!(
+                    "timed out before the request to {host} was sent"
+                )))
+            }
             Err(_) => Err(TransportError::Io(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 "control request timed out",
@@ -73,7 +73,7 @@ impl ControlClient {
         req: RawRequest,
         host: &str,
         addr: SocketAddr,
-        sent: &AtomicBool,
+        progress: &ProgressCell,
     ) -> Result<(ResponseHead, Bytes), TransportError> {
         // A fresh connection per call, dropped at the end of this function: the control plane makes too few
         // requests to justify pooling, and a dead pooled connection would need the same retry machinery as the
@@ -89,7 +89,17 @@ impl ControlClient {
                     TransportError::Io(error) => TransportError::Unreachable(error.to_string()),
                     other => other,
                 })?;
-        write_tracked(&mut conn, &req, host, sent).await?;
+        write_request(&mut conn, &req, Some(progress))
+            .await
+            .map_err(|failure| match failure.progress {
+                WriteProgress::NothingWritten | WriteProgress::HeadWritten => {
+                    TransportError::Unreachable(format!(
+                        "request to {host} was not sent: {}",
+                        failure.error
+                    ))
+                }
+                WriteProgress::BodyWritten => TransportError::Io(failure.error),
+            })?;
         let mut buf = BytesMut::new();
         let head = read_head(&mut conn, &mut buf).await?;
         let f = framing(&head);
@@ -119,40 +129,13 @@ fn at_body_bound(error: TransportError) -> TransportError {
     }
 }
 
-/// Written here rather than through the shared `write_request`, so `sent` can flip the instant the body
-/// clears `write_all`: a cancellation racing the call as a whole cannot tell that instant from one a moment
-/// earlier, and the same refresh token would otherwise be spent twice. This repeats `write_request`'s own
-/// head, body, and flush sequence deliberately, `serialize_head` the one part still shared; the two have to
-/// be kept in step by hand if either one changes.
-async fn write_tracked<W: tokio::io::AsyncWrite + Unpin>(
-    w: &mut W,
-    req: &RawRequest,
-    host: &str,
-    sent: &AtomicBool,
-) -> Result<(), TransportError> {
-    if let Err(error) = w.write_all(&serialize_head(req)).await {
-        return Err(TransportError::Unreachable(format!(
-            "request to {host} was not sent: {error}"
-        )));
-    }
-    if let Err(error) = w.write_all(&req.body).await {
-        return Err(TransportError::Unreachable(format!(
-            "request to {host} was not sent: {error}"
-        )));
-    }
-    // Handed to the socket in full: the peer may read and act on it whether or not the flush returns, so a
-    // timeout from here on is an uncertain outcome rather than an unsent request.
-    sent.store(true, Ordering::SeqCst);
-    w.flush().await.map_err(TransportError::Io)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::pin::Pin;
     use std::task::{Context, Poll};
 
-    /// Accepts every write instantly but never completes a flush, so the flag's timing is provable without
+    /// Accepts every write instantly but never completes a flush, so the cell's timing is provable without
     /// racing a real socket's timing.
     struct StallOnFlush;
 
@@ -207,39 +190,41 @@ mod tests {
 
     #[tokio::test]
     async fn the_body_is_marked_sent_before_a_flush_that_never_returns() {
-        let sent = AtomicBool::new(false);
+        let progress = ProgressCell::default();
         let mut w = StallOnFlush;
         let outcome = tokio::time::timeout(
             Duration::from_millis(50),
-            write_tracked(&mut w, &token_request(), "host", &sent),
+            write_request(&mut w, &token_request(), Some(&progress)),
         )
         .await;
         assert!(
             outcome.is_err(),
             "the flush never resolves, so the call has to time out"
         );
-        assert!(
-            sent.load(Ordering::SeqCst),
+        assert_eq!(
+            progress.get(),
+            WriteProgress::BodyWritten,
             "the body was handed over before the stalled flush, not after it"
         );
     }
 
     #[tokio::test]
     async fn the_body_is_not_marked_sent_while_the_write_itself_never_returns() {
-        let sent = AtomicBool::new(false);
+        let progress = ProgressCell::default();
         let mut w = StallOnWrite;
         let outcome = tokio::time::timeout(
             Duration::from_millis(50),
-            write_tracked(&mut w, &token_request(), "host", &sent),
+            write_request(&mut w, &token_request(), Some(&progress)),
         )
         .await;
         assert!(
             outcome.is_err(),
             "the write never resolves, so the call has to time out"
         );
-        assert!(
-            !sent.load(Ordering::SeqCst),
-            "the flag stays false until the body has fully cleared write_all"
+        assert_ne!(
+            progress.get(),
+            WriteProgress::BodyWritten,
+            "the cell stays short of the body until the body has fully entered the writer"
         );
     }
 }

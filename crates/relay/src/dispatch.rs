@@ -136,7 +136,7 @@ async fn send_and_read<C: AsyncRead + AsyncWrite + Unpin>(
     // From here on the request may be on the wire, which is what the timeout arms need to know; the
     // write's own failures carry their progress and are classified below.
     sending.store(true, Ordering::SeqCst);
-    write_request(&mut conn, request)
+    write_request(&mut conn, request, None)
         .await
         .map_err(|failure| match failure.progress {
             WriteProgress::NothingWritten | WriteProgress::HeadWritten => AttemptFailure::Unsent {

@@ -112,7 +112,7 @@ async fn every_write_failure_reports_the_progress_it_reached() {
     ];
     for (limit, fail_flush, want) in cases {
         let mut w = Budget::new(limit, fail_flush);
-        let err = write_request(&mut w, &req)
+        let err = write_request(&mut w, &req, None)
             .await
             .expect_err("the writer fails");
         assert_eq!(err.progress, want, "limit {limit}");
@@ -123,7 +123,7 @@ async fn every_write_failure_reports_the_progress_it_reached() {
         }
     }
     let mut w = Budget::new(usize::MAX, false);
-    write_request(&mut w, &req)
+    write_request(&mut w, &req, None)
         .await
         .expect("a healthy writer succeeds");
 }

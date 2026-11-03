@@ -960,7 +960,7 @@ async fn exchange<C: AsyncRead + AsyncWrite + Unpin>(
     conn: &mut C,
     request: &RawRequest,
 ) -> Result<(u16, Vec<u8>, bool), DiscoveryError> {
-    write_request(conn, request)
+    write_request(conn, request, None)
         .await
         .map_err(|f| DiscoveryError::Unreachable(f.error.to_string()))?;
     let mut leftover = BytesMut::new();

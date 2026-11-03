@@ -1,6 +1,7 @@
 //! HTTP/1.1 request serialization that emits headers exactly in the order and casing it is given.
 
 use std::io;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use bytes::Bytes;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -21,6 +22,32 @@ pub enum WriteProgress {
     NothingWritten,
     HeadWritten,
     BodyWritten,
+}
+
+/// How far a `write_request` call has got, published as it goes for a caller whose timeout drops the call before it
+/// answers. It reads `BodyWritten` once the last byte entered the writer, before the flush: from then on the upstream
+/// may act on the request whether or not the flush returns, so a control refresh that times out there must not be sent
+/// again with the same refresh token.
+#[derive(Debug, Default)]
+pub struct ProgressCell(AtomicU8);
+
+impl ProgressCell {
+    pub fn get(&self) -> WriteProgress {
+        match self.0.load(Ordering::SeqCst) {
+            0 => WriteProgress::NothingWritten,
+            1 => WriteProgress::HeadWritten,
+            _ => WriteProgress::BodyWritten,
+        }
+    }
+
+    fn set(&self, progress: WriteProgress) {
+        let word = match progress {
+            WriteProgress::NothingWritten => 0,
+            WriteProgress::HeadWritten => 1,
+            WriteProgress::BodyWritten => 2,
+        };
+        self.0.store(word, Ordering::SeqCst);
+    }
 }
 
 #[derive(Debug)]
@@ -48,6 +75,7 @@ pub fn serialize_head(req: &RawRequest) -> Vec<u8> {
 pub async fn write_request<W: AsyncWrite + Unpin>(
     w: &mut W,
     req: &RawRequest,
+    progress: Option<&ProgressCell>,
 ) -> Result<(), WriteFailure> {
     // One buffer for the head and the body, offered to the writer whole, at the cost of one copy of a body the
     // request limit bounds: no write is issued for the head alone. The loop counts what the writer took, which
@@ -58,24 +86,35 @@ pub async fn write_request<W: AsyncWrite + Unpin>(
     wire.extend_from_slice(&req.body);
     let mut written = 0;
     while written < wire.len() {
-        let progress = if written < head_len {
+        let reached = if written < head_len {
             WriteProgress::NothingWritten
         } else {
             WriteProgress::HeadWritten
         };
+        if let Some(cell) = progress {
+            cell.set(reached);
+        }
         match w.write(&wire[written..]).await {
             Ok(0) => {
                 return Err(WriteFailure {
-                    progress,
+                    progress: reached,
                     error: io::ErrorKind::WriteZero.into(),
                 })
             }
             Ok(n) => written += n,
-            Err(error) => return Err(WriteFailure { progress, error }),
+            Err(error) => {
+                return Err(WriteFailure {
+                    progress: reached,
+                    error,
+                })
+            }
         }
     }
     // Every byte entered the writer before the flush is attempted, and the upstream may have read the whole
     // request, so a flush failure is never sent again.
+    if let Some(cell) = progress {
+        cell.set(WriteProgress::BodyWritten);
+    }
     if let Err(error) = w.flush().await {
         return Err(WriteFailure {
             progress: WriteProgress::BodyWritten,
