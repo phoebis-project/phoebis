@@ -1228,58 +1228,32 @@ impl Relay {
                 Ok(key) if key.created_at != probe.key_generation => {
                     let refusal = KeyRefusal::Replaced;
                     tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
-                    self.ledger_standing(&trace, false);
-                    trace
-                        .observed(
-                            None,
+                    return self
+                        .refused_before_body(
+                            &trace,
                             None,
                             &parts.headers,
-                            false,
-                            Bytes::new(),
-                            false,
                             0,
-                            RequestShape::default(),
-                            None,
-                            Vec::new(),
-                            client_facts(&parts.headers, None, None),
-                            None,
                             false,
+                            key_refusal(&refusal),
                             None,
-                            None,
-                            Vec::new(),
                         )
-                        .await;
-                    return self
-                        .refused(&trace, 0, key_refusal(&refusal), None, None, None)
                         .await;
                 }
                 // A probe authenticates by key id, never by secret, so it never presents a retired one.
                 Ok(key) => (key.clone(), Presented::Live),
                 Err(refusal) => {
                     tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
-                    self.ledger_standing(&trace, false);
-                    trace
-                        .observed(
-                            None,
+                    return self
+                        .refused_before_body(
+                            &trace,
                             None,
                             &parts.headers,
-                            false,
-                            Bytes::new(),
-                            false,
                             0,
-                            RequestShape::default(),
-                            None,
-                            Vec::new(),
-                            client_facts(&parts.headers, None, None),
-                            None,
                             false,
+                            key_refusal(&refusal),
                             None,
-                            None,
-                            Vec::new(),
                         )
-                        .await;
-                    return self
-                        .refused(&trace, 0, key_refusal(&refusal), None, None, None)
                         .await;
                 }
             },
@@ -1287,29 +1261,16 @@ impl Relay {
                 let presented = match presented_key(&parts.headers) {
                     Ok(presented) => presented,
                     Err(error) => {
-                        self.ledger_standing(&trace, false);
-                        trace
-                            .observed(
-                                None,
+                        return self
+                            .refused_before_body(
+                                &trace,
                                 None,
                                 &parts.headers,
-                                false,
-                                Bytes::new(),
-                                false,
                                 0,
-                                RequestShape::default(),
-                                None,
-                                Vec::new(),
-                                client_facts(&parts.headers, None, None),
-                                None,
                                 false,
+                                auth_failure(&error),
                                 None,
-                                None,
-                                Vec::new(),
                             )
-                            .await;
-                        return self
-                            .refused(&trace, 0, auth_failure(&error), None, None, None)
                             .await;
                     }
                 };
@@ -1317,29 +1278,16 @@ impl Relay {
                     Ok((key, presented)) => (key.clone(), presented),
                     Err(refusal) => {
                         tracing::debug!(%refusal, "a presented key was refused");
-                        self.ledger_standing(&trace, false);
-                        trace
-                            .observed(
-                                None,
+                        return self
+                            .refused_before_body(
+                                &trace,
                                 None,
                                 &parts.headers,
-                                false,
-                                Bytes::new(),
-                                false,
                                 0,
-                                RequestShape::default(),
-                                None,
-                                Vec::new(),
-                                client_facts(&parts.headers, None, None),
-                                None,
                                 false,
+                                key_refusal(&refusal),
                                 None,
-                                None,
-                                Vec::new(),
                             )
-                            .await;
-                        return self
-                            .refused(&trace, 0, key_refusal(&refusal), None, None, None)
                             .await;
                     }
                 }
@@ -1359,39 +1307,19 @@ impl Relay {
         // The class is read off the user agent alone, with no body read yet to justify: the router admits Claude
         // Code and refuses any other client before the bytes it would never use are even taken off the wire.
         if client_of(&parts.headers).class != ClientClass::ClaudeCode {
-            self.ledger_standing(&trace, false);
-            trace
-                .observed(
-                    Some(&key),
-                    None,
-                    &parts.headers,
-                    false,
-                    Bytes::new(),
-                    false,
-                    capture_hours,
-                    RequestShape::default(),
-                    None,
-                    Vec::new(),
-                    client_facts(&parts.headers, None, None),
-                    None,
-                    retired,
-                    key.rotated_at,
-                    None,
-                    Vec::new(),
-                )
-                .await;
             tracing::warn!(
                 user_agent = %user_agent(&parts.headers),
                 key = %key.id,
                 "a client outside Claude Code sent a request the router admits from Claude Code alone",
             );
             return self
-                .refused(
+                .refused_before_body(
                     &trace,
-                    0,
-                    relay_failure(&RelayError::ClientRefused),
                     Some(&key),
-                    None,
+                    &parts.headers,
+                    capture_hours,
+                    retired,
+                    relay_failure(&RelayError::ClientRefused),
                     client_version.as_deref(),
                 )
                 .await;
@@ -1414,7 +1342,7 @@ impl Relay {
             return self
                 .refused_before_body(
                     &trace,
-                    &key,
+                    Some(&key),
                     &parts.headers,
                     capture_hours,
                     retired,
@@ -1437,7 +1365,7 @@ impl Relay {
                     return self
                         .refused_before_body(
                             &trace,
-                            &key,
+                            Some(&key),
                             &parts.headers,
                             capture_hours,
                             retired,
@@ -1451,7 +1379,7 @@ impl Relay {
                     return self
                         .refused_before_body(
                             &trace,
-                            &key,
+                            Some(&key),
                             &parts.headers,
                             capture_hours,
                             retired,
@@ -1468,7 +1396,7 @@ impl Relay {
                     return self
                         .refused_before_body(
                             &trace,
-                            &key,
+                            Some(&key),
                             &parts.headers,
                             capture_hours,
                             retired,
@@ -1513,7 +1441,7 @@ impl Relay {
                 return self
                     .refused_before_body(
                         &trace,
-                        &key,
+                        Some(&key),
                         &parts.headers,
                         capture_hours,
                         retired,
@@ -1540,7 +1468,7 @@ impl Relay {
                     return self
                         .refused_before_body(
                             &trace,
-                            &key,
+                            Some(&key),
                             &parts.headers,
                             capture_hours,
                             retired,
@@ -1556,7 +1484,7 @@ impl Relay {
                     return self
                         .refused_before_body(
                             &trace,
-                            &key,
+                            Some(&key),
                             &parts.headers,
                             capture_hours,
                             retired,
@@ -4060,12 +3988,13 @@ impl Relay {
     }
 
     /// A refusal with no body to observe: decided on the head before the read, or on a read that ended without
-    /// a whole body. The observation carries the client facts the head alone gives.
+    /// a whole body. The observation carries the client facts the head alone gives. `key` is `None` for a refusal
+    /// decided before a key was known.
     #[allow(clippy::too_many_arguments)]
     async fn refused_before_body(
         &self,
         trace: &Trace,
-        key: &ApiKeyRow,
+        key: Option<&ApiKeyRow>,
         headers: &HeaderMap,
         capture_hours: u32,
         presented_retired: bool,
@@ -4075,7 +4004,7 @@ impl Relay {
         self.ledger_standing(trace, false);
         trace
             .observed(
-                Some(key),
+                key,
                 None,
                 headers,
                 false,
@@ -4088,12 +4017,12 @@ impl Relay {
                 client_facts(headers, None, None),
                 None,
                 presented_retired,
-                key.rotated_at,
+                key.and_then(|k| k.rotated_at),
                 None,
                 Vec::new(),
             )
             .await;
-        self.refused(trace, 0, failure, Some(key), None, client_version)
+        self.refused(trace, 0, failure, key, None, client_version)
             .await
     }
 
