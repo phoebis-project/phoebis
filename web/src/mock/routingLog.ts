@@ -3,6 +3,7 @@ import type {
   PoolKeepalive, RecordPin, RecordRequest, RecordSettings, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
 import { shareIn, weightOf } from '@/lib/costs';
+import { placementHit } from '@/lib/format';
 import { endOf } from '@/lib/quota';
 import { compareRows } from '@/lib/routingLog';
 import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN } from './accounts';
@@ -1321,8 +1322,8 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   }
   const usage = r.usage;
   const promised = spec.rung && spec.rung.rung !== 'with_main' ? spec.rung.prefixTokens : null;
-  const hasUsage = answered && usage.input + usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h > 0;
-  const hit = !hasUsage ? null : spec.rung?.rung === 'content' ? usage.cacheRead >= (promised ?? 0) : usage.cacheRead > 0;
+  const hasUsage = answered && bodyTokensOf(r) > 0;
+  const hit = !hasUsage ? null : spec.rung ? placementHit(spec.rung, usage.cacheRead) : usage.cacheRead > 0;
   const ttlMs = ttlOf(pool, chosen?.kind ?? 'oauth', r.agentId !== 'main', r.canonicalModel);
   const prefixTokens = usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h;
   // The router writes the message chain's rows first, each at the answer's one prefix, then the static chain's, each
