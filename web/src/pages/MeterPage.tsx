@@ -7,7 +7,7 @@ import type { Option } from '@/components/ui/OptionList';
 import { IconChevron } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Button, Card, ErrorState, Skeleton, toggleRow } from '@/components/ui/primitives';
-import { accountHref, METER_CODEC, type MeterAddress } from '@/lib/address';
+import { accountHref, METER_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { METER_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import { fmtAbsolute, fmtDated, fmtInt, fmtShare, instant, noun } from '@/lib/format';
@@ -234,9 +234,7 @@ export function MeterPage(): JSX.Element {
   return (
     <PopoverHost.Provider value={host}>
       <div className="meter-view stack">
-        {/* TypeScript rejects an address that shares no key with the bar's optional range and search, so this one is read
-            with an optional search it never sets. */}
-        <FilterBar<MeterAddress & { search?: string }>
+        <FilterBar
           address={address}
           count={count}
           dimensions={METER_DIMENSIONS}

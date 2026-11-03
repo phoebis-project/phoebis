@@ -13,7 +13,7 @@ import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useHostedDescription } from '@/components/ui/primitives';
-import { accountHref, ANALYTICS_CODEC, REQUESTS_CODEC, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
+import { accountHref, ANALYTICS_CODEC, REQUESTS_CODEC, SESSION_SORT_KEYS, SESSIONS_CODEC, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { failed } from '@/lib/costs';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
@@ -338,9 +338,7 @@ export function SessionsPage() {
   return (
     <PopoverHost.Provider value={host}>
       <div className="stack">
-        {/* TypeScript rejects an address that shares no key with the bar's optional range and search, so this one is read
-            with an optional search it never sets. */}
-        <FilterBar<SessionsAddress & { search?: string }>
+        <FilterBar
           address={address}
           count={rows === null ? '' : plural(rows.length, 'session')}
           dimensions={SESSIONS_DIMENSIONS}

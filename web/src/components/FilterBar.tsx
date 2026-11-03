@@ -9,7 +9,7 @@ import type { RangeValue } from '@/lib/address';
 import { chipsOf, type Dimension, emptyValue, withoutValue } from '@/lib/filterBar';
 import { useCommittedText } from '@/lib/hooks';
 
-export interface FilterBarProps<F extends { range?: RangeValue; search?: string }> {
+export interface FilterBarProps<F extends object> {
   /** The view's address from `useQueryFilters`, whose change folds an expanded chip line again. */
   address: string;
   /** The extras in the view's order: the group-by, Columns, Sort, Refresh all, the primary action last. */
@@ -19,7 +19,7 @@ export interface FilterBarProps<F extends { range?: RangeValue; search?: string 
   /** The Add filter list, which a view without filters leaves out. */
   dimensions?: Dimension[];
   disabled?: Record<string, string>;
-  filters: F;
+  filters: F & { range?: RangeValue; search?: string };
   options?: Record<string, Option[]>;
   /** The search's placeholder and label, which a view without a search leaves out. The field reads and writes `filters.search` through useCommittedText. */
   placeholder?: string;
@@ -35,7 +35,7 @@ export interface FilterBarProps<F extends { range?: RangeValue; search?: string 
   update: (patch: Partial<F>) => void;
 }
 
-function Bar<F extends { range?: RangeValue; search?: string }>({ address, children, count, dimensions, disabled, filters, options = {}, placeholder, presets, range, refresh, sticky = false, update }: FilterBarProps<F>, ref: ForwardedRef<HTMLDivElement>): JSX.Element {
+function Bar<F extends object>({ address, children, count, dimensions, disabled, filters, options = {}, placeholder, presets, range, refresh, sticky = false, update }: FilterBarProps<F>, ref: ForwardedRef<HTMLDivElement>): JSX.Element {
   // TypeScript checks an object literal against `Partial<F>` only once `F` is known, so every patch the bar builds over
   // the generic `F` is asserted here, in one place.
   const patch = (next: Record<string, unknown>) => update(next as Partial<F>);
@@ -77,4 +77,4 @@ function Bar<F extends { range?: RangeValue; search?: string }>({ address, child
  * page's auto reload through the page's PopoverHost.
  */
 // forwardRef drops the generic, so its result is read back under the generic signature.
-export const FilterBar = forwardRef(Bar) as <F extends { range?: RangeValue; search?: string }>(props: FilterBarProps<F> & { ref?: Ref<HTMLDivElement> }) => JSX.Element;
+export const FilterBar = forwardRef(Bar) as <F extends object>(props: FilterBarProps<F> & { ref?: Ref<HTMLDivElement> }) => JSX.Element;
