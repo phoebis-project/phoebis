@@ -336,15 +336,11 @@ const unpricedKey = (k: Omit<ApiKey, 'guardrails' | 'poolGuardrails'>): Omit<Api
   const nulled = <S extends Pick<ApiKey['lifetime'], 'equivalent'>>(s: S): S => ({ ...s, equivalent: null });
   return { ...k, lifetime: nulled(k.lifetime), usage7d: nulled(k.usage7d) };
 };
-/** The detail's cut as the route lifts it, off the newest `stream_interrupted` row that names the request. */
-const streamCutOf = (requestId: string) => {
-  const cuts = ROUTING_EVENTS.filter((e) => e.kind === 'stream_interrupted' && e.requestId === requestId);
-  const newest = cuts[cuts.length - 1];
-  return newest ? decodeStreamCut({ ...newest.detail, at: Date.parse(newest.at) }) : null;
-};
-/** The request's `stream_interrupted` rows as its detail's events, since the route lists the rows it lifts cuts off. */
-const cutEventsOf = (requestId: string): RequestEvent[] =>
-  ROUTING_EVENTS.filter((e) => e.kind === 'stream_interrupted' && e.requestId === requestId).map((e) => ({ accountId: e.accountId, at: e.at, detail: e.detail, keyId: e.keyId, kind: e.kind, model: e.model, sessionId: e.sessionId }));
+/**
+ * The request's `stream_interrupted` rows, which the detail lists as its events and lifts its cut off, the newest
+ * one's, as the route does.
+ */
+const cutsOf = (requestId: string) => ROUTING_EVENTS.filter((e) => e.kind === 'stream_interrupted' && e.requestId === requestId);
 
 /** The keepalive overview of a router with no session and no probe yet. */
 const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
@@ -1180,8 +1176,10 @@ export class MockApi implements Api {
   getRequest(id: string): Promise<RequestDetail | null> {
     const request = ledger().requestById.get(id);
     const events = REQUEST_EVENTS.get(id) ?? [];
-    const cuts = cutEventsOf(id);
-    return latency(request ? { events: cuts.length === 0 ? events : [...events, ...cuts].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)), request, streamCut: streamCutOf(id) } : null);
+    const rows = cutsOf(id);
+    const cuts: RequestEvent[] = rows.map((e) => ({ accountId: e.accountId, at: e.at, detail: e.detail, keyId: e.keyId, kind: e.kind, model: e.model, sessionId: e.sessionId }));
+    const newest = rows[rows.length - 1];
+    return latency(request ? { events: cuts.length === 0 ? events : [...events, ...cuts].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)), request, streamCut: newest ? decodeStreamCut({ ...newest.detail, at: Date.parse(newest.at) }) : null } : null);
   }
 
   getSession(): Promise<SessionInfo | null> {
