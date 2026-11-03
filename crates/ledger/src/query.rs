@@ -30,9 +30,10 @@ use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
 };
 use crate::rollup::{
-    add_counts, fold_identifier, fold_user_agent, hour_of, read_account_rollups,
-    read_rollups_paged, visit_rollups, CostSplit, KeySelector, RollupRow, RollupSelect,
-    DIMENSION_MAX_BYTES, EFFORTS, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, PLAN_FUNDING, UNATTRIBUTED,
+    add_counts, detail_json, fold_identifier, fold_user_agent, hour_of, migration_reason,
+    read_account_rollups, read_rollups_paged, visit_rollups, CostSplit, KeySelector, RollupRow,
+    RollupSelect, DIMENSION_MAX_BYTES, EFFORTS, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, PLAN_FUNDING,
+    UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -1498,10 +1499,7 @@ fn event_rows(
             model: r.get(8)?,
             request_id: r.get(9)?,
             actor: r.get(10)?,
-            detail: r
-                .get::<_, Option<String>>(11)?
-                .and_then(|d| serde_json::from_str(&d).ok())
-                .unwrap_or(Value::Null),
+            detail: detail_json(r.get::<_, Option<String>>(11)?.as_deref()),
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -1617,11 +1615,7 @@ pub fn pin_migrations_by_account_and_reason(
         let Some(account_id) = account_id else {
             continue;
         };
-        let parsed: Value = detail
-            .as_deref()
-            .and_then(|d| serde_json::from_str(d).ok())
-            .unwrap_or(Value::Null);
-        let reason = parsed["reason"].as_str().unwrap_or("unknown").to_string();
+        let reason = migration_reason(&detail_json(detail.as_deref())).to_string();
         *out.entry(account_id)
             .or_default()
             .entry(reason)

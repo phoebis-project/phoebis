@@ -1016,12 +1016,22 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
     Ok(())
 }
 
-pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), LedgerError> {
-    let detail: serde_json::Value = event
-        .detail
-        .as_deref()
+/// An event's stored detail decoded, `Null` for a detail that is absent or not JSON, so a reader of a member reads
+/// its fallback.
+pub(crate) fn detail_json(detail: Option<&str>) -> serde_json::Value {
+    detail
         .and_then(|d| serde_json::from_str(d).ok())
-        .unwrap_or(serde_json::Value::Null);
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// A `pin_migrated` event's reason, `unknown` where the detail names none.
+pub(crate) fn migration_reason(detail: &serde_json::Value) -> &str {
+    detail["reason"].as_str().unwrap_or("unknown")
+}
+
+pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), LedgerError> {
+    // Decoded in the arms that read it, so a kind that reads no detail parses none.
+    let detail = || detail_json(event.detail.as_deref());
     let hour = hour_of(event.at);
     let row = |account_id: &str| AccountRollupRow {
         hour,
@@ -1037,7 +1047,8 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             },
         ),
         (PIN_MIGRATED, Some(to)) => {
-            let reason = detail["reason"].as_str().unwrap_or("unknown");
+            let detail = detail();
+            let reason = migration_reason(&detail);
             let fit = detail["fit"].as_str().unwrap_or("unknown");
             fold_account(
                 tx,
@@ -1059,6 +1070,7 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             }
         }
         (WINDOW_SPENT, Some(account)) => {
+            let detail = detail();
             let window = detail["window"].as_str().unwrap_or("unknown");
             let round = newest_round(tx, account, window, event.at)?;
             // A wall at or after its reset came early by nothing, which the hour's longest already holds.
@@ -1074,6 +1086,7 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             }
         }
         (COOLDOWN_SET, Some(account)) => {
+            let detail = detail();
             let scope = detail["scope"].as_str().unwrap_or("account");
             let accounted = read_span(tx, account, scope)?;
             let Some(until) = detail["until"].as_i64() else {
@@ -1106,6 +1119,7 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             write_span(tx, account, scope, accounted.unwrap_or(booked).max(booked))
         }
         (COOLDOWN_CLEARED, Some(account)) => {
+            let detail = detail();
             let scope = detail["scope"].as_str().unwrap_or("account");
             let Some(until) = take_span(tx, account, scope)? else {
                 return Ok(());
@@ -1124,7 +1138,7 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             Ok(())
         }
         (OVERAGE_ENDED, Some(account)) => {
-            let seconds = detail["since"]
+            let seconds = detail()["since"]
                 .as_i64()
                 .map(|since| (event.at - since).max(0) / 1_000)
                 .unwrap_or(0) as u64;
@@ -1265,10 +1279,7 @@ pub fn fold_routing_conditions(
                     kind: r.get(1)?,
                     account_id: r.get(2)?,
                     pool_id: r.get(3)?,
-                    detail: r
-                        .get::<_, Option<String>>(4)?
-                        .and_then(|d| serde_json::from_str(&d).ok())
-                        .unwrap_or(serde_json::Value::Null),
+                    detail: detail_json(r.get::<_, Option<String>>(4)?.as_deref()),
                 })
             },
         )?
@@ -1645,9 +1656,7 @@ fn slow_down_open_at(tx: &Transaction<'_>, cutoff: i64) -> Result<OpenSpans, Led
         .into_iter()
         .filter(|(start, ..)| restart.is_none_or(|restart| restart < *start))
         .map(|((at, _), account, pool, detail)| {
-            let detail = detail
-                .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
-                .unwrap_or(serde_json::Value::Null);
+            let detail = detail_json(detail.as_deref());
             let (factor, threshold_ms) =
                 (detail["factor"].as_f64(), detail["threshold_ms"].as_i64());
             ((account, pool), (at, factor, threshold_ms))
