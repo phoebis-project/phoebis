@@ -114,7 +114,6 @@ function poolDialog(props) {
     keys: [],
     models: [],
     onClose() {},
-    onKeyCreated() {},
     onKeysChanged() {},
     onRetryAccounts() {},
     onSaved() {},

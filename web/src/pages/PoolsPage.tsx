@@ -414,10 +414,6 @@ export function PoolsPage() {
         }}
         // The pool route lists its keys, so a key created, moved or revoked from the dialog changes the card's
         // warning too.
-        onKeyCreated={() => {
-          keys.reload();
-          pools.reload();
-        }}
         onKeysChanged={() => {
           keys.reload();
           pools.reload();
@@ -1137,7 +1133,6 @@ export function PoolDialog({
   initialGroup = null,
   onClose,
   onSaved,
-  onKeyCreated,
   onKeysChanged,
   onRetryAccounts,
   accounts,
@@ -1162,7 +1157,6 @@ export function PoolDialog({
   models: { label: string; value: string }[];
   /** `reload` is true from the stale save's Reload, and on a close after any refused save or a key move refused as stale, whose cause may be lists that are out of date. */
   onClose: (reload: boolean) => void;
-  onKeyCreated: (c: CreatedApiKey) => void;
   onKeysChanged: () => void;
   onRetryAccounts: () => void;
   onSaved: (created: boolean) => void;
@@ -2412,7 +2406,7 @@ export function PoolDialog({
           setKeyOpen(false);
           setLocalKeys((prev) => [c.key, ...prev]);
           setCreated(c);
-          onKeyCreated(c);
+          onKeysChanged();
         }}
       />
       <Dialog
