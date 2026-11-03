@@ -89,6 +89,15 @@ export const windowOf = (account: Account, id: WindowId): RateLimitWindow | null
 /** Every window an account's poll read, the Fable week from `fableWindow` among them. */
 export const readWindows = (account: Account): RateLimitWindow[] => (account.fableWindow === null ? account.windows : [...account.windows, account.fableWindow]);
 
+/**
+ * The account's extra usage as its plan bills it: none for a usage-based seat, which always pays in dollars, so none
+ * of its spend is overage, and whose spend bar already shows the figure.
+ */
+export const planExtraUsage = (account: Pick<Account, 'extraUsage' | 'usageBased'>): ExtraUsage | null => (account.usageBased ? null : account.extraUsage);
+
+/** The router's overage reading as the plan bills it: none for a usage-based seat, which always pays in dollars. */
+export const planOverage = (account: Pick<Account, 'overage' | 'usageBased'>): Account['overage'] => (account.usageBased ? null : account.overage);
+
 /** A window whose reset has passed with no reading since: the card and the timeline agree on this one test. */
 export const isExpired = (w: RateLimitWindow, now: number) => w.resetsAt !== null && Date.parse(w.resetsAt) < now;
 

@@ -27,7 +27,7 @@ import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, f
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useLatest, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { latestPerWindow, meterGroups } from '@/lib/meter';
-import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, planEndedSentence, planWordLabel, readWindows, slowedOf } from '@/lib/quota';
+import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, planEndedSentence, planExtraUsage, planOverage, planWordLabel, readWindows, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { speedHover } from '@/lib/selection';
 import { MINUTE } from '@/lib/time';
@@ -241,6 +241,7 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
   // The row keeps the list's query and hash, so opening an account leaves the filters standing.
   const location = useLocation();
   const slowed = slowedOf(account, now);
+  const extra = planExtraUsage(account);
   return (
     <li>
       <Link to={{ hash: location.hash, pathname: accountHref(account.id), search: location.search }} className={`account-row ${active ? 'is-active' : ''}`}>
@@ -257,9 +258,8 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
         <WindowTriple account={account} now={now} compact />
         <div className="account-row__foot">
           <span className="muted">{account.pool ? `pool ${account.pool.poolId}` : 'no pool'}</span>
-          {/* A usage-based seat always pays in dollars, which is no overage, whatever its flags read. */}
-          {!account.usageBased && account.extraUsage?.inUse && <Badge tone="serious">Overage</Badge>}
-          {!account.usageBased && account.extraUsage?.enabled && !account.extraUsage.inUse && <span className="muted">extra usage on</span>}
+          {extra?.inUse && <Badge tone="serious">Overage</Badge>}
+          {extra?.enabled && !extra.inUse && <span className="muted">extra usage on</span>}
         </div>
       </Link>
     </li>
@@ -322,7 +322,8 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
   const paused = !account.routingEnabled;
   const cooldown = accountCooldown(account.cooldowns);
   const extra = account.extraUsage;
-  const overage = account.overage;
+  const planExtra = planExtraUsage(account);
+  const overage = planOverage(account);
   /**
    * The router's answer once it took the change, null once it refused. An editor's refusal reaches its own callout, or
    * the shell's toast naming the account once the operator left it, since the callout left with the detail.
@@ -447,11 +448,11 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
                 cooldown ends {fmtRelative(cooldown.until, now)}
               </Badge>
             )}
-            {!account.usageBased && extra?.inUse && <Badge tone="serious">Overage active</Badge>}
+            {planExtra?.inUse && <Badge tone="serious">Overage active</Badge>}
             {!account.routingEnabled && account.status !== 'paused' && <Badge tone="neutral">Routing paused</Badge>}
           </div>
           {/* A usage sample reports overage without a start, and a line counting from nothing would say nothing. */}
-          {!account.usageBased && overage?.inUse && overage.since && (
+          {overage?.inUse && overage.since && (
             <p className="detail__sub" title={fmtAbsolute(overage.since)}>
               Overage since {fmtRelative(overage.since, now)}
             </p>
@@ -641,10 +642,9 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
           ) : (
             <WindowTriple account={account} now={now} others />
           )}
-          {/* A usage-based seat's spend bar above is that reading, so its extra usage line would draw one figure twice. */}
-          {extra && ((extra.enabled && !account.usageBased) || extra.disabledReason) && (
+          {extra && (planExtra?.enabled || extra.disabledReason) && (
             <div className="extra-usage">
-              {extra.enabled && !account.usageBased && (
+              {planExtra?.enabled && (
                 <>
                   <div className="wbar__head">
                     <span className="wbar__label">

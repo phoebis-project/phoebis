@@ -20,7 +20,7 @@ import { dollarsUnder, equivalentOrDash, nativeFiguresOf, nativeSidesOf, shareHi
 import { weekReadingOf } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { failedFirst, refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, accountCooldown, slowedOf } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, accountCooldown, planExtraUsage, slowedOf } from '@/lib/quota';
 import { REFUSED_TITLE, costHeaderTitle, costUnitOf, glanceCellOf, requestHintArgs, revisionsTitle } from '@/lib/requests';
 import { ringFigures, ringLine, ringRowTitle, type RingFigures, type RingLeftOut, type RingRow, type RingWindow } from '@/lib/rings';
 import { speedHover } from '@/lib/selection';
@@ -309,8 +309,7 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
       {account.email && <div className="account-mini__sub mono muted">{account.email}</div>}
       <WindowTriple account={account} now={now} compact />
       <div className="account-mini__foot">
-        {/* A usage-based seat always pays in dollars, which is no overage, whatever its flags read. */}
-        {!account.usageBased && account.extraUsage?.inUse && <Badge tone="serious">Overage active</Badge>}
+        {planExtraUsage(account)?.inUse && <Badge tone="serious">Overage active</Badge>}
         {account.status === 'cooldown' && cooldown && (
           <span className="muted" title={fmtAbsolute(cooldown.until)}>
             cooldown ends {fmtRelative(cooldown.until, now)}

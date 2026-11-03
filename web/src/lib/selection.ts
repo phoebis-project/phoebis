@@ -1,6 +1,6 @@
 import type { Account, AccountSlowDown, MemberEligibility, Pool, PoolMember, PoolStrategy } from '@/api/types';
 import { fmtAbsolute, fmtDuration, fmtPeriodEnd, fmtRelative, fmtShortTime, instant } from './format';
-import { endOf, minuteSpan, slowedOf } from './quota';
+import { endOf, minuteSpan, planExtraUsage, planOverage, slowedOf } from './quota';
 
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
 /** The kind tiers, in the order selection walks them. The third holds the API-key and the usage-based accounts, the
@@ -159,7 +159,7 @@ export function selectionOrder(pool: Pool, accounts: Account[], now: number = Da
             account,
             // Under the kind order an account in overage already has a tier of its own, so deferring it inside
             // one would rank it behind its own siblings twice.
-            deferred: !grouped && pool.overagePolicy === 'prefer_plan' && Boolean(account.extraUsage?.inUse) && !account.usageBased,
+            deferred: !grouped && pool.overagePolicy === 'prefer_plan' && Boolean(planExtraUsage(account)?.inUse),
             end: endOf(account, now),
             ineligible,
             lastResort: ineligible === null ? lastResort : null,
@@ -256,8 +256,9 @@ function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Acc
     return null;
   }
   // The router records no overage evidence for a usage-based seat, so the policy never holds one.
-  if (ends.length > 0 && pool.overagePolicy === 'never' && account?.overage?.inUse && !account.usageBased) {
-    const { reset } = account.overage;
+  const overage = account === undefined ? null : planOverage(account);
+  if (ends.length > 0 && pool.overagePolicy === 'never' && overage?.inUse) {
+    const { reset } = overage;
     if (reset === null) return null;
     ends.push({ at: Date.parse(reset), parts: [name, { text: `'s overage window resets ${fmtRelative(reset, now)}` }] });
   }
