@@ -235,12 +235,6 @@ pub struct PoolRow {
 }
 
 impl PoolRow {
-    /// One function, so the selector, the pool route, and the console cannot answer differently about the
-    /// same pool.
-    pub fn kind_ordered(&self) -> bool {
-        self.prefer_subscription
-    }
-
     /// The shipped defaults with `id` and `label` set: a test overrides the fields its case is about, so a field
     /// added to or removed from the row touches this one site.
     #[cfg(any(test, feature = "test-support"))]

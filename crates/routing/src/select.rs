@@ -6086,7 +6086,7 @@ fn tier_of(
     let in_overage = state.in_overage(&candidate.account_id, now, fallback_ms);
     let overage_bit =
         u8::from(spent || (pool.overage_policy == OveragePolicy::PreferPlan && in_overage));
-    if pool.kind_ordered() {
+    if pool.prefer_subscription {
         let group = if paid_source(snapshot, &candidate.account_id) {
             2
         } else {

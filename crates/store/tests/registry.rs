@@ -3099,7 +3099,7 @@ fn a_pool_stores_round_robin_and_the_subscription_preference_is_the_operators_al
     store.update_pool(&row, read.updated_at, "test").unwrap();
     let read = store.pool("rr").unwrap().unwrap();
     assert!(
-        !read.prefer_subscription && !read.kind_ordered(),
+        !read.prefer_subscription,
         "the flag is the operator's answer alone; no strategy overrides it"
     );
     let change = store.registry_changes_after(0, 10).unwrap().pop().unwrap();
