@@ -42,13 +42,13 @@ fn row_json(row: &CatalogRow) -> serde_json::Value {
 }
 
 fn invalid_limit(request_id: &str) -> Response {
-    no_store(anthropic_error(
+    anthropic_error(
         StatusCode::BAD_REQUEST,
         "invalid_request_error",
         "invalid_limit",
         "limit must be between 1 and 1000",
         request_id,
-    ))
+    )
 }
 
 fn parse_limit(raw: Option<&String>) -> Result<usize, ()> {
@@ -109,8 +109,16 @@ pub(crate) async fn list(
     Query(query): Query<HashMap<String, String>>,
     request: Request,
 ) -> Response {
+    no_store(list_answer(&relay, &query, request.headers()).await)
+}
+
+async fn list_answer(
+    relay: &Relay,
+    query: &HashMap<String, String>,
+    headers: &HeaderMap,
+) -> Response {
     let request_id = new_request_id();
-    let access = match authenticate(&relay, request.headers(), &request_id).await {
+    let access = match authenticate(relay, headers, &request_id).await {
         Ok(access) => access,
         Err(response) => return response,
     };
@@ -118,25 +126,23 @@ pub(crate) async fn list(
         Ok(limit) => limit,
         Err(()) => return invalid_limit(&request_id),
     };
-    let rows = caller_listing(&relay, &access).await;
+    let rows = caller_listing(relay, &access).await;
     let paged = page(
         &rows,
         limit,
         query.get("after_id").map(String::as_str),
         query.get("before_id").map(String::as_str),
     );
-    no_store(
-        (
-            StatusCode::OK,
-            Json(json!({
-                "data": paged.data.iter().map(row_json).collect::<Vec<_>>(),
-                "first_id": paged.first_id,
-                "last_id": paged.last_id,
-                "has_more": paged.has_more,
-            })),
-        )
-            .into_response(),
+    (
+        StatusCode::OK,
+        Json(json!({
+            "data": paged.data.iter().map(row_json).collect::<Vec<_>>(),
+            "first_id": paged.first_id,
+            "last_id": paged.last_id,
+            "has_more": paged.has_more,
+        })),
     )
+        .into_response()
 }
 
 pub(crate) async fn show(
@@ -144,20 +150,24 @@ pub(crate) async fn show(
     Path(id): Path<String>,
     request: Request,
 ) -> Response {
+    no_store(show_answer(&relay, &id, request.headers()).await)
+}
+
+async fn show_answer(relay: &Relay, id: &str, headers: &HeaderMap) -> Response {
     let request_id = new_request_id();
-    let access = match authenticate(&relay, request.headers(), &request_id).await {
+    let access = match authenticate(relay, headers, &request_id).await {
         Ok(access) => access,
         Err(response) => return response,
     };
-    let rows = caller_listing(&relay, &access).await;
-    match find(&rows, &id) {
-        Some(row) => no_store((StatusCode::OK, Json(row_json(row))).into_response()),
-        None => no_store(anthropic_error(
+    let rows = caller_listing(relay, &access).await;
+    match find(&rows, id) {
+        Some(row) => (StatusCode::OK, Json(row_json(row))).into_response(),
+        None => anthropic_error(
             StatusCode::NOT_FOUND,
             "not_found_error",
             "model_not_found",
             &format!("model: {id}"),
             &request_id,
-        )),
+        ),
     }
 }
