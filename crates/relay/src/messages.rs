@@ -3170,6 +3170,8 @@ impl Relay {
             leftover,
             written_at,
         } = sent;
+        // Shared with the post-commit error hook, which outlives this call on the body task.
+        let head = Arc::new(head);
         // When the head arrived, which is what stamps the overage evidence below for an upstream that
         // sends no `Date` of its own.
         let head_at = (self.clock)();
@@ -3544,10 +3546,7 @@ impl Relay {
                             ctx.admitted.portable.then(|| ctx.pin.cloned()).flatten(),
                             ctx.admitted.trace.request_id.clone(),
                         );
-                        let head = ResponseHead {
-                            status: head.status,
-                            headers: head.headers.clone(),
-                        };
+                        let head = Arc::clone(&head);
                         let on_error = Box::new(move |data: Bytes, waiting: &mut Waiting| {
                             // After commit nothing fails over. A rate-limit error records the cooldown
                             // and, on a portable request, invalidates the pin so the next request
