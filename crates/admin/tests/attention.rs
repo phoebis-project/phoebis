@@ -410,9 +410,12 @@ async fn a_read_whose_blocking_worker_dies_logs_the_failed_read_as_canceled_and_
     let _guard = tracing::subscriber::set_default(subscriber);
     let parts = common::admin_parts_full_with_pairs(Arc::new(PanickingPairs)).await;
     let cookie = login(&parts.app, "admin-secret").await;
-    // Another case of this file can register the line's callsite as unwanted on a thread with no subscriber, so a
-    // rebuild reads every subscriber's interest again.
+    // Another case of this file can register the line's callsite as unwanted on a thread with no subscriber while this
+    // case's subscriber is being set. A first read registers it here, so a rebuild then reads every subscriber's
+    // interest again before the read the case checks.
+    let _ = get(&parts.app, "/admin/attention", Some(&cookie)).await;
     tracing::callsite::rebuild_interest_cache();
+    let before = captured.text().len();
     let response = get(&parts.app, "/admin/attention", Some(&cookie)).await;
     assert_eq!(
         response.status(),
@@ -420,7 +423,7 @@ async fn a_read_whose_blocking_worker_dies_logs_the_failed_read_as_canceled_and_
         "an empty list would read as the quiet state"
     );
     assert_eq!(json(response).await, j!({ "error": "storage failure" }));
-    let text = captured.text();
+    let text = captured.text()[before..].to_string();
     assert!(
         text.lines().any(|line| line
             .contains("the attention read failed, so the route answers 500")
