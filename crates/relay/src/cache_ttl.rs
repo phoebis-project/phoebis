@@ -77,14 +77,9 @@ impl TtlRules {
     /// The TTL for `branch`: the per-model override first, an override written under an undated spelling still
     /// found once the canonical id is dated.
     fn ttl(&self, canonical_model: &str, branch: TtlBranch) -> CacheTtl {
-        let over = self
-            .models
-            .iter()
-            .find(|m| m.model == canonical_model)
-            .or_else(|| {
-                phoebis_routing::listing::undated(canonical_model)
-                    .and_then(|base| self.models.iter().find(|m| m.model == base))
-            });
+        let over = phoebis_routing::listing::row_for(canonical_model, |id| {
+            self.models.iter().find(|m| m.model == id)
+        });
         match (branch, over) {
             (TtlBranch::Subagent, Some(m)) => m.subagent,
             (_, Some(m)) => m.main,
