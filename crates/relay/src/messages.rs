@@ -4647,7 +4647,6 @@ impl Relay {
                 saw_stop: false,
                 status: head.status,
                 message_id: None,
-                pending_message_id: None,
                 on_message_id,
                 renewal,
                 affinity,

@@ -158,9 +158,6 @@ pub(crate) struct Publish {
     pub status: u16,
     /// The id of the message this response carries, once `message_start` or the JSON answer named it.
     pub message_id: Option<String>,
-    /// Set by `phase_of` the moment the id is known and taken by `chunk` or `finish` right after, which await
-    /// the hook there.
-    pub pending_message_id: Option<String>,
     /// Runs once, with the id, the moment it is known, and is awaited there: a later request on the same
     /// session reads the id before this body has finished, so the hand-off cannot wait for `finish`, and a
     /// flush must not overtake it.
@@ -677,22 +674,21 @@ impl Publish {
     }
 
     /// The id is handed off once, on first sight: `message_start` names it for a stream, the whole document for a
-    /// JSON answer, and neither arrives twice. Recorded here; `chunk` and `finish` take the pending id and await
-    /// the hook once `phase_of` returns.
+    /// JSON answer, and neither arrives twice. `chunk` and `finish` await the hook once `phase_of` returns.
     fn saw_message_id(&mut self, id: String) {
         if self.message_id.is_none() {
-            self.pending_message_id = Some(id.clone());
             self.message_id = Some(id);
         }
     }
 
-    /// Awaited from `chunk` and `finish` once `phase_of` has had its turn, so a pending id from either path
-    /// fires the hook the same way.
+    /// Awaited from `chunk` and `finish` once `phase_of` has had its turn, so an id from either path fires the
+    /// hook the same way. The hook is taken, so it fires once.
     async fn fire_pending_hook(&mut self) {
-        if let Some(id) = self.pending_message_id.take() {
-            if let Some(hook) = self.on_message_id.take() {
-                hook(id).await;
-            }
+        let Some(id) = self.message_id.as_ref() else {
+            return;
+        };
+        if let Some(hook) = self.on_message_id.take() {
+            hook(id.clone()).await;
         }
     }
 }
