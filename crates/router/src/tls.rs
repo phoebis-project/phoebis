@@ -21,7 +21,7 @@ use crate::config::ListenerTls;
 pub type Acceptor = Option<Arc<LiveAcceptor>>;
 
 /// A leaf this close to `not_after` earns a warning in `check-config` and a line in `status`, and starts.
-pub const EXPIRY_WARNING_DAYS: i32 = 30;
+pub const EXPIRY_WARNING_DAYS: i32 = phoebis_attention::CERTIFICATE_WARNING_DAYS as i32;
 
 /// A loaded listener: the acceptor, and the leaf's facts the start logs and `check-config` prints.
 pub struct Loaded {
@@ -679,15 +679,6 @@ mod tests {
             "{refused:?}"
         );
         assert_eq!(set.facts()[0].loaded_at, 2_000);
-    }
-
-    #[test]
-    fn the_expiry_warning_and_the_attention_item_start_the_same_number_of_days_before_the_end() {
-        assert_eq!(
-            i64::from(EXPIRY_WARNING_DAYS),
-            phoebis_attention::CERTIFICATE_WARNING_DAYS,
-            "the dashboard's item holds from exactly 30 days before not_after"
-        );
     }
 
     #[test]

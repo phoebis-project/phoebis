@@ -24,8 +24,8 @@ use crate::{AttentionError, PairFacts};
 /// How long after a run's first 429 the poll backoff condition holds, so a single 429 or a short run never reads 1.
 pub const BACKOFF_ATTENTION_AFTER_MS: i64 = 30 * 60 * 1_000;
 
-/// A loaded leaf holds `certificate_expiring` from this many days before its `not_after`: the router's
-/// `EXPIRY_WARNING_DAYS`, which `check-config` and `status` warn under, carried here since this crate cannot name it.
+/// A loaded leaf holds `certificate_expiring` from this many days before its `not_after`. The router's
+/// `EXPIRY_WARNING_DAYS`, which `check-config` and `status` warn under, reads this constant.
 pub const CERTIFICATE_WARNING_DAYS: i64 = 30;
 
 const DAY_MS: i64 = 86_400_000;
