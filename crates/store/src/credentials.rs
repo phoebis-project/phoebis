@@ -2,6 +2,7 @@
 
 #[cfg(any(test, feature = "debug-hooks"))]
 use std::sync::atomic::Ordering;
+use std::sync::LazyLock;
 
 use rusqlite::{params, OptionalExtension};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -16,12 +17,16 @@ const IN_FLIGHT_WHERE: &str = "resolved_at IS NULL";
 // `PENDING_WHERE` as one term is the predicate of the partial index `refresh_attempts_pending`, so SQLite answers
 // this read from that index rather than the table. Named, since the planner otherwise prefers
 // `refresh_attempts_account`, which leads with both equality columns but holds every attempt the holder made.
-fn holder_pending_query() -> String {
+fn holder_pending_query() -> &'static str {
+    &HOLDER_PENDING
+}
+
+static HOLDER_PENDING: LazyLock<String> = LazyLock::new(|| {
     format!(
         "SELECT EXISTS(SELECT 1 FROM refresh_attempts INDEXED BY refresh_attempts_pending \
          WHERE account_id = ?1 AND incarnation = ?2 AND ({PENDING_WHERE}))"
     )
-}
+});
 
 // A holder's newest attempt, read through `refresh_attempts_account`: its two equality columns and then `id`, so the
 // newest is the index's last entry under them rather than a sort of every attempt the holder made.
@@ -261,11 +266,12 @@ impl Store {
         account_id: &str,
     ) -> Result<Option<CredentialMetadata>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        conn.query_row(
+        let mut stmt = conn.prepare_cached(
             "SELECT generation, issued_at, expires_at, refresh_expires_at, scopes, lifecycle_generation, last_error, updated_at \
              FROM credentials WHERE account_id = ?1",
-            params![account_id],
-            |row| {
+        )?;
+        let metadata = stmt
+            .query_row(params![account_id], |row| {
                 Ok(CredentialMetadata {
                     generation: row.get::<_, i64>(0)? as u64,
                     issued_at: row.get(1)?,
@@ -276,10 +282,9 @@ impl Store {
                     last_error: row.get(6)?,
                     last_error_at: row.get(7)?,
                 })
-            },
-        )
-        .optional()
-        .map_err(StoreError::from)
+            })
+            .optional()?;
+        Ok(metadata)
     }
 
     /// Records a credential failure that opened no refresh attempt (a backoff or a quarantine), so
@@ -802,12 +807,9 @@ impl Store {
         incarnation: u64,
     ) -> Result<bool, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        conn.query_row(
-            &holder_pending_query(),
-            params![account_id, incarnation as i64],
-            |row| row.get(0),
-        )
-        .map_err(StoreError::from)
+        let mut stmt = conn.prepare_cached(holder_pending_query())?;
+        let pending = stmt.query_row(params![account_id, incarnation as i64], |row| row.get(0))?;
+        Ok(pending)
     }
 
     /// The newest attempt of the holder `incarnation` names: a previous holder's history under the same id is
@@ -818,19 +820,17 @@ impl Store {
         incarnation: u64,
     ) -> Result<Option<LastAttempt>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        conn.query_row(
-            LAST_REFRESH_ATTEMPT,
-            params![account_id, incarnation as i64],
-            |row| {
+        let mut stmt = conn.prepare_cached(LAST_REFRESH_ATTEMPT)?;
+        let attempt = stmt
+            .query_row(params![account_id, incarnation as i64], |row| {
                 Ok(LastAttempt {
                     resolved_at: row.get(0)?,
                     outcome: row.get(1)?,
                     detail: row.get(2)?,
                 })
-            },
-        )
-        .optional()
-        .map_err(StoreError::from)
+            })
+            .optional()?;
+        Ok(attempt)
     }
 
     /// The newest settled attempts of the holder `incarnation` names, newest first, bounded by `limit`: the
@@ -848,7 +848,7 @@ impl Store {
             )));
         }
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT id, account_id, started_at, resolved_at, outcome, detail, lifecycle_generation, \
              credential_generation FROM refresh_attempts \
              WHERE account_id = ?1 AND incarnation = ?2 AND outcome IS NOT NULL \
