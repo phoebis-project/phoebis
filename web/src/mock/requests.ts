@@ -1810,9 +1810,9 @@ function addStoryEvents() {
   }
 }
 
-/** The kind tier the engine files an attempt's account in: the plan-funded subscriptions, the ones in overage, then the
- *  metered sources, the API keys and the usage-based seats. */
-const kindGroupOf = (pool: PoolSeed | undefined, account: Account | undefined): number => (pool?.preferSubscription ? (account?.kind === 'api_key' || account?.usageBased ? 2 : account?.overage?.inUse === true ? 1 : 0) : 0);
+/** The kind tier the engine files an attempt's account in: the plan-funded subscriptions, the ones the attempt read in
+ *  overage, then the metered sources, the API keys and the usage-based seats. */
+const kindGroupOf = (pool: PoolSeed | undefined, account: Account | undefined, overage: boolean): number => (pool?.preferSubscription ? (account?.kind === 'api_key' || account?.usageBased ? 2 : overage ? 1 : 0) : 0);
 
 /**
  * The trace of a row outside the seeded streams: the strategy's pick in its account's tier, with nobody passed over.
@@ -1821,8 +1821,8 @@ function undrawnTrace(r: RequestLog, a: Attempt, last: boolean): SelectionTrace 
   const pool = poolById.get(r.poolId ?? '');
   const account = accountById.get(a.accountId);
   const priority = pool?.members.find((m) => m.accountId === a.accountId)?.priority ?? 0;
-  const overage = account?.overage?.inUse === true ? 1 : 0;
-  return { cacheRead: last && r.status === 200 ? r.usage.cacheRead : null, cohortHold: null, moved: null, placement: null, renewed: false, skipped: [], strategy: pool?.strategy ?? 'pace', tier: [kindGroupOf(pool, account), priority, overage] };
+  const overage = a.overageInUse === true;
+  return { cacheRead: last && r.status === 200 ? r.usage.cacheRead : null, cohortHold: null, moved: null, placement: null, renewed: false, skipped: [], strategy: pool?.strategy ?? 'pace', tier: [kindGroupOf(pool, account, overage), priority, overage ? 1 : 0] };
 }
 
 /**
@@ -1854,8 +1854,9 @@ function traceRequests() {
       const cacheRead = i === all.length - 1 && r.status === 200 ? r.usage.cacheRead : null;
       const strategy = pool?.strategy ?? 'pace';
       const account = accountOf.get(a.accountId);
-      const overage = account?.overage?.inUse === true ? 1 : 0;
-      const group = kindGroupOf(pool, account);
+      const inOverage = a.overageInUse === true;
+      const overage = inOverage ? 1 : 0;
+      const group = kindGroupOf(pool, account, inOverage);
       const priority = pool?.members.find((m) => m.accountId === a.accountId)?.priority ?? 0;
       // A request renews the pin its first selection finds live on the account it went to, and only then. The renewal
       // draw is taken either way, so the stream stays where it was, and a drawn renewal with no live pin to renew is

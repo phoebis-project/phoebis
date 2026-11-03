@@ -589,6 +589,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
+  test(`each attempt's trace tier carries its record's overage flag, at ${at}`, async () => {
+    const s = await story;
+    // The engine files an attempt by the overage it read when the attempt ran, so nightly's attempts before its cap's
+    // raise trace no overage although the account reads in overage at the story's now.
+    const traced = s.requests.flatMap((r) => r.attempts.filter((a) => a.selection?.tier).map((a) => ({ a, r })));
+    const drifted = traced.filter(({ a }) => a.selection.tier[2] !== (a.overageInUse === true ? 1 : 0) || (a.selection.tier[0] === 1 && a.overageInUse !== true));
+    assert.deepEqual(drifted.map(({ a, r }) => `${r.id} ${a.accountId} ${a.startedAt}`), [], 'every traced tier reads the overage its attempt records');
+    assert.deepEqual([...new Set(traced.map(({ a }) => a.overageInUse === true))].sort(), [false, true], 'the traces hold attempts in overage and out of it');
+  });
+
   test(`each account's request counts are its rows' from the hour a day back and the rollups' over the week, at ${at}`, async () => {
     const s = await story;
     for (const a of s.accounts) {
